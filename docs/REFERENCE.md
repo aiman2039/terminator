@@ -38,7 +38,7 @@ Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcom
 - Use **+** in the top-level tab strip to create a terminal tab with its own split layout. Explorer hides Git-ignored entries by default; **Show ignored files** reveals them (including Git metadata). Ordinary dotfiles remain visible.
 - Right-click a terminal or its tab for **New tab**, **Split up**, **Split down**, **Split left**, and **Split right**. Each split stays inside its owning top-level tab.
 - Launch agents and manage worktrees in the terminal yourself. The app does not launch agents or perform Git writes.
-- Project arrows expand/collapse independently of selection and persist across restarts. The window header holds project tabs and the Explorer, Agents, Git, and Settings icons. Explorer, Agents, and Git switch the right sidebar; click the active tool to collapse it. Agents can show the owning project or All projects. Sidebar width and scope persist globally.
+- Project arrows expand/collapse independently of selection and persist across restarts. The window header holds project tabs and the Explorer, Agents, Git, and Settings icons. Explorer, Agents, and Git switch the right sidebar; click the active tool to collapse it. Agents lists undismissed, unsnoozed notifications for the owning project or All projects, including retained events from ended sessions. Unresolved waiting events appear first; resolved events remain below unresolved events and do not count as waiting. Working agents without notifications do not create cards. Sidebar width and scope persist globally.
 - Select a project to restore its own layout. A terminal that changes directory stays under its owning project; the file/Git sidebar follows its effective directory.
 - Single-click anywhere on an Explorer file row to open a new editor tab. Right-click a file path to open the editor, a new editor split, or an external editor. `command+O` uses the native file picker (Cmd+O on macOS, Ctrl+Shift+O on Linux). Change it in Settings → Shortcuts.
 - Settings → Terminal & Editor retains embedded Neovim, terminal-editor, and external-editor modes. External presets include System default, VS Code, Cursor, RustRover, Zed, and Custom. Named presets use macOS application launching or Linux CLI launchers. Custom takes an executable and one literal argument per row; the absolute file path is appended without shell evaluation. **Choose file and test…** launches the draft without saving. Missing launchers and failed exits appear in the status bar; long-running editors remain independent of the GUI.
@@ -208,9 +208,10 @@ Top-level tabs use a flat strip with a terminal icon, close button, and muted ac
 
 
 Clean file-only tabs and editor panes close directly without a terminal-session
-confirmation. If any editor buffer has unsaved changes, choose Save and close,
-Discard changes, or Cancel. Tabs containing shells or active agents retain the
-session-close confirmation. Double-clicking an Explorer/Git file opens one editor,
+confirmation. If any editor buffer has unsaved changes, a high-visibility bar
+inside that file offers Save and close, Discard changes, or Cancel. The rest of
+the app stays usable while the bar is visible. Tabs containing shells or active
+agents retain the session-close confirmation. Double-clicking an Explorer/Git file opens one editor,
 not a duplicate editor for the second click.
 
 Explorer uses Git colors on filenames, icons, and badges: **U** for untracked,
@@ -227,7 +228,7 @@ Markdown; Split places a resizable editor beside the preview. Files start in
 Preview, and each tab's selected mode survives GUI restarts. Preview follows that
 file's live Neovim buffer, including unsaved changes, even when another Neovim
 buffer is selected. Switching modes never creates another editor or saves a file.
-Unsaved close confirmation also applies while the editor is hidden by Preview.
+The unsaved-close bar also applies while the editor is hidden by Preview.
 If Neovim is busy or waiting at a prompt, Preview keeps the last live text or
 shows the saved file with a **live preview paused** label. Live updates resume
 when the editor is ready; switch to Edit to inspect or answer its prompt.

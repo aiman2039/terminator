@@ -26,8 +26,8 @@ impl Popups {
         });
     }
 
+    #[cfg(test)]
     pub fn reserve(&mut self, title: &str) {
-        // Keep the initiating position while a background editor check runs.
         self.reserved.insert(title.to_owned(), self.origin);
     }
 

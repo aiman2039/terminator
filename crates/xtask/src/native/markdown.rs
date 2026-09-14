@@ -297,6 +297,81 @@ pub fn run(o: &Options) -> Result<()> {
         fs::read_to_string(&path)?.starts_with("# Back in editor\n"),
         "Save and close lost Markdown edits"
     );
+    let discard_path = root.join("discard.md");
+    let discard_text = "# Keep on disk\n";
+    fs::write(&discard_path, discard_text)?;
+    capture(
+        &h,
+        o,
+        "discard-dirty-preview-open",
+        json!([{"at_ms":1000,"target":"explorer-file:discard.md"}]),
+        3200,
+        |_| {
+            let state = h.wait(
+                |st| {
+                    sessions(st).iter().any(|s| {
+                        s["kind"] == "editor"
+                            && s["lifecycle"] == "running"
+                            && s["label"] == "discard.md"
+                    })
+                },
+                8,
+            )?;
+            let editor = sessions(&state)
+                .iter()
+                .find(|s| {
+                    s["kind"] == "editor"
+                        && s["lifecycle"] == "running"
+                        && s["label"] == "discard.md"
+                })
+                .unwrap()
+                .clone();
+            h.write(&mut h.attach(&editor)?, "iDiscarded\n")?;
+            h.wait(
+                |_| {
+                    h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
+                        .is_ok_and(|r| {
+                            r["Text"]
+                                .as_str()
+                                .and_then(|s| s.trim().parse::<u32>().ok())
+                                .is_some_and(|n| n > 0)
+                        })
+                },
+                3,
+            )?;
+            Ok(())
+        },
+    )?;
+    let discard_editor = sessions(&h.state()?)
+        .iter()
+        .find(|s| {
+            s["kind"] == "editor" && s["lifecycle"] == "running" && s["label"] == "discard.md"
+        })
+        .context("Discard Markdown editor was not opened")?
+        .clone();
+    let discard_close = if o.narrow {
+        format!("pane-close:{}", id(&discard_editor))
+    } else {
+        "workspace-close:discard.md".into()
+    };
+    plain(
+        &h,
+        o,
+        "discard-dirty-preview-close",
+        json!([
+            {"at_ms":800,"target":discard_close},
+            {"at_ms":2000,"target":"Discard changes"}
+        ]),
+        3500,
+    )?;
+    h.wait(
+        |s| session(s, id(&discard_editor))["lifecycle"] == "ended",
+        5,
+    )?;
+    ensure!(
+        fs::read_to_string(&discard_path)? == discard_text,
+        "Discard wrote Markdown edits"
+    );
     ensure!(
         session_ids(&h.state()?["projects"][0]["layout"]) == [id(&shell)],
         "Closing Markdown changed the shell layout"

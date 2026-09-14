@@ -642,6 +642,15 @@ An initial idle screenshot timed out after the close itself completed; the final
 fixture checks editor/layout completion directly and passed. All test state was
 isolated, and no live user session or hook configuration was changed.
 
+## In-file unsaved close bar (2026-09-14)
+
+Dirty file close no longer uses a floating `"Close file"` window. A red in-pane
+bar offers Save and close / Discard changes / Cancel; other terminals keep
+keyboard focus. Extra close while the bar is up does not start another Check.
+Discard treats `Stopping` as closed so the prompt does not return. Clippy
+passed with warnings denied. Terminator unit tests passed (105). Native
+`cargo xtask gui file-close` passed, including an `unsaved-close-bar` capture
+of the bar over a dirty buffer. Isolated harness only; live daemon untouched.
 
 ## Flat tab strip and inline naming (2026-09-08)
 
@@ -1167,7 +1176,10 @@ Changes and compatibility:
   schema and protocol versions remain unchanged.
 - The daemon's duplicate Alacritty screen/parser has been removed. `vt100` provides
   the screen and callback API for cursor/device/color replies and OSC 9/777/99
-  title/body notifications. The GUI still uses its Alacritty-backed widget.
+  title/body notifications. Primary DA is VT420+color (`?64;1;2;6;22c`), not VT102
+  (`?6c`). DECRQM (`CSI ? … $ p`) reports alt-screen and mouse modes as set/reset.
+  OSC 4 palette queries return distinct ANSI colors. The GUI still uses its
+  Alacritty-backed widget.
   Notification payloads/queues are bounded and do not create or transition agents.
   Terminal messages are separate from authenticated hook lifecycle events;
   historical replay emits neither notifications nor query replies.
@@ -1559,3 +1571,31 @@ No existing user daemon was restarted or terminated. No signing credentials,
 privacy settings, installation in Applications, hosted CI, universal release,
 Developer ID signing/notarization or publication were changed or verified by
 these local checks. The validation package is a local development build.
+
+
+## Pending-change review fixes (2026-09-14)
+
+Inline attention selection no longer suppresses terminal keyboard focus. A
+notification outside the visible inbox scope still opens its detail window.
+Resolved notices remain available below unresolved events and are excluded from
+the waiting count. Inbox buttons wrap at narrow sidebar widths. The unsaved-close
+bar measures its content, with the message above wrapping actions so long errors
+cannot push Save, Discard or Cancel beyond the pane.
+
+Validation: all 174 workspace tests passed (117 app tests), including five new
+regressions for focus/modal scope, resolved waiting counts and ordering, and
+button containment at 170/220/320/640 px. Formatting, diff whitespace checks and
+strict workspace Clippy passed. Socket/watcher tests required execution outside
+the sandbox; the inherited TERMINATOR_SESSION_ID was removed for the test run.
+The test-support build passed. Native `file-close` and `agent-sidebar --narrow`
+fixtures passed in isolated data directories; captures of the close bar and
+wrapped inbox actions were inspected. Captures are under
+`/tmp/terminator-review-file-close/file-close` and
+`/tmp/terminator-review-agents/agent-sidebar` for this run (temporary artifacts).
+No live daemon sessions or provider hooks were changed.
+
+The icon generator now reads `red-eye-source.png` from its own branding directory
+and uses a unique temporary iconset. Running an isolated copy with only the script
+and source artwork reproduced all three shipped icons byte-for-byte. Apple's
+image conversion services required execution outside the sandbox. No release or
+package was published.

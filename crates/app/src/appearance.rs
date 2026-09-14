@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, FontFamily, FontId, TextStyle};
+use eframe::egui::{self, Color32, FontFamily, FontId, RichText, TextStyle};
 use terminator_core::appearance::{AppearanceConfig, rgb};
 
 /// Keep small navigation/action glyphs legible independently of secondary text.
@@ -40,6 +40,23 @@ pub fn install(ctx: &egui::Context) {
             .entry(family)
             .or_default()
             .insert(0, name.into());
+    }
+    fonts.font_data.insert(
+        "Noto Sans Symbols 2 Braille".into(),
+        egui::FontData::from_static(include_bytes!(
+            "../assets/fonts/NotoSansSymbols2-Braille.ttf"
+        ))
+        .into(),
+    );
+    for family in [
+        FontFamily::Monospace,
+        FontFamily::Name("Terminal Bold".into()),
+    ] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .push("Noto Sans Symbols 2 Braille".into());
     }
     ctx.set_fonts(fonts);
     egui_extras::install_image_loaders(ctx);
@@ -99,22 +116,22 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
     style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
     style.visuals.indent_has_left_vline = false;
     style.visuals.menu_corner_radius = egui::CornerRadius::same(4);
-    // Shared by every app-owned ScrollArea: a slim, rounded overlay handle.
+    // Shared by every app-owned ScrollArea: overlay handles stay hidden at rest.
     style.spacing.scroll = egui::style::ScrollStyle {
         floating: true,
         bar_width: 8.0,
         floating_width: 4.0,
-        floating_allocated_width: 4.0,
+        floating_allocated_width: 0.0,
         handle_min_length: 28.0,
         bar_inner_margin: 3.0,
         bar_outer_margin: 2.0,
         foreground_color: true,
         dormant_background_opacity: 0.0,
         active_background_opacity: 0.0,
-        interact_background_opacity: 0.08,
-        dormant_handle_opacity: 0.18,
-        active_handle_opacity: 0.42,
-        interact_handle_opacity: 0.70,
+        interact_background_opacity: 0.0,
+        dormant_handle_opacity: 0.0,
+        active_handle_opacity: 0.0,
+        interact_handle_opacity: 0.0,
         ..Default::default()
     };
     style.spacing.button_padding = egui::vec2(8.0, 5.0);
@@ -124,6 +141,13 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
     style.spacing.interact_size.y = 28.0;
     ctx.set_style_of(egui::Theme::Dark, style);
     ctx.set_theme(egui::Theme::Dark);
+}
+
+/// Sidebar lists stay wheel/trackpad-scrollable without a visible bar.
+pub fn sidebar_scroll(salt: &'static str) -> egui::ScrollArea {
+    egui::ScrollArea::vertical()
+        .id_salt(salt)
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
 }
 
 pub fn tool_button(
@@ -493,6 +517,78 @@ fn header_icon(
     response
 }
 
+pub struct UnsavedCloseBar<'a> {
+    pub theme: &'a AppearanceConfig,
+    pub message: &'a str,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnsavedCloseChoice {
+    Save,
+    Discard,
+    Cancel,
+}
+
+pub struct UnsavedCloseBarResponse {
+    pub save: egui::Response,
+    pub discard: egui::Response,
+    pub cancel: egui::Response,
+}
+
+impl UnsavedCloseBarResponse {
+    pub fn choice(&self) -> Option<UnsavedCloseChoice> {
+        if self.save.clicked() {
+            Some(UnsavedCloseChoice::Save)
+        } else if self.discard.clicked() {
+            Some(UnsavedCloseChoice::Discard)
+        } else if self.cancel.clicked() {
+            Some(UnsavedCloseChoice::Cancel)
+        } else {
+            None
+        }
+    }
+}
+
+/// High-visibility confirm strip inside a file pane, not a floating window.
+pub fn unsaved_close_bar(ui: &mut egui::Ui, input: UnsavedCloseBar<'_>) -> UnsavedCloseBarResponse {
+    let UnsavedCloseBar {
+        theme,
+        message,
+        enabled,
+    } = input;
+    let warn = color(&theme.status_failed);
+    let fill = Color32::from_rgb(warn.r() / 2 + 24, warn.g() / 6, warn.b() / 6);
+    let response = egui::Frame::new()
+        .fill(fill)
+        .inner_margin(egui::Margin::symmetric(10, 5))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.add_enabled_ui(enabled, |ui| {
+                ui.add(egui::Label::new(RichText::new(message).color(ICON_COLOR).strong()).wrap());
+                ui.horizontal_wrapped(|ui| {
+                    let save = ui.button("Save and close");
+                    let discard = ui.button("Discard changes");
+                    let cancel = ui.button("Cancel");
+                    UnsavedCloseBarResponse {
+                        save,
+                        discard,
+                        cancel,
+                    }
+                })
+                .inner
+            })
+            .inner
+        });
+    let rect = response.response.rect;
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
+        0,
+        warn,
+    );
+    response.inner
+}
+
 /// A compact caption inside a pane border, without tab or split controls.
 pub fn pane_caption(
     ui: &mut egui::Ui,
@@ -603,6 +699,30 @@ pub fn click_cursor(ctx: &egui::Context) {
 #[cfg(test)]
 mod row_tests {
     use super::*;
+
+    #[test]
+    fn terminal_fonts_cover_braille_block() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_| {});
+        output.textures_delta.clear();
+        ctx.fonts_mut(|fonts| {
+            for family in [
+                FontFamily::Monospace,
+                FontFamily::Name("Terminal Bold".into()),
+            ] {
+                let font_id = FontId::new(13.0, family);
+                for c in '\u{2800}'..='\u{28FF}' {
+                    assert!(
+                        fonts.has_glyph(&font_id, c),
+                        "missing U+{:04X}",
+                        u32::from(c)
+                    );
+                }
+            }
+        });
+    }
+
     fn draw_markdown_header(
         ctx: &egui::Context,
         width: f32,
@@ -805,5 +925,82 @@ mod row_tests {
                 "Row should receive the click at x={x}"
             );
         }
+    }
+
+    #[test]
+    fn unsaved_close_actions_fit_narrow_panes_and_long_errors() {
+        for width in [170.0, 220.0, 320.0, 640.0] {
+            for message in [
+                "Unsaved changes",
+                "Editor did not close. Check for unsaved buffers or running editor jobs.",
+            ] {
+                let ctx = egui::Context::default();
+                install(&ctx);
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 500.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let bounds = ui.max_rect();
+                        let bar = unsaved_close_bar(
+                            ui,
+                            UnsavedCloseBar {
+                                theme: &AppearanceConfig::default(),
+                                message,
+                                enabled: true,
+                            },
+                        );
+                        for response in [&bar.save, &bar.discard, &bar.cancel] {
+                            assert!(
+                                bounds.contains_rect(response.rect),
+                                "width {width}: {:?} outside {bounds:?}",
+                                response.rect
+                            );
+                        }
+                        assert!(!bar.save.rect.intersects(bar.discard.rect));
+                        assert!(!bar.discard.rect.intersects(bar.cancel.rect));
+                    },
+                );
+                output.textures_delta.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn unsaved_close_bar_keeps_actions_on_one_row() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let theme = AppearanceConfig::default();
+        let mut bar = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(640.0, 80.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                bar = Some(unsaved_close_bar(
+                    ui,
+                    UnsavedCloseBar {
+                        theme: &theme,
+                        message: "Unsaved changes",
+                        enabled: true,
+                    },
+                ));
+            },
+        );
+        output.textures_delta.clear();
+        let bar = bar.expect("bar");
+        assert!(bar.save.rect.width() > 8.0);
+        assert!(bar.discard.rect.width() > 8.0);
+        assert!(bar.cancel.rect.width() > 8.0);
+        assert!(!bar.save.rect.intersects(bar.discard.rect));
+        assert_eq!(bar.choice(), None);
     }
 }

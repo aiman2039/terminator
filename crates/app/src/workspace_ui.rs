@@ -928,12 +928,39 @@ impl TabViewer for Viewer<'_> {
                     ui.weak("Reconnecting to session daemon…");
                     return;
                 }
+                self.app.draw_unsaved_close_bar(ui, sid);
                 if markdown::available(&session) {
                     self.markdown_view(ui, &session);
                 } else {
                     self.terminal_view(ui, &session);
                 }
             }
+        }
+    }
+}
+
+impl App {
+    fn draw_unsaved_close_bar(&mut self, ui: &mut egui::Ui, sid: &str) {
+        let Some((target, ids, error)) = self.unsaved_close_prompt(sid) else {
+            return;
+        };
+        let enabled = !self.editor_close_busy(&ids);
+        let bar = appearance::unsaved_close_bar(
+            ui,
+            appearance::UnsavedCloseBar {
+                theme: &self.theme,
+                message: &error,
+                enabled,
+            },
+        );
+        #[cfg(feature = "test-support")]
+        {
+            diagnostics::record(ui.ctx(), "Save and close", bar.save.rect);
+            diagnostics::record(ui.ctx(), "Discard changes", bar.discard.rect);
+            diagnostics::record(ui.ctx(), "Cancel", bar.cancel.rect);
+        }
+        if let Some(choice) = bar.choice() {
+            self.apply_unsaved_close_choice(choice, target, ids);
         }
     }
 }
@@ -1100,10 +1127,9 @@ impl Viewer<'_> {
             && !self.app.picker_active
             && !self.app.settings_open
             && !self.app.add_project
-            && self.app.detail.is_none()
+            && !self.app.notice_detail_modal_open()
             && self.app.close_session.is_none()
             && !self.app.editor_close_sessions.contains(sid)
-            && self.app.editor_close_decision.is_none()
             && self.app.close_workspace.is_none()
             && self.app.rename_session.is_none()
             && !self.app.open_path

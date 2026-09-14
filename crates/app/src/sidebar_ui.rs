@@ -1,5 +1,6 @@
 //! Project, file, Git, and notification sidebar rendering.
 use super::*;
+use std::cmp::Reverse;
 
 impl App {
     pub(super) fn explorer_tooltip(&self) -> String {
@@ -215,7 +216,7 @@ impl App {
             .filter(|s| s.lifecycle.live() && s.kind != SessionKind::Editor)
             .count();
         let footer = 28.0;
-        egui::ScrollArea::vertical()
+        appearance::sidebar_scroll("projects")
             .max_height((ui.available_height() - footer).max(0.0))
             .show(ui, |ui| {
                 for p in self.state.projects.clone() {
@@ -545,55 +546,166 @@ impl App {
             ui.weak("Loading…");
         }
     }
+    pub(super) fn agents_inbox_open(&self) -> bool {
+        self.preferences.left_agents
+            || (self.preferences.visible && self.preferences.tool == SidebarTool::Agents)
+    }
+    // Inline selection is not a modal and must not take terminal keyboard focus.
+    pub(super) fn notice_detail_modal_open(&self) -> bool {
+        self.detail.as_ref().is_some_and(|id| {
+            self.state
+                .notifications
+                .iter()
+                .find(|notice| &notice.id == id)
+                .is_some_and(|notice| {
+                    !self.agents_inbox_open()
+                        || notice.dismissed
+                        || notice.snoozed_until > now()
+                        || !self.notice_in_scope(notice, self.selected.as_deref())
+                })
+        })
+    }
+
     pub(super) fn agents_view(&mut self, ui: &mut egui::Ui) {
         ui.heading("Agents");
         ui.checkbox(&mut self.preferences.all_projects, "All projects");
-        let agents = self.state.agents.clone();
-        egui::ScrollArea::vertical()
-            .id_salt("agents")
-            .show(ui, |ui| {
-                let mut count = 0;
-                for agent in agents {
-                    let Some(session) = self
-                        .state
-                        .sessions
-                        .iter()
-                        .find(|s| s.id == agent.session_id)
-                    else {
-                        continue;
-                    };
-                    if !self
-                        .preferences
-                        .includes_project(&session.project_id, self.selected.as_deref())
-                    {
-                        continue;
-                    }
-                    count += 1;
-                    let label = format!(
-                        "{} · {}\n{} · {}s ago",
-                        agent.kind,
-                        session.label,
-                        agent.state.label(),
-                        now().saturating_sub(agent.updated)
-                    );
-                    let response = ui.selectable_label(
-                        self.active_session.as_ref() == Some(&agent.session_id),
-                        label,
-                    );
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(
-                        ui.ctx(),
-                        &format!("agent-row:{}", agent.session_id),
-                        response.rect,
-                    );
-                    if response.clicked() {
-                        self.go_session(&agent.session_id);
-                    }
+        let notices = self.pending_notices();
+        let waiting = notices
+            .iter()
+            .filter(|notice| notice_waiting(notice))
+            .count();
+        if waiting > 0 {
+            ui.label(
+                RichText::new(format!("{waiting} waiting for action"))
+                    .color(appearance::color(&self.theme.status_waiting)),
+            );
+        }
+        appearance::sidebar_scroll("agents").show(ui, |ui| {
+            if notices.is_empty() {
+                self.agents_empty(ui);
+            }
+            for notice in notices {
+                let session = self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == notice.session_id)
+                    .cloned();
+                let highlight = self.detail.as_ref() == Some(&notice.id);
+                let selected = self.active_session.as_ref() == Some(&notice.session_id);
+                let action = attention_card(
+                    ui,
+                    AttentionCard {
+                        theme: &self.theme,
+                        notice: &notice,
+                        session: session.as_ref(),
+                        selected,
+                        highlight,
+                    },
+                );
+                self.apply_notice_action(notice.id, action);
+            }
+        });
+    }
+    fn agents_empty(&mut self, ui: &mut egui::Ui) {
+        if self.hook_status.is_empty() {
+            ui.weak("Checking agent hooks…");
+            return;
+        }
+        if self.state.agents.is_empty() && !self.hook_status.values().any(|installed| *installed) {
+            ui.weak("Agent hooks are not configured");
+            if ui.small_button("Set up hooks").clicked() {
+                self.settings_draft = self.state.settings.clone();
+                self.editor_preset = external_editor::selected(&self.settings_draft);
+                self.theme_draft = self.theme_committed.clone();
+                self.settings_section = 5;
+                self.settings_open = true;
+                let _ = self.jobs.send(Job::HookStatus);
+            }
+            return;
+        }
+        ui.weak("No pending agent events");
+    }
+    fn pending_notices(&self) -> Vec<Notification> {
+        let selected = self.selected.as_deref();
+        let mut notices: Vec<_> = self
+            .state
+            .notifications
+            .iter()
+            .filter(|notice| {
+                !notice.dismissed
+                    && notice.snoozed_until <= now()
+                    && self.notice_in_scope(notice, selected)
+            })
+            .cloned()
+            .collect();
+        notices.sort_by_key(|notice| {
+            (
+                notice.resolved,
+                notice_rank(notice.state),
+                Reverse(notice.created),
+            )
+        });
+        notices
+    }
+    fn notice_in_scope(&self, notice: &Notification, selected: Option<&str>) -> bool {
+        self.state.sessions.iter().any(|session| {
+            session.id == notice.session_id
+                && self
+                    .preferences
+                    .includes_project(&session.project_id, selected)
+        })
+    }
+    pub(super) fn apply_notice_action(&mut self, id: String, action: AttentionAction) {
+        match action {
+            AttentionAction::None => {}
+            AttentionAction::Go => {
+                if let Some(session) = self
+                    .state
+                    .notifications
+                    .iter()
+                    .find(|notice| notice.id == id)
+                    .map(|notice| notice.session_id.clone())
+                {
+                    self.go_session(&session);
                 }
-                if count == 0 {
-                    ui.weak("No observed agents in this scope.");
+                self.detail = None;
+            }
+            AttentionAction::Snooze => {
+                self.send(Request::Notice {
+                    id: id.clone(),
+                    action: "snooze".into(),
+                });
+                if let Some(notice) = self
+                    .state
+                    .notifications
+                    .iter_mut()
+                    .find(|notice| notice.id == id)
+                {
+                    notice.snoozed_until = now() + 600;
                 }
-            });
+                if self.detail.as_ref() == Some(&id) {
+                    self.detail = None;
+                }
+            }
+            AttentionAction::Dismiss => {
+                self.send(Request::Notice {
+                    id: id.clone(),
+                    action: "dismiss".into(),
+                });
+                if let Some(notice) = self
+                    .state
+                    .notifications
+                    .iter_mut()
+                    .find(|notice| notice.id == id)
+                {
+                    notice.dismissed = true;
+                }
+                if self.detail.as_ref() == Some(&id) {
+                    self.detail = None;
+                }
+            }
+        }
     }
     pub(super) fn sidebar(&mut self, ui: &mut egui::Ui) {
         if self.preferences.tool == SidebarTool::History {
@@ -606,60 +718,58 @@ impl App {
                 .filter(|s| !s.lifecycle.live())
                 .cloned()
                 .collect();
-            egui::ScrollArea::vertical()
-                .id_salt("global-history")
-                .show(ui, |ui| {
-                    if ended.is_empty() {
-                        ui.weak("No ended sessions.");
+            appearance::sidebar_scroll("global-history").show(ui, |ui| {
+                if ended.is_empty() {
+                    ui.weak("No ended sessions.");
+                }
+                for project in self.state.projects.clone() {
+                    let sessions: Vec<_> = ended
+                        .iter()
+                        .filter(|s| s.project_id == project.id)
+                        .collect();
+                    if sessions.is_empty() {
+                        continue;
                     }
-                    for project in self.state.projects.clone() {
-                        let sessions: Vec<_> = ended
-                            .iter()
-                            .filter(|s| s.project_id == project.id)
-                            .collect();
-                        if sessions.is_empty() {
-                            continue;
-                        }
-                        let expanded = *self
-                            .preferences
-                            .history_expanded
-                            .entry(project.id.clone())
-                            .or_insert(true);
-                        let header = appearance::row(
-                            ui,
-                            &project.name,
-                            if expanded {
-                                "ChevronDown"
-                            } else {
-                                "ChevronRight"
-                            },
-                            false,
-                            26.0,
-                            &sessions.len().to_string(),
-                            appearance::color(&self.theme.text),
-                        )
-                        .on_hover_text(project.path.display().to_string());
-                        #[cfg(feature = "test-support")]
-                        diagnostics::record(
-                            ui.ctx(),
-                            &format!("history-project:{}", project.id),
-                            header.rect,
-                        );
-                        if header.clicked() {
-                            self.preferences
-                                .history_expanded
-                                .insert(project.id.clone(), !expanded);
-                        }
+                    let expanded = *self
+                        .preferences
+                        .history_expanded
+                        .entry(project.id.clone())
+                        .or_insert(true);
+                    let header = appearance::row(
+                        ui,
+                        &project.name,
                         if expanded {
-                            ui.indent(("history-project", &project.id), |ui| {
-                                for session in sessions {
-                                    self.session_row(ui, session);
-                                }
-                            });
-                        }
-                        ui.add_space(8.0);
+                            "ChevronDown"
+                        } else {
+                            "ChevronRight"
+                        },
+                        false,
+                        26.0,
+                        &sessions.len().to_string(),
+                        appearance::color(&self.theme.text),
+                    )
+                    .on_hover_text(project.path.display().to_string());
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(
+                        ui.ctx(),
+                        &format!("history-project:{}", project.id),
+                        header.rect,
+                    );
+                    if header.clicked() {
+                        self.preferences
+                            .history_expanded
+                            .insert(project.id.clone(), !expanded);
                     }
-                });
+                    if expanded {
+                        ui.indent(("history-project", &project.id), |ui| {
+                            for session in sessions {
+                                self.session_row(ui, session);
+                            }
+                        });
+                    }
+                    ui.add_space(8.0);
+                }
+            });
             return;
         }
         if self.preferences.tool == SidebarTool::Agents {
@@ -670,8 +780,7 @@ impl App {
             ui.checkbox(&mut self.preferences.show_ignored, "Show ignored files")
                 .on_hover_text("Show files excluded by Git ignore rules and Git metadata");
             if let Some(cwd) = self.cwd() {
-                egui::ScrollArea::vertical()
-                    .id_salt("files")
+                appearance::sidebar_scroll("files")
                     .max_height(ui.available_height())
                     .show(ui, |ui| self.tree(ui, &cwd, 0));
             }
@@ -705,7 +814,7 @@ impl App {
                 if context.changes.is_empty() {
                     ui.weak("Working tree clean");
                 }
-                egui::ScrollArea::vertical().id_salt("git").show(ui, |ui| {
+                appearance::sidebar_scroll("git").show(ui, |ui| {
                     for group in services::GitGroup::ALL {
                         let entries: Vec<_> = context
                             .changes
@@ -807,4 +916,158 @@ pub(super) fn state_color(state: AgentState, theme: &AppearanceConfig) -> Color3
         AgentState::Completed => &theme.accent,
         _ => &theme.secondary,
     })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum AttentionAction {
+    None,
+    Go,
+    Snooze,
+    Dismiss,
+}
+
+pub(super) struct AttentionCard<'a> {
+    pub theme: &'a AppearanceConfig,
+    pub notice: &'a Notification,
+    pub session: Option<&'a Session>,
+    pub selected: bool,
+    pub highlight: bool,
+}
+
+fn notice_waiting(notice: &Notification) -> bool {
+    !notice.resolved
+        && matches!(
+            notice.state,
+            AgentState::WaitingInput | AgentState::WaitingPermission
+        )
+}
+
+fn notice_rank(state: AgentState) -> u8 {
+    match state {
+        AgentState::WaitingInput | AgentState::WaitingPermission => 0,
+        AgentState::Failed => 1,
+        AgentState::Completed => 2,
+        _ => 3,
+    }
+}
+
+pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> AttentionAction {
+    let AttentionCard {
+        theme,
+        notice,
+        session,
+        selected,
+        highlight,
+    } = input;
+    let stroke = if highlight {
+        egui::Stroke::new(1.0, appearance::color(&theme.accent))
+    } else if selected {
+        egui::Stroke::new(1.0, appearance::color(&theme.selection))
+    } else {
+        egui::Stroke::new(theme.border_width, appearance::color(&theme.border))
+    };
+    let inner = egui::Frame::group(ui.style())
+        .stroke(stroke)
+        .inner_margin(10.0)
+        .show(ui, |ui| {
+            let header = ui
+                .vertical(|ui| {
+                    ui.colored_label(
+                        state_color(notice.state, theme),
+                        RichText::new(notice.state.label()).strong(),
+                    );
+                    ui.heading(&notice.summary);
+                    if let Some(session) = session {
+                        ui.label(format!("{} · {}", session.label, session.cwd.display()));
+                    }
+                })
+                .response
+                .interact(egui::Sense::click());
+            #[cfg(feature = "test-support")]
+            diagnostics::record(
+                ui.ctx(),
+                &format!("agent-row:{}", notice.session_id),
+                header.rect,
+            );
+            ui.separator();
+            ui.label(&notice.details);
+            if notice.resolved {
+                ui.weak("This event has resolved.");
+            }
+            let mut action = if header.clicked() {
+                AttentionAction::Go
+            } else {
+                AttentionAction::None
+            };
+            ui.horizontal_wrapped(|ui| {
+                let go = ui.button("Go to context →");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(
+                    ui.ctx(),
+                    &format!("agent-go:{}", notice.session_id),
+                    go.rect,
+                );
+                if go.clicked() {
+                    action = AttentionAction::Go;
+                }
+                let snooze = ui.button("Snooze 10 min");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(
+                    ui.ctx(),
+                    &format!("agent-snooze:{}", notice.session_id),
+                    snooze.rect,
+                );
+                if snooze.clicked() {
+                    action = AttentionAction::Snooze;
+                }
+                let dismiss = ui.button("Dismiss");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(
+                    ui.ctx(),
+                    &format!("agent-dismiss:{}", notice.session_id),
+                    dismiss.rect,
+                );
+                if dismiss.clicked() {
+                    action = AttentionAction::Dismiss;
+                }
+            });
+            action
+        });
+    if inner.inner == AttentionAction::None
+        && inner.response.interact(egui::Sense::click()).clicked()
+    {
+        AttentionAction::Go
+    } else {
+        inner.inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolved_permission_requests_do_not_count_as_waiting() {
+        let mut notice = Notification {
+            id: "notice".into(),
+            session_id: "session".into(),
+            invocation_id: "agent".into(),
+            request_id: None,
+            state: AgentState::WaitingPermission,
+            summary: String::new(),
+            details: String::new(),
+            created: 0,
+            read: false,
+            dismissed: false,
+            resolved: false,
+            snoozed_until: 0,
+        };
+        assert!(notice_waiting(&notice));
+        notice.resolved = true;
+        assert!(!notice_waiting(&notice));
+        notice.state = AgentState::WaitingInput;
+        assert!(!notice_waiting(&notice));
+        notice.resolved = false;
+        assert!(notice_waiting(&notice));
+    }
 }

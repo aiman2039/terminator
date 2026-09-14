@@ -636,6 +636,115 @@ fn file_close(o: &Options) -> Result<()> {
         session_ids(&state["projects"][0]["layout"]).len() == 6,
         "Close removed shells"
     );
+    let keep = root.join("keep.rs");
+    fs::write(&keep, "fn keep() {}\n")?;
+    capture(
+        &h,
+        o,
+        "dirty-file-discard",
+        json!([
+            {"at_ms":1100,"target":"explorer-file:keep.rs"},
+            {"at_ms":2700,"target":"workspace-close:keep.rs"},
+            {"at_ms":3600,"target":"Discard changes"}
+        ]),
+        5500,
+        |_| {
+            let state = h.wait(
+                |st| {
+                    sessions(st).iter().any(|s| {
+                        s["kind"] == "editor"
+                            && s["lifecycle"] == "running"
+                            && s["label"] == "keep.rs"
+                    })
+                },
+                5,
+            )?;
+            let editor = sessions(&state)
+                .iter()
+                .find(|s| {
+                    s["kind"] == "editor" && s["lifecycle"] == "running" && s["label"] == "keep.rs"
+                })
+                .unwrap();
+            h.write(&mut h.attach(editor)?, "iDiscarded change ")?;
+            h.wait(
+                |_| {
+                    h.rpc(json!({"EditorStatus":{"session":id(editor)}}))
+                        .is_ok_and(|r| {
+                            r["Text"]
+                                .as_str()
+                                .and_then(|s| s.trim().parse::<u32>().ok())
+                                .is_some_and(|n| n > 0)
+                        })
+                },
+                3,
+            )?;
+            Ok(())
+        },
+    )?;
+    ensure!(
+        fs::read_to_string(&keep)? == "fn keep() {}\n",
+        "Discard wrote the buffer"
+    );
+    let state = h.state()?;
+    ensure!(
+        sessions(&state)
+            .iter()
+            .filter(|s| s["kind"] == "editor")
+            .all(|s| s["lifecycle"] == "ended"),
+        "Discard did not close the editor"
+    );
+    ensure!(
+        session_ids(&state["projects"][0]["layout"]).len() == 6,
+        "Discard close removed shells"
+    );
+    let bar = root.join("bar.rs");
+    fs::write(&bar, "fn bar() {}\n")?;
+    capture(
+        &h,
+        o,
+        "unsaved-close-bar",
+        json!([
+            {"at_ms":1100,"target":"explorer-file:bar.rs"},
+            {"at_ms":2700,"target":"workspace-close:bar.rs"}
+        ]),
+        3400,
+        |_| {
+            let state = h.wait(
+                |st| {
+                    sessions(st).iter().any(|s| {
+                        s["kind"] == "editor"
+                            && s["lifecycle"] == "running"
+                            && s["label"] == "bar.rs"
+                    })
+                },
+                5,
+            )?;
+            let editor = sessions(&state)
+                .iter()
+                .find(|s| {
+                    s["kind"] == "editor" && s["lifecycle"] == "running" && s["label"] == "bar.rs"
+                })
+                .unwrap();
+            h.write(&mut h.attach(editor)?, "iBar change ")?;
+            h.wait(
+                |_| {
+                    h.rpc(json!({"EditorStatus":{"session":id(editor)}}))
+                        .is_ok_and(|r| {
+                            r["Text"]
+                                .as_str()
+                                .and_then(|s| s.trim().parse::<u32>().ok())
+                                .is_some_and(|n| n > 0)
+                        })
+                },
+                3,
+            )?;
+            Ok(())
+        },
+    )?;
+    ensure!(
+        fs::read_to_string(&bar)? == "fn bar() {}\n",
+        "Bar capture wrote the buffer"
+    );
     h.assert_pids(&shells)
 }
 fn focus_close(o: &Options) -> Result<()> {

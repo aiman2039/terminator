@@ -58,7 +58,7 @@ pub fn run(o: &Options) -> Result<()> {
         &h,
         o,
         "agent-navigation",
-        json!([{"at_ms":1200,"target":format!("agent-row:{}",id(&agent))}]),
+        json!([{"at_ms":1200,"target":format!("agent-go:{}",id(&agent))}]),
         2700,
         |_| {
             h.wait(

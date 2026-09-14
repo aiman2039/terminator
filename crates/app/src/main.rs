@@ -8,7 +8,7 @@ mod workspace_ui;
 use workspace_ui::Viewer;
 mod dialogs_ui;
 mod sidebar_ui;
-use sidebar_ui::state_color;
+use sidebar_ui::{AttentionAction, AttentionCard, attention_card};
 mod appearance;
 mod external_editor;
 mod file_actions;
@@ -695,10 +695,9 @@ struct App {
     hook_status: HashMap<String, bool>,
     detail: Option<String>,
     close_session: Option<String>,
-    editor_close_pending: bool,
     popups: popup::Popups,
     editor_close_sessions: HashSet<String>,
-    editor_close_decision: Option<(editor_close::Target, Vec<String>, String)>,
+    editor_close_prompts: Vec<(editor_close::Target, Vec<String>, String)>,
     rename_session: Option<(String, String)>,
     rename_focus: bool,
     rename_surface: RenameSurface,
@@ -842,10 +841,9 @@ impl App {
             hook_status: HashMap::new(),
             detail: None,
             close_session: None,
-            editor_close_pending: false,
             popups: popup::Popups::default(),
             editor_close_sessions: HashSet::new(),
-            editor_close_decision: None,
+            editor_close_prompts: Vec::new(),
             rename_session: None,
             rename_focus: false,
             rename_surface: RenameSurface::Sidebar,
@@ -1119,19 +1117,7 @@ impl App {
                     self.targets.insert(key, target);
                 }
                 Update::EditorsClosed(target, ids, result) => {
-                    self.editor_close_pending = false;
-                    self.editor_close_sessions.clear();
-                    match result {
-                        Ok(()) => match target {
-                            editor_close::Target::Workspace(project, id) => {
-                                if let Some(workspace) = self.layouts.get_mut(&project) {
-                                    workspace.close(&id);
-                                }
-                            }
-                            editor_close::Target::Pane(sid) => self.remove_tab(&sid),
-                        },
-                        Err(error) => self.editor_close_decision = Some((target, ids, error)),
-                    }
+                    self.editors_closed(target, ids, result);
                 }
                 Update::UiRequest(request, reply, deadline) => {
                     let result = if Instant::now() >= deadline {
@@ -2014,18 +2000,103 @@ impl App {
                     .any(|s| &s.id == id && s.kind == SessionKind::Editor)
             })
     }
+    fn editor_close_busy(&self, ids: &[String]) -> bool {
+        ids.iter().any(|id| self.editor_close_sessions.contains(id))
+    }
+
+    fn editor_close_prompted(&self, ids: &[String]) -> bool {
+        self.editor_close_prompts
+            .iter()
+            .any(|(_, prompted, _)| prompted.iter().any(|id| ids.contains(id)))
+    }
+
+    fn skip_editor_close_request(&self, ids: &[String]) -> bool {
+        self.editor_close_busy(ids) || self.editor_close_prompted(ids)
+    }
+
+    fn unsaved_close_prompt(
+        &self,
+        sid: &str,
+    ) -> Option<(editor_close::Target, Vec<String>, String)> {
+        self.editor_close_prompts
+            .iter()
+            .find(|(_, ids, _)| ids.iter().any(|id| id == sid))
+            .cloned()
+    }
+
+    fn upsert_unsaved_close(
+        &mut self,
+        target: editor_close::Target,
+        ids: Vec<String>,
+        error: String,
+    ) {
+        if let Some(prompt) = self
+            .editor_close_prompts
+            .iter_mut()
+            .find(|(_, prompted, _)| prompted == &ids || prompted.iter().any(|id| ids.contains(id)))
+        {
+            *prompt = (target, ids, error);
+            return;
+        }
+        self.editor_close_prompts.push((target, ids, error));
+    }
+
+    fn apply_unsaved_close_choice(
+        &mut self,
+        choice: appearance::UnsavedCloseChoice,
+        target: editor_close::Target,
+        ids: Vec<String>,
+    ) {
+        match choice {
+            appearance::UnsavedCloseChoice::Cancel => {
+                self.editor_close_prompts
+                    .retain(|(_, prompted, _)| prompted != &ids);
+            }
+            appearance::UnsavedCloseChoice::Save => {
+                self.close_editors(target, ids, editor_close::Mode::Save);
+            }
+            appearance::UnsavedCloseChoice::Discard => {
+                self.close_editors(target, ids, editor_close::Mode::Discard);
+            }
+        }
+    }
+
+    fn editors_closed(
+        &mut self,
+        target: editor_close::Target,
+        ids: Vec<String>,
+        result: Result<(), String>,
+    ) {
+        for id in &ids {
+            self.editor_close_sessions.remove(id);
+        }
+        match result {
+            Ok(()) => {
+                self.editor_close_prompts
+                    .retain(|(_, prompted, _)| !prompted.iter().any(|id| ids.contains(id)));
+                match target {
+                    editor_close::Target::Workspace(project, id) => {
+                        if let Some(workspace) = self.layouts.get_mut(&project) {
+                            workspace.close(&id);
+                        }
+                    }
+                    editor_close::Target::Pane(sid) => self.remove_tab(&sid),
+                }
+            }
+            Err(error) => self.upsert_unsaved_close(target, ids, error),
+        }
+    }
+
     fn close_editors(
         &mut self,
         target: editor_close::Target,
         ids: Vec<String>,
         mode: editor_close::Mode,
     ) {
-        if self.editor_close_pending {
+        if self.editor_close_busy(&ids) {
             return;
         }
-        self.popups.reserve("Close file");
-        self.editor_close_pending = true;
-        self.editor_close_sessions = ids.iter().cloned().collect();
+        self.editor_close_sessions.extend(ids.iter().cloned());
         let _ = self.jobs.send(Job::CloseEditors(target, ids, mode));
     }
 }
@@ -2257,7 +2328,8 @@ impl eframe::App for App {
                     if self.preferences.left_agents {
                         self.agents_view(ui);
                     } else {
-                        egui::ScrollArea::vertical().show(ui, |ui| self.projects(ui));
+                        appearance::sidebar_scroll("left-projects")
+                            .show(ui, |ui| self.projects(ui));
                     }
                 });
             });
@@ -2960,6 +3032,64 @@ mod navigation_tests {
         assert!(!app.editors_only(&["shell".into()]));
         assert!(!app.editors_only(&["file".into(), "shell".into()]));
         assert!(!app.editors_only(&[]));
+    }
+
+    #[test]
+    fn extra_close_while_prompting_does_not_queue_another_check() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.upsert_unsaved_close(
+            editor_close::Target::Pane("file".into()),
+            vec!["file".into()],
+            "Unsaved changes".into(),
+        );
+        assert!(app.skip_editor_close_request(&["file".into()]));
+        assert!(!app.skip_editor_close_request(&["other".into()]));
+        app.close_editors(
+            editor_close::Target::Pane("file".into()),
+            vec!["file".into()],
+            editor_close::Mode::Discard,
+        );
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Job::CloseEditors(_, _, editor_close::Mode::Discard)
+        ));
+        app.close_editors(
+            editor_close::Target::Pane("file".into()),
+            vec!["file".into()],
+            editor_close::Mode::Discard,
+        );
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn failed_close_updates_the_same_prompt() {
+        let (mut app, _, _dir) = fixture();
+        app.upsert_unsaved_close(
+            editor_close::Target::Pane("file".into()),
+            vec!["file".into()],
+            "Unsaved changes".into(),
+        );
+        app.editors_closed(
+            editor_close::Target::Pane("file".into()),
+            vec!["file".into()],
+            Err("Editor did not close. Check for unsaved buffers or running editor jobs.".into()),
+        );
+        assert_eq!(app.editor_close_prompts.len(), 1);
+        assert!(
+            app.editor_close_prompts[0]
+                .2
+                .contains("Editor did not close")
+        );
+        app.editors_closed(
+            editor_close::Target::Pane("other".into()),
+            vec!["other".into()],
+            Err("Unsaved changes".into()),
+        );
+        assert_eq!(app.editor_close_prompts.len(), 2);
+        assert!(app.unsaved_close_prompt("file").is_some());
+        assert!(app.unsaved_close_prompt("other").is_some());
     }
     #[test]
     fn inline_rename_saves_with_enter_and_cancels_with_escape() {
@@ -3732,5 +3862,230 @@ mod navigation_tests {
             app.preferences
                 .includes_project("a", app.selected.as_deref())
         );
+    }
+
+    #[cfg(feature = "test-support")]
+    fn notice_fixture(id: &str, session: &str, state: AgentState, created: u64) -> Notification {
+        Notification {
+            id: id.into(),
+            session_id: session.into(),
+            invocation_id: id.into(),
+            request_id: None,
+            state,
+            summary: state.label().into(),
+            details: "Agent: codex\nEvent: PermissionRequest\nSession: test".into(),
+            created,
+            read: false,
+            dismissed: false,
+            resolved: false,
+            snoozed_until: 0,
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    fn agent_target(ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
+        ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+    }
+
+    #[cfg(feature = "test-support")]
+    fn render_agents(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| app.agents_view(ui),
+        );
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn inline_attention_preserves_input_but_out_of_scope_details_remain_modal() {
+        let (mut app, _, _dir) = fixture();
+        app.preferences.left_agents = true;
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        app.state.notifications = vec![notice_fixture(
+            "wait",
+            "live-shell",
+            AgentState::WaitingPermission,
+            now(),
+        )];
+        app.detail = Some("wait".into());
+        assert!(!app.notice_detail_modal_open());
+        app.preferences.left_agents = false;
+        app.preferences.visible = false;
+        assert!(app.notice_detail_modal_open());
+        app.preferences.left_agents = true;
+        app.preferences.all_projects = false;
+        app.selected = Some("different-project".into());
+        assert!(app.notice_detail_modal_open());
+        app.preferences.all_projects = true;
+        app.state.notifications[0].snoozed_until = now() + 600;
+        assert!(app.notice_detail_modal_open());
+        app.state.notifications[0].snoozed_until = 0;
+        app.state.notifications[0].dismissed = true;
+        assert!(app.notice_detail_modal_open());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn attention_actions_fit_minimum_sidebar_widths() {
+        for width in [170.0, 220.0, 320.0] {
+            let (mut app, ctx, _dir) = fixture();
+            appearance::install(&ctx);
+            app.preferences.all_projects = true;
+            app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+            app.state.notifications = vec![notice_fixture(
+                "wait",
+                "live-shell",
+                AgentState::WaitingPermission,
+                now(),
+            )];
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let bounds = ui.max_rect();
+                    app.agents_view(ui);
+                    for action in ["go", "snooze", "dismiss"] {
+                        let rect =
+                            agent_target(&ctx, &format!("agent-{action}:live-shell")).unwrap();
+                        assert!(
+                            bounds.contains_rect(rect),
+                            "width {width}: {action} {rect:?} outside {bounds:?}"
+                        );
+                    }
+                },
+            );
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn resolved_waiting_notice_sorts_below_unresolved_completion() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![
+            session_fixture("done", SessionKind::Shell),
+            session_fixture("resolved", SessionKind::Shell),
+        ];
+        let mut resolved =
+            notice_fixture("old-wait", "resolved", AgentState::WaitingPermission, now());
+        resolved.resolved = true;
+        app.state.notifications = vec![
+            resolved,
+            notice_fixture("done", "done", AgentState::Completed, 1),
+        ];
+        render_agents(&mut app, &ctx, vec![]);
+        assert!(
+            agent_target(&ctx, "agent-row:done").unwrap().top()
+                < agent_target(&ctx, "agent-row:resolved").unwrap().top()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn agents_inbox_lists_pending_notices_not_stopped_agents() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![
+            session_fixture("stopped-shell", SessionKind::Shell),
+            session_fixture("live-shell", SessionKind::Shell),
+        ];
+        app.state.agents = vec![Agent {
+            invocation_id: "stopped".into(),
+            session_id: "stopped-shell".into(),
+            kind: "codex".into(),
+            provider_session_id: None,
+            state: AgentState::Stopped,
+            sequence: None,
+            updated: 1,
+            resume: None,
+        }];
+        app.state.notifications = vec![notice_fixture(
+            "wait",
+            "live-shell",
+            AgentState::WaitingPermission,
+            now(),
+        )];
+        render_agents(&mut app, &ctx, vec![]);
+        assert!(agent_target(&ctx, "agent-row:stopped-shell").is_none());
+        assert!(agent_target(&ctx, "agent-row:live-shell").is_some());
+        assert!(agent_target(&ctx, "agent-go:live-shell").is_some());
+        assert!(agent_target(&ctx, "agent-snooze:live-shell").is_some());
+        assert!(agent_target(&ctx, "agent-dismiss:live-shell").is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn agents_inbox_puts_waiting_above_completed() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![
+            session_fixture("done-shell", SessionKind::Shell),
+            session_fixture("live-shell", SessionKind::Shell),
+        ];
+        app.state.notifications = vec![
+            notice_fixture("done", "done-shell", AgentState::Completed, now()),
+            notice_fixture("wait", "live-shell", AgentState::WaitingPermission, 1),
+        ];
+        render_agents(&mut app, &ctx, vec![]);
+        let waiting = agent_target(&ctx, "agent-row:live-shell").unwrap();
+        let completed = agent_target(&ctx, "agent-row:done-shell").unwrap();
+        assert!(waiting.top() < completed.top());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn agents_inbox_go_focuses_session_and_dismiss_hides_card() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        app.state.notifications = vec![notice_fixture(
+            "wait",
+            "live-shell",
+            AgentState::WaitingPermission,
+            now(),
+        )];
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.apply_notice_action("wait".into(), AttentionAction::Go);
+        assert_eq!(app.active_session.as_deref(), Some("live-shell"));
+        app.apply_notice_action("wait".into(), AttentionAction::Dismiss);
+        assert!(
+            app.state
+                .notifications
+                .iter()
+                .all(|notice| notice.dismissed)
+        );
+        render_agents(&mut app, &ctx, vec![]);
+        assert!(agent_target(&ctx, "agent-row:live-shell").is_none());
+        let mut saw_dismiss = false;
+        while let Ok(job) = received.try_recv() {
+            if let Job::Control(request, _) = job
+                && matches!(
+                    *request,
+                    Request::Notice {
+                        ref action,
+                        ..
+                    } if action == "dismiss"
+                )
+            {
+                saw_dismiss = true;
+            }
+        }
+        assert!(saw_dismiss);
     }
 }

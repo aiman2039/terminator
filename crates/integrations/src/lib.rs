@@ -169,6 +169,7 @@ fn codex_config(before: &str, command: &str, remove: bool) -> Result<String> {
         "PreToolUse",
         "PostToolUse",
         "PermissionRequest",
+        "Notification",
         "Stop",
         "SessionEnd",
         "Interrupt",
@@ -281,8 +282,14 @@ pub fn normalize(
                 .pointer("/properties/info/id")
                 .and_then(Value::as_str)
         });
-    let name = get("hook_event_name").or(get("type")).unwrap_or("");
-    let tool = get("tool_name").unwrap_or("").to_lowercase();
+    let name = get("hook_event_name")
+        .or(get("type"))
+        .or(get("hookEventName"))
+        .unwrap_or("");
+    let tool = get("tool_name")
+        .or(get("toolName"))
+        .unwrap_or("")
+        .to_lowercase();
     let state = match name {
         "SessionStart" | "session.created" => AgentState::Unknown,
         "UserPromptSubmit" | "PostToolUse" | "permission.replied" | "question.replied" => {
@@ -292,17 +299,21 @@ pub fn normalize(
             AgentState::WaitingInput
         }
         "PreToolUse" => AgentState::Running,
-        "PermissionRequest" | "permission.asked" => AgentState::WaitingPermission,
+        "PermissionRequest" | "permission.asked" | "permission_request" => {
+            AgentState::WaitingPermission
+        }
         "question.asked" => AgentState::WaitingInput,
         "Stop" | "session.idle" | "agent-turn-complete" => AgentState::Completed,
         "StopFailure" | "session.error" => AgentState::Failed,
         "SessionEnd" | "session.deleted" => AgentState::Stopped,
         "Interrupt" => AgentState::Unknown,
-        "Notification" => match get("notification_type") {
-            Some("permission_prompt") => AgentState::WaitingPermission,
-            Some("idle_prompt" | "elicitation_dialog") => AgentState::WaitingInput,
-            _ => return Ok(None),
-        },
+        "Notification" | "notification" => {
+            match get("notification_type").or(get("notificationType")) {
+                Some("permission_prompt") => AgentState::WaitingPermission,
+                Some("idle_prompt" | "elicitation_dialog") => AgentState::WaitingInput,
+                _ => return Ok(None),
+            }
+        }
         "session.status" => match payload
             .pointer("/properties/status/type")
             .and_then(Value::as_str)
@@ -321,6 +332,7 @@ pub fn normalize(
     let summary = get("message")
         .or(get("last_assistant_message"))
         .or(get("last-assistant-message"))
+        .or(get("lastAssistantMessage"))
         .unwrap_or(state.label())
         .chars()
         .take(1000)
@@ -328,7 +340,9 @@ pub fn normalize(
     // Deliberately omit tool input, prompts, transcripts and credentials from details.
     let details = format!("Agent: {kind}\nEvent: {name}\nSession: {provider}");
     let request = get("tool_use_id")
+        .or(get("toolUseId"))
         .or(get("request_id"))
+        .or(get("requestId"))
         .or_else(|| payload.pointer("/properties/id").and_then(Value::as_str))
         .map(str::to_owned);
     let resume = match kind {
@@ -423,5 +437,28 @@ mod tests {
         .unwrap();
         assert_eq!(e.state, AgentState::WaitingPermission);
         assert_eq!(e.resume.unwrap().args, vec!["--resume", "a"]);
+    }
+    #[test]
+    fn grok_camel_case_permission_notification() {
+        let e = normalize(
+            "grok",
+            "s",
+            "p",
+            &json!({
+                "hookEventName": "notification",
+                "sessionId": "abc",
+                "notificationType": "permission_prompt"
+            }),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(e.state, AgentState::WaitingPermission);
+        assert_eq!(e.provider_session_id.as_deref(), Some("abc"));
+    }
+    #[test]
+    fn codex_installs_notification_hooks() {
+        let config = codex_config("", "/tmp/hook # terminator-managed:v1", false).unwrap();
+        assert!(config.contains("[[hooks.Notification]]"));
+        assert!(config.contains("[[hooks.PermissionRequest]]"));
     }
 }

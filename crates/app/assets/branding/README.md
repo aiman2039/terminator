@@ -3,10 +3,17 @@
 The selected logo is **Red Eye**: terminal + AI, with a red machine sensor
 as a subtle nod to The Terminator. Generated with the built-in image tool.
 
-`terminator.png` is the original selected artwork from
-`output/logo-variants/05-red-eye.png`. The GUI embeds it as its window icon.
-`terminator.icns` contains macOS icon sizes resized with `sips` and stored as PNG entries in an ICNS container
-and is copied into the application bundle by `cargo xtask package`.
+`red-eye-source.png` is the checked-in, unmasked source artwork.
+Shipped icons (`terminator.png`, `terminator-512.png`, `terminator.icns`) apply
+Apple's continuous-corner mask so Dock/Finder match other macOS app icons.
+The GUI embeds `terminator.png` as its window icon (also the running Dock tile).
+`terminator.icns` is copied into the application bundle by `cargo xtask package`.
+
+Regenerate from the source artwork:
+
+```sh
+swift crates/app/assets/branding/generate-icons.swift
+```
 
 The Linux archive includes the 512 px derivative as `terminator.png`; when installing the included
 desktop entry, install this image as `terminator.png` in the user's icon

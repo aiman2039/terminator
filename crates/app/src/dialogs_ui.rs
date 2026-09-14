@@ -1,39 +1,8 @@
 //! Modal rendering.
-use super::*;
+use super::{AttentionAction, AttentionCard, attention_card, *};
 
 impl App {
     pub(super) fn modals(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
-        if let Some((target, ids, error)) = self.editor_close_decision.clone() {
-            let mut open = true;
-            self.popups
-                .window(ctx, "Close file")
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .show(ctx, |ui| {
-                    ui.label(&error);
-                    ui.horizontal(|ui| {
-                        for (label, mode) in [
-                            ("Save and close", Some(editor_close::Mode::Save)),
-                            ("Discard changes", Some(editor_close::Mode::Discard)),
-                            ("Cancel", None),
-                        ] {
-                            let response = ui.button(label);
-                            #[cfg(feature = "test-support")]
-                            diagnostics::record(ui.ctx(), label, response.rect);
-                            if response.clicked() {
-                                self.editor_close_decision = None;
-                                if let Some(mode) = mode {
-                                    self.close_editors(target.clone(), ids.clone(), mode);
-                                }
-                            }
-                        }
-                    });
-                });
-            if !open {
-                self.editor_close_decision = None;
-            }
-        }
         if self.add_project && !self.picker_active {
             #[cfg(feature = "test-support")]
             if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
@@ -87,8 +56,8 @@ impl App {
                 }
                 self.close_workspace = None;
             } else if self.editors_only(&live) {
-                if !self.editor_close_pending {
-                    self.close_workspace = None;
+                self.close_workspace = None;
+                if !self.skip_editor_close_request(&live) {
                     self.close_editors(
                         editor_close::Target::Workspace(project, tab_id),
                         live,
@@ -148,8 +117,8 @@ impl App {
                 self.remove_tab(&sid);
                 self.close_session = None;
             } else if self.editors_only(std::slice::from_ref(&sid)) {
-                if !self.editor_close_pending {
-                    self.close_session = None;
+                self.close_session = None;
+                if !self.skip_editor_close_request(std::slice::from_ref(&sid)) {
                     self.close_editors(
                         editor_close::Target::Pane(sid.clone()),
                         vec![sid],
@@ -234,48 +203,34 @@ impl App {
                 .iter()
                 .find(|n| n.id == nid)
                 .cloned()
+            && self.notice_detail_modal_open()
         {
+            let session = self
+                .state
+                .sessions
+                .iter()
+                .find(|s| s.id == n.session_id)
+                .cloned();
             let mut open = true;
+            let mut action = AttentionAction::None;
             self.popups
                 .window(ctx, "Agent needs attention")
                 .id(egui::Id::new("notice-detail"))
                 .open(&mut open)
                 .default_width(480.0)
                 .show(ctx, |ui| {
-                    ui.colored_label(
-                        state_color(n.state, &self.theme),
-                        RichText::new(n.state.label()).strong(),
+                    action = attention_card(
+                        ui,
+                        AttentionCard {
+                            theme: &self.theme,
+                            notice: &n,
+                            session: session.as_ref(),
+                            selected: self.active_session.as_ref() == Some(&n.session_id),
+                            highlight: true,
+                        },
                     );
-                    ui.heading(&n.summary);
-                    if let Some(s) = self.state.sessions.iter().find(|s| s.id == n.session_id) {
-                        ui.label(format!("{} · {}", s.label, s.cwd.display()));
-                    }
-                    ui.separator();
-                    ui.label(&n.details);
-                    if n.resolved {
-                        ui.weak("This event has resolved.");
-                    }
-                    ui.horizontal(|ui| {
-                        if ui.button("Go to context →").clicked() {
-                            self.go_session(&n.session_id);
-                            self.detail = None;
-                        }
-                        if ui.button("Snooze 10 min").clicked() {
-                            self.send(Request::Notice {
-                                id: nid.clone(),
-                                action: "snooze".into(),
-                            });
-                            self.detail = None;
-                        }
-                        if ui.button("Dismiss").clicked() {
-                            self.send(Request::Notice {
-                                id: nid.clone(),
-                                action: "dismiss".into(),
-                            });
-                            self.detail = None;
-                        }
-                    });
                 });
+            self.apply_notice_action(nid, action);
             if !open {
                 self.detail = None;
             }
