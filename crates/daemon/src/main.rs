@@ -1105,5 +1105,6 @@ fn main() -> Result<()> {
     }
     shared.persist()?;
     let _ = fs::remove_file(shared.paths.socket());
+    shared.helper.cleanup()?;
     Ok(())
 }

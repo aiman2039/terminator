@@ -1,5 +1,6 @@
 mod browser;
 mod control;
+mod shutdown;
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use std::{

@@ -103,6 +103,8 @@ versions remain read-only. Explicit text/external actions retain the editor path
 presentation commands. It does not move PTY ownership into the GUI. The daemon's
 existing protocol is unchanged; added requests are advertised through capabilities.
 UI-control retries focus an already-visible session instead of duplicating it.
+GUI Ping/Snapshot requests observe the GUI even while its daemon is unavailable;
+presentation actions refresh daemon state before resolving their targets.
 
 Git owns worktree state. The SQLite-backed application state records the project,
 common Git directory, checkout path, creation time and removal marker. Creation
@@ -123,6 +125,13 @@ tungstenite; no Chromium, Electron, or webview is bundled into the app.
 
 
 ## GUI updates and exit checkpoints
+
+Worker/IPC responses, native exit requests, exit checkpoints and heartbeats run
+in `eframe::App::logic`, which is called on repaint requests even when the window
+is minimized or hidden. Rendering stays in `App::ui`. Heartbeats pause during the
+exit checkpoint so they cannot keep its job drain busy. Queued GUI requests carry
+the server's response deadline; expired requests are rejected before acting,
+preventing a timed-out request from executing when an old UI queue resumes.
 
 Window close, native Quit and Sparkle share the GUI's asynchronous exit
 coordinator. A worker drain applies pending results; follow-up jobs trigger a
@@ -172,8 +181,10 @@ rechecks the observed daemon generation/version/capability and sends only
 `ShutdownIfIdle`. After the socket is removed and lock is released it starts the
 installed daemon and verifies its new generation and private helper. Concurrent
 creation refuses shutdown. Unknown/newer or unsupported daemons are preserved;
-the oldest installations get one-time logout/login guidance after saving and
-closing sessions. Legacy missing-helper errors route to this screen even when
+the oldest installations get a copyable manual shutdown command scoped to the
+GUI's helper/data/runtime paths. Users must finish sessions and fully quit the
+GUI before executing it in another terminal; the GUI never sends legacy shutdown.
+Logout/login remains an alternative. Legacy missing-helper errors route here even when
 the old daemon has no installation-health fields.
 
 The bounded history queue applies backpressure on the dedicated PTY reader,
@@ -183,3 +194,14 @@ terminal process. A disconnected worker or write failure reports actual history
 loss and marks the affected session truncated; it does not terminate that session.
 A new daemon clears previous runtime health warnings and rechecks its installation;
 per-session history-loss flags remain intact across recovery.
+
+Explicit `terminator-hook ctl shutdown --stop-all` performs user-requested cleanup
+using existing daemon requests. It requests normal GUI closure, holds `ui.lock`
+after the checkpoint completes, records the daemon generation and session set,
+then stops those sessions and waits for them to end. Unrelated concurrent sessions,
+generation changes and timeouts abort the sequence. Idle shutdown flushes history
+and persists state; completion waits for socket removal and daemon lock release.
+The command refuses execution inside a managed session and does not force-kill
+processes. Unsaved editor buffers are discarded only under the explicit stop-all
+option. Normal daemon teardown explicitly removes its private helper directory
+before releasing the lock, even when background worker Arcs outlive main.

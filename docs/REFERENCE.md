@@ -64,9 +64,11 @@ replacement or removal. If an older installation reports a missing helper, use
 **Fix installation… → Settings → Updates → Installation**. Save your files and
 finish the listed sessions, then choose **Repair installation**. Backgrounded
 sessions still count as live. Repair preserves history and never relaunches ended
-sessions. The oldest daemons lack safe restart support; the screen explains the
-one-time logout/login needed after saving and closing sessions. Do not kill a
-daemon with live work merely to reload a build.
+sessions. For the oldest daemons, the screen provides a **Copy shutdown command**
+button: finish all sessions, copy it, fully quit Terminator, then run it in
+Terminal.app or another terminal application. After `"Ok"`, wait two seconds and
+reopen Terminator. Logout/login is an alternative. Do not kill a daemon with live
+work merely to reload a build.
 
 ## Validation
 
@@ -261,7 +263,23 @@ terminator-hook ctl worktree list PROJECT_ID
 terminator-hook ctl worktree remove WORKTREE_PROJECT_ID
 terminator-hook ctl metadata SESSION_ID --pr
 terminator-hook ctl notify SESSION_ID 'Build finished'
+terminator-hook ctl shutdown
+terminator-hook ctl shutdown --stop-all
 ```
+
+Run shutdown from Terminal.app or another terminal outside Terminator. The default
+refuses live sessions. Explicit `--stop-all` closes the GUI through its normal
+workspace checkpoint, stops every live shell/editor through the daemon, waits for
+session exit, flushes saved history, and waits for daemon teardown. **Save your
+work first: unsaved editor buffers are discarded and running jobs stop.** The
+command retains session records and history. A failed GUI close, changed daemon,
+new concurrent session or timeout aborts cleanup; it never force-kills processes.
+If an older installed GUI times out while hidden or minimized, restore its window,
+quit it completely, and retry. Current builds service control requests and exit
+checkpoints even while minimized.
+The default wait is 30 seconds per phase (`--timeout 1..300`). After successful
+completion, reopening the app starts its installed daemon without relaunching
+historical sessions. No fixed sleep is needed before reopening.
 
 The GUI control endpoint is a private authenticated `gui.sock`; the daemon retains
 its existing versioned JSON socket. Unsupported daemon features fail before any

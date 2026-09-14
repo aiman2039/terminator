@@ -16,6 +16,12 @@ pub struct Helper {
 }
 
 impl Helper {
+    /// Background worker Arcs can outlive main; remove this daemon's private
+    /// directory explicitly during idle teardown while its lock is still held.
+    pub fn cleanup(&self) -> Result<()> {
+        fs::remove_dir_all(self._directory.path()).context("Remove stopped daemon's private helper")
+    }
+
     pub fn stage(source: &Path, data: &Path) -> Result<Self> {
         ensure!(
             executable_available(source),

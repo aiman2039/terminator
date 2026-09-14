@@ -1,5 +1,139 @@
 # Validation evidence — 2026-09-08
 
+## Minimized GUI control and cleanup timeout (2026-09-14)
+
+The running daemon remained healthy with both live shells intact while a read-only
+GUI snapshot timed out after 5.05 seconds. A three-second process sample showed
+the GUI in eframe's invisible/minimized-window path. Source inspection found IPC
+response processing and exit checkpoints only in `App::ui`, which eframe skips
+there. The earlier native cleanup test covered a visible window and missed this.
+
+Extending the native fixture to minimize its disposable window reproduced the
+unresponsive GUI status endpoint before the code change. Moving worker responses,
+native exit handling, checkpoints and heartbeats to `App::logic` fixes the
+dependency on rendering. Heartbeats remain suspended during exit. GUI requests
+also carry a deadline and cannot perform late actions after expiring in the queue.
+
+- All 155 workspace tests passed, including expired-request rejection without a
+  late project/file action. Log: `/tmp/terminator-minimized-workspace-tests-final.log`.
+- Workspace binaries/examples test-support build, strict workspace Clippy,
+  formatting and whitespace checks passed.
+- Native installation recovery passed with both visible and explicitly minimized
+  GUIs. Each cleanup case used a shell and unsaved Neovim editor, verified normal
+  GUI exit, retained on-disk file contents and ended records without relaunch.
+  [Minimized cleanup result](screenshots/helper-recovery/cleanup-minimized.json).
+  Captures/logs: `/tmp/terminator-minimized-close-final/`.
+- Native GUI-update continuity also passed after moving checkpoint processing,
+  including preserved sessions and unsaved editor state across GUI replacement.
+  Artifacts: `/tmp/terminator-minimized-update-final/`.
+
+No user sessions were stopped and the installed GUI was not replaced. Older
+installed GUIs need their window restored and a complete normal quit before
+retrying cleanup; the permanent minimized-window fix requires the rebuilt GUI.
+The reproduction and native verification were on macOS; Linux native behavior
+was not exercised in this follow-up.
+
+## Explicit stop-all cleanup (2026-09-14)
+
+Added `terminator-hook ctl shutdown --stop-all` and a separate copyable command
+under Installation → Stop all sessions and shut down. The command checkpoints and
+closes the GUI, stops daemon-owned sessions, waits for their end, flushes history
+through shutdown, and waits for socket removal and lock release. Saved records
+remain. Unsaved buffers are explicitly discarded; refusal/timeouts are errors,
+not force-kill fallbacks. The hook now reuses the workspace's existing fs2 package.
+
+The first real-PTY run found that background worker Arcs could leave the private
+helper directory behind on normal process exit. Teardown now removes that exact
+directory explicitly while holding the daemon lock. No saved history is removed.
+
+- All 154 workspace tests passed, including new failed-GUI-save and
+  changed-generation/concurrent-session refusal tests. Shell quoting tests cover
+  both displayed commands. Socket/watcher tests needed access outside the sandbox.
+- Workspace binaries/examples build with test support, strict workspace Clippy,
+  rustfmt and diff checks passed.
+- `xtask integration` passed: default/self shutdown refusal, two-session cleanup,
+  helper/socket teardown before return, retained history and ended records after
+  restart, and an HUP-ignoring session that times out without retiring its daemon.
+  The fixture then explicitly exits its stubborn shell. Existing integration
+  regressions also passed. Log: `/tmp/terminator-stop-all-integration-final.log`.
+- The extended native installation fixture passed. The cleanup command itself
+  closed an isolated GUI normally, stopped a shell and an unsaved Neovim editor,
+  preserved the on-disk file without silently saving its buffer, and retained
+  historical records without relaunch. The existing manual/idle/reconnection
+  cases passed, and the [stop-all explanation](screenshots/helper-recovery/stop-all-command.png)
+  was visually inspected. Captures/logs: `/tmp/terminator-stop-all-ui/`.
+
+The two observed live user sessions were not stopped. The installed app/helper
+were not replaced; the new command is available from the locally built helper.
+Linux native rendering and detached processes that escape terminal job control
+were not exercised. Stop-all uses normal daemon termination and reports sessions
+that refuse to exit; it is not an unconditional OS process-tree kill.
+
+## Manual recovery instructions and reconnect banners (2026-09-14)
+
+Settings → Updates → Installation now explains manual recovery for legacy
+services and provides **Copy shutdown command** after live sessions finish.
+The command uses the current GUI's absolute helper/data/runtime paths with shell
+quoting. Instructions require fully quitting the GUI before running it in another
+terminal, then reopening after shutdown. No legacy shutdown is executed by the UI.
+
+Successful snapshots clear old connection errors while preserving unrelated
+operation failures. Transport failures invalidate the worker's snapshot hint so
+an unchanged daemon can restore connected status. GUI Ping/Snapshot requests now
+observe the GUI directly without requiring or refreshing the daemon first;
+presentation actions retain their daemon state refresh.
+
+- All 152 workspace tests passed (101 app, 26 core, 15 daemon, 3 hook,
+  4 integrations, 3 packaging), including shell metacharacters/custom endpoints
+  and clearing connection errors without hiding failed operations. The initial
+  full-workspace sandbox run blocked socket/watcher fixtures; rerunning with
+  access to their isolated sockets and watchers passed.
+- Workspace binaries/examples build with `terminator/test-support`, strict
+  all-target/all-feature Clippy, formatting and whitespace checks passed.
+- The extended native installation fixture passed: [manual instructions](screenshots/helper-recovery/manual-recovery.png),
+  live-session protection, idle repair, and [automatic banner clearing](screenshots/helper-recovery/reconnected.png)
+  after a temporary socket outage with identical daemon generation and revision.
+  An initial outage test exposed the GUI status endpoint's daemon dependency;
+  the final fixture verifies recovery without causing a state refresh itself.
+  Captures are under `/tmp/terminator-manual-recovery-ui-verified/installation/`.
+  Copyable shell text was executed only against a harmless argument-reporting
+  fixture helper; native clipboard transfer was not exercised.
+
+After the user's manual shutdown, a process check showed the original GUI still
+open and no daemon. Starting the installed daemon restored version 0.16.0 with an
+available private helper and no degraded warning. The inventory retained all
+110 ended and 10 interrupted sessions, with no live sessions or historical
+relaunch. The installed GUI was not replaced; its stale banner can be dismissed
+or cleared by quitting and reopening now that the daemon is reachable. The UI
+changes above are local builds, not an installed or published application update.
+
+## Installed 0.16.0 helper and history diagnosis (2026-09-14)
+
+A read-only process check and authenticated health snapshot confirmed the GUI
+was running from `/Applications/Terminator.app`, while its older daemon still
+referenced an `AppTranslocation` installation. That daemon reported no version,
+neither `shutdown-if-idle-v1` nor `stable-helper-v1`, and the old queue-saturation
+warning. Its inventory contained no live sessions at inspection. The disabled
+repair action therefore reflected unsupported safe restart, not missing files
+in the current installed app. Logout/login is one recovery option. Inspection of
+the older daemon source also confirmed an existing manual `Shutdown` request
+that rejects live sessions and flushes history. After saving work and quitting
+the GUI to prevent new session creation, users can invoke the installed helper
+with `rpc '"Shutdown"'`, wait for daemon exit, then reopen the installed app.
+This legacy check is not serialized against concurrent creation and is therefore
+not a substitute for the capability-gated automatic repair path. The manual
+shutdown command was inspected, not executed against the user daemon.
+
+Copies of the installed 0.16.0 build 15 daemon/helper passed the existing real-PTY
+integration suite through `TERMINATOR_TEST_BIN_DIR`. The history regression saved
+all 6,291,456 payload bytes without truncation; the helper regression preserved
+the private executable and original shell after removing its source installation.
+Logs and binary hashes are in `/tmp/terminator-installed-check-cel6zhj9/`.
+Fixtures used temporary state and required local socket/PTY access outside the
+sandbox. The installed application and user daemon were not changed or restarted;
+post-recovery production health and native rendering were not tested. Previously
+dropped history remains lost. No additional application-code change was needed.
+
 ## Release cache collision and build scheduling (2026-09-14)
 
 Run [34851813492](https://github.com/aiman2039/terminator/actions/runs/34851813492)

@@ -165,7 +165,7 @@ pub fn run(o: &Options) -> Result<()> {
     );
     h.assert_pids(&[shell])
 }
-struct Proxy {
+pub(super) struct Proxy {
     stop: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
     pub rejected: Arc<AtomicUsize>,
@@ -178,7 +178,7 @@ impl Drop for Proxy {
         }
     }
 }
-fn proxy(root: &Path) -> Result<Proxy> {
+pub(super) fn proxy(root: &Path) -> Result<Proxy> {
     let dir = root.join("legacy");
     fs::create_dir(&dir)?;
     fs::copy(root.join("run/auth"), dir.join("auth"))?;

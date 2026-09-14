@@ -4185,6 +4185,7 @@ dependencies = [
  "anyhow",
  "base64",
  "clap",
+ "fs2",
  "libc",
  "open",
  "serde_json",

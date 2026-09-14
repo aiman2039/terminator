@@ -9,7 +9,7 @@ use std::{
         mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use terminator_core::{
     Paths, read_frame,
@@ -64,15 +64,23 @@ pub fn spawn(
                                 "GUI authentication failed"
                             );
                             envelope.request.validate()?;
-                            if let terminator_core::Response::State(state) =
+                            // Observational GUI requests must remain available
+                            // during a daemon outage and report the GUI's actual
+                            // state, rather than causing a reconnect themselves.
+                            if !matches!(
+                                envelope.request,
+                                terminator_core::ui_control::Request::Snapshot
+                                    | terminator_core::ui_control::Request::Ping
+                            ) && let terminator_core::Response::State(state) =
                                 terminator_core::rpc(&paths, terminator_core::Request::Snapshot)?
                             {
                                 updates.send(Update::State(state))?;
                             }
                             let (tx, rx) = mpsc::sync_channel(1);
-                            updates.send(Update::UiRequest(envelope.request, tx))?;
+                            let deadline = Instant::now() + Duration::from_secs(5);
+                            updates.send(Update::UiRequest(envelope.request, tx, deadline))?;
                             ctx.request_repaint();
-                            rx.recv_timeout(Duration::from_secs(5))?
+                            rx.recv_timeout(deadline.saturating_duration_since(Instant::now()))?
                                 .map_err(anyhow::Error::msg)
                         })();
                         let response = match result {

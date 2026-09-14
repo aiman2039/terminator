@@ -10,6 +10,10 @@ use std::{
 };
 use terminator_core::*;
 
+pub fn is_connection_error(error: &str) -> bool {
+    error.starts_with("Reconnecting:") || error.starts_with("Session daemon unavailable")
+}
+
 pub fn can_retire_daemon(state: &State) -> bool {
     state.daemon_version.as_deref().is_some_and(|version| {
         semver::Version::parse(version)

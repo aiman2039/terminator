@@ -164,8 +164,27 @@ sessions still count. **Repair installation** becomes available when no sessions
 remain and the daemon advertises safe idle shutdown. It checkpoints the workspace,
 rechecks generation and compatibility, requests atomic idle shutdown, starts the
 installed daemon and verifies the private helper. No saved terminal is relaunched.
-Daemons too old to advertise safe shutdown require a one-time OS logout/login
-after saving work and closing sessions. Unknown or newer versions are preserved.
+For older daemons without safe in-app restart, the screen shows a **Copy shutdown
+command** button and numbered manual instructions. Finish all live sessions,
+copy the command, fully quit Terminator (⌘Q on macOS), then run it in Terminal.app
+or another terminal application. After `"Ok"`, wait two seconds and reopen
+Terminator. The command targets this installation's helper, data and runtime
+directories, including custom installations. The GUI only copies the command;
+it does not execute legacy shutdown. Logout/login remains an alternative after
+saving work and closing sessions. Unknown or newer versions are never retired
+automatically.
+
+When live sessions remain, **Stop all sessions and shut down** offers a separate
+**Copy stop-all command** with an unsaved-work warning. The new helper's
+`ctl shutdown --stop-all` requests normal GUI closure and waits for its checkpoint
+and process exit before stopping sessions. It then uses the daemon's existing
+Stop requests, waits for all sessions to end and requests idle shutdown (or the
+legacy Shutdown request when needed). It waits for socket removal and daemon
+lock release before returning, so a following `open /Applications/Terminator.app`
+does not merely reactivate the old GUI. Run this command in another terminal app.
+It does not save editor buffers or force-kill jobs that ignore normal termination;
+timeouts report failure with the daemon retained. The new CLI is included only
+after rebuilding/updating the helper, even when the running daemon is compatible.
 
 `cargo xtask gui installation --output /tmp/terminator-helper-recovery` checks the
 native recovery screen, live-session protection and successful idle repair.

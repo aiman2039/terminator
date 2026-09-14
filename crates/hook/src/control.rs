@@ -25,6 +25,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Control {
     List,
+    /// Close the GUI and shut down the daemon after flushing saved history.
+    Shutdown {
+        /// Terminate every live session, discarding unsaved editor buffers and stopping jobs.
+        #[arg(long)]
+        stop_all: bool,
+        /// Maximum seconds to wait for each cleanup phase; never force-kills a process.
+        #[arg(long, default_value = "30", value_parser = clap::value_parser!(u64).range(1..=300))]
+        timeout: u64,
+    },
     AddProject {
         path: PathBuf,
     },
@@ -185,6 +194,9 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     let state = snapshot(&paths)?;
     let value = match cli.command {
+        Control::Shutdown { stop_all, timeout } => {
+            super::shutdown::run(&paths, state, stop_all, Duration::from_secs(timeout))?
+        }
         Control::List => {
             json!({"generation":state.generation,"projects":state.projects,"sessions":state.sessions,"worktrees":state.worktrees,"agents":state.agents,"terminal_notices":state.terminal_notices})
         }

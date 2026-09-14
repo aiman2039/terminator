@@ -117,6 +117,7 @@ enum Update {
     UiRequest(
         terminator_core::ui_control::Request,
         mpsc::SyncSender<Result<serde_json::Value, String>>,
+        Instant,
     ),
     Metadata(u64, metadata::Metadata),
     OpenImage(String, PathBuf, After),
@@ -557,7 +558,11 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
                     Ok(())
                 })();
                 if let Err(e) = result {
-                    let _ = tx.send(Update::Error(format!("{e:#}")));
+                    let error = format!("{e:#}");
+                    if daemon_connection::is_connection_error(&error) {
+                        revision = None;
+                    }
+                    let _ = tx.send(Update::Error(error));
                 }
                 ctx.request_repaint();
             }
@@ -605,6 +610,9 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
                     }
                 }
                 Err(e) => {
+                    // Obtain a full snapshot on reconnect even if the daemon's
+                    // generation/revision did not change during the outage.
+                    revision = None;
                     let _ = tx.send(Update::Error(format!("Reconnecting: {e}")));
                     ctx.request_repaint();
                 }
@@ -897,6 +905,7 @@ impl App {
                 {
                     snapshot["updater_available"] = serde_json::json!(self.updater.available());
                     snapshot["installation"] = serde_json::json!({
+                        "connected":self.connected,
                         "problem":self.installation_problem(),
                         "repair_pending":self.repair_pending,
                         "can_repair":self.connected && can_retire_daemon(&self.state),
@@ -1124,8 +1133,12 @@ impl App {
                         Err(error) => self.editor_close_decision = Some((target, ids, error)),
                     }
                 }
-                Update::UiRequest(request, reply) => {
-                    let result = self.ui_request(ctx, request).map_err(|e| format!("{e:#}"));
+                Update::UiRequest(request, reply, deadline) => {
+                    let result = if Instant::now() >= deadline {
+                        Err("GUI request expired before processing; no action was performed".into())
+                    } else {
+                        self.ui_request(ctx, request).map_err(|e| format!("{e:#}"))
+                    };
                     let _ = reply.send(result);
                 }
                 Update::Metadata(generation, data) => {
@@ -1385,7 +1398,7 @@ impl App {
                     if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
                         eprintln!("Fixture error {e}");
                     }
-                    if e.starts_with("Reconnecting:") {
+                    if daemon_connection::is_connection_error(&e) {
                         self.connected = false;
                     }
                     self.error = Some(e);
@@ -1406,6 +1419,13 @@ impl App {
         }
     }
     fn apply_state(&mut self, mut state: State) {
+        if self
+            .error
+            .as_deref()
+            .is_some_and(daemon_connection::is_connection_error)
+        {
+            self.error = None;
+        }
         if state.generation != self.state.generation
             || state.attachment_helper_available == Some(true)
         {
@@ -2031,10 +2051,10 @@ impl eframe::App for App {
         self.diagnostics.input(ctx, input);
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        let ctx = ui.ctx().clone();
-        self.popups.begin_frame(&ctx);
-        self.process_updates(&ctx);
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // eframe calls logic even while hidden/minimized; ui is rendering-only.
+        // IPC and exit checkpoints must not depend on a visible window.
+        self.process_updates(ctx);
         if updater::termination_cancelled() {
             self.native_installation_cancelled();
         }
@@ -2044,7 +2064,22 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.begin_exit();
         }
-        self.advance_exit(&ctx);
+        self.advance_exit(ctx);
+        if !self.exit.active() && self.last_heartbeat.elapsed() > Duration::from_secs(1) {
+            self.send(Request::Heartbeat {
+                focused: ctx.input(|i| {
+                    i.viewport().focused.unwrap_or(false)
+                        && !i.viewport().minimized.unwrap_or(false)
+                }),
+            });
+            self.last_heartbeat = Instant::now();
+        }
+        ctx.request_repaint_after(Duration::from_secs(1));
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.popups.begin_frame(&ctx);
         if self.exit.active() {
             ui.centered_and_justified(|ui| {
                 ui.label("Saving workspace before closing…");
@@ -2057,12 +2092,6 @@ impl eframe::App for App {
         self.markdown.begin_frame();
         #[cfg(feature = "test-support")]
         self.diagnostics.frame(&ctx);
-        if self.last_heartbeat.elapsed() > Duration::from_secs(1) {
-            self.send(Request::Heartbeat {
-                focused: ctx.input(|i| i.viewport().focused.unwrap_or(false)),
-            });
-            self.last_heartbeat = Instant::now();
-        }
         for (action, key) in self.state.settings.keybindings.clone() {
             if shortcut(&ctx, &key) {
                 match action.as_str() {
@@ -2695,6 +2724,55 @@ mod navigation_tests {
         repaired.attachment_helper_available = Some(true);
         app.apply_state(repaired);
         assert!(!app.installation_problem());
+    }
+
+    #[test]
+    fn reconnect_clears_transport_errors_but_preserves_failed_operations() {
+        let (mut app, ctx, _dir) = fixture();
+        for message in [
+            "Reconnecting: Session daemon unavailable",
+            "Session daemon unavailable: No such file or directory (os error 2)",
+        ] {
+            app.update_tx.send(Update::Error(message.into())).unwrap();
+            app.process_updates(&ctx);
+            assert!(!app.connected);
+            app.update_tx
+                .send(Update::State(Box::new(app.state.clone())))
+                .unwrap();
+            app.process_updates(&ctx);
+            assert!(app.connected);
+            assert!(app.error.is_none());
+        }
+        for message in [
+            "Settings rejected",
+            "Could not save workspace before repair",
+        ] {
+            app.update_tx.send(Update::Error(message.into())).unwrap();
+            app.process_updates(&ctx);
+            app.apply_state(app.state.clone());
+            assert_eq!(app.error.as_deref(), Some(message));
+        }
+    }
+
+    #[test]
+    fn expired_gui_request_cannot_change_the_workspace_after_timeout() {
+        let (mut app, ctx, _dir) = fixture();
+        let (reply, result) = mpsc::sync_channel(1);
+        app.update_tx
+            .send(Update::UiRequest(
+                terminator_core::ui_control::Request::OpenFile {
+                    project: "b".into(),
+                    path: "/b/late.txt".into(),
+                    as_text: true,
+                },
+                reply,
+                Instant::now() - Duration::from_secs(1),
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(result.recv().unwrap().unwrap_err().contains("expired"));
+        assert_eq!(app.selected.as_deref(), Some("a"));
+        assert!(!app.open_path);
     }
 
     #[test]

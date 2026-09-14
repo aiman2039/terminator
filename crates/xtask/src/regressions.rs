@@ -6,12 +6,120 @@ use std::{fs, io::Read, os::unix::fs::PermissionsExt, thread, time::Duration};
 use terminator_core::{quote, read_frame};
 
 pub fn run() -> Result<()> {
+    clean_shutdown()?;
     idle_shutdown_race()?;
     history_burst()?;
     missing_helper_health()?;
     large_snapshots()?;
     stalled_attachment()?;
     terminal_editors()?;
+    Ok(())
+}
+
+fn clean_shutdown() -> Result<()> {
+    let mut h = Harness::new()?;
+    h.setup()?;
+    let project = h.project("stop-all")?;
+    let first = h.shell(&project)?;
+    let second = h.shell(&project)?;
+    let mut stream = h.attach(&first)?;
+    h.write(
+        &mut stream,
+        "printf '\\nCLEANUP_HISTORY_MARKER\\n'; sleep 60\n",
+    )?;
+    h.wait(
+        |_| {
+            h.history(id(&first))
+                .is_ok_and(|s| s.contains("CLEANUP_HISTORY_MARKER"))
+        },
+        5,
+    )?;
+    let helper = h.state()?["attachment_helper_executable"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let refused = h
+        .command("terminator-hook")
+        .args(["ctl", "shutdown"])
+        .output()?;
+    ensure!(
+        !refused.status.success()
+            && String::from_utf8_lossy(&refused.stderr).contains("--stop-all"),
+        "Default shutdown must refuse live sessions"
+    );
+    h.assert_pids(&[first.clone(), second.clone()])?;
+    let inside = h
+        .command("terminator-hook")
+        .env("TERMINATOR_SESSION_ID", id(&first))
+        .args(["ctl", "shutdown", "--stop-all"])
+        .output()?;
+    ensure!(
+        !inside.status.success()
+            && String::from_utf8_lossy(&inside.stderr).contains("outside Terminator"),
+        "Cleanup must not kill its own terminal"
+    );
+    h.assert_pids(&[first.clone(), second.clone()])?;
+    let output = h
+        .command("terminator-hook")
+        .args(["ctl", "shutdown", "--stop-all", "--timeout", "5"])
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "Cleanup failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout)?;
+    ensure!(
+        result["shutdown"] == true && result["stopped_sessions"] == 2,
+        "Cleanup did not report both sessions"
+    );
+    ensure!(
+        !std::path::Path::new(&helper).exists()
+            && !terminator_core::Paths::at(h.root.clone()).socket().exists(),
+        "Cleanup returned before daemon teardown"
+    );
+    wait_child(&mut h.daemon.as_mut().unwrap().0, Duration::from_secs(5))?;
+    h.daemon.take();
+    h.start()?;
+    let state = h.state()?;
+    ensure!(
+        sessions(&state).len() == 2 && sessions(&state).iter().all(|s| s["lifecycle"] == "ended"),
+        "Cleanup must retain ended records without relaunch"
+    );
+    ensure!(
+        h.history(id(&first))?.contains("CLEANUP_HISTORY_MARKER"),
+        "Cleanup lost saved terminal history"
+    );
+    // A process that ignores the normal stop signal must not cause a fake success.
+    let stubborn = h.shell(&project)?;
+    let mut stream = h.attach(&stubborn)?;
+    let ready = h.root.join("ignoring-hup");
+    h.write(
+        &mut stream,
+        &format!("trap '' HUP; touch {}\n", quote(&ready.to_string_lossy())),
+    )?;
+    h.wait(|_| ready.exists(), 5)?;
+    let generation = h.state()?["generation"].clone();
+    let output = h
+        .command("terminator-hook")
+        .args(["ctl", "shutdown", "--stop-all", "--timeout", "1"])
+        .output()?;
+    // Always release the fixture's HUP-ignoring shell before checking assertions.
+    h.write(&mut stream, "exit\n")?;
+    h.wait(|s| session(s, id(&stubborn))["lifecycle"] == "ended", 5)?;
+    ensure!(
+        !output.status.success()
+            && String::from_utf8_lossy(&output.stderr).contains("did not stop"),
+        "Cleanup falsely succeeded for a refusing process"
+    );
+    ensure!(
+        h.state()?["generation"] == generation,
+        "Timed-out cleanup replaced the daemon"
+    );
+    println!(
+        "{}",
+        json!({"stop_all_cleanup":true,"default_and_self_shutdown_refused":true,"history_preserved":true,"timeout_preserves_daemon":true})
+    );
     Ok(())
 }
 

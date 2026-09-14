@@ -99,7 +99,49 @@ impl App {
                 .iter()
                 .any(|c| c == SHUTDOWN_IF_IDLE_CAPABILITY);
             if !safe_restart {
-                ui.label("This older service cannot restart safely from the app. After saving your work and closing all sessions, log out of your OS account and back in once, then open the installed Terminator app.");
+                ui.label("This older service needs a manual restart. You can run the command below instead of logging out.");
+                ui.label("1. Save your work and close every session listed above.");
+                ui.label(if cfg!(target_os = "macos") {
+                    "2. Copy the command, then fully quit Terminator with ⌘Q. Wait until it closes."
+                } else {
+                    "2. Copy the command, then fully quit Terminator. Wait until it closes."
+                });
+                ui.label(if cfg!(target_os = "macos") {
+                    "3. Open Terminal.app and paste and run the command there."
+                } else {
+                    "3. Open another terminal application and paste and run the command there."
+                });
+                ui.label("4. After it returns \"Ok\", wait two seconds and reopen Terminator.");
+                match std::env::current_exe()
+                    .map_err(anyhow::Error::from)
+                    .and_then(|exe| installation::manual_shutdown_command(&exe, &self.paths, false))
+                {
+                    Ok(command) => {
+                        ui.add(
+                            egui::Label::new(RichText::new(&command).monospace())
+                                .wrap()
+                                .selectable(true),
+                        );
+                        let copy = ui
+                            .add_enabled(
+                                live.is_empty(),
+                                egui::Button::new("Copy shutdown command"),
+                            )
+                            .on_disabled_hover_text(
+                                "Finish all live sessions before copying the recovery command.",
+                            );
+                        #[cfg(feature = "test-support")]
+                        diagnostics::record(ui.ctx(), "copy-shutdown-command", copy.rect);
+                        if copy.clicked() {
+                            ui.ctx().copy_text(command);
+                            self.info = Some("Shutdown command copied. Fully quit Terminator before running it in another terminal app.".into());
+                        }
+                    }
+                    Err(error) => {
+                        ui.label(format!("Could not prepare the command: {error}"));
+                    }
+                }
+                ui.weak("If the command reports running sessions, close them normally and retry. It preserves saved history; output already lost cannot be recovered. You can also log out and back in after saving and closing your sessions.");
             } else if live.is_empty() && !can_retire_daemon(&self.state) {
                 ui.label("This service's version is newer or cannot be verified. Open the matching or newer Terminator app to repair it.");
             }
@@ -145,5 +187,32 @@ impl App {
                 ui.label(error);
             }
         });
+        if !live.is_empty() {
+            let _cleanup = ui.collapsing("Stop all sessions and shut down", |ui| {
+                ui.label("Save your work first. This command quits Terminator, terminates every running terminal and editor, then flushes saved history and shuts down the service. Unsaved editor buffers will be lost and running jobs will stop.");
+                ui.label(if cfg!(target_os = "macos") {
+                    "Run it in Terminal.app. After it completes, reopen Terminator."
+                } else {
+                    "Run it in another terminal application. After it completes, reopen Terminator."
+                });
+                match std::env::current_exe().map_err(anyhow::Error::from)
+                    .and_then(|exe| installation::manual_shutdown_command(&exe, &self.paths, true)) {
+                    Ok(command) => {
+                        ui.add(egui::Label::new(RichText::new(&command).monospace()).wrap().selectable(true));
+                        if ui.button("Copy stop-all command").clicked() {
+                            ui.ctx().copy_text(command);
+                            self.info = Some("Stop-all command copied. Save your work before running it in another terminal app.".into());
+                        }
+                    }
+                    Err(error) => { ui.label(format!("Could not prepare the command: {error}")); }
+                }
+            });
+            #[cfg(feature = "test-support")]
+            diagnostics::record(
+                ui.ctx(),
+                "show-stop-all-command",
+                _cleanup.header_response.rect,
+            );
+        }
     }
 }

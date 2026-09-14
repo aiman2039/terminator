@@ -5,6 +5,34 @@ pub fn is_helper_error(error: &str) -> bool {
     error.starts_with("Attachment helper unavailable:")
 }
 
+/// Target this GUI's installation and service even from an unrelated terminal.
+pub fn manual_shutdown_command(
+    executable: &Path,
+    paths: &terminator_core::Paths,
+    stop_all: bool,
+) -> anyhow::Result<String> {
+    use anyhow::Context;
+    use terminator_core::quote;
+    let helper = executable.with_file_name("terminator-hook");
+    let path = |p: &Path| {
+        let p = std::path::absolute(p)?;
+        p.to_str()
+            .map(quote)
+            .context("Installation path cannot be represented as a shell command")
+    };
+    let arguments = if stop_all {
+        "ctl shutdown --stop-all"
+    } else {
+        "rpc '\"Shutdown\"'"
+    };
+    Ok(format!(
+        "env TERMINATOR_DATA_DIR={} \\\n  TERMINATOR_RUNTIME_DIR={} \\\n  {} {arguments}",
+        path(&paths.data)?,
+        path(&paths.runtime)?,
+        path(&helper)?,
+    ))
+}
+
 pub fn attachment_helper(state: &terminator_core::State) -> anyhow::Result<std::path::PathBuf> {
     if state
         .capabilities
@@ -113,6 +141,47 @@ fn show_message(title: &str, description: &str, _open_applications: bool) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn manual_shutdown_targets_this_installation_and_quotes_shell_metacharacters() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("Install ' $(false) `false`");
+        std::fs::create_dir(&dir).unwrap();
+        let helper = dir.join("terminator-hook");
+        std::fs::write(
+            &helper,
+            "#!/bin/sh\nprintf '%s\\n' \"$TERMINATOR_DATA_DIR\" \"$TERMINATOR_RUNTIME_DIR\" \"$@\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let paths = terminator_core::Paths {
+            data: dir.join("data ' $HOME"),
+            runtime: dir.join("custom runtime"),
+        };
+        for (stop_all, arguments) in [
+            (false, "rpc\n\"Shutdown\"\n"),
+            (true, "ctl\nshutdown\n--stop-all\n"),
+        ] {
+            let command =
+                manual_shutdown_command(&dir.join("terminator"), &paths, stop_all).unwrap();
+            let output = std::process::Command::new("/bin/sh")
+                .args(["-c", &command])
+                .env("TERMINATOR_DATA_DIR", "/wrong/data")
+                .env("TERMINATOR_RUNTIME_DIR", "/wrong/runtime")
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!(
+                    "{}\n{}\n{arguments}",
+                    paths.data.display(),
+                    paths.runtime.display()
+                )
+            );
+        }
+    }
+
     #[test]
     fn gui_uses_only_an_advertised_available_private_helper() {
         use terminator_core::{STABLE_HELPER_CAPABILITY, State};
