@@ -313,7 +313,6 @@ pub fn universal(
         info.insert(key.into(), true.into());
     }
     info.insert("SUShowReleaseNotes".into(), false.into());
-    info.insert("SUScheduledCheckInterval".into(), 86400.into());
     plist::Value::Dictionary(info).to_file_xml(app.join("Contents/Info.plist"))?;
     verify_universal(&app)?;
     // Also check at publication time in case another task created the output.

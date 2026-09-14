@@ -11,6 +11,20 @@ impl App {
         self.settings_section = 6;
     }
 
+    pub(super) fn maybe_upgrade_idle_daemon(&mut self) {
+        if self.exit.active()
+            || !self.connected
+            || self.repair_pending
+            || !can_retire_daemon(&self.state)
+            || self.automatic_repair_attempt.as_ref() == Some(&self.state.generation)
+        {
+            return;
+        }
+        // One automatic attempt per generation; failures remain manually retryable.
+        self.automatic_repair_attempt = Some(self.state.generation.clone());
+        self.begin_installation_repair();
+    }
+
     pub(super) fn begin_installation_repair(&mut self) {
         if self.repair_pending || !self.connected || !can_retire_daemon(&self.state) {
             return;

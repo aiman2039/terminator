@@ -1636,3 +1636,39 @@ opened an untracked file, and review close preserved the fixture shell. Hebrew
 glyphs were visually inspected in `/tmp/terminator-hebrew-git-review/reviews/review.png`.
 Actual Hebrew keyboard-layout input and provider-specific behavior were not
 exercised. No installed application or live daemon was replaced.
+
+
+## 2026-09-14: Idle upgrades and compact agent cards
+
+- The GUI now attempts the existing safe installation repair when an eligible
+  daemon becomes idle, once per generation. Live sessions and active GUI exit
+  checkpoints prevent automatic repair; manual retry remains available.
+- macOS release packaging defaults to hourly update checks. Agent cards show
+  status and a truncated session label without response summaries/details.
+- `cargo test -p terminator --bin terminator --locked`: 111 passed, including
+  automatic-upgrade idle/exit guards and failure retry suppression.
+- `cargo fmt --all --check` and `git diff --check` passed.
+- Native visual rendering, real-PTY upgrade continuity, signed updater delivery,
+  and installed user preferences were not exercised. No installation or live
+  daemon was changed.
+
+## 2026-09-14: App-owned one-minute Sparkle polling
+
+Supersedes the hourly packaging interval above. Terminator follows AppDock's
+immediate/60-second information-probe schedule and disables Sparkle's separate
+timer after migrating the existing automatic-check preference. Active Sparkle
+sessions and GUI exit suspend polling. A successful probe enters Sparkle's normal
+background update flow once per discovered version per launch, preserving its
+background-download preference and manual check controls.
+
+- `cargo test -p terminator --bin terminator --locked`: 113 passed, including
+  immediate/minute scheduling, busy/in-flight suppression, sleep without bursts,
+  failed-probe suppression, disable handling, and once-per-version offers.
+  The sandbox run had eight socket/watcher failures; the same full suite passed
+  outside the sandbox with isolated test fixtures.
+- `cargo clippy -p terminator -p xtask --all-targets --all-features --locked -- -D warnings`,
+  `cargo fmt --all --check`, and `git diff --check` passed.
+- Sparkle selectors were checked against its public SPUUpdater API documentation.
+  Native delegate delivery, installed preference migration, signed feed delivery,
+  download/install behavior, and live minute timing were not exercised. No user
+  defaults, installed app, production feed, or live daemon was changed by validation.

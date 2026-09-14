@@ -52,8 +52,15 @@ uploaded by packaging.
 
 Sparkle's `SPUStandardUpdaterController` is loaded from the app's own framework
 bundle on the main thread. The application menu has **Check for Updates…** and
-Settings has **Updates**. Automatic daily checking and background downloading
-are defaults; Sparkle stores the user's choices. Native Later, Skip, Install and
+Settings has **Updates**. The GUI probes immediately when available, then every
+60 seconds using `checkForUpdateInformation`, following AppDock's app-owned
+schedule. The existing automatic-check choice is migrated once to
+`TerminatorAutomaticUpdateChecks` before disabling Sparkle's separate timer.
+Polling pauses during GUI exit and active Sparkle sessions, with no catch-up burst
+after sleep. A successful probe hands each new version to Sparkle's background
+update flow once per GUI launch; manual checks remain available after a failure
+or deferral. Background downloading retains its existing Sparkle preference.
+Native Later, Skip, Install and
 Relaunch, and install-on-quit behavior remain under Sparkle's control.
 `SUShowReleaseNotes=false` disables embedded release notes; Settings links to
 GitHub. Signed-feed verification and verification before extraction are enabled.
@@ -76,7 +83,7 @@ termination notifications re-entering winit. Native installation cancellation
 restores GUI interaction. Review this bridge when upgrading winit or Sparkle.
 
 No GUI update stops the daemon, rotates authentication, replays commands, or
-relaunches agents/editors. A later GUI launch may retire an older daemon, or a
+relaunches agents/editors. A later GUI launch or an idle check while the GUI is open may retire an older daemon, or a
 same-version daemon with unavailable/unreported helper health or without
 `stable-helper-v1`, only when it
 advertises `shutdown-if-idle-v1` and has no live sessions. That request shares

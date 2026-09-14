@@ -625,6 +625,7 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
 struct App {
     installation_error: Option<String>,
     repair_pending: bool,
+    automatic_repair_attempt: Option<String>,
     exit: exit::Exit,
     exit_attempt: u64,
     updater: updater::Updater,
@@ -774,6 +775,7 @@ impl App {
             updater: updater::Updater::new(ctx),
             installation_error: None,
             repair_pending: false,
+            automatic_repair_attempt: None,
             #[cfg(feature = "test-support")]
             diagnostics: Default::default(),
             preferences_saved: preferences.clone(),
@@ -2144,6 +2146,8 @@ impl eframe::App for App {
                 }),
             });
             self.last_heartbeat = Instant::now();
+            self.maybe_upgrade_idle_daemon();
+            self.updater.poll();
         }
         ctx.request_repaint_after(Duration::from_secs(1));
     }
@@ -2874,6 +2878,39 @@ mod navigation_tests {
             Job::RepairInstallation(_, _)
         ));
         assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn automatic_upgrade_waits_for_idle_and_does_not_retry_failed_generation() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state.daemon_version = Some("0.0.1".into());
+        app.state.capabilities = vec![SHUTDOWN_IF_IDLE_CAPABILITY.into()];
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.maybe_upgrade_idle_daemon();
+        assert!(requests.try_recv().is_err());
+        assert!(app.automatic_repair_attempt.is_none());
+        app.state.sessions.clear();
+        app.exit = exit::Exit::Waiting(Instant::now());
+        app.maybe_upgrade_idle_daemon();
+        assert!(requests.try_recv().is_err());
+        app.exit = exit::Exit::Idle;
+        app.maybe_upgrade_idle_daemon();
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Job::RepairInstallation(_, _)
+        ));
+        app.repair_pending = false;
+        app.maybe_upgrade_idle_daemon();
+        assert!(requests.try_recv().is_err());
+        app.begin_installation_repair();
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Job::RepairInstallation(_, _)
+        ));
     }
 
     #[test]

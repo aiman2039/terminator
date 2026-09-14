@@ -141,7 +141,9 @@ The macOS bridge intercepts `NSApplication.terminate:` while retaining winit's
 delegate and calls its original implementation on the main queue after saving.
 
 The daemon survives GUI replacement. Optional `daemon_version` metadata and
-`shutdown-if-idle-v1` allow a later GUI launch to retire an older idle daemon.
+`shutdown-if-idle-v1` allow a later GUI launch or the running GUI to retire an older idle daemon.
+The GUI attempts automatic repair once per daemon generation after sessions end;
+failed attempts remain manually retryable in Settings.
 A same-version daemon is also eligible when its helper is unavailable or it
 predates `stable-helper-v1`. Unknown/newer versions and daemons without
 `shutdown-if-idle-v1` remain untouched. The check and shutdown decision share the

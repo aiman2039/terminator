@@ -1,16 +1,40 @@
 //! Sparkle is loaded only from a configured app bundle. Development launches
 //! never consult the production feed. NSApplication's delegate remains winit's.
+#[cfg(any(target_os = "macos", test))]
+mod schedule;
 #[cfg(target_os = "macos")]
 mod macos {
     use eframe::egui;
     use objc2::{
-        ClassType, MainThreadMarker, MainThreadOnly, msg_send,
+        ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send,
         rc::Retained,
         runtime::{AnyClass, AnyObject, Bool, Imp, Sel},
         sel,
     };
     use objc2_app_kit::{NSApplication, NSMenuItem};
-    use objc2_foundation::{NSBundle, NSString, ns_string};
+    use objc2_foundation::{
+        NSBundle, NSObject, NSObjectProtocol, NSString, NSUserDefaults, ns_string,
+    };
+    use std::{cell::RefCell, time::Instant};
+
+    define_class!(
+        #[unsafe(super = NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = RefCell<super::schedule::UpdateSchedule>]
+        struct UpdateDelegate;
+        unsafe impl NSObjectProtocol for UpdateDelegate {}
+        impl UpdateDelegate {
+            #[unsafe(method(updater:didFindValidUpdate:))]
+            fn found(&self, _: &AnyObject, item: &AnyObject) {
+                let version: Retained<NSString> = unsafe { msg_send![item, versionString] };
+                self.ivars().borrow_mut().found(version.to_string());
+            }
+            #[unsafe(method(updater:didFinishUpdateCycleForUpdateCheck:error:))]
+            fn finished(&self, _: &AnyObject, _: isize, error: Option<&AnyObject>) {
+                self.ivars().borrow_mut().finished(error.is_some());
+            }
+        }
+    );
     use std::sync::{
         OnceLock,
         atomic::{AtomicBool, Ordering},
@@ -79,6 +103,8 @@ mod macos {
 
     pub struct Updater {
         controller: Option<Retained<AnyObject>>,
+        delegate: Option<Retained<UpdateDelegate>>,
+        started: Instant,
         // NSBundle must stay loaded for every retained Sparkle object.
         _framework: Option<Retained<NSBundle>>,
     }
@@ -86,6 +112,8 @@ mod macos {
         pub fn new(ctx: &egui::Context) -> Self {
             let mut result = Self {
                 controller: None,
+                delegate: None,
+                started: Instant::now(),
                 _framework: None,
             };
             if cfg!(test) {
@@ -149,11 +177,28 @@ mod macos {
                 let Some(class) = AnyClass::get(c"SPUStandardUpdaterController") else {
                     return result;
                 };
+                let delegate: Retained<UpdateDelegate> = msg_send![
+                    super(
+                        UpdateDelegate::alloc(mtm)
+                            .set_ivars(RefCell::new(super::schedule::UpdateSchedule::default()))
+                    ),
+                    init
+                ];
                 let allocated: *mut AnyObject = msg_send![class, alloc];
-                let controller: *mut AnyObject = msg_send![allocated, initWithStartingUpdater: true, updaterDelegate: std::ptr::null::<AnyObject>(), userDriverDelegate: std::ptr::null::<AnyObject>()];
+                let controller: *mut AnyObject = msg_send![allocated, initWithStartingUpdater: false, updaterDelegate: &*delegate, userDriverDelegate: std::ptr::null::<AnyObject>()];
                 let Some(controller) = Retained::from_raw(controller) else {
                     return result;
                 };
+                let defaults = NSUserDefaults::standardUserDefaults();
+                let key = ns_string!("TerminatorAutomaticUpdateChecks");
+                let updater: *mut AnyObject = msg_send![&*controller, updater];
+                if defaults.objectForKey(key).is_none() {
+                    let enabled: Bool = msg_send![updater, automaticallyChecksForUpdates];
+                    defaults.setBool_forKey(enabled.as_bool(), key);
+                }
+                // Preserve the old choice above before disabling Sparkle's own timer.
+                let _: () = msg_send![updater, setAutomaticallyChecksForUpdates: false];
+                let _: () = msg_send![&*controller, startUpdater];
                 let app = NSApplication::sharedApplication(mtm);
                 if let Some(menu) = app
                     .mainMenu()
@@ -170,9 +215,36 @@ mod macos {
                     menu.insertItem_atIndex(&item, 1);
                 }
                 result.controller = Some(controller);
+                result.delegate = Some(delegate);
                 result._framework = Some(framework);
             }
             result
+        }
+        pub fn poll(&self) {
+            let (Some(controller), Some(delegate)) = (&self.controller, &self.delegate) else {
+                return;
+            };
+            let enabled = NSUserDefaults::standardUserDefaults()
+                .boolForKey(ns_string!("TerminatorAutomaticUpdateChecks"));
+            unsafe {
+                let updater: *mut AnyObject = msg_send![controller, updater];
+                let busy: Bool = msg_send![updater, sessionInProgress];
+                let action = delegate.ivars().borrow_mut().next_action(
+                    self.started.elapsed(),
+                    enabled,
+                    busy.as_bool(),
+                );
+                // Release the RefCell before invoking APIs which can call the delegate.
+                match action {
+                    super::schedule::Action::Probe => {
+                        let _: () = msg_send![updater, checkForUpdateInformation];
+                    }
+                    super::schedule::Action::Offer => {
+                        let _: () = msg_send![updater, checkForUpdatesInBackground];
+                    }
+                    super::schedule::Action::None => {}
+                }
+            }
         }
         #[cfg(feature = "test-support")]
         pub fn available(&self) -> bool {
@@ -185,15 +257,19 @@ mod macos {
                 unsafe {
                     let updater: *mut AnyObject = msg_send![controller, updater];
                     let updater = &*updater;
-                    let checks: Bool = msg_send![updater, automaticallyChecksForUpdates];
+                    let defaults = NSUserDefaults::standardUserDefaults();
+                    let key = ns_string!("TerminatorAutomaticUpdateChecks");
                     let downloads: Bool = msg_send![updater, automaticallyDownloadsUpdates];
-                    let mut checks = checks.as_bool();
+                    let mut checks = defaults.boolForKey(key);
                     let mut downloads = downloads.as_bool();
                     if ui
-                        .checkbox(&mut checks, "Check for updates automatically")
+                        .checkbox(&mut checks, "Check for updates every minute")
                         .changed()
                     {
-                        let _: () = msg_send![updater, setAutomaticallyChecksForUpdates: checks];
+                        defaults.setBool_forKey(checks, key);
+                        if let Some(delegate) = &self.delegate {
+                            delegate.ivars().borrow_mut().reset();
+                        }
                     }
                     if ui
                         .checkbox(&mut downloads, "Download updates in the background")
@@ -225,6 +301,7 @@ mod other {
     use eframe::egui;
     pub struct Updater;
     impl Updater {
+        pub fn poll(&self) {}
         pub fn new(_: &egui::Context) -> Self {
             Self
         }

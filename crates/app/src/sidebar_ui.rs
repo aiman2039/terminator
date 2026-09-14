@@ -975,11 +975,18 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
                 .vertical(|ui| {
                     ui.colored_label(
                         state_color(notice.state, theme),
-                        RichText::new(notice.state.label()).strong(),
+                        RichText::new(match notice.state {
+                            AgentState::Completed => "Agent done",
+                            AgentState::WaitingInput | AgentState::WaitingPermission => {
+                                "Agent waiting"
+                            }
+                            _ => notice.state.label(),
+                        })
+                        .strong(),
                     );
-                    ui.heading(&notice.summary);
                     if let Some(session) = session {
-                        ui.label(format!("{} · {}", session.label, session.cwd.display()));
+                        ui.add(egui::Label::new(&session.label).truncate())
+                            .on_hover_text(session.cwd.display().to_string());
                     }
                 })
                 .response
@@ -991,7 +998,6 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
                 header.rect,
             );
             ui.separator();
-            ui.label(&notice.details);
             if notice.resolved {
                 ui.weak("This event has resolved.");
             }
