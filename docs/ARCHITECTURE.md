@@ -134,8 +134,8 @@ delegate and calls its original implementation on the main queue after saving.
 The daemon survives GUI replacement. Optional `daemon_version` metadata and
 `shutdown-if-idle-v1` allow a later GUI launch to retire an older idle daemon.
 A same-version daemon is also eligible when its helper is unavailable or it
-predates installation-health metadata. Unknown/newer versions and daemons without
-that capability remain untouched. The check and shutdown decision share the
+predates `stable-helper-v1`. Unknown/newer versions and daemons without
+`shutdown-if-idle-v1` remain untouched. The check and shutdown decision share the
 session-creation lock. A failed RPC
 with a held daemon lock is a connection error, not permission to replace it.
 See `docs/UPDATES.md` for packaging, native fixture and signed rollout boundaries.
@@ -149,11 +149,32 @@ Rust development executables remain supported. Both sibling executables must be
 regular files executable by the current user. Packaging sets their mode to 0755.
 This does not request Accessibility access or modify user privacy permissions.
 
-Optional snapshot fields `daemon_executable` and `attachment_helper_available`
-report the running daemon's installation. Each authenticated snapshot refreshes
+Before publishing its socket, the daemon copies its bundled helper into a new,
+mode-0700 `.daemon-helper-*` directory under persistent application data. The
+complete executable is synced and mode 0500 before its path is used. Each daemon
+keeps that exact inode, independent of replacement, renaming or removal of the
+original app bundle. Shell cwd hooks use the private path. GUI attachment bridges
+also use it when the daemon advertises `stable-helper-v1` and reports it available;
+older daemons retain the GUI's bundled attachment bridge. No helper is downloaded
+or substituted into an already running daemon. Normal teardown removes the private
+directory; startup removes crash leftovers only after obtaining the daemon lock.
+
+Optional snapshot fields `daemon_executable`, `attachment_helper_executable`, and
+`attachment_helper_available` report the running daemon's installation and actual
+private helper. Each authenticated snapshot refreshes
 health before evaluating conditional-snapshot hints, so a helper removal or
 permission change invalidates cached health. Status diagnostics show GUI/daemon
 versions and the daemon path; live sessions always prevent automatic retirement.
+
+Settings → Updates → Installation lists live sessions with ordinary navigation
+back to their tabs. Explicit repair saves the workspace on the GUI worker,
+rechecks the observed daemon generation/version/capability and sends only
+`ShutdownIfIdle`. After the socket is removed and lock is released it starts the
+installed daemon and verifies its new generation and private helper. Concurrent
+creation refuses shutdown. Unknown/newer or unsupported daemons are preserved;
+the oldest installations get one-time logout/login guidance after saving and
+closing sessions. Legacy missing-helper errors route to this screen even when
+the old daemon has no installation-health fields.
 
 The bounded history queue applies backpressure on the dedicated PTY reader,
 without holding GUI, parser or state locks. Output bursts are not discarded when

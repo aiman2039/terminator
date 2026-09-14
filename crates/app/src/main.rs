@@ -1,5 +1,8 @@
+mod daemon_connection;
+use daemon_connection::can_retire_daemon;
 mod exit;
 mod installation;
+mod installation_ui;
 mod updater;
 mod workspace_ui;
 use workspace_ui::Viewer;
@@ -43,7 +46,6 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::PathBuf,
-    process::{Command, Stdio},
     sync::mpsc::{self, Receiver, Sender},
     thread,
     time::{Duration, Instant},
@@ -83,6 +85,7 @@ enum After {
     Text(String),
 }
 enum Job {
+    RepairInstallation(String, exit::Checkpoint),
     Control(Box<Request>, After),
     OpenProject(PathBuf, u64),
     Preferences(UiPreferences),
@@ -108,6 +111,7 @@ impl Job {
     }
 }
 enum Update {
+    InstallationRepaired(Result<Box<State>, String>),
     ExitDrained(u64, u64),
     ExitSaved(u64, Result<(), String>),
     UiRequest(
@@ -351,6 +355,19 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
             Ok(job) => {
                 let result = (|| -> Result<()> {
                     match job {
+                        Job::RepairInstallation(generation, checkpoint) => {
+                            let result = (|| -> Result<Box<State>> {
+                                checkpoint.save(&paths)?;
+                                daemon_connection::repair(
+                                    &paths,
+                                    &std::env::current_exe()?,
+                                    &generation,
+                                )
+                            })()
+                            .map_err(|e| format!("{e:#}"));
+                            revision = None;
+                            tx.send(Update::InstallationRepaired(result))?;
+                        }
                         Job::ResolveTarget(key, text, cwd) => {
                             tx.send(Update::ResolvedTarget(
                                 key,
@@ -598,6 +615,8 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
     }
 }
 struct App {
+    installation_error: Option<String>,
+    repair_pending: bool,
     exit: exit::Exit,
     exit_attempt: u64,
     updater: updater::Updater,
@@ -746,6 +765,8 @@ impl App {
             exit: Default::default(),
             exit_attempt: 0,
             updater: updater::Updater::new(ctx),
+            installation_error: None,
+            repair_pending: false,
             #[cfg(feature = "test-support")]
             diagnostics: Default::default(),
             preferences_saved: preferences.clone(),
@@ -875,6 +896,14 @@ impl App {
                 #[cfg(feature = "test-support")]
                 {
                     snapshot["updater_available"] = serde_json::json!(self.updater.available());
+                    snapshot["installation"] = serde_json::json!({
+                        "problem":self.installation_problem(),
+                        "repair_pending":self.repair_pending,
+                        "can_repair":self.connected && can_retire_daemon(&self.state),
+                        "settings_visible":self.settings_open && self.settings_section == 6,
+                        "generation":self.state.generation,
+                        "error":self.error,
+                    });
                     snapshot["left_agents"] = serde_json::json!(self.preferences.left_agents);
                     snapshot["agent_bar_badge"] = serde_json::json!(ctx.data(|data| {
                         data.get_temp::<String>(egui::Id::new("agent-bar-badge"))
@@ -1004,6 +1033,21 @@ impl App {
     fn process_updates(&mut self, ctx: &egui::Context) {
         while let Ok(update) = self.updates.try_recv() {
             match update {
+                Update::InstallationRepaired(result) => {
+                    self.repair_pending = false;
+                    match result {
+                        Ok(state) => {
+                            self.apply_state(*state);
+                            self.installation_error = None;
+                            self.error = None;
+                            self.info =
+                                Some("Installation repaired. New terminals can be opened.".into());
+                        }
+                        Err(error) => {
+                            self.error = Some(format!("Could not repair installation: {error}"))
+                        }
+                    }
+                }
                 Update::ExitDrained(id, serial) => {
                     if let exit::Exit::Draining(started, current) = self.exit
                         && current == id
@@ -1331,6 +1375,9 @@ impl App {
                     }
                 }
                 Update::Error(e) => {
+                    if installation::is_helper_error(&e) {
+                        self.installation_error = Some(e.clone());
+                    }
                     if self.exit.active() {
                         self.cancel_exit(e.clone());
                     }
@@ -1359,6 +1406,18 @@ impl App {
         }
     }
     fn apply_state(&mut self, mut state: State) {
+        if state.generation != self.state.generation
+            || state.attachment_helper_available == Some(true)
+        {
+            self.installation_error = None;
+            if self
+                .error
+                .as_deref()
+                .is_some_and(installation::is_helper_error)
+            {
+                self.error = None;
+            }
+        }
         self.connected = true;
         let initial = !self.state_loaded;
         self.state_loaded = true;
@@ -2060,27 +2119,58 @@ impl eframe::App for App {
                     } else {
                         "○ Connecting"
                     },
-                ).on_hover_text(format!("GUI {}\nDaemon {}\nDaemon executable: {}\nAttachment helper: {}",
+                )
+                .on_hover_text(format!(
+                    "GUI {}\nDaemon {}\nDaemon executable: {}\nAttachment helper: {}",
                     env!("CARGO_PKG_VERSION"),
-                    self.state.daemon_version.as_deref().unwrap_or("unknown (older daemon)"),
-                    self.state.daemon_executable.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "not reported by this daemon".into()),
-                    match self.state.attachment_helper_available { Some(true) => "available", Some(false) => "unavailable", None => "not reported by this daemon" }));
+                    self.state
+                        .daemon_version
+                        .as_deref()
+                        .unwrap_or("unknown (older daemon)"),
+                    self.state
+                        .daemon_executable
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "not reported by this daemon".into()),
+                    match self.state.attachment_helper_available {
+                        Some(true) => "available",
+                        Some(false) => "unavailable",
+                        None => "not reported by this daemon",
+                    }
+                ));
                 ui.separator();
-                if let Some(error) = self.error.clone() {
+                if self.installation_problem() {
+                    ui.colored_label(
+                        appearance::color(&self.theme.status_failed),
+                        "Terminal helper needs repair. Existing sessions are preserved.",
+                    );
+                    let repair = ui.small_button("Fix installation…");
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(ui.ctx(), "fix-installation", repair.rect);
+                    if repair.clicked() {
+                        self.open_installation_settings();
+                    }
+                } else if let Some(error) = self.error.clone() {
                     ui.horizontal_wrapped(|ui| {
                         ui.colored_label(appearance::color(&self.theme.status_failed), error);
                         if ui.small_button("Dismiss").clicked() {
                             self.error = None;
                         }
                     });
-                } else if self.state.attachment_helper_available == Some(false) {
-                    ui.colored_label(appearance::color(&self.theme.status_failed),
-                        "The running daemon’s attachment helper is unavailable. Existing sessions are preserved. Reopen Terminator after closing live sessions to repair it.");
                 } else if let Some(message) = &self.state.degraded {
                     ui.colored_label(appearance::color(&self.theme.status_waiting), message);
-                } else if self.state.daemon_version.as_deref().is_some_and(|v| v != env!("CARGO_PKG_VERSION")) {
-                    ui.weak(format!("GUI {} · daemon {}. Existing sessions use the running daemon; reopen the latest installed app after closing sessions to finish updating.",
-                        env!("CARGO_PKG_VERSION"), self.state.daemon_version.as_deref().unwrap()));
+                } else if self.state_loaded
+                    && (self.state.daemon_version.as_deref() != Some(env!("CARGO_PKG_VERSION"))
+                        || !self
+                            .state
+                            .capabilities
+                            .iter()
+                            .any(|c| c == STABLE_HELPER_CAPABILITY))
+                {
+                    ui.weak("App and session service use different installations.");
+                    if ui.small_button("Review installation…").clicked() {
+                        self.open_installation_settings();
+                    }
                 } else if let Some(info) = self.info.clone() {
                     ui.horizontal(|ui| {
                         ui.label(info);
@@ -2402,22 +2492,6 @@ impl eframe::App for App {
         ctx.request_repaint_after(Duration::from_secs(1));
     }
 }
-fn can_retire_daemon(state: &State) -> bool {
-    state.daemon_version.as_deref().is_some_and(|version| {
-        semver::Version::parse(version)
-            .ok()
-            .zip(semver::Version::parse(env!("CARGO_PKG_VERSION")).ok())
-            .is_some_and(|(running, bundled)| {
-                running < bundled
-                    || (running == bundled && state.attachment_helper_available != Some(true))
-            })
-    }) && state
-        .capabilities
-        .iter()
-        .any(|c| c == SHUTDOWN_IF_IDLE_CAPABILITY)
-        && !state.sessions.iter().any(|s| s.lifecycle.live())
-}
-
 #[cfg(test)]
 mod daemon_compatibility_tests {
     use super::*;
@@ -2425,6 +2499,7 @@ mod daemon_compatibility_tests {
     fn unknown_healthy_current_and_newer_daemons_are_preserved() {
         let mut state = State {
             attachment_helper_available: Some(true),
+            capabilities: vec![STABLE_HELPER_CAPABILITY.into()],
             ..State::default()
         };
         assert!(!can_retire_daemon(&state));
@@ -2458,80 +2533,7 @@ fn main() -> Result<()> {
         eprintln!("Terminator is already open.");
         return Ok(());
     }
-    let snapshot = rpc(&paths, Request::Snapshot);
-    if let Ok(Response::State(state)) = &snapshot
-        && can_retire_daemon(state)
-    {
-        // A concurrent creation can make this fail; keep that daemon.
-        if matches!(rpc(&paths, Request::ShutdownIfIdle), Ok(Response::Ok)) {
-            let start = Instant::now();
-            let retiring_lock = fs::OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .write(true)
-                .open(paths.runtime.join("daemon.lock"))?;
-            loop {
-                if !paths.socket().exists() && retiring_lock.try_lock_exclusive().is_ok() {
-                    FileExt::unlock(&retiring_lock)?;
-                    break;
-                }
-                anyhow::ensure!(
-                    start.elapsed() < Duration::from_secs(5),
-                    "Idle daemon did not shut down; retry launch"
-                );
-                thread::sleep(Duration::from_millis(50));
-            }
-        }
-    }
-    if rpc(&paths, Request::Snapshot).is_err() {
-        // A failed RPC is never evidence that a live daemon may be replaced.
-        let daemon_lock = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(paths.runtime.join("daemon.lock"))?;
-        daemon_lock.try_lock_exclusive().context(
-            "Running daemon is unresponsive or incompatible; its sessions have been preserved",
-        )?;
-        FileExt::unlock(&daemon_lock)?;
-
-        let daemon = std::env::current_exe()?.with_file_name("terminator-daemon");
-        anyhow::ensure!(
-            daemon.is_file(),
-            "Build the workspace first: cargo build --workspace"
-        );
-        let log = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(paths.data.join("daemon.log"))?;
-        let mut cmd = Command::new(daemon);
-        cmd.env("TERMINATOR_DATA_DIR", &paths.data)
-            .env("TERMINATOR_RUNTIME_DIR", &paths.runtime);
-        cmd.stdin(Stdio::null())
-            .stdout(log.try_clone()?)
-            .stderr(log);
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            cmd.pre_exec(|| {
-                if libc::setsid() < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let mut child = cmd.spawn()?;
-        thread::spawn(move || {
-            let _ = child.wait();
-        });
-        let start = Instant::now();
-        while rpc(&paths, Request::Snapshot).is_err() {
-            anyhow::ensure!(
-                start.elapsed() < Duration::from_secs(5),
-                "Daemon did not start; inspect daemon.log"
-            );
-            thread::sleep(Duration::from_millis(50));
-        }
-    }
+    daemon_connection::ensure_running(&paths, &std::env::current_exe()?)?;
     let window_size = [1440.0, 900.0];
     #[cfg(feature = "test-support")]
     let window_size = {
@@ -2659,6 +2661,9 @@ mod navigation_tests {
             state.sessions.clear();
         }
         state.attachment_helper_available = Some(true);
+        // Even a healthy sibling helper must migrate to a pinned copy when idle.
+        assert!(can_retire_daemon(&state));
+        state.capabilities.push(STABLE_HELPER_CAPABILITY.into());
         assert!(!can_retire_daemon(&state));
         state.attachment_helper_available = Some(false);
         state.capabilities.clear();
@@ -2666,6 +2671,59 @@ mod navigation_tests {
         state.capabilities.push(SHUTDOWN_IF_IDLE_CAPABILITY.into());
         state.daemon_version = Some("999.0.0".into());
         assert!(!can_retire_daemon(&state));
+    }
+
+    #[test]
+    fn legacy_helper_error_opens_recovery_and_survives_unreported_health() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state.generation = "old-daemon".into();
+        app.update_tx
+            .send(Update::Error(
+                "Attachment helper unavailable: /AppTranslocation/old/terminator-hook".into(),
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(app.installation_problem());
+        app.error = None; // Dismissing a general error must not hide recovery.
+        app.apply_state(app.state.clone());
+        assert!(app.installation_problem());
+        app.open_installation_settings();
+        assert!(app.settings_open);
+        assert_eq!(app.settings_section, 6);
+        let mut repaired = app.state.clone();
+        repaired.generation = "new-daemon".into();
+        repaired.attachment_helper_available = Some(true);
+        app.apply_state(repaired);
+        assert!(!app.installation_problem());
+    }
+
+    #[test]
+    fn repair_never_queues_shutdown_with_live_or_unsupported_sessions() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state.daemon_version = Some(env!("CARGO_PKG_VERSION").into());
+        app.state.capabilities = vec![SHUTDOWN_IF_IDLE_CAPABILITY.into()];
+        app.state
+            .sessions
+            .push(session_fixture("unsaved-editor", SessionKind::Editor));
+        app.begin_installation_repair();
+        assert!(requests.try_recv().is_err());
+        app.state.sessions.clear();
+        app.state.capabilities.clear();
+        app.begin_installation_repair();
+        assert!(requests.try_recv().is_err());
+        app.state
+            .capabilities
+            .push(SHUTDOWN_IF_IDLE_CAPABILITY.into());
+        app.begin_installation_repair();
+        app.begin_installation_repair();
+        assert!(app.repair_pending);
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Job::RepairInstallation(_, _)
+        ));
+        assert!(requests.try_recv().is_err());
     }
 
     #[test]

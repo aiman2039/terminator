@@ -1,4 +1,5 @@
 mod editor;
+mod helper;
 mod notifications;
 mod review;
 mod terminal_events;
@@ -54,6 +55,7 @@ enum HistoryJob {
     Clear(Option<String>, bool, mpsc::Sender<Result<(), String>>),
 }
 struct Shared {
+    helper: helper::Helper,
     state: Mutex<State>,
     store: Mutex<storage::Store>,
     sessions: Mutex<HashMap<String, Arc<Mutex<Runtime>>>>,
@@ -136,10 +138,10 @@ impl Shared {
         let sid = id();
         let review_files = is_review.then(|| review::Files::new(&self.paths, &sid));
         let token = id();
-        let helper = std::env::current_exe()?.with_file_name("terminator-hook");
+        let helper = &self.helper.executable;
         ensure!(
-            executable_available(&helper),
-            "Attachment helper unavailable: {}. Install Terminator in Applications and reopen it. An idle daemon can be replaced safely; keep live sessions running until you are ready to close them",
+            executable_available(helper),
+            "Attachment helper unavailable: {}. Open Settings → Updates → Installation to repair Terminator. Existing sessions are preserved",
             helper.display()
         );
         let mut cmd = if let Launch::Review { staged } = launch {
@@ -167,7 +169,7 @@ impl Shared {
                     "Configured shell not found; clear the override to use zsh → bash → sh",
                 )?
             };
-            shell::prepare(&self.paths, &shell.to_string_lossy(), &helper)?
+            shell::prepare(&self.paths, &shell.to_string_lossy(), helper)?
         };
         cmd.cwd(&cwd);
         cmd.env("TERM", "xterm-256color");
@@ -779,14 +781,15 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
     ensure!(authenticated, "Authentication failed");
     if matches!(env.request, Request::Snapshot) {
         let executable = std::env::current_exe().ok();
-        let available = executable
-            .as_ref()
-            .is_some_and(|p| executable_available(&p.with_file_name("terminator-hook")));
+        let helper = &shared.helper.executable;
+        let available = executable_available(helper);
         let mut state = shared.state.lock().unwrap();
         if state.daemon_executable != executable
+            || state.attachment_helper_executable.as_ref() != Some(helper)
             || state.attachment_helper_available != Some(available)
         {
             state.daemon_executable = executable;
+            state.attachment_helper_executable = Some(helper.clone());
             state.attachment_helper_available = Some(available);
             state.revision += 1;
         }
@@ -928,6 +931,11 @@ fn main() -> Result<()> {
         .open(paths.runtime.join("daemon.lock"))?;
     lock.try_lock_exclusive()
         .context("Daemon already running")?;
+    helper::cleanup_abandoned(&paths.data)?;
+    let helper = helper::Helper::stage(
+        &std::env::current_exe()?.with_file_name("terminator-hook"),
+        &paths.data,
+    )?;
     let _ = fs::remove_file(paths.socket());
     let listener = UnixListener::bind(paths.socket())?;
     fs::set_permissions(paths.socket(), fs::Permissions::from_mode(0o600))?;
@@ -938,6 +946,7 @@ fn main() -> Result<()> {
     state.recover();
     state.daemon_version = Some(env!("CARGO_PKG_VERSION").into());
     state.capabilities = vec![
+        STABLE_HELPER_CAPABILITY.into(),
         SHUTDOWN_IF_IDLE_CAPABILITY.into(),
         snapshot::CAPABILITY.into(),
         NVIM_REVIEW_CAPABILITY.into(),
@@ -950,6 +959,7 @@ fn main() -> Result<()> {
     let (history, history_rx) = mpsc::sync_channel::<HistoryJob>(512);
     let (alerts, alert_rx) = mpsc::sync_channel::<String>(64);
     let shared = Arc::new(Shared {
+        helper,
         state: Mutex::new(state),
         store: Mutex::new(store),
         sessions: Mutex::new(HashMap::new()),

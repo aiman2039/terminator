@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Keep a private helper for each daemon so app replacement or removal cannot break
+  its terminal creation, shell hooks or GUI attachments. Add installation recovery
+  under Settings → Updates, with live-session navigation and safe idle repair.
+
 - Refuse worktree removal when another project's live session, editor file or
   child process uses the checkout, including symlink paths and missing cwd hooks.
 - Negotiate chunked snapshots when state exceeds the 8 MiB frame limit, retaining

@@ -1055,8 +1055,8 @@ impl Viewer<'_> {
         if !self.app.backends.contains_key(sid) {
             let id = self.app.next_backend;
             self.app.next_backend += 1;
-            let helper = match std::env::current_exe() {
-                Ok(p) => p.with_file_name("terminator-hook"),
+            let helper = match installation::attachment_helper(&self.app.state) {
+                Ok(p) => p,
                 Err(e) => {
                     ui.label(e.to_string());
                     return;

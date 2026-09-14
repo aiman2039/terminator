@@ -400,6 +400,7 @@ impl Settings {
 pub const METADATA_SETTINGS_CAPABILITY: &str = "metadata-settings-v1";
 pub const WORKTREES_CAPABILITY: &str = "worktrees-v1";
 pub const SHUTDOWN_IF_IDLE_CAPABILITY: &str = "shutdown-if-idle-v1";
+pub const STABLE_HELPER_CAPABILITY: &str = "stable-helper-v1";
 pub const SCREEN_CAPABILITY: &str = "screen-v1";
 pub const TERMINAL_NOTICES_CAPABILITY: &str = "terminal-notices-v1";
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -417,6 +418,8 @@ pub struct State {
     pub daemon_version: Option<String>,
     /// Runtime health; absent on older daemons. Refreshed before snapshots.
     pub daemon_executable: Option<PathBuf>,
+    /// Private executable pinned for the lifetime of this daemon, when supported.
+    pub attachment_helper_executable: Option<PathBuf>,
     pub attachment_helper_available: Option<bool>,
     /// Features advertised by the running daemon, not the GUI binary on disk.
     pub capabilities: Vec<String>,
@@ -491,6 +494,7 @@ impl State {
         // remains on each session's truncated flag, not a stale queue warning.
         self.degraded = None;
         self.daemon_executable = None;
+        self.attachment_helper_executable = None;
         self.attachment_helper_available = None;
         for s in &mut self.sessions {
             if s.lifecycle.live() {
@@ -1015,11 +1019,13 @@ mod tests {
         state.sessions[0].truncated = true;
         state.degraded = Some("Output storage queue saturated; some history was not saved".into());
         state.daemon_executable = Some("/removed/daemon".into());
+        state.attachment_helper_executable = Some("/removed/helper".into());
         state.attachment_helper_available = Some(false);
         state.recover();
         assert!(state.sessions[0].truncated);
         assert!(state.degraded.is_none());
         assert!(state.daemon_executable.is_none());
+        assert!(state.attachment_helper_executable.is_none());
         assert!(state.attachment_helper_available.is_none());
     }
     #[test]

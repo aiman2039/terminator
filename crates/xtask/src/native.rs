@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 mod agents;
+mod installation;
 mod markdown;
 mod projects;
 mod reviews;
@@ -157,6 +158,7 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "markdown" => markdown::run(&opts)?,
             "markdown-busy" => markdown::busy(&opts)?,
             "updates" => updates::run(&opts)?,
+            "installation" => installation::run(&opts)?,
             "project-sidebar" => projects::run(&opts)?,
             "agent-sidebar" => agents::run(&opts)?,
             "pane-close" => {

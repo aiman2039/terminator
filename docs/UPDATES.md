@@ -73,7 +73,8 @@ restores GUI interaction. Review this bridge when upgrading winit or Sparkle.
 
 No GUI update stops the daemon, rotates authentication, replays commands, or
 relaunches agents/editors. A later GUI launch may retire an older daemon, or a
-same-version daemon with unavailable/unreported helper health, only when it
+same-version daemon with unavailable/unreported helper health or without
+`stable-helper-v1`, only when it
 advertises `shutdown-if-idle-v1` and has no live sessions. That request shares
 the session-creation lock and persists before acknowledging shutdown; subsequent
 creation requests fail. Daemons without that capability, unknown/newer versions,
@@ -143,3 +144,28 @@ eject the image, then launch that installed copy. Reopening can retire an idle
 older/broken daemon through its advertised atomic shutdown capability. If any
 sessions remain live, they are preserved and the status area explains recovery.
 No helper is substituted into a live daemon and no privacy grants are changed.
+
+## Stable helpers and recovery from older installations
+
+New daemons keep a private copy of their own bundled helper in application data.
+It stays executable if the app is moved, replaced or removed. Shell hooks and
+GUI attachments use the advertised private copy, so an app update cannot change
+the helper underneath a running session. Its bytes and signature remain intact;
+no signing, quarantine removal or external download occurs at startup.
+
+If an older daemon has already lost its original helper, **Fix installation…**
+opens **Settings → Updates → Installation**. That screen lists every live session
+and links back to it. Save editors and close sessions normally; backgrounded
+sessions still count. **Repair installation** becomes available when no sessions
+remain and the daemon advertises safe idle shutdown. It checkpoints the workspace,
+rechecks generation and compatibility, requests atomic idle shutdown, starts the
+installed daemon and verifies the private helper. No saved terminal is relaunched.
+Daemons too old to advertise safe shutdown require a one-time OS logout/login
+after saving work and closing sessions. Unknown or newer versions are preserved.
+
+`cargo xtask gui installation --output /tmp/terminator-helper-recovery` checks the
+native recovery screen, live-session protection and successful idle repair.
+`cargo xtask integration` also removes an isolated running daemon's entire source
+installation, then verifies helper execution and new session creation with the
+same daemon and original shell PID. These fixtures do not exercise Gatekeeper or
+a signed Sparkle installation.

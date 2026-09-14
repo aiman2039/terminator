@@ -106,3 +106,9 @@ and unchanged daemon/session PIDs. On macOS it also exercises native Quit. Set
 `TERMINATOR_TEST_SPARKLE_FRAMEWORK` to the pinned framework to verify native updater
 loading in an isolated fixture bundle. See `docs/UPDATES.md` for signed rollout
 checks; this local fixture is not a signed Sparkle installation.
+
+`cargo xtask gui installation` checks the native installation recovery screen,
+disabled repair with live sessions, and successful repair after the last session
+finishes. It uses only disposable data and executables. `cargo xtask integration`
+also verifies that removing the original installation leaves the daemon's private
+helper executable, original session identities and new terminal creation intact.

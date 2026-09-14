@@ -58,7 +58,15 @@ The default data directory follows the OS application-data convention. `TERMINAT
 
 SQLite stores projects, layouts, session metadata, agent state, and notification state. `ui-preferences.json` stores versioned per-installation navigation/sidebar choices and the one-time typography and Attention migration markers. Attention moves to the right sidebar once after the daemon acknowledges the settings update; later placement choices are preserved. The Islands update sets terminal/editor size to 13 once; subsequent user size choices are preserved. Inter and JetBrains Mono are bundled with their licenses. Scrollback is stored separately and pruned by configurable age/per-session/total limits. Defaults: 30 days, 50 MiB/session, 2 GiB total. Metadata and resume commands remain until explicitly removed. Truncated output is labeled.
 
-A running daemon keeps its current executable version until it exits. GUI updates can reconnect to compatible running daemons. To update daemon behavior, explicitly stop its sessions and then stop it; do not kill a daemon with live work merely to reload a build. Low-level control is available through `terminator-hook rpc` (JSON requests documented by `terminator-core::Request`). For example, `terminator-hook rpc '"Shutdown"'` refuses while any sessions remain live.
+A running daemon keeps its current executable version until it exits. GUI updates
+reconnect to compatible daemons, whose private terminal helpers survive app
+replacement or removal. If an older installation reports a missing helper, use
+**Fix installation… → Settings → Updates → Installation**. Save your files and
+finish the listed sessions, then choose **Repair installation**. Backgrounded
+sessions still count as live. Repair preserves history and never relaunches ended
+sessions. The oldest daemons lack safe restart support; the screen explains the
+one-time logout/login needed after saving and closing sessions. Do not kill a
+daemon with live work merely to reload a build.
 
 ## Validation
 

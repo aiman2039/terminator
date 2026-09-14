@@ -289,18 +289,58 @@ fn missing_helper_health() -> Result<()> {
         initial["attachment_helper_available"] == true,
         "Installed helper was not available"
     );
-    let hint = serde_json::from_value::<terminator_core::State>(initial)?.snapshot_hint();
+    let pinned =
+        std::path::PathBuf::from(initial["attachment_helper_executable"].as_str().unwrap());
+    ensure!(
+        pinned.starts_with(&h.root) && !pinned.starts_with(&install),
+        "Helper was not pinned outside the installation"
+    );
+    let original_helper = fs::read(&pinned)?;
+    // Model both in-place replacement and removal of an entire old app bundle.
+    fs::write(
+        install.join("terminator-hook"),
+        b"replaced application helper",
+    )?;
     fs::set_permissions(
         install.join("terminator-hook"),
         fs::Permissions::from_mode(0o600),
     )?;
+    fs::remove_dir_all(&install)?;
+    ensure!(
+        h.state()?["attachment_helper_available"] == true && fs::read(&pinned)? == original_helper,
+        "App replacement or removal changed the pinned helper"
+    );
+    let second = h.shell(&project)?;
+    let new_cwd = h.root.join("after-app-removal");
+    fs::create_dir(&new_cwd)?;
+    let mut stream = h.attach(&shell)?;
+    h.write(
+        &mut stream,
+        &format!(
+            "cd {}; {} cwd \"$PWD\"; printf 'PINNED_HELPER_STILL_WORKS\\n'\n",
+            quote(&new_cwd.to_string_lossy()),
+            quote(&pinned.to_string_lossy())
+        ),
+    )?;
+    h.wait(
+        |st| session(st, id(&shell))["cwd"] == new_cwd.to_string_lossy().as_ref(),
+        5,
+    )?;
+    h.assert_pids(&[shell.clone(), second.clone()])?;
+    ensure!(
+        h.state()?["generation"] == initial["generation"],
+        "App removal replaced the daemon"
+    );
+    // Health now refers to the actual private helper, not a discarded bundle.
+    let hint = serde_json::from_value::<terminator_core::State>(h.state()?)?.snapshot_hint();
+    fs::set_permissions(&pinned, fs::Permissions::from_mode(0o600))?;
     let paths = terminator_core::Paths::at(h.root.clone());
     let response = terminator_core::conditional_snapshot(&paths, Some(hint))?;
     ensure!(
         matches!(response, terminator_core::Response::State(ref s) if s.attachment_helper_available == Some(false)),
         "Permission change did not invalidate conditional snapshot"
     );
-    fs::remove_file(install.join("terminator-hook"))?;
+    fs::remove_file(&pinned)?;
     ensure!(
         h.state()?["attachment_helper_available"] == false,
         "Removed helper was not detected"
@@ -315,11 +355,18 @@ fn missing_helper_health() -> Result<()> {
         "Missing helper should give an installation error"
     );
     h.rpc(json!({"Stop":{"session":id(&shell)}}))?;
-    h.wait(|s| session(s, id(&shell))["lifecycle"] == "ended", 5)?;
+    h.rpc(json!({"Stop":{"session":id(&second)}}))?;
+    h.wait(
+        |s| {
+            session(s, id(&shell))["lifecycle"] == "ended"
+                && session(s, id(&second))["lifecycle"] == "ended"
+        },
+        5,
+    )?;
     h.rpc(json!("ShutdownIfIdle"))?;
     println!(
         "{}",
-        json!({"missing_helper_detected":true,"permission_change_invalidates_snapshot":true,"live_sessions_preserved":true})
+        json!({"app_removal_preserves_helper":true,"new_session_after_removal":true,"pinned_hook_executes":true,"missing_helper_detected":true,"permission_change_invalidates_snapshot":true,"live_sessions_preserved":true})
     );
     Ok(())
 }

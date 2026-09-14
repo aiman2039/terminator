@@ -1,5 +1,48 @@
 # Validation evidence — 2026-09-08
 
+## Private daemon helpers and installation recovery (2026-09-14)
+
+Each new daemon now pins its bundled helper in private persistent app data before
+serving requests. Shell hooks and supported GUI attachments use that copy.
+Settings → Updates → Installation handles older/missing helpers with live-session
+navigation and a checkpointed, capability-gated idle repair.
+
+Local validation on Apple Silicon, macOS 26.6.2, Rust 1.97.1:
+
+- Workspace build with binaries/examples and `terminator/test-support`, formatting,
+  strict all-target/all-feature Clippy, and `git diff --check` passed.
+- All 147 workspace tests passed (99 app, 26 core, 15 daemon, 3 hook, 4 integrations).
+  Regressions cover independent helper copies, missing source/cleanup, GUI helper
+  capability fallback, legacy errors without health metadata, duplicate repair,
+  live/unsupported/newer-daemon protection, generation changes, refused concurrent
+  shutdown, and an unresponsive daemon whose lock remains held.
+- `cargo xtask integration` passed. The new real-PTY regression overwrote and
+  removed the running daemon's entire source installation, executed the pinned
+  helper inside the original shell, and created another terminal with the same
+  daemon generation. Removing executable permission from the private copy then
+  invalidated conditional health; missing-helper failure preserved live sessions.
+  All existing transport, hook, history, worktree and idle-shutdown race checks passed.
+- `cargo xtask gui installation --output /tmp/terminator-helper-recovery/final`
+  passed. Native screenshots show [repair blocked by a live session](screenshots/helper-recovery/live-sessions-preserved.png)
+  and [successful idle repair](screenshots/helper-recovery/repaired.png).
+  The fixture verified a new healthy daemon, ended-session history without relaunch,
+  and new terminal creation. [Result record](screenshots/helper-recovery/installation.json).
+  Fixture executables are frozen before captures so another Cargo build cannot
+  replace test-support binaries during the run.
+- `cargo xtask gui updates --output /tmp/terminator-helper-recovery` passed,
+  retaining the daemon/session identities, workspace layouts and an unsaved
+  editor across GUI replacement, with continuing input/output and new sessions.
+- A local development app was packaged at
+  `/tmp/terminator-helper-recovery/package/Terminator.app`; strict deep ad-hoc
+  code-signature verification passed. Package creation does not install it.
+
+PTY/native fixtures required execution outside the sandbox to bind their isolated
+Unix sockets. Production sessions, agent configurations, privacy grants and the
+installed app were untouched. Linux native rendering, Developer ID notarization,
+Gatekeeper and signed Sparkle installation were not exercised. Daemons too old to
+advertise safe idle shutdown receive logout/login guidance after saving work and
+closing sessions; they are never killed or sent unsupported requests.
+
 ## Universal macOS packaging and session-preserving GUI updates (2026-09-14)
 
 Implemented universal assembly, the dynamically loaded Sparkle 2.10.0 controller,

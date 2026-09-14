@@ -1,6 +1,26 @@
 //! Validate the launch location before creating data or starting persistent PTYs.
 use std::path::Path;
 
+pub fn is_helper_error(error: &str) -> bool {
+    error.starts_with("Attachment helper unavailable:")
+}
+
+pub fn attachment_helper(state: &terminator_core::State) -> anyhow::Result<std::path::PathBuf> {
+    if state
+        .capabilities
+        .iter()
+        .any(|c| c == terminator_core::STABLE_HELPER_CAPABILITY)
+        && state.attachment_helper_available == Some(true)
+        && let Some(path) = &state.attachment_helper_executable
+        && path.is_absolute()
+    {
+        return Ok(path.clone());
+    }
+    // Old daemons don't advertise a private helper. A newly installed GUI's
+    // bridge can still attach to their existing PTYs without replacing them.
+    Ok(std::env::current_exe()?.with_file_name("terminator-hook"))
+}
+
 pub fn needs_installation(executable: &Path, home: Option<&Path>) -> bool {
     let Some(bundle) = executable
         .ancestors()
@@ -93,6 +113,29 @@ fn show_message(title: &str, description: &str, _open_applications: bool) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gui_uses_only_an_advertised_available_private_helper() {
+        use terminator_core::{STABLE_HELPER_CAPABILITY, State};
+        let mut state = State {
+            attachment_helper_executable: Some("/private/pinned/terminator-hook".into()),
+            attachment_helper_available: Some(true),
+            ..State::default()
+        };
+        let bundled = std::env::current_exe()
+            .unwrap()
+            .with_file_name("terminator-hook");
+        assert_eq!(attachment_helper(&state).unwrap(), bundled);
+        state.capabilities.push(STABLE_HELPER_CAPABILITY.into());
+        assert_eq!(
+            attachment_helper(&state).unwrap(),
+            state.attachment_helper_executable.clone().unwrap()
+        );
+        state.attachment_helper_available = Some(false);
+        assert_eq!(attachment_helper(&state).unwrap(), bundled);
+        state.attachment_helper_available = Some(true);
+        state.attachment_helper_executable = Some("relative/path".into());
+        assert_eq!(attachment_helper(&state).unwrap(), bundled);
+    }
     #[test]
     fn installer_downloaded_and_translocated_bundles_require_installation() {
         let home = Some(Path::new("/Users/test"));

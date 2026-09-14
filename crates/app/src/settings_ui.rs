@@ -31,7 +31,12 @@ impl App {
                     ui.set_width(540.0);
                     egui::ScrollArea::vertical().id_salt(("settings-section",self.settings_section)).max_height(height).show(ui,|ui| {
                         match self.settings_section {
-                            6 => self.updater.settings(ui),
+                            6 => {
+                                self.installation_settings(ui);
+                                ui.add_space(12.0);
+                                ui.separator();
+                                self.updater.settings(ui);
+                            },
                             0 => {
                 ui.heading("Appearance");
                 if self.theme_conflict {
