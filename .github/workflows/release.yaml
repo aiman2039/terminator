@@ -75,7 +75,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-  build:
+  build-macos:
     needs: prepare
     strategy:
       fail-fast: false
@@ -85,6 +85,27 @@ jobs:
             target: aarch64-apple-darwin
           - runner: macos-15-intel
             target: x86_64-apple-darwin
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/release-build
+        with:
+          runner-label: ${{ matrix.runner }}
+          target: ${{ matrix.target }}
+          rust-version: ${{ env.RUST_VERSION }}
+          tag: ${{ needs.prepare.outputs.tag }}
+
+  build-linux:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
           - runner: ubuntu-24.04-arm
@@ -97,71 +118,15 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
-      - name: Install Linux build dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libssl-dev libx11-dev libxi-dev \
-            libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dev \
-            libwayland-dev libxkbcommon-dev libxkbcommon-x11-0
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/release-build
         with:
-          toolchain: ${{ env.RUST_VERSION }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-${{ matrix.runner }}-${{ matrix.target }}
-          cache-bin: false
-      - name: Verify native target
-        env:
-          EXPECTED_TARGET: ${{ matrix.target }}
-        run: |
-          test "$(rustc -vV | sed -n 's/^host: //p')" = "$EXPECTED_TARGET"
-      - name: Build release package
-        env:
-          TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-release-state
-        run: cargo xtask package --output target/package
-      - name: Archive and inspect package
-        if: needs.prepare.outputs.tag != ''
-        env:
-          TAG: ${{ needs.prepare.outputs.tag }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          asset="terminator-${TAG}-${TARGET}"
-          if [[ "$RUNNER_OS" == macOS ]]; then
-            codesign --verify --deep --strict target/package/Terminator.app
-            for binary in terminator terminator-daemon terminator-hook; do
-              test -x "target/package/Terminator.app/Contents/MacOS/$binary"
-              file "target/package/Terminator.app/Contents/MacOS/$binary"
-            done
-            ditto -c -k --sequesterRsrc --keepParent target/package/Terminator.app "dist/$asset.zip"
-          else
-            mv target/package/terminator-linux.tar.gz "dist/$asset.tar.gz"
-            mkdir -p target/package/verify
-            tar -xzf "dist/$asset.tar.gz" -C target/package/verify
-            for binary in terminator terminator-daemon terminator-hook; do
-              path="target/package/verify/terminator/$binary"
-              test -x "$path"
-              file "$path"
-              ldd "$path" > "$RUNNER_TEMP/$binary-ldd.txt"
-              cat "$RUNNER_TEMP/$binary-ldd.txt"
-              if grep -q 'not found' "$RUNNER_TEMP/$binary-ldd.txt"; then
-                exit 1
-              fi
-            done
-          fi
-      - uses: actions/upload-artifact@v7
-        if: needs.prepare.outputs.tag != ''
-        with:
-          name: ${{ runner.os == 'macOS' && format('macos-slice-{0}', matrix.target) || format('release-{0}', matrix.target) }}
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 7
+          runner-label: ${{ matrix.runner }}
+          target: ${{ matrix.target }}
+          rust-version: ${{ env.RUST_VERSION }}
+          tag: ${{ needs.prepare.outputs.tag }}
 
   assemble-macos:
-    needs: [prepare, build]
+    needs: [prepare, build-macos]
     runs-on: macos-15
     timeout-minutes: 45
     env:
@@ -174,29 +139,32 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v8
         with:
-          toolchain: ${{ env.RUST_VERSION }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-universal-assembly
-          cache-bin: false
+          name: macos-assembly-tools
+          path: ${{ runner.temp }}/assembly-tools
+      - name: Restore assembly tooling from the native build
+        run: |
+          set -euo pipefail
+          tar -xzf "$RUNNER_TEMP/assembly-tools/terminator-assembly-tools.tar.gz" -C "$RUNNER_TEMP/assembly-tools"
+          test -x "$RUNNER_TEMP/assembly-tools/xtask"
+          lipo "$RUNNER_TEMP/assembly-tools/xtask" -verify_arch arm64
       - uses: actions/download-artifact@v8
         with:
           pattern: macos-slice-*
-          path: slices
+          path: ${{ runner.temp }}/slices
           merge-multiple: true
       - name: Fetch pinned Sparkle and assemble prebuilt slices
         run: |
           set -euo pipefail
           curl --fail --location --retry 3 https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-2.10.0.tar.xz -o "$RUNNER_TEMP/Sparkle.tar.xz"
           echo "c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c  $RUNNER_TEMP/Sparkle.tar.xz" | shasum -a 256 --check
-          mkdir -p "$RUNNER_TEMP/sparkle" slices/arm slices/intel
+          mkdir -p "$RUNNER_TEMP/sparkle" "$RUNNER_TEMP/slices/arm" "$RUNNER_TEMP/slices/intel"
           tar -xf "$RUNNER_TEMP/Sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
-          ditto -x -k "slices/terminator-${TAG}-aarch64-apple-darwin.zip" slices/arm
-          ditto -x -k "slices/terminator-${TAG}-x86_64-apple-darwin.zip" slices/intel
-          cargo xtask universal --arm slices/arm/Terminator.app --intel slices/intel/Terminator.app \
-            --sparkle "$RUNNER_TEMP/sparkle" --build-number "$GITHUB_RUN_NUMBER" --output target/package
+          ditto -x -k "$RUNNER_TEMP/slices/terminator-${TAG}-aarch64-apple-darwin.zip" "$RUNNER_TEMP/slices/arm"
+          ditto -x -k "$RUNNER_TEMP/slices/terminator-${TAG}-x86_64-apple-darwin.zip" "$RUNNER_TEMP/slices/intel"
+          "$RUNNER_TEMP/assembly-tools/xtask" universal --arm "$RUNNER_TEMP/slices/arm/Terminator.app" --intel "$RUNNER_TEMP/slices/intel/Terminator.app" \
+            --sparkle "$RUNNER_TEMP/sparkle" --build-number "$GITHUB_RUN_NUMBER" --output "$RUNNER_TEMP/terminator-package"
       - name: Require a monotonically increasing published build number
         run: |
           set -euo pipefail
@@ -263,7 +231,7 @@ jobs:
             echo "::error::Expected exactly one valid Developer ID Application identity for APPLE_TEAM_ID"
             exit 1
           fi
-          app="target/package/Terminator.app"
+          app="$RUNNER_TEMP/terminator-package/Terminator.app"
           # Sign Mach-O files first, then nested bundles from deepest outward.
           python3 - "$app" "$identity" "$keychain" <<'SIGN'
           import pathlib, subprocess, sys
@@ -292,7 +260,7 @@ jobs:
           spctl --assess --type execute --verbose=2 "$app"
           mkdir -p dist
           dmg="dist/terminator-${TAG}-universal-macos.dmg"
-          cargo xtask dmg --app "$app" --output "$dmg"
+          "$RUNNER_TEMP/assembly-tools/xtask" dmg --app "$app" --output "$dmg"
           codesign --force --sign "$identity" --keychain "$keychain" --timestamp "$dmg"
           codesign --verify --strict "$dmg"
           xcrun notarytool submit "$dmg" \
@@ -340,7 +308,7 @@ jobs:
           retention-days: 7
 
   upload-draft:
-    needs: [prepare, build, assemble-macos]
+    needs: [prepare, build-linux, assemble-macos]
     if: needs.prepare.outputs.tag != ''
     runs-on: ubuntu-24.04
     concurrency:

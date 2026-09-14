@@ -1,7 +1,11 @@
 # macOS releases and session continuity
 
-The release workflow builds native Apple Silicon and Intel slices, then runs
-`cargo xtask universal` to assemble the three executables without rebuilding them.
+The release workflow builds native Apple Silicon and Intel slices in parallel
+with Linux. It then runs `xtask universal` using the tooling binary uploaded by
+the Apple Silicon job to assemble the three executables without rebuilding them.
+macOS assembly waits only for the macOS matrix. Its package output lives under
+`RUNNER_TEMP`, outside the native jobs' Cargo caches. The same prebuilt tool
+creates the DMG, so assembly requires no Rust installation or compiler cache.
 The daemon build verifies the architecture of its embedded CodeDiff library before
 embedding it. Assembly checks every Mach-O executable in the app and Sparkle
 framework for both `arm64` and `x86_64`, preserves symlinks, and includes Sparkle's

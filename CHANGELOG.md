@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Keep release package output outside Cargo caches, reuse the native assembly
+  tooling, and build only shipped binaries. Run macOS assembly independently of
+  Linux builds and upload Cargo timing reports for each target.
+
 - Keep a private helper for each daemon so app replacement or removal cannot break
   its terminal creation, shell hooks or GUI attachments. Add installation recovery
   under Settings → Updates, with live-session navigation and safe idle repair.

@@ -84,14 +84,13 @@ fn licenses(destination: &Path) -> Result<()> {
     )?;
     Ok(())
 }
-pub fn run(debug: bool, output_dir: Option<PathBuf>) -> Result<()> {
+pub fn run(debug: bool, timings: bool, output_dir: Option<PathBuf>) -> Result<()> {
     let shell = xshell::Shell::new()?;
     let _cwd = shell.push_dir(root());
-    if debug {
-        xshell::cmd!(shell, "cargo build --workspace --locked").run()?;
-    } else {
-        xshell::cmd!(shell, "cargo build --workspace --locked --release").run()?;
-    }
+    // xtask is already running; an optimized copy is not part of the package.
+    let release_flag = (!debug).then_some("--release");
+    let timing_flag = timings.then_some("--timings");
+    xshell::cmd!(shell, "cargo build --locked -p terminator -p terminator-daemon -p terminator-hook {release_flag...} {timing_flag...}").run()?;
     let binaries = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| root().join("target"))
@@ -213,6 +212,8 @@ pub fn universal(
         "Universal assembly requires macOS"
     );
     ensure!(build_number > 0, "Build number must be positive");
+    // Detect restored/previous output before reading inputs or assembling slices.
+    let target = new_assembly_output(destination)?;
     let public_key = std::env::var("SPARKLE_PUBLIC_ED_KEY")
         .context("SPARKLE_PUBLIC_ED_KEY must contain the public update key")?;
     use base64::Engine;
@@ -315,16 +316,25 @@ pub fn universal(
     info.insert("SUScheduledCheckInterval".into(), 86400.into());
     plist::Value::Dictionary(info).to_file_xml(app.join("Contents/Info.plist"))?;
     verify_universal(&app)?;
-    let target = destination.join("Terminator.app");
-    ensure!(
-        !target.exists(),
-        "Assembly output already exists: {}",
-        target.display()
-    );
+    // Also check at publication time in case another task created the output.
+    new_assembly_output(destination)?;
     fs::rename(app, &target)?;
     println!("{}", target.display());
     Ok(())
 }
+
+fn new_assembly_output(destination: &Path) -> Result<PathBuf> {
+    let target = destination.join("Terminator.app");
+    match fs::symlink_metadata(&target) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(target),
+        Err(error) => Err(error).context("Cannot inspect assembly output"),
+        Ok(_) => anyhow::bail!(
+            "Assembly output already exists: {}. Use a fresh output directory outside the Cargo cache",
+            target.display()
+        ),
+    }
+}
+
 fn verify_universal(path: &Path) -> Result<()> {
     for entry in fs::read_dir(path)? {
         let entry = entry?;
@@ -419,4 +429,56 @@ fn dmg_background(destination: &Path) -> Result<()> {
     );
     pixels.save_png(destination)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restored_empty_app_directory_is_refused_before_reading_inputs() {
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("Terminator.app");
+        fs::create_dir(&target).unwrap();
+        let missing = dir.path().join("missing-input");
+        let error = universal(&missing, &missing, &missing, 1, dir.path()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("Assembly output already exists:")
+        );
+        assert!(target.is_dir());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn fresh_assembly_output_leaves_other_packages_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let cached = dir.path().join("target/package/Terminator.app");
+        fs::create_dir_all(&cached).unwrap();
+        fs::write(cached.join("keep"), b"previous package").unwrap();
+        let fresh = dir.path().join("runner-temp/package");
+        assert_eq!(
+            new_assembly_output(&fresh).unwrap(),
+            fresh.join("Terminator.app")
+        );
+        assert_eq!(fs::read(cached.join("keep")).unwrap(), b"previous package");
+    }
+
+    #[test]
+    fn dangling_app_symlink_is_not_an_empty_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("Terminator.app");
+        std::os::unix::fs::symlink(dir.path().join("missing"), &target).unwrap();
+        assert!(new_assembly_output(dir.path()).is_err());
+        assert!(
+            fs::symlink_metadata(target)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
 }

@@ -1,0 +1,118 @@
+name: Build native release package
+description: Build one native target with compiler caching and isolated package output
+inputs:
+  runner-label:
+    description: Runner label used to retain the existing architecture-specific cache
+    required: true
+  target:
+    description: Expected native Rust target
+    required: true
+  rust-version:
+    description: Pinned Rust toolchain
+    required: true
+  tag:
+    description: Release tag from the immutable revision preparation job
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Install Linux build dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential pkg-config libssl-dev libx11-dev libxi-dev \
+          libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dev \
+          libwayland-dev libxkbcommon-dev libxkbcommon-x11-0
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ inputs.rust-version }}
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: release-${{ inputs.runner-label }}-${{ inputs.target }}
+        cache-bin: false
+        cache-on-failure: true
+    - name: Remove legacy cached package output
+      shell: bash
+      run: |
+        # Only the old generated package directory in this disposable checkout.
+        # Keep compiler artifacts and the existing restore keys.
+        rm -rf -- target/package
+    - name: Verify native target
+      shell: bash
+      env:
+        EXPECTED_TARGET: ${{ inputs.target }}
+      run: |
+        test "$(rustc -vV | sed -n 's/^host: //p')" = "$EXPECTED_TARGET"
+    - name: Build release package
+      shell: bash
+      env:
+        TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-release-state
+      run: |
+        cargo run --locked --package xtask --timings -- \
+          package --timings --output "$RUNNER_TEMP/terminator-package"
+    - name: Archive and inspect package
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        package="$RUNNER_TEMP/terminator-package"
+        artifacts="$RUNNER_TEMP/terminator-build-artifacts"
+        mkdir -p "$artifacts"
+        asset="terminator-${TAG}-${TARGET}"
+        if [[ "$RUNNER_OS" == macOS ]]; then
+          codesign --verify --deep --strict "$package/Terminator.app"
+          for binary in terminator terminator-daemon terminator-hook; do
+            test -x "$package/Terminator.app/Contents/MacOS/$binary"
+            file "$package/Terminator.app/Contents/MacOS/$binary"
+          done
+          ditto -c -k --sequesterRsrc --keepParent "$package/Terminator.app" "$artifacts/$asset.zip"
+        else
+          mv "$package/terminator-linux.tar.gz" "$artifacts/$asset.tar.gz"
+          mkdir -p "$package/verify"
+          tar -xzf "$artifacts/$asset.tar.gz" -C "$package/verify"
+          for binary in terminator terminator-daemon terminator-hook; do
+            path="$package/verify/terminator/$binary"
+            test -x "$path"
+            file "$path"
+            ldd "$path" > "$RUNNER_TEMP/$binary-ldd.txt"
+            cat "$RUNNER_TEMP/$binary-ldd.txt"
+            if grep -q 'not found' "$RUNNER_TEMP/$binary-ldd.txt"; then
+              exit 1
+            fi
+          done
+        fi
+    - uses: actions/upload-artifact@v7
+      with:
+        name: ${{ runner.os == 'macOS' && format('macos-slice-{0}', inputs.target) || format('release-{0}', inputs.target) }}
+        path: ${{ runner.temp }}/terminator-build-artifacts/*
+        if-no-files-found: error
+        retention-days: 7
+        overwrite: true
+    - name: Archive assembly tooling from this revision
+      if: inputs.target == 'aarch64-apple-darwin'
+      shell: bash
+      run: |
+        test -x target/debug/xtask
+        # A tar preserves executable permissions across artifact upload/download.
+        tar -czf "$RUNNER_TEMP/terminator-assembly-tools.tar.gz" -C target/debug xtask
+    - uses: actions/upload-artifact@v7
+      if: inputs.target == 'aarch64-apple-darwin'
+      with:
+        name: macos-assembly-tools
+        path: ${{ runner.temp }}/terminator-assembly-tools.tar.gz
+        if-no-files-found: error
+        retention-days: 7
+        overwrite: true
+    - name: Upload Cargo timing reports
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: cargo-timings-${{ inputs.target }}
+        path: target/cargo-timings/*.html
+        if-no-files-found: ignore
+        retention-days: 7
+        overwrite: true

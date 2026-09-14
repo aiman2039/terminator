@@ -1,5 +1,60 @@
 # Validation evidence — 2026-09-08
 
+## Release cache collision and build scheduling (2026-09-14)
+
+Run [34851813492](https://github.com/aiman2039/terminator/actions/runs/34851813492)
+at `10f9f39516875a3cf6eb6918e8ec4070501471aa` failed in universal assembly because
+the compiler cache restored `target/package/Terminator.app`. The four native
+builds succeeded concurrently; the Intel macOS job took 11m56s, including 8m03s
+for packaging/building, 54s for cache restore and 1m58s for cache cleanup/save.
+
+Native release builds now share a composite action across separate macOS/Linux
+matrices. Assembly waits only for macOS and consumes the Apple Silicon job's
+archived `xtask` executable. Packages and extracted slices stay under
+`RUNNER_TEMP`; the old generated package directory is removed after cache restore
+without removing compiler artifacts. Packaging builds only the three shipped
+executables and their dependencies. Both tooling and application builds emit
+Cargo HTML timing artifacts, including available reports after build failure.
+
+Validation on Apple Silicon, macOS 26.6.2, Rust 1.97.1:
+
+- All 150 workspace tests passed (99 app, 26 core, 15 daemon, 3 hook,
+  4 integrations, 3 packaging). The packaging regressions preserve existing
+  outputs, reject a dangling app symlink, and reject a restored empty app
+  directory before reading assembly inputs. Existing socket/watcher tests needed
+  execution outside the sandbox; their initial permission failures were not
+  application regressions.
+- Strict all-target/all-feature workspace Clippy, rustfmt, and diff checks passed.
+- Actionlint 1.7.12 checked the release workflow and the composite steps through
+  a synthetic workflow wrapper. YAML parsing and all 16 shell blocks passed
+  `bash -n`. Dependency checks verified four native targets, no Linux dependency
+  for macOS assembly, both platforms required for draft upload, and no Cargo or
+  Rust-cache action in assembly.
+- Executing the actual legacy-cache cleanup body in a disposable checkout
+  removed only `target/package`, retaining a marker in `target/release/deps`.
+- The first local release package build took 34.24s with existing dependency
+  artifacts; this was not a cold build. After the final source edit, identical
+  packaging commands took 2.80s then 1.91s. The latter rebuilt no crates:
+  development and optimized Cargo phases finished in 0.09s and 0.16s respectively.
+  The logs confirm that no optimized `xtask` was built. Strict deep ad-hoc signature
+  verification of the resulting native app passed.
+- The actual tooling archive/restore and assembly shell bodies were exercised
+  using the freshly built ARM app, the successful Intel slice from the failed
+  run (artifact `10351139933`), and Sparkle 2.10.0 with its pinned SHA-256 verified.
+  The already verified SDK archive was copied locally instead of downloading it
+  again. A dummy public update key was used; no private keys were involved.
+  Assembly succeeded with an unrelated cached app directory still present and
+  a `cargo` shim that fails on invocation. `lipo` verified both architectures in
+  all three assembled executables. The archived tool retained its executable
+  permission and passed its ad-hoc signature check after extraction.
+
+Logs, assembly fixtures and local packages are under
+`/tmp/terminator-ci-fix-validation/`; Cargo reports are in `target/cargo-timings/`.
+These timings are local verification, not measured GitHub speedups. No workflow
+was dispatched, cache deleted remotely, tag moved, release published, signing
+credential used, or installed application changed. Hosted execution and final
+Developer ID signing/notarization remain to be checked on the next release run.
+
 ## Private daemon helpers and installation recovery (2026-09-14)
 
 Each new daemon now pins its bundled helper in private persistent app data before

@@ -39,6 +39,9 @@ enum Task {
     Package {
         #[arg(long)]
         debug: bool,
+        /// Emit Cargo HTML timing reports for the application build.
+        #[arg(long)]
+        timings: bool,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -145,7 +148,11 @@ fn main() -> Result<()> {
             browser,
             case,
         } => linux::desktop(&backend, browser, case.as_deref()),
-        Task::Package { debug, output } => package::run(debug, output),
+        Task::Package {
+            debug,
+            timings,
+            output,
+        } => package::run(debug, timings, output),
         Task::Dmg { app, output } => package::dmg(&app, &output),
         Task::Universal {
             arm,
