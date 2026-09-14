@@ -1,5 +1,21 @@
 # Rust development tasks
 
+## Quality checks
+
+Run `sh scripts/check.sh` for formatting, compiler checks (`lint`), build, and
+Clippy with warnings denied across all workspace targets and features. Run
+`sh scripts/check.sh test` for workspace tests. Individual checks accept `fmt`,
+`lint`, `build`, or `clippy`. Checks use the lockfile and do not rewrite files.
+
+[cargo-husky](https://github.com/rhysd/cargo-husky) installs the tracked
+`.cargo-husky/hooks/pre-commit` when its development dependency is first built
+(for example, `cargo test -p terminator --no-run --locked`). The hook runs
+`sh scripts/check.sh` against the working tree; stage any fixes before committing.
+Existing non-cargo-husky hooks are preserved. CI skips hook installation and runs
+all checks plus tests on native macOS and Linux for pushes and pull requests to
+`master`, or via manual dispatch. CI uses Rust 1.95.0.
+
+
 Project-owned Python automation has moved to `crates/xtask`. Run commands from
 `terminator/`; no Python interpreter is used by these tasks.
 

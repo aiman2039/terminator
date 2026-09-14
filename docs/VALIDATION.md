@@ -1,5 +1,20 @@
 # Validation evidence — 2026-09-08
 
+## Cargo-husky and master CI (2026-09-14)
+
+- Added cargo-husky 1.5.0 with a tracked pre-commit hook and shared
+  `scripts/check.sh` commands for fmt, compiler checks, build, and strict Clippy.
+  The installed `.git/hooks/pre-commit` passed end to end on macOS with Rust
+  1.97.1, checking all workspace targets and features with the lockfile.
+- All 121 workspace tests passed with isolated temporary application state.
+  The initial sandboxed run failed socket/notification tests; the unrestricted
+  rerun passed without Rust source changes.
+- `actionlint` 1.7.12, shell syntax checks, and `git diff --check` passed.
+- New CI runs checks and tests on macOS and Linux for master pushes, pull
+  requests targeting master, and manual dispatch, using Rust 1.95.0. Hosted
+  execution and the pinned CI toolchain were not validated locally. No native
+  GUI smoke tests, release, signing, or deployment was performed.
+
 ## Release dependency caching (2026-09-10)
 
 - Replaced download-only caching with `Swatinem/rust-cache@v2`, including

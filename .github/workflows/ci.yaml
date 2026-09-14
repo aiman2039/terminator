@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  CARGO_HUSKY_DONT_INSTALL_HOOKS: 'true'
+
+jobs:
+  checks:
+    name: Checks (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libx11-dev libxi-dev \
+            libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.95.0'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-${{ matrix.os }}
+          cache-bin: false
+      - name: Formatting
+        run: sh scripts/check.sh fmt
+      - name: Compiler checks
+        run: sh scripts/check.sh lint
+      - name: Build
+        run: sh scripts/check.sh build
+      - name: Clippy
+        run: sh scripts/check.sh clippy
+      - name: Tests
+        env:
+          TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-state
+        run: sh scripts/check.sh test
