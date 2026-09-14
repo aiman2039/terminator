@@ -138,8 +138,8 @@ impl Shared {
         let token = id();
         let helper = std::env::current_exe()?.with_file_name("terminator-hook");
         ensure!(
-            helper.is_file(),
-            "Attachment helper unavailable: {}. Keep terminator-hook beside the running daemon; if its installation was moved, restore access at the original path",
+            executable_available(&helper),
+            "Attachment helper unavailable: {}. Install Terminator in Applications and reopen it. An idle daemon can be replaced safely; keep live sessions running until you are ready to close them",
             helper.display()
         );
         let mut cmd = if let Launch::Review { staged } = launch {
@@ -305,9 +305,11 @@ impl Shared {
                         }
                     }
                 }
+                // Bound memory without dropping bursts. No runtime/state lock is held
+                // while storage applies backpressure to this PTY reader.
                 if shared
                     .history
-                    .try_send(HistoryJob::Append(read_sid.clone(), data.to_vec()))
+                    .send(HistoryJob::Append(read_sid.clone(), data.to_vec()))
                     .is_err()
                 {
                     let mut s = shared.state.lock().unwrap();
@@ -315,7 +317,7 @@ impl Shared {
                         rec.truncated = true;
                     }
                     s.degraded =
-                        Some("Output storage queue saturated; some history was not saved".into());
+                        Some("History storage worker stopped; terminal output continues but some history was not saved".into());
                     s.revision += 1;
                 }
             }
@@ -775,6 +777,20 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
         }
     };
     ensure!(authenticated, "Authentication failed");
+    if matches!(env.request, Request::Snapshot) {
+        let executable = std::env::current_exe().ok();
+        let available = executable
+            .as_ref()
+            .is_some_and(|p| executable_available(&p.with_file_name("terminator-hook")));
+        let mut state = shared.state.lock().unwrap();
+        if state.daemon_executable != executable
+            || state.attachment_helper_available != Some(available)
+        {
+            state.daemon_executable = executable;
+            state.attachment_helper_available = Some(available);
+            state.revision += 1;
+        }
+    }
     if matches!(env.request, Request::Snapshot)
         && let Some(hint) = &env.snapshot_hint
     {
@@ -964,7 +980,14 @@ fn main() -> Result<()> {
             match history_rx.recv_timeout(Duration::from_millis(250)) {
                 Ok(HistoryJob::Append(sid, data)) => {
                     if let Err(e) = history.append(&sid, &data) {
-                        s.degraded(&format!("Scrollback storage unavailable: {e}"));
+                        let mut state = s.state.lock().unwrap();
+                        if let Some(record) = state.sessions.iter_mut().find(|r| r.id == sid) {
+                            record.truncated = true;
+                        }
+                        state.degraded = Some(format!(
+                            "History write failed; some terminal history was not saved: {e}"
+                        ));
+                        state.revision += 1;
                     }
                 }
                 Ok(HistoryJob::Flush(tx)) => {

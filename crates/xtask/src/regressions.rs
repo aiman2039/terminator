@@ -7,6 +7,8 @@ use terminator_core::{quote, read_frame};
 
 pub fn run() -> Result<()> {
     idle_shutdown_race()?;
+    history_burst()?;
+    missing_helper_health()?;
     large_snapshots()?;
     stalled_attachment()?;
     terminal_editors()?;
@@ -207,5 +209,117 @@ fn idle_shutdown_race() -> Result<()> {
         }
     }
     println!("Idle shutdown serialized against concurrent session creation (8 runs)");
+    Ok(())
+}
+
+fn history_burst() -> Result<()> {
+    let h = Harness::new()?;
+    h.setup()?;
+    let project = h.project("history-burst")?;
+    let shell = h.shell(&project)?;
+    let mut stream = h.attach(&shell)?;
+    h.write(&mut stream, "stty -echo; printf 'BURST_READY\\n'\n")?;
+    h.wait(
+        |_| {
+            h.history(id(&shell))
+                .is_ok_and(|s| s.contains("BURST_READY"))
+        },
+        5,
+    )?;
+    // Six MiB exceeds the entire queue capacity. Octal avoids echoing any payload Xs.
+    h.write(
+        &mut stream,
+        "head -c 6291456 /dev/zero | tr '\\000' '\\130'; printf '\\nHISTORY_BURST_DONE\\n'\n",
+    )?;
+    h.wait(
+        |_| {
+            h.history(id(&shell))
+                .is_ok_and(|s| s.contains("HISTORY_BURST_DONE"))
+        },
+        30,
+    )?;
+    h.rpc(json!({"Stop":{"session":id(&shell)}}))?;
+    let state = h.wait(|s| session(s, id(&shell))["lifecycle"] == "ended", 5)?;
+    ensure!(
+        session(&state, id(&shell))["truncated"] == false,
+        "History burst was truncated"
+    );
+    h.history(id(&shell))?; // Ended History requests flush the storage worker.
+    let mut saved = 0;
+    for entry in fs::read_dir(terminator_core::Paths::at(h.root.clone()).history_dir())? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with(id(&shell)) {
+            saved += fs::read(entry.path())?
+                .iter()
+                .filter(|b| **b == b'X')
+                .count();
+        }
+    }
+    ensure!(
+        saved == 6_291_456,
+        "Expected every burst byte in saved history, got {saved}"
+    );
+    println!(
+        "{}",
+        json!({"history_burst_bytes_saved":saved,"truncated":false})
+    );
+    Ok(())
+}
+
+fn missing_helper_health() -> Result<()> {
+    let mut h = Harness::new()?;
+    let install = h.root.join("isolated-install");
+    fs::create_dir(&install)?;
+    for name in ["terminator-daemon", "terminator-hook"] {
+        fs::copy(bin().join(name), install.join(name))?;
+    }
+    h.env.insert(
+        "TERMINATOR_FIXTURE_DAEMON".into(),
+        install
+            .join("terminator-daemon")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    h.restart()?;
+    h.setup()?;
+    let project = h.project("helper-health")?;
+    let shell = h.shell(&project)?;
+    let initial = h.state()?;
+    ensure!(
+        initial["attachment_helper_available"] == true,
+        "Installed helper was not available"
+    );
+    let hint = serde_json::from_value::<terminator_core::State>(initial)?.snapshot_hint();
+    fs::set_permissions(
+        install.join("terminator-hook"),
+        fs::Permissions::from_mode(0o600),
+    )?;
+    let paths = terminator_core::Paths::at(h.root.clone());
+    let response = terminator_core::conditional_snapshot(&paths, Some(hint))?;
+    ensure!(
+        matches!(response, terminator_core::Response::State(ref s) if s.attachment_helper_available == Some(false)),
+        "Permission change did not invalidate conditional snapshot"
+    );
+    fs::remove_file(install.join("terminator-hook"))?;
+    ensure!(
+        h.state()?["attachment_helper_available"] == false,
+        "Removed helper was not detected"
+    );
+    h.assert_pids(std::slice::from_ref(&shell))?;
+    ensure!(
+        h.rpc(json!("ShutdownIfIdle")).is_err(),
+        "Broken helper allowed shutdown with a live session"
+    );
+    ensure!(
+        h.shell(&project).is_err(),
+        "Missing helper should give an installation error"
+    );
+    h.rpc(json!({"Stop":{"session":id(&shell)}}))?;
+    h.wait(|s| session(s, id(&shell))["lifecycle"] == "ended", 5)?;
+    h.rpc(json!("ShutdownIfIdle"))?;
+    println!(
+        "{}",
+        json!({"missing_helper_detected":true,"permission_change_invalidates_snapshot":true,"live_sessions_preserved":true})
+    );
     Ok(())
 }

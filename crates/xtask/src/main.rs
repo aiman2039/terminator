@@ -42,6 +42,13 @@ enum Task {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// Create a drag-to-Applications DMG from a prebuilt app (requires create-dmg).
+    Dmg {
+        #[arg(long)]
+        app: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Assemble two prebuilt macOS apps with the pinned Sparkle framework.
     Universal {
         #[arg(long)]
@@ -139,6 +146,7 @@ fn main() -> Result<()> {
             case,
         } => linux::desktop(&backend, browser, case.as_deref()),
         Task::Package { debug, output } => package::run(debug, output),
+        Task::Dmg { app, output } => package::dmg(&app, &output),
         Task::Universal {
             arm,
             intel,

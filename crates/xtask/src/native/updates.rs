@@ -105,7 +105,10 @@ pub fn run(o: &Options) -> Result<()> {
     )?;
 
     // Install copies, preserving the running daemon's original executable.
-    let app = h.root.join("fixture-install/Terminator.app/Contents/MacOS");
+    // Model a user Applications installation under the isolated fixture home.
+    h.env
+        .insert("HOME".into(), h.root.to_string_lossy().into_owned());
+    let app = h.root.join("Applications/Terminator.app/Contents/MacOS");
     fs::create_dir_all(&app)?;
     for name in ["terminator", "terminator-daemon", "terminator-hook"] {
         fs::copy(bin().join(name), app.join(name))?;

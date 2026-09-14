@@ -16,6 +16,7 @@ xshell = "0.2"
 plist = "1"
 tar = "0.4"
 flate2 = "1"
+resvg = { version = "0.45.1", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]

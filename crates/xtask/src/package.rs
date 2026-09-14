@@ -113,7 +113,14 @@ pub fn run(debug: bool, output_dir: Option<PathBuf>) -> Result<()> {
     };
     fs::create_dir_all(&executables)?;
     for name in ["terminator", "terminator-daemon", "terminator-hook"] {
-        fs::copy(binaries.join(name), executables.join(name))?;
+        let target = executables.join(name);
+        fs::copy(binaries.join(name), &target)?;
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755))?;
+        ensure!(
+            terminator_core::executable_available(&target),
+            "Packaged executable is unavailable: {name}"
+        );
     }
     if cfg!(target_os = "macos") {
         let mut info = plist::Dictionary::new();
@@ -275,6 +282,8 @@ pub fn universal(
             .arg("-output")
             .arg(app.join(&relative));
         output(lipo)?;
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(app.join(&relative), fs::Permissions::from_mode(0o755))?;
     }
     copy_tree(
         &framework,
@@ -336,5 +345,78 @@ fn verify_universal(path: &Path) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+/// Use create-dmg's Finder layout support; never silently skip presentation in CI.
+pub fn dmg(app: &Path, destination: &Path) -> Result<()> {
+    ensure!(cfg!(target_os = "macos"), "DMG packaging requires macOS");
+    ensure!(!destination.exists(), "DMG output already exists");
+    for name in ["terminator", "terminator-daemon", "terminator-hook"] {
+        ensure!(
+            terminator_core::executable_available(&app.join("Contents/MacOS").join(name)),
+            "Missing or non-executable bundle component: {name}"
+        );
+    }
+    let staging = tempfile::Builder::new()
+        .prefix("terminator-dmg-")
+        .tempdir()?;
+    let source = staging.path().join("source");
+    fs::create_dir(&source)?;
+    // ditto retains the signed bundle's metadata and framework symlinks.
+    let mut copy = Command::new("ditto");
+    copy.arg(app).arg(source.join("Terminator.app"));
+    output(copy)?;
+    let background = staging.path().join("background.png");
+    dmg_background(&background)?;
+    let mut create = Command::new("create-dmg");
+    create
+        .args([
+            "--volname",
+            "Terminator",
+            "--window-pos",
+            "200",
+            "120",
+            "--window-size",
+            "640",
+            "440",
+            "--icon-size",
+            "96",
+            "--text-size",
+            "14",
+            "--icon",
+            "Terminator.app",
+            "170",
+            "195",
+            "--hide-extension",
+            "Terminator.app",
+            "--app-drop-link",
+            "470",
+            "195",
+            "--background",
+        ])
+        .arg(background)
+        .arg(destination)
+        .arg(source);
+    terminator_core::run_command(create, terminator_core::CommandOptions {
+        timeout: std::time::Duration::from_secs(300),
+        stdout_limit: 1024 * 1024,
+        ..Default::default()
+    }).context("DMG creation failed (requires create-dmg and a macOS desktop; install with brew install create-dmg)")?;
+    Ok(())
+}
+
+fn dmg_background(destination: &Path) -> Result<()> {
+    let mut options = resvg::usvg::Options::default();
+    options.fontdb_mut().load_system_fonts();
+    let tree = resvg::usvg::Tree::from_str(include_str!("../assets/dmg-background.svg"), &options)?;
+    let mut pixels =
+        resvg::tiny_skia::Pixmap::new(640, 400).context("DMG background allocation failed")?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::identity(),
+        &mut pixels.as_mut(),
+    );
+    pixels.save_png(destination)?;
     Ok(())
 }

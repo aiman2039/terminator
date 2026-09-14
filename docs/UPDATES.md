@@ -18,7 +18,7 @@ remains the display version. The first migration compares against the previous
 fixed build number, 1.
 
 The workflow signs nested executable files and bundles before the containing app,
-notarizes/staples the app, creates a DMG with an Applications shortcut, signs and
+notarizes/staples the app, creates a DMG with fixed icon positions, an Applications shortcut and installation instructions, signs and
 notarizes/staples that DMG, then generates the signed appcast from those final
 bytes. Deltas are disabled. The feed is:
 
@@ -72,10 +72,12 @@ termination notifications re-entering winit. Native installation cancellation
 restores GUI interaction. Review this bridge when upgrading winit or Sparkle.
 
 No GUI update stops the daemon, rotates authentication, replays commands, or
-relaunches agents/editors. A later GUI launch may retire an older daemon only when
-it advertises `shutdown-if-idle-v1` and has no live sessions. That request shares
+relaunches agents/editors. A later GUI launch may retire an older daemon, or a
+same-version daemon with unavailable/unreported helper health, only when it
+advertises `shutdown-if-idle-v1` and has no live sessions. That request shares
 the session-creation lock and persists before acknowledging shutdown; subsequent
-creation requests fail. Legacy, newer, and live daemons remain in place. RPC
+creation requests fail. Daemons without that capability, unknown/newer versions,
+and live daemons remain in place. RPC
 failure with a held daemon lock is a connection error, never authority to replace
 the daemon. Reboot/daemon-crash recovery is separate from GUI-update continuity.
 
@@ -124,3 +126,20 @@ Primary references: [Sparkle setup](https://sparkle-project.org/documentation/),
 [programmatic setup](https://sparkle-project.org/documentation/programmatic-setup/),
 [updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),
 [Apple universal binaries](https://developer.apple.com/documentation/apple-silicon/building-a-universal-macos-binary).
+
+## Local installer validation
+
+`cargo xtask dmg --app PATH/Terminator.app --output PATH/Terminator.dmg` uses
+[create-dmg](https://github.com/create-dmg/create-dmg) (`brew install create-dmg`)
+and requires a macOS desktop for Finder layout generation. The SVG background
+source lives in `crates/xtask/assets/dmg-background.svg`; Rust renders it to PNG.
+The task preserves the app's existing signature with `ditto`, checks all three
+executables and refuses to overwrite an existing DMG. The release workflow signs
+and notarizes the resulting image as before; it never skips Finder styling.
+
+First launch from the disk image now presents installation instructions and exits
+before creating state or starting a daemon. Copy the complete app to Applications,
+eject the image, then launch that installed copy. Reopening can retire an idle
+older/broken daemon through its advertised atomic shutdown capability. If any
+sessions remain live, they are preserved and the status area explains recovery.
+No helper is substituted into a live daemon and no privacy grants are changed.

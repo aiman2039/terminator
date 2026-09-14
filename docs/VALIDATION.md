@@ -1276,3 +1276,54 @@ manual release and native launch check.
 - `cargo check -p terminator --all-targets --all-features --locked --offline` passed.
 - Vendored formatting and `git diff --check` passed.
 - Live native rendering was not exercised; no running daemon or sessions were restarted.
+
+
+## 2026-09-14 — Installation, daemon health, DMG layout and history bursts
+
+Implemented a macOS installation preflight before state creation/daemon startup,
+app-owned native startup alerts, executable-access checks and 0755 package modes.
+Authenticated snapshots refresh optional daemon path/helper-health metadata before
+conditional-cache checks. Capability-gated retirement now also covers idle
+same-version daemons with broken or unreported helper health; live, unknown/newer
+and unsupported daemons remain protected. A new daemon discards stale runtime
+warnings while preserving per-session history-loss flags.
+
+The bounded history queue now waits for capacity without holding parser/state
+locks rather than dropping output. Disconnected workers and storage-write errors
+have distinct loss messages. Slow storage can apply backpressure to noisy PTYs.
+
+Evidence on local macOS:
+
+- `cargo test --workspace --all-features --locked`: 138 unit tests passed. The
+  initial sandbox run could not create Unix sockets or receive filesystem-watch
+  events; the complete run passed outside that sandbox using isolated fixtures.
+- `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`,
+  formatting and whitespace checks passed. Release workflow YAML parsed locally.
+- `cargo xtask integration`: real PTY saved all 6,291,456 payload bytes without
+  truncation. An isolated copied daemon detected helper chmod/removal, invalidated
+  the conditional snapshot, preserved the live session PID and rejected idle
+  shutdown until the session ended. Existing shutdown-race (8 runs), reconnect,
+  snapshots, hooks, worktree and terminal-editor checks also passed.
+- `cargo xtask gui updates --output /tmp/terminator-install-validation/updates`:
+  native GUI replacement preserved shells, unsaved editor state, layouts and
+  session identities. The fixture now models a user Applications directory in
+  its isolated home rather than bypassing installation checks.
+- Local ad-hoc `cargo xtask package --debug` and `cargo xtask dmg` completed.
+  The mounted DMG had `.DS_Store`, its rendered background and the Applications
+  symlink; every bundled executable was 0755 and strict deep signature checking
+  passed. Finder was visually inspected at 640 × 440; screenshot:
+  `/tmp/terminator-install-validation/dmg-finder.png`.
+- The isolated non-installed bundle launch exited successfully without creating
+  its configured data directory. A screenshot of the startup alert itself was
+  not retained; the launch-location decision is covered by unit tests.
+
+Final local package/DMG: `/tmp/terminator-install-validation/final/`.
+Unit log: `/tmp/terminator-install-validation/unit-tests.log`.
+The original 20-second generic command deadline was too short for DMG creation;
+its dedicated task now allows five minutes and successfully completed. The first
+attempt's temporary mount was detached before retrying.
+
+No existing user daemon was restarted or terminated. No signing credentials,
+privacy settings, installation in Applications, hosted CI, universal release,
+Developer ID signing/notarization or publication were changed or verified by
+these local checks. The validation package is a local development build.

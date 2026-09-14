@@ -1,4 +1,5 @@
 mod exit;
+mod installation;
 mod updater;
 mod workspace_ui;
 use workspace_ui::Viewer;
@@ -2059,7 +2060,11 @@ impl eframe::App for App {
                     } else {
                         "○ Connecting"
                     },
-                );
+                ).on_hover_text(format!("GUI {}\nDaemon {}\nDaemon executable: {}\nAttachment helper: {}",
+                    env!("CARGO_PKG_VERSION"),
+                    self.state.daemon_version.as_deref().unwrap_or("unknown (older daemon)"),
+                    self.state.daemon_executable.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "not reported by this daemon".into()),
+                    match self.state.attachment_helper_available { Some(true) => "available", Some(false) => "unavailable", None => "not reported by this daemon" }));
                 ui.separator();
                 if let Some(error) = self.error.clone() {
                     ui.horizontal_wrapped(|ui| {
@@ -2068,8 +2073,14 @@ impl eframe::App for App {
                             self.error = None;
                         }
                     });
+                } else if self.state.attachment_helper_available == Some(false) {
+                    ui.colored_label(appearance::color(&self.theme.status_failed),
+                        "The running daemon’s attachment helper is unavailable. Existing sessions are preserved. Reopen Terminator after closing live sessions to repair it.");
                 } else if let Some(message) = &self.state.degraded {
                     ui.colored_label(appearance::color(&self.theme.status_waiting), message);
+                } else if self.state.daemon_version.as_deref().is_some_and(|v| v != env!("CARGO_PKG_VERSION")) {
+                    ui.weak(format!("GUI {} · daemon {}. Existing sessions use the running daemon; reopen the latest installed app after closing sessions to finish updating.",
+                        env!("CARGO_PKG_VERSION"), self.state.daemon_version.as_deref().unwrap()));
                 } else if let Some(info) = self.info.clone() {
                     ui.horizontal(|ui| {
                         ui.label(info);
@@ -2396,7 +2407,10 @@ fn can_retire_daemon(state: &State) -> bool {
         semver::Version::parse(version)
             .ok()
             .zip(semver::Version::parse(env!("CARGO_PKG_VERSION")).ok())
-            .is_some_and(|(running, bundled)| running < bundled)
+            .is_some_and(|(running, bundled)| {
+                running < bundled
+                    || (running == bundled && state.attachment_helper_available != Some(true))
+            })
     }) && state
         .capabilities
         .iter()
@@ -2408,8 +2422,11 @@ fn can_retire_daemon(state: &State) -> bool {
 mod daemon_compatibility_tests {
     use super::*;
     #[test]
-    fn legacy_unknown_current_and_newer_daemons_are_preserved() {
-        let mut state = State::default();
+    fn unknown_healthy_current_and_newer_daemons_are_preserved() {
+        let mut state = State {
+            attachment_helper_available: Some(true),
+            ..State::default()
+        };
         assert!(!can_retire_daemon(&state));
         state.daemon_version = Some("0.0.1".into());
         assert!(!can_retire_daemon(&state));
@@ -2422,6 +2439,9 @@ mod daemon_compatibility_tests {
     }
 }
 fn main() -> Result<()> {
+    if !installation::preflight()? {
+        return Ok(());
+    }
     let args = std::env::args().collect::<Vec<_>>();
     let paths = if let Some(i) = args.iter().position(|a| a == "--data-dir") {
         Paths::at(args.get(i + 1).context("Missing data directory")?.into())
@@ -2620,6 +2640,32 @@ mod navigation_tests {
             truncated: false,
             cwd_confirmed: true,
         }
+    }
+
+    #[test]
+    fn idle_legacy_or_broken_daemon_is_retired_but_live_sessions_are_preserved() {
+        let mut state = State {
+            daemon_version: Some(env!("CARGO_PKG_VERSION").into()),
+            capabilities: vec![SHUTDOWN_IF_IDLE_CAPABILITY.into()],
+            ..State::default()
+        };
+        for health in [None, Some(false)] {
+            state.attachment_helper_available = health;
+            assert!(can_retire_daemon(&state));
+            state
+                .sessions
+                .push(session_fixture("live", SessionKind::Shell));
+            assert!(!can_retire_daemon(&state));
+            state.sessions.clear();
+        }
+        state.attachment_helper_available = Some(true);
+        assert!(!can_retire_daemon(&state));
+        state.attachment_helper_available = Some(false);
+        state.capabilities.clear();
+        assert!(!can_retire_daemon(&state));
+        state.capabilities.push(SHUTDOWN_IF_IDLE_CAPABILITY.into());
+        state.daemon_version = Some("999.0.0".into());
+        assert!(!can_retire_daemon(&state));
     }
 
     #[test]

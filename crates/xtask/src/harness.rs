@@ -138,6 +138,11 @@ impl Harness {
                 .get("TERMINATOR_FIXTURE_GUI")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| bin().join(name))
+        } else if name == "terminator-daemon" {
+            self.env
+                .get("TERMINATOR_FIXTURE_DAEMON")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| bin().join(name))
         } else {
             bin().join(name)
         };

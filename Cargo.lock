@@ -5646,6 +5646,7 @@ dependencies = [
  "image",
  "libc",
  "plist",
+ "resvg",
  "serde_json",
  "tar",
  "tempfile",

@@ -52,6 +52,13 @@ fn find_executable_in(program: &str, paths: &[PathBuf]) -> Option<PathBuf> {
             .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
     })
 }
+/// Check the current user's ability to execute a regular file, including ACLs.
+pub fn executable_available(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    path.is_file()
+        && std::ffi::CString::new(path.as_os_str().as_bytes())
+            .is_ok_and(|p| unsafe { libc::access(p.as_ptr(), libc::X_OK) == 0 })
+}
 pub fn default_shell() -> Result<PathBuf> {
     ["zsh", "bash", "sh"]
         .into_iter()
@@ -408,6 +415,9 @@ pub struct TerminalNotice {
 #[serde(default)]
 pub struct State {
     pub daemon_version: Option<String>,
+    /// Runtime health; absent on older daemons. Refreshed before snapshots.
+    pub daemon_executable: Option<PathBuf>,
+    pub attachment_helper_available: Option<bool>,
     /// Features advertised by the running daemon, not the GUI binary on disk.
     pub capabilities: Vec<String>,
     pub revision: u64,
@@ -477,6 +487,11 @@ impl State {
     }
     pub fn recover(&mut self) {
         self.generation = id();
+        // Runtime health must be re-evaluated by this daemon. Historical loss
+        // remains on each session's truncated flag, not a stale queue warning.
+        self.degraded = None;
+        self.daemon_executable = None;
+        self.attachment_helper_available = None;
         for s in &mut self.sessions {
             if s.lifecycle.live() {
                 s.lifecycle = Lifecycle::Interrupted;
@@ -995,6 +1010,19 @@ mod tests {
         assert!(s.sessions[0].pid.is_none());
     }
     #[test]
+    fn recovery_preserves_history_loss_but_discards_previous_runtime_health() {
+        let mut state = setup();
+        state.sessions[0].truncated = true;
+        state.degraded = Some("Output storage queue saturated; some history was not saved".into());
+        state.daemon_executable = Some("/removed/daemon".into());
+        state.attachment_helper_available = Some(false);
+        state.recover();
+        assert!(state.sessions[0].truncated);
+        assert!(state.degraded.is_none());
+        assert!(state.daemon_executable.is_none());
+        assert!(state.attachment_helper_available.is_none());
+    }
+    #[test]
     fn oversized_frame_rejected_before_allocation() {
         let mut b = (MAX_FRAME as u32 + 1).to_be_bytes().as_slice().to_vec();
         assert!(read_frame::<Request>(&mut b.as_slice()).is_err());
@@ -1072,5 +1100,24 @@ mod snapshot_tests {
         state.recover();
         state.revision = previous.revision;
         assert_ne!(previous, state.snapshot_hint());
+    }
+}
+
+#[cfg(test)]
+mod executable_health_tests {
+    use super::*;
+    #[test]
+    fn missing_non_executable_and_directory_helpers_are_unavailable() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("helper");
+        assert!(!executable_available(&file));
+        assert!(!executable_available(dir.path()));
+        fs::write(&file, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!executable_available(&file));
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(executable_available(&file));
+        fs::remove_file(&file).unwrap();
+        assert!(!executable_available(&file));
     }
 }

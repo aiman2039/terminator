@@ -22,6 +22,7 @@ Project-owned Python automation has moved to `crates/xtask`. Run commands from
 | Former script | Rust command |
 | --- | --- |
 | `package.py` | `cargo xtask package [--debug]` |
+| Styled macOS disk image | `cargo xtask dmg --app PATH/Terminator.app --output PATH/Terminator.dmg` |
 | `integration.py` | `cargo xtask integration` |
 | `gui_smoke.py` | `cargo xtask gui smoke --sessions 50 --seconds 5` |
 | `workspace_tabs_smoke.py` | `cargo xtask gui workspace-tabs` |

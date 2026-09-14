@@ -217,6 +217,8 @@ jobs:
           if int(os.environ['GITHUB_RUN_NUMBER']) <= previous:
               raise SystemExit('Build number must exceed the previous published build')
           CHECK
+      - name: Install DMG layout tool
+        run: brew install create-dmg
       - name: Sign and notarize macOS app
         timeout-minutes: 30
         env:
@@ -288,11 +290,9 @@ jobs:
           xcrun stapler staple "$app"
           xcrun stapler validate "$app"
           spctl --assess --type execute --verbose=2 "$app"
-          mkdir -p dist "$RUNNER_TEMP/dmg-root"
-          ditto "$app" "$RUNNER_TEMP/dmg-root/Terminator.app"
-          ln -s /Applications "$RUNNER_TEMP/dmg-root/Applications"
+          mkdir -p dist
           dmg="dist/terminator-${TAG}-universal-macos.dmg"
-          hdiutil create -volname Terminator -srcfolder "$RUNNER_TEMP/dmg-root" -ov -format UDZO "$dmg"
+          cargo xtask dmg --app "$app" --output "$dmg"
           codesign --force --sign "$identity" --keychain "$keychain" --timestamp "$dmg"
           codesign --verify --strict "$dmg"
           xcrun notarytool submit "$dmg" \
