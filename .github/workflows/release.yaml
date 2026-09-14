@@ -142,9 +142,15 @@ jobs:
           keychain_password="$(openssl rand -hex 32)"
           echo "::add-mask::$keychain_password"
           printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate"
+          security list-keychains -d user > "$RUNNER_TEMP/terminator-keychain-search-list.txt"
           security create-keychain -p "$keychain_password" "$keychain"
           security set-keychain-settings -lut 3600 "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
+          python3 - "$RUNNER_TEMP/terminator-keychain-search-list.txt" "$keychain" <<'PY'
+          import pathlib, shlex, subprocess, sys
+          original = shlex.split(pathlib.Path(sys.argv[1]).read_text())
+          subprocess.run(['security', 'list-keychains', '-d', 'user', '-s', sys.argv[2], *original], check=True)
+          PY
           openssl pkcs12 -in "$certificate" \
             -passin env:APPLE_CERTIFICATE_PASSWORD -info -noout
           security import "$certificate" -P "$APPLE_CERTIFICATE_PASSWORD" \
@@ -181,6 +187,15 @@ jobs:
         run: |
           set -euo pipefail
           keychain="$RUNNER_TEMP/terminator-signing.keychain-db"
+          search_list="$RUNNER_TEMP/terminator-keychain-search-list.txt"
+          if [[ -f "$search_list" ]]; then
+            python3 - "$search_list" <<'PY'
+          import pathlib, shlex, subprocess, sys
+          original = shlex.split(pathlib.Path(sys.argv[1]).read_text())
+          subprocess.run(['security', 'list-keychains', '-d', 'user', '-s', *original], check=True)
+          PY
+            rm -f "$search_list"
+          fi
           if [[ -f "$keychain" ]]; then
             security delete-keychain "$keychain"
           fi

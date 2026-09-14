@@ -6,3 +6,12 @@ nvim.log
 
 __pycache__/
 *.pyc
+
+# Local signing credentials and editor recovery files.
+/tmp-state/
+/scripts/.signing.sh.swp
+
+docs/MACOS_SIGNING_SETUP.md
+scripts/signing-cleanup.sh
+scripts/signing-github.sh
+scripts/signing.sh
