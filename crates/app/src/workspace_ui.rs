@@ -1305,7 +1305,7 @@ impl Viewer<'_> {
                     ui,
                     matches!(target, services::Target::File(..)),
                     matches!(target, services::Target::Url(..)),
-                    false,
+                    None,
                 ) {
                     self.app.terminal_action(ui.ctx(), session, &target, action);
                 }
@@ -1361,7 +1361,7 @@ impl Viewer<'_> {
                         ui,
                         matches!(target, services::Target::File(..)),
                         matches!(target, services::Target::Url(..)),
-                        false,
+                        None,
                     ) {
                         self.app.terminal_action(ui.ctx(), session, &target, action);
                     }

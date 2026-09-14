@@ -536,7 +536,7 @@ impl App {
                         self.open_file(entry.path.clone(), None, None, false);
                     }
                     r.context_menu(|ui| {
-                        if let Some(action) = file_actions::menu(ui, true, false, false) {
+                        if let Some(action) = file_actions::menu(ui, true, false, None) {
                             self.file_action(ui, action, &entry.path, None);
                         }
                     });
@@ -880,7 +880,8 @@ impl App {
                                     }
                                 }
                                 response.context_menu(|ui| {
-                                    if let Some(action) = file_actions::menu(ui, true, false, true)
+                                    if let Some(action) =
+                                        file_actions::menu(ui, true, false, Some(group))
                                     {
                                         self.file_action(ui, action, &change.path, None);
                                     }

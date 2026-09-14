@@ -58,6 +58,23 @@ pub fn install(ctx: &egui::Context) {
             .or_default()
             .push("Noto Sans Symbols 2 Braille".into());
     }
+    fonts.font_data.insert(
+        "Noto Sans Hebrew".into(),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSansHebrew-Regular.ttf"))
+            .into(),
+    );
+    for family in [
+        FontFamily::Monospace,
+        FontFamily::Name("Terminal Bold".into()),
+        FontFamily::Proportional,
+        FontFamily::Name("Semibold".into()),
+    ] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .push("Noto Sans Hebrew".into());
+    }
     ctx.set_fonts(fonts);
     egui_extras::install_image_loaders(ctx);
     apply(ctx, &AppearanceConfig::default());
@@ -699,6 +716,27 @@ pub fn click_cursor(ctx: &egui::Context) {
 #[cfg(test)]
 mod row_tests {
     use super::*;
+
+    #[test]
+    fn app_and_terminal_fonts_cover_hebrew_letters() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_| {});
+        output.textures_delta.clear();
+        ctx.fonts_mut(|fonts| {
+            for family in [
+                FontFamily::Monospace,
+                FontFamily::Name("Terminal Bold".into()),
+                FontFamily::Proportional,
+                FontFamily::Name("Semibold".into()),
+            ] {
+                let font_id = FontId::new(13.0, family);
+                for c in '\u{05D0}'..='\u{05EA}' {
+                    assert!(fonts.has_glyph(&font_id, c), "{font_id:?} missing {c}");
+                }
+            }
+        });
+    }
 
     #[test]
     fn terminal_fonts_cover_braille_block() {

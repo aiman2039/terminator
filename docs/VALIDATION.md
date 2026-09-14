@@ -1599,3 +1599,40 @@ and uses a unique temporary iconset. Running an isolated copy with only the scri
 and source artwork reproduced all three shipped icons byte-for-byte. Apple's
 image conversion services required execution outside the sandbox. No release or
 package was published.
+
+## Interactive terminal colors (2026-09-14)
+
+PTY creation now matches Orca's color-environment cleanup: remove `NO_COLOR`
+unconditionally, and remove `FORCE_COLOR` / `CLICOLOR` only when exactly `0`.
+This applies to shells, editors, and reviews before spawning; shell startup files
+can still set user preferences. Other environment values remain intact.
+
+Validation: all 19 daemon tests passed, including two regressions covering
+suppression removal and preservation of other preferences. Daemon build, strict
+all-target/all-feature daemon Clippy, formatting, and diff whitespace checks
+passed. The installed live daemon was not replaced or restarted; existing
+sessions and native agent rendering were not changed or revalidated.
+
+## Pre-commit review menus and Hebrew glyphs (2026-09-14)
+
+Git row menus now put the matching review first: Working tree diff for Changes
+and Untracked, Staged diff for Staged Changes. Conflicts offer editor actions
+instead of unsupported two-way reviews. Opening a file still opens its editor.
+No staging or commit is required to review working-tree changes.
+
+A new font coverage regression failed on Hebrew aleph (U+05D0) with the old
+terminal font stack. Bundled, unmodified Noto Sans Hebrew now supplies Hebrew
+letters to normal/bold terminal and UI families; its OFL and source/hash are
+recorded with the font assets. The test now passes for all 27 Hebrew letters
+across all four families. This fixes missing glyphs, not bidirectional terminal
+layout; the native terminal still paints characters in application cell order.
+
+Validation: all 120 app tests passed, including pre-commit/partially-staged menu
+routing and Hebrew coverage. Workspace test-support build, strict workspace
+Clippy, formatting, and diff whitespace checks passed. The isolated native
+`reviews` fixture passed after sandbox PTY startup required elevated execution:
+staged/working snapshots remained read-only, the native Working tree diff menu
+opened an untracked file, and review close preserved the fixture shell. Hebrew
+glyphs were visually inspected in `/tmp/terminator-hebrew-git-review/reviews/review.png`.
+Actual Hebrew keyboard-layout input and provider-specific behavior were not
+exercised. No installed application or live daemon was replaced.

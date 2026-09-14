@@ -2,6 +2,7 @@ mod editor;
 mod helper;
 mod notifications;
 mod review;
+mod terminal_env;
 mod terminal_events;
 
 #[derive(Clone, Copy)]
@@ -174,6 +175,7 @@ impl Shared {
         cmd.cwd(&cwd);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        terminal_env::restore_colors(&mut cmd);
         cmd.env("TERMINATOR_SESSION_ID", &sid);
         cmd.env("TERMINATOR_SESSION_TOKEN", &token);
         cmd.env("TERMINATOR_DATA_DIR", &self.paths.data);

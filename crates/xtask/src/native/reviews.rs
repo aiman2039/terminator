@@ -118,7 +118,10 @@ pub fn run(o: &Options) -> Result<()> {
         "Review mutated Git or source"
     );
     let gui_source = root.join("review.rs");
-    fs::write(&gui_source, &original_source)?;
+    fs::write(
+        &gui_source,
+        "fn main() {\n    working();\n}\n// שלום עולם\n",
+    )?;
     h.layout(&p, std::slice::from_ref(&shell))?;
     save_prefs(
         &h,
@@ -141,7 +144,7 @@ pub fn run(o: &Options) -> Result<()> {
         &h,
         review,
         json!([""]),
-        json!(["fn main() {", "    working();", "}"]),
+        json!(["fn main() {", "    working();", "}", "// שלום עולם"]),
     )?;
     ensure!(
         state["projects"][0]["layout"]["tabs"]
