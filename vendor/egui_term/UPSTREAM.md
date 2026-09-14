@@ -38,3 +38,10 @@ enables mouse reporting, allowing full-screen agents to scroll their own history
 Ordinary terminals retain local scrollback and alternate-screen arrow scrolling;
 Shift bypasses mouse reporting. Pixel deltas still accumulate into complete rows.
 Regression tests cover both wheel directions, partial trackpad deltas, and Shift.
+
+## Terminal keyboard focus (2026-09-14)
+
+Focused terminals lock Tab, arrow keys, and Escape to terminal input using egui's
+focus event filter. This prevents widget navigation from briefly focusing and
+highlighting dock separators. A headless egui regression covers Tab, Shift+Tab,
+arrows, Escape, and repeated presses while confirming input remains available.

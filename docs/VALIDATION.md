@@ -1205,3 +1205,10 @@ manual release and native launch check.
 - Inspected screenshots and fixed a black-on-dark bell caused by SVG `currentColor`; the icon now uses the existing white-source tint convention. Final captures: `/tmp/terminator-agent-sidebar-validation/agent-sidebar/` and `/tmp/terminator-agent-sidebar-retina/agent-sidebar/`.
 - Passed the workspace binaries/examples test-support build, all 82 app tests (`cargo test -p terminator --all-features --locked`), formatting, and strict Clippy for app/xtask across all targets/features.
 - Native fixtures required execution outside the filesystem sandbox for local daemon sockets/PTYs. Live provider hook delivery and Linux rendering were not tested.
+
+## Terminal separator focus flash (2026-09-14)
+
+- All 13 vendored egui_term tests passed, including a headless focus regression for Tab, Shift+Tab, arrows, Escape, and repeated presses.
+- `cargo check -p terminator --all-targets --all-features --locked --offline` passed.
+- Vendored formatting and `git diff --check` passed.
+- Live native rendering was not exercised; no running daemon or sessions were restarted.

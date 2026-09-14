@@ -122,7 +122,7 @@ impl<'a> TerminalView<'a> {
 
     fn focus(self, layout: &Response) -> Self {
         if self.has_focus {
-            layout.request_focus();
+            focus_terminal(layout);
         } else {
             layout.surrender_focus();
         }
@@ -349,6 +349,72 @@ impl<'a> TerminalView<'a> {
         }
 
         painter.extend(shapes);
+    }
+}
+
+fn focus_terminal(layout: &Response) {
+    layout.request_focus();
+    // These keys belong to the shell/editor, not egui's widget navigation.
+    // Otherwise Tab can briefly focus and highlight a dock separator.
+    layout.ctx.memory_mut(|memory| {
+        memory.set_focus_lock_filter(
+            layout.id,
+            egui::EventFilter {
+                tab: true,
+                horizontal_arrows: true,
+                vertical_arrows: true,
+                escape: true,
+            },
+        );
+    });
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+
+    #[test]
+    fn terminal_navigation_keys_do_not_focus_the_separator() {
+        for (key, modifiers) in [
+            (Key::Tab, Modifiers::NONE),
+            (Key::Tab, Modifiers::SHIFT),
+            (Key::ArrowLeft, Modifiers::NONE),
+            (Key::ArrowRight, Modifiers::NONE),
+            (Key::ArrowUp, Modifiers::NONE),
+            (Key::ArrowDown, Modifiers::NONE),
+            (Key::Escape, Modifiers::NONE),
+        ] {
+            let ctx = egui::Context::default();
+            for frame in 0..4 {
+                let mut input = egui::RawInput::default();
+                if frame >= 2 {
+                    input.events.push(egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: frame > 2,
+                        modifiers,
+                    });
+                }
+                let mut output = ctx.run_ui(input, |ui| {
+                    ui.scope(|ui| {
+                        let terminal =
+                            ui.allocate_response(Vec2::splat(100.0), egui::Sense::click());
+                        if frame >= 2 {
+                            assert!(terminal.has_focus(), "terminal lost focus on {key:?}");
+                            assert!(ui.input(|i| i.key_pressed(key)));
+                        }
+                        focus_terminal(&terminal);
+                        let separator = ui.allocate_response(
+                            Vec2::new(4.0, 100.0),
+                            egui::Sense::click_and_drag(),
+                        );
+                        assert!(!separator.has_focus(), "separator focused on {key:?}");
+                    });
+                });
+                output.textures_delta.clear();
+            }
+        }
     }
 }
 
