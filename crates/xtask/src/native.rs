@@ -8,6 +8,7 @@ use std::{
     thread,
     time::Duration,
 };
+mod agents;
 mod markdown;
 mod projects;
 mod reviews;
@@ -127,6 +128,7 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "markdown",
             "markdown-busy",
             "project-sidebar",
+            "agent-sidebar",
             "inline-rename",
             "editor-lifecycle",
             "file-close",
@@ -154,6 +156,7 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "markdown" => markdown::run(&opts)?,
             "markdown-busy" => markdown::busy(&opts)?,
             "project-sidebar" => projects::run(&opts)?,
+            "agent-sidebar" => agents::run(&opts)?,
             "pane-close" => {
                 let (h, _, originals, _) = setup("pane-close")?;
                 let target = format!("pane-close:{}", id(&originals[0]));

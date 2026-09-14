@@ -1,5 +1,65 @@
 # Validation evidence — 2026-09-08
 
+## Clipboard image paste (2026-09-14)
+
+- Reviewed Orca's [terminal clipboard routing](https://github.com/stablyai/orca/blob/main/src/renderer/src/components/terminal-pane/terminal-clipboard-paste.ts)
+  and [temporary PNG writer](https://github.com/stablyai/orca/blob/main/src/main/window/clipboard-image-temp-file.ts):
+  nonempty text takes priority; image-only clipboard contents become a temporary
+  PNG whose path is pasted into the terminal. Terminator implements this locally
+  using arboard and its existing image encoder, with shell-quoted paths.
+- Cmd+V on macOS, Ctrl+Shift+V on Linux, and the terminal's Paste context menu
+  support image-only clipboard contents. The egui-winit patch preserves empty
+  text paste intent; the GUI routes image reads/encoding/writes to its worker.
+  Results carry the originating session ID and never use the later active tab.
+- PNGs use exclusive random filenames with Unix mode 0600 in the OS temp
+  directory. Files survive GUI exit for daemon-owned agents; eventual cleanup
+  is left to the OS. Invalid RGBA sizes and images above 128 MiB are rejected.
+  Paths refer to this machine; no SSH upload is performed.
+- All 81 app tests passed, including three clipboard regressions covering pixel
+  round trips, unique/private retained files, quoted paths, malformed input, and
+  one-time event consumption with text preservation. Locked all-target app
+  checking, workspace strict Clippy, formatting, diff checks, and
+  `cargo build --workspace --locked` passed.
+- Native macOS follow-up passed using the real NSPasteboard, a normal GUI,
+  Orca-generated Cmd+V, and two daemon-owned raw PTY receivers that record input
+  without executing it. Image-only paste delivered exactly one quoted PNG path;
+  text-only and mixed text/image paste delivered the expected text exactly once;
+  an empty clipboard delivered nothing. Switching to the second project routed
+  the next image only to its terminal. Each 32x24 PNG matched every decoded
+  source pixel and had mode 0600; generated files survived GUI exit.
+- The rendered context-menu Paste action passed through the existing native
+  fixture mouse-event driver, using the real image clipboard and PTY receiver.
+  Orca's OS right-click delivery could not be verified; this menu result is a
+  GUI fixture result, distinct from the successful native OS keyboard tests.
+- Evidence: `target/validation/clipboard-e2e/results.json`, `source.png`,
+  `menu.png`, `menu.log`, and `REPORT.md`. Clipboard formats were retained in
+  memory and restored; an earlier attempt preserved externally changed clipboard
+  contents. Cleanup stopped only the isolated fixture GUI/daemon/sessions.
+- Orca's focus check rejected the always-on-top screenshot fixture; the normal
+  layer-0 GUI allowed native keyboard testing. No application fix was needed.
+  Linux X11/Wayland runtime behavior, SSH upload, live-agent image recognition,
+  and switching focus while image encoding is still in flight remain unverified.
+
+## Project terminal indentation (2026-09-14)
+
+- Expanded project terminals indent one standard spacing step beyond the actual
+  project row, accounting for its separate expand/collapse button.
+- Added and passed `expanded_project_terminals_stay_indented_at_all_sidebar_sizes`:
+  measured parent/child row rectangles at widths 180, 280, and 420 points,
+  scales 1 and 2, both selected projects, and initial/settled layout frames.
+  The existing project-list/history regression also passed.
+- Built the workspace binaries and examples with `terminator/test-support`.
+  Native `project-sidebar` fixtures passed at normal 1x and narrow 2x sizing;
+  inspected both restored-project screenshots and confirmed the indentation.
+  Removal, restoration, and GUI restarts preserved fixture shell/editor PIDs,
+  unsaved editor content, saved file bytes, and project layouts.
+- Captures: `/tmp/terminator-indent-native-1x/project-sidebar/` and
+  `/tmp/terminator-indent-native-2x/project-sidebar/` (five PNGs each).
+  Fixtures used isolated temporary state; the sandbox initially blocked daemon
+  socket startup, and both native runs passed outside the sandbox.
+- `cargo fmt --all --check` and `git diff --check` passed. Linux native rendering
+  was not tested.
+
 ## Cargo-husky and master CI (2026-09-14)
 
 - Added cargo-husky 1.5.0 with a tracked pre-commit hook and shared
@@ -1120,3 +1180,28 @@ No credentials were imported locally and no signing, notarization submission,
 GitHub run, or release publication was performed. Apple credential validity,
 notarization acceptance, and downloaded-app launch remain unverified until a
 manual release and native launch check.
+
+## Left sidebar agent bell (2026-09-14)
+
+- Added a bell bar above Projects with waiting-agent and unread-notification counts. Clicking toggles the left sidebar between Projects and the shared Agents view; the choice persists in UI preferences.
+- Passed `cargo fmt --all --check`, `cargo check -p terminator --all-targets --all-features --locked`, and the three `preferences::tests` with all features and the lockfile enforced, including legacy defaults and persistence of the left Agents view.
+- The initial locked check was blocked by concurrent dependency edits; an offline check reconciled Cargo.lock with those manifests before the successful locked check.
+- Native visual/click behavior was not exercised; no live daemon was restarted.
+
+## Agent terminal wheel scrolling (2026-09-14)
+
+- Fixed wheel routing for applications advertising terminal mouse reporting.
+- All 12 vendored egui_term tests passed, including three scrolling regressions.
+- `cargo check -p terminator --all-targets --all-features --locked --offline` passed.
+- Live agent/native GUI scrolling was not exercised; no running sessions were restarted.
+- Formatting and `git diff --check` passed. Final strict Clippy was blocked
+  by concurrent clipboard dependency edits requiring a lockfile update; that
+  unrelated lockfile was not regenerated for this fix.
+
+### Native agent-bell follow-up (2026-09-14)
+
+- Added `cargo xtask gui agent-sidebar` to the repeatable native suite. It uses an isolated daemon, two real shell PTYs, and synthetic hook events; no live provider account or user daemon is involved.
+- Passed at scale 1 and at `--scale 2 --narrow`. Automated clicks verified opening Agents, selecting an agent in another project, returning to Projects, and retaining the sidebar choice across GUI restarts. Snapshot assertions verified waiting/unread counts and a waiting-to-running update delivered while the GUI was open. Original shell PIDs survived all GUI launches.
+- Inspected screenshots and fixed a black-on-dark bell caused by SVG `currentColor`; the icon now uses the existing white-source tint convention. Final captures: `/tmp/terminator-agent-sidebar-validation/agent-sidebar/` and `/tmp/terminator-agent-sidebar-retina/agent-sidebar/`.
+- Passed the workspace binaries/examples test-support build, all 82 app tests (`cargo test -p terminator --all-features --locked`), formatting, and strict Clippy for app/xtask across all targets/features.
+- Native fixtures required execution outside the filesystem sandbox for local daemon sockets/PTYs. Live provider hook delivery and Linux rendering were not tested.

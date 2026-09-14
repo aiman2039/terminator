@@ -177,11 +177,13 @@ impl<'a> TerminalView<'a> {
                     modifiers,
                 )),
                 egui::Event::MouseWheel { unit, delta, .. } => {
-                    input_actions.push(process_mouse_wheel(
+                    input_actions.extend(process_mouse_wheel(
                         state,
                         self.font.font_measure(&layout.ctx).height,
                         unit,
                         delta,
+                        self.backend.last_content().terminal_mode,
+                        modifiers,
                     ))
                 }
                 egui::Event::PointerButton {
@@ -451,23 +453,41 @@ fn process_mouse_wheel(
     font_size: f32,
     unit: MouseWheelUnit,
     delta: Vec2,
-) -> InputAction {
-    match unit {
-        MouseWheelUnit::Line => {
-            let lines = delta.y.signum() * delta.y.abs().ceil();
-            InputAction::BackendCall(BackendCommand::Scroll(lines as i32))
-        }
+    terminal_mode: TermMode,
+    modifiers: Modifiers,
+) -> Vec<InputAction> {
+    let lines = match unit {
+        MouseWheelUnit::Line => (delta.y.signum() * delta.y.abs().ceil()) as i32,
         MouseWheelUnit::Point => {
-            state.scroll_pixels -= delta.y;
-            let lines = (state.scroll_pixels / font_size).trunc();
+            state.scroll_pixels += delta.y;
+            let lines = (state.scroll_pixels / font_size).trunc() as i32;
             state.scroll_pixels %= font_size;
-            if lines != 0.0 {
-                InputAction::BackendCall(BackendCommand::Scroll(-lines as i32))
-            } else {
-                InputAction::Ignore
-            }
+            lines
         }
-        MouseWheelUnit::Page => InputAction::Ignore,
+        MouseWheelUnit::Page => 0,
+    };
+    if lines == 0 {
+        return vec![];
+    }
+    // Full-screen agents own their history and expect wheel reports, not
+    // alternate-screen arrow keys. Shift retains local terminal scrolling.
+    if terminal_mode.intersects(TermMode::MOUSE_MODE) && !modifiers.shift {
+        (0..lines.unsigned_abs())
+            .map(|_| {
+                InputAction::BackendCall(BackendCommand::MouseReport(
+                    if lines > 0 {
+                        MouseButton::ScrollUp
+                    } else {
+                        MouseButton::ScrollDown
+                    },
+                    modifiers,
+                    state.current_mouse_position_on_grid,
+                    true,
+                ))
+            })
+            .collect()
+    } else {
+        vec![InputAction::BackendCall(BackendCommand::Scroll(lines))]
     }
 }
 
@@ -618,4 +638,83 @@ fn process_mouse_move(
     }
 
     actions
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+
+    #[test]
+    fn agent_mouse_mode_receives_wheel_reports_in_both_directions() {
+        let mut state = TerminalViewState::default();
+        for (delta, expected) in [(2.0, 64), (-2.0, 65)] {
+            let actions = process_mouse_wheel(
+                &mut state,
+                16.0,
+                MouseWheelUnit::Line,
+                Vec2::new(0.0, delta),
+                TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE | TermMode::ALT_SCREEN,
+                Modifiers::NONE,
+            );
+            assert_eq!(actions.len(), 2);
+            for action in actions {
+                match action {
+                    InputAction::BackendCall(BackendCommand::MouseReport(
+                        button,
+                        _,
+                        _,
+                        pressed,
+                    )) => {
+                        assert_eq!(button as u8, expected);
+                        assert!(pressed);
+                    }
+                    _ => panic!("expected a wheel report"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn trackpad_accumulates_partial_lines_for_shell_scrollback() {
+        let mut state = TerminalViewState::default();
+        for _ in 0..3 {
+            assert!(process_mouse_wheel(
+                &mut state,
+                16.0,
+                MouseWheelUnit::Point,
+                Vec2::new(0.0, 4.0),
+                TermMode::empty(),
+                Modifiers::NONE
+            )
+            .is_empty());
+        }
+        let actions = process_mouse_wheel(
+            &mut state,
+            16.0,
+            MouseWheelUnit::Point,
+            Vec2::new(0.0, 4.0),
+            TermMode::empty(),
+            Modifiers::NONE,
+        );
+        assert!(matches!(
+            actions.as_slice(),
+            [InputAction::BackendCall(BackendCommand::Scroll(1))]
+        ));
+    }
+
+    #[test]
+    fn shift_wheel_bypasses_application_mouse_reporting() {
+        let actions = process_mouse_wheel(
+            &mut TerminalViewState::default(),
+            16.0,
+            MouseWheelUnit::Line,
+            Vec2::new(0.0, -1.0),
+            TermMode::MOUSE_REPORT_CLICK,
+            Modifiers::SHIFT,
+        );
+        assert!(matches!(
+            actions.as_slice(),
+            [InputAction::BackendCall(BackendCommand::Scroll(-1))]
+        ));
+    }
 }

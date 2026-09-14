@@ -115,6 +115,56 @@ impl App {
             }
         });
     }
+    pub(super) fn agent_bar(&mut self, ui: &mut egui::Ui) {
+        let waiting = self
+            .state
+            .agents
+            .iter()
+            .filter(|agent| {
+                matches!(
+                    agent.state,
+                    AgentState::WaitingInput | AgentState::WaitingPermission
+                )
+            })
+            .count();
+        let unread = self
+            .state
+            .notifications
+            .iter()
+            .filter(|notice| !notice.read && !notice.dismissed && notice.snoozed_until <= now())
+            .count();
+        let badge = match (waiting, unread) {
+            (0, 0) => String::new(),
+            (0, unread) => format!("{unread} unread"),
+            (waiting, 0) => format!("{waiting} waiting"),
+            (waiting, unread) => format!("{waiting} waiting · {unread} unread"),
+        };
+        #[cfg(feature = "test-support")]
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(egui::Id::new("agent-bar-badge"), badge.clone()));
+        let response = appearance::row(
+            ui,
+            "Agents",
+            "Bell",
+            self.preferences.left_agents,
+            34.0,
+            &badge,
+            appearance::color(if waiting > 0 {
+                &self.theme.status_waiting
+            } else {
+                &self.theme.text
+            }),
+        )
+        .on_hover_text(
+            "Agent notifications across all projects. Click to switch between Agents and Projects.",
+        );
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "left-agent-bar", response.rect);
+        if response.clicked() {
+            self.preferences.left_agents = !self.preferences.left_agents;
+        }
+        ui.separator();
+    }
     pub(super) fn projects(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(RichText::new("PROJECTS").small().weak().strong());
@@ -187,7 +237,7 @@ impl App {
                         .expanded
                         .entry(p.id.clone())
                         .or_insert(true);
-                    ui.horizontal(|ui| {
+                    let project_left = ui.horizontal(|ui| {
                         if ui
                             .add_sized(
                                 [16.0, 28.0],
@@ -246,22 +296,27 @@ impl App {
                                 ui.close();
                             }
                         });
-                    });
+                        response.rect.left()
+                    }).inner;
                     if expanded && !self.preferences.hidden_projects.contains(&p.id) {
-                        ui.indent(&p.id, |ui| {
-                            let sessions: Vec<_> = self
-                                .state
-                                .sessions
-                                .iter()
-                                .filter(|s| s.project_id == p.id && s.kind != SessionKind::Editor)
-                                .cloned()
-                                .collect();
-                            for session in sessions
-                                .iter()
-                                .filter(|s| s.lifecycle.live() && s.kind != SessionKind::Editor)
-                            {
-                                self.session_row(ui, session);
-                            }
+                        ui.scope(|ui| {
+                            // Indent from the project row, past its separate expand button.
+                            ui.spacing_mut().indent += project_left - ui.next_widget_position().x;
+                            ui.indent(&p.id, |ui| {
+                                let sessions: Vec<_> = self
+                                    .state
+                                    .sessions
+                                    .iter()
+                                    .filter(|s| s.project_id == p.id && s.kind != SessionKind::Editor)
+                                    .cloned()
+                                    .collect();
+                                for session in sessions
+                                    .iter()
+                                    .filter(|s| s.lifecycle.live() && s.kind != SessionKind::Editor)
+                                {
+                                    self.session_row(ui, session);
+                                }
+                            });
                         });
                     }
                 }
@@ -490,6 +545,56 @@ impl App {
             ui.weak("Loading…");
         }
     }
+    pub(super) fn agents_view(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Agents");
+        ui.checkbox(&mut self.preferences.all_projects, "All projects");
+        let agents = self.state.agents.clone();
+        egui::ScrollArea::vertical()
+            .id_salt("agents")
+            .show(ui, |ui| {
+                let mut count = 0;
+                for agent in agents {
+                    let Some(session) = self
+                        .state
+                        .sessions
+                        .iter()
+                        .find(|s| s.id == agent.session_id)
+                    else {
+                        continue;
+                    };
+                    if !self
+                        .preferences
+                        .includes_project(&session.project_id, self.selected.as_deref())
+                    {
+                        continue;
+                    }
+                    count += 1;
+                    let label = format!(
+                        "{} · {}\n{} · {}s ago",
+                        agent.kind,
+                        session.label,
+                        agent.state.label(),
+                        now().saturating_sub(agent.updated)
+                    );
+                    let response = ui.selectable_label(
+                        self.active_session.as_ref() == Some(&agent.session_id),
+                        label,
+                    );
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(
+                        ui.ctx(),
+                        &format!("agent-row:{}", agent.session_id),
+                        response.rect,
+                    );
+                    if response.clicked() {
+                        self.go_session(&agent.session_id);
+                    }
+                }
+                if count == 0 {
+                    ui.weak("No observed agents in this scope.");
+                }
+            });
+    }
     pub(super) fn sidebar(&mut self, ui: &mut egui::Ui) {
         if self.preferences.tool == SidebarTool::History {
             ui.heading("History");
@@ -558,50 +663,7 @@ impl App {
             return;
         }
         if self.preferences.tool == SidebarTool::Agents {
-            ui.heading("Agents");
-            ui.checkbox(&mut self.preferences.all_projects, "All projects");
-            let agents = self.state.agents.clone();
-            egui::ScrollArea::vertical()
-                .id_salt("agents")
-                .show(ui, |ui| {
-                    let mut count = 0;
-                    for agent in agents {
-                        let Some(session) = self
-                            .state
-                            .sessions
-                            .iter()
-                            .find(|s| s.id == agent.session_id)
-                        else {
-                            continue;
-                        };
-                        if !self
-                            .preferences
-                            .includes_project(&session.project_id, self.selected.as_deref())
-                        {
-                            continue;
-                        }
-                        count += 1;
-                        let label = format!(
-                            "{} · {}\n{} · {}s ago",
-                            agent.kind,
-                            session.label,
-                            agent.state.label(),
-                            now().saturating_sub(agent.updated)
-                        );
-                        if ui
-                            .selectable_label(
-                                self.active_session.as_ref() == Some(&agent.session_id),
-                                label,
-                            )
-                            .clicked()
-                        {
-                            self.go_session(&agent.session_id);
-                        }
-                    }
-                    if count == 0 {
-                        ui.weak("No observed agents in this scope.");
-                    }
-                });
+            self.agents_view(ui);
             return;
         }
         if self.preferences.tool == SidebarTool::Explorer {

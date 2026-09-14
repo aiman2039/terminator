@@ -22,6 +22,7 @@ pub struct UiPreferences {
     pub history_expanded: HashMap<String, bool>,
     pub tool: SidebarTool,
     pub visible: bool,
+    pub left_agents: bool,
     pub width: f32,
     pub all_projects: bool,
     pub show_ignored: bool,
@@ -38,6 +39,7 @@ impl Default for UiPreferences {
             history_expanded: HashMap::new(),
             tool: SidebarTool::Explorer,
             visible: true,
+            left_agents: false,
             width: 285.0,
             all_projects: false,
             show_ignored: false,
@@ -88,6 +90,7 @@ mod tests {
         let old: UiPreferences =
             serde_json::from_str(r#"{"version":1,"typography_migrated":true}"#).unwrap();
         assert!(!old.attention_migrated);
+        assert!(!old.left_agents);
         assert!(old.typography_migrated);
         assert!(old.markdown_modes.is_empty());
         assert!(old.hidden_projects.is_empty());
@@ -102,6 +105,7 @@ mod tests {
         p.expanded.insert("b".into(), true);
         p.toggle(SidebarTool::Agents);
         p.toggle(SidebarTool::Agents);
+        p.left_agents = true;
         p.width = 410.0;
         p.all_projects = true;
         p.typography_migrated = true;

@@ -1108,6 +1108,13 @@ impl Viewer<'_> {
             && self.app.rename_session.is_none()
             && !self.app.open_path
             && self.app.search_session.is_none();
+        if focused {
+            let count = ui
+                .input_mut(|input| clipboard::take_image_paste(&mut input.events, input.modifiers));
+            for _ in 0..count {
+                let _ = self.app.jobs.send(Job::PasteClipboard(sid.clone()));
+            }
+        }
         let backend = self.app.backends.get_mut(sid).unwrap();
         let font = egui_term::TerminalFont::new(egui_term::FontSettings {
             font_type: egui::FontId::monospace(self.app.state.settings.font_size),
@@ -1251,8 +1258,7 @@ impl Viewer<'_> {
                 ui.close();
             }
             if appearance::menu_item(ui, "Paste", "Clipboard", &format!("{command}V")).clicked() {
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                let _ = self.app.jobs.send(Job::PasteClipboard(sid.clone()));
                 ui.close();
             }
             ui.separator();

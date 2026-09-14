@@ -44,6 +44,7 @@ New cases: `cargo xtask gui images`, `cargo xtask gui control`,
 `cargo xtask gui window-controls`, `cargo xtask gui split-file-opening`,
 `cargo xtask gui markdown`, `cargo xtask gui markdown-busy`, and `cargo xtask browser-check`.
 `cargo xtask gui project-sidebar` covers project removal and restoration.
+`cargo xtask gui agent-sidebar` covers the bell, waiting/unread counts, left Agents navigation, restart persistence, and live status updates.
 `cargo xtask gui all` runs the ordinary native fixture suite. All GUI cases accept
 `--scale 1|2`, `--narrow`, and `--output PATH`. Captures default to the Cargo target
 validation directory; earlier committed screenshots are not overwritten.

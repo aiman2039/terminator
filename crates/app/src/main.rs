@@ -23,6 +23,7 @@ mod workspace;
 use preferences::{SidebarTool, UiPreferences};
 use terminator_core::appearance::{AppearanceConfig, AppearanceFile, config_path};
 use workspace::Workspace;
+mod clipboard;
 #[cfg(feature = "test-support")]
 mod diagnostics;
 mod services;
@@ -90,6 +91,7 @@ enum Job {
     CloseEditors(editor_close::Target, Vec<String>, editor_close::Mode),
     ResolveTarget(String, String, PathBuf),
     Browser(String),
+    PasteClipboard(String),
 
     Diff(Tab),
     Install(String, bool),
@@ -135,6 +137,7 @@ enum Update {
         Vec<(PathBuf, Vec<services::Entry>)>,
         bool,
     ),
+    ClipboardPaste(String, String),
     Error(String),
     Info(String),
 }
@@ -341,6 +344,11 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
                                 key,
                                 services::resolve_target(&text, &cwd).ok(),
                             ))?;
+                        }
+                        Job::PasteClipboard(session) => {
+                            if let Some(text) = clipboard::read_paste()? {
+                                tx.send(Update::ClipboardPaste(session, text))?;
+                            }
                         }
                         Job::Browser(url) => {
                             open::that(url)?;
@@ -843,6 +851,10 @@ impl App {
                     "window":ctx.input(|i|serde_json::json!({"inner":i.viewport().inner_rect.map(|r|[r.min.x,r.min.y,r.width(),r.height()]),"outer":i.viewport().outer_rect.map(|r|[r.min.x,r.min.y,r.width(),r.height()]),"maximized":i.viewport().maximized,"minimized":i.viewport().minimized,"gui_ppp":gui_ppp,"native_ppp":i.viewport().native_pixels_per_point}))});
                 #[cfg(feature = "test-support")]
                 {
+                    snapshot["left_agents"] = serde_json::json!(self.preferences.left_agents);
+                    snapshot["agent_bar_badge"] = serde_json::json!(ctx.data(|data| {
+                        data.get_temp::<String>(egui::Id::new("agent-bar-badge"))
+                    }));
                     snapshot["markdown"] = self.markdown.diagnostics();
                     snapshot["markdown_modes"] =
                         serde_json::to_value(&self.preferences.markdown_modes)?;
@@ -1252,6 +1264,13 @@ impl App {
                         for (path, entries) in directories {
                             self.dirs.insert(path, entries);
                         }
+                    }
+                }
+                Update::ClipboardPaste(session, text) => {
+                    // Resolve by captured identity, never by current focus.
+                    if let Some(backend) = self.backends.get_mut(&session) {
+                        backend
+                            .process_command(egui_term::BackendCommand::Write(text.into_bytes()));
                     }
                 }
                 Update::Error(e) => {
@@ -2028,7 +2047,14 @@ impl eframe::App for App {
             .default_size(225.0)
             .size_range(170.0..=420.0)
             .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| self.projects(ui));
+                self.agent_bar(ui);
+                ui.push_id("left-sidebar-content", |ui| {
+                    if self.preferences.left_agents {
+                        self.agents_view(ui);
+                    } else {
+                        egui::ScrollArea::vertical().show(ui, |ui| self.projects(ui));
+                    }
+                });
             });
         self.project_width = projects_response.response.rect.width();
         let response = egui::Panel::right("context")
@@ -2560,6 +2586,61 @@ mod navigation_tests {
         assert!(app.preferences.hidden_projects.contains("a"));
         assert_eq!(app.selected.as_deref(), Some("b"));
     }
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn expanded_project_terminals_stay_indented_at_all_sidebar_sizes() {
+        for width in [180.0, 280.0, 420.0] {
+            for scale in [1.0, 2.0] {
+                let (mut app, ctx, _dir) = fixture();
+                ctx.set_pixels_per_point(scale);
+                let first = session_fixture("first-shell", SessionKind::Shell);
+                let mut second = session_fixture("second-shell", SessionKind::Shell);
+                second.project_id = "b".into();
+                app.state.sessions = vec![first, second];
+                for project in ["a", "b"] {
+                    app.preferences.expanded.insert(project.into(), true);
+                }
+                for selected in ["a", "b"] {
+                    app.selected = Some(selected.into());
+                    // Include the first frame and settled layout frames.
+                    for _ in 0..3 {
+                        let mut expected_indent = 0.0;
+                        let mut output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, 800.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                expected_indent = ui.spacing().indent;
+                                app.projects(ui);
+                            },
+                        );
+                        output.textures_delta.clear();
+                        let target = |name: &str| {
+                            ctx.data(|data| {
+                                data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name)))
+                            })
+                            .unwrap()
+                        };
+                        for (project, session) in [("a", "first-shell"), ("b", "second-shell")] {
+                            let parent = target(&format!("project-row:{project}"));
+                            let child = target(&format!("session-row:{session}"));
+                            let indent = child.left() - parent.left();
+                            assert!(
+                                indent >= expected_indent - 0.1,
+                                "width={width}, scale={scale}, project={project}: indent={indent}"
+                            );
+                            assert!(child.top() >= parent.bottom());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     #[cfg(feature = "test-support")]
     fn project_list_excludes_editors_and_global_history_includes_other_projects() {

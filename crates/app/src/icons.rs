@@ -332,6 +332,7 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         "FileType" => egui::include_image!("../assets/icons/file-type.svg"),
         "FileDiff" => egui::include_image!("../assets/icons/file-diff.svg"),
         "FileTerminal" => egui::include_image!("../assets/icons/file-terminal.svg"),
+        "Bell" => egui::include_image!("../assets/icons/bell.svg"),
         "History" => egui::include_image!("../assets/icons/history.svg"),
         "Folder" => egui::include_image!("../assets/icons/folder.svg"),
         "FileLock" => egui::include_image!("../assets/icons/file-lock.svg"),

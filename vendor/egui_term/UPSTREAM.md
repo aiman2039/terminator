@@ -30,3 +30,11 @@ The flat terminal context menu adds `select_all()` and reads copied selection te
 from the cached grid, including offscreen history, wrapped lines, combining marks,
 and wide-cell spacing. Copying does not acquire an additional live terminal lock
 while rendering. A regression checks offscreen copying and newline preservation.
+
+## Agent terminal wheel scrolling (2026-09-14)
+
+Wheel input now sends mouse wheel press reports when the terminal application
+enables mouse reporting, allowing full-screen agents to scroll their own history.
+Ordinary terminals retain local scrollback and alternate-screen arrow scrolling;
+Shift bypasses mouse reporting. Pixel deltas still accumulate into complete rows.
+Regression tests cover both wheel directions, partial trackpad deltas, and Shift.
