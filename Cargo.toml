@@ -3,7 +3,7 @@ members = ["crates/*"]
 exclude = ["vendor/egui_term", "vendor/egui_dock"]
 resolver = "2"
 [workspace.package]
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.95"
