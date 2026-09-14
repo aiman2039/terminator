@@ -13,7 +13,8 @@ Clippy with warnings denied across all workspace targets and features. Run
 `sh scripts/check.sh` against the working tree; stage any fixes before committing.
 Existing non-cargo-husky hooks are preserved. CI skips hook installation and runs
 all checks plus tests on native macOS and Linux for pushes and pull requests to
-`master`, or via manual dispatch. CI uses Rust 1.95.0.
+`master`, or via manual dispatch. Local checks, CI, and releases use Rust 1.97.1, pinned locally by
+`rust-toolchain.toml` with rustfmt and Clippy.
 
 
 Project-owned Python automation has moved to `crates/xtask`. Run commands from
@@ -69,7 +70,7 @@ It checks that filename, view tabs and refresh icon share one row without overla
 across GUI restarts while retaining the same shell/editor PIDs, unsaved buffers,
 file bytes and project layouts. Both cases run as part of `gui all`.
 
-Build first with Rust 1.95+ and a C compiler. Editor/review fixtures require
+Build first with Rust 1.97.1+ and a C compiler. Editor/review fixtures require
 Neovim 0.10+ on PATH, Git, and a native desktop. Run GUI cases serially:
 
 `cargo xtask integration` also covers worktree use across projects and descendant

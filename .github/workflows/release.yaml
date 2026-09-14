@@ -15,7 +15,7 @@ permissions:
 env:
   CARGO_INCREMENTAL: '0'
   CARGO_TERM_COLOR: always
-  RUST_VERSION: '1.95.0'
+  RUST_VERSION: '1.97.1'
   MACOSX_DEPLOYMENT_TARGET: '12.0'
   TERMINATOR_BUILD_NUMBER: ${{ github.run_number }}
 

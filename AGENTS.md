@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-The native macOS/Linux, a Rust 2024 workspace requiring Rust 1.95+. Root documents such as `plan.md` describe product requirements; consult `README.md` and `docs/` for implementation details and validation limits.
+The native macOS/Linux, a Rust 2024 workspace requiring Rust 1.97.1+. Root documents such as `plan.md` describe product requirements; consult `README.md` and `docs/` for implementation details and validation limits.
 
 `crates/` contains:
 

@@ -6,7 +6,7 @@ resolver = "2"
 version = "0.13.0"
 edition = "2024"
 license = "MIT"
-rust-version = "1.95"
+rust-version = "1.97.1"
 [workspace.dependencies]
 terminator-core = { path = "crates/core" }
 terminator-integrations = { path = "crates/integrations" }

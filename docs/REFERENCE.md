@@ -6,7 +6,7 @@ A native Rust terminal workspace for macOS and Linux. Projects have independent 
 
 ## Build and run
 
-Requires Rust 1.95+, a C compiler for the bundled CodeDiff library, and a native desktop. Install Neovim for the default embedded editor; Git reviews require Neovim 0.10+ on PATH.
+Requires Rust 1.97.1+, a C compiler for the bundled CodeDiff library, and a native desktop. Install Neovim for the default embedded editor; Git reviews require Neovim 0.10+ on PATH.
 
 ```sh
 cd terminator

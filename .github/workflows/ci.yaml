@@ -42,7 +42,7 @@ jobs:
             libwayland-dev libxkbcommon-dev libxkbcommon-x11-0
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: '1.95.0'
+          toolchain: '1.97.1'
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:

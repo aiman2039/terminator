@@ -1,7 +1,7 @@
 # Native GitHub releases
 
 `.github/workflows/release.yaml` builds directly on GitHub-hosted machines with
-Rust 1.95.0 and the committed Cargo.lock. It does not use Docker.
+Rust 1.97.1 and the committed Cargo.lock. It does not use Docker.
 
 | Platform | Runner | Release asset |
 | --- | --- | --- |
