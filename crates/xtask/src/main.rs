@@ -42,6 +42,19 @@ enum Task {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// Assemble two prebuilt macOS apps with the pinned Sparkle framework.
+    Universal {
+        #[arg(long)]
+        arm: PathBuf,
+        #[arg(long)]
+        intel: PathBuf,
+        #[arg(long)]
+        sparkle: PathBuf,
+        #[arg(long)]
+        build_number: u64,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Real-PTY, auth, hooks, reconnect, and daemon-recovery checks.
     Integration,
     /// Native renderer and input fixtures. Requires a desktop and test-support build.
@@ -126,6 +139,13 @@ fn main() -> Result<()> {
             case,
         } => linux::desktop(&backend, browser, case.as_deref()),
         Task::Package { debug, output } => package::run(debug, output),
+        Task::Universal {
+            arm,
+            intel,
+            sparkle,
+            build_number,
+            output,
+        } => package::universal(&arm, &intel, &sparkle, build_number, &output),
         Task::Integration => {
             integration::run()?;
             integration::controls()?;

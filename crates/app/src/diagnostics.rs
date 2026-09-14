@@ -221,7 +221,13 @@ impl Diagnostics {
                     eprintln!("Capture failed: {e}");
                 }
                 if std::env::var_os("TERMINATOR_TEST_KEEP_OPEN").is_none() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    if cfg!(target_os = "macos")
+                        && std::env::var_os("TERMINATOR_TEST_NATIVE_QUIT").is_some()
+                    {
+                        crate::updater::fixture_native_quit();
+                    } else {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
                 }
             }
         }

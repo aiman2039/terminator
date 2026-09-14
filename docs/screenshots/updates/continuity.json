@@ -1,0 +1,202 @@
+{
+  "continued_input_output": true,
+  "daemon_generation": "dc6f3d2b-80b2-4a2f-a588-8566fd8e265e",
+  "daemon_pid": 80010,
+  "kind": "local GUI executable replacement; not a signed Sparkle update",
+  "restored": {
+    "focus": "d3ba6a0f-a512-4500-bab0-8720acb47566",
+    "markdown_modes": {
+      "010a74a8-74bc-4d2a-95c6-751fb17088b0": "Split"
+    },
+    "selected": "d8a036ff-4fd3-4896-8a4b-ebb914b0d267",
+    "workspaces": {
+      "65b0a513-7550-4070-ae1e-5c5cdde2196f": {
+        "active": "e7ba3c7d-4818-45b4-a398-6fe40a2d8d30",
+        "tabs": [
+          {
+            "id": "e7ba3c7d-4818-45b4-a398-6fe40a2d8d30",
+            "layout": {
+              "focused_surface": null,
+              "surfaces": [
+                {
+                  "Main": {
+                    "collapsed": false,
+                    "collapsed_leaf_count": 0,
+                    "focused_node": null,
+                    "nodes": [
+                      {
+                        "Leaf": {
+                          "active": 0,
+                          "collapsed": false,
+                          "scroll": 0.0,
+                          "tab_bar_hidden": false,
+                          "tabs": [
+                            {
+                              "Terminal": "310048e2-a213-4163-a843-3bd7e1ed4725"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "primary": {
+              "Terminal": "310048e2-a213-4163-a843-3bd7e1ed4725"
+            }
+          }
+        ],
+        "version": 2
+      },
+      "d8a036ff-4fd3-4896-8a4b-ebb914b0d267": {
+        "active": "shells",
+        "tabs": [
+          {
+            "id": "shells",
+            "layout": {
+              "focused_surface": null,
+              "surfaces": [
+                {
+                  "Main": {
+                    "collapsed": false,
+                    "collapsed_leaf_count": 0,
+                    "focused_node": 2,
+                    "nodes": [
+                      {
+                        "Horizontal": {
+                          "collapsed_leaf_count": 0,
+                          "fraction": 0.5,
+                          "fully_collapsed": false
+                        }
+                      },
+                      {
+                        "Leaf": {
+                          "active": 0,
+                          "collapsed": false,
+                          "scroll": 0.0,
+                          "tab_bar_hidden": false,
+                          "tabs": [
+                            {
+                              "Terminal": "e142a2ef-e202-42bc-91ef-cc5024d056f9"
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "Leaf": {
+                          "active": 0,
+                          "collapsed": false,
+                          "scroll": 0.0,
+                          "tab_bar_hidden": false,
+                          "tabs": [
+                            {
+                              "Terminal": "d3ba6a0f-a512-4500-bab0-8720acb47566"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "primary": {
+              "Terminal": "e142a2ef-e202-42bc-91ef-cc5024d056f9"
+            }
+          },
+          {
+            "id": "markdown",
+            "layout": {
+              "focused_surface": null,
+              "surfaces": [
+                {
+                  "Main": {
+                    "collapsed": false,
+                    "collapsed_leaf_count": 0,
+                    "focused_node": null,
+                    "nodes": [
+                      {
+                        "Leaf": {
+                          "active": 0,
+                          "collapsed": false,
+                          "scroll": 0.0,
+                          "tab_bar_hidden": false,
+                          "tabs": [
+                            {
+                              "Terminal": "010a74a8-74bc-4d2a-95c6-751fb17088b0"
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "primary": {
+              "Terminal": "010a74a8-74bc-4d2a-95c6-751fb17088b0"
+            }
+          },
+          {
+            "id": "image",
+            "layout": {
+              "focused_surface": null,
+              "surfaces": [
+                {
+                  "Main": {
+                    "collapsed": false,
+                    "collapsed_leaf_count": 0,
+                    "focused_node": null,
+                    "nodes": [
+                      {
+                        "Leaf": {
+                          "active": 0,
+                          "collapsed": false,
+                          "scroll": 0.0,
+                          "tab_bar_hidden": false,
+                          "tabs": [
+                            {
+                              "Image": {
+                                "path": "/private/tmp/term-0DuOen/update-visible/preview.png"
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "primary": {
+              "Image": {
+                "path": "/private/tmp/term-0DuOen/update-visible/preview.png"
+              }
+            }
+          }
+        ],
+        "version": 3
+      }
+    }
+  },
+  "sessions": [
+    {
+      "id": "e142a2ef-e202-42bc-91ef-cc5024d056f9",
+      "pid": 80037
+    },
+    {
+      "id": "d3ba6a0f-a512-4500-bab0-8720acb47566",
+      "pid": 80038
+    },
+    {
+      "id": "310048e2-a213-4163-a843-3bd7e1ed4725",
+      "pid": 80041
+    },
+    {
+      "id": "010a74a8-74bc-4d2a-95c6-751fb17088b0",
+      "pid": 80042
+    }
+  ],
+  "unsaved_buffer_preserved": true
+}

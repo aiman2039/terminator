@@ -12,7 +12,12 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
     for entry in fs::read_dir(source)? {
         let entry = entry?;
         let target = destination.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
+        if entry.file_type()?.is_symlink() {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(fs::read_link(entry.path())?, &target)?;
+            #[cfg(not(unix))]
+            anyhow::bail!("Symlink-preserving packaging requires Unix");
+        } else if entry.file_type()?.is_dir() {
             copy_tree(&entry.path(), &target)?;
         } else if entry.file_type()?.is_file() {
             fs::copy(entry.path(), target)?;
@@ -112,6 +117,11 @@ pub fn run(debug: bool, output_dir: Option<PathBuf>) -> Result<()> {
     }
     if cfg!(target_os = "macos") {
         let mut info = plist::Dictionary::new();
+        let build_number = std::env::var("TERMINATOR_BUILD_NUMBER").unwrap_or_else(|_| "1".into());
+        ensure!(
+            build_number.parse::<u64>().is_ok_and(|n| n > 0),
+            "Build number must be a positive integer"
+        );
         for (key, value) in [
             ("CFBundleIdentifier", "dev.terminator.app"),
             ("CFBundleName", "Terminator"),
@@ -119,7 +129,7 @@ pub fn run(debug: bool, output_dir: Option<PathBuf>) -> Result<()> {
             ("CFBundleExecutable", "terminator"),
             ("CFBundleIconFile", "Terminator.icns"),
             ("CFBundlePackageType", "APPL"),
-            ("CFBundleVersion", "1"),
+            ("CFBundleVersion", build_number.as_str()),
             ("CFBundleShortVersionString", env!("CARGO_PKG_VERSION")),
             ("LSMinimumSystemVersion", "12.0"),
         ] {
@@ -178,6 +188,153 @@ pub fn run(debug: bool, output_dir: Option<PathBuf>) -> Result<()> {
         let target = destination.join("terminator-linux.tar.gz");
         fs::rename(staging.path().join("terminator-linux.tar.gz"), &target)?;
         println!("{}", target.display());
+    }
+    Ok(())
+}
+
+/// Native jobs build each daemon and its embedded CodeDiff together. Assembly
+/// only combines those exact executable slices; it never cross-compiles them.
+pub fn universal(
+    arm: &Path,
+    intel: &Path,
+    sparkle: &Path,
+    build_number: u64,
+    destination: &Path,
+) -> Result<()> {
+    ensure!(
+        cfg!(target_os = "macos"),
+        "Universal assembly requires macOS"
+    );
+    ensure!(build_number > 0, "Build number must be positive");
+    let public_key = std::env::var("SPARKLE_PUBLIC_ED_KEY")
+        .context("SPARKLE_PUBLIC_ED_KEY must contain the public update key")?;
+    use base64::Engine;
+    ensure!(
+        base64::engine::general_purpose::STANDARD
+            .decode(&public_key)?
+            .len()
+            == 32,
+        "Invalid public Ed25519 key"
+    );
+    let arm_info = plist::Value::from_file(arm.join("Contents/Info.plist"))?;
+    let intel_info = plist::Value::from_file(intel.join("Contents/Info.plist"))?;
+    for key in [
+        "CFBundleIdentifier",
+        "CFBundleShortVersionString",
+        "LSMinimumSystemVersion",
+    ] {
+        ensure!(
+            arm_info.as_dictionary().and_then(|d| d.get(key))
+                == intel_info.as_dictionary().and_then(|d| d.get(key)),
+            "Architecture metadata differs: {key}"
+        );
+    }
+    for (key, expected) in [
+        ("CFBundleIdentifier", "dev.terminator.app"),
+        ("LSMinimumSystemVersion", "12.0"),
+    ] {
+        ensure!(
+            arm_info
+                .as_dictionary()
+                .and_then(|d| d.get(key))
+                .and_then(plist::Value::as_string)
+                == Some(expected),
+            "Unexpected app metadata: {key}"
+        );
+    }
+    let framework = sparkle.join("Sparkle.framework");
+    let framework_info = plist::Value::from_file(framework.join("Resources/Info.plist"))?;
+    ensure!(
+        framework_info
+            .as_dictionary()
+            .and_then(|d| d.get("CFBundleShortVersionString"))
+            .and_then(plist::Value::as_string)
+            == Some("2.10.0"),
+        "Expected Sparkle 2.10.0"
+    );
+    fs::create_dir_all(destination)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".universal-")
+        .tempdir_in(destination)?;
+    let app = staging.path().join("Terminator.app");
+    copy_tree(arm, &app)?;
+    for name in ["terminator", "terminator-daemon", "terminator-hook"] {
+        let relative = Path::new("Contents/MacOS").join(name);
+        for (source, arch) in [(arm, "arm64"), (intel, "x86_64")] {
+            let mut verify = Command::new("lipo");
+            verify
+                .arg(source.join(&relative))
+                .args(["-verify_arch", arch]);
+            output(verify)?;
+        }
+        fs::remove_file(app.join(&relative))?;
+        let mut lipo = Command::new("lipo");
+        lipo.arg("-create")
+            .arg(arm.join(&relative))
+            .arg(intel.join(&relative))
+            .arg("-output")
+            .arg(app.join(&relative));
+        output(lipo)?;
+    }
+    copy_tree(
+        &framework,
+        &app.join("Contents/Frameworks/Sparkle.framework"),
+    )?;
+    let license = sparkle.join("LICENSE");
+    fs::copy(
+        license,
+        app.join("Contents/Resources/licenses/Sparkle-LICENSE"),
+    )?;
+    let mut info = arm_info
+        .into_dictionary()
+        .context("Missing app dictionary")?;
+    info.insert("CFBundleVersion".into(), build_number.to_string().into());
+    info.insert(
+        "SUFeedURL".into(),
+        "https://github.com/ohaddahan/terminator/releases/latest/download/appcast.xml".into(),
+    );
+    info.insert("SUPublicEDKey".into(), public_key.into());
+    for key in [
+        "SUEnableAutomaticChecks",
+        "SUAutomaticallyUpdate",
+        "SURequireSignedFeed",
+        "SUVerifyUpdateBeforeExtraction",
+    ] {
+        info.insert(key.into(), true.into());
+    }
+    info.insert("SUShowReleaseNotes".into(), false.into());
+    info.insert("SUScheduledCheckInterval".into(), 86400.into());
+    plist::Value::Dictionary(info).to_file_xml(app.join("Contents/Info.plist"))?;
+    verify_universal(&app)?;
+    let target = destination.join("Terminator.app");
+    ensure!(
+        !target.exists(),
+        "Assembly output already exists: {}",
+        target.display()
+    );
+    fs::rename(app, &target)?;
+    println!("{}", target.display());
+    Ok(())
+}
+fn verify_universal(path: &Path) -> Result<()> {
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            verify_universal(&entry.path())?;
+        } else {
+            let mut file = Command::new("file");
+            file.arg("-b").arg(entry.path());
+            if String::from_utf8(output(file)?)?.contains("Mach-O") {
+                let mut verify = Command::new("lipo");
+                verify
+                    .arg(entry.path())
+                    .args(["-verify_arch", "arm64", "x86_64"]);
+                output(verify)?;
+            }
+        }
     }
     Ok(())
 }

@@ -17,7 +17,7 @@ impl App {
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.set_width(142.0);ui.set_min_height(height);ui.spacing_mut().item_spacing.y=4.0;
-                    for (index,label,icon) in [(0,"Appearance","Settings2"),(1,"Terminal & Editor","Terminal"),(2,"Notifications","PanelsTopLeft"),(3,"History","FileText"),(4,"Shortcuts","SquareDashed"),(5,"Agent Hooks","GitBranch")] {
+                    for (index,label,icon) in [(0,"Appearance","Settings2"),(1,"Terminal & Editor","Terminal"),(2,"Notifications","PanelsTopLeft"),(3,"History","FileText"),(4,"Shortcuts","SquareDashed"),(5,"Agent Hooks","GitBranch"),(6,"Updates","Settings2")] {
                         let section = appearance::row(ui,label,icon,self.settings_section==index,30.0,"",ui.visuals().weak_text_color());
                         #[cfg(feature = "test-support")]
                         diagnostics::record(ui.ctx(), &format!("settings-section:{label}"), section.rect);
@@ -31,6 +31,7 @@ impl App {
                     ui.set_width(540.0);
                     egui::ScrollArea::vertical().id_salt(("settings-section",self.settings_section)).max_height(height).show(ui,|ui| {
                         match self.settings_section {
+                            6 => self.updater.settings(ui),
                             0 => {
                 ui.heading("Appearance");
                 if self.theme_conflict {

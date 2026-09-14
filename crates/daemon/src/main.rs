@@ -99,6 +99,10 @@ impl Shared {
         launch: Launch,
     ) -> Result<Session> {
         let _worktree_guard = self.worktree_operations.lock().unwrap();
+        ensure!(
+            !self.shutdown.load(Ordering::Acquire),
+            "Daemon is shutting down"
+        );
         let editor = !matches!(launch, Launch::Shell);
         let is_review = matches!(launch, Launch::Review { .. });
         let (settings, root, generation) = {
@@ -696,7 +700,8 @@ impl Shared {
                     "string(len(filter(getbufinfo(), 'v:val.changed')))",
                 );
             }
-            Request::Shutdown => {
+            Request::Shutdown | Request::ShutdownIfIdle => {
+                let _creation_guard = self.worktree_operations.lock().unwrap();
                 ensure!(
                     !self
                         .state
@@ -711,7 +716,9 @@ impl Shared {
                 self.history.send(HistoryJob::Flush(tx))?;
                 rx.recv_timeout(Duration::from_secs(3))?
                     .map_err(anyhow::Error::msg)?;
-                self.shutdown.store(true, Ordering::Relaxed);
+                self.persist()?;
+                self.shutdown.store(true, Ordering::Release);
+                return Ok(Response::Ok);
             }
             _ => bail!("Request requires an attached stream"),
         }
@@ -913,7 +920,9 @@ fn main() -> Result<()> {
     atomic_write(&paths.auth(), auth.as_bytes())?;
     let (store, mut state) = storage::Store::open(&paths)?;
     state.recover();
+    state.daemon_version = Some(env!("CARGO_PKG_VERSION").into());
     state.capabilities = vec![
+        SHUTDOWN_IF_IDLE_CAPABILITY.into(),
         snapshot::CAPABILITY.into(),
         NVIM_REVIEW_CAPABILITY.into(),
         TERMINAL_NOTICES_CAPABILITY.into(),

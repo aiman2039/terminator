@@ -133,7 +133,15 @@ impl Harness {
         Ok(harness)
     }
     pub fn command(&self, name: &str) -> Command {
-        let mut c = Command::new(bin().join(name));
+        let executable = if name == "terminator" {
+            self.env
+                .get("TERMINATOR_FIXTURE_GUI")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| bin().join(name))
+        } else {
+            bin().join(name)
+        };
+        let mut c = Command::new(executable);
         for (key, _) in std::env::vars_os() {
             let name = key.to_string_lossy();
             if name.starts_with("TERMINATOR_TEST_") || name.starts_with("TERMINATOR_CAPTURE_") {

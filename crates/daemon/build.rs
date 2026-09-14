@@ -74,6 +74,22 @@ fn main() {
             .success(),
         "CodeDiff native build failed"
     );
+    if ext == "dylib" {
+        let arch = match env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
+            "aarch64" => "arm64",
+            "x86_64" => "x86_64",
+            arch => panic!("Unsupported macOS architecture: {arch}"),
+        };
+        assert!(
+            std::process::Command::new("lipo")
+                .arg(&library)
+                .args(["-verify_arch", arch])
+                .status()
+                .expect("lipo is required")
+                .success(),
+            "Embedded CodeDiff must match the daemon architecture"
+        );
+    }
     let mut entries = vec![];
     collect(&root, &root.join("lua"), &mut entries);
     collect(&root, &root.join("plugin"), &mut entries);

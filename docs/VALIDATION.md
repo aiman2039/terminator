@@ -1,5 +1,69 @@
 # Validation evidence — 2026-09-08
 
+## Universal macOS packaging and session-preserving GUI updates (2026-09-14)
+
+Implemented universal assembly, the dynamically loaded Sparkle 2.10.0 controller,
+Updates settings/native menu action, acknowledged asynchronous exit checkpoints,
+and capability-gated retirement of older idle daemons. Production publication is
+gated on signed-update validation; no release, signing secret, or production
+installation was changed in this work.
+
+Local evidence on Apple Silicon, macOS 26.6.2, Rust 1.97.1:
+
+- Workspace build with binaries/examples and `terminator/test-support`, formatting,
+  strict all-target/all-feature workspace Clippy and `git diff --check` passed.
+- All 134 workspace unit tests passed (91 app, 24 core, 12 daemon, 3 hook,
+  4 integrations). New regressions cover failed persistence, pending creation and
+  pickers, follow-up draining, duplicate exit requests, timeouts, stale success
+  replies, modeled installation cancellation/retry, unknown layouts and
+  legacy/newer daemon preservation. Socket/PTY tests
+  require execution outside the filesystem/network sandbox.
+- `cargo xtask integration` passed, including eight simultaneous creation versus
+  idle-shutdown races, existing real-PTY reconnect/same-PID checks, hook delivery,
+  legacy-client behavior, daemon recovery without relaunch, worktree controls,
+  oversized snapshots, stalled attachment cleanup and terminal-editor operands.
+- `cargo xtask gui updates` passed with the pinned Sparkle framework loaded into
+  an isolated fixture app. The fixture's explicit controller-availability check
+  passed. It exercised window close and native Quit, replaced all three installed
+  executable copies, and retained daemon generation/PID, four session IDs/PIDs,
+  project/top-level-tab identities, split trees/fractions/focus (excluding derived
+  screen rectangles), hidden-project state and Markdown mode. Output and input
+  continued; an unsaved Neovim buffer remained unsaved on disk and modified in
+  memory; new session creation and an event delivered through the replaced hook
+  worked. Foundation preferences were redirected to a temporary fixture home.
+- [Continuity inventory](screenshots/updates/continuity.json),
+  [before replacement](screenshots/updates/before-replacement.png),
+  [after replacement](screenshots/updates/after-replacement.png), and
+  [Updates settings](screenshots/updates/settings.png) are retained. IDs, PIDs and
+  temporary paths in this evidence identify the completed isolated run.
+- Downloaded Sparkle 2.10.0 and verified its archive SHA-256 against the release
+  asset digest. Universal assembly passed with small native C executable fixtures
+  compiled for Intel and Apple Silicon, plus the actual pinned Sparkle framework;
+  all bundled Mach-O files passed both-architecture checks and framework symlinks
+  remained intact. This validates the assembly path, not a universal Rust release.
+- Release workflow YAML parsed; all 12 shell blocks passed `bash -n` and embedded
+  Python blocks compiled. Hosted GitHub jobs, the pinned CI Rust 1.95 toolchain,
+  Intel-native GUI execution and Linux execution were not run here.
+
+The native fixture exposed and fixed two AppKit integration failures: invoking
+termination inside winit's active callback re-entered its event handler, while
+`NSTerminateLater` blocked GUI checkpoint progress. The final bridge intercepts
+`terminate:` without replacing winit's delegate, then invokes its original
+implementation in a later main-queue callback. Both native exit paths passed
+with this implementation.
+
+Remaining rollout gates: two genuinely Developer-ID-signed and notarized versions
+through Sparkle on **both Intel and Apple Silicon**, including Install and
+Relaunch, installation on quit without reopening, Later/Skip, offline checks,
+invalid feed/archive signatures, interrupted downloads, authorization or
+installation cancellation, and read-only/translocated installs. The local fixture
+uses an unreachable loopback feed and dummy public key and does not install via
+Sparkle. Signing-key setup remains operator-owned. Keep
+`SIGNED_UPDATE_VALIDATED` unset until that matrix passes; see
+[UPDATES.md](UPDATES.md). Session continuity assumes the daemon survives; crashes
+and reboots remain separate recovery cases.
+
+
 ## Clipboard image paste (2026-09-14)
 
 - Reviewed Orca's [terminal clipboard routing](https://github.com/stablyai/orca/blob/main/src/renderer/src/components/terminal-pane/terminal-clipboard-paste.ts)

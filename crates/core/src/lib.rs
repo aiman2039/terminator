@@ -392,6 +392,7 @@ impl Settings {
 
 pub const METADATA_SETTINGS_CAPABILITY: &str = "metadata-settings-v1";
 pub const WORKTREES_CAPABILITY: &str = "worktrees-v1";
+pub const SHUTDOWN_IF_IDLE_CAPABILITY: &str = "shutdown-if-idle-v1";
 pub const SCREEN_CAPABILITY: &str = "screen-v1";
 pub const TERMINAL_NOTICES_CAPABILITY: &str = "terminal-notices-v1";
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -406,6 +407,7 @@ pub struct TerminalNotice {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
+    pub daemon_version: Option<String>,
     /// Features advertised by the running daemon, not the GUI binary on disk.
     pub capabilities: Vec<String>,
     pub revision: u64,
@@ -734,6 +736,7 @@ pub enum Request {
         session: String,
     },
     Shutdown,
+    ShutdownIfIdle,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Envelope {
@@ -1038,6 +1041,7 @@ mod snapshot_tests {
     fn legacy_snapshots_do_not_advertise_new_daemon_features() {
         let legacy: State = serde_json::from_value(serde_json::json!({"revision":7})).unwrap();
         assert!(legacy.capabilities.is_empty());
+        assert!(legacy.daemon_version.is_none());
         let new = State {
             capabilities: vec![NVIM_REVIEW_CAPABILITY.into()],
             ..State::default()

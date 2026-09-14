@@ -120,3 +120,19 @@ All project-owned test/package automation is Rust in `crates/xtask`. The native
 fixtures use isolated data/config directories and a test-support input/capture
 surface. The optional external-browser driver uses a local CDP WebSocket through
 tungstenite; no Chromium, Electron, or webview is bundled into the app.
+
+
+## GUI updates and exit checkpoints
+
+Window close, native Quit and Sparkle share the GUI's asynchronous exit
+coordinator. A worker drain applies pending results; follow-up jobs trigger a
+further drain before the final layout/focus/preference checkpoint. Successful
+write acknowledgments permit exit; errors or a deadline restore interaction.
+The macOS bridge intercepts `NSApplication.terminate:` while retaining winit's
+delegate and calls its original implementation on the main queue after saving.
+
+The daemon survives GUI replacement. Optional `daemon_version` metadata and
+`shutdown-if-idle-v1` allow a later GUI launch to retire an older idle daemon;
+the check and shutdown decision share the session-creation lock. A failed RPC
+with a held daemon lock is a connection error, not permission to replace it.
+See `docs/UPDATES.md` for packaging, native fixture and signed rollout boundaries.

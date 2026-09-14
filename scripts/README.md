@@ -97,3 +97,10 @@ and `CARGO_HOME` for writable caches, and Docker `--init` for correct child sign
 `TERMINATOR_TEST_BIN_DIR` optionally chooses a separate binary directory for
 before/after measurements. Provider echo testing is opt-in and requires a supplied
 Muse executable. Historical validation reports retain their original command names.
+
+`cargo xtask gui updates` checks GUI executable replacement with multiple projects,
+splits, hidden sessions, previews, an unsaved editor, continuous output/input, hooks
+and unchanged daemon/session PIDs. On macOS it also exercises native Quit. Set
+`TERMINATOR_TEST_SPARKLE_FRAMEWORK` to the pinned framework to verify native updater
+loading in an isolated fixture bundle. See `docs/UPDATES.md` for signed rollout
+checks; this local fixture is not a signed Sparkle installation.

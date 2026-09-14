@@ -12,6 +12,7 @@ mod agents;
 mod markdown;
 mod projects;
 mod reviews;
+mod updates;
 mod windows;
 
 #[derive(Clone)]
@@ -155,6 +156,7 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "split-file-opening" => split_file_opening(&opts)?,
             "markdown" => markdown::run(&opts)?,
             "markdown-busy" => markdown::busy(&opts)?,
+            "updates" => updates::run(&opts)?,
             "project-sidebar" => projects::run(&opts)?,
             "agent-sidebar" => agents::run(&opts)?,
             "pane-close" => {

@@ -6,6 +6,7 @@ use std::{fs, io::Read, os::unix::fs::PermissionsExt, thread, time::Duration};
 use terminator_core::{quote, read_frame};
 
 pub fn run() -> Result<()> {
+    idle_shutdown_race()?;
     large_snapshots()?;
     stalled_attachment()?;
     terminal_editors()?;
@@ -154,5 +155,57 @@ fn terminal_editors() -> Result<()> {
         "{}",
         json!({"terminal_editor_literal_file_and_position":true})
     );
+    Ok(())
+}
+
+fn idle_shutdown_race() -> Result<()> {
+    use std::sync::{Arc, Barrier};
+    use terminator_core::{Paths, Request, Response, rpc};
+    for _ in 0..8 {
+        let h = Harness::new()?;
+        h.setup()?;
+        let project = h.project("idle-shutdown-race")?;
+        let barrier = Arc::new(Barrier::new(2));
+        let first = barrier.clone();
+        let paths = Paths::at(h.root.clone());
+        let project_id = id(&project).to_owned();
+        let creator = thread::spawn(move || {
+            first.wait();
+            rpc(
+                &paths,
+                Request::Create {
+                    project: project_id,
+                    cwd: None,
+                    file: None,
+                    line: None,
+                    column: None,
+                    editor: false,
+                },
+            )
+        });
+        barrier.wait();
+        let shutdown = rpc(&Paths::at(h.root.clone()), Request::ShutdownIfIdle);
+        let creation = creator.join().unwrap();
+        match creation {
+            Ok(Response::Created(session)) => {
+                ensure!(
+                    shutdown.is_err(),
+                    "Idle shutdown acknowledged despite a successful creation"
+                );
+                let state = h.state()?;
+                ensure!(
+                    state["generation"] == session.generation,
+                    "Daemon changed under a live session"
+                );
+                h.rpc(json!({"Stop":{"session":session.id}}))?;
+            }
+            Err(_) => ensure!(
+                matches!(shutdown, Ok(Response::Ok)),
+                "Neither concurrent operation succeeded"
+            ),
+            _ => anyhow::bail!("Unexpected creation reply"),
+        }
+    }
+    println!("Idle shutdown serialized against concurrent session creation (8 runs)");
     Ok(())
 }

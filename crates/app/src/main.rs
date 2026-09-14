@@ -1,3 +1,5 @@
+mod exit;
+mod updater;
 mod workspace_ui;
 use workspace_ui::Viewer;
 mod dialogs_ui;
@@ -85,7 +87,8 @@ enum Job {
     Preferences(UiPreferences),
     MigrateTypography,
     MigrateAttention,
-    Flush(Sender<()>),
+    ExitDrain(u64, u64),
+    ExitSave(u64, exit::Checkpoint),
     SaveAppearance(Box<AppearanceConfig>, String),
     HookStatus,
     CloseEditors(editor_close::Target, Vec<String>, editor_close::Mode),
@@ -104,6 +107,8 @@ impl Job {
     }
 }
 enum Update {
+    ExitDrained(u64, u64),
+    ExitSaved(u64, Result<(), String>),
     UiRequest(
         terminator_core::ui_control::Request,
         mpsc::SyncSender<Result<serde_json::Value, String>>,
@@ -292,8 +297,14 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
     // The xtask PTY/GUI fixtures run the normal binary and exercise real I/O.
     if cfg!(test) {
         for job in rx {
-            if let Job::Flush(done) = job {
-                let _ = done.send(());
+            match job {
+                Job::ExitDrain(id, serial) => {
+                    let _ = tx.send(Update::ExitDrained(id, serial));
+                }
+                Job::ExitSave(id, _) => {
+                    let _ = tx.send(Update::ExitSaved(id, Ok(())));
+                }
+                _ => {}
             }
         }
         return;
@@ -380,8 +391,12 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
                             config_source = Some(file.source.clone());
                             tx.send(Update::Appearance(Box::new(file)))?;
                         }
-                        Job::Flush(done) => {
-                            let _ = done.send(());
+                        Job::ExitDrain(id, serial) => {
+                            tx.send(Update::ExitDrained(id, serial))?;
+                        }
+                        Job::ExitSave(id, checkpoint) => {
+                            let result = checkpoint.save(&paths).map_err(|e| format!("{e:#}"));
+                            tx.send(Update::ExitSaved(id, result))?;
                         }
                         Job::Preferences(prefs) => {
                             let result = prefs
@@ -582,6 +597,9 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
     }
 }
 struct App {
+    exit: exit::Exit,
+    exit_attempt: u64,
+    updater: updater::Updater,
     #[cfg(feature = "test-support")]
     diagnostics: diagnostics::Diagnostics,
     paths: Paths,
@@ -614,7 +632,7 @@ struct App {
     next_backend: u64,
     pty_tx: Sender<(u64, PtyEvent)>,
     pty_rx: Receiver<(u64, PtyEvent)>,
-    jobs: Sender<Job>,
+    jobs: exit::JobQueue,
     updates: Receiver<Update>,
     update_tx: Sender<Update>,
     picker_active: bool,
@@ -724,6 +742,9 @@ impl App {
         let _ = jobs.send(Job::HookStatus);
         let (pty_tx, pty_rx) = mpsc::channel();
         Self {
+            exit: Default::default(),
+            exit_attempt: 0,
+            updater: updater::Updater::new(ctx),
             #[cfg(feature = "test-support")]
             diagnostics: Default::default(),
             preferences_saved: preferences.clone(),
@@ -756,7 +777,7 @@ impl App {
             next_backend: 0,
             pty_tx,
             pty_rx,
-            jobs,
+            jobs: jobs.into(),
             updates,
             update_tx,
             picker_active: false,
@@ -833,6 +854,7 @@ impl App {
     ) -> Result<serde_json::Value> {
         use terminator_core::ui_control::Request as Ui;
         request.validate()?;
+        anyhow::ensure!(!self.exit.active(), "Terminator is saving before closing");
         let gui_ppp = ctx.pixels_per_point();
         match request {
             Ui::Ping => {
@@ -851,6 +873,7 @@ impl App {
                     "window":ctx.input(|i|serde_json::json!({"inner":i.viewport().inner_rect.map(|r|[r.min.x,r.min.y,r.width(),r.height()]),"outer":i.viewport().outer_rect.map(|r|[r.min.x,r.min.y,r.width(),r.height()]),"maximized":i.viewport().maximized,"minimized":i.viewport().minimized,"gui_ppp":gui_ppp,"native_ppp":i.viewport().native_pixels_per_point}))});
                 #[cfg(feature = "test-support")]
                 {
+                    snapshot["updater_available"] = serde_json::json!(self.updater.available());
                     snapshot["left_agents"] = serde_json::json!(self.preferences.left_agents);
                     snapshot["agent_bar_badge"] = serde_json::json!(ctx.data(|data| {
                         data.get_temp::<String>(egui::Id::new("agent-bar-badge"))
@@ -980,13 +1003,46 @@ impl App {
     fn process_updates(&mut self, ctx: &egui::Context) {
         while let Ok(update) = self.updates.try_recv() {
             match update {
+                Update::ExitDrained(id, serial) => {
+                    if let exit::Exit::Draining(started, current) = self.exit
+                        && current == id
+                    {
+                        if serial != self.jobs.serial() {
+                            let _ = self.jobs.send(Job::ExitDrain(id, self.jobs.serial()));
+                            continue;
+                        }
+                        match self.exit_checkpoint() {
+                            Ok(checkpoint) => {
+                                self.exit = exit::Exit::Saving(started, id);
+                                if self.jobs.send(Job::ExitSave(id, checkpoint)).is_err() {
+                                    self.cancel_exit("Worker disconnected".into());
+                                }
+                            }
+                            Err(e) => self.cancel_exit(format!("{e:#}")),
+                        }
+                    }
+                }
+                Update::ExitSaved(id, result) => {
+                    if matches!(self.exit, exit::Exit::Saving(_, current) if current == id) {
+                        match result {
+                            Ok(()) => {
+                                self.exit = exit::Exit::Ready;
+                                updater::complete_termination(ctx);
+                            }
+                            Err(e) => self.cancel_exit(e),
+                        }
+                    }
+                }
                 Update::PreferencesSaved(result) => {
                     self.preferences_pending = false;
                     match result {
                         Ok(prefs) => self.preferences_saved = prefs,
                         Err(error) => {
-                            self.error = Some(error);
-                            self.preferences_writable = false;
+                            if self.exit.active() {
+                                self.cancel_exit(error);
+                            } else {
+                                self.error = Some(error);
+                            }
                         }
                     }
                 }
@@ -1274,6 +1330,9 @@ impl App {
                     }
                 }
                 Update::Error(e) => {
+                    if self.exit.active() {
+                        self.cancel_exit(e.clone());
+                    }
                     #[cfg(feature = "test-support")]
                     if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
                         eprintln!("Fixture error {e}");
@@ -1916,6 +1975,22 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.popups.begin_frame(&ctx);
         self.process_updates(&ctx);
+        if updater::termination_cancelled() {
+            self.native_installation_cancelled();
+        }
+        if (updater::termination_requested() || ctx.input(|i| i.viewport().close_requested()))
+            && !matches!(self.exit, exit::Exit::Ready)
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.begin_exit();
+        }
+        self.advance_exit(&ctx);
+        if self.exit.active() {
+            ui.centered_and_justified(|ui| {
+                ui.label("Saving workspace before closing…");
+            });
+            return;
+        }
         self.visible_dirs.clear();
         self.visible_sessions.clear();
         self.visible_images.clear();
@@ -2305,10 +2380,6 @@ impl eframe::App for App {
             self.save_layouts();
             self.last_save = Instant::now();
         }
-        if ctx.input(|i| i.viewport().close_requested()) {
-            self.save_layouts();
-            self.send(Request::Heartbeat { focused: false });
-        }
         if cfg!(target_os = "linux") {
             window_resize_edges(ui);
         }
@@ -2319,45 +2390,35 @@ impl eframe::App for App {
         self.diagnostics.capture(&ctx);
         ctx.request_repaint_after(Duration::from_secs(1));
     }
-    fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
-        // Drain queued writes before the final preference save, including any
-        // migration acknowledgment received during window shutdown.
-        if self.preferences_writable {
-            let (done, drained) = mpsc::channel();
-            let _ = self.jobs.send(Job::Flush(done));
-            if drained.recv_timeout(Duration::from_secs(5)).is_ok() {
-                for update in self.updates.try_iter() {
-                    match update {
-                        Update::TypographyMigrated => self.preferences.typography_migrated = true,
-                        Update::AttentionMigrated(Ok(())) => {
-                            self.preferences.attention_migrated = true
-                        }
-                        _ => {}
-                    }
-                }
-                if let Err(error) = self.preferences.save(&self.paths.data) {
-                    eprintln!("Save UI preferences on exit: {error:#}");
-                }
-            } else {
-                eprintln!("UI preferences queue did not drain before exit");
-            }
+}
+fn can_retire_daemon(state: &State) -> bool {
+    state.daemon_version.as_deref().is_some_and(|version| {
+        semver::Version::parse(version)
+            .ok()
+            .zip(semver::Version::parse(env!("CARGO_PKG_VERSION")).ok())
+            .is_some_and(|(running, bundled)| running < bundled)
+    }) && state
+        .capabilities
+        .iter()
+        .any(|c| c == SHUTDOWN_IF_IDLE_CAPABILITY)
+        && !state.sessions.iter().any(|s| s.lifecycle.live())
+}
+
+#[cfg(test)]
+mod daemon_compatibility_tests {
+    use super::*;
+    #[test]
+    fn legacy_unknown_current_and_newer_daemons_are_preserved() {
+        let mut state = State::default();
+        assert!(!can_retire_daemon(&state));
+        state.daemon_version = Some("0.0.1".into());
+        assert!(!can_retire_daemon(&state));
+        state.capabilities.push(SHUTDOWN_IF_IDLE_CAPABILITY.into());
+        assert!(can_retire_daemon(&state));
+        for version in ["unknown", env!("CARGO_PKG_VERSION"), "999.0.0"] {
+            state.daemon_version = Some(version.into());
+            assert!(!can_retire_daemon(&state));
         }
-        for (project, dock) in &self.layouts {
-            if self.layout_readonly.contains(project) {
-                continue;
-            }
-            if let Ok(layout) = serde_json::to_value(dock) {
-                let layout = sanitize_layout(layout);
-                let _ = rpc(
-                    &self.paths,
-                    Request::SaveLayout {
-                        project: project.clone(),
-                        layout,
-                    },
-                );
-            }
-        }
-        let _ = rpc(&self.paths, Request::Heartbeat { focused: false });
     }
 }
 fn main() -> Result<()> {
@@ -2377,7 +2438,43 @@ fn main() -> Result<()> {
         eprintln!("Terminator is already open.");
         return Ok(());
     }
+    let snapshot = rpc(&paths, Request::Snapshot);
+    if let Ok(Response::State(state)) = &snapshot
+        && can_retire_daemon(state)
+    {
+        // A concurrent creation can make this fail; keep that daemon.
+        if matches!(rpc(&paths, Request::ShutdownIfIdle), Ok(Response::Ok)) {
+            let start = Instant::now();
+            let retiring_lock = fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .write(true)
+                .open(paths.runtime.join("daemon.lock"))?;
+            loop {
+                if !paths.socket().exists() && retiring_lock.try_lock_exclusive().is_ok() {
+                    FileExt::unlock(&retiring_lock)?;
+                    break;
+                }
+                anyhow::ensure!(
+                    start.elapsed() < Duration::from_secs(5),
+                    "Idle daemon did not shut down; retry launch"
+                );
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
     if rpc(&paths, Request::Snapshot).is_err() {
+        // A failed RPC is never evidence that a live daemon may be replaced.
+        let daemon_lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(paths.runtime.join("daemon.lock"))?;
+        daemon_lock.try_lock_exclusive().context(
+            "Running daemon is unresponsive or incompatible; its sessions have been preserved",
+        )?;
+        FileExt::unlock(&daemon_lock)?;
+
         let daemon = std::env::current_exe()?.with_file_name("terminator-daemon");
         anyhow::ensure!(
             daemon.is_file(),
@@ -2535,7 +2632,7 @@ mod navigation_tests {
         let layouts = serde_json::to_value(&app.layouts).unwrap();
         let sessions = serde_json::to_value(&app.state.sessions).unwrap();
         let (jobs, requests) = mpsc::channel();
-        app.jobs = jobs;
+        app.jobs = jobs.into();
         app.hide_project("a");
         assert_eq!(app.selected.as_deref(), Some("b"));
         assert!(app.preferences.hidden_projects.contains("a"));
@@ -2695,7 +2792,7 @@ mod navigation_tests {
                     .sessions
                     .push(session_fixture("named", SessionKind::Shell));
                 let (jobs, requests) = mpsc::channel();
-                app.jobs = jobs;
+                app.jobs = jobs.into();
                 app.begin_rename("named", surface);
                 let rect = egui::Rect::from_min_size(egui::pos2(8.0, 8.0), egui::vec2(220.0, 24.0));
                 let mut frame = |events| {
@@ -2782,7 +2879,7 @@ mod navigation_tests {
     fn legacy_daemon_diff_never_sends_an_unsupported_creation_request() {
         let (mut app, _, _dir) = fixture();
         let (jobs, requests) = mpsc::channel();
-        app.jobs = jobs;
+        app.jobs = jobs.into();
         app.selected = Some("a".into());
         app.error = Some("failed to fill whole buffer".into());
         for staged in [false, true] {
@@ -2803,7 +2900,7 @@ mod navigation_tests {
         let (mut app, ctx, _dir) = fixture();
         app.state.capabilities.push(NVIM_REVIEW_CAPABILITY.into());
         let (jobs, requests) = mpsc::channel();
-        app.jobs = jobs;
+        app.jobs = jobs.into();
         app.selected = Some("a".into());
         app.add_diff("/a".into(), "/a/file.rs".into(), false);
         app.add_diff("/a".into(), "/a/file.rs".into(), true);
@@ -2837,7 +2934,7 @@ mod navigation_tests {
     fn invalid_saved_focus_reports_error_and_preserves_layout() {
         let (mut app, _, _dir) = fixture();
         let (jobs, requests) = mpsc::channel();
-        app.jobs = jobs;
+        app.jobs = jobs.into();
         let workspace = Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
         let mut saved = sanitize_layout(serde_json::to_value(workspace).unwrap());
         saved["tabs"][0]["layout"]["surfaces"][0]["Main"]["focused_node"] = serde_json::json!(999);
@@ -2862,7 +2959,7 @@ mod navigation_tests {
     fn unknown_workspace_format_is_not_overwritten() {
         let (mut app, _, _dir) = fixture();
         let (jobs, requests) = mpsc::channel();
-        app.jobs = jobs;
+        app.jobs = jobs.into();
         app.layouts.clear();
         let mut state = app.state.clone();
         state.projects[0].layout = serde_json::json!({"version":99});
@@ -3095,7 +3192,7 @@ mod navigation_tests {
                 }],
             );
             let (jobs, received) = mpsc::channel();
-            app.jobs = jobs;
+            app.jobs = jobs.into();
             let mut draw = |events| {
                 let mut output = ctx.run_ui(
                     egui::RawInput {
@@ -3304,7 +3401,7 @@ mod navigation_tests {
     fn image_open_creates_no_editor_and_keeps_original_project() {
         let (mut app, ctx, _dir) = fixture();
         let (jobs, requests) = mpsc::channel();
-        app.jobs = jobs;
+        app.jobs = jobs.into();
         app.open_file("/a/image.PNG".into(), None, None, false);
         app.select_project("b".into());
         app.process_updates(&ctx);
