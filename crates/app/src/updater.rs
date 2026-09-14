@@ -212,7 +212,7 @@ mod macos {
             }
             ui.hyperlink_to(
                 "GitHub release notes",
-                "https://github.com/ohaddahan/terminator/releases",
+                "https://github.com/aiman2039/terminator/releases",
             );
         }
     }
@@ -236,7 +236,7 @@ mod other {
             ui.heading("Updates");
             ui.hyperlink_to(
                 "Download releases",
-                "https://github.com/ohaddahan/terminator/releases",
+                "https://github.com/aiman2039/terminator/releases",
             );
         }
     }

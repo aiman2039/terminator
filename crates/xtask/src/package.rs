@@ -301,7 +301,7 @@ pub fn universal(
     info.insert("CFBundleVersion".into(), build_number.to_string().into());
     info.insert(
         "SUFeedURL".into(),
-        "https://github.com/ohaddahan/terminator/releases/latest/download/appcast.xml".into(),
+        "https://github.com/aiman2039/terminator/releases/latest/download/appcast.xml".into(),
     );
     info.insert("SUPublicEDKey".into(), public_key.into());
     for key in [

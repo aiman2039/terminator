@@ -26,7 +26,7 @@ notarizes/staples the app, creates a DMG with fixed icon positions, an Applicati
 notarizes/staples that DMG, then generates the signed appcast from those final
 bytes. Deltas are disabled. The feed is:
 
-`https://github.com/ohaddahan/terminator/releases/latest/download/appcast.xml`
+`https://github.com/aiman2039/terminator/releases/latest/download/appcast.xml`
 
 Enclosures use immutable `releases/download/vVERSION/` URLs. A draft receives the
 universal DMG, both Linux archives, appcast, and SHA256SUMS before publication.
