@@ -113,6 +113,7 @@ pub fn repair(paths: &Paths, executable: &Path, generation: &str) -> Result<Box<
                         .any(|c| c == STABLE_HELPER_CAPABILITY),
                 "The replacement service does not report a working private helper. Reopen the latest installed Terminator app"
             );
+            crate::installation::verify_replacement(&state, executable)?;
             Ok(state)
         }
         _ => anyhow::bail!("Could not verify the repaired session service"),

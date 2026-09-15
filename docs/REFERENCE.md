@@ -245,6 +245,12 @@ Mermaid and typeset math are not included. Preview text is limited to 1 MiB.
 Custom terminal editors without Neovim RPC show a clearly labeled **Saved file**
 preview. Ordinary Neovim configuration and Git review profiles are unchanged.
 
+HTML files open as a GUI-only Blitz preview tab (no PTY, no JavaScript). The
+header always offers **Open in browser** (`file://` to the system browser) when
+the raster is incomplete, plus Reload and Open as text for Neovim. Explorer,
+Git, and terminal menus still offer **Open in browser**. No Chromium or webview
+is bundled. HTML-bearing layouts use version 4. Transitive `stylo` is MPL-2.0.
+
 Click PNG, JPEG, WebP, GIF, BMP, ICO, TIFF, or SVG files to open a native image tab.
 Fit, 100%, pan/zoom, Reload, Open as text, and Open externally are available.
 Raster previews decode in a bounded worker and use the first frame of animated

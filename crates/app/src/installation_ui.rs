@@ -8,7 +8,7 @@ impl App {
 
     pub(super) fn open_installation_settings(&mut self) {
         self.open_settings();
-        self.settings_section = 6;
+        self.settings_section = SettingsSection::Updates;
     }
 
     pub(super) fn maybe_upgrade_idle_daemon(&mut self) {

@@ -19,102 +19,43 @@ impl App {
         )
     }
     pub(super) fn notifications(&mut self, ui: &mut egui::Ui) {
-        let notices = self
+        let pending = self
             .state
             .notifications
             .iter()
-            .filter(|n| !n.dismissed && n.snoozed_until <= now())
-            .rev()
-            .take(50)
-            .cloned()
-            .collect::<Vec<_>>();
-        let terminal_notices = self
-            .state
-            .terminal_notices
-            .iter()
-            .filter(|n| !n.dismissed)
-            .rev()
-            .take(20)
-            .cloned()
-            .collect::<Vec<_>>();
-        ui.horizontal_wrapped(|ui| {
-            ui.label(
-                RichText::new(format!(
-                    "Attention  {}",
-                    notices.len() + terminal_notices.len()
-                ))
-                .small()
-                .strong()
-                .color(appearance::color(&self.theme.secondary)),
-            );
-            if notices.is_empty() && terminal_notices.is_empty() {
-                if self.hook_status.is_empty() {
-                    ui.weak("Checking agent hooks…");
-                } else if self.state.agents.is_empty()
-                    && !self.hook_status.values().any(|installed| *installed)
-                {
-                    ui.weak("Agent hooks are not configured");
-                    if ui.small_button("Set up hooks").clicked() {
-                        self.settings_draft = self.state.settings.clone();
-                        self.editor_preset = external_editor::selected(&self.settings_draft);
-                        self.theme_draft = self.theme_committed.clone();
-                        self.settings_section = 5;
-                        self.settings_open = true;
-                        let _ = self.jobs.send(Job::HookStatus);
-                    }
-                } else {
-                    ui.weak("No pending agent events");
-                }
-            }
-            for n in notices {
-                let color = if n.resolved {
-                    appearance::color(&self.theme.secondary)
-                } else {
-                    state_color(n.state, &self.theme)
-                };
-                let label = format!("● {}", n.summary.chars().take(42).collect::<String>());
-                if ui
-                    .button(RichText::new(label).color(color))
-                    .on_hover_text(&n.summary)
-                    .clicked()
-                {
-                    self.detail = Some(n.id.clone());
-                    self.send(Request::Notice {
-                        id: n.id,
-                        action: "read".into(),
-                    });
-                }
-            }
-            for n in terminal_notices {
-                let label = if n.title.is_empty() || n.title == "Terminal" {
-                    &n.body
-                } else {
-                    &n.title
-                };
-                if ui
-                    .button(format!(
-                        "Terminal · {}",
-                        label.chars().take(36).collect::<String>()
-                    ))
-                    .on_hover_text(format!("{}\n{}", n.title, n.body))
-                    .clicked()
-                {
-                    self.go_session(&n.session_id);
-                }
-                if ui
-                    .small_button("×")
-                    .on_hover_text("Dismiss terminal notification")
-                    .clicked()
-                    && self
-                        .state
-                        .capabilities
-                        .iter()
-                        .any(|c| c == TERMINAL_NOTICES_CAPABILITY)
-                {
-                    self.send(Request::DismissTerminalNotice { id: n.id });
-                }
-            }
+            .filter(|n| notice_pending(n, now()))
+            .count()
+            + self
+                .state
+                .terminal_notices
+                .iter()
+                .filter(|n| !n.dismissed)
+                .count();
+        let label = if pending == 0 {
+            String::new()
+        } else {
+            pending.to_string()
+        };
+        let button = egui::Button::image_and_text(
+            egui::Image::new(icons::source("Bell")).fit_to_exact_size(egui::vec2(16.0, 16.0)),
+            label,
+        )
+        .frame(false);
+        let response = ui
+            .add(button)
+            .on_hover_text(format!("{pending} pending notifications"));
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "attention-bell", response.rect);
+        let popup = egui::Popup::from_toggle_button_response(&response).show(|ui| {
+            ui.set_width(300.0);
+            ui.set_max_height(460.0);
+            ui.push_id("attention-popup", |ui| self.agents_view(ui));
         });
+        #[cfg(feature = "test-support")]
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(egui::Id::new("attention-state"), (pending, popup.is_some()))
+        });
+        let _ = popup;
     }
     pub(super) fn agent_bar(&mut self, ui: &mut egui::Ui) {
         let waiting = self.waiting_notice_count();
@@ -122,7 +63,7 @@ impl App {
             .state
             .notifications
             .iter()
-            .filter(|notice| !notice.read && !notice.dismissed && notice.snoozed_until <= now())
+            .filter(|notice| !notice.read && notice_pending(notice, now()))
             .count();
         let badge = match (waiting, unread) {
             (0, 0) => String::new(),
@@ -155,6 +96,8 @@ impl App {
         ui.separator();
     }
     fn project_sort_menu(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().interact_size.y = 22.0;
+        ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
         let current = self.preferences.project_sort;
         let menu = appearance::menu_button(ui, "Sort", |ui| {
             for (sort, icon, target) in [
@@ -184,6 +127,43 @@ impl App {
         diagnostics::record(ui.ctx(), "project-sort", menu.rect);
         let _ = menu;
     }
+
+    fn removed_projects_menu(&mut self, ui: &mut egui::Ui) {
+        let hidden: Vec<_> = self
+            .state
+            .projects
+            .iter()
+            .filter(|p| self.preferences.hidden_projects.contains(&p.id))
+            .cloned()
+            .collect();
+        if hidden.is_empty() {
+            return;
+        }
+        ui.spacing_mut().interact_size.y = 22.0;
+        ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
+        let menu = appearance::menu_button(ui, "Removed", |ui| {
+            for project in hidden {
+                let response = appearance::menu_item(ui, &project.name, "FolderOpen", "")
+                    .on_hover_text(project.path.display().to_string());
+                #[cfg(feature = "test-support")]
+                diagnostics::record(
+                    ui.ctx(),
+                    &format!("restore-project:{}", project.id),
+                    response.rect,
+                );
+                if response.clicked() {
+                    self.select_project(project.id);
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Restore a project to the sidebar");
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "removed-projects", menu.rect);
+        let _ = menu;
+    }
+
     pub(super) fn visible_projects(&self) -> Vec<Project> {
         sort_visible_projects(VisibleProjects {
             projects: self.state.projects.clone(),
@@ -198,44 +178,27 @@ impl App {
     }
     pub(super) fn projects(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
             ui.label(RichText::new("PROJECTS").small().weak().strong());
-            let add = ui.small_button("+").on_hover_text("Add local project");
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "project-add", add.rect);
-            if add.clicked() {
-                self.add_project = true;
-            }
-            self.project_sort_menu(ui);
-            let hidden: Vec<_> = self
-                .state
-                .projects
-                .iter()
-                .filter(|p| self.preferences.hidden_projects.contains(&p.id))
-                .cloned()
-                .collect();
-            if !hidden.is_empty() {
-                let menu = appearance::menu_button(ui, "Removed", |ui| {
-                    for project in hidden {
-                        let response = appearance::menu_item(ui, &project.name, "FolderOpen", "")
-                            .on_hover_text(project.path.display().to_string());
-                        #[cfg(feature = "test-support")]
-                        diagnostics::record(
-                            ui.ctx(),
-                            &format!("restore-project:{}", project.id),
-                            response.rect,
-                        );
-                        if response.clicked() {
-                            self.select_project(project.id);
-                            ui.close();
-                        }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                self.removed_projects_menu(ui);
+                self.project_sort_menu(ui);
+                if self.has_worktrees() {
+                    let worktree = appearance::sidebar_action(ui, "GitBranch", "New task worktree");
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(ui.ctx(), "worktree-add", worktree.rect);
+                    if worktree.clicked() {
+                        self.open_worktree_wizard();
                     }
-                })
-                .response
-                .on_hover_text("Restore a project to the sidebar");
+                }
+                let add = appearance::sidebar_action(ui, "Plus", "Add local project");
                 #[cfg(feature = "test-support")]
-                diagnostics::record(ui.ctx(), "removed-projects", menu.rect);
-                let _ = menu;
-            }
+                diagnostics::record(ui.ctx(), "project-add", add.rect);
+                if add.clicked() {
+                    self.add_project = true;
+                }
+            });
         });
         ui.spacing_mut().item_spacing.y = 0.0;
         let live = self
@@ -249,6 +212,15 @@ impl App {
             .max_height((ui.available_height() - footer).max(0.0))
             .show(ui, |ui| {
                 for p in self.visible_projects() {
+                    if self.managed_worktree(&p.id).is_some()
+                        && self.visible_projects().iter().any(|parent| {
+                            self.worktree_children(parent)
+                                .iter()
+                                .any(|worktree| worktree.project_id == p.id)
+                        })
+                    {
+                        continue;
+                    }
                     ui.add_space(6.0);
                     let count = self
                         .state
@@ -269,7 +241,7 @@ impl App {
                     let project_left = ui.horizontal(|ui| {
                         if ui
                             .add_sized(
-                                [16.0, 28.0],
+                                [16.0, self.theme.row_height()],
                                 egui::Button::image(
                                     egui::Image::new(icons::source(if expanded {
                                         "ChevronDown"
@@ -293,7 +265,7 @@ impl App {
                             &p.name,
                             if expanded { "FolderOpen" } else { "Folder" },
                             selected,
-                            28.0,
+                            self.theme.row_height(),
                             &count.to_string(),
                             appearance::color(&self.theme.secondary),
                         )
@@ -318,6 +290,21 @@ impl App {
                             self.select_project(p.id.clone());
                         }
                         appearance::context_menu(&response, |ui| {
+                            if self.has_worktrees()
+                                && appearance::menu_item(ui, "New task worktree…", "GitBranch", "")
+                                    .clicked()
+                            {
+                                self.select_project(p.id.clone());
+                                self.open_worktree_wizard();
+                                ui.close();
+                            }
+                            if self.managed_worktree(&p.id).is_some()
+                                && appearance::menu_item(ui, "Remove worktree…", "X", "")
+                                    .clicked()
+                            {
+                                self.confirm_remove_worktree(&p.id);
+                                ui.close();
+                            }
                             if appearance::menu_item(ui, "Remove project from sidebar", "X", "")
                                 .on_hover_text("Keep files, layouts, and running sessions. Restore it from Removed or add the folder again.")
                                 .clicked() {
@@ -344,6 +331,22 @@ impl App {
                                     .filter(|s| s.lifecycle.live() && s.kind != SessionKind::Editor)
                                 {
                                     self.session_row(ui, session);
+                                }
+                                let children: Vec<_> = self
+                                    .worktree_children(&p)
+                                    .into_iter()
+                                    .map(|worktree| worktree.project_id.clone())
+                                    .collect();
+                                for child_id in children {
+                                    if let Some(child) = self
+                                        .state
+                                        .projects
+                                        .iter()
+                                        .find(|project| project.id == child_id)
+                                        .cloned()
+                                    {
+                                        self.worktree_card(ui, &child);
+                                    }
                                 }
                             });
                         });
@@ -463,6 +466,82 @@ impl App {
                     session: session.id.clone(),
                 });
                 self.remove_tab(&session.id);
+                ui.close();
+            }
+        });
+    }
+    fn worktree_card(&mut self, ui: &mut egui::Ui, project: &Project) {
+        let live = self
+            .state
+            .sessions
+            .iter()
+            .filter(|session| {
+                session.project_id == project.id
+                    && session.lifecycle.live()
+                    && session.kind != SessionKind::Editor
+            })
+            .count();
+        let agent_in_project = |agent: &Agent| {
+            self.state
+                .sessions
+                .iter()
+                .any(|session| session.id == agent.session_id && session.project_id == project.id)
+        };
+        let waiting = self.state.agents.iter().any(|agent| {
+            matches!(
+                agent.state,
+                AgentState::WaitingInput | AgentState::WaitingPermission
+            ) && agent_in_project(agent)
+        });
+        let running = self
+            .state
+            .agents
+            .iter()
+            .any(|agent| agent.state == AgentState::Running && agent_in_project(agent));
+        let tint = appearance::color(if waiting {
+            &self.theme.status_waiting
+        } else if running {
+            &self.theme.status_running
+        } else {
+            &self.theme.secondary
+        });
+        let count = live.to_string();
+        let selected = self.selected.as_ref() == Some(&project.id);
+        let response = appearance::project_row(
+            ui,
+            &project.name,
+            "GitBranch",
+            selected,
+            self.theme.row_height(),
+            &count,
+            tint,
+        )
+        .on_hover_text(format!(
+            "{}\nManaged Git worktree\n{} live terminal(s)",
+            project.path.display(),
+            live
+        ));
+        #[cfg(feature = "test-support")]
+        diagnostics::record(
+            ui.ctx(),
+            &format!("worktree-row:{}", project.id),
+            response.rect,
+        );
+        if response.clicked() {
+            self.select_project(project.id.clone());
+        }
+        appearance::context_menu(&response, |ui| {
+            if appearance::menu_item(ui, "Open", "FolderOpen", "").clicked() {
+                self.select_project(project.id.clone());
+                ui.close();
+            }
+            if appearance::menu_item(ui, "New terminal", "Terminal", "").clicked() {
+                self.select_project(project.id.clone());
+                self.create(None);
+                ui.close();
+            }
+            if appearance::menu_item(ui, "Remove worktree…", "X", "").clicked() {
+                self.confirm_remove_worktree(&project.id);
                 ui.close();
             }
         });
@@ -603,7 +682,7 @@ impl App {
                             ui,
                             file_actions::FileMenu {
                                 file: true,
-                                browser: false,
+                                browser: file_actions::browser_document(&entry.path),
                                 git: None,
                                 neovim: false,
                             },
@@ -621,6 +700,14 @@ impl App {
         self.preferences.left_agents
             || (self.preferences.visible && self.preferences.tool == SidebarTool::Agents)
     }
+
+    pub(super) fn side_attention_visible(&self) -> bool {
+        self.state.settings.notifications_side && !self.right_agents_inbox()
+    }
+
+    fn right_agents_inbox(&self) -> bool {
+        self.preferences.visible && self.preferences.tool == SidebarTool::Agents
+    }
     // Inline selection is not a modal and must not take terminal keyboard focus.
     pub(super) fn notice_detail_modal_open(&self) -> bool {
         self.detail.as_ref().is_some_and(|id| {
@@ -631,6 +718,7 @@ impl App {
                 .is_some_and(|notice| {
                     !self.agents_inbox_open()
                         || notice.dismissed
+                        || notice.resolved
                         || notice.snoozed_until > now()
                         || !self.notice_in_scope(notice, self.selected.as_deref())
                 })
@@ -641,6 +729,22 @@ impl App {
         ui.heading("Agents");
         ui.checkbox(&mut self.preferences.all_projects, "All projects");
         let notices = self.pending_notices();
+        let terminal_notices: Vec<_> = self
+            .state
+            .terminal_notices
+            .iter()
+            .filter(|notice| {
+                !notice.dismissed
+                    && self.state.sessions.iter().any(|session| {
+                        session.id == notice.session_id
+                            && self
+                                .preferences
+                                .includes_project(&session.project_id, self.selected.as_deref())
+                    })
+            })
+            .rev()
+            .cloned()
+            .collect();
         let waiting = self.waiting_notice_count();
         if waiting > 0 {
             ui.label(
@@ -649,7 +753,7 @@ impl App {
             );
         }
         appearance::sidebar_scroll("agents").show(ui, |ui| {
-            if notices.is_empty() {
+            if notices.is_empty() && terminal_notices.is_empty() {
                 self.agents_empty(ui);
             }
             for notice in notices {
@@ -673,6 +777,46 @@ impl App {
                 );
                 self.apply_notice_action(notice.id, action);
             }
+            for notice in terminal_notices {
+                let row = ui.group(|ui| {
+                    ui.label(if notice.title.is_empty() {
+                        "Terminal"
+                    } else {
+                        &notice.title
+                    });
+                    ui.label(&notice.body);
+                    ui.horizontal(|ui| {
+                        let go = ui.button("Go to terminal");
+                        #[cfg(feature = "test-support")]
+                        diagnostics::record(
+                            ui.ctx(),
+                            &format!("terminal-go:{}", notice.session_id),
+                            go.rect,
+                        );
+                        if go.clicked() {
+                            self.go_session(&notice.session_id);
+                        }
+                        if self
+                            .state
+                            .capabilities
+                            .iter()
+                            .any(|c| c == TERMINAL_NOTICES_CAPABILITY)
+                            && ui.button("Dismiss").clicked()
+                        {
+                            self.send(Request::DismissTerminalNotice {
+                                id: notice.id.clone(),
+                            });
+                        }
+                    });
+                });
+                #[cfg(feature = "test-support")]
+                diagnostics::record(
+                    ui.ctx(),
+                    &format!("terminal-row:{}", notice.session_id),
+                    row.response.rect,
+                );
+                let _ = row;
+            }
         });
     }
     fn agents_empty(&mut self, ui: &mut egui::Ui) {
@@ -686,7 +830,7 @@ impl App {
                 self.settings_draft = self.state.settings.clone();
                 self.editor_preset = external_editor::selected(&self.settings_draft);
                 self.theme_draft = self.theme_committed.clone();
-                self.settings_section = 5;
+                self.settings_section = SettingsSection::AgentHooks;
                 self.settings_open = true;
                 let _ = self.jobs.send(Job::HookStatus);
             }
@@ -708,6 +852,7 @@ impl App {
             .iter()
             .filter(|notice| {
                 !notice.dismissed
+                    && !notice.resolved
                     && notice.snoozed_until <= now()
                     && self.notice_in_scope(notice, selected)
             })
@@ -952,10 +1097,9 @@ impl App {
                                         ui,
                                         file_actions::FileMenu {
                                             file: true,
-                                            browser: false,
+                                            browser: file_actions::browser_document(&change.path),
                                             git: Some(group),
-                                            neovim: self.state.settings.review_mode
-                                                == ReviewMode::Neovim,
+                                            neovim: true,
                                         },
                                     ) {
                                         self.file_action(ui, action, &change.path, None);
@@ -1027,6 +1171,27 @@ fn notice_rank(state: AgentState) -> u8 {
     }
 }
 
+fn notice_pending(notice: &Notification, timestamp: u64) -> bool {
+    !notice.dismissed && !notice.resolved && notice.snoozed_until <= timestamp
+}
+
+fn notice_preview(markdown: &str) -> String {
+    use pulldown_cmark::{Event, Parser, TagEnd};
+    let mut text = String::new();
+    for event in Parser::new(markdown) {
+        match event {
+            Event::Text(value) | Event::Code(value) => text.push_str(&value),
+            Event::SoftBreak
+            | Event::HardBreak
+            | Event::End(
+                TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item | TagEnd::CodeBlock,
+            ) => text.push(' '),
+            _ => {}
+        }
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> AttentionAction {
     let AttentionCard {
         theme,
@@ -1044,7 +1209,13 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
     };
     let inner = egui::Frame::group(ui.style())
         .stroke(stroke)
-        .inner_margin(10.0)
+        .corner_radius(8)
+        .fill(appearance::color(if selected || highlight {
+            &theme.selection
+        } else {
+            &theme.window
+        }))
+        .inner_margin(8.0)
         .show(ui, |ui| {
             let header = ui
                 .vertical(|ui| {
@@ -1072,7 +1243,9 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
                 &format!("agent-row:{}", notice.session_id),
                 header.rect,
             );
-            ui.separator();
+            ui.add(egui::Label::new(notice_preview(&notice.summary)).truncate())
+                .on_hover_text(&notice.summary);
+            ui.add_space(4.0);
             if notice.resolved {
                 ui.weak("This event has resolved.");
             }
@@ -1125,6 +1298,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn message_preview_preserves_words_and_punctuation_without_markdown() {
+        assert_eq!(
+            notice_preview("**No.** A different user or a `mini-VM` does not help."),
+            "No. A different user or a mini-VM does not help."
+        );
+        assert_eq!(
+            notice_preview("**Ready**.\n\n[Open](https://example.com)"),
+            "Ready. Open"
+        );
+    }
+
+    #[test]
     fn resolved_permission_requests_do_not_count_as_waiting() {
         let mut notice = Notification {
             id: "notice".into(),
@@ -1141,7 +1326,15 @@ mod tests {
             snoozed_until: 0,
         };
         assert!(notice_waiting(&notice));
+        assert!(notice_pending(&notice, 10));
+        notice.snoozed_until = 11;
+        assert!(!notice_pending(&notice, 10));
+        notice.snoozed_until = 0;
+        notice.dismissed = true;
+        assert!(!notice_pending(&notice, 10));
+        notice.dismissed = false;
         notice.resolved = true;
+        assert!(!notice_pending(&notice, 10));
         assert!(!notice_waiting(&notice));
         notice.state = AgentState::WaitingInput;
         assert!(!notice_waiting(&notice));

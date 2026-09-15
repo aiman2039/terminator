@@ -2,26 +2,41 @@
 use super::{AttentionAction, AttentionCard, attention_card, *};
 
 impl App {
-    pub(super) fn modals(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
-        if cfg!(target_os = "macos")
+    fn first_project_dialog(&mut self, ctx: &egui::Context) {
+        if !(cfg!(target_os = "macos")
             && self
                 .preferences
                 .needs_setup(self.state_loaded, self.state.projects.len())
-            && !self.picker_active
+            && !self.picker_active)
         {
-            self.popups
-                .window(ctx, "Choose your first project")
-                .collapsible(false)
-                .show(ctx, |ui| {
-                    ui.label("Choose a folder to begin. You can add more projects later.");
-                    if ui.button("Choose project folder").clicked() {
-                        self.add_project = true;
-                    }
-                    if ui.button("Skip").clicked() {
-                        self.preferences.setup_completed = true;
-                    }
-                });
+            return;
         }
+        self.popups
+            .centered(ctx, "Choose your first project")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.set_width(300.0);
+                ui.label("Choose a folder to begin. You can add more projects later.");
+                ui.add_space(8.0);
+                let width = ui.available_width();
+                if ui
+                    .add_sized([width, 28.0], egui::Button::new("Choose project folder"))
+                    .clicked()
+                {
+                    self.add_project = true;
+                }
+                if ui
+                    .add_sized([width, 28.0], egui::Button::new("Skip"))
+                    .clicked()
+                {
+                    self.preferences.setup_completed = true;
+                }
+            });
+    }
+
+    pub(super) fn modals(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        self.first_project_dialog(ctx);
         if self.restart_confirm {
             let live = self
                 .state
@@ -397,6 +412,43 @@ impl App {
         }
         if self.settings_open {
             self.settings(ctx);
+        }
+        if self.palette_open {
+            self.palette(ctx);
+        }
+        if self.worktree_draft.is_some() {
+            self.worktree_wizard(ctx);
+        }
+        self.worktree_remove_dialog(ctx);
+        if let Some(target) = self.browse_target.take() {
+            if self.picker_active {
+                self.browse_target = Some(target);
+            } else {
+                self.picker_active = true;
+                let folder = matches!(target, BrowseTarget::WorktreeDest);
+                let dialog =
+                    rfd::AsyncFileDialog::new()
+                        .set_parent(frame)
+                        .set_title(match target {
+                            BrowseTarget::Shell => "Choose shell",
+                            BrowseTarget::Editor => "Choose editor",
+                            BrowseTarget::External => "Choose external editor",
+                            BrowseTarget::WorktreeDest => "Choose parent folder",
+                        });
+                let cwd = self.dialog_directory();
+                let tx = self.update_tx.clone();
+                let ctx = ctx.clone();
+                thread::spawn(move || {
+                    let dialog = dialog.set_directory(services::existing_directory(cwd));
+                    let path = if folder {
+                        pollster::block_on(dialog.pick_folder()).map(|p| p.path().to_path_buf())
+                    } else {
+                        pollster::block_on(dialog.pick_file()).map(|p| p.path().to_path_buf())
+                    };
+                    let _ = tx.send(Update::PickedPath { path, target });
+                    ctx.request_repaint();
+                });
+            }
         }
     }
 }

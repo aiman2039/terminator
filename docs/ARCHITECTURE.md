@@ -96,8 +96,10 @@ is a point-in-time check; it cannot lock out arbitrary external OS or Git action
 
 Image previews belong to the GUI and allocate no PTYs. A dedicated bounded worker
 loads raster/SVG data, with stale-generation rejection and a texture-memory budget.
-Only paths are persisted in version-3 image-bearing layouts. Unknown layout
+Only paths are persisted in version-3 image-bearing layouts. HTML previews use the
+same GUI-only path with Blitz CPU raster and layout version 4. Unknown layout
 versions remain read-only. Explicit text/external actions retain the editor paths.
+HTML Open in browser uses the existing system-browser worker; no JS or webview.
 
 `gui.sock` is a separate, mode-0600 authenticated GUI endpoint for explicit
 presentation commands. It does not move PTY ownership into the GUI. The daemon's

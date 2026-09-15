@@ -266,11 +266,28 @@ pub fn run(paths: &Paths, state: State, options: Options) -> Result<Value> {
     );
     validate_relaunch(relaunch.as_deref())?;
     let lock = close_gui(paths, timeout)?;
+    let generation = state.generation.clone();
     let result = finish_cleanup(paths, state, stop_all, timeout);
+    // Persist before reopening: the old GUI and its error receiver are already gone.
+    let report_result = (|| -> Result<()> {
+        if relaunch.is_some() {
+            let report = json!({
+                "generation": generation,
+                "error": result.as_ref().err().map(|error| format!("{error:#}")),
+            });
+            atomic_write(
+                &paths.data.join("restart-result.json"),
+                &serde_json::to_vec(&report)?,
+            )?;
+        }
+        Ok(())
+    })();
     drop(lock);
     let relaunch_error = relaunch
         .as_ref()
         .and_then(|exe| spawn_relaunch(paths, exe).err());
+    // Restore the GUI even when writing diagnostics fails.
+    let result = result.and_then(|stopped| report_result.map(|()| stopped));
     match (result, relaunch_error) {
         (Ok(stopped), None) => Ok(json!({
             "shutdown": true,
@@ -612,6 +629,10 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("did not stop"));
+        let report: Value =
+            serde_json::from_slice(&std::fs::read(paths.data.join("restart-result.json")).unwrap())
+                .unwrap();
+        assert!(report["error"].as_str().unwrap().contains("did not stop"));
         let _ = wait_marker(&paths.data.join("relaunched"));
         assert!(paths.socket().exists());
         drop(server);

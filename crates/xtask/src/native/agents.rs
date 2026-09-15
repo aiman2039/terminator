@@ -8,6 +8,10 @@ fn gui(h: &Harness) -> Result<Value> {
 pub fn run(o: &Options) -> Result<()> {
     let h = Harness::new()?;
     h.setup()?;
+    // Keep the pending event through navigation so this fixture can test resolve updates.
+    let mut settings = h.state()?["settings"].clone();
+    settings["dismissal"] = json!("Manual");
+    h.rpc(json!({"Settings":settings}))?;
     let first = h.project("agent-project")?;
     let second = h.project("other-project")?;
     let agent = h.shell(&first)?;
@@ -17,7 +21,7 @@ pub fn run(o: &Options) -> Result<()> {
     h.rpc(json!({"SelectProject":{"project":id(&second)}}))?;
     save_prefs(
         &h,
-        &json!({"version":1,"all_projects":true,"attention_migrated":true}),
+        &json!({"version":1,"all_projects":true,"attention_migrated":true,"tool":"Git","visible":true}),
     )?;
     let event = json!({"protocol_version":1,"event_id":"bell-waiting","terminal_session_id":id(&agent),"agent_invocation_id":"bell-agent","agent_kind":"custom","provider_session_id":"bell-provider","state":"waiting_permission","request_id":"bell-request","sequence":1,"summary":"Agent needs permission","details":"Isolated bell fixture","resume":null});
     h.rpc(json!({"Hook":event}))?;
@@ -25,13 +29,33 @@ pub fn run(o: &Options) -> Result<()> {
         h.wait(
             |_| {
                 gui(&h).is_ok_and(|s| {
-                    s["left_agents"] == false && s["agent_bar_badge"] == "1 waiting · 1 unread"
+                    s["left_agents"] == false
+                        && s["agent_bar_badge"] == "1 waiting · 1 unread"
+                        && s["attention"] == json!([1, false])
                 })
             },
             8,
         )?;
         Ok(())
     })?;
+    capture(
+        &h,
+        o,
+        "bell-open-on-git",
+        json!([{"at_ms":900,"target":"attention-bell"}]),
+        2300,
+        |_| {
+            h.wait(
+                |_| {
+                    gui(&h).is_ok_and(|s| {
+                        s["attention"] == json!([1, true]) && s["left_agents"] == false
+                    })
+                },
+                8,
+            )?;
+            Ok(())
+        },
+    )?;
     capture(
         &h,
         o,
@@ -74,7 +98,7 @@ pub fn run(o: &Options) -> Result<()> {
             Ok(())
         },
     )?;
-    // Focus may dismiss the notice, but must not clear the observed waiting state.
+    // Navigation must not clear the observed waiting state.
     h.wait(|s| s["agents"][0]["state"] == "waiting_permission", 5)?;
     capture(
         &h,

@@ -6,7 +6,36 @@ fn gui(h: &Harness) -> Result<Value> {
     ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)
 }
 
+fn restart_failure_is_visible(o: &Options) -> Result<()> {
+    let h = Harness::new()?;
+    h.setup()?;
+    let project = h.project("restart-failure")?;
+    let shell = h.shell(&project)?;
+    h.layout(&project, std::slice::from_ref(&shell))?;
+    fs::write(
+        h.root.join("restart-result.json"),
+        serde_json::to_vec(&json!({
+            "generation":h.state()?["generation"], "error":"Fixture session did not stop"
+        }))?,
+    )?;
+    capture(&h, o, "restart-failure-visible", json!([]), 2300, |_| {
+        h.wait(
+            |_| {
+                gui(&h).is_ok_and(|s| {
+                    s["installation"]["error"]
+                        .as_str()
+                        .is_some_and(|error| error.contains("Fixture session did not stop"))
+                })
+            },
+            8,
+        )?;
+        Ok(())
+    })?;
+    h.assert_pids(&[shell])
+}
+
 pub fn run(o: &Options) -> Result<()> {
+    restart_failure_is_visible(o)?;
     cleanup_closes_gui(o, false)?;
     cleanup_closes_gui(o, true)?;
     restart_cancel(o)?;
@@ -245,12 +274,15 @@ fn restart_relaunch(o: &Options) -> Result<()> {
     while next.is_none() {
         ensure!(
             std::time::Instant::now() < deadline,
-            "Relaunched GUI did not come back: {}",
-            fs::read_to_string(h.root.join("restart.log")).unwrap_or_default()
+            "Relaunched GUI did not come back: {}; report: {}; GUI: {:?}",
+            fs::read_to_string(h.root.join("restart.log")).unwrap_or_default(),
+            fs::read_to_string(h.root.join("restart-result.json")).unwrap_or_default(),
+            gui(&h).map(|snapshot| snapshot["installation"].clone())
         );
         if let Ok(snapshot) = gui(&h)
             && snapshot["installation"]["generation"] != generation
             && snapshot["installation"]["problem"] == false
+            && snapshot["installation"]["error"].is_null()
         {
             next = Some(snapshot);
         } else {

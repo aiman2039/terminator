@@ -4,6 +4,14 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Density {
+    #[default]
+    Comfortable,
+    Compact,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppearanceConfig {
@@ -28,6 +36,7 @@ pub struct AppearanceConfig {
     pub status_failed: String,
     pub border_width: f32,
     pub pane_divider_width: f32,
+    pub density: Density,
 }
 impl Default for AppearanceConfig {
     fn default() -> Self {
@@ -53,6 +62,7 @@ impl Default for AppearanceConfig {
             status_failed: "#C74E39".into(),
             border_width: 1.0,
             pane_divider_width: 8.0,
+            density: Density::Comfortable,
         }
     }
 }
@@ -97,6 +107,66 @@ impl AppearanceConfig {
             "appearance.pane_divider_width must be between 1 and 24"
         );
         Ok(())
+    }
+    pub fn compact(&self) -> bool {
+        matches!(self.density, Density::Compact)
+    }
+    pub fn row_height(&self) -> f32 {
+        if self.compact() { 24.0 } else { 28.0 }
+    }
+    pub fn high_contrast() -> Self {
+        Self {
+            window: "#0A0A0C".into(),
+            surface: "#000000".into(),
+            hover: "#1A1A1E".into(),
+            border: "#5A5A60".into(),
+            text: "#FFFFFF".into(),
+            secondary: "#C8C8D0".into(),
+            accent: "#5B9DFF".into(),
+            selection: "#1A3358".into(),
+            terminal_background: "#000000".into(),
+            terminal_foreground: "#FFFFFF".into(),
+            git_added: "#9BE09B".into(),
+            git_modified: "#F0D48A".into(),
+            git_deleted: "#FF6B5A".into(),
+            git_untracked: "#9BE09B".into(),
+            git_ignored: "#808080".into(),
+            status_running: "#8EE0C0".into(),
+            status_waiting: "#F0D48A".into(),
+            status_failed: "#FF6B5A".into(),
+            ..Default::default()
+        }
+    }
+    pub fn colors_match(&self, other: &Self) -> bool {
+        self.window == other.window
+            && self.surface == other.surface
+            && self.hover == other.hover
+            && self.border == other.border
+            && self.text == other.text
+            && self.secondary == other.secondary
+            && self.accent == other.accent
+            && self.selection == other.selection
+            && self.terminal_background == other.terminal_background
+            && self.terminal_foreground == other.terminal_foreground
+            && self.git_added == other.git_added
+            && self.git_modified == other.git_modified
+            && self.git_deleted == other.git_deleted
+            && self.git_untracked == other.git_untracked
+            && self.git_ignored == other.git_ignored
+            && self.status_running == other.status_running
+            && self.status_waiting == other.status_waiting
+            && self.status_failed == other.status_failed
+    }
+    pub fn apply_accent(&mut self, accent: String) {
+        if let Ok([r, g, b]) = rgb(&accent) {
+            self.selection = format!(
+                "#{:02X}{:02X}{:02X}",
+                r / 3,
+                g / 3,
+                ((b as u16 * 2) / 5) as u8
+            );
+        }
+        self.accent = accent;
     }
 }
 pub fn rgb(value: &str) -> Result<[u8; 3]> {
@@ -235,5 +305,18 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+    #[test]
+    fn high_contrast_and_density_round_trip() {
+        AppearanceConfig::high_contrast().validate().unwrap();
+        let mut compact = AppearanceConfig {
+            density: Density::Compact,
+            ..Default::default()
+        };
+        assert!(compact.compact());
+        assert_eq!(compact.row_height(), 24.0);
+        compact.apply_accent("#3871E1".into());
+        assert_eq!(compact.accent, "#3871E1");
+        assert!(compact.selection.starts_with('#'));
     }
 }

@@ -58,7 +58,7 @@ pub fn run(o: &Options) -> Result<()> {
     h.setup()?;
     let mut settings = h.state()?["settings"].clone();
     settings["editor_program"] = json!("/missing/user-editor");
-    settings["review_mode"] = json!("neovim");
+    settings["review_mode"] = json!("native");
     h.rpc(json!({"Settings":settings}))?;
     let p = h.project("review")?;
     let root = PathBuf::from(p["path"].as_str().unwrap());
@@ -132,7 +132,7 @@ pub fn run(o: &Options) -> Result<()> {
         &h,
         o,
         "review",
-        json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1600,"target":"Working tree diff"}]),
+        json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1600,"target":"Neovim diff"}]),
         3500,
     )?;
     let state = h.state()?;
@@ -166,6 +166,21 @@ pub fn run(o: &Options) -> Result<()> {
     ensure!(
         session_ids(&h.state()?["projects"][0]["layout"]) == [id(&shell)],
         "Closing review affected shell"
+    );
+    plain(
+        &h,
+        o,
+        "native-side-by-side",
+        json!([
+            {"at_ms":1200,"target":"git-file-review.rs","right_click":true},
+            {"at_ms":1600,"target":"Native diff"},
+            {"at_ms":2200,"target":"diff-side-by-side"}
+        ]),
+        3500,
+    )?;
+    ensure!(
+        sessions(&h.state()?).len() == sessions(&state).len(),
+        "Native diff allocated a PTY"
     );
     h.assert_pids(&[shell])
 }
@@ -275,7 +290,7 @@ pub fn legacy(o: &Options) -> Result<()> {
         &h,
         o,
         "legacy-diff",
-        json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1700,"target":"Native diff"}]),
+        json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1700,"target":"Neovim diff"}]),
         3500,
     )?;
     ensure!(

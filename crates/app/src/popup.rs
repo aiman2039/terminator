@@ -50,6 +50,13 @@ impl Popups {
         window
     }
 
+    pub fn centered(&mut self, ctx: &egui::Context, title: &str) -> egui::Window<'static> {
+        self.seen.insert(title.to_owned());
+        egui::Window::new(title.to_owned())
+            .constrain_to(ctx.content_rect())
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+    }
+
     pub fn end_frame(&mut self) {
         self.visible.retain(|title, (_, age)| {
             *age = age.saturating_add(1);
@@ -121,5 +128,48 @@ mod tests {
         let rect = draw(&ctx, &mut popups, "Close file");
         assert!(rect.left() > 400.0 && rect.top() > 300.0, "{rect:?}");
         assert!(ctx.content_rect().contains_rect(rect), "{rect:?}");
+    }
+
+    fn draw_centered(ctx: &egui::Context, popups: &mut Popups, title: &str) -> egui::Rect {
+        let mut rect = egui::Rect::NOTHING;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            let ctx = ui.ctx();
+            rect = popups
+                .centered(ctx, title)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.set_width(300.0);
+                    ui.label("Choose a folder to begin.");
+                    ui.add_sized([300.0, 28.0], egui::Button::new("Choose project folder"));
+                    ui.add_sized([300.0, 28.0], egui::Button::new("Skip"));
+                })
+                .unwrap()
+                .response
+                .rect;
+        });
+        output.textures_delta.clear();
+        popups.end_frame();
+        rect
+    }
+
+    #[test]
+    fn first_project_dialog_is_centered() {
+        let ctx = egui::Context::default();
+        let mut popups = Popups::default();
+        let _ = draw_centered(&ctx, &mut popups, "Choose your first project");
+        let rect = draw_centered(&ctx, &mut popups, "Choose your first project");
+        let center = ctx.content_rect().center();
+        assert!(
+            rect.center().distance(center) < 12.0,
+            "dialog center {rect:?} vs content {center:?}"
+        );
     }
 }

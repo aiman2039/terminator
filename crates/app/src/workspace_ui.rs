@@ -2,6 +2,20 @@
 use super::*;
 
 impl App {
+    pub(super) fn terminal_input_enabled(&self, sid: &str) -> bool {
+        !self.picker_active
+            && !self.settings_open
+            && !self.command_dialog_open()
+            && !self.add_project
+            && !self.notice_detail_modal_open()
+            && (self.close_session.is_none() || self.idle_close_pending.is_some())
+            && !self.editor_close_sessions.contains(sid)
+            && (self.close_workspace.is_none() || self.idle_close_pending.is_some())
+            && self.rename_session.is_none()
+            && !self.open_path
+            && self.search_session.is_none()
+    }
+
     pub(super) fn window_header(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
         let left = self.project_width.min(rect.width() - 300.0);
@@ -99,6 +113,14 @@ impl App {
                         self.preferences.toggle(tool);
                     }
                 }
+                let settings_tip = {
+                    let keys = shortcuts::pretty(&self.state.settings.keybindings, "open_settings");
+                    if keys.is_empty() {
+                        "Settings".into()
+                    } else {
+                        format!("Settings ({keys})")
+                    }
+                };
                 let settings = ui
                     .add_sized(
                         [36.0, 32.0],
@@ -109,11 +131,37 @@ impl App {
                         )
                         .frame(false),
                     )
-                    .on_hover_text("Settings");
+                    .on_hover_text(settings_tip);
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "settings", settings.rect);
                 if settings.clicked() {
                     self.open_settings();
+                }
+                let palette = ui
+                    .add_sized(
+                        [36.0, 32.0],
+                        egui::Button::image(
+                            egui::Image::new(icons::source("Search"))
+                                .tint(appearance::ICON_COLOR)
+                                .fit_to_exact_size(egui::vec2(16.0, 16.0)),
+                        )
+                        .frame(false),
+                    )
+                    .on_hover_text({
+                        let keys =
+                            shortcuts::pretty(&self.state.settings.keybindings, "open_palette");
+                        if keys.is_empty() {
+                            "Command palette".into()
+                        } else {
+                            format!("Command palette ({keys})")
+                        }
+                    });
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "palette", palette.rect);
+                if palette.clicked() {
+                    self.palette_open = true;
+                    self.palette_query.clear();
+                    self.palette_index = 0;
                 }
                 header_drag_space(ui);
             },
@@ -201,13 +249,17 @@ impl App {
                                         )
                                     })
                                     .unwrap_or(("Terminal".into(), "Terminal", None)),
-                                Some(Tab::Diff { path, .. }) | Some(Tab::Image { path }) => (
+                                Some(Tab::Diff { path, .. })
+                                | Some(Tab::Image { path })
+                                | Some(Tab::Html { path }) => (
                                     path.file_name()
                                         .unwrap_or_default()
                                         .to_string_lossy()
                                         .into_owned(),
                                     if matches!(primary, Some(Tab::Image { .. })) {
                                         "FileImage"
+                                    } else if matches!(primary, Some(Tab::Html { .. })) {
+                                        "FileCode"
                                     } else {
                                         "FileDiff"
                                     },
@@ -309,15 +361,17 @@ impl App {
                                 )
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                                 .on_hover_text("Close tab");
-                            egui::Image::new(icons::source("X"))
-                                .tint(appearance::ICON_COLOR)
-                                .paint_at(
-                                    ui,
-                                    egui::Rect::from_center_size(
-                                        close_rect.center(),
-                                        egui::vec2(16.0, 16.0),
-                                    ),
-                                );
+                            if response.hovered() || close_response.hovered() || active {
+                                egui::Image::new(icons::source("X"))
+                                    .tint(appearance::ICON_COLOR)
+                                    .paint_at(
+                                        ui,
+                                        egui::Rect::from_center_size(
+                                            close_rect.center(),
+                                            egui::vec2(16.0, 16.0),
+                                        ),
+                                    );
+                            }
                             if close_response.clicked() {
                                 close = Some(group.id.clone());
                             }
@@ -426,12 +480,12 @@ impl App {
         }
     }
     fn new_terminal_menu(&mut self, ui: &mut egui::Ui, pane: Option<egui_dock::NodePath>) {
-        for (label, split) in [
-            ("New tab", None),
-            ("Split up", Some("up")),
-            ("Split down", Some("down")),
-            ("Split left", Some("left")),
-            ("Split right", Some("right")),
+        for (label, split, action) in [
+            ("New tab", None, "new_terminal"),
+            ("Split up", Some("up"), ""),
+            ("Split down", Some("down"), "split_down"),
+            ("Split left", Some("left"), ""),
+            ("Split right", Some("right"), "split_right"),
         ] {
             let icon = match split {
                 Some("up") => "PanelTopClose",
@@ -440,7 +494,8 @@ impl App {
                 Some("right") => "PanelRightClose",
                 _ => "Plus",
             };
-            if appearance::menu_item(ui, label, icon, "").clicked() {
+            let shortcut = shortcuts::pretty(&self.state.settings.keybindings, action);
+            if appearance::menu_item(ui, label, icon, &shortcut).clicked() {
                 if let Some(pane) = pane {
                     self.add_tab = Some((pane, split.map(str::to_owned)));
                 } else {
@@ -465,7 +520,7 @@ impl App {
                         .find(|s| &s.id == sid)
                         .map(|s| s.label.clone())
                         .unwrap_or_else(|| "Terminal".into()),
-                    Tab::Diff { path, .. } | Tab::Image { path } => path
+                    Tab::Diff { path, .. } | Tab::Image { path } | Tab::Html { path } => path
                         .file_name()
                         .unwrap_or_default()
                         .to_string_lossy()
@@ -590,6 +645,46 @@ impl App {
         }
         preview.show(ui);
     }
+    fn html_view(&mut self, ui: &mut egui::Ui, path: &std::path::Path) {
+        self.visible_htmls.insert(path.into());
+        let mut as_text = false;
+        let mut browser = false;
+        ui.horizontal(|ui| {
+            ui.add(egui::Label::new(path.display().to_string()).truncate())
+                .on_hover_text(path.display().to_string());
+            if ui.button("Reload").clicked() {
+                self.htmls.remove(path);
+            }
+            as_text = ui.button("Open as text").clicked();
+            let open = ui.button("Open in browser");
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "html-open-browser", open.rect);
+            browser = open.clicked();
+        });
+        if as_text {
+            self.open_file_mode(path.into(), None, None, false, true);
+        }
+        if browser {
+            self.open_in_browser(path);
+        }
+        if !self.htmls.contains_key(path) && self.htmls.len() >= 4 {
+            ui.weak("Close another HTML preview to load this page.");
+            return;
+        }
+        let preview = self.htmls.entry(path.into()).or_default();
+        if !preview.loading && preview.texture.is_none() && preview.error.is_none() {
+            self.html_generation = self.html_generation.wrapping_add(1);
+            preview.generation = self.html_generation;
+            preview.loading = self
+                .html_jobs
+                .try_send((path.into(), preview.generation))
+                .is_ok();
+        }
+        preview.show(ui);
+        if preview.error.is_some() {
+            ui.weak("Open in browser to view the page in your system browser.");
+        }
+    }
     fn diff_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
         let Tab::Diff { path, staged, .. } = tab else {
             return;
@@ -606,7 +701,10 @@ impl App {
             if ui.selectable_label(!split, "Unified").clicked() {
                 self.diff_split.remove(&key);
             }
-            if ui.selectable_label(split, "Split").clicked() {
+            let side_by_side = ui.selectable_label(split, "Side by side");
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "diff-side-by-side", side_by_side.rect);
+            if side_by_side.clicked() {
                 self.diff_split.insert(key.clone());
             }
             if ui.small_button("Refresh").clicked() {
@@ -1203,7 +1301,7 @@ impl TabViewer for Viewer<'_> {
     }
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
-            Tab::Image { path } => path
+            Tab::Image { path } | Tab::Html { path } => path
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
@@ -1291,6 +1389,7 @@ impl TabViewer for Viewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
             Tab::Image { path } => self.app.image_view(ui, path),
+            Tab::Html { path } => self.app.html_view(ui, path),
             Tab::Diff { .. } => self.app.diff_view(ui, tab),
             Tab::Terminal(sid) => {
                 let Some(session) = self
@@ -1623,16 +1722,7 @@ impl Viewer<'_> {
                 }
             }
         }
-        let input_enabled = !self.app.picker_active
-            && !self.app.settings_open
-            && !self.app.add_project
-            && !self.app.notice_detail_modal_open()
-            && (self.app.close_session.is_none() || self.app.idle_close_pending.is_some())
-            && !self.app.editor_close_sessions.contains(sid)
-            && (self.app.close_workspace.is_none() || self.app.idle_close_pending.is_some())
-            && self.app.rename_session.is_none()
-            && !self.app.open_path
-            && self.app.search_session.is_none();
+        let input_enabled = self.app.terminal_input_enabled(sid);
         let focused = input_enabled
             && self.app.active_session.as_ref() == Some(sid)
             && self
@@ -1825,15 +1915,7 @@ impl Viewer<'_> {
                 .unwrap_or_default();
             if let Some(Some(target)) = self.app.targets.get(&key).cloned() {
                 appearance::target_header(ui, &target.display());
-                if let Some(action) = file_actions::menu(
-                    ui,
-                    file_actions::FileMenu {
-                        file: matches!(target, services::Target::File(..)),
-                        browser: matches!(target, services::Target::Url(..)),
-                        git: None,
-                        neovim: false,
-                    },
-                ) {
+                if let Some(action) = file_actions::menu(ui, file_actions::target_menu(&target)) {
                     self.app.terminal_action(ui.ctx(), session, &target, action);
                 }
             }
@@ -1885,15 +1967,8 @@ impl Viewer<'_> {
                 .show(|ui| {
                     ui.set_max_width(440.0);
                     appearance::target_header(ui, &target.display());
-                    if let Some(action) = file_actions::menu(
-                        ui,
-                        file_actions::FileMenu {
-                            file: matches!(target, services::Target::File(..)),
-                            browser: matches!(target, services::Target::Url(..)),
-                            git: None,
-                            neovim: false,
-                        },
-                    ) {
+                    if let Some(action) = file_actions::menu(ui, file_actions::target_menu(&target))
+                    {
                         self.app.terminal_action(ui.ctx(), session, &target, action);
                     }
                 });

@@ -161,13 +161,35 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
         interact_handle_opacity: 0.0,
         ..Default::default()
     };
-    style.spacing.button_padding = egui::vec2(8.0, 5.0);
+    let compact = theme.compact();
+    style.spacing.button_padding = if compact {
+        egui::vec2(6.0, 4.0)
+    } else {
+        egui::vec2(8.0, 5.0)
+    };
     style.spacing.text_edit_width = 220.0;
     style.spacing.indent = 14.0;
-    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-    style.spacing.interact_size.y = 28.0;
+    style.spacing.item_spacing = if compact {
+        egui::vec2(6.0, 6.0)
+    } else {
+        egui::vec2(8.0, 8.0)
+    };
+    style.spacing.interact_size.y = if compact { 24.0 } else { 28.0 };
     ctx.set_style_of(egui::Theme::Dark, style);
     ctx.set_theme(egui::Theme::Dark);
+}
+
+pub fn sidebar_action(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
+    ui.add_sized(
+        [22.0, 22.0],
+        egui::Button::image(
+            egui::Image::new(crate::icons::source(icon))
+                .tint(ICON_COLOR)
+                .fit_to_exact_size(egui::vec2(14.0, 14.0)),
+        )
+        .frame(false),
+    )
+    .on_hover_text(tip)
 }
 
 /// Sidebar lists stay wheel/trackpad-scrollable without a visible bar.
@@ -381,6 +403,13 @@ pub fn row(
             },
         );
     }
+    if trailing == "●" {
+        ui.painter().circle_filled(
+            egui::pos2(response.rect.right() - 10.0, response.rect.center().y),
+            3.5,
+            tint,
+        );
+    }
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(response.rect.left() + 12.0, response.rect.center().y),
         egui::vec2(16.0, 16.0),
@@ -420,17 +449,19 @@ pub fn row(
     ui.painter()
         .with_clip_rect(rect)
         .galley(position, galley, ui.visuals().text_color());
-    ui.painter().text(
-        egui::pos2(response.rect.right() - 5.0, response.rect.center().y),
-        egui::Align2::RIGHT_CENTER,
-        trailing,
-        FontId::proportional(12.0),
-        if trailing.contains(' ') {
-            ui.visuals().weak_text_color()
-        } else {
-            tint
-        },
-    );
+    if trailing != "●" {
+        ui.painter().text(
+            egui::pos2(response.rect.right() - 5.0, response.rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            trailing,
+            FontId::proportional(12.0),
+            if trailing.contains(' ') {
+                ui.visuals().weak_text_color()
+            } else {
+                tint
+            },
+        );
+    }
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)
     });

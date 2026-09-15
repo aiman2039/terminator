@@ -1,5 +1,15 @@
 # Validation evidence — 2026-09-08
 
+## HTML Blitz preview (2026-09-15)
+
+- Decision: no Chromium/CEF/webview. Local `.html`/`.htm`/`.xhtml` open as
+  GUI-only `Tab::Html` rastered by Blitz CPU (`anyrender_vello_cpu`). Header
+  always has Open in browser (`file://` / `Job::Browser`), plus Reload and
+  Open as text. Fail closed with an error label; never a blank tab.
+- DummyNet: no JS, no HTTP. Layout v4. Transitive `stylo` is MPL-2.0.
+- Unit: extension gate, 2 MiB oversize, inline HTML raster, open creates no
+  editor session. Native GUI screenshot was not recaptured in this change.
+
 ## Review regressions (2026-09-15)
 
 - `cargo test --workspace --all-features --locked`: 233 passed with local
@@ -1959,3 +1969,82 @@ report the failed attempt. Unrelated worker errors do not unlock a pending resta
 Focused GUI restart/installation and hook shutdown tests passed, including an
 actual detached failing helper and its preserved config environment. Native
 window restart behavior was not re-run for these fixes.
+
+## CI inbox follow-up (2026-09-15)
+
+The Agents inbox now lists in-scope terminal notices with navigation and
+capability-gated dismissal, excludes resolved agent notices, and opens resolved
+notice details outside the inline inbox. All 251 workspace tests passed with
+all features, including the three reported CI regressions. Workspace Clippy,
+formatting and diff checks passed. Native desktop rendering and hosted CI were
+not rerun.
+
+
+## Attention, diff selection, and restart recovery (2026-09-15)
+
+- Replaced the expanded attention strip with a bell and pending count. Resolved,
+  dismissed, and snoozed agent notices do not contribute to its count. Clicking
+  opens a bounded inbox popup. Cards use rounded borders, selection backgrounds,
+  and plain-text Markdown previews with visual ellipsis instead of cutting words.
+- Git menus expose Native and Neovim reviews independently of the default viewer.
+  Explicit Neovim selection retains capability-gated native fallback on older
+  services. The native viewer labels its existing split mode “Side by side”.
+- Reproduced failed restart in the disposable native installation fixture. The
+  helper's stderr was a pipe drained by the exiting GUI; its post-exit status
+  write could abort cleanup and leave an empty restart log. It now writes directly
+  to disk, with a separate silent stdin socket used only to observe helper exit.
+  No helper output depends on a reader in the old GUI. A subprocess regression
+  verifies that the helper continues and logs after its parent GUI process exits.
+- Restart results persist before relaunch. The reopened GUI reports cleanup errors
+  and checks the new generation, daemon path/version, and helper health. Idle
+  automatic repair also verifies the replacement. Restart preflight checks all
+  three sibling executables. Existing live-session confirmation remains required.
+- `cargo test --workspace --all-features --locked`: 256 passed outside the sandbox
+  for disposable sockets, processes, PTYs, and watchers. The final application
+  diff-routing change also passed all 188 application tests. Workspace build,
+  all-target/all-feature Clippy with `-D warnings`, rustfmt, and diff checks passed.
+- Native fixtures passed: `agent-sidebar`, `reviews`, `legacy-diff`, and
+  `installation`. They verify collapsed/open bell state on Git, navigation and
+  resolved counts, explicit Neovim review while Native is the default, native
+  side-by-side rendering without allocating a PTY, no unsupported legacy request,
+  visible restart errors, successful confirmed restart, and safe idle recovery.
+  The sidebar fixture uses explicit manual dismissal to keep its notification
+  pending through navigation before testing resolution.
+- Inspected native screenshots: [collapsed bell](screenshots/sidebar-recovery-2026-09-15/bell-collapsed.png),
+  [popup and cards](screenshots/sidebar-recovery-2026-09-15/bell-popup.png),
+  [side-by-side diff](screenshots/sidebar-recovery-2026-09-15/side-by-side.png), and
+  [restart error](screenshots/sidebar-recovery-2026-09-15/restart-error.png).
+- Validation used disposable state. Existing user edits were preserved; the live
+  installation and its daemon sessions were not replaced, restarted, or stopped.
+
+
+## Pending-change review fixes — 2026-09-15
+
+- Palette and worktree dialogs now suspend terminal input as well as app shortcuts.
+  A regression checks that input is restored after each dialog is dismissed.
+- Shortcut regressions cover captured function/navigation keys, macOS Control-only
+  event consumption, and modifier-order independence for Command+Control.
+- An egui pointer-event regression selects Custom, verifies the existing executable
+  remains editable, then selects a detected executable and verifies Custom exits.
+- Passed `cargo test -p terminator --bin terminator --all-features --locked`
+  (212 tests), `cargo clippy -p terminator --all-targets --all-features --locked -- -D warnings`,
+  `cargo fmt --all --check`, and `git diff --check`. Tests ran outside the sandbox
+  to permit isolated Unix sockets and filesystem watchers.
+- These are unit/headless egui checks, not native desktop or real-PTY validation.
+  No live GUI or daemon was restarted, and existing pending changes were preserved.
+
+## Follow-up review fixes — 2026-09-15
+
+- Explicit empty shortcut bindings remain disabled; missing bindings still receive
+  defaults. Palette file filtering precedes the 40-file result limit.
+- Worktree creation now completes through its own worker response after an
+  acknowledged add and inventory lookup. The worker canonicalizes the destination;
+  failed requests cannot leave pending navigation or terminal creation behind.
+- Five focused regressions cover empty bindings, searching beyond the first 40
+  files, failed worktree requests, symlink destination lookup, and opening the
+  requested project's terminal only when selected in the creation options.
+- Passed all 217 application tests with all features outside the sandbox, permitting
+  isolated sockets and filesystem watchers. Application all-target/all-feature
+  Clippy with `-D warnings`, rustfmt, and `git diff --check` passed.
+- These are unit/headless checks, not native GUI or real-daemon worktree validation.
+  Existing pending edits were preserved; no live sessions were restarted.

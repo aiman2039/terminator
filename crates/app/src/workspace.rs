@@ -42,7 +42,7 @@ impl Workspace {
             let workspace: Self = serde_json::from_value(terminator_core::sanitize_layout(value))
                 .context("Invalid project tabs")?;
             ensure!(
-                matches!(workspace.version, 2 | 3),
+                matches!(workspace.version, 2..=4),
                 "Unsupported project tab layout version"
             );
             ensure!(!workspace.tabs.is_empty(), "Project tab layout has no tabs");
@@ -100,8 +100,10 @@ impl Workspace {
             .any(|tab| tab.layout.find_tab(pane).is_some())
     }
     pub fn add(&mut self, id: String, pane: Tab) {
-        if matches!(pane, Tab::Image { .. }) {
-            self.version = 3;
+        match pane {
+            Tab::Html { .. } => self.version = 4,
+            Tab::Image { .. } => self.version = self.version.max(3),
+            _ => {}
         }
         self.tabs
             .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
@@ -209,7 +211,7 @@ mod tests {
                 .to_string()
                 .contains("focus")
         );
-        for version in [2, 3] {
+        for version in [2, 3, 4] {
             let mut saved = terminator_core::sanitize_layout(
                 serde_json::to_value(Workspace::from_layout(dock.clone())).unwrap(),
             );
@@ -241,6 +243,18 @@ mod tests {
         assert!(restored.contains(&Tab::Terminal("shell".into())));
         assert!(restored.contains(&Tab::Image {
             path: "/image.png".into()
+        }));
+        workspace.add(
+            "html".into(),
+            Tab::Html {
+                path: "/page.html".into(),
+            },
+        );
+        assert_eq!(workspace.version, 4);
+        let saved = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
+        let restored = Workspace::load(saved).unwrap();
+        assert!(restored.contains(&Tab::Html {
+            path: "/page.html".into()
         }));
     }
     #[test]

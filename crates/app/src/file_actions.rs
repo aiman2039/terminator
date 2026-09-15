@@ -1,4 +1,8 @@
+use crate::services::Target;
 use eframe::egui;
+use std::path::Path;
+use url::Url;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileAction {
     Open,
@@ -28,6 +32,35 @@ pub struct FileMenu {
     pub neovim: bool,
 }
 
+pub fn browser_document(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "html" | "htm" | "xhtml"))
+}
+
+pub fn file_url(path: &Path, cwd: &Path) -> Option<String> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    Url::from_file_path(absolute)
+        .ok()
+        .map(|url| url.to_string())
+}
+
+pub fn target_menu(target: &Target) -> FileMenu {
+    FileMenu {
+        file: matches!(target, Target::File(..)),
+        browser: match target {
+            Target::Url(_) => true,
+            Target::File(path, ..) => browser_document(path),
+        },
+        git: None,
+        neovim: false,
+    }
+}
+
 pub fn items(
     FileMenu {
         file,
@@ -42,12 +75,12 @@ pub fn items(
     [
         (working, "Native diff", FileAction::NativeWorkingDiff),
         (staged, "Native staged diff", FileAction::NativeStagedDiff),
+        (neovim && working, "Neovim diff", FileAction::WorkingDiff),
         (
-            neovim && working,
-            "Working tree diff",
-            FileAction::WorkingDiff,
+            neovim && staged,
+            "Neovim staged diff",
+            FileAction::StagedDiff,
         ),
-        (neovim && staged, "Staged diff", FileAction::StagedDiff),
         (file, "Open file", FileAction::Open),
         (file, "Open as text", FileAction::Text),
         (file, "Open in editor split", FileAction::Split),
@@ -132,11 +165,7 @@ mod tests {
             neovim: false,
         });
         assert_eq!(entries[0], ("Native diff", FileAction::NativeWorkingDiff));
-        assert!(
-            !entries
-                .iter()
-                .any(|(label, _)| *label == "Working tree diff")
-        );
+        assert!(!entries.iter().any(|(label, _)| *label == "Neovim diff"));
     }
 
     #[test]
@@ -162,6 +191,43 @@ mod tests {
             neovim: true,
         });
         assert_eq!(entries[0], ("Native diff", FileAction::NativeWorkingDiff));
-        assert!(entries.contains(&("Working tree diff", FileAction::WorkingDiff)));
+        assert!(entries.contains(&("Neovim diff", FileAction::WorkingDiff)));
+    }
+
+    #[test]
+    fn html_files_offer_open_in_browser() {
+        assert!(browser_document(Path::new("docs/index.HTML")));
+        assert!(browser_document(Path::new("a.htm")));
+        assert!(browser_document(Path::new("page.xhtml")));
+        assert!(!browser_document(Path::new("readme.md")));
+        let entries = items(FileMenu {
+            file: true,
+            browser: browser_document(Path::new("page.html")),
+            git: None,
+            neovim: false,
+        });
+        assert!(entries.contains(&("Open in browser", FileAction::Browser)));
+    }
+
+    #[test]
+    fn file_url_uses_the_file_scheme_and_resolves_relative_paths() {
+        let absolute = file_url(Path::new("/tmp/page.html"), Path::new("/")).expect("absolute");
+        assert!(absolute.starts_with("file://"));
+        assert!(absolute.ends_with("/tmp/page.html"));
+        let relative = file_url(Path::new("page.html"), Path::new("/tmp")).expect("relative");
+        assert_eq!(relative, absolute);
+    }
+
+    #[test]
+    fn url_targets_and_html_files_offer_the_browser_action() {
+        let url = target_menu(&Target::Url("https://example.com".into()));
+        assert!(url.browser);
+        assert!(!url.file);
+        let html = target_menu(&Target::File(Path::new("index.html").into(), None, None));
+        assert!(html.browser);
+        assert!(html.file);
+        let rust = target_menu(&Target::File(Path::new("main.rs").into(), None, None));
+        assert!(!rust.browser);
+        assert!(rust.file);
     }
 }

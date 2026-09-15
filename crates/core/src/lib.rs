@@ -378,6 +378,8 @@ impl Default for Settings {
                 ("split_right".into(), "command+shift+D".into()),
                 ("split_down".into(), "command+alt+D".into()),
                 ("next_pane".into(), "command+]".into()),
+                ("open_settings".into(), "command+,".into()),
+                ("open_palette".into(), "command+P".into()),
             ]
             .into(),
         }
