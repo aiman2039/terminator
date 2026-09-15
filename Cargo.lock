@@ -4126,7 +4126,7 @@ dependencies = [
 
 [[package]]
 name = "terminator"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -4165,7 +4165,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-core"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -4182,7 +4182,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-daemon"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -4202,7 +4202,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-hook"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -4222,7 +4222,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-integrations"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -5658,7 +5658,7 @@ checksum = "32ac00cd3f8ec9c1d33fb3e7958a82df6989c42d747bd326c822b1d625283547"
 
 [[package]]
 name = "xtask"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "base64",
