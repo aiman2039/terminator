@@ -1,0 +1,8 @@
+{
+  "name": "Terminator",
+  "tagline": "A native workspace for terminals and coding agents",
+  "description": "Free, open-source terminal workspace for macOS and Linux. Organize projects and splits, edit with Neovim, preview files, and reconnect to running sessions. Agent alerts require supported hooks; agent subscriptions are separate.",
+  "topics": ["Developer Tools", "Open Source", "Productivity"],
+  "source": "https://github.com/aiman2039/terminator",
+  "download": "https://github.com/aiman2039/terminator/releases/latest"
+}

@@ -3,6 +3,25 @@ use super::{AttentionAction, AttentionCard, attention_card, *};
 
 impl App {
     pub(super) fn modals(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        if cfg!(target_os = "macos")
+            && self
+                .preferences
+                .needs_setup(self.state_loaded, self.state.projects.len())
+            && !self.picker_active
+        {
+            self.popups
+                .window(ctx, "Choose your first project")
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.label("Choose a folder to begin. You can add more projects later.");
+                    if ui.button("Choose project folder").clicked() {
+                        self.add_project = true;
+                    }
+                    if ui.button("Skip").clicked() {
+                        self.preferences.setup_completed = true;
+                    }
+                });
+        }
         if self.add_project && !self.picker_active {
             #[cfg(feature = "test-support")]
             if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
@@ -24,6 +43,9 @@ impl App {
                 let _ = tx.send(Update::PickedProject(path, generation));
                 ctx.request_repaint();
             });
+        }
+        if self.close_workspace.is_none() && self.close_session.is_none() {
+            self.idle_close_fallback = None;
         }
         if let Some((project, tab_id)) = self.close_workspace.clone() {
             let sessions = self
@@ -64,6 +86,11 @@ impl App {
                         editor_close::Mode::Check,
                     );
                 }
+            } else if self.check_idle_close(
+                editor_close::Target::Workspace(project.clone(), tab_id.clone()),
+                live.clone(),
+            ) {
+                // Keep the original identity while the worker checks all terminals.
             } else {
                 let mut open = true;
                 self.popups
@@ -125,6 +152,10 @@ impl App {
                         editor_close::Mode::Check,
                     );
                 }
+            } else if self
+                .check_idle_close(editor_close::Target::Pane(sid.clone()), vec![sid.clone()])
+            {
+                // Confirmation follows only if daemon verification cannot close safely.
             } else {
                 self.popups
                     .window(

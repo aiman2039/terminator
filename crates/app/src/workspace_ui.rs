@@ -347,7 +347,7 @@ impl App {
                                     &label,
                                 )
                             });
-                            response.context_menu(|ui| {
+                            appearance::context_menu(&response, |ui| {
                                 if let Some(sid) = &sid {
                                     self.rename_action(ui, sid, RenameSurface::Workspace);
                                 }
@@ -617,37 +617,36 @@ impl TabViewer for Viewer<'_> {
                 rect.translate(egui::vec2(-24.0, 0.0)),
             );
         }
-        let response = ui
-            .menu_button("⌄", |ui| {
-                for (label, direction) in [
-                    ("New tab", None),
-                    ("Split up", Some("up")),
-                    ("Split down", Some("down")),
-                    ("Split left", Some("left")),
-                    ("Split right", Some("right")),
-                ] {
-                    let response = appearance::menu_item(
-                        ui,
-                        label,
-                        match direction {
-                            Some("up") => "PanelTopClose",
-                            Some("down") => "PanelBottomClose",
-                            Some("left") => "PanelLeftClose",
-                            Some("right") => "PanelRightClose",
-                            _ => "Plus",
-                        },
-                        "",
-                    );
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(ui.ctx(), label, response.rect);
-                    if response.clicked() {
-                        self.app.add_tab = Some((path, direction.map(str::to_owned)));
-                        ui.close();
-                    }
+        let response = appearance::menu_button(ui, "⌄", |ui| {
+            for (label, direction) in [
+                ("New tab", None),
+                ("Split up", Some("up")),
+                ("Split down", Some("down")),
+                ("Split left", Some("left")),
+                ("Split right", Some("right")),
+            ] {
+                let response = appearance::menu_item(
+                    ui,
+                    label,
+                    match direction {
+                        Some("up") => "PanelTopClose",
+                        Some("down") => "PanelBottomClose",
+                        Some("left") => "PanelLeftClose",
+                        Some("right") => "PanelRightClose",
+                        _ => "Plus",
+                    },
+                    "",
+                );
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), label, response.rect);
+                if response.clicked() {
+                    self.app.add_tab = Some((path, direction.map(str::to_owned)));
+                    ui.close();
                 }
-            })
-            .response
-            .on_hover_text("New tab or split this pane");
+            }
+        })
+        .response
+        .on_hover_text("New tab or split this pane");
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "pane-dropdown", response.rect);
         let _ = response;
@@ -851,7 +850,7 @@ impl TabViewer for Viewer<'_> {
                 if response.double_clicked() && !closing && !editing {
                     self.app.begin_rename(sid, RenameSurface::Pane);
                 }
-                response.context_menu(|ui| {
+                appearance::context_menu(&response, |ui| {
                     if let Some(pane) = pane {
                         self.context_menu(ui, &mut Tab::Terminal(sid.clone()), pane);
                     }
@@ -1117,23 +1116,24 @@ impl Viewer<'_> {
                 }
             }
         }
-        let focused = self.app.active_session.as_ref() == Some(sid)
+        let input_enabled = !self.app.picker_active
+            && !self.app.settings_open
+            && !self.app.add_project
+            && !self.app.notice_detail_modal_open()
+            && (self.app.close_session.is_none() || self.app.idle_close_pending.is_some())
+            && !self.app.editor_close_sessions.contains(sid)
+            && (self.app.close_workspace.is_none() || self.app.idle_close_pending.is_some())
+            && self.app.rename_session.is_none()
+            && !self.app.open_path
+            && self.app.search_session.is_none();
+        let focused = input_enabled
+            && self.app.active_session.as_ref() == Some(sid)
             && self
                 .app
                 .markdown
                 .entries
                 .get(sid)
-                .is_none_or(|p| p.editor_focused)
-            && !self.app.picker_active
-            && !self.app.settings_open
-            && !self.app.add_project
-            && !self.app.notice_detail_modal_open()
-            && self.app.close_session.is_none()
-            && !self.app.editor_close_sessions.contains(sid)
-            && self.app.close_workspace.is_none()
-            && self.app.rename_session.is_none()
-            && !self.app.open_path
-            && self.app.search_session.is_none();
+                .is_none_or(|p| p.editor_focused);
         if focused {
             let count = ui
                 .input_mut(|input| clipboard::take_image_paste(&mut input.events, input.modifiers));
@@ -1157,7 +1157,7 @@ impl Viewer<'_> {
             .set_focus(focused)
             .set_font(font)
             .set_size(ui.available_size());
-        let response = ui.add(view);
+        let response = ui.add_enabled(input_enabled, view);
         #[cfg(feature = "test-support")]
         {
             if session.kind == SessionKind::Shell {
@@ -1178,6 +1178,23 @@ impl Viewer<'_> {
             });
         }
         let backend = self.app.backends.get(sid).unwrap();
+        #[cfg(feature = "test-support")]
+        if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
+            let content = backend.last_content();
+            let snapshot = (
+                focused,
+                content.grid.display_offset(),
+                content.terminal_mode.bits(),
+            );
+            let key = egui::Id::new(("scroll-evidence", sid));
+            if ui.ctx().data(|d| d.get_temp::<(bool, usize, u32)>(key)) != Some(snapshot) {
+                eprintln!(
+                    "Scroll evidence: session={sid} focused={} offset={} modes={}",
+                    snapshot.0, snapshot.1, snapshot.2
+                );
+                ui.ctx().data_mut(|d| d.insert_temp(key, snapshot));
+            }
+        }
         let mouse_reporting = backend
             .last_content()
             .terminal_mode
@@ -1265,7 +1282,7 @@ impl Viewer<'_> {
                     .send(Job::ResolveTarget(key, text, session.cwd.clone()));
             }
         }
-        response.context_menu(|ui| {
+        appearance::context_menu(&response, |ui| {
             let command = if cfg!(target_os = "macos") {
                 "⌘"
             } else {
@@ -1354,6 +1371,7 @@ impl Viewer<'_> {
                 .id(egui::Id::new(("terminal-hover", sid.as_str())))
                 .anchor(anchor)
                 .open_bool(&mut open)
+                .style(appearance::menu_style)
                 .show(|ui| {
                     ui.set_max_width(440.0);
                     appearance::target_header(ui, &target.display());

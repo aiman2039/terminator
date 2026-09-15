@@ -1637,6 +1637,19 @@ glyphs were visually inspected in `/tmp/terminator-hebrew-git-review/reviews/rev
 Actual Hebrew keyboard-layout input and provider-specific behavior were not
 exercised. No installed application or live daemon was replaced.
 
+## Orca-style context menus (2026-09-14)
+
+Right-click menus, pane/sidebar dropdowns, and the terminal hover action popup
+now use Orca's dark menu tokens from `ui/context-menu.tsx` and `.dark` in
+`src/renderer/src/assets/main.css`: fill `#0a0a0a`, text `#fafafa`, muted
+`#a1a1a1`, hover/border white/14, 11px corners, 12px labels. App chrome and
+Settings windows keep the existing grey theme.
+
+Validation: all 125 app tests passed, including `menu_style_matches_orca_dark_tokens`
+and `context_menu_paints_orca_fill_and_text`. Strict terminator Clippy and
+formatting passed. Native right-click appearance was not re-captured; no
+installed application or live daemon was replaced.
+
 
 ## 2026-09-14: Idle upgrades and compact agent cards
 
@@ -1672,3 +1685,171 @@ background-download preference and manual check controls.
   Native delegate delivery, installed preference migration, signed feed delivery,
   download/install behavior, and live minute timing were not exercised. No user
   defaults, installed app, production feed, or live daemon was changed by validation.
+
+## 2026-09-15: Scrolling, local DMGs, access recovery, idle close and launch kit
+
+Implementation is local and separate from the running installation. Existing dirty
+backlog changes/task deletions and concurrent appearance/external-editor edits were
+preserved. No user agent configuration, installed application, or live daemon was
+replaced; no provider, Store submission, release, or Product Hunt post was launched.
+
+### Automated and native evidence
+
+- Workspace tests passed: 133 app, 28 core, 19 daemon, 5 hook, 6 integrations and
+  3 xtask tests (194 total). Run with `env -u TERMINATOR_SESSION_ID cargo test
+  --workspace --all-features --locked --offline` outside the filesystem/socket
+  sandbox. Strict workspace/all-target/all-feature Clippy and formatting passed.
+- Separate vendored terminal suite: 15 passed, including mouse-report routing,
+  fractional points/lines, viewport page units, Shift bypass under alternate-scroll
+  modes, and retained-history anchoring during new output. Temporary standalone
+  build products were kept outside the repository.
+- `cargo xtask integration` passed functional transport, conditional snapshots,
+  hook delivery, same-PID reconnect, restart-without-launch, worktree protections,
+  explicit shutdown cleanup, eight creation/shutdown races, 6 MiB lossless history,
+  stable helper removal/replacement, large snapshots and stalled attachment cleanup.
+  Its large-input check exposed and verified the fix for holding the close lock
+  during a blocking PTY write. Input admission/in-flight bookkeeping now excludes
+  idle closure while blocking writes remain outside the shared lock. Fixture
+  processes also clear inherited live session IDs/tokens.
+- `cargo xtask idle-close` passed zsh and bash initial/completed prompts, waiting
+  builtins, foreground commands, background/stopped jobs, partial input, active
+  agent state, all-target preflight, and stale generations. Unsupported sh retained
+  confirmation. Fish was not installed and was explicitly skipped.
+- Native `scrolling` passed at scales 1 and 2. Final metadata-only evidence is
+  `target/validation/native/scrolling/scroll-evidence.log`; the unfocused pane moved
+  0 → 5 → 7 → 0 while the focused pane stayed at zero. New sample output arrived
+  before the explicit downward scroll. Modes were 163969; captured build was 0.20.0.
+  These synthetic wheel events are not physical trackpad or live Codex proof.
+- Native `folder-access` passed: one successful cached entry survived a real Unix
+  PermissionDenied refresh, permissions were restored, Retry was exercised, the
+  file stayed intact and its shell PID stayed live. See
+  `target/validation/native/folder-access/access-evidence.log` and `recovered.png`.
+  This is temporary-directory chmod revocation, not a macOS TCC-policy test.
+  The existing 1,000-entry bound is now an explicit incomplete-listing error rather
+  than silently returning a truncated successful listing. First-run dismissal,
+  loaded inventory/hidden projects, forced same-path retry and stale results have
+  focused unit coverage; existing picker-cancellation coverage still passes.
+- Native `idle-close` passed: the real pane button closed a verified idle zsh pane
+  without confirmation while another pane remained blocked in a shell builtin.
+  Native `agent-sidebar`, `markdown`, `launch`, and `smoke --sessions 50 --seconds 5`
+  also passed. Captures live under `target/validation/native/`.
+- Background screenshot fixtures previously raised always-on-top windows while
+  filtering physical input, which could make scrolling in an obscured working
+  window appear stuck. They now start inactive, behind ordinary windows, with
+  mouse pass-through for synthetic input. Scrolling and later native captures
+  passed with that behavior. No fixture processes remained in the process check.
+
+### Packaging and launch artifacts
+
+- Two consecutive plain `cargo xtask local-dmg` builds succeeded. Build/package/DMG
+  seconds were 1.63/0.90/6.65 and 0.18/0.82/5.64; the second reused compilation.
+  The final plain artifact is `target/local-dmg/build-eF5Tbk/Terminator.dmg`.
+- Styled packaging used an existing temporary create-dmg 1.3.0 checkout, without
+  system installation: build/package/DMG 0.18/0.83/25.24 seconds. Artifact:
+  `target/local-dmg/build-15rSgH/Terminator.dmg`. Missing create-dmg reports an explicit
+  prerequisite error. Earlier plain and styled builds also used an output path
+  containing spaces under `/private/tmp/terminator local dmg/`.
+- Both final images passed hdiutil verification and were mounted read-only for
+  inspection, then detached. Each contained the Applications symlink, all three
+  executable components with 0755 permissions, resources/licenses, privacy usage
+  descriptions and a valid ad-hoc signature. The styled image contained its Finder
+  layout and background. `target/validation/local-dmg-inspection.json` records this.
+- An intentionally invalid build number failed packaging with `--timings` enabled.
+  Temporary output directories were removed, previous artifact hashes were
+  unchanged and a Cargo HTML timing report was produced. No installation occurred.
+- `docs/MAC_APP_STORE_FEASIBILITY.md` separates current Apple requirements, source
+  gaps and review questions; its roadmap is a proposal, not a submitted prototype.
+- `launch/product-hunt/` contains a 50-character tagline, 227-character description,
+  maker comment, three suggested topics, FAQ/checklist, 240×240 thumbnail and four
+  1270×760 gallery images. Native sample projects are atlas-web/atlas-api. The
+  attention event is explicitly synthetic; no agent provider was used. Source and
+  download links returned HTTP 200, with latest download resolving to v0.20.0.
+  Copy/dimensions/provenance are in `launch/product-hunt/validation.json`.
+
+### Runtime gates still open
+
+Installed Codex is 0.154.0; its help and the current official CLI documentation
+confirm `--no-alt-screen` as a per-launch override. No user Codex configuration was
+changed. Actual retained Codex conversation navigation in both modes remains open:
+repository instructions keep agent launches user-driven, and synthetic tests alone
+do not close that issue. Record GUI build, focus, modes, offsets and delivery counts
+without private message text when performing that check.
+
+Physical trackpad momentum/overlays, real TCC revocation/reselection and separate
+GUI-versus-shell/editor access, fish runtime, and Linux runtime remain unverified.
+The launch kit is prepared for review; posting and claims about the downloadable
+release's installation/signing still require the posting checklist. A rebuilt GUI
+or DMG has not replaced the running daemon; old daemons retain close confirmation.
+
+## 2026-09-15: User-approved live Codex history verification
+
+This follow-up supersedes the unverified live-Codex gate above. The user explicitly
+approved launching disposable Codex sessions. Tests used only fresh conversations
+requesting numbered public TSAMPLE/TUPDATE lines, with tools forbidden by the prompt,
+read-only sandboxing and hooks disabled for those invocations. No stored conversation
+was resumed. The saved configuration predates the test fixture and contains no new
+temporary trust entries. Disposable projects were under the already-trusted repository's
+ignored target directory; saved trust configuration was not edited.
+
+Installed Codex 0.154.0 passed **both normal launch and `--no-alt-screen`** against the
+current 0.20.0 GUI/daemon build:
+
+- A focused pane reached earlier transcript lines and returned to line 160.
+- An unfocused, hovered pane reached earlier lines while typing focus stayed in
+  the other pane, then returned to recent output.
+- Lines 104–135 remained unchanged in the visible history while the second real
+  model response streamed; later downward scrolling reached update line 100.
+- Closing/reopening the GUI preserved the daemon-owned sessions. Scrolling after
+  reconnect reached the earlier first conversation, not only the latest update.
+- The routing mode mask is now identical before/after reconnect (166033 in both
+  cases). Both tested invocations used inline terminal history in this environment;
+  application-mouse and alternate-screen routing retain separate unit coverage.
+
+Evidence: `target/validation/native/codex-live/summary.json`, `normal-evidence.json`,
+`no-alt-screen-evidence.json`, and the corresponding `*-focused-evidence.json` files.
+They contain mode/focus/offset metadata and public line numbers, not private message
+bodies. Screenshots and logs in that ignored directory belong only to these public
+fixtures. Physical trackpad input, TCC behavior, fish and Linux remain separate gates.
+
+### Fix found by the live check
+
+The daemon's vt100 snapshot did not preserve DEC focus-reporting mode 1004, and did
+not track explicit alternate-scroll mode 1007. Runtime callbacks now retain these
+bounded mode settings and append them to attachment snapshots. The same parser is
+fed in order around terminal resets so RIS clears extension state, including across
+byte chunks. Regression tests cover set/reset, combined parameters, mode queries,
+replay and terminal reset ordering. Live reconnect subsequently retained mode 166033
+instead of losing focus reporting and falling to 163985.
+
+Long-running background fixtures also exposed eframe's normal occlusion behavior:
+logic and IPC continue, but covered windows stop UI rendering. A compile-time
+`test-support` extension plus explicit fixture environment flags now enables UI
+passes while occluded. Test windows remain inactive, behind normal windows and
+click-through. Normal packaging does not enable that feature. Control connections
+also preserve the GUI's PTY dimensions, and Codex prompt submission uses bracketed
+paste followed by a separate Enter event.
+
+Validation after the parser fix: **196 workspace tests passed** (133 app, 28 core,
+21 daemon, 5 hook, 6 integrations, 3 xtask); strict Clippy and formatting passed.
+The full real-PTY integration suite also passed, including 6 MiB history bursts,
+mode/screen snapshots, stalled attachments, helper lifetime and shutdown races.
+
+### Final post-live builds
+
+The native scrolling (scales 1/2), idle-pane close, folder-access recovery and
+50-session smoke fixtures all passed again with occluded rendering enabled for
+background fixtures. Final formatting and strict Clippy checks passed.
+
+Rebuilt artifacts containing the reconnect fix:
+
+- Plain: `target/local-dmg/build-vbR38L/Terminator.dmg`
+  (build/package/DMG: 3.22/0.96/17.97 seconds).
+- Styled: `target/local-dmg/build-DZR4Je/Terminator.dmg`
+  (build/package/DMG: 0.17/0.87/24.27 seconds).
+
+Both passed image/signature verification and a fresh read-only mounted-content
+inspection; mounts were detached afterward. Inspection evidence is
+`target/validation/local-dmg-live-verified.json`. A final process check found no
+fixture GUIs/daemons; the original installed Terminator GUI and daemon remained
+running with their original PIDs. No installation or live-daemon replacement was
+performed.

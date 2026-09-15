@@ -153,7 +153,9 @@ impl Harness {
                 c.env_remove(key);
             }
         }
-        c.env_remove("TERMINATOR_RUNTIME_DIR")
+        c.env_remove("TERMINATOR_SESSION_ID")
+            .env_remove("TERMINATOR_SESSION_TOKEN")
+            .env_remove("TERMINATOR_RUNTIME_DIR")
             .env_remove("TERMINATOR_CONFIG_HOME")
             .env_remove("VIMINIT")
             .env_remove("EXINIT")

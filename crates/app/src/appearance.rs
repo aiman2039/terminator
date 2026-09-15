@@ -4,6 +4,16 @@ use terminator_core::appearance::{AppearanceConfig, rgb};
 /// Keep small navigation/action glyphs legible independently of secondary text.
 pub const ICON_COLOR: Color32 = Color32::from_rgb(242, 244, 248);
 
+/// Orca dark context menu fill: `--background` `#0a0a0a`, used as the solid
+/// stand-in for `dark:bg-[rgba(0,0,0,0.12)]` + `backdrop-blur-2xl`.
+pub const MENU_FILL: Color32 = Color32::from_rgb(10, 10, 10);
+/// Orca `--popover-foreground` `#fafafa`.
+pub const MENU_TEXT: Color32 = Color32::from_rgb(250, 250, 250);
+/// Orca `--muted-foreground` `#a1a1a1` (shortcuts use this at 85% in CSS).
+const MENU_MUTED: Color32 = Color32::from_rgb(161, 161, 161);
+/// Orca `dark:border-white/14` and `dark:focus:bg-white/14`.
+const MENU_LINE: Color32 = Color32::from_rgba_premultiplied(36, 36, 36, 36);
+
 pub fn color(value: &str) -> Color32 {
     let [r, g, b] = rgb(value).unwrap_or([209, 211, 217]);
     Color32::from_rgb(r, g, b)
@@ -208,6 +218,67 @@ pub fn tool_button(
     });
     response
 }
+/// Orca dark menu recipe from `ui/context-menu.tsx` and `.dark` tokens in `main.css`.
+pub fn menu_style(style: &mut egui::Style) {
+    egui::menu::menu_style(style);
+    for role in [TextStyle::Body, TextStyle::Button] {
+        style.text_styles.insert(role, FontId::proportional(12.0));
+    }
+    style
+        .text_styles
+        .insert(TextStyle::Small, FontId::proportional(11.0));
+    style.spacing.menu_margin = egui::Margin::same(4);
+    style.visuals.window_fill = MENU_FILL;
+    style.visuals.override_text_color = Some(MENU_TEXT);
+    style.visuals.weak_text_color = Some(MENU_MUTED);
+    style.visuals.window_stroke = egui::Stroke::new(1.0, MENU_LINE);
+    style.visuals.menu_corner_radius = egui::CornerRadius::same(11);
+    style.visuals.popup_shadow = egui::epaint::Shadow {
+        offset: [0, 16],
+        blur: 34,
+        spread: 0,
+        color: Color32::from_black_alpha(102),
+    };
+    style.visuals.widgets.hovered.bg_fill = MENU_LINE;
+    style.visuals.widgets.hovered.weak_bg_fill = MENU_LINE;
+    style.visuals.widgets.open.bg_fill = MENU_LINE;
+    style.visuals.widgets.open.weak_bg_fill = MENU_LINE;
+    for widget in [
+        &mut style.visuals.widgets.noninteractive,
+        &mut style.visuals.widgets.inactive,
+        &mut style.visuals.widgets.hovered,
+        &mut style.visuals.widgets.active,
+        &mut style.visuals.widgets.open,
+    ] {
+        widget.fg_stroke = egui::Stroke::new(1.0, MENU_TEXT);
+    }
+}
+
+pub fn context_menu(
+    response: &egui::Response,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) -> Option<egui::InnerResponse<()>> {
+    egui::Popup::context_menu(response)
+        .style(menu_style)
+        .show(add_contents)
+}
+
+pub fn menu_button<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let config = egui::menu::MenuConfig::new().style(menu_style);
+    let (response, inner) = if egui::menu::is_in_menu(ui) {
+        egui::menu::SubMenuButton::new(title).ui(ui, add_contents)
+    } else {
+        egui::menu::MenuButton::new(title)
+            .config(config)
+            .ui(ui, add_contents)
+    };
+    egui::InnerResponse::new(inner.map(|shown| shown.inner), response)
+}
+
 /// Flat full-width action row with a fixed icon column and optional shortcut.
 pub fn menu_item(ui: &mut egui::Ui, label: &str, icon: &str, shortcut: &str) -> egui::Response {
     ui.set_min_width(220.0);
@@ -1040,5 +1111,74 @@ mod row_tests {
         assert!(bar.cancel.rect.width() > 8.0);
         assert!(!bar.save.rect.intersects(bar.discard.rect));
         assert_eq!(bar.choice(), None);
+    }
+
+    #[test]
+    fn menu_style_matches_orca_dark_tokens() {
+        let mut style = egui::Style {
+            visuals: egui::Visuals::dark(),
+            ..Default::default()
+        };
+        menu_style(&mut style);
+        assert_eq!(style.visuals.window_fill, MENU_FILL);
+        assert_eq!(style.visuals.override_text_color, Some(MENU_TEXT));
+        assert_eq!(style.visuals.weak_text_color, Some(MENU_MUTED));
+        assert_eq!(style.visuals.window_stroke.color, MENU_LINE);
+        assert_eq!(
+            style.visuals.menu_corner_radius,
+            egui::CornerRadius::same(11)
+        );
+        assert_eq!(style.visuals.widgets.hovered.bg_fill, MENU_LINE);
+        assert_eq!(
+            style.text_styles.get(&TextStyle::Body),
+            Some(&FontId::proportional(12.0))
+        );
+    }
+
+    #[test]
+    fn context_menu_paints_orca_fill_and_text() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let mut fill = None;
+        let mut text = None;
+        let pos = egui::pos2(40.0, 20.0);
+        for events in [
+            vec![],
+            vec![egui::Event::PointerMoved(pos)],
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Secondary,
+                pressed: true,
+                modifiers: Default::default(),
+            }],
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Secondary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        ] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 300.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let response = ui.button("Terminal");
+                    context_menu(&response, |ui| {
+                        fill = Some(ui.visuals().window_fill);
+                        text = ui.visuals().override_text_color;
+                        menu_item(ui, "Copy", "Copy", "⌘C");
+                    });
+                },
+            );
+            output.textures_delta.clear();
+        }
+        assert_eq!(fill, Some(MENU_FILL));
+        assert_eq!(text, Some(MENU_TEXT));
     }
 }

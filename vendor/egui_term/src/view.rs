@@ -33,6 +33,8 @@ enum InputAction {
 pub struct TerminalViewState {
     is_dragged: bool,
     scroll_pixels: f32,
+    scroll_lines: f32,
+    scroll_time: Option<f64>,
     current_mouse_position_on_grid: TerminalGridPoint,
 }
 
@@ -140,13 +142,23 @@ impl<'a> TerminalView<'a> {
     }
 
     fn process_input(self, layout: &Response, state: &mut TerminalViewState) -> Self {
-        if !layout.has_focus() {
-            return self;
+        let wheel_target = layout.enabled() && layout.contains_pointer();
+        if !wheel_target {
+            state.scroll_pixels = 0.0;
+            state.scroll_lines = 0.0;
+            state.scroll_time = None;
         }
-
+        if wheel_target {
+            // Egui can smooth a wheel tick over subsequent frames without another raw event.
+            layout.ctx.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+        }
         let modifiers = layout.ctx.input(|i| i.modifiers);
         let events = layout.ctx.input(|i| i.events.clone());
         for event in events {
+            let wheel = matches!(event, egui::Event::MouseWheel { .. });
+            if !layout.enabled() || (!wheel && !layout.has_focus()) || (wheel && !wheel_target) {
+                continue;
+            }
             if matches!(
                 event,
                 egui::Event::PointerButton { .. } | egui::Event::MouseWheel { .. }
@@ -176,10 +188,43 @@ impl<'a> TerminalView<'a> {
                     &self.bindings_layout,
                     modifiers,
                 )),
-                egui::Event::MouseWheel { unit, delta, .. } => {
+                egui::Event::MouseWheel {
+                    unit,
+                    delta,
+                    phase,
+                    modifiers,
+                } => {
+                    let now = layout.ctx.input(|i| i.time);
+                    if matches!(phase, egui::TouchPhase::Start | egui::TouchPhase::Cancel)
+                        || state.scroll_time.is_some_and(|last| now - last > 0.5)
+                    {
+                        state.scroll_pixels = 0.0;
+                        state.scroll_lines = 0.0;
+                    }
+                    state.scroll_time = Some(now);
+                    if let Some(pos) = layout.ctx.input(|i| i.pointer.hover_pos()) {
+                        let content = self.backend.last_content();
+                        state.current_mouse_position_on_grid = TerminalBackend::selection_point(
+                            pos.x - layout.rect.min.x,
+                            pos.y - layout.rect.min.y,
+                            &content.terminal_size,
+                            0, // Application mouse reports use viewport coordinates.
+                        );
+                    }
+                    // Consume both representations before an enclosing ScrollArea sees them.
+                    layout.ctx.input_mut(|i| {
+                        i.events
+                            .retain(|event| !matches!(event, egui::Event::MouseWheel { .. }));
+                        i.smooth_scroll_delta = Vec2::ZERO;
+                    });
+                    if phase == egui::TouchPhase::Cancel {
+                        continue;
+                    }
                     input_actions.extend(process_mouse_wheel(
                         state,
                         self.font.font_measure(&layout.ctx).height,
+                        (layout.rect.height() / self.font.font_measure(&layout.ctx).height.max(1.0))
+                            as usize,
                         unit,
                         delta,
                         self.backend.last_content().terminal_mode,
@@ -517,21 +562,36 @@ fn process_keyboard_key(
 fn process_mouse_wheel(
     state: &mut TerminalViewState,
     font_size: f32,
+    page_lines: usize,
     unit: MouseWheelUnit,
     delta: Vec2,
     terminal_mode: TermMode,
     modifiers: Modifiers,
 ) -> Vec<InputAction> {
+    if !delta.is_finite() {
+        return vec![];
+    }
+    let font_size = font_size.max(1.0);
     let lines = match unit {
-        MouseWheelUnit::Line => (delta.y.signum() * delta.y.abs().ceil()) as i32,
+        MouseWheelUnit::Line | MouseWheelUnit::Page => {
+            state.scroll_lines += delta.y
+                * if unit == MouseWheelUnit::Page {
+                    page_lines as f32
+                } else {
+                    1.0
+                };
+            let lines = state.scroll_lines.trunc() as i32;
+            state.scroll_lines -= lines as f32;
+            lines
+        }
         MouseWheelUnit::Point => {
             state.scroll_pixels += delta.y;
             let lines = (state.scroll_pixels / font_size).trunc() as i32;
             state.scroll_pixels %= font_size;
             lines
         }
-        MouseWheelUnit::Page => 0,
     };
+    let lines = lines.clamp(-1000, 1000);
     if lines == 0 {
         return vec![];
     }
@@ -553,7 +613,11 @@ fn process_mouse_wheel(
             })
             .collect()
     } else {
-        vec![InputAction::BackendCall(BackendCommand::Scroll(lines))]
+        vec![InputAction::BackendCall(if modifiers.shift {
+            BackendCommand::ScrollLocal(lines)
+        } else {
+            BackendCommand::Scroll(lines)
+        })]
     }
 }
 
@@ -717,6 +781,7 @@ mod scroll_tests {
             let actions = process_mouse_wheel(
                 &mut state,
                 16.0,
+                24,
                 MouseWheelUnit::Line,
                 Vec2::new(0.0, delta),
                 TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE | TermMode::ALT_SCREEN,
@@ -747,6 +812,7 @@ mod scroll_tests {
             assert!(process_mouse_wheel(
                 &mut state,
                 16.0,
+                24,
                 MouseWheelUnit::Point,
                 Vec2::new(0.0, 4.0),
                 TermMode::empty(),
@@ -757,6 +823,7 @@ mod scroll_tests {
         let actions = process_mouse_wheel(
             &mut state,
             16.0,
+            24,
             MouseWheelUnit::Point,
             Vec2::new(0.0, 4.0),
             TermMode::empty(),
@@ -769,18 +836,60 @@ mod scroll_tests {
     }
 
     #[test]
-    fn shift_wheel_bypasses_application_mouse_reporting() {
-        let actions = process_mouse_wheel(
-            &mut TerminalViewState::default(),
+    fn fractional_wheel_lines_accumulate_and_pages_use_viewport_rows() {
+        let mut state = TerminalViewState::default();
+        assert!(process_mouse_wheel(
+            &mut state,
             16.0,
+            24,
             MouseWheelUnit::Line,
+            Vec2::new(0.0, 0.25),
+            TermMode::empty(),
+            Modifiers::NONE
+        )
+        .is_empty());
+        let actions = process_mouse_wheel(
+            &mut state,
+            16.0,
+            24,
+            MouseWheelUnit::Line,
+            Vec2::new(0.0, 0.75),
+            TermMode::empty(),
+            Modifiers::NONE,
+        );
+        assert!(matches!(
+            actions.as_slice(),
+            [InputAction::BackendCall(BackendCommand::Scroll(1))]
+        ));
+        let actions = process_mouse_wheel(
+            &mut state,
+            16.0,
+            24,
+            MouseWheelUnit::Page,
             Vec2::new(0.0, -1.0),
-            TermMode::MOUSE_REPORT_CLICK,
+            TermMode::empty(),
             Modifiers::SHIFT,
         );
         assert!(matches!(
             actions.as_slice(),
-            [InputAction::BackendCall(BackendCommand::Scroll(-1))]
+            [InputAction::BackendCall(BackendCommand::ScrollLocal(-24))]
+        ));
+    }
+
+    #[test]
+    fn shift_wheel_bypasses_application_mouse_reporting() {
+        let actions = process_mouse_wheel(
+            &mut TerminalViewState::default(),
+            16.0,
+            24,
+            MouseWheelUnit::Line,
+            Vec2::new(0.0, -1.0),
+            TermMode::MOUSE_REPORT_CLICK | TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL,
+            Modifiers::SHIFT,
+        );
+        assert!(matches!(
+            actions.as_slice(),
+            [InputAction::BackendCall(BackendCommand::ScrollLocal(-1))]
         ));
     }
 }

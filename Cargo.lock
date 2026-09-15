@@ -4115,6 +4115,7 @@ dependencies = [
  "cargo-husky",
  "dispatch2",
  "eframe",
+ "egui-winit",
  "egui_commonmark",
  "egui_dock",
  "egui_extras",

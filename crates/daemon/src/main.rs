@@ -1,5 +1,6 @@
 mod editor;
 mod helper;
+mod idle_close;
 mod notifications;
 mod review;
 mod terminal_env;
@@ -42,6 +43,10 @@ struct Runtime {
     subscribers: Vec<SyncSender<Response>>,
     token: String,
     ended: bool,
+    closing: bool,
+    inputs_in_flight: usize,
+    prompt: terminator_core::idle_close::PromptEvidence,
+    shell_executable: Option<std::path::PathBuf>,
 }
 /// A cloned input descriptor must not keep a failed output connection alive.
 struct Disconnect(UnixStream);
@@ -64,11 +69,38 @@ struct Shared {
     auth: String,
     focused: Mutex<(bool, Instant)>,
     worktree_operations: Mutex<()>,
+    terminal_operations: Mutex<()>,
     shutdown: AtomicBool,
     history: SyncSender<HistoryJob>,
     alerts: SyncSender<String>,
 }
 impl Shared {
+    fn forward_input(&self, runtime: &Arc<Mutex<Runtime>>, bytes: &[u8]) -> Result<()> {
+        let writer = {
+            let _operation = self.terminal_operations.lock().unwrap();
+            let mut runtime = runtime.lock().unwrap();
+            ensure!(!runtime.ended && !runtime.closing, "Session is closing");
+            runtime.prompt.input(bytes);
+            runtime.inputs_in_flight += 1;
+            runtime.writer.clone()
+        };
+        // A full PTY input buffer must not block prompt callbacks, other panes,
+        // or Stop. In-flight input makes idle-close ineligible until it finishes.
+        let result = {
+            let mut writer = writer.lock().unwrap();
+            writer.write_all(bytes).and_then(|_| writer.flush())
+        };
+        {
+            let _operation = self.terminal_operations.lock().unwrap();
+            let mut runtime = runtime.lock().unwrap();
+            runtime.inputs_in_flight -= 1;
+            if result.is_err() {
+                runtime.prompt.ready = false;
+            }
+        }
+        result.map_err(Into::into)
+    }
+
     fn history_clear(&self, session: Option<String>, remove: bool) -> Result<()> {
         let (tx, rx) = mpsc::channel();
         self.history.send(HistoryJob::Clear(session, remove, tx))?;
@@ -186,6 +218,13 @@ impl Shared {
             pixel_width: 0,
             pixel_height: 0,
         })?;
+        let shell_executable = if editor {
+            None
+        } else {
+            cmd.get_argv()
+                .first()
+                .and_then(|path| std::path::Path::new(path).canonicalize().ok())
+        };
         let mut child = pair
             .slave
             .spawn_command(cmd)
@@ -206,6 +245,10 @@ impl Shared {
             subscribers: vec![],
             token,
             ended: false,
+            closing: false,
+            inputs_in_flight: 0,
+            prompt: Default::default(),
+            shell_executable,
         }));
         let record = Session {
             review: is_review,
@@ -286,15 +329,14 @@ impl Shared {
                 let data = &bytes[..n];
                 {
                     let mut rt = read_rt.lock().unwrap();
-                    rt.parser.process(data);
+                    terminal_events::process(&mut rt.parser, data);
                     let replies = std::mem::take(&mut rt.parser.callbacks_mut().replies);
                     let notices = std::mem::take(&mut rt.parser.callbacks_mut().notices);
                     let frame = Response::Data(B64.encode(data));
                     rt.subscribers.retain(|s| s.try_send(frame.clone()).is_ok());
-                    let writer = rt.writer.clone();
                     drop(rt);
                     for reply in replies {
-                        let _ = writer.lock().unwrap().write_all(reply.as_bytes());
+                        let _ = shared.forward_input(&read_rt, reply.as_bytes());
                     }
                     for notice in notices {
                         let mut state = shared.state.lock().unwrap();
@@ -358,6 +400,28 @@ impl Shared {
     }
     fn handle(self: &Arc<Self>, request: Request) -> Result<Response> {
         match request {
+            Request::CloseIdleSessions {
+                generation,
+                sessions,
+            } => return self.close_idle(generation, sessions),
+            Request::ShellCommand { session } => {
+                let _operation = self.terminal_operations.lock().unwrap();
+                let runtime = self.runtime(&session)?;
+                let generation = runtime.lock().unwrap().prompt.begin();
+                return Ok(Response::Text(generation.to_string()));
+            }
+            Request::ShellPrompt {
+                session,
+                generation,
+                jobs_empty,
+            } => {
+                let _operation = self.terminal_operations.lock().unwrap();
+                self.runtime(&session)?
+                    .lock()
+                    .unwrap()
+                    .prompt
+                    .prompt(generation, jobs_empty);
+            }
             Request::WorktreeList { project } => {
                 let path = self
                     .state
@@ -592,6 +656,7 @@ impl Shared {
                 s.revision += 1;
             }
             Request::Hook(event) => {
+                let _operation = self.terminal_operations.lock().unwrap();
                 let should_os = self
                     .state
                     .lock()
@@ -619,6 +684,7 @@ impl Shared {
                 s.revision += 1;
             }
             Request::Stop { session } => {
+                let _operation = self.terminal_operations.lock().unwrap();
                 let rt = self.runtime(&session)?;
                 let mut s = self.state.lock().unwrap();
                 let rec = s
@@ -774,7 +840,10 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
             Request::Hook(e) => shared
                 .runtime(&e.terminal_session_id)
                 .is_ok_and(|r| r.lock().unwrap().token == env.auth),
-            Request::Cwd { session, .. } | Request::TerminalNotify { session, .. } => shared
+            Request::ShellCommand { session }
+            | Request::ShellPrompt { session, .. }
+            | Request::Cwd { session, .. }
+            | Request::TerminalNotify { session, .. } => shared
                 .runtime(session)
                 .is_ok_and(|r| r.lock().unwrap().token == env.auth),
             _ => false,
@@ -842,6 +911,7 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
                 snapshot.extend_from_slice(b"\x1b[?1049h");
             }
             snapshot.extend(r.parser.screen().state_formatted());
+            snapshot.extend(r.parser.callbacks().modes_formatted());
             write_frame(&mut stream, &Response::Data(B64.encode(snapshot)))?;
             r.subscribers.push(tx);
         }
@@ -854,22 +924,18 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
         thread::spawn(move || {
             let _disconnect = input_disconnect;
             while let Ok(req) = read_frame::<Request>(&mut input) {
-                let mut r = input_rt.lock().unwrap();
                 match req {
                     Request::Input { data } => {
-                        let writer = r.writer.clone();
-                        drop(r);
-                        if let Ok(bytes) = B64.decode(data) {
-                            let mut writer = writer.lock().unwrap();
-                            if writer.write_all(&bytes).is_err() {
-                                break;
-                            }
-                            let _ = writer.flush();
+                        if let Ok(bytes) = B64.decode(data)
+                            && input_shared.forward_input(&input_rt, &bytes).is_err()
+                        {
+                            break;
                         }
                     }
                     Request::Resize { rows, cols }
                         if rows > 0 && cols > 0 && rows <= 500 && cols <= 1000 =>
                     {
+                        let mut r = input_rt.lock().unwrap();
                         let _ = r.master.resize(PtySize {
                             rows,
                             cols,
@@ -948,6 +1014,7 @@ fn main() -> Result<()> {
     state.recover();
     state.daemon_version = Some(env!("CARGO_PKG_VERSION").into());
     state.capabilities = vec![
+        terminator_core::idle_close::CAPABILITY.into(),
         STABLE_HELPER_CAPABILITY.into(),
         SHUTDOWN_IF_IDLE_CAPABILITY.into(),
         snapshot::CAPABILITY.into(),
@@ -969,6 +1036,7 @@ fn main() -> Result<()> {
         auth,
         focused: Mutex::new((false, Instant::now())),
         worktree_operations: Mutex::new(()),
+        terminal_operations: Mutex::new(()),
         shutdown: AtomicBool::new(false),
         history,
         alerts,

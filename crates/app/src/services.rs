@@ -112,16 +112,40 @@ pub struct ContextData {
 pub fn entries(path: &Path) -> Result<Vec<Entry>> {
     entries_known(path, git(path, &["rev-parse", "--show-toplevel"]).is_ok())
 }
+#[derive(Clone, Debug)]
+pub struct DirectoryError {
+    pub path: PathBuf,
+    pub kind: std::io::ErrorKind,
+    pub message: String,
+}
+
+pub fn directory_result(
+    path: &Path,
+    in_git: bool,
+) -> std::result::Result<Vec<Entry>, DirectoryError> {
+    entries_known(path, in_git).map_err(|error| DirectoryError {
+        path: path.into(),
+        kind: error
+            .downcast_ref::<std::io::Error>()
+            .map_or(std::io::ErrorKind::Other, std::io::Error::kind),
+        message: error.to_string(),
+    })
+}
+
 pub fn entries_known(path: &Path, in_git: bool) -> Result<Vec<Entry>> {
-    let mut entries = fs::read_dir(path)?
-        .take(1000)
-        .filter_map(|e| e.ok())
-        .map(|e| Entry {
-            ignored: e.file_name() == ".git",
-            path: e.path(),
-            directory: e.file_type().is_ok_and(|t| t.is_dir()),
-        })
-        .collect::<Vec<_>>();
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        anyhow::ensure!(
+            entries.len() < 1000,
+            "Directory exceeds the 1,000-entry display limit"
+        );
+        entries.push(Entry {
+            ignored: entry.file_name() == ".git",
+            path: entry.path(),
+            directory: entry.file_type()?.is_dir(),
+        });
+    }
     // Ask Git so nested ignore files, negations, global excludes and tracked
     // files use the same rules as the user's repository. Keep dotfiles visible.
     if in_git {
@@ -569,5 +593,24 @@ mod tests {
         assert_eq!(line, Some(12));
         let target = resolve_target("space file.rs:12:3", tmp.path()).unwrap();
         assert!(matches!(target, Target::File(_, Some(12), Some(3))));
+    }
+    #[test]
+    fn empty_and_failed_directory_reads_are_distinct() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(directory_result(dir.path(), false).unwrap().is_empty());
+        let missing = dir.path().join("missing");
+        let error = directory_result(&missing, false).unwrap_err();
+        assert_eq!(error.path, missing);
+        assert_eq!(error.kind, std::io::ErrorKind::NotFound);
+        assert!(!error.message.is_empty());
+    }
+    #[test]
+    fn incomplete_listing_reports_its_limit_instead_of_returning_partial_success() {
+        let dir = tempfile::tempdir().unwrap();
+        for n in 0..1001 {
+            fs::write(dir.path().join(n.to_string()), "").unwrap();
+        }
+        let error = directory_result(dir.path(), false).unwrap_err();
+        assert!(error.message.contains("1,000-entry display limit"));
     }
 }

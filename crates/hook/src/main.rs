@@ -14,7 +14,7 @@ fn main() -> Result<()> {
     match args.first().map(String::as_str) {
         Some("ctl") => control::run(&args[1..]),
         Some("attach") => attach(args.get(1).context("Missing session ID")?, &args[2..]),
-        Some("event" | "emit" | "cwd") => {
+        Some("event" | "emit" | "cwd" | "prompt") => {
             // Observational hooks never block or alter an agent's decision.
             let _ = hook(&args);
             Ok(())
@@ -93,7 +93,17 @@ fn hook(args: &[String]) -> Result<()> {
             .context("Hook is outside an app-owned session")?;
         (session.id.clone(), paths.token()?)
     };
-    let request = if args[0] == "cwd" {
+    let request = if args[0] == "prompt" {
+        if args.get(1).is_some_and(|s| s == "begin") {
+            Request::ShellCommand { session: sid }
+        } else {
+            Request::ShellPrompt {
+                session: sid,
+                generation: args.get(1).context("Missing prompt generation")?.parse()?,
+                jobs_empty: args.get(2).is_some_and(String::is_empty),
+            }
+        }
+    } else if args[0] == "cwd" {
         Request::Cwd {
             session: sid,
             path: args.get(1).context("Missing cwd")?.into(),
@@ -131,7 +141,12 @@ fn hook(args: &[String]) -> Result<()> {
     };
     let mut stream = connect(&paths, request, Some(token))?;
     stream.set_read_timeout(Some(Duration::from_millis(500)))?;
-    let _: Response = read_frame(&mut stream)?;
+    let response: Response = read_frame(&mut stream)?;
+    if args[0] == "prompt"
+        && let Response::Text(generation) = response
+    {
+        println!("{generation}");
+    }
     Ok(())
 }
 fn agent_parent() -> (String, Option<String>, Vec<u32>) {

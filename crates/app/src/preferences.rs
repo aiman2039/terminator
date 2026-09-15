@@ -18,6 +18,7 @@ pub enum SidebarTool {
 #[serde(default)]
 pub struct UiPreferences {
     pub version: u32,
+    pub setup_completed: bool,
     pub expanded: HashMap<String, bool>,
     pub history_expanded: HashMap<String, bool>,
     pub tool: SidebarTool,
@@ -35,6 +36,7 @@ impl Default for UiPreferences {
     fn default() -> Self {
         Self {
             version: 1,
+            setup_completed: false,
             expanded: HashMap::new(),
             history_expanded: HashMap::new(),
             tool: SidebarTool::Explorer,
@@ -51,6 +53,9 @@ impl Default for UiPreferences {
     }
 }
 impl UiPreferences {
+    pub fn needs_setup(&self, state_loaded: bool, project_count: usize) -> bool {
+        state_loaded && project_count == 0 && !self.setup_completed
+    }
     pub fn load(data: &Path) -> Result<Self> {
         let bytes = match fs::read(data.join("ui-preferences.json")) {
             Ok(bytes) => bytes,
@@ -105,6 +110,7 @@ mod tests {
         p.expanded.insert("b".into(), true);
         p.toggle(SidebarTool::Agents);
         p.toggle(SidebarTool::Agents);
+        p.setup_completed = true;
         p.left_agents = true;
         p.width = 410.0;
         p.all_projects = true;
@@ -127,5 +133,15 @@ mod tests {
         assert!(UiPreferences::load(dir.path()).is_err());
         fs::write(dir.path().join("ui-preferences.json"), r#"{"width":900}"#).unwrap();
         assert_eq!(UiPreferences::load(dir.path()).unwrap().width, 480.0);
+    }
+    #[test]
+    fn setup_waits_for_inventory_and_counts_hidden_projects() {
+        let mut preferences = UiPreferences::default();
+        assert!(!preferences.needs_setup(false, 0));
+        assert!(preferences.needs_setup(true, 0));
+        preferences.hidden_projects.insert("hidden".into());
+        assert!(!preferences.needs_setup(true, 1));
+        preferences.setup_completed = true;
+        assert!(!preferences.needs_setup(true, 0));
     }
 }

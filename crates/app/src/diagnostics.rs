@@ -39,6 +39,12 @@ impl Diagnostics {
         if self.path.is_none() {
             return;
         }
+        if let Some(path) = std::env::var_os("TERMINATOR_TEST_ACTIONS_PATH")
+            && let Ok(bytes) = std::fs::read(path)
+            && let Ok(actions) = serde_json::from_slice::<Vec<FixtureAction>>(&bytes)
+        {
+            self.actions = actions;
+        }
         // A fixture owns its input. Do not let concurrent desktop typing or
         // clipboard shortcuts reach its shells/editors or leak into captures.
         if std::env::var_os("TERMINATOR_TEST_NATIVE_INPUT").is_none() {
@@ -78,10 +84,22 @@ impl Diagnostics {
             input.events.push(egui::Event::PointerMoved(pos));
             if let Some(delta) = action.scroll {
                 input.events.push(egui::Event::MouseWheel {
-                    unit: egui::MouseWheelUnit::Point,
-                    phase: egui::TouchPhase::Move,
-                    delta: egui::vec2(0.0, delta),
-                    modifiers: Default::default(),
+                    unit: match action.wheel_unit.as_deref() {
+                        Some("line") => egui::MouseWheelUnit::Line,
+                        Some("page") => egui::MouseWheelUnit::Page,
+                        _ => egui::MouseWheelUnit::Point,
+                    },
+                    phase: match action.wheel_phase.as_deref() {
+                        Some("start") => egui::TouchPhase::Start,
+                        Some("end") => egui::TouchPhase::End,
+                        Some("cancel") => egui::TouchPhase::Cancel,
+                        _ => egui::TouchPhase::Move,
+                    },
+                    delta: egui::vec2(action.scroll_x.unwrap_or_default(), delta),
+                    modifiers: egui::Modifiers {
+                        shift: action.shift,
+                        ..Default::default()
+                    },
                 });
             } else if let Some(key) = &action.key {
                 if let Some(key) = egui::Key::from_name(key) {
@@ -124,10 +142,17 @@ impl Diagnostics {
                 });
                 self.release = Some((pos, button));
             }
+            if action.capture {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+            }
             eprintln!("Fixture action: {}", action.target);
             self.action_index += 1;
         }
     }
+    pub fn actions_completed(&self) -> usize {
+        self.action_index
+    }
+
     pub fn frame(&mut self, ctx: &egui::Context) {
         let Some(path) = &self.path else { return };
         if !self.scale_configured {
@@ -147,9 +172,16 @@ impl Diagnostics {
                 }
             });
             ctx.set_pixels_per_point(scale);
-            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
-                egui::WindowLevel::AlwaysOnTop,
-            ));
+            let background = std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some();
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if background {
+                egui::WindowLevel::AlwaysOnBottom
+            } else {
+                egui::WindowLevel::AlwaysOnTop
+            }));
+            if background && std::env::var_os("TERMINATOR_TEST_NATIVE_INPUT").is_none() {
+                // Synthetic fixtures must not intercept the user's real wheel or clicks.
+                ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(true));
+            }
             self.scale_configured = true;
             if std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_none() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -162,7 +194,17 @@ impl Diagnostics {
                 .and_then(|s| s.parse::<f32>().ok())
                 .unwrap_or(1.0);
             if (ctx.pixels_per_point() - scale).abs() < 0.01 {
-                let size = if std::env::var_os("TERMINATOR_TEST_NARROW").is_some() {
+                let custom_size = std::env::var("TERMINATOR_TEST_SIZE")
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<[f32; 2]>(&s).ok())
+                    .filter(|s| {
+                        s.iter().all(|n| n.is_finite())
+                            && (450.0..=2000.0).contains(&s[0])
+                            && (275.0..=1200.0).contains(&s[1])
+                    });
+                let size = if let Some([width, height]) = custom_size {
+                    egui::vec2(width, height)
+                } else if std::env::var_os("TERMINATOR_TEST_NARROW").is_some() {
                     egui::vec2(900.0, 650.0)
                 } else {
                     egui::vec2(1440.0, 900.0)
@@ -260,11 +302,21 @@ struct FixtureAction {
     at_ms: u64,
     target: String,
     #[serde(default)]
+    capture: bool,
+    #[serde(default)]
     hover: bool,
     #[serde(default)]
     right_click: bool,
     #[serde(default)]
     scroll: Option<f32>,
+    #[serde(default)]
+    scroll_x: Option<f32>,
+    #[serde(default)]
+    wheel_unit: Option<String>,
+    #[serde(default)]
+    wheel_phase: Option<String>,
+    #[serde(default)]
+    shift: bool,
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]

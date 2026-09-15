@@ -112,3 +112,26 @@ disabled repair with live sessions, and successful repair after the last session
 finishes. It uses only disposable data and executables. `cargo xtask integration`
 also verifies that removing the original installation leaves the daemon's private
 helper executable, original session identities and new terminal creation intact.
+
+### Local launch preparation
+
+- `cargo xtask local-dmg [--release] [--styled] [--output DIR] [--timings]`
+  builds the current Mac architecture and creates a unique directory beneath the
+  output root (default `target/local-dmg`). Debug is the default. Plain compressed
+  DMGs use `hdiutil`; styled DMGs require `create-dmg` and a desktop. Both include
+  the existing ad-hoc-signed app and Applications shortcut. Builds reuse Cargo's
+  target directory and never install or restart the live daemon.
+- `cargo xtask idle-close` exercises prompt readiness against isolated real shells.
+- `cargo xtask gui scrolling` exercises unfocused hover scrolling with sample history.
+  Input fixtures support `wheel_unit` (`point`, `line`, `page`), `wheel_phase`
+  (`start`, `move`, `end`, `cancel`), `scroll`, `scroll_x`, `shift`, and hover-only actions.
+- After a test-support build, `cargo xtask gui launch` captures public sample scenes;
+  `cargo xtask launch-assets` composes `launch/product-hunt/` images and checks copy
+  lengths and dimensions. No provider is launched and nothing is posted.
+
+`cargo xtask gui codex-live` is an explicit, account-backed live test: it starts new
+Codex conversations containing public numbered lines. It is excluded from `gui all`
+and must only be run with user authorization. `TERMINATOR_TEST_CODEX_FOCUS_ONLY=1`
+limits it to focused/hovered navigation. Both normal and `--no-alt-screen` launches
+are checked. The fixture does not resume stored account conversations or edit saved
+Codex configuration. JSON evidence contains line numbers and terminal metadata.

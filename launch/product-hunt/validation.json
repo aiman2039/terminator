@@ -1,0 +1,46 @@
+{
+  "date": "2026-09-15",
+  "gui_version": "0.20.0",
+  "source": "modified local checkout",
+  "tagline_characters": 50,
+  "description_characters": 227,
+  "source_http_status": 200,
+  "download_http_status": 200,
+  "download_release": "v0.20.0",
+  "native_fixture": "cargo xtask gui launch",
+  "sample_data_only": true,
+  "agent_event_is_synthetic": true,
+  "provider_launched": false,
+  "images": [
+    {
+      "file": "01-projects-splits.png",
+      "width": 1270,
+      "height": 760,
+      "sha256": "33734fd9934605eb5462892ad09b59be63b13ebcadc3351ee097cb4d51a05706"
+    },
+    {
+      "file": "02-agent-attention.png",
+      "width": 1270,
+      "height": 760,
+      "sha256": "6e30605fe5331363aa0d0e3ff828aacb2af929d77d72fc6c3e416d335ddb37da"
+    },
+    {
+      "file": "03-editing-previews.png",
+      "width": 1270,
+      "height": 760,
+      "sha256": "b68499d85a18a34468a6a54d5bf5dbd1f909fde6c11541cd44d4f4be06bdba9c"
+    },
+    {
+      "file": "04-reconnection.png",
+      "width": 1270,
+      "height": 760,
+      "sha256": "038a0dfc1c86707c2daa386a43ca941af1233c1a4ecdd39b325a466d0ffac5d1"
+    },
+    {
+      "file": "thumbnail.png",
+      "width": 240,
+      "height": 240,
+      "sha256": "2221d3bb12a090ac4be90937d8f0aafed1236a74e5c36eccd4db4e31b4d5078c"
+    }
+  ]
+}

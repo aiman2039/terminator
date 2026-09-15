@@ -132,8 +132,7 @@ fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Con
                     .iter()
                     .any(|p| p == &canonical || p.parent() == Some(canonical.as_path()));
             if affected {
-                let entries =
-                    services::entries_known(path, context.root.is_some()).unwrap_or_default();
+                let entries = services::directory_result(path, context.root.is_some());
                 directory_cache.insert(path.clone(), entries);
             }
             if let Some(entries) = directory_cache.get(path) {
@@ -200,7 +199,7 @@ mod tests {
             };
             if dirs
                 .iter()
-                .flat_map(|(_, entries)| entries)
+                .flat_map(|(_, entries)| entries.as_ref().into_iter().flatten())
                 .any(|e| e.path.ends_with("saved.rs"))
             {
                 break;
@@ -225,8 +224,30 @@ mod tests {
         assert!(
             !dirs
                 .iter()
-                .flat_map(|(_, entries)| entries)
+                .flat_map(|(_, entries)| entries.as_ref().into_iter().flatten())
                 .any(|e| e.path.ends_with("saved.rs"))
         );
+    }
+    #[test]
+    fn forced_retry_refreshes_an_unchanged_path_without_a_watch_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let coordinator = spawn(tx, eframe::egui::Context::default());
+        for generation in [1, 2] {
+            coordinator
+                .send(Some(Request {
+                    cwd: dir.path().into(),
+                    generation,
+                    directories: vec![dir.path().into()],
+                }))
+                .unwrap();
+            let Update::Refresh(actual, _, dirs, _) =
+                rx.recv_timeout(Duration::from_secs(5)).unwrap()
+            else {
+                panic!("Expected refresh");
+            };
+            assert_eq!(actual, generation);
+            assert!(dirs[0].1.as_ref().unwrap().is_empty());
+        }
     }
 }

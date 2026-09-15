@@ -207,3 +207,39 @@ The command refuses execution inside a managed session and does not force-kill
 processes. Unsaved editor buffers are discarded only under the explicit stop-all
 option. Normal daemon teardown explicitly removes its private helper directory
 before releasing the lock, even when background worker Arcs outlive main.
+
+## Verified idle-shell closure
+
+`close-idle-sessions-v1` gates a daemon-generation-scoped batch request. The GUI
+uses one asynchronous coordinator for existing pane/workspace close intents;
+editors and mixed editor/terminal tabs retain their existing confirmation flow.
+A pending workspace close captures its contents and preserves the view if they
+change before the result arrives. Older daemons retain confirmation.
+
+A dedicated terminal-operation lock serializes input admission, automatic terminal
+reply admission, prompt acknowledgments, agent events, and final idle-close checks.
+Blocking PTY writes run outside that lock; an in-flight counter makes idle closure
+ineligible until they finish, so a full input buffer cannot block Stop or other panes. The
+daemon checks the originally launched shell executable/PID/start time, actual
+thread waiting state on macOS, foreground PTY process group, live children, agent
+lifecycle, and authenticated prompt evidence. Every target is preflighted before
+any signal; each target is rechecked immediately before SIGHUP. Results distinguish
+confirmed exits from signals whose exit could not be verified. Partial signalling
+cannot be rolled back; the GUI preserves its view and reports outcomes.
+
+Input invalidates readiness and advances a daemon-owned generation. Shell command
+callbacks establish a candidate generation; prompt callbacks can acknowledge only
+that candidate with no queued submissions or jobs. Multiline input and builtin
+input can conservatively retain confirmation. Existing Bash DEBUG traps/functrace,
+command-substituting prompts, and unsupported readiness configurations also retain
+confirmation. The GUI never infers readiness from terminal text. Fish's wrapper
+acknowledges only after its original prompt returns, and retains confirmation when
+a right prompt is present or the original prompt cannot be copied. Fish runtime
+validation is outstanding on this workstation.
+
+DEC focus-reporting (1004) and alternate-scroll (1007) settings are retained through
+vt100 extension callbacks and replayed after the formatted attachment snapshot.
+A reset-boundary feeder clears extension modes in stream order on RIS; it does not
+create another screen model or infer lifecycle from text. Long-running native
+fixtures may opt into rendering while occluded through the test-support build;
+normal application occlusion/minimization behavior is preserved.

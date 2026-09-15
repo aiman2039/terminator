@@ -31,6 +31,8 @@ pub type SelectionType = AlacrittySelectionType;
 pub enum BackendCommand {
     Write(Vec<u8>),
     Scroll(i32),
+    /// Scroll retained history without translating wheel movement into input.
+    ScrollLocal(i32),
     Resize(Size, Size),
     SelectStart(SelectionType, f32, f32),
     SelectUpdate(f32, f32),
@@ -221,6 +223,9 @@ impl TerminalBackend {
             BackendCommand::Write(input) => {
                 self.write(input);
                 term.scroll_display(Scroll::Bottom);
+            }
+            BackendCommand::ScrollLocal(delta) => {
+                term.scroll_display(Scroll::Delta(delta));
             }
             BackendCommand::Scroll(delta) => {
                 self.scroll(&mut term, delta);
@@ -785,6 +790,19 @@ fn token_range(chars: &[char], hit: usize) -> Option<std::ops::Range<usize>> {
 #[cfg(test)]
 mod target_tests {
     use super::*;
+    #[test]
+    fn new_output_keeps_retained_history_anchored_until_scrolling_down() {
+        let mut grid = Grid::<Cell>::new(3, 10, 100);
+        grid.scroll_up(&(Line(0)..Line(3)), 8);
+        grid.scroll_display(Scroll::Delta(3));
+        let offset = grid.display_offset();
+        assert_eq!(offset, 3);
+        grid.scroll_up(&(Line(0)..Line(3)), 1);
+        assert_eq!(grid.display_offset(), offset + 1);
+        grid.scroll_display(Scroll::Delta(-100));
+        assert_eq!(grid.display_offset(), 0);
+    }
+
     #[test]
     fn copying_selection_preserves_newlines_and_offscreen_history() {
         let mut content = RenderableContent {

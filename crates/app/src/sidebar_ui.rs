@@ -183,26 +183,24 @@ impl App {
                 .cloned()
                 .collect();
             if !hidden.is_empty() {
-                let menu = ui
-                    .menu_button("Removed", |ui| {
-                        for project in hidden {
-                            let response =
-                                appearance::menu_item(ui, &project.name, "FolderOpen", "")
-                                    .on_hover_text(project.path.display().to_string());
-                            #[cfg(feature = "test-support")]
-                            diagnostics::record(
-                                ui.ctx(),
-                                &format!("restore-project:{}", project.id),
-                                response.rect,
-                            );
-                            if response.clicked() {
-                                self.select_project(project.id);
-                                ui.close();
-                            }
+                let menu = appearance::menu_button(ui, "Removed", |ui| {
+                    for project in hidden {
+                        let response = appearance::menu_item(ui, &project.name, "FolderOpen", "")
+                            .on_hover_text(project.path.display().to_string());
+                        #[cfg(feature = "test-support")]
+                        diagnostics::record(
+                            ui.ctx(),
+                            &format!("restore-project:{}", project.id),
+                            response.rect,
+                        );
+                        if response.clicked() {
+                            self.select_project(project.id);
+                            ui.close();
                         }
-                    })
-                    .response
-                    .on_hover_text("Restore a project to the sidebar");
+                    }
+                })
+                .response
+                .on_hover_text("Restore a project to the sidebar");
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "removed-projects", menu.rect);
                 let _ = menu;
@@ -289,7 +287,7 @@ impl App {
                         if response.clicked() {
                             self.select_project(p.id.clone());
                         }
-                        response.context_menu(|ui| {
+                        appearance::context_menu(&response, |ui| {
                             if appearance::menu_item(ui, "Remove project from sidebar", "X", "")
                                 .on_hover_text("Keep files, layouts, and running sessions. Restore it from Removed or add the folder again.")
                                 .clicked() {
@@ -419,7 +417,7 @@ impl App {
         if response.clicked() && !editing {
             self.go_session(&session.id);
         }
-        response.context_menu(|ui| {
+        appearance::context_menu(&response, |ui| {
             self.rename_action(ui, &session.id, RenameSurface::Sidebar);
             if appearance::menu_item(ui, "Open session", "Terminal", "").clicked() {
                 self.go_session(&session.id);
@@ -446,6 +444,34 @@ impl App {
             return;
         }
         self.visible_dirs.push(path.into());
+        if let Some(error) = self.directory_errors.get(path).cloned() {
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                format!(
+                    "Cannot refresh {} ({:?}): {}",
+                    error.path.display(),
+                    error.kind,
+                    error.message
+                ),
+            );
+            if self.dirs.contains_key(path) {
+                ui.weak("Showing the last successful listing.");
+            }
+            ui.horizontal(|ui| {
+                let retry = ui.button("Retry");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "directory-retry", retry.rect);
+                if retry.clicked() {
+                    self.refresh_request = None;
+                }
+                if ui.button("Choose folder again").clicked() {
+                    self.add_project = true;
+                }
+            });
+            if cfg!(target_os = "macos") {
+                ui.weak("Check System Settings → Privacy & Security → Files and Folders. Full Disk Access is optional troubleshooting; this error may have another cause. Shells and editors can have separate access.");
+            }
+        }
         let entries = self.dirs.get(path).cloned();
         if let Some(entries) = entries {
             for entry in entries {
@@ -535,14 +561,14 @@ impl App {
                     if r.clicked() && !r.double_clicked() {
                         self.open_file(entry.path.clone(), None, None, false);
                     }
-                    r.context_menu(|ui| {
+                    appearance::context_menu(&r, |ui| {
                         if let Some(action) = file_actions::menu(ui, true, false, None) {
                             self.file_action(ui, action, &entry.path, None);
                         }
                     });
                 }
             }
-        } else {
+        } else if !self.directory_errors.contains_key(path) {
             ui.weak("Loading…");
         }
     }
@@ -879,7 +905,7 @@ impl App {
                                         self.open_file(change.path.clone(), None, None, false);
                                     }
                                 }
-                                response.context_menu(|ui| {
+                                appearance::context_menu(&response, |ui| {
                                     if let Some(action) =
                                         file_actions::menu(ui, true, false, Some(group))
                                     {

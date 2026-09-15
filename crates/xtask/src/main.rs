@@ -1,7 +1,9 @@
 //! Repository automation in Rust. No Python interpreter or downloaded test runner.
 mod browser_fixture;
 mod harness;
+mod idle_fixture;
 mod integration;
+mod launch;
 mod linux;
 mod native;
 mod package;
@@ -18,6 +20,10 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Task {
+    /// Compose local launch assets from validated native captures.
+    LaunchAssets,
+    /// Verify conservative prompt readiness using isolated real shells.
+    IdleClose,
     BrowserCheck,
     /// Install test dependencies and validate inside a disposable Linux container.
     LinuxCheck {
@@ -44,6 +50,17 @@ enum Task {
         timings: bool,
         #[arg(long)]
         output: Option<PathBuf>,
+    },
+    /// Build and package a local DMG without installing it.
+    LocalDmg {
+        #[arg(long)]
+        release: bool,
+        #[arg(long)]
+        styled: bool,
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        timings: bool,
     },
     /// Create a drag-to-Applications DMG from a prebuilt app (requires create-dmg).
     Dmg {
@@ -141,6 +158,8 @@ fn main() -> Result<()> {
         return integration::git_shim();
     }
     match Args::parse().task {
+        Task::LaunchAssets => launch::run(),
+        Task::IdleClose => idle_fixture::run(),
         Task::BrowserCheck => browser_fixture::run(),
         Task::LinuxCheck { browser, wayland } => linux::check(browser, wayland),
         Task::LinuxDesktop {
@@ -153,6 +172,12 @@ fn main() -> Result<()> {
             timings,
             output,
         } => package::run(debug, timings, output),
+        Task::LocalDmg {
+            release,
+            styled,
+            output,
+            timings,
+        } => package::local_dmg(release, styled, output, timings),
         Task::Dmg { app, output } => package::dmg(&app, &output),
         Task::Universal {
             arm,

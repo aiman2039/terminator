@@ -1387,6 +1387,14 @@ pub fn update_viewport_info(
         viewport_info.minimized = Some(window.is_minimized().unwrap_or(false));
     }
 
+    #[cfg(feature = "test-support")]
+    if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
+        && std::env::var_os("TERMINATOR_TEST_RENDER_OCCLUDED").is_some()
+    {
+        // Opt-in native fixtures still need real UI/input passes behind the user's
+        // window. Preserve normal/minimized behavior outside this explicit mode.
+        viewport_info.occluded = Some(false);
+    }
     viewport_info.fullscreen = Some(window.fullscreen().is_some());
     viewport_info.focused = Some(window.has_focus());
 }

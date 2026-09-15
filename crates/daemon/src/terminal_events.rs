@@ -41,7 +41,32 @@ pub struct Events {
     pub replies: VecDeque<String>,
     pub notices: VecDeque<Notice>,
     chunks: BTreeMap<String, Notice>,
+    extra_modes: BTreeMap<u16, bool>,
+    escape_pending: bool,
 }
+/// Feed the existing vt100 parser, clearing extension modes in stream order on
+/// RIS. vt100 handles RIS internally without a callback. ESC starts an escape
+/// from every VTE state; C0 controls/DEL do not finish that escape.
+pub fn process(parser: &mut vt100::Parser<Events>, bytes: &[u8]) {
+    let mut escaped = parser.callbacks().escape_pending;
+    let mut start = 0;
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        match byte {
+            0x1b => escaped = true,
+            b'c' if escaped => {
+                parser.process(&bytes[start..=index]);
+                parser.callbacks_mut().extra_modes.clear();
+                start = index + 1;
+                escaped = false;
+            }
+            0x00..=0x17 | 0x19 | 0x1c..=0x1f | 0x7f..=0xff => {}
+            _ => escaped = false,
+        }
+    }
+    parser.process(&bytes[start..]);
+    parser.callbacks_mut().escape_pending = escaped;
+}
+
 fn text(bytes: &[u8], limit: usize) -> String {
     String::from_utf8_lossy(bytes)
         .chars()
@@ -50,6 +75,14 @@ fn text(bytes: &[u8], limit: usize) -> String {
         .collect()
 }
 impl Events {
+    pub fn modes_formatted(&self) -> Vec<u8> {
+        self.extra_modes
+            .iter()
+            .flat_map(|(mode, enabled)| {
+                format!("\x1b[?{mode}{}", if *enabled { 'h' } else { 'l' }).into_bytes()
+            })
+            .collect()
+    }
     fn reply(&mut self, reply: String) {
         if self.replies.len() < 64 {
             self.replies.push_back(reply);
@@ -138,7 +171,15 @@ impl Events {
     }
     fn reply_decrqm(&mut self, screen: &vt100::Screen, params: &[&[u16]]) {
         let mode = params.first().and_then(|p| p.first()).copied().unwrap_or(0);
-        let status = dec_mode_status(screen, mode);
+        let status = if matches!(mode, 1004 | 1007) {
+            if self.extra_modes.get(&mode).copied().unwrap_or(mode == 1007) {
+                1
+            } else {
+                2
+            }
+        } else {
+            dec_mode_status(screen, mode)
+        };
         self.reply(format!("\x1b[?{mode};{status}$y"));
     }
     fn reply_palette(&mut self, params: &[&[u8]]) {
@@ -208,6 +249,13 @@ impl vt100::Callbacks for Events {
         c: char,
     ) {
         match (i1, i2, c) {
+            (Some(b'?'), None, 'h' | 'l') => {
+                for param in params {
+                    if let [mode @ (1004 | 1007)] = *param {
+                        self.extra_modes.insert(*mode, c == 'h');
+                    }
+                }
+            }
             (Some(b'?'), Some(b'$'), 'p') => self.reply_decrqm(screen, params),
             (_, Some(_), _) => {}
             (i1, None, c) => self.reply_csi(screen, i1, params, c),
@@ -241,6 +289,51 @@ impl vt100::Callbacks for Events {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reconnect_preserves_focus_reporting_and_explicit_alternate_scroll() {
+        let mut parser = vt100::Parser::new_with_callbacks(24, 80, 100, Events::default());
+        for byte in b"\x1b[?1004;1007h\x1b[?1007l" {
+            process(&mut parser, &[*byte]);
+        }
+        assert_eq!(
+            parser.callbacks().modes_formatted(),
+            b"\x1b[?1004h\x1b[?1007l"
+        );
+        let mut replay = vt100::Parser::new_with_callbacks(24, 80, 100, Events::default());
+        process(&mut replay, &parser.screen().state_formatted());
+        process(&mut replay, &parser.callbacks().modes_formatted());
+        assert_eq!(
+            replay.callbacks().modes_formatted(),
+            parser.callbacks().modes_formatted()
+        );
+        process(&mut replay, b"\x1b[?1004$p\x1b[?1007$p");
+        assert_eq!(
+            replay
+                .callbacks()
+                .replies
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            ["\x1b[?1004;1$y", "\x1b[?1007;2$y"]
+        );
+    }
+
+    #[test]
+    fn terminal_reset_clears_extension_modes_in_stream_order_across_chunks() {
+        let mut parser = vt100::Parser::new_with_callbacks(24, 80, 100, Events::default());
+        process(&mut parser, b"\x1b[?1004h\x1b[?1007lX\x1b");
+        process(&mut parser, b"\0c\x1b[?1007l");
+        assert!(parser.screen().contents().is_empty());
+        assert_eq!(parser.callbacks().modes_formatted(), b"\x1b[?1007l");
+        process(&mut parser, b"\x1b[?1004h\x1b c");
+        assert_eq!(
+            parser.callbacks().modes_formatted(),
+            b"\x1b[?1004h\x1b[?1007l"
+        );
+        process(&mut parser, b"\x1b]9;public\x1bc");
+        assert!(parser.callbacks().modes_formatted().is_empty());
+    }
+
     #[test]
     fn replies_use_the_same_screen_as_reconnect_snapshots() {
         let mut parser = vt100::Parser::new_with_callbacks(24, 80, 100, Events::default());

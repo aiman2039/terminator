@@ -9,7 +9,11 @@ use std::{
     time::Duration,
 };
 mod agents;
+mod codex;
+mod folder_access;
+mod idle_close;
 mod installation;
+mod launch;
 mod markdown;
 mod projects;
 mod reviews;
@@ -63,7 +67,9 @@ pub fn capture(
         command.env_remove("TERMINATOR_TEST_NARROW");
     }
     if cfg!(target_os = "macos") {
-        command.env("TERMINATOR_TEST_BACKGROUND", "1");
+        command
+            .env("TERMINATOR_TEST_BACKGROUND", "1")
+            .env("TERMINATOR_TEST_RENDER_OCCLUDED", "1");
     }
     command.stdout(log.try_clone()?).stderr(log);
     let mut gui = Process(command.spawn()?);
@@ -152,6 +158,11 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
         println!("Running native {case}");
         match case {
             "smoke" => smoke(&opts)?,
+            "codex-live" => codex::run(&opts)?,
+            "launch" => launch::run(&opts)?,
+            "folder-access" => folder_access::run(&opts)?,
+            "idle-close" => idle_close::run(&opts)?,
+            "scrolling" => scrolling(&opts)?,
             "control" => control(&opts)?,
             "workspace-tabs" => workspace_tabs(&opts)?,
             "split-file-opening" => split_file_opening(&opts)?,
@@ -1126,4 +1137,87 @@ fn control(o: &Options) -> Result<()> {
         Ok(())
     })?;
     h.assert_pids(&originals)
+}
+
+fn scrolling(opts: &Options) -> Result<()> {
+    let h = Harness::new()?;
+    h.setup()?;
+    let project = h.project("scrolling-sample")?;
+    let left = h.shell(&project)?;
+    let right = h.shell(&project)?;
+    h.layout(&project, &[left.clone(), right.clone()])?;
+    for session in [&left, &right] {
+        let mut stream = h.attach(session)?;
+        h.write(&mut stream, "i=0; while [ $i -lt 500 ]; do printf 'Sample retained line %s\\n' \"$i\"; i=$((i+1)); done\n")?;
+    }
+    thread::sleep(Duration::from_millis(500));
+    let left_target = format!("terminal:{}", id(&left));
+    let right_target = format!("terminal:{}", id(&right));
+    let logs = capture(
+        &h,
+        opts,
+        "hover-history",
+        json!([
+            {"at_ms":900,"target":left_target},
+            {"at_ms":1300,"target":right_target,"hover":true},
+            {"at_ms":1500,"target":right_target,"scroll":4.0,"wheel_phase":"start"},
+            {"at_ms":1600,"target":right_target,"scroll":4.0},
+            {"at_ms":1700,"target":right_target,"scroll":4.0},
+            {"at_ms":1800,"target":right_target,"scroll":100.0},
+            {"at_ms":2200,"target":right_target,"scroll":2.0,"wheel_unit":"line"},
+            {"at_ms":2400,"target":right_target,"scroll":0.0,"wheel_phase":"cancel"},
+            {"at_ms":3700,"target":right_target,"scroll":-1000.0,"wheel_unit":"line"}
+        ]),
+        4500,
+        |_| {
+            thread::sleep(Duration::from_millis(2800));
+            h.write(
+                &mut h.attach(&right)?,
+                "printf 'Sample arriving output\\n'\n",
+            )?;
+            Ok(())
+        },
+    )?;
+    fs::create_dir_all(&opts.output)?;
+    fs::write(opts.output.join("scroll-evidence.log"), &logs)?;
+    let prefix = format!(
+        "Scroll evidence: session={} focused=false offset=",
+        id(&right)
+    );
+    ensure!(
+        logs.lines()
+            .filter_map(|l| l.strip_prefix(&prefix))
+            .any(|s| s
+                .split_whitespace()
+                .next()
+                .and_then(|n| n.parse::<usize>().ok())
+                .is_some_and(|n| n > 0)),
+        "Hover-only scrolling did not move unfocused history: {logs}"
+    );
+    let offsets: Vec<usize> = logs
+        .lines()
+        .filter_map(|l| l.strip_prefix(&prefix))
+        .filter_map(|s| s.split_whitespace().next()?.parse().ok())
+        .collect();
+    ensure!(
+        offsets.last() == Some(&0),
+        "Scrolling down did not return to recent output: {logs}"
+    );
+    ensure!(
+        offsets.iter().filter(|offset| **offset > 0).count() >= 2,
+        "Missing retained-history observations during output"
+    );
+    let left_prefix = format!(
+        "Scroll evidence: session={} focused=true offset=",
+        id(&left)
+    );
+    ensure!(
+        !logs
+            .lines()
+            .filter_map(|l| l.strip_prefix(&left_prefix))
+            .any(|s| !s.starts_with("0 ")),
+        "Focused pane scrolled with hovered pane: {logs}"
+    );
+    h.assert_pids(&[left, right])?;
+    Ok(())
 }

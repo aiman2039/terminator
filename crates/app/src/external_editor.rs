@@ -46,6 +46,19 @@ pub fn selected(settings: &Settings) -> usize {
         })
         .unwrap_or(CUSTOM)
 }
+/// macOS `open file.png` asks Launch Services for a UTI handler and can fail for
+/// owner-only temp files (`NSOSStatusErrorDomain` -10661). Naming Preview skips
+/// that lookup. Linux `xdg-open` does not have the same failure mode.
+pub fn image_opener() -> (String, Vec<String>) {
+    if cfg!(target_os = "macos") {
+        (
+            "open".into(),
+            vec!["-a".into(), "Preview".into(), "--".into()],
+        )
+    } else {
+        ("xdg-open".into(), vec![])
+    }
+}
 fn command(program: &str, args: &[String], path: &Path) -> Result<Command> {
     let executable = find_executable(program)
         .with_context(|| format!("External editor executable not found: {program}"))?;
@@ -211,5 +224,28 @@ mod tests {
         }
         settings.external_args.push("--my-config".into());
         assert_eq!(selected(&settings), CUSTOM);
+    }
+    #[test]
+    fn images_use_preview_and_source_files_keep_the_configured_editor() {
+        assert!(crate::image_preview::supported(Path::new("shot.PNG")));
+        assert!(!crate::image_preview::supported(Path::new("src/main.rs")));
+        let (program, args) = image_opener();
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(program, "open");
+            assert_eq!(args, vec!["-a", "Preview", "--"]);
+            let cmd = command(&program, &args, Path::new("paste.png")).unwrap();
+            let actual: Vec<_> = cmd
+                .get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(&actual[..3], &["-a", "Preview", "--"]);
+            assert!(actual[3].ends_with("paste.png"));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(program, "xdg-open");
+            assert!(args.is_empty());
+        }
     }
 }

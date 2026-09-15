@@ -7,6 +7,22 @@ use std::{
     process::Command,
 };
 
+struct StageTimer(&'static str, std::time::Instant);
+impl StageTimer {
+    fn new(name: &'static str) -> Self {
+        Self(name, std::time::Instant::now())
+    }
+}
+impl Drop for StageTimer {
+    fn drop(&mut self) {
+        println!(
+            "{} duration: {:.2}s",
+            self.0,
+            self.1.elapsed().as_secs_f64()
+        );
+    }
+}
+
 fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
@@ -85,12 +101,15 @@ fn licenses(destination: &Path) -> Result<()> {
     Ok(())
 }
 pub fn run(debug: bool, timings: bool, output_dir: Option<PathBuf>) -> Result<()> {
+    let build_timer = StageTimer::new("Build");
     let shell = xshell::Shell::new()?;
     let _cwd = shell.push_dir(root());
     // xtask is already running; an optimized copy is not part of the package.
     let release_flag = (!debug).then_some("--release");
     let timing_flag = timings.then_some("--timings");
     xshell::cmd!(shell, "cargo build --locked -p terminator -p terminator-daemon -p terminator-hook {release_flag...} {timing_flag...}").run()?;
+    drop(build_timer);
+    let _package_timer = StageTimer::new("Package");
     let binaries = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| root().join("target"))
@@ -138,6 +157,26 @@ pub fn run(debug: bool, timings: bool, output_dir: Option<PathBuf>) -> Result<()
             ("CFBundleVersion", build_number.as_str()),
             ("CFBundleShortVersionString", env!("CARGO_PKG_VERSION")),
             ("LSMinimumSystemVersion", "12.0"),
+            (
+                "NSDesktopFolderUsageDescription",
+                "Access project files you choose on your Desktop.",
+            ),
+            (
+                "NSDocumentsFolderUsageDescription",
+                "Access project files you choose in Documents.",
+            ),
+            (
+                "NSDownloadsFolderUsageDescription",
+                "Access project files you choose in Downloads.",
+            ),
+            (
+                "NSRemovableVolumesUsageDescription",
+                "Access projects you choose on removable volumes.",
+            ),
+            (
+                "NSNetworkVolumesUsageDescription",
+                "Access projects you choose on network volumes.",
+            ),
         ] {
             info.insert(key.into(), value.into());
         }
@@ -427,6 +466,88 @@ fn dmg_background(destination: &Path) -> Result<()> {
         &mut pixels.as_mut(),
     );
     pixels.save_png(destination)?;
+    Ok(())
+}
+
+/// Publish a unique directory only once both the app and compressed image exist.
+pub fn local_dmg(
+    release: bool,
+    styled: bool,
+    destination: Option<PathBuf>,
+    timings: bool,
+) -> Result<()> {
+    ensure!(cfg!(target_os = "macos"), "local-dmg requires macOS");
+    if styled {
+        let mut prerequisite = Command::new("create-dmg");
+        prerequisite.arg("--version");
+        output(prerequisite).context("Styled DMGs require create-dmg: brew install create-dmg")?;
+    }
+    let destination = destination.unwrap_or_else(|| root().join("target/local-dmg"));
+    fs::create_dir_all(&destination)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".building-")
+        .tempdir_in(&destination)?;
+    run(!release, timings, Some(staging.path().to_owned()))?;
+    let dmg_timer = StageTimer::new("DMG");
+    let app = staging.path().join("Terminator.app");
+    let image = staging.path().join("Terminator.dmg");
+    if styled {
+        dmg(&app, &image)?;
+    } else {
+        let source = staging.path().join("image-source");
+        fs::create_dir(&source)?;
+        let mut copy = Command::new("ditto");
+        copy.arg(&app).arg(source.join("Terminator.app"));
+        output(copy)?;
+        std::os::unix::fs::symlink("/Applications", source.join("Applications"))?;
+        let mut create = Command::new("hdiutil");
+        create
+            .args([
+                "create",
+                "-volname",
+                "Terminator",
+                "-format",
+                "UDZO",
+                "-srcfolder",
+            ])
+            .arg(&source)
+            .arg(&image);
+        terminator_core::run_command(
+            create,
+            terminator_core::CommandOptions {
+                timeout: std::time::Duration::from_secs(300),
+                stdout_limit: 1024 * 1024,
+                ..Default::default()
+            },
+        )
+        .context("Plain DMG creation failed")?;
+        fs::remove_dir_all(source)?;
+    }
+    drop(dmg_timer);
+    let mut verify = Command::new("hdiutil");
+    verify.arg("verify").arg(&image);
+    output(verify)?;
+    let mut signature = Command::new("codesign");
+    signature.args(["--verify", "--deep", "--strict"]).arg(&app);
+    output(signature)?;
+    let unique = staging
+        .path()
+        .file_name()
+        .context("Missing staging name")?
+        .to_string_lossy()
+        .replace(".building-", "build-");
+    let final_dir = destination.join(unique);
+    ensure!(
+        !final_dir.exists(),
+        "Output already exists: {}",
+        final_dir.display()
+    );
+    fs::rename(staging.path(), &final_dir)?;
+    println!(
+        "App: {}\nDMG: {}",
+        final_dir.join("Terminator.app").display(),
+        final_dir.join("Terminator.dmg").display()
+    );
     Ok(())
 }
 

@@ -52,6 +52,8 @@ rustdoc-args = ["--generate-link-to-definition"]
 ignored = ["wayland-cursor"]
 
 [features]
+# Enabled only through Terminator's explicit test-support feature.
+test-support = []
 accesskit = ["dep:accesskit_winit"]
 android-game-activity = ["winit/android-game-activity"]
 android-native-activity = ["winit/android-native-activity"]

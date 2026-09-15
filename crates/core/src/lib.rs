@@ -1,5 +1,6 @@
 //! Versioned local protocol and persistent, renderer-independent models.
 pub mod appearance;
+pub mod idle_close;
 pub mod metadata;
 pub mod snapshot;
 pub mod ui_control;
@@ -652,6 +653,18 @@ impl State {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Request {
+    CloseIdleSessions {
+        generation: String,
+        sessions: Vec<String>,
+    },
+    ShellCommand {
+        session: String,
+    },
+    ShellPrompt {
+        session: String,
+        generation: u64,
+        jobs_empty: bool,
+    },
     WorktreeList {
         project: String,
     },
@@ -770,6 +783,7 @@ pub struct Envelope {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
+    IdleSessionsClosed(Vec<idle_close::Outcome>),
     SnapshotChunk { data: String, last: bool },
     Worktrees(Vec<worktrees::GitWorktree>),
     Unchanged,
@@ -817,7 +831,13 @@ fn connect_hint(
     snapshot_hint: Option<SnapshotHint>,
 ) -> Result<UnixStream> {
     let mut s = UnixStream::connect(paths.socket()).context("Session daemon unavailable")?;
-    s.set_read_timeout(Some(Duration::from_secs(3)))?;
+    s.set_read_timeout(Some(Duration::from_secs(
+        if matches!(&request, Request::CloseIdleSessions { .. }) {
+            30
+        } else {
+            3
+        },
+    )))?;
     s.set_write_timeout(Some(Duration::from_secs(3)))?;
     write_frame(
         &mut s,

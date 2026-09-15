@@ -22,6 +22,7 @@ mod refresh;
 mod settings_ui;
 mod ui_control;
 use file_actions::FileAction;
+mod close_idle;
 mod editor_close;
 mod popup;
 mod preferences;
@@ -85,6 +86,7 @@ enum After {
     Text(String),
 }
 enum Job {
+    CloseIdle(editor_close::Target, String, Vec<String>),
     RepairInstallation(String, exit::Checkpoint),
     Control(Box<Request>, After),
     OpenProject(PathBuf, u64),
@@ -111,6 +113,11 @@ impl Job {
     }
 }
 enum Update {
+    IdleClosed(
+        editor_close::Target,
+        Vec<String>,
+        Result<Vec<terminator_core::idle_close::Outcome>, String>,
+    ),
     InstallationRepaired(Result<Box<State>, String>),
     ExitDrained(u64, u64),
     ExitSaved(u64, Result<(), String>),
@@ -145,7 +152,10 @@ enum Update {
     Refresh(
         u64,
         services::ContextData,
-        Vec<(PathBuf, Vec<services::Entry>)>,
+        Vec<(
+            PathBuf,
+            Result<Vec<services::Entry>, services::DirectoryError>,
+        )>,
         bool,
     ),
     ClipboardPaste(String, String),
@@ -274,6 +284,15 @@ fn header_drag_space(ui: &mut egui::Ui) {
         begin_native_window_gesture(ui.ctx(), egui::ViewportCommand::StartDrag);
     }
 }
+fn external_opener(paths: &Paths, path: &std::path::Path) -> Result<(String, Vec<String>)> {
+    if image_preview::supported(path) {
+        return Ok(external_editor::image_opener());
+    }
+    let Response::State(state) = rpc(paths, Request::Snapshot)? else {
+        anyhow::bail!("Expected editor settings snapshot");
+    };
+    Ok((state.settings.external_editor, state.settings.external_args))
+}
 fn launch_external(
     program: &str,
     args: &[String],
@@ -382,6 +401,21 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
                         }
                         Job::Browser(url) => {
                             open::that(url)?;
+                        }
+                        Job::CloseIdle(target, generation, ids) => {
+                            let result = rpc(
+                                &paths,
+                                Request::CloseIdleSessions {
+                                    generation,
+                                    sessions: ids.clone(),
+                                },
+                            )
+                            .and_then(|r| match r {
+                                Response::IdleSessionsClosed(outcomes) => Ok(outcomes),
+                                _ => anyhow::bail!("Unexpected idle-close response"),
+                            })
+                            .map_err(|e| format!("{e:#}"));
+                            tx.send(Update::IdleClosed(target, ids, result))?;
                         }
                         Job::CloseEditors(target, ids, mode) => {
                             let result = editor_close::close(&paths, &ids, mode)
@@ -539,12 +573,10 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
                             )))?;
                         }
                         Job::External(path) => {
-                            let Response::State(state) = rpc(&paths, Request::Snapshot)? else {
-                                anyhow::bail!("Expected editor settings snapshot");
-                            };
+                            let (program, args) = external_opener(&paths, &path)?;
                             launch_external(
-                                &state.settings.external_editor,
-                                &state.settings.external_args,
+                                &program,
+                                &args,
                                 &path,
                                 tx.clone(),
                                 ctx.clone(),
@@ -643,6 +675,9 @@ struct App {
     selection_generation: u64,
     state: State,
     state_loaded: bool,
+    idle_close_pending: Option<editor_close::Target>,
+    idle_close_snapshot: Vec<Tab>,
+    idle_close_fallback: Option<editor_close::Target>,
     layouts: HashMap<String, Workspace>,
     layout_readonly: HashSet<String>,
     close_workspace: Option<(String, String)>,
@@ -674,6 +709,7 @@ struct App {
     texts: HashMap<String, String>,
     loading: HashSet<String>,
     dirs: HashMap<PathBuf, Vec<services::Entry>>,
+    directory_errors: HashMap<PathBuf, services::DirectoryError>,
     context: Option<services::ContextData>,
     metadata: Option<metadata::Metadata>,
     metadata_jobs: Sender<Option<metadata_refresh::Request>>,
@@ -790,6 +826,9 @@ impl App {
             paths,
             state: State::default(),
             state_loaded: false,
+            idle_close_pending: None,
+            idle_close_snapshot: Vec::new(),
+            idle_close_fallback: None,
             layouts: HashMap::new(),
             layout_readonly: HashSet::new(),
             close_workspace: None,
@@ -821,6 +860,7 @@ impl App {
             texts: HashMap::new(),
             loading: HashSet::new(),
             dirs: HashMap::new(),
+            directory_errors: HashMap::new(),
             context: None,
             metadata: None,
             metadata_jobs,
@@ -921,6 +961,15 @@ impl App {
                     snapshot["markdown_modes"] =
                         serde_json::to_value(&self.preferences.markdown_modes)?;
                     snapshot["visible_terminals"] = serde_json::to_value(&self.visible_sessions)?;
+                    snapshot["fixture_actions_completed"] =
+                        serde_json::json!(self.diagnostics.actions_completed());
+                    snapshot["terminal_scroll"] = serde_json::json!(self.backends.iter().map(|(sid, backend)| {
+                        let content = backend.last_content();
+                        let text: String = content.grid.display_iter().map(|cell| cell.c).collect();
+                        let samples: Vec<_> = (1..=160).filter(|n| text.contains(&format!("TSAMPLE{n:03}"))).collect();
+                        let updates: Vec<_> = (1..=100).filter(|n| text.contains(&format!("TUPDATE{n:03}"))).collect();
+                        (sid.clone(), serde_json::json!({"ui_pass":ctx.cumulative_pass_nr(), "window_occluded":ctx.input(|i| i.viewport().occluded), "offset":content.grid.display_offset(), "modes":content.terminal_mode.bits(), "focused":self.active_session.as_ref()==Some(sid), "samples":samples, "updates":updates, "rect":self.fixture_rect(ctx,&format!("terminal:{sid}"))}))
+                    }).collect::<HashMap<_,_>>());
                     snapshot["editor_rect"] =
                         serde_json::to_value(self.fixture_rect(ctx, "editor-terminal"))?;
                     snapshot["sidebar_projects"] = serde_json::json!(
@@ -1231,7 +1280,10 @@ impl App {
                 Update::TypographyMigrated => {
                     self.preferences.typography_migrated = true;
                 }
+                Update::IdleClosed(target, ids, result) => self.idle_closed(target, ids, result),
                 Update::OpenedProject(state, project, generation) => {
+                    self.preferences.setup_completed = true;
+                    self.refresh_request = None;
                     self.apply_state(*state);
                     if generation == self.selection_generation {
                         self.select_project(project);
@@ -1364,7 +1416,30 @@ impl App {
                         self.context = Some(context);
                         self.watch_fallback = fallback;
                         for (path, entries) in directories {
-                            self.dirs.insert(path, entries);
+                            match entries {
+                                Ok(entries) => {
+                                    #[cfg(feature = "test-support")]
+                                    if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
+                                        eprintln!(
+                                            "Directory refresh succeeded: entries={}",
+                                            entries.len()
+                                        );
+                                    }
+                                    self.directory_errors.remove(&path);
+                                    self.dirs.insert(path, entries);
+                                }
+                                Err(error) => {
+                                    #[cfg(feature = "test-support")]
+                                    if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
+                                        eprintln!(
+                                            "Directory refresh failed: kind={:?} cached_entries={}",
+                                            error.kind,
+                                            self.dirs.get(&path).map_or(0, Vec::len)
+                                        );
+                                    }
+                                    self.directory_errors.insert(path, error);
+                                }
+                            }
                         }
                     }
                 }
@@ -2577,6 +2652,7 @@ impl eframe::App for App {
             if self.context_path != cwd {
                 self.context = None;
                 self.dirs.clear();
+                self.directory_errors.clear();
             }
             self.context_path = cwd;
             self.refresh_request = next.clone();
@@ -2666,6 +2742,22 @@ fn main() -> Result<()> {
                 !(cfg!(feature = "test-support")
                     && std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
                     && std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some()),
+            )
+            .with_mouse_passthrough(
+                cfg!(feature = "test-support")
+                    && std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
+                    && std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some()
+                    && std::env::var_os("TERMINATOR_TEST_NATIVE_INPUT").is_none(),
+            )
+            .with_window_level(
+                if cfg!(feature = "test-support")
+                    && std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
+                    && std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some()
+                {
+                    egui::WindowLevel::AlwaysOnBottom
+                } else {
+                    egui::WindowLevel::Normal
+                },
             )
             .with_inner_size(window_size)
             .with_min_inner_size([900.0, 550.0])
@@ -3606,6 +3698,114 @@ mod navigation_tests {
         assert_eq!(app.theme_draft.text, "#123456");
         assert_eq!(app.theme_committed, external);
     }
+    #[test]
+    fn idle_close_deduplicates_and_preserves_new_tab_contents() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.state
+            .capabilities
+            .push(terminator_core::idle_close::CAPABILITY.into());
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        let tab = app.layouts["a"].active.clone();
+        let target = editor_close::Target::Workspace("a".into(), tab.clone());
+        assert!(app.check_idle_close(target.clone(), vec!["shell".into()]));
+        assert!(app.check_idle_close(target.clone(), vec!["shell".into()]));
+        assert!(matches!(received.try_recv().unwrap(), Job::CloseIdle(..)));
+        assert!(received.try_recv().is_err());
+        app.insert("a", Tab::Terminal("new-shell".into()), Some("right"));
+        app.idle_closed(
+            target,
+            vec!["shell".into()],
+            Ok(vec![terminator_core::idle_close::Outcome {
+                session: "shell".into(),
+                status: terminator_core::idle_close::Status::Closed,
+                reason: "Exited".into(),
+            }]),
+        );
+        assert!(app.layouts["a"].tabs.iter().any(|t| t.id == tab));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("new-shell".into())));
+    }
+
+    #[test]
+    fn older_daemons_and_mixed_editor_tabs_keep_confirmation() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.state
+            .sessions
+            .push(session_fixture("editor", SessionKind::Editor));
+        let target = editor_close::Target::Pane("shell".into());
+        assert!(!app.check_idle_close(target.clone(), vec!["shell".into()]));
+        app.state
+            .capabilities
+            .push(terminator_core::idle_close::CAPABILITY.into());
+        assert!(!app.check_idle_close(target, vec!["shell".into(), "editor".into()]));
+        assert!(received.try_recv().is_err());
+    }
+
+    #[test]
+    fn failed_directory_refresh_preserves_cached_entries_until_retry_succeeds() {
+        let (mut app, ctx, _dir) = fixture();
+        let path = PathBuf::from("/a");
+        let cached = services::Entry {
+            path: path.join("retained.rs"),
+            directory: false,
+            ignored: false,
+        };
+        app.dirs.insert(path.clone(), vec![cached]);
+        app.refresh_generation = 7;
+        app.refresh_request = Some(refresh::Request {
+            cwd: path.clone(),
+            generation: 7,
+            directories: vec![path.clone()],
+        });
+        let context = services::ContextData {
+            cwd: path.clone(),
+            root: None,
+            git_dirs: vec![],
+            branch: String::new(),
+            changes: vec![],
+            decorations: Default::default(),
+            error: None,
+        };
+        app.update_tx
+            .send(Update::Refresh(
+                7,
+                context.clone(),
+                vec![(
+                    path.clone(),
+                    Err(services::DirectoryError {
+                        path: path.clone(),
+                        kind: std::io::ErrorKind::PermissionDenied,
+                        message: "Fixture access revoked".into(),
+                    }),
+                )],
+                false,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(app.dirs[&path].len(), 1);
+        assert!(app.directory_errors.contains_key(&path));
+        app.update_tx
+            .send(Update::Refresh(
+                7,
+                context,
+                vec![(path.clone(), Ok(vec![]))],
+                false,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(app.dirs[&path].is_empty());
+        assert!(!app.directory_errors.contains_key(&path));
+    }
+
     #[test]
     fn stale_refresh_is_ignored_even_for_same_directory() {
         let (mut app, ctx, _dir) = fixture();

@@ -45,3 +45,16 @@ Focused terminals lock Tab, arrow keys, and Escape to terminal input using egui'
 focus event filter. This prevents widget navigation from briefly focusing and
 highlighting dock separators. A headless egui regression covers Tab, Shift+Tab,
 arrows, Escape, and repeated presses while confirming input remains available.
+
+## 2026-09-15: hover wheel routing and local-history bypass
+
+Wheel eligibility now follows the enabled, clipped response under the pointer,
+independently of keyboard focus. Consumed raw wheel events and egui's derived
+smooth delta are removed from enclosing scroll controls. Application wheel reports
+use current viewport pointer coordinates. Per-view point and line fractions reset
+on hover loss, gesture start/cancellation, or an idle gap; page units use the visible
+row count. Shift sends `ScrollLocal`, bypassing both application mouse reporting
+and alternate-scroll arrow translation. Ordinary `Scroll` retains mode-controlled
+alternate scrolling. The host disables terminal responses during blocking overlays
+and disabled editor-close states. See `docs/VALIDATION.md` for native versus live
+Codex verification boundaries.

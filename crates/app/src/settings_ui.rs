@@ -32,6 +32,11 @@ impl App {
                     egui::ScrollArea::vertical().id_salt(("settings-section",self.settings_section)).max_height(height).show(ui,|ui| {
                         match self.settings_section {
                             6 => {
+                                if cfg!(target_os = "macos") {
+                                    ui.heading("Folder access");
+                                    ui.label("Choose a project folder to grant access. If access changes, use Explorer’s Retry or Choose folder again.");
+                                    ui.weak("System Settings → Privacy & Security → Files and Folders controls protected locations. Full Disk Access is optional troubleshooting, not a general requirement. GUI, shell, and editor access may differ.");
+                                }
                                 self.installation_settings(ui);
                                 ui.add_space(12.0);
                                 ui.separator();
