@@ -557,7 +557,15 @@ impl App {
                     };
                     self.file_pointer_action(&r, pointer);
                     appearance::context_menu(&r, |ui| {
-                        if let Some(action) = file_actions::menu(ui, true, false, None) {
+                        if let Some(action) = file_actions::menu(
+                            ui,
+                            file_actions::FileMenu {
+                                file: true,
+                                browser: false,
+                                git: None,
+                                neovim: false,
+                            },
+                        ) {
                             self.file_action(ui, action, &entry.path, None);
                         }
                     });
@@ -810,17 +818,13 @@ impl App {
             }
             return;
         }
-        ui.heading("Git");
-        if let Some(cwd) = self.cwd() {
-            ui.label(
-                RichText::new(cwd.display().to_string())
-                    .small()
-                    .color(appearance::color(&self.theme.secondary)),
-            );
-            if self.context_session().is_some_and(|s| !s.cwd_confirmed) {
-                ui.label(RichText::new("Last known directory").small().weak());
-            }
-            ui.separator();
+        let heading = ui.heading("Git");
+        let _ = match self.cwd() {
+            Some(cwd) => heading.on_hover_text(cwd.display().to_string()),
+            None => heading,
+        };
+        if self.context_session().is_some_and(|s| !s.cwd_confirmed) {
+            ui.label(RichText::new("Last known directory").small().weak());
         }
         ui.separator();
         if self.watch_fallback {
@@ -902,9 +906,16 @@ impl App {
                                     },
                                 );
                                 appearance::context_menu(&response, |ui| {
-                                    if let Some(action) =
-                                        file_actions::menu(ui, true, false, Some(group))
-                                    {
+                                    if let Some(action) = file_actions::menu(
+                                        ui,
+                                        file_actions::FileMenu {
+                                            file: true,
+                                            browser: false,
+                                            git: Some(group),
+                                            neovim: self.state.settings.review_mode
+                                                == ReviewMode::Neovim,
+                                        },
+                                    ) {
                                         self.file_action(ui, action, &change.path, None);
                                     }
                                 });
@@ -1062,13 +1073,9 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
             });
             action
         });
-    if inner.inner == AttentionAction::None
-        && inner.response.interact(egui::Sense::click()).clicked()
-    {
-        AttentionAction::Go
-    } else {
-        inner.inner
-    }
+    // Header and action buttons own clicks. A later frame-wide click target
+    // sits on top of those buttons in egui and would steal Dismiss/Snooze as Go.
+    inner.inner
 }
 
 #[cfg(test)]

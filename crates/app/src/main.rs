@@ -89,6 +89,12 @@ struct FilePointer {
     deleted: bool,
     staged: Option<bool>,
 }
+struct SpawnDiff {
+    cwd: PathBuf,
+    path: PathBuf,
+    staged: bool,
+    native: bool,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FileClick {
     None,
@@ -2083,45 +2089,75 @@ impl App {
             FileAction::External => self.open_file(path.into(), line, None, true),
             FileAction::Copy => ui.ctx().copy_text(path.display().to_string()),
             FileAction::StagedDiff | FileAction::WorkingDiff => {
-                if let Some(root) = self.context.as_ref().and_then(|c| c.root.clone()) {
+                if let Some(root) = self.git_root() {
                     self.add_diff(root, path.into(), action == FileAction::StagedDiff);
+                }
+            }
+            FileAction::NativeStagedDiff | FileAction::NativeWorkingDiff => {
+                if let Some(root) = self.git_root() {
+                    self.spawn_diff(SpawnDiff {
+                        cwd: root,
+                        path: path.into(),
+                        staged: action == FileAction::NativeStagedDiff,
+                        native: true,
+                    });
                 }
             }
             FileAction::Browser => {}
         }
     }
     fn add_diff(&mut self, cwd: PathBuf, path: PathBuf, staged: bool) {
-        if let Some(project) = self.selected.clone() {
-            if self.native_review() {
-                let tab = Tab::Diff { cwd, path, staged };
-                self.layouts
-                    .entry(project)
-                    .or_insert_with(Workspace::empty)
-                    .add(id(), tab.clone());
-                self.active_session = None;
-                self.diffs.remove(&tab.key());
-                self.loading.insert(tab.key());
-                self.error = None;
-                if self.state.settings.review_mode == ReviewMode::Neovim {
-                    self.info = Some("Using built-in diff. Neovim review needs the updated daemon; restart it after finishing your live sessions.".into());
-                }
-                let _ = self.jobs.send(Job::Diff(tab));
-                return;
+        self.spawn_diff(SpawnDiff {
+            cwd,
+            path,
+            staged,
+            native: self.native_review(),
+        });
+    }
+    fn spawn_diff(
+        &mut self,
+        SpawnDiff {
+            cwd,
+            path,
+            staged,
+            native,
+        }: SpawnDiff,
+    ) {
+        let Some(project) = self.selected.clone() else {
+            return;
+        };
+        if native {
+            let tab = Tab::Diff { cwd, path, staged };
+            self.layouts
+                .entry(project)
+                .or_insert_with(Workspace::empty)
+                .add(id(), tab.clone());
+            self.active_session = None;
+            self.diffs.remove(&tab.key());
+            self.loading.insert(tab.key());
+            self.error = None;
+            if self.neovim_review_unavailable() {
+                self.info = Some("Using built-in diff. Neovim review needs the updated daemon; restart it after finishing your live sessions.".into());
             }
-            let _ = self.jobs.send(Job::rpc(
-                Request::CreateReview {
-                    project: project.clone(),
-                    cwd,
-                    path,
-                    staged,
-                },
-                After::Workspace(id(), vec![]),
-            ));
+            let _ = self.jobs.send(Job::Diff(tab));
+            return;
         }
+        let _ = self.jobs.send(Job::rpc(
+            Request::CreateReview {
+                project,
+                cwd,
+                path,
+                staged,
+            },
+            After::Workspace(id(), vec![]),
+        ));
     }
     fn native_review(&self) -> bool {
-        self.state.settings.review_mode != ReviewMode::Neovim
-            || !self
+        self.state.settings.review_mode != ReviewMode::Neovim || self.neovim_review_unavailable()
+    }
+    fn neovim_review_unavailable(&self) -> bool {
+        self.state.settings.review_mode == ReviewMode::Neovim
+            && !self
                 .state
                 .capabilities
                 .iter()
@@ -3486,6 +3522,28 @@ mod navigation_tests {
         assert_eq!(app.layouts["a"].tabs.len(), 2);
     }
     #[test]
+    fn native_menu_diff_opens_the_built_in_viewer_when_neovim_is_selected() {
+        let (mut app, _, _dir) = fixture();
+        app.state.settings.review_mode = ReviewMode::Neovim;
+        app.state.capabilities.push(NVIM_REVIEW_CAPABILITY.into());
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.selected = Some("a".into());
+        app.spawn_diff(SpawnDiff {
+            cwd: "/a".into(),
+            path: "/a/file.rs".into(),
+            staged: false,
+            native: true,
+        });
+        let Job::Diff(Tab::Diff { staged, .. }) = requests.recv().unwrap() else {
+            panic!("Native menu diff must stay in the GUI");
+        };
+        assert!(!staged);
+        assert!(requests.try_recv().is_err());
+        assert!(app.info.is_none());
+        assert!(app.state.sessions.is_empty());
+    }
+    #[test]
     fn native_review_skips_create_review_when_the_daemon_can_review() {
         let (mut app, _, _dir) = fixture();
         app.state.capabilities.push(NVIM_REVIEW_CAPABILITY.into());
@@ -4106,6 +4164,70 @@ mod navigation_tests {
             .push(terminator_core::idle_close::CAPABILITY.into());
         assert!(!app.check_idle_close(target, vec!["shell".into(), "editor".into()]));
         assert!(received.try_recv().is_err());
+    }
+
+    #[test]
+    fn idle_close_busy_shell_asks_without_error() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.state
+            .capabilities
+            .push(terminator_core::idle_close::CAPABILITY.into());
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        let tab = app.layouts["a"].active.clone();
+        let target = editor_close::Target::Workspace("a".into(), tab.clone());
+        app.close_workspace = Some(("a".into(), tab.clone()));
+        assert!(app.check_idle_close(target.clone(), vec!["shell".into()]));
+        assert!(matches!(received.try_recv().unwrap(), Job::CloseIdle(..)));
+        app.idle_closed(
+            target.clone(),
+            vec!["shell".into()],
+            Ok(vec![terminator_core::idle_close::Outcome {
+                session: "shell".into(),
+                status: terminator_core::idle_close::Status::Busy,
+                reason: "A foreground command owns the terminal".into(),
+            }]),
+        );
+        assert_eq!(
+            app.close_workspace.as_ref(),
+            Some(&(String::from("a"), tab))
+        );
+        assert_eq!(app.idle_close_fallback.as_ref(), Some(&target));
+        assert!(app.error.is_none());
+        assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
+    }
+
+    #[test]
+    fn idle_close_failed_signal_reports_error() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.state
+            .capabilities
+            .push(terminator_core::idle_close::CAPABILITY.into());
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        let target = editor_close::Target::Pane("shell".into());
+        assert!(app.check_idle_close(target.clone(), vec!["shell".into()]));
+        assert!(matches!(received.try_recv().unwrap(), Job::CloseIdle(..)));
+        app.idle_closed(
+            target.clone(),
+            vec!["shell".into()],
+            Ok(vec![terminator_core::idle_close::Outcome {
+                session: "shell".into(),
+                status: terminator_core::idle_close::Status::Failed,
+                reason: "Signal delivered, but exit was not confirmed; view preserved".into(),
+            }]),
+        );
+        assert_eq!(app.idle_close_fallback.as_ref(), Some(&target));
+        assert!(app.error.as_deref().is_some_and(|e| e.contains("Failed")));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
     }
 
     #[test]
@@ -4730,5 +4852,101 @@ mod navigation_tests {
             }
         }
         assert!(saw_dismiss);
+    }
+
+    #[cfg(feature = "test-support")]
+    fn click_agent_target(app: &mut App, ctx: &egui::Context, name: &str) {
+        render_agents(app, ctx, vec![]);
+        let pos = agent_target(ctx, name).unwrap().center();
+        render_agents(app, ctx, vec![egui::Event::PointerMoved(pos)]);
+        render_agents(
+            app,
+            ctx,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            }],
+        );
+        render_agents(
+            app,
+            ctx,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    fn waiting_inbox() -> (App, egui::Context, tempfile::TempDir, mpsc::Receiver<Job>) {
+        let (mut app, ctx, dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        app.state.notifications = vec![notice_fixture(
+            "wait",
+            "live-shell",
+            AgentState::WaitingPermission,
+            now(),
+        )];
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        (app, ctx, dir, received)
+    }
+
+    #[cfg(feature = "test-support")]
+    fn control_actions(received: &mpsc::Receiver<Job>) -> Vec<String> {
+        let mut actions = Vec::new();
+        while let Ok(job) = received.try_recv() {
+            if let Job::Control(request, _) = job {
+                match *request {
+                    Request::Notice { action, .. } => actions.push(action),
+                    Request::Focus { .. } => actions.push("focus".into()),
+                    _ => {}
+                }
+            }
+        }
+        actions
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn dismiss_click_does_not_focus_the_agent() {
+        let (mut app, ctx, _dir, received) = waiting_inbox();
+        click_agent_target(&mut app, &ctx, "agent-dismiss:live-shell");
+        assert!(app.state.notifications[0].dismissed);
+        assert!(app.active_session.is_none());
+        let actions = control_actions(&received);
+        assert!(actions.iter().any(|action| action == "dismiss"));
+        assert!(!actions.iter().any(|action| action == "focus"));
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn snooze_click_does_not_focus_the_agent() {
+        let (mut app, ctx, _dir, received) = waiting_inbox();
+        click_agent_target(&mut app, &ctx, "agent-snooze:live-shell");
+        assert!(app.state.notifications[0].snoozed_until > now());
+        assert!(!app.state.notifications[0].dismissed);
+        assert!(app.active_session.is_none());
+        let actions = control_actions(&received);
+        assert!(actions.iter().any(|action| action == "snooze"));
+        assert!(!actions.iter().any(|action| action == "focus"));
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn go_click_focuses_the_agent() {
+        let (mut app, ctx, _dir, received) = waiting_inbox();
+        click_agent_target(&mut app, &ctx, "agent-go:live-shell");
+        assert_eq!(app.active_session.as_deref(), Some("live-shell"));
+        assert!(
+            control_actions(&received)
+                .iter()
+                .any(|action| action == "focus")
+        );
     }
 }

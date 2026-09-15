@@ -24,13 +24,13 @@ pub struct DiffRequest<'a> {
     pub staged: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Intra {
     None,
     Change,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LineKind {
     Hunk,
     Equal,
@@ -38,14 +38,14 @@ pub enum LineKind {
     Insert,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DiffSpan {
     pub text: String,
     pub rgb: [u8; 3],
     pub intra: Intra,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DiffLine {
     pub kind: LineKind,
     pub old_no: Option<u32>,
@@ -53,13 +53,13 @@ pub struct DiffLine {
     pub spans: Vec<DiffSpan>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SplitRow {
     pub left: Option<DiffLine>,
     pub right: Option<DiffLine>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DiffDocument {
     pub left_label: String,
     pub right_label: String,

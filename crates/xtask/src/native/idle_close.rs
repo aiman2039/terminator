@@ -20,7 +20,7 @@ pub fn run(o: &Options) -> Result<()> {
     let busy = h.shell(&project)?;
     h.layout(&project, &[idle.clone(), busy.clone()])?;
     thread::sleep(Duration::from_millis(400));
-    h.write(&mut h.attach(&busy)?, "read value\r")?;
+    h.write(&mut h.attach(&busy)?, "sleep 30\r")?;
     plain(
         &h,
         o,

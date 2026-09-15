@@ -36,10 +36,6 @@ impl Shared {
             "Terminal input is still being forwarded"
         );
         ensure!(
-            runtime.prompt.ready,
-            "No current authenticated prompt readiness; keep running or explicitly terminate"
-        );
-        ensure!(
             runtime.master.process_group_leader() == Some(pid as i32),
             "A foreground command owns the terminal"
         );
@@ -59,7 +55,7 @@ impl Shared {
         sessions.dedup();
         let mut outcomes = Vec::new();
         {
-            // All input forwarding, readiness transitions, and close decisions share this lock.
+            // All input forwarding and close decisions share this lock.
             let _operation = self.terminal_operations.lock().unwrap();
             if self.state.lock().unwrap().generation != generation {
                 return Ok(Response::IdleSessionsClosed(
@@ -111,9 +107,7 @@ impl Shared {
                     Ok(Some(pid)) => {
                         if unsafe { libc::kill(-(pid as i32), libc::SIGHUP) } == 0 {
                             if let Ok(runtime) = self.runtime(&session) {
-                                let mut runtime = runtime.lock().unwrap();
-                                runtime.prompt.ready = false;
-                                runtime.closing = true;
+                                runtime.lock().unwrap().closing = true;
                             }
                             let mut state = self.state.lock().unwrap();
                             if let Some(record) = state

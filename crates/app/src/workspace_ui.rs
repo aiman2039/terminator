@@ -621,12 +621,6 @@ impl App {
         match self.diffs.get(&key) {
             Some(Ok(doc)) => {
                 let split = self.diff_split.contains(&key);
-                let rows = if split {
-                    doc.split.len()
-                } else {
-                    doc.unified.len()
-                };
-                let height = ui.text_style_height(&egui::TextStyle::Monospace).max(16.0);
                 let colors = DiffColors {
                     added: appearance::color(&self.theme.git_added),
                     deleted: appearance::color(&self.theme.git_deleted),
@@ -634,40 +628,7 @@ impl App {
                     text: appearance::color(&self.theme.text),
                 };
                 let doc = doc.clone();
-                egui::ScrollArea::both()
-                    .id_salt(&key)
-                    .show_rows(ui, height, rows, |ui, range| {
-                        for index in range {
-                            if split {
-                                let width = ui.available_width() / 2.0;
-                                ui.horizontal(|ui| {
-                                    paint_diff_side(
-                                        ui,
-                                        egui::vec2(width, height),
-                                        doc.split[index].left.as_ref(),
-                                        colors,
-                                    );
-                                    paint_diff_side(
-                                        ui,
-                                        egui::vec2(width, height),
-                                        doc.split[index].right.as_ref(),
-                                        colors,
-                                    );
-                                });
-                            } else {
-                                paint_diff_line(
-                                    ui,
-                                    DiffPaint {
-                                        width: ui.available_width(),
-                                        height,
-                                        line: &doc.unified[index],
-                                        unified: true,
-                                        colors,
-                                    },
-                                );
-                            }
-                        }
-                    });
+                paint_diff_document(ui, &doc, split, colors, &key);
             }
             Some(Err(error)) => {
                 ui.colored_label(appearance::color(&self.theme.status_failed), error);
@@ -687,82 +648,344 @@ struct DiffColors {
     text: Color32,
 }
 
-struct DiffPaint<'a> {
-    width: f32,
-    height: f32,
-    line: &'a diff::DiffLine,
-    unified: bool,
-    colors: DiffColors,
+#[derive(Clone, Copy)]
+enum DiffGutter {
+    Unified,
+    Old,
+    New,
 }
 
-fn paint_diff_side(
-    ui: &mut egui::Ui,
-    size: egui::Vec2,
-    line: Option<&diff::DiffLine>,
+struct DiffMetrics {
+    font: egui::FontId,
+    digit_w: f32,
+    row_h: f32,
+    digits: u32,
+}
+
+impl DiffMetrics {
+    fn measure(ui: &egui::Ui, digits: u32) -> Self {
+        let font = ui.style().text_styles[&egui::TextStyle::Monospace].clone();
+        let (digit_w, row_h) = ui
+            .ctx()
+            .fonts_mut(|fonts| (fonts.glyph_width(&font, '0'), fonts.row_height(&font)));
+        Self {
+            font,
+            digit_w,
+            row_h,
+            digits,
+        }
+    }
+
+    fn number_w(&self) -> f32 {
+        self.digit_w * self.digits as f32
+    }
+}
+
+#[derive(Clone, Copy)]
+struct GutterCols {
+    old_right: Option<f32>,
+    new_right: Option<f32>,
+    sign: f32,
+    code: f32,
+}
+
+struct DiffPaint<'a> {
+    width: f32,
+    line: &'a diff::DiffLine,
+    gutter: DiffGutter,
     colors: DiffColors,
+    metrics: &'a DiffMetrics,
+}
+
+struct DiffSidePaint<'a> {
+    size: egui::Vec2,
+    line: Option<&'a diff::DiffLine>,
+    gutter: DiffGutter,
+    colors: DiffColors,
+    metrics: &'a DiffMetrics,
+}
+
+struct DiffGutterPaint<'a> {
+    rect: egui::Rect,
+    cols: GutterCols,
+    line: &'a diff::DiffLine,
+    sign: &'static str,
+    colors: DiffColors,
+    metrics: &'a DiffMetrics,
+}
+
+struct DiffNumberPaint<'a> {
+    top: f32,
+    right: f32,
+    number: Option<u32>,
+    metrics: &'a DiffMetrics,
+    color: Color32,
+}
+
+// Widths are document-wide so vertical virtualization cannot shrink the horizontal
+// scroll range when the longest line leaves the viewport.
+#[derive(Clone)]
+struct DiffWidths {
+    fingerprint: egui::Id,
+    content: f32,
+}
+
+fn diff_content_width(
+    ui: &egui::Ui,
+    doc: &diff::DiffDocument,
+    split: bool,
+    metrics: &DiffMetrics,
+    scroll_key: &str,
+) -> f32 {
+    let cache_id = egui::Id::new(("diff-width", scroll_key, split));
+    let fingerprint = egui::Id::new((
+        doc,
+        &metrics.font,
+        metrics.digit_w.to_bits(),
+        metrics.row_h.to_bits(),
+        ui.ctx().pixels_per_point().to_bits(),
+    ));
+    if let Some(cached) = ui
+        .ctx()
+        .data_mut(|data| data.get_temp::<DiffWidths>(cache_id))
+        && cached.fingerprint == fingerprint
+    {
+        return cached.content;
+    }
+    let lines: Box<dyn Iterator<Item = &diff::DiffLine>> = if split {
+        Box::new(
+            doc.split
+                .iter()
+                .flat_map(|row| [row.left.as_ref(), row.right.as_ref()])
+                .flatten(),
+        )
+    } else {
+        Box::new(doc.unified.iter())
+    };
+    let gutter = if split {
+        DiffGutter::Old
+    } else {
+        DiffGutter::Unified
+    };
+    let code_width = lines
+        .map(|line| {
+            let text = line
+                .spans
+                .iter()
+                .map(|span| span.text.as_str())
+                .collect::<String>();
+            ui.painter()
+                .layout_no_wrap(text, metrics.font.clone(), Color32::WHITE)
+                .size()
+                .x
+        })
+        .fold(0.0, f32::max);
+    let content = gutter_cols(metrics, gutter).code + code_width;
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(
+            cache_id,
+            DiffWidths {
+                fingerprint,
+                content,
+            },
+        )
+    });
+    content
+}
+
+fn paint_diff_document(
+    ui: &mut egui::Ui,
+    doc: &diff::DiffDocument,
+    split: bool,
+    colors: DiffColors,
+    scroll_key: &str,
+) -> egui::scroll_area::ScrollAreaOutput<()> {
+    let rows = diff_row_count(doc, split);
+    let digits = diff_doc_digits(doc, split);
+    let metrics = DiffMetrics::measure(ui, digits);
+    let content = diff_content_width(ui, doc, split, &metrics, scroll_key);
+    let columns = if split { 2.0 } else { 1.0 };
+    let column_width = content.max(ui.available_width() / columns);
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+        egui::ScrollArea::both()
+            .id_salt((scroll_key, split))
+            .auto_shrink([false, false])
+            .show_rows(ui, metrics.row_h, rows, |ui, range| {
+                ui.set_min_width(column_width * columns);
+                for index in range {
+                    if split {
+                        paint_diff_split_row(ui, &doc.split[index], colors, &metrics, column_width);
+                    } else {
+                        paint_diff_line(
+                            ui,
+                            DiffPaint {
+                                width: column_width,
+                                line: &doc.unified[index],
+                                gutter: DiffGutter::Unified,
+                                colors,
+                                metrics: &metrics,
+                            },
+                        );
+                    }
+                }
+            })
+    })
+    .inner
+}
+
+fn paint_diff_split_row(
+    ui: &mut egui::Ui,
+    row: &diff::SplitRow,
+    colors: DiffColors,
+    metrics: &DiffMetrics,
+    width: f32,
 ) {
+    let size = egui::vec2(width, metrics.row_h);
+    ui.allocate_ui_with_layout(
+        egui::vec2(width * 2.0, metrics.row_h),
+        egui::Layout::left_to_right(egui::Align::Min),
+        |ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+            paint_diff_side(
+                ui,
+                DiffSidePaint {
+                    size,
+                    line: row.left.as_ref(),
+                    gutter: DiffGutter::Old,
+                    colors,
+                    metrics,
+                },
+            );
+            paint_diff_side(
+                ui,
+                DiffSidePaint {
+                    size,
+                    line: row.right.as_ref(),
+                    gutter: DiffGutter::New,
+                    colors,
+                    metrics,
+                },
+            );
+        },
+    );
+}
+
+fn diff_row_count(doc: &diff::DiffDocument, split: bool) -> usize {
+    if split {
+        doc.split.len()
+    } else {
+        doc.unified.len()
+    }
+}
+
+fn diff_doc_digits(doc: &diff::DiffDocument, split: bool) -> u32 {
+    if split {
+        diff_gutter_digits(
+            doc.split
+                .iter()
+                .flat_map(|row| [row.left.as_ref(), row.right.as_ref()])
+                .flatten(),
+        )
+    } else {
+        diff_gutter_digits(doc.unified.iter())
+    }
+}
+
+fn diff_gutter_digits<'a>(lines: impl IntoIterator<Item = &'a diff::DiffLine>) -> u32 {
+    let max = lines
+        .into_iter()
+        .flat_map(|line| [line.old_no, line.new_no])
+        .flatten()
+        .max()
+        .unwrap_or(1);
+    max.ilog10().saturating_add(1).max(4)
+}
+
+fn gutter_cols(metrics: &DiffMetrics, gutter: DiffGutter) -> GutterCols {
+    let pad = metrics.digit_w;
+    let number_w = metrics.number_w();
+    let mut x = pad;
+    match gutter {
+        DiffGutter::Unified => {
+            let old_right = x + number_w;
+            x = old_right + pad;
+            let new_right = x + number_w;
+            x = new_right + pad;
+            let sign = x;
+            GutterCols {
+                old_right: Some(old_right),
+                new_right: Some(new_right),
+                sign,
+                code: sign + metrics.digit_w + pad,
+            }
+        }
+        DiffGutter::Old | DiffGutter::New => side_gutter_cols(metrics, gutter),
+    }
+}
+
+fn side_gutter_cols(metrics: &DiffMetrics, gutter: DiffGutter) -> GutterCols {
+    let pad = metrics.digit_w;
+    let right = pad + metrics.number_w();
+    let sign = right + pad;
+    let code = sign + metrics.digit_w + pad;
+    GutterCols {
+        old_right: matches!(gutter, DiffGutter::Old).then_some(right),
+        new_right: matches!(gutter, DiffGutter::New).then_some(right),
+        sign,
+        code,
+    }
+}
+
+fn paint_diff_side(ui: &mut egui::Ui, paint: DiffSidePaint<'_>) {
+    let DiffSidePaint {
+        size,
+        line,
+        gutter,
+        colors,
+        metrics,
+    } = paint;
     ui.allocate_ui(size, |ui| {
+        ui.set_min_size(size);
+        ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
         if let Some(line) = line {
             paint_diff_line(
                 ui,
                 DiffPaint {
                     width: size.x,
-                    height: size.y,
                     line,
-                    unified: false,
+                    gutter,
                     colors,
+                    metrics,
                 },
             );
         }
     });
 }
 
-fn paint_diff_line(ui: &mut egui::Ui, paint: DiffPaint<'_>) {
-    let DiffPaint {
-        width,
-        height,
-        line,
-        unified,
-        colors,
-    } = paint;
-    let DiffColors {
-        added,
-        deleted,
-        accent,
-        text,
-    } = colors;
-    let (bg, sign) = match line.kind {
-        diff::LineKind::Insert => (tint(added, 40), "+"),
-        diff::LineKind::Delete => (tint(deleted, 40), "-"),
-        diff::LineKind::Hunk => (tint(accent, 24), " "),
+fn diff_row_style(kind: diff::LineKind, colors: DiffColors) -> (Color32, &'static str) {
+    match kind {
+        diff::LineKind::Insert => (tint(colors.added, 40), "+"),
+        diff::LineKind::Delete => (tint(colors.deleted, 40), "-"),
+        diff::LineKind::Hunk => (tint(colors.accent, 24), " "),
         diff::LineKind::Equal => (Color32::TRANSPARENT, " "),
-    };
-    let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(width.max(1.0), height), egui::Sense::hover());
-    if bg != Color32::TRANSPARENT {
-        ui.painter().rect_filled(rect, 0.0, bg);
     }
-    let mut job = egui::text::LayoutJob::default();
-    let font = egui::FontId::monospace(ui.style().text_styles[&egui::TextStyle::Monospace].size);
-    let gutter = format!(
-        "{:>4} {:>4} {} ",
-        line.old_no.map(|n| n.to_string()).unwrap_or_default(),
-        line.new_no.map(|n| n.to_string()).unwrap_or_default(),
-        if unified { sign } else { " " }
-    );
-    job.append(
-        &gutter,
-        0.0,
-        egui::TextFormat {
-            font_id: font.clone(),
-            color: ui.visuals().weak_text_color(),
-            ..Default::default()
-        },
-    );
+}
+
+fn diff_code_job(
+    line: &diff::DiffLine,
+    font: &egui::FontId,
+    colors: DiffColors,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob {
+        wrap: egui::text::TextWrapping::no_max_width(),
+        break_on_newline: false,
+        ..Default::default()
+    };
     for span in &line.spans {
         let intra = match (line.kind, span.intra) {
-            (diff::LineKind::Insert, diff::Intra::Change) => tint(added, 90),
-            (diff::LineKind::Delete, diff::Intra::Change) => tint(deleted, 90),
+            (diff::LineKind::Insert, diff::Intra::Change) => tint(colors.added, 90),
+            (diff::LineKind::Delete, diff::Intra::Change) => tint(colors.deleted, 90),
             _ => Color32::TRANSPARENT,
         };
         job.append(
@@ -771,7 +994,7 @@ fn paint_diff_line(ui: &mut egui::Ui, paint: DiffPaint<'_>) {
             egui::TextFormat {
                 font_id: font.clone(),
                 color: if line.kind == diff::LineKind::Hunk {
-                    accent
+                    colors.accent
                 } else {
                     Color32::from_rgb(span.rgb[0], span.rgb[1], span.rgb[2])
                 },
@@ -785,15 +1008,130 @@ fn paint_diff_line(ui: &mut egui::Ui, paint: DiffPaint<'_>) {
             " ",
             0.0,
             egui::TextFormat {
-                font_id: font,
-                color: text,
+                font_id: font.clone(),
+                color: colors.text,
                 ..Default::default()
             },
         );
     }
-    ui.put(
+    job
+}
+
+fn fill_diff_row(ui: &egui::Ui, rect: egui::Rect, gutter_w: f32, bg: Color32) {
+    if bg != Color32::TRANSPARENT {
+        ui.painter().rect_filled(rect, 0.0, bg);
+    }
+    let gutter =
+        egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + gutter_w, rect.bottom()));
+    ui.painter()
+        .rect_filled(gutter, 0.0, Color32::from_black_alpha(40));
+}
+
+fn paint_diff_number(ui: &egui::Ui, paint: DiffNumberPaint<'_>) {
+    let DiffNumberPaint {
+        top,
+        right,
+        number,
+        metrics,
+        color,
+    } = paint;
+    let Some(number) = number else {
+        return;
+    };
+    let galley = ui
+        .painter()
+        .layout_no_wrap(number.to_string(), metrics.font.clone(), color);
+    ui.painter().galley(
+        egui::pos2(right - galley.size().x, top).round(),
+        galley,
+        color,
+    );
+}
+
+fn paint_diff_gutter(ui: &egui::Ui, paint: DiffGutterPaint<'_>) {
+    let DiffGutterPaint {
         rect,
-        egui::Label::new(job).wrap_mode(egui::TextWrapMode::Extend),
+        cols,
+        line,
+        sign,
+        colors,
+        metrics,
+    } = paint;
+    if line.kind == diff::LineKind::Hunk {
+        return;
+    }
+    let weak = ui.visuals().weak_text_color();
+    if let Some(right) = cols.old_right {
+        paint_diff_number(
+            ui,
+            DiffNumberPaint {
+                top: rect.top(),
+                right: rect.left() + right,
+                number: line.old_no,
+                metrics,
+                color: weak,
+            },
+        );
+    }
+    if let Some(right) = cols.new_right {
+        paint_diff_number(
+            ui,
+            DiffNumberPaint {
+                top: rect.top(),
+                right: rect.left() + right,
+                number: line.new_no,
+                metrics,
+                color: weak,
+            },
+        );
+    }
+    if sign != " " {
+        let color = match line.kind {
+            diff::LineKind::Insert => colors.added,
+            diff::LineKind::Delete => colors.deleted,
+            diff::LineKind::Hunk | diff::LineKind::Equal => weak,
+        };
+        let galley = ui
+            .painter()
+            .layout_no_wrap(sign.to_owned(), metrics.font.clone(), color);
+        ui.painter().galley(
+            egui::pos2(rect.left() + cols.sign, rect.top()).round(),
+            galley,
+            color,
+        );
+    }
+}
+
+fn paint_diff_line(ui: &mut egui::Ui, paint: DiffPaint<'_>) {
+    let DiffPaint {
+        width,
+        line,
+        gutter,
+        colors,
+        metrics,
+    } = paint;
+    let (bg, sign) = diff_row_style(line.kind, colors);
+    let cols = gutter_cols(metrics, gutter);
+    let code = ui
+        .painter()
+        .layout_job(diff_code_job(line, &metrics.font, colors));
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, metrics.row_h), egui::Sense::hover());
+    fill_diff_row(ui, rect, cols.code, bg);
+    paint_diff_gutter(
+        ui,
+        DiffGutterPaint {
+            rect,
+            cols,
+            line,
+            sign,
+            colors,
+            metrics,
+        },
+    );
+    ui.painter().galley(
+        (rect.left_top() + egui::vec2(cols.code, 0.0)).round(),
+        code,
+        colors.text,
     );
 }
 
@@ -1489,9 +1827,12 @@ impl Viewer<'_> {
                 appearance::target_header(ui, &target.display());
                 if let Some(action) = file_actions::menu(
                     ui,
-                    matches!(target, services::Target::File(..)),
-                    matches!(target, services::Target::Url(..)),
-                    None,
+                    file_actions::FileMenu {
+                        file: matches!(target, services::Target::File(..)),
+                        browser: matches!(target, services::Target::Url(..)),
+                        git: None,
+                        neovim: false,
+                    },
                 ) {
                     self.app.terminal_action(ui.ctx(), session, &target, action);
                 }
@@ -1546,9 +1887,12 @@ impl Viewer<'_> {
                     appearance::target_header(ui, &target.display());
                     if let Some(action) = file_actions::menu(
                         ui,
-                        matches!(target, services::Target::File(..)),
-                        matches!(target, services::Target::Url(..)),
-                        None,
+                        file_actions::FileMenu {
+                            file: matches!(target, services::Target::File(..)),
+                            browser: matches!(target, services::Target::Url(..)),
+                            git: None,
+                            neovim: false,
+                        },
                     ) {
                         self.app.terminal_action(ui.ctx(), session, &target, action);
                     }
@@ -1558,5 +1902,586 @@ impl Viewer<'_> {
                 self.app.hover = None;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span(text: &str) -> diff::DiffSpan {
+        diff::DiffSpan {
+            text: text.into(),
+            rgb: [209, 211, 217],
+            intra: diff::Intra::None,
+        }
+    }
+
+    fn line(
+        kind: diff::LineKind,
+        old_no: Option<u32>,
+        new_no: Option<u32>,
+        text: &str,
+    ) -> diff::DiffLine {
+        diff::DiffLine {
+            kind,
+            old_no,
+            new_no,
+            spans: vec![span(text)],
+        }
+    }
+
+    fn sample_line() -> diff::DiffLine {
+        line(diff::LineKind::Insert, None, Some(1), "visible-diff-marker")
+    }
+
+    fn sample_doc() -> diff::DiffDocument {
+        diff::DiffDocument {
+            left_label: "Index".into(),
+            right_label: "Working tree".into(),
+            unified: vec![sample_line()],
+            split: vec![],
+        }
+    }
+
+    fn paint_diff_view(app: &mut App, ctx: &egui::Context, tab: &Tab) -> Vec<(egui::Pos2, String)> {
+        let mut painted = Vec::new();
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 500.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    // egui_dock tab body: no pane scrollbars, expand to the leaf,
+                    // then the native viewer owns its own ScrollArea.
+                    egui::ScrollArea::new([false, false]).show(ui, |ui| {
+                        let available = ui.available_rect_before_wrap();
+                        ui.expand_to_include_rect(available);
+                        app.diff_view(ui, tab);
+                    });
+                },
+            );
+            painted = painted_text(&output.shapes);
+            output.textures_delta.clear();
+        }
+        painted
+    }
+
+    fn paint_doc(doc: diff::DiffDocument, split: bool) -> Vec<(egui::Pos2, String)> {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        let tab = Tab::Diff {
+            cwd: "/repo".into(),
+            path: "/repo/file.rs".into(),
+            staged: false,
+        };
+        if split {
+            app.diff_split.insert(tab.key());
+        }
+        app.diffs.insert(tab.key(), Ok(doc));
+        paint_diff_view(&mut app, &ctx, &tab)
+    }
+
+    fn painted_text(shapes: &[egui::epaint::ClippedShape]) -> Vec<(egui::Pos2, String)> {
+        fn walk(out: &mut Vec<(egui::Pos2, String)>, shape: &egui::Shape) {
+            match shape {
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(out, shape);
+                    }
+                }
+                egui::Shape::Text(text) => out.push((text.pos, text.galley.text().to_owned())),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for clipped in shapes {
+            walk(&mut out, &clipped.shape);
+        }
+        out
+    }
+
+    fn require_text<'a>(
+        painted: &'a [(egui::Pos2, String)],
+        needle: &str,
+    ) -> &'a (egui::Pos2, String) {
+        painted
+            .iter()
+            .find(|(_, text)| text == needle)
+            .unwrap_or_else(|| panic!("{needle} was not painted: {painted:?}"))
+    }
+
+    #[test]
+    fn unified_diff_text_stays_in_the_viewport() {
+        let painted = paint_doc(sample_doc(), false);
+        let (pos, text) = require_text(&painted, "visible-diff-marker");
+        assert!(
+            (40.0..200.0).contains(&pos.x),
+            "code must start at the gutter, not centered or at x=0, got {pos:?} {text}"
+        );
+        assert!(
+            !text.chars().any(|c| c.is_ascii_digit()),
+            "code galley must not include line numbers, got {text:?}"
+        );
+    }
+
+    #[test]
+    fn diff_view_paints_hunks_in_a_dock_pane() {
+        let painted = paint_doc(sample_doc(), false);
+        let (pos, _) = require_text(&painted, "visible-diff-marker");
+        assert!(
+            (40.0..200.0).contains(&pos.x) && (0.0..500.0).contains(&pos.y),
+            "hunk text must stay in the pane, got {pos:?}"
+        );
+    }
+
+    #[test]
+    fn equal_lines_share_a_gutter_x() {
+        let painted = paint_doc(
+            diff::DiffDocument {
+                left_label: "Index".into(),
+                right_label: "Working tree".into(),
+                unified: vec![
+                    line(diff::LineKind::Equal, Some(8), Some(8), "x"),
+                    line(
+                        diff::LineKind::Equal,
+                        Some(9),
+                        Some(9),
+                        "this-is-a-much-longer-equal-line",
+                    ),
+                ],
+                split: vec![],
+            },
+            false,
+        );
+        let short = require_text(&painted, "x");
+        let long = require_text(&painted, "this-is-a-much-longer-equal-line");
+        assert!(
+            (short.0.x - long.0.x).abs() < 1.0,
+            "short and long lines must share a gutter, got {} vs {}",
+            short.0.x,
+            long.0.x
+        );
+    }
+
+    #[test]
+    fn delete_sign_stays_right_of_line_numbers() {
+        let painted = paint_doc(
+            diff::DiffDocument {
+                left_label: "Index".into(),
+                right_label: "Working tree".into(),
+                unified: vec![line(
+                    diff::LineKind::Delete,
+                    Some(100),
+                    None,
+                    "removed-line",
+                )],
+                split: vec![],
+            },
+            false,
+        );
+        let number = require_text(&painted, "100");
+        let sign = require_text(&painted, "-");
+        let code = require_text(&painted, "removed-line");
+        assert!(
+            sign.0.x > number.0.x + 8.0,
+            "minus must sit in its own column, got number={} sign={}",
+            number.0.x,
+            sign.0.x
+        );
+        assert!(
+            code.0.x > sign.0.x,
+            "code must start after the sign, got sign={} code={}",
+            sign.0.x,
+            code.0.x
+        );
+    }
+
+    #[test]
+    fn insert_sign_stays_right_of_line_numbers() {
+        let painted = paint_doc(
+            diff::DiffDocument {
+                left_label: "Index".into(),
+                right_label: "Working tree".into(),
+                unified: vec![line(diff::LineKind::Insert, None, Some(102), "added-line")],
+                split: vec![],
+            },
+            false,
+        );
+        let number = require_text(&painted, "102");
+        let sign = require_text(&painted, "+");
+        assert!(
+            sign.0.x > number.0.x,
+            "plus must sit to the right of the new number, got number={} sign={}",
+            number.0.x,
+            sign.0.x
+        );
+    }
+
+    #[test]
+    fn split_paints_one_number_per_side() {
+        let painted = paint_doc(
+            diff::DiffDocument {
+                left_label: "Index".into(),
+                right_label: "Working tree".into(),
+                unified: vec![],
+                split: vec![diff::SplitRow {
+                    left: Some(line(diff::LineKind::Delete, Some(5), None, "left-only")),
+                    right: Some(line(diff::LineKind::Insert, None, Some(6), "right-only")),
+                }],
+            },
+            true,
+        );
+        let left = require_text(&painted, "left-only");
+        let right = require_text(&painted, "right-only");
+        let old_no = require_text(&painted, "5");
+        let new_no = require_text(&painted, "6");
+        assert!(
+            left.0.x < right.0.x,
+            "split sides must not stack, got left={} right={}",
+            left.0.x,
+            right.0.x
+        );
+        assert!(
+            old_no.0.x < left.0.x && old_no.0.x < 200.0,
+            "old number must stay on the left gutter, got {old_no:?}"
+        );
+        assert!(
+            new_no.0.x > left.0.x && new_no.0.x < right.0.x,
+            "new number must stay on the right gutter, got old={} new={} left={} right={}",
+            old_no.0.x,
+            new_no.0.x,
+            left.0.x,
+            right.0.x
+        );
+    }
+
+    #[test]
+    fn diff_rows_use_font_height_not_item_spacing() {
+        let painted = paint_doc(
+            diff::DiffDocument {
+                left_label: "Index".into(),
+                right_label: "Working tree".into(),
+                unified: vec![
+                    line(diff::LineKind::Equal, Some(1), Some(1), "row-a"),
+                    line(diff::LineKind::Equal, Some(2), Some(2), "row-b"),
+                ],
+                split: vec![],
+            },
+            false,
+        );
+        let a = require_text(&painted, "row-a");
+        let b = require_text(&painted, "row-b");
+        let pitch = b.0.y - a.0.y;
+        assert!(
+            (12.0..22.0).contains(&pitch),
+            "row pitch must be the font line height, not height+8 item_spacing, got {pitch}"
+        );
+    }
+
+    #[test]
+    fn equal_line_keeps_old_and_new_numbers_apart() {
+        let painted = paint_doc(
+            diff::DiffDocument {
+                left_label: "Index".into(),
+                right_label: "Working tree".into(),
+                unified: vec![line(diff::LineKind::Equal, Some(97), Some(97), "unchanged")],
+                split: vec![],
+            },
+            false,
+        );
+        let numbers: Vec<_> = painted.iter().filter(|(_, text)| text == "97").collect();
+        assert_eq!(
+            numbers.len(),
+            2,
+            "unified equal lines paint old and new numbers separately, got {painted:?}"
+        );
+        let gap = (numbers[1].0.x - numbers[0].0.x).abs();
+        assert!(
+            gap > 8.0,
+            "old and new 97 must be distinct columns, got {} and {}",
+            numbers[0].0.x,
+            numbers[1].0.x
+        );
+    }
+
+    #[test]
+    fn hunk_header_paints_no_line_numbers() {
+        let painted = paint_doc(
+            diff::DiffDocument {
+                left_label: "Index".into(),
+                right_label: "Working tree".into(),
+                unified: vec![line(diff::LineKind::Hunk, None, None, "@@ -3,2 +3,2 @@")],
+                split: vec![],
+            },
+            false,
+        );
+        let header = require_text(&painted, "@@ -3,2 +3,2 @@");
+        assert!(
+            (40.0..200.0).contains(&header.0.x),
+            "hunk text must align with code, got {header:?}"
+        );
+        assert!(
+            painted.iter().all(|(_, text)| text != "3"),
+            "hunk rows must not paint fake line numbers, got {painted:?}"
+        );
+    }
+
+    #[test]
+    fn five_digit_line_numbers_still_clear_the_sign() {
+        let painted = paint_doc(
+            diff::DiffDocument {
+                left_label: "Index".into(),
+                right_label: "Working tree".into(),
+                unified: vec![line(diff::LineKind::Insert, None, Some(10000), "wide-line")],
+                split: vec![],
+            },
+            false,
+        );
+        let number = require_text(&painted, "10000");
+        let sign = require_text(&painted, "+");
+        assert!(
+            sign.0.x > number.0.x + 8.0,
+            "5-digit numbers must not overflow into the sign column, got number={} sign={}",
+            number.0.x,
+            sign.0.x
+        );
+    }
+
+    #[test]
+    fn gutter_digit_columns_grow_with_line_numbers() {
+        assert_eq!(diff_gutter_digits(std::iter::empty()), 4);
+        assert_eq!(
+            diff_gutter_digits(std::iter::once(&line(
+                diff::LineKind::Equal,
+                Some(9999),
+                Some(9999),
+                "n",
+            ))),
+            4
+        );
+        assert_eq!(
+            diff_gutter_digits(std::iter::once(&line(
+                diff::LineKind::Equal,
+                Some(10000),
+                Some(10000),
+                "n",
+            ))),
+            5
+        );
+    }
+    #[test]
+    fn insertion_only_split_rows_keep_the_right_column() {
+        let painted = paint_doc(
+            diff::DiffDocument {
+                left_label: "old".into(),
+                right_label: "new".into(),
+                unified: vec![],
+                split: vec![
+                    diff::SplitRow {
+                        left: None,
+                        right: Some(line(diff::LineKind::Insert, None, Some(1), "insert-only")),
+                    },
+                    diff::SplitRow {
+                        left: Some(line(diff::LineKind::Equal, Some(1), Some(2), "paired-left")),
+                        right: Some(line(
+                            diff::LineKind::Equal,
+                            Some(1),
+                            Some(2),
+                            "paired-right",
+                        )),
+                    },
+                    diff::SplitRow {
+                        left: Some(line(diff::LineKind::Delete, Some(2), None, "delete-only")),
+                        right: None,
+                    },
+                ],
+            },
+            true,
+        );
+        assert_eq!(
+            require_text(&painted, "insert-only").0.x,
+            require_text(&painted, "paired-right").0.x
+        );
+        assert_eq!(
+            require_text(&painted, "delete-only").0.x,
+            require_text(&painted, "paired-left").0.x
+        );
+    }
+
+    fn scroll_doc(
+        ctx: &egui::Context,
+        doc: &diff::DiffDocument,
+        split: bool,
+    ) -> (
+        egui::scroll_area::ScrollAreaOutput<()>,
+        Vec<egui::epaint::ClippedShape>,
+    ) {
+        let mut scroll = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 300.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                scroll = Some(paint_diff_document(
+                    ui,
+                    doc,
+                    split,
+                    DiffColors {
+                        added: Color32::GREEN,
+                        deleted: Color32::RED,
+                        accent: Color32::BLUE,
+                        text: Color32::WHITE,
+                    },
+                    "scroll-regression",
+                ));
+            },
+        );
+        output.textures_delta.clear();
+        (scroll.unwrap(), output.shapes)
+    }
+
+    fn long_doc() -> diff::DiffDocument {
+        let unified: Vec<_> = (1..=150)
+            .map(|n| {
+                line(
+                    diff::LineKind::Equal,
+                    Some(n),
+                    Some(n),
+                    &if n == 1 {
+                        format!("{}END", "long-line-".repeat(30))
+                    } else {
+                        format!("short-{n}")
+                    },
+                )
+            })
+            .collect();
+        let split = unified
+            .iter()
+            .map(|line| diff::SplitRow {
+                left: Some(line.clone()),
+                right: Some(line.clone()),
+            })
+            .collect();
+        diff::DiffDocument {
+            left_label: "old".into(),
+            right_label: "new".into(),
+            unified,
+            split,
+        }
+    }
+
+    #[test]
+    fn long_split_lines_have_scroll_space_and_do_not_cross_their_column() {
+        let ctx = egui::Context::default();
+        let doc = long_doc();
+        scroll_doc(&ctx, &doc, true);
+        let (scroll, _) = scroll_doc(&ctx, &doc, true);
+        assert!(scroll.content_size.x > 3000.0);
+        // Bring the end of the left column and beginning of the right into view.
+        let mut state = scroll.state;
+        state.offset.x = scroll.content_size.x / 2.0 - 400.0;
+        state.store(&ctx, scroll.id);
+        let (_, shapes) = scroll_doc(&ctx, &doc, true);
+        let long: Vec<_> = shapes
+            .iter()
+            .filter_map(|shape| {
+                if let egui::Shape::Text(text) = &shape.shape
+                    && text.galley.text().ends_with("END")
+                {
+                    Some((shape.clip_rect, text))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(long.len(), 2);
+        assert!(long[0].0.right() <= long[1].0.left() + 1.0);
+        for (clip, text) in long {
+            assert!(
+                text.pos.x + text.galley.size().x <= clip.right() + 1.0
+                    || clip.right() == scroll.inner_rect.right()
+            );
+        }
+    }
+
+    #[test]
+    fn split_row_pitch_matches_the_virtualized_font_height() {
+        let ctx = egui::Context::default();
+        let doc = long_doc();
+        scroll_doc(&ctx, &doc, true);
+        let (_, shapes) = scroll_doc(&ctx, &doc, true);
+        let painted = painted_text(&shapes);
+        let a = require_text(&painted, "short-2");
+        let b = require_text(&painted, "short-3");
+        let font = ctx.global_style().text_styles[&egui::TextStyle::Monospace].clone();
+        let height = ctx.fonts_mut(|fonts| fonts.row_height(&font));
+        assert!((b.0.y - a.0.y - height).abs() <= 1.0);
+    }
+
+    #[test]
+    fn horizontal_scroll_reaches_the_end_of_the_right_split_line() {
+        let ctx = egui::Context::default();
+        let doc = long_doc();
+        scroll_doc(&ctx, &doc, true);
+        let (scroll, _) = scroll_doc(&ctx, &doc, true);
+        let mut state = scroll.state;
+        state.offset.x = scroll.content_size.x - scroll.inner_rect.width();
+        state.store(&ctx, scroll.id);
+        let (scroll, shapes) = scroll_doc(&ctx, &doc, true);
+        let end = shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().ends_with("END") => {
+                    Some(text.pos.x + text.galley.size().x)
+                }
+                _ => None,
+            })
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!((end - scroll.inner_rect.right()).abs() <= 1.0);
+    }
+
+    #[test]
+    fn horizontal_scroll_survives_vertical_virtualization_and_mode_switches() {
+        let ctx = egui::Context::default();
+        let doc = long_doc();
+        for split in [false, true] {
+            scroll_doc(&ctx, &doc, split);
+            let (before, _) = scroll_doc(&ctx, &doc, split);
+            let width = before.content_size.x;
+            let mut state = before.state;
+            state.offset = egui::vec2(250.0, 900.0);
+            state.store(&ctx, before.id);
+            let (after, _) = scroll_doc(&ctx, &doc, split);
+            assert_eq!(after.content_size.x, width);
+            assert_eq!(after.state.offset, egui::vec2(250.0, 900.0));
+        }
+        let (unified, _) = scroll_doc(&ctx, &doc, false);
+        let mut state = unified.state;
+        state.offset = egui::vec2(100.0, 300.0);
+        state.store(&ctx, unified.id);
+        let (split, _) = scroll_doc(&ctx, &doc, true);
+        assert_ne!(unified.id, split.id);
+        assert_eq!(split.state.offset, egui::vec2(250.0, 900.0));
+        let (unified, _) = scroll_doc(&ctx, &doc, false);
+        assert_eq!(unified.state.offset, egui::vec2(100.0, 300.0));
+    }
+
+    #[test]
+    fn refreshing_a_diff_invalidates_its_cached_width() {
+        let ctx = egui::Context::default();
+        let doc = long_doc();
+        let (long, _) = scroll_doc(&ctx, &doc, false);
+        let (short, _) = scroll_doc(&ctx, &sample_doc(), false);
+        assert!(long.content_size.x > short.content_size.x * 2.0);
     }
 }

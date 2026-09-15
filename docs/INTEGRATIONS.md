@@ -51,18 +51,12 @@ The app displays provider resume commands for manual copying; it never executes 
 - [Muse Code SDK](https://github.com/meta-models/muse-code-sdk); installed CLI echo-provider testing verifies the project hook path and payloads.
 - [Grok hook guide](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md)
 
-## Shell prompt evidence (2026-09-15)
+## Idle-shell close (2026-09-15)
 
-Generated daemon-owned zsh/bash/fish startup integrations additionally call the
-private helper's `prompt begin` and `prompt GENERATION JOBS` operations using the
-existing session-scoped authentication token. These are shell readiness events,
-not agent lifecycle events. Input and queued command boundaries belong to the
-daemon; a delayed prompt acknowledgment cannot acknowledge a later input generation.
-No token, prompt text, or command text is stored in readiness evidence.
-
-The integration preserves user startup files. Bash leaves an existing DEBUG trap
-untouched and keeps confirmation; generated callbacks are confined to the isolated
-startup files. Zsh prompt substitution/custom line-init and Bash command-substituting
-prompts retain confirmation. Fish preserves the original prompt function through a
-wrapper and retains confirmation with a right prompt. Runtime coverage of fish is
-still required; it was unavailable in this validation environment.
+Closing a shell tab asks only when something besides the launched shell is
+running: a child process, a non-shell foreground process group, or a live agent.
+An idle shell, a waiting builtin without children, and half-typed input close
+without confirmation. Generated startup files still install cwd hooks; they do
+not gate close on prompt acknowledgments. Older shells may still emit `prompt`
+helper calls; the daemon ignores them. The GUI never infers readiness from
+terminal text.

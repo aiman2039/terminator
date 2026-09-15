@@ -275,7 +275,7 @@ pub fn legacy(o: &Options) -> Result<()> {
         &h,
         o,
         "legacy-diff",
-        json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1700,"target":"Working tree diff"}]),
+        json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1700,"target":"Native diff"}]),
         3500,
     )?;
     ensure!(

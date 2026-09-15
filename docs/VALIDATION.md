@@ -1,5 +1,44 @@
 # Validation evidence — 2026-09-08
 
+## Review regressions (2026-09-15)
+
+- `cargo test --workspace --all-features --locked`: 233 passed with local
+  socket/process access and the parent terminal environment intact.
+  Workspace Clippy with `-D warnings`, rustfmt, and `git diff --check` passed.
+- Native diff rows reserve missing split cells and clip each side. Document-wide
+  cached widths retain horizontal scroll range when long lines leave the visible
+  rows; refreshed documents invalidate the cache. Unified/Split keep independent
+  scroll positions. Split rows now use the same font height as virtualization.
+- Headless egui regressions cover insertion/deletion-only rows, long lines on both
+  sides, the rightmost text, vertical plus horizontal scrolling, mode switching,
+  width-cache invalidation, and split row pitch. These inspect layout/paint output;
+  no new native desktop screenshot was captured.
+- Shutdown socket tests run in isolated child test processes with
+  `TERMINATOR_SESSION_ID` removed, without changing the production refusal to
+  shut down from inside a managed session or mutating parallel tests' environment.
+- `cargo xtask idle-close` passed for zsh, bash, unsupported sh, and the zsh
+  prompt-framework case. Fish was unavailable. The new command-submission case
+  uses an ordered attachment resize to acknowledge PTY input forwarding, then
+  immediately requests idle close without a command-settling sleep and verifies
+  that the shell remains alive. It does not prove ordering across unrelated
+  sockets before the daemon receives their input.
+
+
+## Native diff gutter chrome (2026-09-15)
+
+Unified/split paint no longer stuffs `{:>4} {:>4} ±` into the same galley as
+code or inherits the app's 8px `item_spacing`. Rows use the monospace line
+height, stay left-aligned, and number/`+/-` columns are pixel-measured.
+
+- `workspace_ui::tests`: short vs long equal lines share code x; delete/insert
+  signs sit right of their numbers; split paints old on the left and new on the
+  right; consecutive row pitch is font height (12–22px), not height+8.
+- `cargo test --locked --features test-support --bin terminator workspace_ui::tests`
+  and `diff::tests`: 11 passed. `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`
+  and `cargo fmt --all --check` passed.
+- Live native GUI screenshot of a real dirty file was not re-captured in this
+  change; rebuild the GUI to see the chrome.
+
 ## Native Git diff viewer (2026-09-15)
 
 Git reviews default to a GUI `Tab::Diff` built with similar (line and word hunks)

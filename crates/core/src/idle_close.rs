@@ -1,4 +1,4 @@
-//! Conservative prompt evidence. Silence and absence of children are not readiness.
+//! Process-group idle close. Children or a non-shell foreground keep confirmation.
 use serde::{Deserialize, Serialize};
 
 pub const CAPABILITY: &str = "close-idle-sessions-v1";
@@ -18,66 +18,6 @@ pub struct Outcome {
     pub session: String,
     pub status: Status,
     pub reason: String,
-}
-
-/// Input generations are daemon-owned; shell callbacks can only acknowledge them.
-#[derive(Debug)]
-pub struct PromptEvidence {
-    pub generation: u64,
-    candidate: Option<u64>,
-    submitted: usize,
-    boundary: bool,
-    pub ready: bool,
-    pub last_event: &'static str,
-}
-impl Default for PromptEvidence {
-    fn default() -> Self {
-        Self {
-            generation: 0,
-            candidate: Some(0),
-            submitted: 0,
-            boundary: false,
-            ready: false,
-            last_event: "none",
-        }
-    }
-}
-impl PromptEvidence {
-    pub fn input(&mut self, bytes: &[u8]) {
-        if bytes.is_empty() {
-            return;
-        }
-        self.last_event = "input";
-        self.generation = self.generation.saturating_add(1);
-        self.ready = false;
-        self.candidate = None;
-        self.submitted = self
-            .submitted
-            .saturating_add(bytes.iter().filter(|b| matches!(b, b'\r' | b'\n')).count());
-        self.boundary = bytes.last().is_some_and(|b| matches!(b, b'\r' | b'\n'));
-    }
-    pub fn begin(&mut self) -> u64 {
-        self.last_event = "command";
-        self.ready = false;
-        if self.submitted > 0 {
-            self.submitted -= 1;
-            if self.submitted == 0 && self.boundary {
-                self.candidate = Some(self.generation);
-            }
-        }
-        self.generation
-    }
-    pub fn prompt(&mut self, generation: u64, jobs_empty: bool) {
-        self.last_event = if jobs_empty {
-            "prompt"
-        } else {
-            "prompt_jobs_busy"
-        };
-        self.ready = jobs_empty
-            && self.candidate == Some(generation)
-            && self.generation == generation
-            && self.submitted == 0;
-    }
 }
 
 /// A fresh process inventory, never a cached GUI observation.
@@ -166,34 +106,4 @@ fn shell_waiting(pid: u32, _status: sysinfo::ProcessStatus) -> bool {
         };
         result == size && info.pth_run_state == libc::TH_STATE_WAITING
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn delayed_prompt_cannot_acknowledge_new_input() {
-        let mut p = PromptEvidence::default();
-        p.prompt(0, true);
-        assert!(p.ready);
-        p.input(b"read value\r");
-        let generation = p.begin();
-        assert!(!p.ready); // The builtin has no child, but is not at a prompt.
-        p.input(b"new input");
-        p.prompt(generation, true);
-        assert!(!p.ready);
-    }
-    #[test]
-    fn queued_commands_and_jobs_require_confirmation() {
-        let mut p = PromptEvidence::default();
-        p.input(b"true\rread value\r");
-        let generation = p.begin();
-        p.prompt(generation, true);
-        assert!(!p.ready);
-        p.begin();
-        p.prompt(generation, false);
-        assert!(!p.ready);
-        p.prompt(generation, true);
-        assert!(p.ready);
-    }
 }

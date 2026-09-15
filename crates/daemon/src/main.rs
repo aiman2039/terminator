@@ -45,7 +45,6 @@ struct Runtime {
     ended: bool,
     closing: bool,
     inputs_in_flight: usize,
-    prompt: terminator_core::idle_close::PromptEvidence,
     shell_executable: Option<std::path::PathBuf>,
 }
 /// A cloned input descriptor must not keep a failed output connection alive.
@@ -80,23 +79,18 @@ impl Shared {
             let _operation = self.terminal_operations.lock().unwrap();
             let mut runtime = runtime.lock().unwrap();
             ensure!(!runtime.ended && !runtime.closing, "Session is closing");
-            runtime.prompt.input(bytes);
             runtime.inputs_in_flight += 1;
             runtime.writer.clone()
         };
-        // A full PTY input buffer must not block prompt callbacks, other panes,
-        // or Stop. In-flight input makes idle-close ineligible until it finishes.
+        // A full PTY input buffer must not block other panes or Stop.
+        // In-flight input makes idle-close ineligible until it finishes.
         let result = {
             let mut writer = writer.lock().unwrap();
             writer.write_all(bytes).and_then(|_| writer.flush())
         };
         {
             let _operation = self.terminal_operations.lock().unwrap();
-            let mut runtime = runtime.lock().unwrap();
-            runtime.inputs_in_flight -= 1;
-            if result.is_err() {
-                runtime.prompt.ready = false;
-            }
+            runtime.lock().unwrap().inputs_in_flight -= 1;
         }
         result.map_err(Into::into)
     }
@@ -247,7 +241,6 @@ impl Shared {
             ended: false,
             closing: false,
             inputs_in_flight: 0,
-            prompt: Default::default(),
             shell_executable,
         }));
         let record = Session {
@@ -405,22 +398,12 @@ impl Shared {
                 sessions,
             } => return self.close_idle(generation, sessions),
             Request::ShellCommand { session } => {
-                let _operation = self.terminal_operations.lock().unwrap();
-                let runtime = self.runtime(&session)?;
-                let generation = runtime.lock().unwrap().prompt.begin();
-                return Ok(Response::Text(generation.to_string()));
+                // Older generated shells still emit prompt hooks; ignore them.
+                let _ = self.runtime(&session)?;
+                return Ok(Response::Text("0".into()));
             }
-            Request::ShellPrompt {
-                session,
-                generation,
-                jobs_empty,
-            } => {
-                let _operation = self.terminal_operations.lock().unwrap();
-                self.runtime(&session)?
-                    .lock()
-                    .unwrap()
-                    .prompt
-                    .prompt(generation, jobs_empty);
+            Request::ShellPrompt { session, .. } => {
+                let _ = self.runtime(&session)?;
             }
             Request::WorktreeList { project } => {
                 let path = self

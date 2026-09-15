@@ -121,7 +121,7 @@ helper executable, original session identities and new terminal creation intact.
   DMGs use `hdiutil`; styled DMGs require `create-dmg` and a desktop. Both include
   the existing ad-hoc-signed app and Applications shortcut. Builds reuse Cargo's
   target directory and never install or restart the live daemon.
-- `cargo xtask idle-close` exercises prompt readiness against isolated real shells.
+- `cargo xtask idle-close` exercises process-group idle close against isolated real shells.
 - `cargo xtask gui scrolling` exercises unfocused hover scrolling with sample history.
   Input fixtures support `wheel_unit` (`point`, `line`, `page`), `wheel_phase`
   (`start`, `move`, `end`, `cancel`), `scroll`, `scroll_x`, `shift`, and hover-only actions.

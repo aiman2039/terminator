@@ -182,6 +182,28 @@ mod tests {
     use super::*;
     use std::os::unix::net::UnixListener;
 
+    // Run socket fixtures in a child rather than mutating process-wide environment
+    // while other tests are running. Keep the production managed-session guard.
+    fn isolated(test: &str) -> bool {
+        const CHILD: &str = "TERMINATOR_SHUTDOWN_TEST_CHILD";
+        if std::env::var(CHILD).as_deref() == Ok(test) {
+            return false;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env_remove("TERMINATOR_SESSION_ID")
+            .env(CHILD, test)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        true
+    }
+
     fn fixture() -> (tempfile::TempDir, Paths) {
         let dir = tempfile::Builder::new()
             .prefix("cleanup-")
@@ -204,6 +226,11 @@ mod tests {
 
     #[test]
     fn failed_gui_checkpoint_sends_no_session_stop_or_daemon_shutdown() {
+        if isolated(
+            "shutdown::tests::failed_gui_checkpoint_sends_no_session_stop_or_daemon_shutdown",
+        ) {
+            return;
+        }
         let (_dir, paths) = fixture();
         let lock = File::create(paths.runtime.join("ui.lock")).unwrap();
         lock.lock_exclusive().unwrap();
@@ -237,6 +264,10 @@ mod tests {
 
     #[test]
     fn changed_daemon_or_concurrent_session_aborts_before_shutdown() {
+        if isolated("shutdown::tests::changed_daemon_or_concurrent_session_aborts_before_shutdown")
+        {
+            return;
+        }
         for changed_generation in [false, true] {
             let (_dir, paths) = fixture();
             let initial = State::default();

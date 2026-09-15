@@ -22,7 +22,7 @@ struct Args {
 enum Task {
     /// Compose local launch assets from validated native captures.
     LaunchAssets,
-    /// Verify conservative prompt readiness using isolated real shells.
+    /// Verify idle shells close without confirmation using isolated real shells.
     IdleClose,
     BrowserCheck,
     /// Install test dependencies and validate inside a disposable Linux container.

@@ -75,47 +75,80 @@ impl App {
         self.idle_close_pending = None;
         let changed = self.idle_target_tabs(&target) != self.idle_close_snapshot;
         self.idle_close_snapshot.clear();
-        let success = !changed
-            && result.as_ref().is_ok_and(|outcomes| {
-                ids.iter().all(|id| {
-                    outcomes.iter().any(|o| {
-                        &o.session == id
-                            && matches!(o.status, Status::Closed | Status::AlreadyEnded)
-                    })
-                })
-            });
-        if success {
-            match &target {
-                editor_close::Target::Pane(sid) => {
-                    self.remove_tab(sid);
-                    if self.close_session.as_ref() == Some(sid) {
-                        self.close_session = None;
-                    }
-                }
-                editor_close::Target::Workspace(project, tab) => {
-                    if let Some(workspace) = self.layouts.get_mut(project) {
-                        workspace.close(tab);
-                    }
-                    if self.close_workspace.as_ref() == Some(&(project.clone(), tab.clone())) {
-                        self.close_workspace = None;
-                    }
+        if idle_close_succeeded(&ids, &result, changed) {
+            self.apply_idle_close(&target);
+            self.idle_close_fallback = None;
+            return;
+        }
+        self.idle_close_fallback = Some(target);
+        if let Some(error) = idle_close_failure_message(changed, result) {
+            self.error = Some(error);
+        }
+    }
+
+    fn apply_idle_close(&mut self, target: &editor_close::Target) {
+        match target {
+            editor_close::Target::Pane(sid) => {
+                self.remove_tab(sid);
+                if self.close_session.as_ref() == Some(sid) {
+                    self.close_session = None;
                 }
             }
-            self.idle_close_fallback = None;
-        } else {
-            self.idle_close_fallback = Some(target);
-            self.error = Some(if changed {
-                "Tab contents changed while closing. The view was preserved; any confirmed shell exits remain in effect.".into()
-            } else {
-                match result {
-                    Err(error) => error,
-                    Ok(outcomes) => outcomes
-                        .into_iter()
-                        .map(|o| format!("{}: {:?}: {}", o.session, o.status, o.reason))
-                        .collect::<Vec<_>>()
-                        .join("\n"),
+            editor_close::Target::Workspace(project, tab) => {
+                if let Some(workspace) = self.layouts.get_mut(project) {
+                    workspace.close(tab);
                 }
-            });
+                if self.close_workspace.as_ref() == Some(&(project.clone(), tab.clone())) {
+                    self.close_workspace = None;
+                }
+            }
         }
+    }
+}
+
+fn idle_close_succeeded(
+    ids: &[String],
+    result: &Result<Vec<Outcome>, String>,
+    changed: bool,
+) -> bool {
+    !changed
+        && result.as_ref().is_ok_and(|outcomes| {
+            ids.iter().all(|id| {
+                outcomes.iter().any(|outcome| {
+                    &outcome.session == id
+                        && matches!(outcome.status, Status::Closed | Status::AlreadyEnded)
+                })
+            })
+        })
+}
+
+fn idle_close_failure_message(
+    changed: bool,
+    result: Result<Vec<Outcome>, String>,
+) -> Option<String> {
+    if changed {
+        return Some(
+            "Tab contents changed while closing. The view was preserved; any confirmed shell exits remain in effect.".into(),
+        );
+    }
+    match result {
+        Err(error) => Some(error),
+        Ok(outcomes) => outcomes
+            .iter()
+            .any(|outcome| matches!(outcome.status, Status::Failed))
+            .then(|| {
+                outcomes
+                    .into_iter()
+                    .map(|outcome| {
+                        let Outcome {
+                            session,
+                            status,
+                            reason,
+                        } = outcome;
+                        format!("{session}: {status:?}: {reason}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }),
     }
 }
