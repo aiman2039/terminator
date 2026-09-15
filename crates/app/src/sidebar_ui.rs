@@ -117,17 +117,7 @@ impl App {
         });
     }
     pub(super) fn agent_bar(&mut self, ui: &mut egui::Ui) {
-        let waiting = self
-            .state
-            .agents
-            .iter()
-            .filter(|agent| {
-                matches!(
-                    agent.state,
-                    AgentState::WaitingInput | AgentState::WaitingPermission
-                )
-            })
-            .count();
+        let waiting = self.waiting_notice_count();
         let unread = self
             .state
             .notifications
@@ -156,9 +146,7 @@ impl App {
                 &self.theme.text
             }),
         )
-        .on_hover_text(
-            "Agent notifications across all projects. Click to switch between Agents and Projects.",
-        );
+        .on_hover_text("Pending agent notifications. Click to switch between Agents and Projects.");
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "left-agent-bar", response.rect);
         if response.clicked() {
@@ -603,10 +591,7 @@ impl App {
         ui.heading("Agents");
         ui.checkbox(&mut self.preferences.all_projects, "All projects");
         let notices = self.pending_notices();
-        let waiting = notices
-            .iter()
-            .filter(|notice| notice_waiting(notice))
-            .count();
+        let waiting = self.waiting_notice_count();
         if waiting > 0 {
             ui.label(
                 RichText::new(format!("{waiting} waiting for action"))
@@ -658,6 +643,12 @@ impl App {
             return;
         }
         ui.weak("No pending agent events");
+    }
+    pub(super) fn waiting_notice_count(&self) -> usize {
+        self.pending_notices()
+            .iter()
+            .filter(|notice| notice_waiting(notice))
+            .count()
     }
     fn pending_notices(&self) -> Vec<Notification> {
         let selected = self.selected.as_deref();

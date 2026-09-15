@@ -4568,6 +4568,54 @@ mod navigation_tests {
     }
 
     #[test]
+    fn waiting_badge_matches_pending_notices_not_live_agents() {
+        let (mut app, _, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.selected = Some("a".into());
+        app.state.sessions = vec![session_fixture("s", SessionKind::Shell)];
+        app.state.agents = vec![Agent {
+            invocation_id: "agent".into(),
+            session_id: "s".into(),
+            kind: "codex".into(),
+            provider_session_id: None,
+            state: AgentState::WaitingInput,
+            sequence: Some(1),
+            updated: 0,
+            resume: None,
+        }];
+        assert_eq!(app.waiting_notice_count(), 0);
+        app.state.notifications = vec![Notification {
+            id: "n".into(),
+            session_id: "s".into(),
+            invocation_id: "agent".into(),
+            request_id: None,
+            state: AgentState::WaitingInput,
+            summary: "Need input".into(),
+            details: String::new(),
+            created: 1,
+            read: false,
+            dismissed: false,
+            resolved: false,
+            snoozed_until: 0,
+        }];
+        assert_eq!(app.waiting_notice_count(), 1);
+        app.state.notifications[0].state = AgentState::WaitingPermission;
+        assert_eq!(app.waiting_notice_count(), 1);
+        app.state.notifications[0].dismissed = true;
+        assert_eq!(app.waiting_notice_count(), 0);
+        app.state.notifications[0].dismissed = false;
+        app.state.notifications[0].snoozed_until = now() + 600;
+        assert_eq!(app.waiting_notice_count(), 0);
+        app.state.notifications[0].snoozed_until = 0;
+        app.preferences.all_projects = false;
+        app.selected = Some("b".into());
+        assert_eq!(app.waiting_notice_count(), 0);
+        app.preferences.all_projects = true;
+        app.state.notifications[0].resolved = true;
+        assert_eq!(app.waiting_notice_count(), 0);
+    }
+
+    #[test]
     #[cfg(feature = "test-support")]
     fn resolved_waiting_notice_sorts_below_unresolved_completion() {
         let (mut app, ctx, _dir) = fixture();

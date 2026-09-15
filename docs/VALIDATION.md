@@ -17,6 +17,24 @@ dirty rows so the first click of a double-click does not also open the file.
 - Live native GUI paint, delay-click timing, and a real Neovim-mode review were
   not re-run in this change; record that follow-up in a later entry.
 
+Review fixes use egui's input clock and configured double-click interval, with
+pending opens flushed after the frame's click handlers. Delayed editor/image
+opens retain the original project, cwd and tab target. Native diff paths reject
+symlinks before resolving directory aliases, preserving the selected Git entry.
+
+- Regressions cover a simulated 280 ms double-click without an editor launch,
+  a configured 500 ms interval, project navigation before editor/image creation,
+  internal/external/dangling symlinks on both diff sides, and deletion through a
+  repository directory alias.
+- `env -u TERMINATOR_SESSION_ID cargo test --workspace --all-features --locked --quiet`:
+  all 208 tests passed. The inherited session marker otherwise trips two hook
+  fixtures' outside-Terminator guard; the successful run allowed isolated Unix
+  fixture sockets and filesystem watches outside the sandbox.
+- `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`,
+  `cargo fmt --all --check`, and Git diff whitespace checks passed.
+- Pointer regression coverage uses headless egui input; a live native GUI smoke
+  test was not run for these fixes.
+
 ## Minimized GUI control and cleanup timeout (2026-09-14)
 
 The running daemon remained healthy with both live shells intact while a read-only
