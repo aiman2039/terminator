@@ -590,6 +590,215 @@ impl App {
         }
         preview.show(ui);
     }
+    fn diff_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
+        let Tab::Diff { path, staged, .. } = tab else {
+            return;
+        };
+        let key = tab.key();
+        ui.horizontal(|ui| {
+            ui.weak(path.display().to_string());
+            ui.weak(if *staged {
+                "HEAD → Index"
+            } else {
+                "Index → Working tree"
+            });
+            let split = self.diff_split.contains(&key);
+            if ui.selectable_label(!split, "Unified").clicked() {
+                self.diff_split.remove(&key);
+            }
+            if ui.selectable_label(split, "Split").clicked() {
+                self.diff_split.insert(key.clone());
+            }
+            if ui.small_button("Refresh").clicked() {
+                self.diffs.remove(&key);
+                self.loading.insert(key.clone());
+                let _ = self.jobs.send(Job::Diff(tab.clone()));
+            }
+        });
+        if !self.diffs.contains_key(&key) && self.loading.insert(key.clone()) {
+            let _ = self.jobs.send(Job::Diff(tab.clone()));
+        }
+        match self.diffs.get(&key) {
+            Some(Ok(doc)) => {
+                let split = self.diff_split.contains(&key);
+                let rows = if split {
+                    doc.split.len()
+                } else {
+                    doc.unified.len()
+                };
+                let height = ui.text_style_height(&egui::TextStyle::Monospace).max(16.0);
+                let colors = DiffColors {
+                    added: appearance::color(&self.theme.git_added),
+                    deleted: appearance::color(&self.theme.git_deleted),
+                    accent: appearance::color(&self.theme.accent),
+                    text: appearance::color(&self.theme.text),
+                };
+                let doc = doc.clone();
+                egui::ScrollArea::both()
+                    .id_salt(&key)
+                    .show_rows(ui, height, rows, |ui, range| {
+                        for index in range {
+                            if split {
+                                let width = ui.available_width() / 2.0;
+                                ui.horizontal(|ui| {
+                                    paint_diff_side(
+                                        ui,
+                                        egui::vec2(width, height),
+                                        doc.split[index].left.as_ref(),
+                                        colors,
+                                    );
+                                    paint_diff_side(
+                                        ui,
+                                        egui::vec2(width, height),
+                                        doc.split[index].right.as_ref(),
+                                        colors,
+                                    );
+                                });
+                            } else {
+                                paint_diff_line(
+                                    ui,
+                                    DiffPaint {
+                                        width: ui.available_width(),
+                                        height,
+                                        line: &doc.unified[index],
+                                        unified: true,
+                                        colors,
+                                    },
+                                );
+                            }
+                        }
+                    });
+            }
+            Some(Err(error)) => {
+                ui.colored_label(appearance::color(&self.theme.status_failed), error);
+            }
+            None => {
+                ui.spinner();
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DiffColors {
+    added: Color32,
+    deleted: Color32,
+    accent: Color32,
+    text: Color32,
+}
+
+struct DiffPaint<'a> {
+    width: f32,
+    height: f32,
+    line: &'a diff::DiffLine,
+    unified: bool,
+    colors: DiffColors,
+}
+
+fn paint_diff_side(
+    ui: &mut egui::Ui,
+    size: egui::Vec2,
+    line: Option<&diff::DiffLine>,
+    colors: DiffColors,
+) {
+    ui.allocate_ui(size, |ui| {
+        if let Some(line) = line {
+            paint_diff_line(
+                ui,
+                DiffPaint {
+                    width: size.x,
+                    height: size.y,
+                    line,
+                    unified: false,
+                    colors,
+                },
+            );
+        }
+    });
+}
+
+fn paint_diff_line(ui: &mut egui::Ui, paint: DiffPaint<'_>) {
+    let DiffPaint {
+        width,
+        height,
+        line,
+        unified,
+        colors,
+    } = paint;
+    let DiffColors {
+        added,
+        deleted,
+        accent,
+        text,
+    } = colors;
+    let (bg, sign) = match line.kind {
+        diff::LineKind::Insert => (tint(added, 40), "+"),
+        diff::LineKind::Delete => (tint(deleted, 40), "-"),
+        diff::LineKind::Hunk => (tint(accent, 24), " "),
+        diff::LineKind::Equal => (Color32::TRANSPARENT, " "),
+    };
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(width.max(1.0), height), egui::Sense::hover());
+    if bg != Color32::TRANSPARENT {
+        ui.painter().rect_filled(rect, 0.0, bg);
+    }
+    let mut job = egui::text::LayoutJob::default();
+    let font = egui::FontId::monospace(ui.style().text_styles[&egui::TextStyle::Monospace].size);
+    let gutter = format!(
+        "{:>4} {:>4} {} ",
+        line.old_no.map(|n| n.to_string()).unwrap_or_default(),
+        line.new_no.map(|n| n.to_string()).unwrap_or_default(),
+        if unified { sign } else { " " }
+    );
+    job.append(
+        &gutter,
+        0.0,
+        egui::TextFormat {
+            font_id: font.clone(),
+            color: ui.visuals().weak_text_color(),
+            ..Default::default()
+        },
+    );
+    for span in &line.spans {
+        let intra = match (line.kind, span.intra) {
+            (diff::LineKind::Insert, diff::Intra::Change) => tint(added, 90),
+            (diff::LineKind::Delete, diff::Intra::Change) => tint(deleted, 90),
+            _ => Color32::TRANSPARENT,
+        };
+        job.append(
+            &span.text,
+            0.0,
+            egui::TextFormat {
+                font_id: font.clone(),
+                color: if line.kind == diff::LineKind::Hunk {
+                    accent
+                } else {
+                    Color32::from_rgb(span.rgb[0], span.rgb[1], span.rgb[2])
+                },
+                background: intra,
+                ..Default::default()
+            },
+        );
+    }
+    if job.text.is_empty() {
+        job.append(
+            " ",
+            0.0,
+            egui::TextFormat {
+                font_id: font,
+                color: text,
+                ..Default::default()
+            },
+        );
+    }
+    ui.put(
+        rect,
+        egui::Label::new(job).wrap_mode(egui::TextWrapMode::Extend),
+    );
+}
+
+fn tint(color: Color32, alpha: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
 }
 
 pub(super) struct Viewer<'a> {
@@ -744,47 +953,7 @@ impl TabViewer for Viewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
             Tab::Image { path } => self.app.image_view(ui, path),
-            Tab::Diff { .. } => {
-                let key = tab.key();
-                let path = match tab {
-                    Tab::Diff { path, .. } | Tab::Image { path } => path.clone(),
-                    _ => unreachable!(),
-                };
-                ui.horizontal(|ui| {
-                    ui.weak(path.display().to_string());
-                    if ui.small_button("Refresh").clicked() {
-                        let _ = self.app.jobs.send(Job::Diff(tab.clone()));
-                    }
-                });
-                if !self.app.texts.contains_key(&key) && self.app.loading.insert(key.clone()) {
-                    let _ = self.app.jobs.send(Job::Diff(tab.clone()));
-                }
-                if let Some(text) = self.app.texts.get(&key) {
-                    let lines = text.lines().collect::<Vec<_>>();
-                    egui::ScrollArea::both().id_salt(&key).show_rows(
-                        ui,
-                        18.0,
-                        lines.len(),
-                        |ui, range| {
-                            for row in range {
-                                let line = lines[row];
-                                let color = if line.starts_with('+') {
-                                    appearance::color(&self.app.theme.git_added)
-                                } else if line.starts_with('-') {
-                                    appearance::color(&self.app.theme.git_deleted)
-                                } else if line.starts_with("@@") {
-                                    appearance::color(&self.app.theme.accent)
-                                } else {
-                                    appearance::color(&self.app.theme.text)
-                                };
-                                ui.label(RichText::new(line).monospace().color(color));
-                            }
-                        },
-                    );
-                } else {
-                    ui.spinner();
-                }
-            }
+            Tab::Diff { .. } => self.app.diff_view(ui, tab),
             Tab::Terminal(sid) => {
                 let Some(session) = self
                     .app

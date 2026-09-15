@@ -87,6 +87,10 @@ impl App {
                         ui.selectable_value(&mut self.settings_draft.editor_mode, EditorMode::Terminal, "Terminal editor");
                         ui.selectable_value(&mut self.settings_draft.editor_mode, EditorMode::External, "External editor");
                     }); ui.end_row();
+                    ui.label("Diff viewer"); egui::ComboBox::from_id_salt("review-mode").selected_text(match self.settings_draft.review_mode { ReviewMode::Native => "Native", ReviewMode::Neovim => "Neovim review" }).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.settings_draft.review_mode, ReviewMode::Native, "Native");
+                        ui.selectable_value(&mut self.settings_draft.review_mode, ReviewMode::Neovim, "Neovim review");
+                    }); ui.end_row();
                     ui.label("Editor executable"); ui.add(egui::TextEdit::singleline(&mut self.settings_draft.editor_program).desired_width(250.0)); ui.end_row();
                     ui.label("External editor");
                     egui::ComboBox::from_id_salt("external-preset").selected_text(external_editor::PRESETS[self.editor_preset]).show_ui(ui, |ui| {

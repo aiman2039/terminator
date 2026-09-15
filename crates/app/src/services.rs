@@ -1,7 +1,6 @@
 use anyhow::{Result, ensure};
 use std::{
     fs,
-    io::Read,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -95,6 +94,18 @@ impl Change {
             self.status.chars().next().unwrap_or(' ')
         } else {
             self.status.chars().nth(1).unwrap_or(' ')
+        }
+    }
+    /// Working-tree side wins when both exist. Conflicts are not auto-reviewed.
+    pub fn default_staged(&self) -> Option<bool> {
+        if self.conflict() {
+            None
+        } else if self.in_group(GitGroup::Changes) || self.in_group(GitGroup::Untracked) {
+            Some(false)
+        } else if self.in_group(GitGroup::Staged) {
+            Some(true)
+        } else {
+            None
         }
     }
 }
@@ -303,43 +314,6 @@ pub fn status_description(status: char) -> &'static str {
         _ => "Unchanged",
     }
 }
-pub fn diff(cwd: &Path, path: &Path, staged: bool) -> Result<String> {
-    let mut c = Command::new("git");
-    c.env("GIT_OPTIONAL_LOCKS", "0").arg("-C").arg(cwd).args([
-        "--no-pager",
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-color",
-    ]);
-    if staged {
-        c.arg("--cached");
-    }
-    c.arg("--").arg(path);
-    let bytes = run(c)?;
-    if bytes.is_empty() && path.is_file() && !staged {
-        let mut check = Command::new("git");
-        check
-            .arg("-C")
-            .arg(cwd)
-            .args(["ls-files", "--error-unmatch", "--"])
-            .arg(path);
-        if run(check).is_err() {
-            let mut bytes = Vec::new();
-            fs::File::open(path)?
-                .take(1024 * 1024 + 1)
-                .read_to_end(&mut bytes)?;
-            ensure!(bytes.len() <= 1024 * 1024, "Untracked file too large");
-            ensure!(!bytes.contains(&0), "Binary untracked file");
-            return Ok(format!(
-                "Untracked file: {}\n{}",
-                path.display(),
-                String::from_utf8_lossy(&bytes)
-            ));
-        }
-    }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
 #[derive(Clone, Debug)]
 pub enum Target {
     File(PathBuf, Option<u32>, Option<u32>),
@@ -538,6 +512,29 @@ mod tests {
         );
     }
     #[test]
+    fn default_staged_prefers_the_working_tree() {
+        let working = Change {
+            path: "a.rs".into(),
+            status: "MM".into(),
+        };
+        assert_eq!(working.default_staged(), Some(false));
+        let staged_only = Change {
+            path: "a.rs".into(),
+            status: "M ".into(),
+        };
+        assert_eq!(staged_only.default_staged(), Some(true));
+        let untracked = Change {
+            path: "a.rs".into(),
+            status: "??".into(),
+        };
+        assert_eq!(untracked.default_staged(), Some(false));
+        let conflict = Change {
+            path: "a.rs".into(),
+            status: "UU".into(),
+        };
+        assert_eq!(conflict.default_staged(), None);
+    }
+    #[test]
     fn partially_staged_diffs_show_the_correct_side() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -553,8 +550,27 @@ mod tests {
         fs::write(&path, "working\n").unwrap();
         let context = context_cached(root, &mut Default::default());
         assert_eq!(context.changes[0].status, "MM");
-        assert!(diff(root, &path, true).unwrap().contains("+staged"));
-        assert!(diff(root, &path, false).unwrap().contains("+working"));
+        let staged = crate::diff::document(crate::diff::DiffRequest {
+            cwd: root,
+            path: &path,
+            staged: true,
+        })
+        .unwrap();
+        let working = crate::diff::document(crate::diff::DiffRequest {
+            cwd: root,
+            path: &path,
+            staged: false,
+        })
+        .unwrap();
+        let text = |doc: &crate::diff::DiffDocument| {
+            doc.unified
+                .iter()
+                .flat_map(|line| line.spans.iter().map(|s| s.text.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert!(text(&staged).contains("staged"));
+        assert!(text(&working).contains("working"));
     }
     #[test]
     fn git_ignore_rules_preserve_dotfiles_negations_and_tracked_files() {

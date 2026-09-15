@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Default Git reviews to the native similar+syntect viewer (word-level hunks,
+  syntax highlighting, Unified/Split). Settings → Diff viewer can restore Neovim
+  CodeDiff. Double-click a git-dirty file to open the matching side.
+
 - Keep release package output outside Cargo caches, reuse the native assembly
   tooling, and build only shipped binaries. Run macOS assembly independently of
   Linux builds and upload Cargo timing reports for each target.

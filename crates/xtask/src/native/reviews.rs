@@ -58,6 +58,7 @@ pub fn run(o: &Options) -> Result<()> {
     h.setup()?;
     let mut settings = h.state()?["settings"].clone();
     settings["editor_program"] = json!("/missing/user-editor");
+    settings["review_mode"] = json!("neovim");
     h.rpc(json!({"Settings":settings}))?;
     let p = h.project("review")?;
     let root = PathBuf::from(p["path"].as_str().unwrap());

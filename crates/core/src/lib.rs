@@ -305,6 +305,13 @@ pub enum EditorMode {
     Terminal,
     External,
 }
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewMode {
+    #[default]
+    Native,
+    Neovim,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -316,6 +323,7 @@ pub struct Settings {
     pub terminal_notifications_os: bool,
     pub pr_metadata: bool,
     pub editor_mode: EditorMode,
+    pub review_mode: ReviewMode,
     pub editor_program: String,
     pub external_editor: String,
     pub external_args: Vec<String>,
@@ -349,6 +357,7 @@ impl Default for Settings {
             terminal_notifications_os: false,
             pr_metadata: false,
             editor_mode: EditorMode::Embedded,
+            review_mode: ReviewMode::Native,
             editor_program: "nvim".into(),
             external_editor: if cfg!(target_os = "macos") {
                 "open"

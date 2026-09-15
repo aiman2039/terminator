@@ -143,27 +143,31 @@ Tree-sitter dependency is needed for these targets; Neovim owns editor syntax.
 The top-level tab strip sits above the split workspace. Every pane has a compact
 title caption and right-click actions for splitting, finding text, saving/comparing
 an editor, and closing a session. Legacy stacks of panes remain accessible through
-“Tabs in this pane” in the context menu. A normal click on an
-existing Git file opens its editor; staged and working-tree diffs remain in the
-file menu. Deleted entries open a diff because there is no current file to edit.
+“Tabs in this pane” in the context menu. A normal click on an existing Git file opens its editor. Double-click a
+modified, added, renamed, or untracked file to open a diff (working-tree side
+when that side is dirty, otherwise staged). Deleted entries open a diff
+immediately. Staged and working-tree diffs remain in the file menu.
 
-Git → right-click a file → **Staged diff** or **Working tree diff** opens a
-separate Neovim review tab with bundled CodeDiff. Neovim 0.10+ must be on PATH;
+Git diffs default to the native viewer (syntax highlighting and word-level
+hunks, Unified or Split in the tab). Settings → Terminal & Editor → Diff viewer
+can switch to Neovim review (bundled CodeDiff). Neovim 0.10+ must be on PATH;
 users do not install plugins. The review uses an isolated Neovim profile, without
 loading user configuration. Ordinary file editors still use the editor settings.
-Use `]c` / `[c` for changes, `t` for inline/side-by-side layout, `gc` to fold
-unchanged context, and `q` or the tab X to close without a session prompt.
+In Neovim review, use `]c` / `[c` for changes, `t` for inline/side-by-side layout,
+`gc` to fold unchanged context, and `q` or the tab X to close without a session
+prompt.
 
 Reviews are read-only snapshots: HEAD → index for staged changes, index → disk
-for working changes. Reopen a review to refresh it. Renames, added/deleted files,
-untracked files and partially staged files are supported. Two-way reviews reject
-unresolved conflicts, binary/non-UTF-8 files, symlinks/submodules, and files over
-1 MiB with an error. Git mutations remain terminal operations. Older saved native
-diff tabs keep their existing renderer. The GUI checks the running daemon’s
-advertised capabilities before opening a review. With an older daemon it uses
-the built-in diff and explains that Neovim review needs a daemon update, keeping
-live sessions intact. Restarting just the GUI loads this compatibility fix;
-building a package does not replace a running daemon.
+for working changes. Reopen or Refresh a review to reload it. Renames, added/deleted
+files, untracked files and partially staged files are supported. Two-way reviews
+reject unresolved conflicts, binary/non-UTF-8 files, symlinks/submodules, and
+files over 1 MiB with an error. Git mutations remain terminal operations. The GUI
+checks the running daemon’s advertised capabilities before opening a Neovim
+review. Native review does not need that capability. With Diff viewer set to
+Neovim and an older daemon, the built-in viewer is used and the GUI explains that
+Neovim review needs a daemon update, keeping live sessions intact. Restarting just
+the GUI loads this compatibility fix; building a package does not replace a
+running daemon.
 
 CodeDiff and its C diff library are pinned and bundled in the daemon, built locally
 with the C compiler used by Cargo; there are no first-use downloads or OpenMP

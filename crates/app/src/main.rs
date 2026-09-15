@@ -33,6 +33,7 @@ use workspace::Workspace;
 mod clipboard;
 #[cfg(feature = "test-support")]
 mod diagnostics;
+mod diff;
 mod services;
 use anyhow::{Context, Result};
 use eframe::egui::{self, Color32, RichText};
@@ -46,7 +47,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, Sender},
     thread,
     time::{Duration, Instant},
@@ -75,6 +76,49 @@ enum RenameSurface {
     Workspace,
     Pane,
     Sidebar,
+}
+struct PendingFileClick {
+    path: PathBuf,
+    at: f64,
+    project: String,
+    cwd: Option<PathBuf>,
+    after: After,
+}
+struct FilePointer {
+    path: PathBuf,
+    deleted: bool,
+    staged: Option<bool>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FileClick {
+    None,
+    Open,
+    Review,
+    DelayOpen,
+}
+fn file_click(deleted: bool, reviewable: bool, double_clicked: bool, clicked: bool) -> FileClick {
+    if deleted {
+        return if clicked || double_clicked {
+            FileClick::Review
+        } else {
+            FileClick::None
+        };
+    }
+    if double_clicked {
+        return if reviewable {
+            FileClick::Review
+        } else {
+            FileClick::Open
+        };
+    }
+    if !clicked {
+        return FileClick::None;
+    }
+    if reviewable {
+        FileClick::DelayOpen
+    } else {
+        FileClick::Open
+    }
 }
 
 #[derive(Clone)]
@@ -149,6 +193,7 @@ enum Update {
     Created(Session, Option<String>, Option<Vec<Tab>>),
     WorkspaceCreated(Session, String, Vec<Tab>),
     Text(String, String),
+    Diff(String, Result<diff::DiffDocument, String>),
     Refresh(
         u64,
         services::ContextData,
@@ -548,8 +593,13 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
                         },
                         Job::Diff(tab) => {
                             if let Tab::Diff { cwd, path, staged } = &tab {
-                                let content = services::diff(cwd, path, *staged)?;
-                                tx.send(Update::Text(tab.key(), content))?;
+                                let result = diff::document(diff::DiffRequest {
+                                    cwd,
+                                    path,
+                                    staged: *staged,
+                                })
+                                .map_err(|e| format!("{e:#}"));
+                                tx.send(Update::Diff(tab.key(), result))?;
                             }
                         }
                         Job::Install(kind, remove) => {
@@ -707,6 +757,9 @@ struct App {
     focus_tab: Option<Tab>,
     terminal_context: HashMap<String, String>,
     texts: HashMap<String, String>,
+    diffs: HashMap<String, Result<diff::DiffDocument, String>>,
+    diff_split: HashSet<String>,
+    pending_file_click: Option<PendingFileClick>,
     loading: HashSet<String>,
     dirs: HashMap<PathBuf, Vec<services::Entry>>,
     directory_errors: HashMap<PathBuf, services::DirectoryError>,
@@ -858,6 +911,9 @@ impl App {
             focus_tab: None,
             terminal_context: HashMap::new(),
             texts: HashMap::new(),
+            diffs: HashMap::new(),
+            diff_split: HashSet::new(),
+            pending_file_click: None,
             loading: HashSet::new(),
             dirs: HashMap::new(),
             directory_errors: HashMap::new(),
@@ -1405,6 +1461,10 @@ impl App {
                 Update::Text(key, text) => {
                     self.loading.remove(&key);
                     self.texts.insert(key, text);
+                }
+                Update::Diff(key, result) => {
+                    self.loading.remove(&key);
+                    self.diffs.insert(key, result);
                 }
                 Update::Refresh(generation, context, directories, fallback) => {
                     if generation == self.refresh_generation
@@ -2032,21 +2092,19 @@ impl App {
     }
     fn add_diff(&mut self, cwd: PathBuf, path: PathBuf, staged: bool) {
         if let Some(project) = self.selected.clone() {
-            if !self
-                .state
-                .capabilities
-                .iter()
-                .any(|c| c == NVIM_REVIEW_CAPABILITY)
-            {
+            if self.native_review() {
                 let tab = Tab::Diff { cwd, path, staged };
                 self.layouts
                     .entry(project)
                     .or_insert_with(Workspace::empty)
                     .add(id(), tab.clone());
                 self.active_session = None;
+                self.diffs.remove(&tab.key());
                 self.loading.insert(tab.key());
                 self.error = None;
-                self.info = Some("Using built-in diff. Neovim review needs the updated daemon; restart it after finishing your live sessions.".into());
+                if self.state.settings.review_mode == ReviewMode::Neovim {
+                    self.info = Some("Using built-in diff. Neovim review needs the updated daemon; restart it after finishing your live sessions.".into());
+                }
                 let _ = self.jobs.send(Job::Diff(tab));
                 return;
             }
@@ -2060,6 +2118,94 @@ impl App {
                 After::Workspace(id(), vec![]),
             ));
         }
+    }
+    fn native_review(&self) -> bool {
+        self.state.settings.review_mode != ReviewMode::Neovim
+            || !self
+                .state
+                .capabilities
+                .iter()
+                .any(|c| c == NVIM_REVIEW_CAPABILITY)
+    }
+    fn git_root(&self) -> Option<PathBuf> {
+        self.context.as_ref().and_then(|c| c.root.clone())
+    }
+    fn file_pointer_action(&mut self, response: &egui::Response, info: FilePointer) {
+        match file_click(
+            info.deleted,
+            info.staged.is_some(),
+            response.double_clicked(),
+            response.clicked(),
+        ) {
+            FileClick::None => {}
+            FileClick::Open => {
+                self.pending_file_click = None;
+                self.open_file(info.path, None, None, false);
+            }
+            FileClick::Review => self.open_review(info),
+            FileClick::DelayOpen => {
+                self.delay_file_open(&response.ctx, info.path);
+            }
+        }
+    }
+    fn delay_file_open(&mut self, ctx: &egui::Context, path: PathBuf) {
+        let Some(project) = self.selected.clone() else {
+            return;
+        };
+        self.pending_file_click = Some(PendingFileClick {
+            path,
+            at: ctx.input(|i| i.time),
+            cwd: self.cwd(),
+            after: self.editor_target(&project, None, None),
+            project,
+        });
+    }
+    fn open_review(&mut self, info: FilePointer) {
+        self.pending_file_click = None;
+        if let (Some(root), Some(staged)) = (self.git_root(), info.staged) {
+            self.add_diff(root, info.path, staged);
+        }
+    }
+    fn flush_pending_file_click(&mut self, ctx: &egui::Context) {
+        let Some(pending) = self.pending_file_click.as_ref() else {
+            return;
+        };
+        let wait = ctx.options(|o| o.input_options.max_double_click_delay);
+        let elapsed = ctx.input(|i| i.time) - pending.at;
+        if elapsed < wait {
+            ctx.request_repaint_after(Duration::from_secs_f64(wait - elapsed));
+            return;
+        }
+        if let Some(pending) = self.pending_file_click.take() {
+            if image_preview::supported(&pending.path) {
+                let _ = self.update_tx.send(Update::OpenImage(
+                    pending.project,
+                    std::path::absolute(&pending.path).unwrap_or(pending.path),
+                    pending.after,
+                ));
+            } else if self.state.settings.editor_mode == EditorMode::External {
+                let _ = self.jobs.send(Job::External(pending.path));
+            } else {
+                let _ = self.jobs.send(Job::rpc(
+                    Request::Create {
+                        project: pending.project,
+                        cwd: pending.cwd,
+                        file: Some(pending.path),
+                        line: None,
+                        column: None,
+                        editor: true,
+                    },
+                    pending.after,
+                ));
+            }
+        }
+    }
+    fn change_for(&self, path: &Path) -> Option<&services::Change> {
+        self.context
+            .as_ref()?
+            .changes
+            .iter()
+            .find(|change| change.path == path)
     }
     fn editors_only(&self, ids: &[String]) -> bool {
         !ids.is_empty()
@@ -2667,6 +2813,8 @@ impl eframe::App for App {
         }
         self.modals(&ctx, frame);
         self.popups.end_frame();
+        // Let this frame's second click cancel the pending open before expiring it.
+        self.flush_pending_file_click(&ctx);
         appearance::click_cursor(&ctx);
         #[cfg(feature = "test-support")]
         self.diagnostics.capture(&ctx);
@@ -3319,6 +3467,7 @@ mod navigation_tests {
     #[test]
     fn legacy_daemon_diff_never_sends_an_unsupported_creation_request() {
         let (mut app, _, _dir) = fixture();
+        app.state.settings.review_mode = ReviewMode::Neovim;
         let (jobs, requests) = mpsc::channel();
         app.jobs = jobs.into();
         app.selected = Some("a".into());
@@ -3337,8 +3486,217 @@ mod navigation_tests {
         assert_eq!(app.layouts["a"].tabs.len(), 2);
     }
     #[test]
+    fn native_review_skips_create_review_when_the_daemon_can_review() {
+        let (mut app, _, _dir) = fixture();
+        app.state.capabilities.push(NVIM_REVIEW_CAPABILITY.into());
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.selected = Some("a".into());
+        app.add_diff("/a".into(), "/a/file.rs".into(), false);
+        let Job::Diff(Tab::Diff { staged, .. }) = requests.recv().unwrap() else {
+            panic!("Native review must stay in the GUI");
+        };
+        assert!(!staged);
+        assert!(requests.try_recv().is_err());
+        assert!(app.info.is_none());
+        assert!(app.state.sessions.is_empty());
+    }
+    #[test]
+    fn file_clicks_open_review_only_for_dirty_double_clicks_and_deletes() {
+        assert_eq!(Settings::default().review_mode, ReviewMode::Native);
+        for (deleted, reviewable, double_clicked, clicked, expected) in [
+            (false, false, false, true, FileClick::Open),
+            (false, true, false, true, FileClick::DelayOpen),
+            (false, true, true, true, FileClick::Review),
+            (false, false, true, true, FileClick::Open),
+            (true, true, false, true, FileClick::Review),
+            (true, true, true, true, FileClick::Review),
+            (false, true, false, false, FileClick::None),
+        ] {
+            assert_eq!(
+                file_click(deleted, reviewable, double_clicked, clicked),
+                expected,
+                "deleted={deleted} reviewable={reviewable} double={double_clicked} click={clicked}"
+            );
+        }
+    }
+    #[test]
+    fn dirty_double_click_opens_a_native_diff_and_cancels_a_pending_open() {
+        let (mut app, ctx, _dir) = fixture();
+        app.context = Some(services::ContextData {
+            cwd: "/a".into(),
+            root: Some("/a".into()),
+            git_dirs: vec![],
+            branch: "main".into(),
+            changes: vec![],
+            decorations: Default::default(),
+            error: None,
+        });
+        app.selected = Some("a".into());
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.delay_file_open(&ctx, "/a/clean.rs".into());
+        app.open_review(FilePointer {
+            path: "/a/dirty.rs".into(),
+            deleted: false,
+            staged: Some(false),
+        });
+        assert!(app.pending_file_click.is_none());
+        let Job::Diff(Tab::Diff { path, staged, .. }) = requests.recv().unwrap() else {
+            panic!("Dirty double-click must open a native diff");
+        };
+        assert_eq!(path, PathBuf::from("/a/dirty.rs"));
+        assert!(!staged);
+        assert!(requests.try_recv().is_err());
+    }
+    #[test]
+    fn delayed_dirty_click_opens_the_file_only_after_the_double_click_window() {
+        let (mut app, ctx, _dir) = fixture();
+        ctx.options_mut(|o| o.input_options.max_double_click_delay = 0.5);
+        app.selected = Some("a".into());
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.delay_file_open(&ctx, "/a/dirty.rs".into());
+        assert!(app.pending_file_click.is_some());
+        app.flush_pending_file_click(&ctx);
+        assert!(app.pending_file_click.is_some());
+        assert!(requests.try_recv().is_err());
+        app.pending_file_click.as_mut().unwrap().at = ctx.input(|i| i.time) - 0.4;
+        app.flush_pending_file_click(&ctx);
+        assert!(app.pending_file_click.is_some());
+        assert!(requests.try_recv().is_err());
+        app.pending_file_click.as_mut().unwrap().at = ctx.input(|i| i.time) - 0.6;
+        app.flush_pending_file_click(&ctx);
+        assert!(app.pending_file_click.is_none());
+        let Job::Control(request, _) = requests.recv().unwrap() else {
+            panic!("Expired dirty click must open the file");
+        };
+        assert!(matches!(
+            *request,
+            Request::Create {
+                file: Some(ref file),
+                editor: true,
+                ..
+            } if file == Path::new("/a/dirty.rs")
+        ));
+    }
+    #[test]
+    fn dirty_double_click_after_250_ms_does_not_launch_an_editor() {
+        let (mut app, ctx, _dir) = fixture();
+        app.context = Some(services::ContextData {
+            cwd: "/a".into(),
+            root: Some("/a".into()),
+            git_dirs: vec![],
+            branch: "main".into(),
+            changes: vec![],
+            decorations: Default::default(),
+            error: None,
+        });
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        let pos = egui::pos2(50.0, 50.0);
+        for (time, pressed) in [
+            (1.0, None),
+            (1.01, Some(true)),
+            (1.02, Some(false)),
+            (1.28, None),
+            (1.29, Some(true)),
+            (1.30, Some(false)),
+            (2.0, None),
+        ] {
+            let mut events = vec![egui::Event::PointerMoved(pos)];
+            if let Some(pressed) = pressed {
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let response = ui.interact(
+                        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 100.0)),
+                        egui::Id::new("dirty-file"),
+                        egui::Sense::click(),
+                    );
+                    app.file_pointer_action(
+                        &response,
+                        FilePointer {
+                            path: "/a/dirty.rs".into(),
+                            deleted: false,
+                            staged: Some(false),
+                        },
+                    );
+                    app.flush_pending_file_click(&ctx);
+                },
+            );
+            output.textures_delta.clear();
+        }
+        assert!(matches!(requests.try_recv().unwrap(), Job::Diff(_)));
+        assert!(requests.try_recv().is_err());
+        assert!(app.pending_file_click.is_none());
+    }
+    #[test]
+    fn delayed_dirty_file_open_keeps_its_origin_after_project_navigation() {
+        let (mut app, ctx, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.delay_file_open(&ctx, "/a/dirty.rs".into());
+        let After::Workspace(origin_tab, _) =
+            app.pending_file_click.as_ref().unwrap().after.clone()
+        else {
+            panic!("File click must capture a new workspace tab");
+        };
+        app.select_project("b".into());
+        assert!(matches!(requests.try_recv().unwrap(), Job::Control(_, _)));
+        app.pending_file_click.as_mut().unwrap().at = ctx.input(|i| i.time) - 1.0;
+        app.flush_pending_file_click(&ctx);
+        let Job::Control(request, After::Workspace(tab, _)) = requests.try_recv().unwrap() else {
+            panic!("Delayed click must create an editor in its original workspace");
+        };
+        assert_eq!(tab, origin_tab);
+        assert!(matches!(
+            *request,
+            Request::Create { project, cwd, file: Some(file), editor: true, .. }
+                if project == "a" && cwd.as_deref() == Some(Path::new("/a")) && file == Path::new("/a/dirty.rs")
+        ));
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        assert!(requests.try_recv().is_err());
+    }
+    #[test]
+    fn delayed_dirty_image_open_keeps_its_origin_after_project_navigation() {
+        let (mut app, ctx, _dir) = fixture();
+        app.delay_file_open(&ctx, "/a/dirty.png".into());
+        app.select_project("b".into());
+        app.pending_file_click.as_mut().unwrap().at = ctx.input(|i| i.time) - 1.0;
+        app.flush_pending_file_click(&ctx);
+        app.process_updates(&ctx);
+        assert!(
+            app.layouts["a"]
+                .find_tab(&Tab::Image {
+                    path: "/a/dirty.png".into()
+                })
+                .is_some()
+        );
+        assert!(
+            app.layouts["b"]
+                .find_tab(&Tab::Image {
+                    path: "/a/dirty.png".into()
+                })
+                .is_none()
+        );
+        assert_eq!(app.selected.as_deref(), Some("b"));
+    }
+    #[test]
     fn git_reviews_open_distinct_top_level_tabs_in_the_origin_project() {
         let (mut app, ctx, _dir) = fixture();
+        app.state.settings.review_mode = ReviewMode::Neovim;
         app.state.capabilities.push(NVIM_REVIEW_CAPABILITY.into());
         let (jobs, requests) = mpsc::channel();
         app.jobs = jobs.into();

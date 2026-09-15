@@ -558,9 +558,16 @@ impl App {
                     ));
                     #[cfg(feature = "test-support")]
                     diagnostics::record(ui.ctx(), &format!("explorer-file:{}", label), r.rect);
-                    if r.clicked() && !r.double_clicked() {
-                        self.open_file(entry.path.clone(), None, None, false);
-                    }
+                    let pointer = FilePointer {
+                        path: entry.path.clone(),
+                        deleted: self
+                            .change_for(&entry.path)
+                            .is_some_and(|c| c.decoration() == 'D'),
+                        staged: self
+                            .change_for(&entry.path)
+                            .and_then(services::Change::default_staged),
+                    };
+                    self.file_pointer_action(&r, pointer);
                     appearance::context_menu(&r, |ui| {
                         if let Some(action) = file_actions::menu(ui, true, false, None) {
                             self.file_action(ui, action, &entry.path, None);
@@ -894,17 +901,15 @@ impl App {
                                     ),
                                     response.rect,
                                 );
-                                if response.clicked() && !response.double_clicked() {
-                                    if letter == 'D' {
-                                        self.add_diff(
-                                            context.root.as_ref().unwrap().clone(),
-                                            change.path.clone(),
-                                            group == services::GitGroup::Staged,
-                                        );
-                                    } else {
-                                        self.open_file(change.path.clone(), None, None, false);
-                                    }
-                                }
+                                self.file_pointer_action(
+                                    &response,
+                                    FilePointer {
+                                        path: change.path.clone(),
+                                        deleted: letter == 'D',
+                                        staged: (!change.conflict())
+                                            .then_some(group == services::GitGroup::Staged),
+                                    },
+                                );
                                 appearance::context_menu(&response, |ui| {
                                     if let Some(action) =
                                         file_actions::menu(ui, true, false, Some(group))

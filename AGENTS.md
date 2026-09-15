@@ -50,7 +50,7 @@ Use rustfmt defaults, four-space indentation, `snake_case` functions/modules, an
 - Each project owns top-level tabs, each with its own split layout and focus. Preserve the originating project/tab for asynchronous creation. Layout JSON is versioned; do not overwrite unknown versions or restart sessions during migration.
 - Opening a supported image creates a GUI-only preview tab without a PTY; explicit Open as text bypasses preview. Opening a text file creates a new editor session in a new top-level tab; explicit editor-split actions stay in the current tab. Clean file-only tabs close directly. Unsaved buffers offer Save and close, Discard changes, or Cancel on an in-file bar; unknown editor state must not silently discard changes. The rest of the GUI stays usable while that bar is visible. Shell/active-agent tabs retain the background-or-terminate choice.
 - Ordinary editors load the user's Neovim configuration. Git reviews use bundled CodeDiff with an isolated profile and read-only snapshots: HEAD to index for staged changes, index to disk for working changes. Reopening refreshes a review; review actions must not mutate Git state.
-- Gate new daemon requests on advertised capabilities. For example, missing `nvim-review-v1` uses the built-in diff renderer. A newly built GUI or package does not replace a running daemon; preserve compatibility with live older daemons.
+- Gate new daemon requests on advertised capabilities. Git reviews default to the native GUI viewer. Neovim CodeDiff is Settings → Diff viewer, and still requires `nvim-review-v1`. Missing that capability falls back to native. A newly built GUI or package does not replace a running daemon; preserve compatibility with live older daemons.
 
 ## Testing Guidelines
 

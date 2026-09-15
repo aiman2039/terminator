@@ -1,5 +1,22 @@
 # Validation evidence — 2026-09-08
 
+## Native Git diff viewer (2026-09-15)
+
+Git reviews default to a GUI `Tab::Diff` built with similar (line and word hunks)
+and syntect (syntax), computed on the existing jobs worker. Settings → Terminal
+& Editor → Diff viewer can select Neovim CodeDiff when `nvim-review-v1` is
+present. Double-click on a git-dirty Explorer or Git-status file opens the
+working-tree side when that side is dirty, otherwise staged; deleted files still
+open a diff immediately. Click still opens the editor after a short delay on
+dirty rows so the first click of a double-click does not also open the file.
+
+- Unit tests cover snapshot sides, word-level inserts, untracked/binary/outside
+  paths, Native vs Neovim routing, and `Change::default_staged`.
+- `cargo xtask gui reviews` sets `review_mode=neovim`. Native default is covered
+  by `legacy-diff` (no `CreateReview`) plus routing unit tests.
+- Live native GUI paint, delay-click timing, and a real Neovim-mode review were
+  not re-run in this change; record that follow-up in a later entry.
+
 ## Minimized GUI control and cleanup timeout (2026-09-14)
 
 The running daemon remained healthy with both live shells intact while a read-only
