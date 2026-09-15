@@ -29,7 +29,7 @@ open target/package/Terminator.app
 
 `--debug` produces a faster development bundle. Bundles are signed ad hoc locally; they are not notarized or published. On Linux, the same task produces a relocatable archive and desktop entry. X11 and Wayland backends are compiled; native file selection uses the desktop's XDG portal on Linux and NSOpenPanel on macOS.
 
-Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcommon0`, `libgl1`, and the usual X11/Wayland desktop libraries. Install an XDG desktop portal backend appropriate to your desktop for file dialogs. `cargo xtask linux-check` configures a disposable Linux test container; `scripts/README.md` lists the Rust validation tasks.
+Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcommon0`, `libgl1`, and the usual X11/Wayland desktop libraries. Linux compilation also needs `pkg-config` and `libfontconfig1-dev` so resvg/blitz can use system fonts, plus the matching X11/Wayland/GL headers. Install an XDG desktop portal backend appropriate to your desktop for file dialogs. `cargo xtask linux-check` configures a disposable Linux test container; `scripts/README.md` lists the Rust validation tasks.
 
 ## Daily workflow
 
