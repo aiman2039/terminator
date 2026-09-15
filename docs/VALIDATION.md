@@ -107,6 +107,28 @@ retrying cleanup; the permanent minimized-window fix requires the rebuilt GUI.
 The reproduction and native verification were on macOS; Linux native behavior
 was not exercised in this follow-up.
 
+## Version-mismatch restart (2026-09-15)
+
+Detached `ctl shutdown --stop-all --relaunch` and in-app **Restart session service**
+quit the GUI, stop live sessions without force-kill, drop `ui.lock`, and respawn
+this installation with `TERMINATOR_DATA_DIR` / `TERMINATOR_RUNTIME_DIR`. Sparkle
+Install and Relaunch is unchanged. Idle auto-repair is unchanged.
+
+- Unit: session-leader `setsid`; missing exe / failed GUI close do not Stop;
+  successful relaunch writes isolated env after lock release; stop timeout
+  relaunches without `ShutdownIfIdle`; in-session still refused; GUI restart
+  hidden for newer/idle daemons; confirm cancel does not enqueue a job; copied
+  stop-all includes `--relaunch`.
+- `cargo xtask integration`: two-session `--relaunch --exe stub`, history kept,
+  ended records not revived, stubborn HUP keeps the daemon and still launches
+  the stub. Large-snapshot fixture uses distinct invocation IDs so wait-supersede
+  does not dismiss the 130-notice payload.
+- `cargo xtask gui installation` passed. Evidence:
+  `target/validation/native/installation/restart-cancel.png`,
+  `restart-confirm.png`, `restart-relaunch.json`
+  (`restarted`, `unsaved_buffer_not_written`, `history_not_restarted`,
+  `helper_available`).
+
 ## Explicit stop-all cleanup (2026-09-14)
 
 Added `terminator-hook ctl shutdown --stop-all` and a separate copyable command
@@ -1927,3 +1949,13 @@ inspection; mounts were detached afterward. Inspection evidence is
 fixture GUIs/daemons; the original installed Terminator GUI and daemon remained
 running with their original PIDs. No installation or live-daemon replacement was
 performed.
+
+## Restart review fixes (2026-09-15)
+
+Restart commands pin the original appearance configuration directory before
+setting the service data directory. Detached helper stderr is drained to
+`restart.log`; EOF notifies a surviving GUI to clear its restart guard and
+report the failed attempt. Unrelated worker errors do not unlock a pending restart.
+Focused GUI restart/installation and hook shutdown tests passed, including an
+actual detached failing helper and its preserved config environment. Native
+window restart behavior was not re-run for these fixes.

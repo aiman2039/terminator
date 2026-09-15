@@ -33,6 +33,12 @@ enum Control {
         /// Maximum seconds to wait for each cleanup phase; never force-kills a process.
         #[arg(long, default_value = "30", value_parser = clap::value_parser!(u64).range(1..=300))]
         timeout: u64,
+        /// After shutdown, reopen this installation's GUI.
+        #[arg(long)]
+        relaunch: bool,
+        /// GUI executable to reopen. Defaults to terminator beside this helper.
+        #[arg(long, requires = "relaunch")]
+        exe: Option<PathBuf>,
     },
     AddProject {
         path: PathBuf,
@@ -194,8 +200,29 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     let state = snapshot(&paths)?;
     let value = match cli.command {
-        Control::Shutdown { stop_all, timeout } => {
-            super::shutdown::run(&paths, state, stop_all, Duration::from_secs(timeout))?
+        Control::Shutdown {
+            stop_all,
+            timeout,
+            relaunch,
+            exe,
+        } => {
+            let relaunch = if relaunch {
+                Some(match exe {
+                    Some(path) => path,
+                    None => std::env::current_exe()?.with_file_name("terminator"),
+                })
+            } else {
+                None
+            };
+            super::shutdown::run(
+                &paths,
+                state,
+                super::shutdown::Options {
+                    stop_all,
+                    timeout: Duration::from_secs(timeout),
+                    relaunch,
+                },
+            )?
         }
         Control::List => {
             json!({"generation":state.generation,"projects":state.projects,"sessions":state.sessions,"worktrees":state.worktrees,"agents":state.agents,"terminal_notices":state.terminal_notices})

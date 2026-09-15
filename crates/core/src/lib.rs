@@ -913,7 +913,7 @@ pub fn sanitize_layout(mut value: serde_json::Value) -> serde_json::Value {
 }
 
 pub mod process;
-pub use process::{CommandOptions, run_command};
+pub use process::{CommandOptions, run_command, spawn_session_leader};
 /// Legacy callers inspect the exit status themselves.
 pub fn bounded_output(
     cmd: std::process::Command,

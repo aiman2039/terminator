@@ -38,7 +38,7 @@ Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcom
 - Use **+** in the top-level tab strip to create a terminal tab with its own split layout. Explorer hides Git-ignored entries by default; **Show ignored files** reveals them (including Git metadata). Ordinary dotfiles remain visible.
 - Right-click a terminal or its tab for **New tab**, **Split up**, **Split down**, **Split left**, and **Split right**. Each split stays inside its owning top-level tab.
 - Launch agents and manage worktrees in the terminal yourself. The app does not launch agents or perform Git writes.
-- Project arrows expand/collapse independently of selection and persist across restarts. The window header holds project tabs and the Explorer, Agents, Git, and Settings icons. Explorer, Agents, and Git switch the right sidebar; click the active tool to collapse it. Agents lists undismissed, unsnoozed notifications for the owning project or All projects, including retained events from ended sessions. Unresolved waiting events appear first; resolved events remain below unresolved events and do not count as waiting. The Agents header waiting badge uses that same list, not live agent sessions. Working agents without notifications do not create cards. Sidebar width and scope persist globally.
+- Project arrows expand/collapse independently of selection and persist across restarts. **Sort** beside PROJECTS orders visible projects by name A → Z (default), name Z → A, or latest activity; the choice persists in `ui-preferences.json`. Latest activity is the latest of last focus, session creation, agent updates, and notice times. The window header holds project tabs and the Explorer, Agents, Git, and Settings icons. Explorer, Agents, and Git switch the right sidebar; click the active tool to collapse it. The left Agents row stays compact (waiting/unread counts) until opened. Explorer, Git, and History do not list attention events. Agents lists undismissed, unsnoozed notifications for the owning project or All projects, including retained events from ended sessions and terminal notices. Unresolved waiting events appear first. Waiting input and permission notices leave the inbox when the agent continues or a newer request replaces them; completed and failed notices remain until the session is focused or the notice is dismissed. The Agents header waiting badge uses that same list, not live agent sessions. Working agents without notifications do not create cards. Sidebar width and scope persist globally. Settings → Place notifications at the side hides the top Attention strip (default); unchecking it restores the top strip.
 - Select a project to restore its own layout. A terminal that changes directory stays under its owning project; the file/Git sidebar follows its effective directory.
 - Single-click anywhere on an Explorer file row to open a new editor tab. Right-click a file path to open the editor, a new editor split, or an external editor. `command+O` uses the native file picker (Cmd+O on macOS, Ctrl+Shift+O on Linux). Change it in Settings → Shortcuts.
 - Settings → Terminal & Editor retains embedded Neovim, terminal-editor, and external-editor modes. External presets include System default, VS Code, Cursor, RustRover, Zed, and Custom. Named presets use macOS application launching or Linux CLI launchers. Custom takes an executable and one literal argument per row; the absolute file path is appended without shell evaluation. **Choose file and test…** launches the draft without saving. Missing launchers and failed exits appear in the status bar; long-running editors remain independent of the GUI.
@@ -56,7 +56,7 @@ Read [the integration contract and capability notes](INTEGRATIONS.md) before con
 
 The default data directory follows the OS application-data convention. `TERMINATOR_DATA_DIR=/absolute/path` or `terminator --data-dir /absolute/path` selects an isolated installation. The runtime directory contains a private Unix socket and authentication file; do not share these files.
 
-SQLite stores projects, layouts, session metadata, agent state, and notification state. `ui-preferences.json` stores versioned per-installation navigation/sidebar choices and the one-time typography and Attention migration markers. Attention moves to the right sidebar once after the daemon acknowledges the settings update; later placement choices are preserved. The Islands update sets terminal/editor size to 13 once; subsequent user size choices are preserved. Inter and JetBrains Mono are bundled with their licenses. Scrollback is stored separately and pruned by configurable age/per-session/total limits. Defaults: 30 days, 50 MiB/session, 2 GiB total. Metadata and resume commands remain until explicitly removed. Truncated output is labeled.
+SQLite stores projects, layouts, session metadata, agent state, and notification state. `ui-preferences.json` stores versioned per-installation navigation/sidebar choices, project sort/activity, and the one-time typography and Attention migration markers. Attention migration turns on side placement once after the daemon acknowledges the settings update; later placement choices are preserved. Side placement keeps the compact Agents row as the persistent indicator and does not overlay Git, Explorer, or History. The Islands update sets terminal/editor size to 13 once; subsequent user size choices are preserved. Inter and JetBrains Mono are bundled with their licenses. Scrollback is stored separately and pruned by configurable age/per-session/total limits. Defaults: 30 days, 50 MiB/session, 2 GiB total. Metadata and resume commands remain until explicitly removed. Truncated output is labeled.
 
 A running daemon keeps its current executable version until it exits. GUI updates
 reconnect to compatible daemons, whose private terminal helpers survive app
@@ -270,14 +270,21 @@ terminator-hook ctl metadata SESSION_ID --pr
 terminator-hook ctl notify SESSION_ID 'Build finished'
 terminator-hook ctl shutdown
 terminator-hook ctl shutdown --stop-all
+terminator-hook ctl shutdown --stop-all --relaunch
 ```
 
 Run shutdown from Terminal.app or another terminal outside Terminator. The default
 refuses live sessions. Explicit `--stop-all` closes the GUI through its normal
 workspace checkpoint, stops every live shell/editor through the daemon, waits for
-session exit, flushes saved history, and waits for daemon teardown. **Save your
-work first: unsaved editor buffers are discarded and running jobs stop.** The
-command retains session records and history. A failed GUI close, changed daemon,
+session exit, flushes saved history, and waits for daemon teardown. `--relaunch`
+then starts this installation's GUI with the same data and runtime directories
+(never a bare `open`). **Save your work first: unsaved editor buffers are discarded and running jobs stop.** The
+command retains session records and history.
+
+When the status bar shows that the app and session service use different
+installations, **Restart session service** asks for confirmation and runs that
+same detached stop-all plus relaunch. Idle mismatch still auto-repairs without
+stopping live sessions. Sparkle updates still replace only the GUI. A failed GUI close, changed daemon,
 new concurrent session or timeout aborts cleanup; it never force-kills processes.
 If an older installed GUI times out while hidden or minimized, restore its window,
 quit it completely, and retry. Current builds service control requests and exit

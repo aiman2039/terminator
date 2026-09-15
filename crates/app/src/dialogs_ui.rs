@@ -22,6 +22,45 @@ impl App {
                     }
                 });
         }
+        if self.restart_confirm {
+            let live = self
+                .state
+                .sessions
+                .iter()
+                .filter(|session| session.lifecycle.live())
+                .count();
+            let mut open = true;
+            self.popups
+                .window(ctx, "Restart session service?")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(format!(
+                        "This will quit Terminator, stop {live} live session(s), and reopen this version."
+                    ));
+                    ui.weak(
+                        "Unsaved editor buffers are discarded and running jobs stop. Saved history is kept. Ended sessions are not relaunched.",
+                    );
+                    ui.horizontal(|ui| {
+                        let confirm = ui.button("Restart session service");
+                        #[cfg(feature = "test-support")]
+                        diagnostics::record(ui.ctx(), "confirm-restart-session", confirm.rect);
+                        if confirm.clicked() {
+                            self.begin_session_restart();
+                        }
+                        let cancel = ui.button("Cancel");
+                        #[cfg(feature = "test-support")]
+                        diagnostics::record(ui.ctx(), "cancel-restart-session", cancel.rect);
+                        if cancel.clicked() {
+                            self.restart_confirm = false;
+                        }
+                    });
+                });
+            if !open {
+                self.restart_confirm = false;
+            }
+        }
         if self.add_project && !self.picker_active {
             #[cfg(feature = "test-support")]
             if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {

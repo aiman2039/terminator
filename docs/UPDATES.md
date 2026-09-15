@@ -83,7 +83,10 @@ termination notifications re-entering winit. Native installation cancellation
 restores GUI interaction. Review this bridge when upgrading winit or Sparkle.
 
 No GUI update stops the daemon, rotates authentication, replays commands, or
-relaunches agents/editors. A later GUI launch or an idle check while the GUI is open may retire an older daemon, or a
+relaunches agents/editors. After a newer GUI reconnects to a live older or
+broken service, **Restart session service** is an explicit confirm-then-detach
+stop-all that reopens this installation; it is not part of Sparkle Install and
+Relaunch. A later GUI launch or an idle check while the GUI is open may retire an older daemon, or a
 same-version daemon with unavailable/unreported helper health or without
 `stable-helper-v1`, only when it
 advertises `shutdown-if-idle-v1` and has no live sessions. That request shares
@@ -181,8 +184,10 @@ it does not execute legacy shutdown. Logout/login remains an alternative after
 saving work and closing sessions. Unknown or newer versions are never retired
 automatically.
 
-When live sessions remain, **Stop all sessions and shut down** offers a separate
-**Copy stop-all command** with an unsaved-work warning. The new helper's
+When live sessions remain, **Restart session service** confirms and runs a
+detached `ctl shutdown --stop-all --relaunch`. **Stop all sessions and shut down**
+still offers a separate **Copy stop-all command** (now including `--relaunch`)
+with an unsaved-work warning. The new helper's
 `ctl shutdown --stop-all` requests normal GUI closure and waits for its checkpoint
 and process exit before stopping sessions. It then uses the daemon's existing
 Stop requests, waits for all sessions to end and requests idle shutdown (or the

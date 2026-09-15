@@ -1,10 +1,133 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
+    cmp::Ordering,
     collections::{HashMap, HashSet},
     fs,
     path::Path,
 };
+use terminator_core::{Agent, Notification, Project, Session, TerminalNotice};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectSort {
+    #[default]
+    NameAsc,
+    NameDesc,
+    LatestActivity,
+}
+
+impl ProjectSort {
+    pub fn menu_label(self) -> &'static str {
+        match self {
+            Self::NameAsc => "Name A → Z",
+            Self::NameDesc => "Name Z → A",
+            Self::LatestActivity => "Latest activity",
+        }
+    }
+}
+
+pub struct VisibleProjects<'a> {
+    pub projects: Vec<Project>,
+    pub hidden: &'a HashSet<String>,
+    pub sort: ProjectSort,
+    pub activity: &'a HashMap<String, u64>,
+    pub sessions: &'a [Session],
+    pub agents: &'a [Agent],
+    pub notifications: &'a [Notification],
+    pub terminal_notices: &'a [TerminalNotice],
+}
+
+pub fn sort_visible_projects(input: VisibleProjects<'_>) -> Vec<Project> {
+    let VisibleProjects {
+        mut projects,
+        hidden,
+        sort,
+        activity,
+        sessions,
+        agents,
+        notifications,
+        terminal_notices,
+    } = input;
+    projects.retain(|project| !hidden.contains(&project.id));
+    let times = project_times(ProjectTimes {
+        sessions,
+        agents,
+        notifications,
+        terminal_notices,
+        activity,
+    });
+    apply_sort(sort, &mut projects, &times);
+    projects
+}
+
+struct ProjectTimes<'a> {
+    sessions: &'a [Session],
+    agents: &'a [Agent],
+    notifications: &'a [Notification],
+    terminal_notices: &'a [TerminalNotice],
+    activity: &'a HashMap<String, u64>,
+}
+
+fn apply_sort(sort: ProjectSort, projects: &mut [Project], times: &HashMap<String, u64>) {
+    match sort {
+        ProjectSort::NameAsc => projects.sort_by(name_order),
+        ProjectSort::NameDesc => projects.sort_by(|left, right| name_order(right, left)),
+        ProjectSort::LatestActivity => projects.sort_by(|left, right| {
+            times
+                .get(&right.id)
+                .copied()
+                .unwrap_or(0)
+                .cmp(&times.get(&left.id).copied().unwrap_or(0))
+                .then_with(|| name_order(left, right))
+        }),
+    }
+}
+
+fn name_order(left: &Project, right: &Project) -> Ordering {
+    left.name
+        .to_lowercase()
+        .cmp(&right.name.to_lowercase())
+        .then_with(|| left.name.cmp(&right.name))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn project_times(input: ProjectTimes<'_>) -> HashMap<String, u64> {
+    let ProjectTimes {
+        sessions,
+        agents,
+        notifications,
+        terminal_notices,
+        activity,
+    } = input;
+    let mut times = activity.clone();
+    let mut owner = HashMap::new();
+    for session in sessions {
+        owner.insert(session.id.clone(), session.project_id.clone());
+        bump(&mut times, &session.project_id, session.created);
+    }
+    for agent in agents {
+        if let Some(project) = owner.get(&agent.session_id) {
+            bump(&mut times, project, agent.updated);
+        }
+    }
+    for notice in notifications {
+        if let Some(project) = owner.get(&notice.session_id) {
+            bump(&mut times, project, notice.created);
+        }
+    }
+    for notice in terminal_notices {
+        if let Some(project) = owner.get(&notice.session_id) {
+            bump(&mut times, project, notice.created);
+        }
+    }
+    times
+}
+
+fn bump(times: &mut HashMap<String, u64>, project: &str, timestamp: u64) {
+    let entry = times.entry(project.to_string()).or_insert(0);
+    *entry = (*entry).max(timestamp);
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SidebarTool {
@@ -31,6 +154,8 @@ pub struct UiPreferences {
     pub attention_migrated: bool,
     pub markdown_modes: HashMap<String, crate::markdown::Mode>,
     pub hidden_projects: HashSet<String>,
+    pub project_sort: ProjectSort,
+    pub project_activity: HashMap<String, u64>,
 }
 impl Default for UiPreferences {
     fn default() -> Self {
@@ -49,6 +174,8 @@ impl Default for UiPreferences {
             attention_migrated: false,
             markdown_modes: HashMap::new(),
             hidden_projects: HashSet::new(),
+            project_sort: ProjectSort::NameAsc,
+            project_activity: HashMap::new(),
         }
     }
 }
@@ -99,6 +226,8 @@ mod tests {
         assert!(old.typography_migrated);
         assert!(old.markdown_modes.is_empty());
         assert!(old.hidden_projects.is_empty());
+        assert_eq!(old.project_sort, ProjectSort::NameAsc);
+        assert!(old.project_activity.is_empty());
     }
     #[test]
     fn restart_preserves_independent_expansion_sidebar_and_migration() {
@@ -117,6 +246,8 @@ mod tests {
         p.typography_migrated = true;
         p.attention_migrated = true;
         p.hidden_projects.insert("hidden-project".into());
+        p.project_sort = ProjectSort::LatestActivity;
+        p.project_activity.insert("a".into(), 42);
         p.markdown_modes
             .insert("editor-a".into(), crate::markdown::Mode::Split);
         p.markdown_modes
@@ -143,5 +274,148 @@ mod tests {
         assert!(!preferences.needs_setup(true, 1));
         preferences.setup_completed = true;
         assert!(!preferences.needs_setup(true, 0));
+    }
+
+    fn project(id: &str, name: &str) -> Project {
+        Project {
+            id: id.into(),
+            name: name.into(),
+            path: format!("/{id}").into(),
+            layout: serde_json::Value::Null,
+        }
+    }
+
+    fn session(id: &str, project: &str, created: u64) -> Session {
+        Session {
+            review: false,
+            id: id.into(),
+            project_id: project.into(),
+            label: id.into(),
+            cwd: format!("/{project}").into(),
+            kind: terminator_core::SessionKind::Shell,
+            file: None,
+            lifecycle: terminator_core::Lifecycle::Running,
+            created,
+            exit_code: None,
+            rows: 24,
+            cols: 80,
+            generation: "test".into(),
+            pid: None,
+            truncated: false,
+            cwd_confirmed: true,
+        }
+    }
+
+    fn ids(input: VisibleProjects<'_>) -> Vec<String> {
+        sort_visible_projects(input)
+            .into_iter()
+            .map(|project| project.id)
+            .collect()
+    }
+
+    #[test]
+    fn name_sort_is_case_insensitive_and_omits_hidden_projects() {
+        let hidden = HashSet::from(["skip".into()]);
+        let projects = vec![
+            project("z", "Banana"),
+            project("skip", "aaaa"),
+            project("a", "apple"),
+            project("m", "Banana"),
+        ];
+        let empty = HashMap::new();
+        let input = |sort: ProjectSort, projects: Vec<Project>| VisibleProjects {
+            projects,
+            hidden: &hidden,
+            sort,
+            activity: &empty,
+            sessions: &[],
+            agents: &[],
+            notifications: &[],
+            terminal_notices: &[],
+        };
+        assert_eq!(
+            ids(input(ProjectSort::NameAsc, projects.clone())),
+            ["a", "m", "z"]
+        );
+        assert_eq!(ids(input(ProjectSort::NameDesc, projects)), ["z", "m", "a"]);
+    }
+
+    #[test]
+    fn latest_activity_uses_max_timestamp_and_name_tie_break() {
+        let hidden = HashSet::new();
+        let projects = vec![project("z", "zebra"), project("a", "alpha")];
+        let sessions = [session("sz", "z", 10), session("sa", "a", 5)];
+        let empty = HashMap::new();
+        let mut agents = vec![Agent {
+            invocation_id: "i".into(),
+            session_id: "sa".into(),
+            kind: "custom".into(),
+            provider_session_id: None,
+            state: terminator_core::AgentState::Running,
+            sequence: None,
+            updated: 20,
+            resume: None,
+        }];
+        let ranked = |activity: &HashMap<String, u64>, agents: &[Agent]| {
+            ids(VisibleProjects {
+                projects: projects.clone(),
+                hidden: &hidden,
+                sort: ProjectSort::LatestActivity,
+                activity,
+                sessions: &sessions,
+                agents,
+                notifications: &[],
+                terminal_notices: &[],
+            })
+        };
+        assert_eq!(ranked(&empty, &[]), ["z", "a"]);
+        assert_eq!(ranked(&empty, &agents), ["a", "z"]);
+        agents[0].updated = 10;
+        assert_eq!(ranked(&empty, &agents), ["a", "z"]);
+        let mut activity = HashMap::new();
+        activity.insert("z".into(), 30);
+        assert_eq!(ranked(&activity, &agents), ["z", "a"]);
+    }
+
+    #[test]
+    fn latest_activity_includes_notice_timestamps() {
+        let hidden = HashSet::new();
+        let empty = HashMap::new();
+        let sessions = [session("sa", "a", 1), session("sb", "b", 2)];
+        let notifications = [Notification {
+            id: "n".into(),
+            session_id: "sa".into(),
+            invocation_id: "i".into(),
+            request_id: None,
+            state: terminator_core::AgentState::Completed,
+            summary: String::new(),
+            details: String::new(),
+            created: 8,
+            read: true,
+            dismissed: false,
+            resolved: true,
+            snoozed_until: 0,
+        }];
+        let terminal_notices = [TerminalNotice {
+            id: "t".into(),
+            session_id: "sb".into(),
+            title: String::new(),
+            body: String::new(),
+            created: 9,
+            dismissed: false,
+        }];
+        assert_eq!(
+            ids(VisibleProjects {
+                projects: vec![project("a", "a"), project("b", "b")],
+                hidden: &hidden,
+                sort: ProjectSort::LatestActivity,
+                activity: &empty,
+                sessions: &sessions,
+                agents: &[],
+                notifications: &notifications,
+                terminal_notices: &terminal_notices,
+            }),
+            ["b", "a"]
+        );
     }
 }

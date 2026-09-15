@@ -9,6 +9,8 @@ fn gui(h: &Harness) -> Result<Value> {
 pub fn run(o: &Options) -> Result<()> {
     cleanup_closes_gui(o, false)?;
     cleanup_closes_gui(o, true)?;
+    restart_cancel(o)?;
+    restart_relaunch(o)?;
     connection_recovery(o)?;
     manual_recovery(o)?;
     let mut h = Harness::new()?;
@@ -127,6 +129,165 @@ pub fn run(o: &Options) -> Result<()> {
         );
         thread::sleep(Duration::from_millis(50));
     }
+    Ok(())
+}
+
+fn restart_cancel(o: &Options) -> Result<()> {
+    let h = Harness::new()?;
+    h.setup()?;
+    let project = h.project("restart-cancel")?;
+    let shell = h.shell(&project)?;
+    h.layout(&project, std::slice::from_ref(&shell))?;
+    let state = h.state()?;
+    let generation = state["generation"].clone();
+    let helper = PathBuf::from(state["attachment_helper_executable"].as_str().unwrap());
+    fs::remove_file(helper)?;
+    capture(
+        &h,
+        o,
+        "restart-cancel",
+        json!([
+            {"at_ms":800,"target":"restart-session-service"},
+            {"at_ms":1300,"target":"cancel-restart-session"}
+        ]),
+        2200,
+        |_| {
+            h.wait(
+                |_| gui(&h).is_ok_and(|s| s["installation"]["can_restart"] == true),
+                5,
+            )?;
+            h.wait(
+                |_| gui(&h).is_ok_and(|s| s["installation"]["restart_confirm"] == true),
+                5,
+            )?;
+            h.wait(
+                |_| gui(&h).is_ok_and(|s| s["installation"]["restart_confirm"] == false),
+                5,
+            )?;
+            ensure!(
+                gui(&h)?["installation"]["restart_pending"] == false
+                    && h.state()?["generation"] == generation,
+                "Cancel must not restart the service"
+            );
+            h.assert_pids(std::slice::from_ref(&shell))?;
+            Ok(())
+        },
+    )?;
+    Ok(())
+}
+
+fn restart_relaunch(o: &Options) -> Result<()> {
+    fs::create_dir_all(&o.output)?;
+    let mut h = Harness::new()?;
+    h.setup()?;
+    let project = h.project("restart-relaunch")?;
+    let shell = h.shell(&project)?;
+    let file = h.root.join("restart-relaunch/unsaved.txt");
+    fs::create_dir_all(file.parent().unwrap())?;
+    fs::write(&file, "saved file\n")?;
+    let editor = h.editor(&project, &file)?;
+    h.wait(
+        |_| {
+            h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
+                .is_ok()
+        },
+        8,
+    )?;
+    h.write(&mut h.attach(&editor)?, "gg0Cunsaved buffer\u{1b}")?;
+    h.wait(
+        |_| {
+            h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
+                .is_ok_and(|r| r["Text"] == "1")
+        },
+        8,
+    )?;
+    h.layout(&project, &[shell, editor])?;
+    let state = h.state()?;
+    let generation = state["generation"].clone();
+    let helper = PathBuf::from(state["attachment_helper_executable"].as_str().unwrap());
+    fs::remove_file(&helper)?;
+    let log = fs::File::create(o.output.join("restart-relaunch.log"))?;
+    let mut command = h.command("terminator");
+    command
+        .env(
+            "TERMINATOR_CAPTURE_PATH",
+            o.output.join("restart-confirm.png"),
+        )
+        .env("TERMINATOR_CAPTURE_AFTER_MS", "60000")
+        .env("TERMINATOR_TEST_KEEP_OPEN", "1")
+        .env("TERMINATOR_TEST_SCALE", o.scale.to_string())
+        .env(
+            "TERMINATOR_TEST_ACTIONS",
+            json!([
+                {"at_ms":700,"target":"restart-session-service"},
+                {"at_ms":1100,"target":"confirm-restart-session","hover":true,"capture":true},
+                {"at_ms":1500,"target":"confirm-restart-session"}
+            ])
+            .to_string(),
+        );
+    if cfg!(target_os = "macos") {
+        command
+            .env("TERMINATOR_TEST_BACKGROUND", "1")
+            .env("TERMINATOR_TEST_RENDER_OCCLUDED", "1");
+    }
+    command.stdout(log.try_clone()?).stderr(log);
+    let mut child = Process(command.spawn()?);
+    h.wait(
+        |_| gui(&h).is_ok_and(|s| s["installation"]["can_restart"] == true),
+        8,
+    )?;
+    ensure!(
+        wait_child(&mut child.0, Duration::from_secs(20))?.success(),
+        "GUI did not close for restart"
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(40);
+    let mut next = None;
+    while next.is_none() {
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Relaunched GUI did not come back: {}",
+            fs::read_to_string(h.root.join("restart.log")).unwrap_or_default()
+        );
+        if let Ok(snapshot) = gui(&h)
+            && snapshot["installation"]["generation"] != generation
+            && snapshot["installation"]["problem"] == false
+        {
+            next = Some(snapshot);
+        } else {
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+    let after = h.state()?;
+    ensure!(
+        after["generation"] != generation && after["attachment_helper_available"] == true,
+        "Restart did not start this installation's service"
+    );
+    ensure!(
+        sessions(&after).iter().all(|s| s["lifecycle"] == "ended"),
+        "Restart revived an ended session"
+    );
+    ensure!(
+        fs::read_to_string(&file)? == "saved file\n",
+        "Restart must not silently save the unsaved buffer"
+    );
+    let output = h
+        .command("terminator-hook")
+        .args(["ctl", "shutdown", "--timeout", "10"])
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "Could not shut down relaunched service: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    wait_child(&mut h.daemon.as_mut().unwrap().0, Duration::from_secs(5))?;
+    h.daemon.take();
+    fs::write(
+        o.output.join("restart-relaunch.json"),
+        serde_json::to_vec_pretty(&json!({
+            "restarted":true,"unsaved_buffer_not_written":true,
+            "history_not_restarted":true,"helper_available":true
+        }))?,
+    )?;
     Ok(())
 }
 

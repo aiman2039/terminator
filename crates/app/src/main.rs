@@ -1,5 +1,5 @@
 mod daemon_connection;
-use daemon_connection::can_retire_daemon;
+use daemon_connection::{can_restart_service, can_retire_daemon};
 mod exit;
 mod installation;
 mod installation_ui;
@@ -27,7 +27,9 @@ mod editor_close;
 mod popup;
 mod preferences;
 mod workspace;
-use preferences::{SidebarTool, UiPreferences};
+use preferences::{
+    ProjectSort, SidebarTool, UiPreferences, VisibleProjects, sort_visible_projects,
+};
 use terminator_core::appearance::{AppearanceConfig, AppearanceFile, config_path};
 use workspace::Workspace;
 mod clipboard;
@@ -138,6 +140,7 @@ enum After {
 enum Job {
     CloseIdle(editor_close::Target, String, Vec<String>),
     RepairInstallation(String, exit::Checkpoint),
+    RestartSessionService,
     Control(Box<Request>, After),
     OpenProject(PathBuf, u64),
     Preferences(UiPreferences),
@@ -163,6 +166,7 @@ impl Job {
     }
 }
 enum Update {
+    RestartFinished,
     IdleClosed(
         editor_close::Target,
         Vec<String>,
@@ -439,6 +443,26 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
                             revision = None;
                             tx.send(Update::InstallationRepaired(result))?;
                         }
+                        Job::RestartSessionService => {
+                            let restart_tx = tx.clone();
+                            let restart_ctx = ctx.clone();
+                            let result = (|| {
+                                installation::spawn_restart(
+                                    installation::restart_invocation(
+                                        &std::env::current_exe()?,
+                                        &paths,
+                                    )?,
+                                    move || {
+                                        let _ = restart_tx.send(Update::RestartFinished);
+                                        restart_ctx.request_repaint();
+                                    },
+                                )
+                            })();
+                            if let Err(error) = result {
+                                tx.send(Update::RestartFinished)?;
+                                tx.send(Update::Error(format!("Could not restart: {error:#}")))?;
+                            }
+                        }
                         Job::ResolveTarget(key, text, cwd) => {
                             tx.send(Update::ResolvedTarget(
                                 key,
@@ -713,6 +737,8 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
 struct App {
     installation_error: Option<String>,
     repair_pending: bool,
+    restart_pending: bool,
+    restart_confirm: bool,
     automatic_repair_attempt: Option<String>,
     exit: exit::Exit,
     exit_attempt: u64,
@@ -870,6 +896,8 @@ impl App {
             updater: updater::Updater::new(ctx),
             installation_error: None,
             repair_pending: false,
+            restart_pending: false,
+            restart_confirm: false,
             automatic_repair_attempt: None,
             #[cfg(feature = "test-support")]
             diagnostics: Default::default(),
@@ -1010,7 +1038,10 @@ impl App {
                         "connected":self.connected,
                         "problem":self.installation_problem(),
                         "repair_pending":self.repair_pending,
+                        "restart_pending":self.restart_pending,
+                        "restart_confirm":self.restart_confirm,
                         "can_repair":self.connected && can_retire_daemon(&self.state),
+                        "can_restart":self.connected && can_restart_service(&self.state),
                         "settings_visible":self.settings_open && self.settings_section == 6,
                         "generation":self.state.generation,
                         "error":self.error,
@@ -1035,13 +1066,12 @@ impl App {
                     snapshot["editor_rect"] =
                         serde_json::to_value(self.fixture_rect(ctx, "editor-terminal"))?;
                     snapshot["sidebar_projects"] = serde_json::json!(
-                        self.state
-                            .projects
+                        self.visible_projects()
                             .iter()
-                            .filter(|p| !self.preferences.hidden_projects.contains(&p.id))
                             .map(|p| &p.id)
                             .collect::<Vec<_>>()
                     );
+                    snapshot["project_sort"] = serde_json::to_value(self.preferences.project_sort)?;
                     snapshot["markdown_header"] = serde_json::json!({
                         "title":self.fixture_rect(ctx,"markdown-title"),
                         "edit":self.fixture_rect(ctx,"markdown-mode:Edit"),
@@ -1516,6 +1546,10 @@ impl App {
                             .process_command(egui_term::BackendCommand::Write(text.into_bytes()));
                     }
                 }
+                Update::RestartFinished => {
+                    self.restart_pending = false;
+                    self.error = Some("Session service restart did not close this window. See restart.log in the data directory for details, then retry.".into());
+                }
                 Update::Error(e) => {
                     if installation::is_helper_error(&e) {
                         self.installation_error = Some(e.clone());
@@ -1732,6 +1766,9 @@ impl App {
     fn select_project(&mut self, project: String) {
         // Explicit navigation or reopening a folder restores its sidebar entry.
         self.preferences.hidden_projects.remove(&project);
+        self.preferences
+            .project_activity
+            .insert(project.clone(), now());
         if self.selected.as_ref() != Some(&project) {
             self.finish_rename(true);
         }
@@ -1759,13 +1796,7 @@ impl App {
             self.finish_rename(true);
             self.selected = None;
             self.active_session = None;
-            if let Some(next) = self
-                .state
-                .projects
-                .iter()
-                .find(|p| !self.preferences.hidden_projects.contains(&p.id))
-                .map(|p| p.id.clone())
-            {
+            if let Some(next) = self.visible_projects().into_iter().next().map(|p| p.id) {
                 self.select_project(next);
             }
         }
@@ -2511,6 +2542,7 @@ impl eframe::App for App {
                     if repair.clicked() {
                         self.open_installation_settings();
                     }
+                    self.restart_session_button(ui, true);
                 } else if let Some(error) = self.error.clone() {
                     ui.horizontal_wrapped(|ui| {
                         ui.colored_label(appearance::color(&self.theme.status_failed), error);
@@ -2532,6 +2564,7 @@ impl eframe::App for App {
                     if ui.small_button("Review installation…").clicked() {
                         self.open_installation_settings();
                     }
+                    self.restart_session_button(ui, true);
                 } else if let Some(info) = self.info.clone() {
                     ui.horizontal(|ui| {
                         ui.label(info);
@@ -2872,9 +2905,11 @@ mod daemon_compatibility_tests {
         assert!(!can_retire_daemon(&state));
         state.capabilities.push(SHUTDOWN_IF_IDLE_CAPABILITY.into());
         assert!(can_retire_daemon(&state));
+        assert!(!can_restart_service(&state));
         for version in ["unknown", env!("CARGO_PKG_VERSION"), "999.0.0"] {
             state.daemon_version = Some(version.into());
             assert!(!can_retire_daemon(&state));
+            assert!(!can_restart_service(&state));
         }
     }
 }
@@ -3035,10 +3070,12 @@ mod navigation_tests {
         for health in [None, Some(false)] {
             state.attachment_helper_available = health;
             assert!(can_retire_daemon(&state));
+            assert!(!can_restart_service(&state));
             state
                 .sessions
                 .push(session_fixture("live", SessionKind::Shell));
             assert!(!can_retire_daemon(&state));
+            assert!(can_restart_service(&state));
             state.sessions.clear();
         }
         state.attachment_helper_available = Some(true);
@@ -3187,6 +3224,103 @@ mod navigation_tests {
             requests.try_recv().unwrap(),
             Job::RepairInstallation(_, _)
         ));
+    }
+
+    #[test]
+    fn finished_restart_helper_restores_retry() {
+        let (mut app, ctx, _dir) = fixture();
+        let (tx, rx) = mpsc::channel();
+        app.updates = rx;
+        app.restart_pending = true;
+        tx.send(Update::RestartFinished).unwrap();
+        app.process_updates(&ctx);
+        assert!(!app.restart_pending);
+        assert!(app.error.as_deref().unwrap().contains("restart.log"));
+    }
+
+    #[test]
+    fn restart_is_hidden_for_newer_daemons_and_idle_services() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state.daemon_version = Some("999.0.0".into());
+        app.state.capabilities = vec![SHUTDOWN_IF_IDLE_CAPABILITY.into()];
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.begin_session_restart();
+        assert!(requests.try_recv().is_err());
+        app.state.daemon_version = Some("0.0.1".into());
+        app.state.sessions.clear();
+        app.begin_session_restart();
+        assert!(requests.try_recv().is_err());
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.begin_session_restart();
+        app.begin_session_restart();
+        assert!(app.restart_pending);
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Job::RestartSessionService
+        ));
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn restart_confirm_cancel_does_not_spawn() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state.daemon_version = Some("0.0.1".into());
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.restart_confirm = true;
+        app.restart_confirm = false;
+        assert!(requests.try_recv().is_err());
+        assert!(!app.restart_pending);
+    }
+
+    fn visible_ids(app: &App) -> Vec<String> {
+        app.visible_projects()
+            .into_iter()
+            .map(|project| project.id)
+            .collect()
+    }
+
+    #[test]
+    fn project_sidebar_sorts_by_name_and_latest_activity() {
+        let (mut app, _, _) = fixture();
+        app.state.projects[0].name = "zeta".into();
+        app.state.projects[1].name = "alpha".into();
+        assert_eq!(visible_ids(&app), ["b", "a"]);
+        app.preferences.project_sort = ProjectSort::NameDesc;
+        assert_eq!(visible_ids(&app), ["a", "b"]);
+        app.preferences.project_sort = ProjectSort::LatestActivity;
+        app.preferences.project_activity.insert("a".into(), 1);
+        app.preferences.project_activity.insert("b".into(), 2);
+        assert_eq!(visible_ids(&app), ["b", "a"]);
+        app.select_project("a".into());
+        assert_eq!(visible_ids(&app), ["a", "b"]);
+        assert!(app.preferences.project_activity["a"] >= 2);
+    }
+
+    #[test]
+    fn hiding_the_selected_project_selects_the_next_sorted_project() {
+        let (mut app, _, _) = fixture();
+        app.state.projects.push(Project {
+            id: "c".into(),
+            name: "alpha".into(),
+            path: "/c".into(),
+            layout: serde_json::Value::Null,
+        });
+        app.state.projects[0].name = "zeta".into();
+        app.state.projects[1].name = "mu".into();
+        app.selected = Some("a".into());
+        app.hide_project("a");
+        assert_eq!(app.selected.as_deref(), Some("c"));
+        assert_eq!(visible_ids(&app), ["c", "b"]);
     }
 
     #[test]
@@ -4646,6 +4780,9 @@ mod navigation_tests {
         app.state.notifications[0].snoozed_until = now() + 600;
         assert!(app.notice_detail_modal_open());
         app.state.notifications[0].snoozed_until = 0;
+        app.state.notifications[0].resolved = true;
+        assert!(app.notice_detail_modal_open());
+        app.state.notifications[0].resolved = false;
         app.state.notifications[0].dismissed = true;
         assert!(app.notice_detail_modal_open());
     }
@@ -4739,7 +4876,7 @@ mod navigation_tests {
 
     #[test]
     #[cfg(feature = "test-support")]
-    fn resolved_waiting_notice_sorts_below_unresolved_completion() {
+    fn resolved_waiting_notice_is_not_listed() {
         let (mut app, ctx, _dir) = fixture();
         app.preferences.all_projects = true;
         app.state.sessions = vec![
@@ -4754,10 +4891,27 @@ mod navigation_tests {
             notice_fixture("done", "done", AgentState::Completed, 1),
         ];
         render_agents(&mut app, &ctx, vec![]);
-        assert!(
-            agent_target(&ctx, "agent-row:done").unwrap().top()
-                < agent_target(&ctx, "agent-row:resolved").unwrap().top()
-        );
+        assert!(agent_target(&ctx, "agent-row:done").is_some());
+        assert!(agent_target(&ctx, "agent-row:resolved").is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn agents_inbox_lists_terminal_notices() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        app.state.terminal_notices = vec![TerminalNotice {
+            id: "tn".into(),
+            session_id: "live-shell".into(),
+            title: "Terminal".into(),
+            body: "bell".into(),
+            created: 1,
+            dismissed: false,
+        }];
+        render_agents(&mut app, &ctx, vec![]);
+        assert!(agent_target(&ctx, "terminal-row:live-shell").is_some());
+        assert!(agent_target(&ctx, "terminal-go:live-shell").is_some());
     }
 
     #[test]

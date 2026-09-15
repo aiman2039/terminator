@@ -2,11 +2,19 @@
 use crate::harness::*;
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
-use std::{fs, io::Read, os::unix::fs::PermissionsExt, thread, time::Duration};
+use std::{
+    fs,
+    io::Read,
+    os::unix::fs::PermissionsExt,
+    path::PathBuf,
+    thread,
+    time::{Duration, Instant},
+};
 use terminator_core::{quote, read_frame};
 
 pub fn run() -> Result<()> {
     clean_shutdown()?;
+    relaunch_shutdown()?;
     idle_shutdown_race()?;
     history_burst()?;
     missing_helper_health()?;
@@ -123,6 +131,134 @@ fn clean_shutdown() -> Result<()> {
     Ok(())
 }
 
+fn relaunch_stub(h: &Harness) -> Result<PathBuf> {
+    let stub = h.root.join("relaunch-stub");
+    fs::write(
+        &stub,
+        "#!/bin/sh\n{\n  printf 'data=%s\\n' \"$TERMINATOR_DATA_DIR\"\n  printf 'runtime=%s\\n' \"$TERMINATOR_RUNTIME_DIR\"\n  printf 'session=%s\\n' \"${TERMINATOR_SESSION_ID-}\"\n} > \"$TERMINATOR_DATA_DIR/relaunched\"\n",
+    )?;
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o700))?;
+    Ok(stub)
+}
+
+fn wait_relaunch_marker(h: &Harness) -> Result<String> {
+    let marker = h.root.join("relaunched");
+    let end = Instant::now() + Duration::from_secs(5);
+    while !marker.exists() {
+        ensure!(Instant::now() < end, "Relaunch stub did not run");
+        thread::sleep(Duration::from_millis(30));
+    }
+    Ok(fs::read_to_string(&marker)?)
+}
+
+fn relaunch_shutdown() -> Result<()> {
+    let mut h = Harness::new()?;
+    h.setup()?;
+    let project = h.project("relaunch")?;
+    let first = h.shell(&project)?;
+    let _second = h.shell(&project)?;
+    let mut stream = h.attach(&first)?;
+    h.write(
+        &mut stream,
+        "printf '\\nRELAUNCH_HISTORY_MARKER\\n'; sleep 60\n",
+    )?;
+    h.wait(
+        |_| {
+            h.history(id(&first))
+                .is_ok_and(|s| s.contains("RELAUNCH_HISTORY_MARKER"))
+        },
+        5,
+    )?;
+    let stub = relaunch_stub(&h)?;
+    let output = h
+        .command("terminator-hook")
+        .args([
+            "ctl",
+            "shutdown",
+            "--stop-all",
+            "--timeout",
+            "5",
+            "--relaunch",
+            "--exe",
+        ])
+        .arg(&stub)
+        .output()?;
+    ensure!(
+        output.status.success(),
+        "Relaunch cleanup failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout)?;
+    ensure!(
+        result["shutdown"] == true
+            && result["stopped_sessions"] == 2
+            && result["relaunched"] == true,
+        "Relaunch did not report both sessions"
+    );
+    let marker = wait_relaunch_marker(&h)?;
+    ensure!(
+        marker.contains(&format!("data={}", h.root.display()))
+            && marker.contains("session=\n")
+            && !h.root.join("run/daemon.sock").exists(),
+        "Relaunch stub missed isolated env or ran before teardown"
+    );
+    wait_child(&mut h.daemon.as_mut().unwrap().0, Duration::from_secs(5))?;
+    h.daemon.take();
+    h.start()?;
+    let state = h.state()?;
+    ensure!(
+        sessions(&state).len() == 2 && sessions(&state).iter().all(|s| s["lifecycle"] == "ended"),
+        "Relaunch must retain ended records without relaunch"
+    );
+    ensure!(
+        h.history(id(&first))?.contains("RELAUNCH_HISTORY_MARKER"),
+        "Relaunch lost saved terminal history"
+    );
+    let stubborn = h.shell(&project)?;
+    let mut stream = h.attach(&stubborn)?;
+    let ready = h.root.join("ignoring-hup-relaunch");
+    h.write(
+        &mut stream,
+        &format!("trap '' HUP; touch {}\n", quote(&ready.to_string_lossy())),
+    )?;
+    h.wait(|_| ready.exists(), 5)?;
+    let generation = h.state()?["generation"].clone();
+    let _ = fs::remove_file(h.root.join("relaunched"));
+    let output = h
+        .command("terminator-hook")
+        .args([
+            "ctl",
+            "shutdown",
+            "--stop-all",
+            "--timeout",
+            "1",
+            "--relaunch",
+            "--exe",
+        ])
+        .arg(&stub)
+        .output()?;
+    h.write(&mut stream, "exit\n")?;
+    h.wait(|s| session(s, id(&stubborn))["lifecycle"] == "ended", 5)?;
+    ensure!(
+        !output.status.success()
+            && String::from_utf8_lossy(&output.stderr).contains("did not stop"),
+        "Relaunch cleanup falsely succeeded for a refusing process"
+    );
+    ensure!(
+        h.state()?["generation"] == generation,
+        "Timed-out relaunch replaced the daemon"
+    );
+    ensure!(
+        h.root.join("relaunched").exists(),
+        "Timed-out relaunch did not reopen"
+    );
+    println!(
+        "{}",
+        json!({"relaunch_cleanup":true,"history_preserved":true,"timeout_preserves_daemon":true,"stub_relaunched":true})
+    );
+    Ok(())
+}
+
 fn large_snapshots() -> Result<()> {
     let mut h = Harness::new()?;
     h.setup()?;
@@ -132,7 +268,7 @@ fn large_snapshots() -> Result<()> {
     for n in 0..130 {
         h.rpc(json!({"Hook":{
             "protocol_version":1,"event_id":format!("event-{n}"),
-            "terminal_session_id":id(&shell),"agent_invocation_id":"fixture",
+            "terminal_session_id":id(&shell),"agent_invocation_id":format!("fixture-{n}"),
             "agent_kind":"custom","provider_session_id":"fixture",
             "state":"waiting_input","request_id":format!("request-{n}"),
             "sequence":n,"summary":"Pending fixture request","details":details,"resume":null

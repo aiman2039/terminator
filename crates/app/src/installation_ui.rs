@@ -25,6 +25,45 @@ impl App {
         self.begin_installation_repair();
     }
 
+    pub(super) fn restart_session_button(&mut self, ui: &mut egui::Ui, small: bool) {
+        if !self.connected || !can_restart_service(&self.state) {
+            return;
+        }
+        let label = if self.restart_pending {
+            "Restarting…"
+        } else {
+            "Restart session service"
+        };
+        let enabled = !self.restart_pending && !self.repair_pending && !self.exit.active();
+        let response = if small {
+            ui.add_enabled(enabled, egui::Button::new(label).small())
+        } else {
+            ui.add_enabled(enabled, egui::Button::new(label))
+        };
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "restart-session-service", response.rect);
+        if response.clicked() {
+            self.restart_confirm = true;
+        }
+    }
+
+    pub(super) fn begin_session_restart(&mut self) {
+        if self.restart_pending
+            || self.repair_pending
+            || self.exit.active()
+            || !can_restart_service(&self.state)
+        {
+            return;
+        }
+        self.restart_confirm = false;
+        match self.jobs.send(Job::RestartSessionService) {
+            Ok(()) => self.restart_pending = true,
+            Err(_) => {
+                self.error = Some("Restart worker disconnected. Reopen Terminator to retry.".into())
+            }
+        }
+    }
+
     pub(super) fn begin_installation_repair(&mut self) {
         if self.repair_pending || !self.connected || !can_retire_daemon(&self.state) {
             return;
@@ -159,6 +198,7 @@ impl App {
             } else if live.is_empty() && !can_retire_daemon(&self.state) {
                 ui.label("This service's version is newer or cannot be verified. Open the matching or newer Terminator app to repair it.");
             }
+            self.restart_session_button(ui, false);
             let repair = ui.add_enabled(
                 !self.repair_pending && can_retire_daemon(&self.state),
                 egui::Button::new(if self.repair_pending {

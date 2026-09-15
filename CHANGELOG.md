@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Sort the PROJECTS sidebar by name (A → Z / Z → A) or latest activity.
+  The choice persists in UI preferences. Latest activity uses last focus plus
+  session, agent, and notice timestamps.
+
+- Restart a mismatched session service from the status bar or Settings →
+  Installation: confirm, then a detached helper stops live sessions and reopens
+  this version. Sparkle updates still leave running terminals attached.
+
+- Keep attention compact on the left Agents row until that inbox is opened.
+  Git, Explorer, and History no longer list pending agent events. Waiting
+  input and permission notices leave the inbox when the agent continues or a
+  newer request replaces them.
+
 - Default Git reviews to the native similar+syntect viewer (word-level hunks,
   syntax highlighting, Unified/Split). Settings → Diff viewer can restore Neovim
   CodeDiff. Double-click a git-dirty file to open the matching side.

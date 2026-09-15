@@ -6,10 +6,18 @@ use std::{
     collections::HashSet,
     fs::{File, OpenOptions},
     os::unix::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
 use terminator_core::*;
+
+pub struct Options {
+    pub stop_all: bool,
+    pub timeout: Duration,
+    pub relaunch: Option<PathBuf>,
+}
 
 fn current(paths: &Paths, generation: &str) -> Result<State> {
     let Response::State(state) = rpc(paths, Request::Snapshot)? else {
@@ -65,15 +73,10 @@ fn close_gui(paths: &Paths, timeout: Duration) -> Result<File> {
     Ok(lock)
 }
 
-pub fn run(paths: &Paths, state: State, stop_all: bool, timeout: Duration) -> Result<Value> {
+fn refuse_managed_session(state: &State) -> Result<()> {
     ensure!(
         std::env::var_os("TERMINATOR_SESSION_ID").is_none(),
         "Run shutdown from Terminal.app or another terminal outside Terminator"
-    );
-    let live = state.sessions.iter().filter(|s| s.lifecycle.live()).count();
-    ensure!(
-        stop_all || live == 0,
-        "{live} live sessions remain. Save your work, then use --stop-all to terminate them (unsaved editor buffers will be lost)"
     );
     let ancestors = super::agent_parent().2;
     ensure!(
@@ -83,7 +86,134 @@ pub fn run(paths: &Paths, state: State, stop_all: bool, timeout: Duration) -> Re
             .any(|s| s.lifecycle.live() && s.pid.is_some_and(|pid| ancestors.contains(&pid))),
         "Run shutdown from Terminal.app or another terminal outside Terminator"
     );
-    let _gui_lock = close_gui(paths, timeout)?;
+    Ok(())
+}
+
+fn validate_relaunch(exe: Option<&Path>) -> Result<()> {
+    let Some(exe) = exe else {
+        return Ok(());
+    };
+    ensure!(
+        executable_available(exe),
+        "Cannot reopen Terminator: {} is unavailable",
+        exe.display()
+    );
+    Ok(())
+}
+
+fn prepare_relaunch_command(paths: &Paths, exe: &Path) -> Result<Command> {
+    let config = terminator_core::appearance::config_path(paths)?;
+    let mut command = Command::new(exe);
+    command
+        .env("TERMINATOR_DATA_DIR", &paths.data)
+        .env("TERMINATOR_RUNTIME_DIR", &paths.runtime)
+        .env(
+            "TERMINATOR_CONFIG_DIR",
+            config.parent().context("Missing config directory")?,
+        )
+        .env_remove("TERMINATOR_SESSION_ID")
+        .env_remove("TERMINATOR_SESSION_TOKEN")
+        .stdin(Stdio::null());
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("TERMINATOR_TEST_ACTIONS") || name.starts_with("TERMINATOR_CAPTURE_") {
+            command.env_remove(key);
+        }
+    }
+    Ok(command)
+}
+
+fn spawn_relaunch(paths: &Paths, exe: &Path) -> Result<()> {
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(paths.data.join("restart.log"))?;
+    let mut command = prepare_relaunch_command(paths, exe)?;
+    command.stdout(log.try_clone()?).stderr(log);
+    let mut child = spawn_session_leader(command)?;
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+fn stop_session(
+    paths: &Paths,
+    generation: &str,
+    targets: &HashSet<String>,
+    sid: &str,
+) -> Result<()> {
+    let before = current(paths, generation)?;
+    check_scope(&before, targets)?;
+    if before
+        .sessions
+        .iter()
+        .any(|s| s.id == sid && s.lifecycle.live())
+        && let Err(error) = rpc(
+            paths,
+            Request::Stop {
+                session: sid.to_owned(),
+            },
+        )
+    {
+        let after = current(paths, generation)?;
+        if after
+            .sessions
+            .iter()
+            .any(|s| s.id == sid && s.lifecycle.live())
+        {
+            return Err(error.context(format!(
+                "Could not stop session {sid}; the daemon was left running"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn wait_until_idle(
+    paths: &Paths,
+    generation: &str,
+    targets: &HashSet<String>,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = current(paths, generation)?;
+        check_scope(&remaining, targets)?;
+        let live = remaining
+            .sessions
+            .iter()
+            .filter(|s| s.lifecycle.live())
+            .count();
+        if live == 0 {
+            return Ok(());
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "{live} sessions did not stop within the timeout. The daemon was left running; close the remaining jobs and retry"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_daemon_exit(paths: &Paths, timeout: Duration) -> Result<()> {
+    let lock = OpenOptions::new()
+        .write(true)
+        .open(paths.runtime.join("daemon.lock"))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !paths.socket().exists() && try_lock(&lock)? {
+            return Ok(());
+        }
+        ensure!(
+            Instant::now() < deadline,
+            "Shutdown was acknowledged but the daemon has not exited; do not relaunch until it finishes"
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn finish_cleanup(paths: &Paths, state: State, stop_all: bool, timeout: Duration) -> Result<usize> {
     let state = current(paths, &state.generation)?;
     let targets: HashSet<_> = state
         .sessions
@@ -102,50 +232,9 @@ pub fn run(paths: &Paths, state: State, stop_all: bool, timeout: Duration) -> Re
         );
     }
     for sid in &targets {
-        let before = current(paths, &state.generation)?;
-        check_scope(&before, &targets)?;
-        if before
-            .sessions
-            .iter()
-            .any(|s| s.id == *sid && s.lifecycle.live())
-            && let Err(error) = rpc(
-                paths,
-                Request::Stop {
-                    session: sid.clone(),
-                },
-            )
-        {
-            let after = current(paths, &state.generation)?;
-            // Exiting independently between Snapshot and Stop is normal.
-            if after
-                .sessions
-                .iter()
-                .any(|s| s.id == *sid && s.lifecycle.live())
-            {
-                return Err(error.context(format!(
-                    "Could not stop session {sid}; the daemon was left running"
-                )));
-            }
-        }
+        stop_session(paths, &state.generation, &targets, sid)?;
     }
-    let deadline = Instant::now() + timeout;
-    loop {
-        let remaining = current(paths, &state.generation)?;
-        check_scope(&remaining, &targets)?;
-        let live = remaining
-            .sessions
-            .iter()
-            .filter(|s| s.lifecycle.live())
-            .count();
-        if live == 0 {
-            break;
-        }
-        ensure!(
-            Instant::now() < deadline,
-            "{live} sessions did not stop within the timeout. The daemon was left running; close the remaining jobs and retry"
-        );
-        thread::sleep(Duration::from_millis(50));
-    }
+    wait_until_idle(paths, &state.generation, &targets, timeout)?;
     let request = if state
         .capabilities
         .iter()
@@ -153,28 +242,46 @@ pub fn run(paths: &Paths, state: State, stop_all: bool, timeout: Duration) -> Re
     {
         Request::ShutdownIfIdle
     } else {
-        // Existing legacy request; never send the newer variant without its capability.
         Request::Shutdown
     };
     ensure!(
         matches!(rpc(paths, request)?, Response::Ok),
         "Daemon shutdown was not acknowledged"
     );
-    let lock = OpenOptions::new()
-        .write(true)
-        .open(paths.runtime.join("daemon.lock"))?;
-    let deadline = Instant::now() + timeout;
-    loop {
-        if !paths.socket().exists() && try_lock(&lock)? {
-            break;
+    wait_daemon_exit(paths, timeout)?;
+    Ok(targets.len())
+}
+
+pub fn run(paths: &Paths, state: State, options: Options) -> Result<Value> {
+    let Options {
+        stop_all,
+        timeout,
+        relaunch,
+    } = options;
+    refuse_managed_session(&state)?;
+    let live = state.sessions.iter().filter(|s| s.lifecycle.live()).count();
+    ensure!(
+        stop_all || live == 0,
+        "{live} live sessions remain. Save your work, then use --stop-all to terminate them (unsaved editor buffers will be lost)"
+    );
+    validate_relaunch(relaunch.as_deref())?;
+    let lock = close_gui(paths, timeout)?;
+    let result = finish_cleanup(paths, state, stop_all, timeout);
+    drop(lock);
+    let relaunch_error = relaunch
+        .as_ref()
+        .and_then(|exe| spawn_relaunch(paths, exe).err());
+    match (result, relaunch_error) {
+        (Ok(stopped), None) => Ok(json!({
+            "shutdown": true,
+            "stopped_sessions": stopped,
+            "relaunched": relaunch.is_some()
+        })),
+        (Ok(_), Some(error)) => {
+            Err(error).context("Sessions stopped but Terminator could not reopen")
         }
-        ensure!(
-            Instant::now() < deadline,
-            "Shutdown was acknowledged but the daemon has not exited; do not relaunch until it finishes"
-        );
-        thread::sleep(Duration::from_millis(50));
+        (Err(error), _) => Err(error),
     }
-    Ok(json!({"shutdown":true,"stopped_sessions":targets.len()}))
 }
 
 #[cfg(test)]
@@ -213,6 +320,38 @@ mod tests {
         paths.init().unwrap();
         atomic_write(&paths.auth(), b"fixture").unwrap();
         (dir, paths)
+    }
+
+    fn options(stop_all: bool, relaunch: Option<PathBuf>) -> Options {
+        Options {
+            stop_all,
+            timeout: Duration::from_secs(1),
+            relaunch,
+        }
+    }
+
+    fn stub_exe(dir: &Path, name: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            "#!/bin/sh\n{\n  printf 'data=%s\\n' \"$TERMINATOR_DATA_DIR\"\n  printf 'runtime=%s\\n' \"$TERMINATOR_RUNTIME_DIR\"\n  printf 'session=%s\\n' \"${TERMINATOR_SESSION_ID-}\"\n} > \"$TERMINATOR_DATA_DIR/relaunched.tmp\"\nmv \"$TERMINATOR_DATA_DIR/relaunched.tmp\" \"$TERMINATOR_DATA_DIR/relaunched\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+
+    fn wait_marker(path: &Path) -> String {
+        let start = Instant::now();
+        while !path.exists() {
+            assert!(
+                start.elapsed() < Duration::from_secs(3),
+                "relaunch stub did not run"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        std::fs::read_to_string(path).unwrap()
     }
 
     fn live_session() -> Session {
@@ -255,7 +394,7 @@ mod tests {
             sessions: vec![live_session()],
             ..Default::default()
         };
-        let error = run(&paths, state, true, Duration::from_secs(1)).unwrap_err();
+        let error = run(&paths, state, options(true, None)).unwrap_err();
         assert!(format!("{error:#}").contains("Workspace save failed"));
         server.join().unwrap();
         daemon.set_nonblocking(true).unwrap();
@@ -290,7 +429,7 @@ mod tests {
                 }
                 listener
             });
-            let error = run(&paths, initial, true, Duration::from_secs(1)).unwrap_err();
+            let error = run(&paths, initial, options(true, None)).unwrap_err();
             assert!(error.to_string().contains(if changed_generation {
                 "daemon changed"
             } else {
@@ -300,5 +439,207 @@ mod tests {
             listener.set_nonblocking(true).unwrap();
             assert!(listener.accept().is_err());
         }
+    }
+
+    #[test]
+    fn missing_relaunch_exe_does_not_close_gui() {
+        if isolated("shutdown::tests::missing_relaunch_exe_does_not_close_gui") {
+            return;
+        }
+        let (_dir, paths) = fixture();
+        let lock = File::create(paths.runtime.join("ui.lock")).unwrap();
+        lock.lock_exclusive().unwrap();
+        let daemon = UnixListener::bind(paths.socket()).unwrap();
+        let gui = UnixListener::bind(paths.runtime.join("gui.sock")).unwrap();
+        let error = run(
+            &paths,
+            State::default(),
+            options(true, Some(paths.data.join("missing-terminator"))),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unavailable"));
+        gui.set_nonblocking(true).unwrap();
+        daemon.set_nonblocking(true).unwrap();
+        assert!(gui.accept().is_err());
+        assert!(daemon.accept().is_err());
+        assert!(!paths.data.join("relaunched").exists());
+    }
+
+    #[test]
+    fn failed_gui_close_does_not_relaunch() {
+        if isolated("shutdown::tests::failed_gui_close_does_not_relaunch") {
+            return;
+        }
+        let (dir, paths) = fixture();
+        let stub = stub_exe(dir.path(), "relaunch");
+        let lock = File::create(paths.runtime.join("ui.lock")).unwrap();
+        lock.lock_exclusive().unwrap();
+        let daemon = UnixListener::bind(paths.socket()).unwrap();
+        let gui = UnixListener::bind(paths.runtime.join("gui.sock")).unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = gui.accept().unwrap();
+            let request: ui_control::Envelope = read_frame(&mut stream).unwrap();
+            assert!(
+                matches!(request.request, ui_control::Request::Window { action } if action == "close")
+            );
+            write_frame(
+                &mut stream,
+                &ui_control::Response {
+                    result: None,
+                    error: Some("Workspace save failed".into()),
+                },
+            )
+            .unwrap();
+        });
+        let error = run(
+            &paths,
+            State {
+                sessions: vec![live_session()],
+                ..Default::default()
+            },
+            options(true, Some(stub)),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("Workspace save failed"));
+        server.join().unwrap();
+        daemon.set_nonblocking(true).unwrap();
+        assert!(daemon.accept().is_err());
+        thread::sleep(Duration::from_millis(200));
+        assert!(!paths.data.join("relaunched").exists());
+    }
+
+    #[test]
+    fn relaunch_pins_the_original_appearance_directory() {
+        let (_dir, paths) = fixture();
+        let expected = terminator_core::appearance::config_path(&paths).unwrap();
+        let command = prepare_relaunch_command(&paths, Path::new("terminator")).unwrap();
+        let configured = command
+            .get_envs()
+            .find(|(key, _)| *key == "TERMINATOR_CONFIG_DIR")
+            .unwrap()
+            .1
+            .unwrap();
+        assert_eq!(Path::new(configured), expected.parent().unwrap());
+    }
+
+    fn idle_state() -> State {
+        State {
+            generation: "fixture".into(),
+            capabilities: vec![SHUTDOWN_IF_IDLE_CAPABILITY.into()],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn relaunch_runs_after_lock_release_with_isolated_env() {
+        if isolated("shutdown::tests::relaunch_runs_after_lock_release_with_isolated_env") {
+            return;
+        }
+        let (dir, paths) = fixture();
+        File::create(paths.runtime.join("daemon.lock")).unwrap();
+        let stub = stub_exe(dir.path(), "relaunch");
+        let listener = UnixListener::bind(paths.socket()).unwrap();
+        let socket = paths.socket();
+        let server = thread::spawn(move || {
+            loop {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let request: Envelope = read_frame(&mut stream).unwrap();
+                match request.request {
+                    Request::Snapshot => {
+                        write_frame(&mut stream, &Response::State(Box::new(idle_state()))).unwrap();
+                    }
+                    Request::ShutdownIfIdle => {
+                        write_frame(&mut stream, &Response::Ok).unwrap();
+                        let _ = std::fs::remove_file(&socket);
+                        break;
+                    }
+                    other => panic!("unexpected {other:?}"),
+                }
+            }
+        });
+        let result = run(&paths, idle_state(), options(true, Some(stub))).unwrap();
+        assert_eq!(result["shutdown"], true);
+        assert_eq!(result["relaunched"], true);
+        server.join().unwrap();
+        let marker = wait_marker(&paths.data.join("relaunched"));
+        assert!(marker.contains(&format!("data={}", paths.data.display())));
+        assert!(marker.contains(&format!("runtime={}", paths.runtime.display())));
+        assert!(marker.contains("session=\n"));
+        let lock = File::create(paths.runtime.join("ui.lock")).unwrap();
+        assert!(try_lock(&lock).unwrap());
+    }
+
+    #[test]
+    fn stop_timeout_relaunches_without_replacing_the_daemon() {
+        if isolated("shutdown::tests::stop_timeout_relaunches_without_replacing_the_daemon") {
+            return;
+        }
+        let (dir, paths) = fixture();
+        let stub = stub_exe(dir.path(), "relaunch");
+        let listener = UnixListener::bind(paths.socket()).unwrap();
+        let server = thread::spawn(move || {
+            let mut live = idle_state();
+            live.sessions.push(live_session());
+            for _ in 0..64 {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let request: Envelope = read_frame(&mut stream).unwrap();
+                match request.request {
+                    Request::Snapshot => {
+                        write_frame(&mut stream, &Response::State(Box::new(live.clone()))).unwrap();
+                    }
+                    Request::Stop { .. } => {
+                        write_frame(&mut stream, &Response::Ok).unwrap();
+                    }
+                    Request::ShutdownIfIdle | Request::Shutdown => {
+                        panic!("timeout must not shut down the daemon");
+                    }
+                    other => panic!("unexpected {other:?}"),
+                }
+            }
+        });
+        let error = run(
+            &paths,
+            {
+                let mut state = idle_state();
+                state.sessions.push(live_session());
+                state
+            },
+            options(true, Some(stub)),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("did not stop"));
+        let _ = wait_marker(&paths.data.join("relaunched"));
+        assert!(paths.socket().exists());
+        drop(server);
+    }
+
+    #[test]
+    fn managed_session_refuses_relaunch() {
+        const CHILD: &str = "TERMINATOR_SHUTDOWN_TEST_CHILD";
+        let name = "shutdown::tests::managed_session_refuses_relaunch";
+        if std::env::var(CHILD).as_deref() != Ok(name) {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", name, "--nocapture"])
+                .env(CHILD, name)
+                .env("TERMINATOR_SESSION_ID", "session")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let (dir, paths) = fixture();
+        let stub = stub_exe(dir.path(), "relaunch");
+        let error = run(&paths, State::default(), options(true, Some(stub))).unwrap_err();
+        assert!(error.to_string().contains("outside Terminator"));
+        assert!(!paths.data.join("relaunched").exists());
     }
 }

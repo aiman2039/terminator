@@ -125,6 +125,28 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
     }
     result
 }
+
+/// Double-fork + setsid so the process is not a child of the GUI.
+pub fn spawn_session_leader(mut command: Command) -> Result<std::process::Child> {
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        command.pre_exec(|| match libc::fork() {
+            -1 => Err(std::io::Error::last_os_error()),
+            0 => {
+                if libc::setsid() < 0 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            }
+            _ => {
+                libc::_exit(0);
+            }
+        });
+    }
+    Ok(command.spawn()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,6 +190,33 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn session_leader_pid_equals_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = dir.path().join("ready");
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg(format!("echo $$ > {}; sleep 8", ready.display()));
+        let mut child = spawn_session_leader(command).unwrap();
+        assert!(child.wait().unwrap().success());
+        let start = Instant::now();
+        while !ready.exists() {
+            assert!(start.elapsed() < Duration::from_secs(3));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let pid: i32 = std::fs::read_to_string(&ready)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let sid = unsafe { libc::getsid(pid) };
+        assert_eq!(sid, pid);
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+
     #[test]
     fn stdin_and_accepted_exit_codes() {
         let o = run_command(

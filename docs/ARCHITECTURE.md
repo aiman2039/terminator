@@ -146,7 +146,13 @@ The GUI attempts automatic repair once per daemon generation after sessions end;
 failed attempts remain manually retryable in Settings.
 A same-version daemon is also eligible when its helper is unavailable or it
 predates `stable-helper-v1`. Unknown/newer versions and daemons without
-`shutdown-if-idle-v1` remain untouched. The check and shutdown decision share the
+`shutdown-if-idle-v1` remain untouched.
+When live sessions block that idle path, **Restart session service** confirms,
+then a detached helper (`setsid`, not a session child) runs
+`ctl shutdown --stop-all --relaunch`. It checkpoints and quits the GUI, stops
+sessions without force-kill, shuts the daemon down, drops `ui.lock`, and
+respawns this installation's GUI with the same data/runtime environment.
+Sparkle Install and Relaunch stays GUI-only. The check and shutdown decision share the
 session-creation lock. A failed RPC
 with a held daemon lock is a connection error, not permission to replace it.
 See `docs/UPDATES.md` for packaging, native fixture and signed rollout boundaries.
@@ -186,6 +192,8 @@ creation refuses shutdown. Unknown/newer or unsupported daemons are preserved;
 the oldest installations get a copyable manual shutdown command scoped to the
 GUI's helper/data/runtime paths. Users must finish sessions and fully quit the
 GUI before executing it in another terminal; the GUI never sends legacy shutdown.
+**Restart session service** is the in-app equivalent for a replaceable live
+daemon: it spawns the GUI's sibling helper, not the daemon's private copy.
 Logout/login remains an alternative. Legacy missing-helper errors route here even when
 the old daemon has no installation-health fields.
 

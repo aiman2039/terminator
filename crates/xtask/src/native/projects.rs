@@ -4,6 +4,55 @@ use terminator_core::{Paths, ui_control};
 fn gui(h: &Harness) -> Result<Value> {
     ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)
 }
+fn wait_sidebar(h: &Harness, ids: &Value) -> Result<()> {
+    h.wait(|_| gui(h).is_ok_and(|s| s["sidebar_projects"] == *ids), 8)?;
+    Ok(())
+}
+fn sort_sidebar(h: &Harness, o: &Options, first: &Value, second: &Value) -> Result<()> {
+    let asc = json!([first["id"].clone(), second["id"].clone()]);
+    let desc = json!([second["id"].clone(), first["id"].clone()]);
+    capture(h, o, "sorted-name-asc", json!([]), 2200, |_| {
+        wait_sidebar(h, &asc)
+    })?;
+    capture(
+        h,
+        o,
+        "sorted-name-desc",
+        json!([
+            {"at_ms":800,"target":"project-sort"},
+            {"at_ms":1600,"target":"sort-name-desc"}
+        ]),
+        3200,
+        |_| wait_sidebar(h, &desc),
+    )?;
+    ensure!(
+        prefs(h)?["project_sort"] == "name_desc",
+        "Name Z → A did not persist"
+    );
+    capture(h, o, "sorted-name-desc-restart", json!([]), 2200, |_| {
+        wait_sidebar(h, &desc)
+    })?;
+    capture(
+        h,
+        o,
+        "sorted-latest-activity",
+        json!([
+            {"at_ms":800,"target":"project-sort"},
+            {"at_ms":1600,"target":"sort-latest-activity"},
+            {"at_ms":2400,"target":format!("project-row:{}", id(first))}
+        ]),
+        4200,
+        |_| wait_sidebar(h, &asc),
+    )?;
+    ensure!(
+        prefs(h)?["project_sort"] == "latest_activity",
+        "Latest activity did not persist"
+    );
+    capture(h, o, "sorted-latest-restart", json!([]), 2200, |_| {
+        wait_sidebar(h, &asc)
+    })?;
+    Ok(())
+}
 pub fn run(o: &Options) -> Result<()> {
     let h = Harness::new()?;
     h.setup()?;
@@ -40,6 +89,7 @@ pub fn run(o: &Options) -> Result<()> {
     h.layout(&second, std::slice::from_ref(&other))?;
     h.rpc(json!({"SelectProject":{"project":id(&first)}}))?;
     let originals = [shell.clone(), other.clone(), editor.clone()];
+    sort_sidebar(&h, o, &first, &second)?;
 
     capture(
         &h,

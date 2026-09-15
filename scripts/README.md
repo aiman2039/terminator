@@ -45,7 +45,7 @@ Project-owned Python automation has moved to `crates/xtask`. Run commands from
 New cases: `cargo xtask gui images`, `cargo xtask gui control`,
 `cargo xtask gui window-controls`, `cargo xtask gui split-file-opening`,
 `cargo xtask gui markdown`, `cargo xtask gui markdown-busy`, and `cargo xtask browser-check`.
-`cargo xtask gui project-sidebar` covers project removal and restoration.
+`cargo xtask gui project-sidebar` covers project sort, removal and restoration.
 `cargo xtask gui agent-sidebar` covers the bell, waiting/unread counts, left Agents navigation, restart persistence, and live status updates.
 `cargo xtask gui all` runs the ordinary native fixture suite. All GUI cases accept
 `--scale 1|2`, `--narrow`, and `--output PATH`. Captures default to the Cargo target
@@ -66,7 +66,8 @@ renders the saved file, then checks that live rendering resumes on the same PID.
 The regular Markdown fixture also tests unsaved text through a prompt and Refresh,
 Preview on the initial file click, and persistence of an explicit Edit choice.
 It checks that filename, view tabs and refresh icon share one row without overlap.
-`project-sidebar` removes/restores active projects and tests an empty sidebar
+`project-sidebar` sorts visible projects by name and latest activity, then
+removes/restores active projects and tests an empty sidebar
 across GUI restarts while retaining the same shell/editor PIDs, unsaved buffers,
 file bytes and project layouts. Both cases run as part of `gui all`.
 
@@ -108,8 +109,9 @@ loading in an isolated fixture bundle. See `docs/UPDATES.md` for signed rollout
 checks; this local fixture is not a signed Sparkle installation.
 
 `cargo xtask gui installation` checks the native installation recovery screen,
-disabled repair with live sessions, and successful repair after the last session
-finishes. It uses only disposable data and executables. `cargo xtask integration`
+disabled repair with live sessions, successful repair after the last session
+finishes, cancel of Restart session service, and confirm that stops an unsaved
+editor and relaunches this installation. It uses only disposable data and executables. `cargo xtask integration`
 also verifies that removing the original installation leaves the daemon's private
 helper executable, original session identities and new terminal creation intact.
 

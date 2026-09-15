@@ -1,17 +1,19 @@
 //! Validate the launch location before creating data or starting persistent PTYs.
-use std::path::Path;
+use anyhow::{Context, Result, ensure};
+use std::{
+    fs::OpenOptions,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    thread,
+};
+use terminator_core::{Paths, executable_available, spawn_session_leader};
 
 pub fn is_helper_error(error: &str) -> bool {
     error.starts_with("Attachment helper unavailable:")
 }
 
 /// Target this GUI's installation and service even from an unrelated terminal.
-pub fn manual_shutdown_command(
-    executable: &Path,
-    paths: &terminator_core::Paths,
-    stop_all: bool,
-) -> anyhow::Result<String> {
-    use anyhow::Context;
+pub fn manual_shutdown_command(executable: &Path, paths: &Paths, stop_all: bool) -> Result<String> {
     use terminator_core::quote;
     let helper = executable.with_file_name("terminator-hook");
     let path = |p: &Path| {
@@ -21,16 +23,93 @@ pub fn manual_shutdown_command(
             .context("Installation path cannot be represented as a shell command")
     };
     let arguments = if stop_all {
-        "ctl shutdown --stop-all"
+        "ctl shutdown --stop-all --relaunch"
     } else {
         "rpc '\"Shutdown\"'"
     };
+    let config = terminator_core::appearance::config_path(paths)?;
+    let config_dir = config.parent().context("Missing config directory")?;
     Ok(format!(
-        "env TERMINATOR_DATA_DIR={} \\\n  TERMINATOR_RUNTIME_DIR={} \\\n  {} {arguments}",
+        "env TERMINATOR_CONFIG_DIR={} TERMINATOR_DATA_DIR={} \\\n  TERMINATOR_RUNTIME_DIR={} \\\n  {} {arguments}",
+        path(config_dir)?,
         path(&paths.data)?,
         path(&paths.runtime)?,
         path(&helper)?,
     ))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct RestartInvocation {
+    pub hook: PathBuf,
+    pub gui: PathBuf,
+    pub data: PathBuf,
+    pub runtime: PathBuf,
+    pub config: PathBuf,
+}
+
+pub fn restart_invocation(executable: &Path, paths: &Paths) -> Result<RestartInvocation> {
+    let hook = executable.with_file_name("terminator-hook");
+    let gui = std::path::absolute(executable)?;
+    ensure!(
+        executable_available(&hook),
+        "Cannot restart: {} is unavailable",
+        hook.display()
+    );
+    ensure!(
+        executable_available(&gui),
+        "Cannot restart: {} is unavailable",
+        gui.display()
+    );
+    Ok(RestartInvocation {
+        hook,
+        gui,
+        data: paths.data.clone(),
+        runtime: paths.runtime.clone(),
+        config: terminator_core::appearance::config_path(paths)?,
+    })
+}
+
+pub fn spawn_restart(
+    invocation: RestartInvocation,
+    finished: impl FnOnce() + Send + 'static,
+) -> Result<()> {
+    let RestartInvocation {
+        hook,
+        gui,
+        data,
+        runtime,
+        config,
+    } = invocation;
+    let mut log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(data.join("restart.log"))
+        .context("Cannot open restart log")?;
+    let mut command = Command::new(&hook);
+    command
+        .args(["ctl", "shutdown", "--stop-all", "--relaunch", "--exe"])
+        .arg(&gui)
+        .env("TERMINATOR_DATA_DIR", &data)
+        .env("TERMINATOR_RUNTIME_DIR", &runtime)
+        .env(
+            "TERMINATOR_CONFIG_DIR",
+            config.parent().context("Missing config directory")?,
+        )
+        .env_remove("TERMINATOR_SESSION_ID")
+        .env_remove("TERMINATOR_SESSION_TOKEN")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let mut child = spawn_session_leader(command)?;
+    let mut stderr = child.stderr.take().context("Missing restart error pipe")?;
+    thread::spawn(move || {
+        // The returned Child is the intermediate fork. EOF tracks the actual
+        // detached helper, which retains this pipe until it exits.
+        let _ = child.wait();
+        let _ = std::io::copy(&mut stderr, &mut log);
+        finished();
+    });
+    Ok(())
 }
 
 pub fn attachment_helper(state: &terminator_core::State) -> anyhow::Result<std::path::PathBuf> {
@@ -142,6 +221,39 @@ fn show_message(title: &str, description: &str, _open_applications: bool) -> boo
 mod tests {
     use super::*;
     #[test]
+    fn detached_helper_failure_reports_completion_and_preserves_config() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let hook = dir.path().join("helper");
+        std::fs::write(
+            &hook,
+            "#!/bin/sh\nprintf '%s' \"$TERMINATOR_CONFIG_DIR\" >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let config_dir = dir.path().join("original config");
+        let (tx, rx) = std::sync::mpsc::channel();
+        spawn_restart(
+            RestartInvocation {
+                hook,
+                gui: dir.path().join("gui"),
+                data: dir.path().to_owned(),
+                runtime: dir.path().join("run"),
+                config: config_dir.join("config.toml"),
+            },
+            move || {
+                let _ = tx.send(());
+            },
+        )
+        .unwrap();
+        rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("restart.log")).unwrap(),
+            config_dir.to_string_lossy()
+        );
+    }
+
+    #[test]
     fn manual_shutdown_targets_this_installation_and_quotes_shell_metacharacters() {
         use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
@@ -160,7 +272,7 @@ mod tests {
         };
         for (stop_all, arguments) in [
             (false, "rpc\n\"Shutdown\"\n"),
-            (true, "ctl\nshutdown\n--stop-all\n"),
+            (true, "ctl\nshutdown\n--stop-all\n--relaunch\n"),
         ] {
             let command =
                 manual_shutdown_command(&dir.join("terminator"), &paths, stop_all).unwrap();
@@ -180,6 +292,29 @@ mod tests {
                 )
             );
         }
+    }
+
+    #[test]
+    fn restart_invocation_uses_gui_sibling_not_a_private_helper() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let gui = dir.path().join("terminator");
+        let hook = dir.path().join("terminator-hook");
+        for path in [&gui, &hook] {
+            std::fs::write(path, b"#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let paths = terminator_core::Paths {
+            data: dir.path().join("data"),
+            runtime: dir.path().join("run"),
+        };
+        let invocation = restart_invocation(&gui, &paths).unwrap();
+        assert_eq!(invocation.hook, hook);
+        assert!(invocation.gui.ends_with("terminator"));
+        assert_eq!(invocation.data, paths.data);
+        assert_eq!(invocation.runtime, paths.runtime);
+        std::fs::remove_file(&hook).unwrap();
+        assert!(restart_invocation(&gui, &paths).is_err());
     }
 
     #[test]

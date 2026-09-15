@@ -14,7 +14,7 @@ pub fn is_connection_error(error: &str) -> bool {
     error.starts_with("Reconnecting:") || error.starts_with("Session daemon unavailable")
 }
 
-pub fn can_retire_daemon(state: &State) -> bool {
+pub fn can_replace_daemon(state: &State) -> bool {
     state.daemon_version.as_deref().is_some_and(|version| {
         semver::Version::parse(version)
             .ok()
@@ -28,11 +28,20 @@ pub fn can_retire_daemon(state: &State) -> bool {
                                 .iter()
                                 .any(|c| c == STABLE_HELPER_CAPABILITY)))
             })
-    }) && state
-        .capabilities
-        .iter()
-        .any(|c| c == SHUTDOWN_IF_IDLE_CAPABILITY)
+    })
+}
+
+pub fn can_retire_daemon(state: &State) -> bool {
+    can_replace_daemon(state)
+        && state
+            .capabilities
+            .iter()
+            .any(|c| c == SHUTDOWN_IF_IDLE_CAPABILITY)
         && !state.sessions.iter().any(|s| s.lifecycle.live())
+}
+
+pub fn can_restart_service(state: &State) -> bool {
+    can_replace_daemon(state) && state.sessions.iter().any(|s| s.lifecycle.live())
 }
 
 fn wait_for_retirement(paths: &Paths) -> Result<()> {

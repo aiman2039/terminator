@@ -154,6 +154,48 @@ impl App {
         }
         ui.separator();
     }
+    fn project_sort_menu(&mut self, ui: &mut egui::Ui) {
+        let current = self.preferences.project_sort;
+        let menu = appearance::menu_button(ui, "Sort", |ui| {
+            for (sort, icon, target) in [
+                (ProjectSort::NameAsc, "ArrowDown", "sort-name-asc"),
+                (ProjectSort::NameDesc, "ArrowUp", "sort-name-desc"),
+                (
+                    ProjectSort::LatestActivity,
+                    "History",
+                    "sort-latest-activity",
+                ),
+            ] {
+                let check = if current == sort { "✓" } else { "" };
+                let response = appearance::menu_item(ui, sort.menu_label(), icon, check);
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), target, response.rect);
+                #[cfg(not(feature = "test-support"))]
+                let _ = target;
+                if response.clicked() {
+                    self.preferences.project_sort = sort;
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Sort projects by name or latest activity");
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "project-sort", menu.rect);
+        let _ = menu;
+    }
+    pub(super) fn visible_projects(&self) -> Vec<Project> {
+        sort_visible_projects(VisibleProjects {
+            projects: self.state.projects.clone(),
+            hidden: &self.preferences.hidden_projects,
+            sort: self.preferences.project_sort,
+            activity: &self.preferences.project_activity,
+            sessions: &self.state.sessions,
+            agents: &self.state.agents,
+            notifications: &self.state.notifications,
+            terminal_notices: &self.state.terminal_notices,
+        })
+    }
     pub(super) fn projects(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(RichText::new("PROJECTS").small().weak().strong());
@@ -163,6 +205,7 @@ impl App {
             if add.clicked() {
                 self.add_project = true;
             }
+            self.project_sort_menu(ui);
             let hidden: Vec<_> = self
                 .state
                 .projects
@@ -205,8 +248,7 @@ impl App {
         appearance::sidebar_scroll("projects")
             .max_height((ui.available_height() - footer).max(0.0))
             .show(ui, |ui| {
-                for p in self.state.projects.clone() {
-                    if self.preferences.hidden_projects.contains(&p.id) { continue; }
+                for p in self.visible_projects() {
                     ui.add_space(6.0);
                     let count = self
                         .state
