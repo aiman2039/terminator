@@ -9,6 +9,8 @@
 
 - Decision: GUI-owned `Tab::Browser` (layout v6) via wry WKWebView/WebKitGTK. Dies with the GUI. v4 `Html` migrates. Isolated `webview/` profile. Local HTML + http(s). Covered panes hide the native view. Downloads denied. `window.open` http(s) opens another Browser tab. Wayland fail closed.
 - Unit: layout migrate, v7 reject, player-only stays v5, html/http allowlist, relative file href reject, profile dir, eviction order, URL submit replaces tab, open keeps originating project, no editor PTY. `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` passed.
+- Linux CI/release/`linux-check` install `libwebkit2gtk-4.1-dev` so `glib-sys` can find `glib-2.0`.
+- OSV ignores `RUSTSEC-2024-0429` (`glib` 0.18 via wry/gtk3; unsound, no CVE; 0.20 blocked on wry) and `RUSTSEC-2024-0370` (`proc-macro-error` via gtk3-macros; unmaintained). Synced in `osv-scanner.toml`, `deny.toml`, `.cargo/audit.toml`.
 - Blitz raster, worker, and `html_preview` removed. URL bar Go/Enter navigates http(s) in-place.
 - `cargo xtask gui browser` passed: open JS `page.html` (layout v6, no extra PTY), close tab, Open as text (editor session). PNG capture does not include OS webview pixels (child NSView).
 
@@ -36,8 +38,8 @@ Dependabot, and OpenSSF Scorecard.
   The job skips when `NVD_API_KEY` is unset (OWASP 13 fails NVD updates on an
   empty key). When set, NVD data is cached under `owasp-data/`.
 - Snyk and Socket skip when `SNYK_TOKEN` / `SOCKET_SECURITY_API_KEY` are unset.
-- OSV-Scanner uses `osv-scanner.toml` with the same unmaintained RUSTSEC ignores
-  as `deny.toml` / `.cargo/audit.toml`.
+- OSV-Scanner uses `osv-scanner.toml` with the same unmaintained/unsound RUSTSEC
+  ignores as `deny.toml` / `.cargo/audit.toml`.
 - Hosted Security/Scorecard runs, secret-backed Snyk/Socket scans, Renovate App
   onboarding, and Dependabot alert enablement were not executed in this change.
   Scorecard badge 404s until the first `publish_results` run succeeds.

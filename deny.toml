@@ -9,13 +9,16 @@ targets = [
 [advisories]
 unmaintained = "workspace"
 yanked = "deny"
-# Keep in sync with .cargo/audit.toml and osv-scanner.toml. Unmaintained notices only (no CVEs).
+# Keep in sync with .cargo/audit.toml and osv-scanner.toml.
+# Unmaintained/unsound notices only (no CVEs).
 ignore = [
     { id = "RUSTSEC-2025-0141", reason = "bincode via syntect; 1.3.3 considered complete, no CVE" },
     { id = "RUSTSEC-2024-0436", reason = "paste via vendored egui_dock; proc-macro, no CVE" },
     { id = "RUSTSEC-2026-0206", reason = "rustybuzz via resvg 0.45; blocked on egui_extras" },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser via resvg 0.45; blocked on egui_extras" },
     { id = "RUSTSEC-2024-0320", reason = "yaml-rust via syntect; published 5.3.0 not on yaml-rust2 yet" },
+    { id = "RUSTSEC-2024-0429", reason = "glib 0.18 via wry/gtk3; unsound, no CVE; 0.20 blocked on wry" },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error via gtk3-macros; unmaintained, no CVE" },
 ]
 
 [bans]
