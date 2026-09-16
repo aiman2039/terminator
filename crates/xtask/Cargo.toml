@@ -25,7 +25,7 @@ x11rb = { version = "0.13", features = ["xtest"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = { version = "0.23", features = ["elcapitan"] }
-core-foundation = "0.9"
+core-foundation = "0.10"
 
 [dependencies.tungstenite]
 version = "0.28"
