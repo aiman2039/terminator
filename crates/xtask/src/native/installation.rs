@@ -94,8 +94,7 @@ pub fn run(o: &Options) -> Result<()> {
         o,
         "repaired",
         json!([
-            {"at_ms":700,"target":"fix-installation"},
-            {"at_ms":2200,"target":"repair-installation"}
+            {"at_ms":700,"target":"fix-installation"}
         ]),
         5500,
         |_| {
@@ -105,10 +104,7 @@ pub fn run(o: &Options) -> Result<()> {
             )?;
             // The user finishes the last session while the recovery screen is open.
             h.rpc(json!({"Stop":{"session":id(&shell)}}))?;
-            h.wait(
-                |_| gui(&h).is_ok_and(|s| s["installation"]["can_repair"] == true),
-                5,
-            )?;
+            // Idle migration starts automatically; the repair button can disappear immediately.
             // Daemon RPC is briefly unavailable during the acknowledged idle restart.
             let deadline = std::time::Instant::now() + Duration::from_secs(8);
             loop {
@@ -149,9 +145,13 @@ pub fn run(o: &Options) -> Result<()> {
     )?;
     h.rpc(json!({"Stop":{"session":id(&new)}}))?;
     h.wait(|s| session(s, id(&new))["lifecycle"] == "ended", 5)?;
+    let endpoint = terminator_core::generations::owner_for(
+        &Paths::at(h.root.clone()),
+        &terminator_core::Request::Snapshot,
+    )?;
     h.rpc(json!("ShutdownIfIdle"))?;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while Paths::at(h.root.clone()).socket().exists() {
+    while endpoint.socket().exists() {
         ensure!(
             std::time::Instant::now() < deadline,
             "Repaired fixture service did not shut down"
@@ -462,6 +462,11 @@ fn manual_recovery(o: &Options) -> Result<()> {
 fn connection_recovery(o: &Options) -> Result<()> {
     let h = Harness::new()?;
     h.setup()?;
+    // Keep this transport-compatibility fixture on the legacy endpoint. An idle
+    // legacy service now migrates on GUI launch, legitimately removing its socket.
+    let project = h.project("connection-recovery")?;
+    let shell = h.shell(&project)?;
+    h.layout(&project, std::slice::from_ref(&shell))?;
     save_prefs(
         &h,
         &json!({"version":1,"typography_migrated":true,"attention_migrated":true}),
@@ -491,6 +496,7 @@ fn connection_recovery(o: &Options) -> Result<()> {
     };
     capture(&h, o, "reconnected", json!([]), 2200, |_| {
         wait_connection(true)?;
+        thread::sleep(Duration::from_millis(300));
         let before = h.state()?;
         let socket = Paths::at(h.root.clone()).socket();
         let hidden = socket.with_extension("temporarily-unavailable");

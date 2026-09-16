@@ -39,6 +39,9 @@ enum Control {
         /// GUI executable to reopen. Defaults to terminator beside this helper.
         #[arg(long, requires = "relaunch")]
         exe: Option<PathBuf>,
+        /// Exact inventory approved in the GUI.
+        #[arg(long, hide = true, requires = "stop_all")]
+        confirmed_inventory: Option<String>,
     },
     AddProject {
         path: PathBuf,
@@ -198,6 +201,7 @@ pub fn run(args: &[String]) -> Result<()> {
     if let Control::Browser { command } = cli.command {
         return super::browser::run(command);
     }
+    paths = generations::workspace_paths(&paths)?;
     let state = snapshot(&paths)?;
     let value = match cli.command {
         Control::Shutdown {
@@ -205,6 +209,7 @@ pub fn run(args: &[String]) -> Result<()> {
             timeout,
             relaunch,
             exe,
+            confirmed_inventory,
         } => {
             let relaunch = if relaunch {
                 Some(match exe {
@@ -219,6 +224,9 @@ pub fn run(args: &[String]) -> Result<()> {
                 state,
                 super::shutdown::Options {
                     stop_all,
+                    confirmed: confirmed_inventory
+                        .map(|json| serde_json::from_str(&json))
+                        .transpose()?,
                     timeout: Duration::from_secs(timeout),
                     relaunch,
                 },
@@ -315,14 +323,20 @@ pub fn run(args: &[String]) -> Result<()> {
                 bytes.push(b'\r');
             }
             let rec = session(&state, &sid)?;
-            let mut stream = UnixStream::connect(paths.socket())?;
+            let owner = generations::owner_for(
+                &paths,
+                &Request::History {
+                    session: sid.clone(),
+                },
+            )?;
+            let mut stream = UnixStream::connect(owner.socket())?;
             stream.set_read_timeout(Some(Duration::from_secs(5)))?;
             stream.set_write_timeout(Some(Duration::from_secs(5)))?;
             write_frame(
                 &mut stream,
                 &Envelope {
                     version: PROTOCOL_VERSION,
-                    auth: paths.token()?,
+                    auth: owner.token()?,
                     request: Request::Attach {
                         session: sid,
                         rows: rec.rows.max(1),

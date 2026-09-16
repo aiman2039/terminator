@@ -51,14 +51,20 @@ impl App {
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    ui.label(format!(
-                        "This will quit Terminator, stop {live} live session(s), and reopen this version."
-                    ));
-                    ui.weak(
-                        "Unsaved editor buffers are discarded and running jobs stop. Saved history is kept. Ended sessions are not relaunched.",
+                    ui.label(
+                        RichText::new(format!("All {live} live session(s) will be stopped."))
+                            .strong()
+                            .color(appearance::color(&self.theme.status_failed)),
                     );
+                    ui.label(
+                        RichText::new("Unsaved editor changes will be lost. Running shells, agents, and jobs will stop.")
+                            .strong()
+                            .color(appearance::color(&self.theme.status_failed)),
+                    );
+                    ui.add_space(8.0);
+                    ui.label("Terminator will quit and reopen. Saved history is kept, but stopped sessions cannot be restored.");
                     ui.horizontal(|ui| {
-                        let confirm = ui.button("Restart session service");
+                        let confirm = ui.button("Stop all sessions and restart");
                         #[cfg(feature = "test-support")]
                         diagnostics::record(ui.ctx(), "confirm-restart-session", confirm.rect);
                         if confirm.clicked() {

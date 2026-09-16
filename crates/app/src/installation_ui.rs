@@ -32,7 +32,7 @@ impl App {
         let label = if self.restart_pending {
             "Restarting…"
         } else {
-            "Restart session service"
+            "Stop all sessions and restart"
         };
         let enabled = !self.restart_pending && !self.repair_pending && !self.exit.active();
         let response = if small {
@@ -56,7 +56,9 @@ impl App {
             return;
         }
         self.restart_confirm = false;
-        match self.jobs.send(Job::RestartSessionService) {
+        match self.jobs.send(Job::RestartSessionService(
+            recovery::RestartInventory::capture(&self.state),
+        )) {
             Ok(()) => self.restart_pending = true,
             Err(_) => {
                 self.error = Some("Restart worker disconnected. Reopen Terminator to retry.".into())
@@ -65,7 +67,10 @@ impl App {
     }
 
     pub(super) fn begin_installation_repair(&mut self) {
-        if self.repair_pending || !self.connected || !can_retire_daemon(&self.state) {
+        if self.repair_pending
+            || !self.connected
+            || (!can_retire_daemon(&self.state) && self.state.generations.is_empty())
+        {
             return;
         }
         self.finish_rename(true);
@@ -96,6 +101,67 @@ impl App {
                 "Waiting for the session service. Repair will be available after it reconnects.",
             );
             return;
+        }
+        if !self.state.generations.is_empty() {
+            if let Some(error) = self.error.as_ref().filter(|e| {
+                e.starts_with("Service upgrade") || e.starts_with("Could not repair installation")
+            }) {
+                ui.colored_label(appearance::color(&self.theme.status_failed), error);
+                if ui
+                    .add_enabled(
+                        !self.repair_pending,
+                        egui::Button::new("Retry service update"),
+                    )
+                    .clicked()
+                {
+                    self.begin_installation_repair();
+                }
+            } else {
+                ui.label("Updated service ready");
+            }
+            if self
+                .state
+                .generations
+                .iter()
+                .any(|g| g.owner.id != self.state.generation && g.live_sessions > 0)
+            {
+                ui.label("Existing sessions continue on an earlier version.");
+            }
+            let generations = self.state.generations.clone();
+            for generation in generations {
+                ui.collapsing(
+                    format!(
+                        "{} · {:?} · {} live sessions",
+                        generation.owner.version, generation.owner.status, generation.live_sessions
+                    ),
+                    |ui| {
+                        ui.monospace(&generation.owner.id);
+                        ui.label(format!(
+                            "Build {} · protocol {} · catalog {}",
+                            generation.owner.build,
+                            generation.owner.protocol,
+                            generation.owner.catalog
+                        ));
+                        if let Some(error) = &generation.error {
+                            ui.colored_label(appearance::color(&self.theme.status_failed), error);
+                        }
+                        let sessions: Vec<_> = self
+                            .state
+                            .sessions
+                            .iter()
+                            .filter(|s| s.generation == generation.owner.id && s.lifecycle.live())
+                            .cloned()
+                            .collect();
+                        for session in sessions {
+                            if ui.button(format!("Show {}", session.label)).clicked() {
+                                self.settings_open = false;
+                                self.go_session(&session.id);
+                            }
+                        }
+                    },
+                );
+            }
+            self.restart_session_button(ui, false);
         }
         let protected = self
             .state

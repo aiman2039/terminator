@@ -112,6 +112,8 @@ fn request_quit(paths: &Paths, state: &State, live: &[String], mode: Mode) -> Re
 }
 
 fn quit_one(paths: &Paths, state: &State, id: &str, mode: Mode) -> Result<()> {
+    let owner = state.session_paths(paths, id);
+    let paths = &owner;
     if mode == Mode::Discard && !paths.editor_socket(id).exists() {
         return stop(paths, id);
     }

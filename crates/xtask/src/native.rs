@@ -11,6 +11,7 @@ use std::{
 mod agents;
 mod codex;
 mod folder_access;
+mod generations;
 mod idle_close;
 mod installation;
 mod launch;
@@ -170,6 +171,7 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "markdown-busy" => markdown::busy(&opts)?,
             "updates" => updates::run(&opts)?,
             "installation" => installation::run(&opts)?,
+            "generations" => generations::run(&opts)?,
             "project-sidebar" => projects::run(&opts)?,
             "agent-sidebar" => agents::run(&opts)?,
             "pane-close" => {

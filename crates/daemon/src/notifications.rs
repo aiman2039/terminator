@@ -29,7 +29,11 @@ pub fn send(paths: Paths, summary: String, notice: String) {
                     return;
                 }
                 let _ = atomic_write(&paths.runtime.join("activation"), notice.as_bytes());
-                if let Ok(exe) = std::env::current_exe() {
+                if let Ok(exe) = std::env::var_os("TERMINATOR_GUI_EXECUTABLE")
+                    .map(std::path::PathBuf::from)
+                    .map(Ok)
+                    .unwrap_or_else(std::env::current_exe)
+                {
                     #[cfg(target_os = "macos")]
                     let mut command = {
                         let mut c = Command::new("open");

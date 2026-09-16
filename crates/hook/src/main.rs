@@ -1,7 +1,7 @@
 mod browser;
 mod control;
 mod shutdown;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use std::{
     io::{Read, Write},
@@ -12,6 +12,10 @@ use terminator_core::*;
 fn main() -> Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     match args.first().map(String::as_str) {
+        Some("--health-check") => {
+            println!("{}:{}", env!("CARGO_PKG_VERSION"), PROTOCOL_VERSION);
+            Ok(())
+        }
         Some("ctl") => control::run(&args[1..]),
         Some("attach") => attach(args.get(1).context("Missing session ID")?, &args[2..]),
         Some("event" | "emit" | "cwd" | "prompt") => {
@@ -21,7 +25,7 @@ fn main() -> Result<()> {
         }
         Some("rpc") => {
             let req: Request = serde_json::from_str(args.get(1).context("Expected JSON request")?)?;
-            let response = rpc(&Paths::discover()?, req)?;
+            let response = rpc(&generations::workspace_paths(&Paths::discover()?)?, req)?;
             println!("{}", serde_json::to_string(&response)?);
             Ok(())
         }
@@ -82,15 +86,22 @@ fn hook(args: &[String]) -> Result<()> {
         let Response::State(state) = rpc(&paths, Request::Snapshot)? else {
             bail!("No session inventory")
         };
-        let session = ancestors
+        let matches: Vec<_> = state
+            .sessions
             .iter()
-            .find_map(|pid| {
-                state
-                    .sessions
-                    .iter()
-                    .find(|s| s.lifecycle.live() && s.pid == Some(*pid))
-            })
-            .context("Hook is outside an app-owned session")?;
+            .filter(|s| s.lifecycle.live() && s.pid.is_some_and(|pid| ancestors.contains(&pid)))
+            .collect();
+        ensure!(
+            matches.len() == 1,
+            "Hook ancestry must identify exactly one owned session"
+        );
+        let session = matches[0];
+        paths = generations::owner_for(
+            &paths,
+            &Request::History {
+                session: session.id.clone(),
+            },
+        )?;
         (session.id.clone(), paths.token()?)
     };
     let request = if args[0] == "prompt" {

@@ -77,6 +77,7 @@ pub fn restart_invocation(executable: &Path, paths: &Paths) -> Result<RestartInv
 
 pub fn spawn_restart(
     invocation: RestartInvocation,
+    inventory: terminator_core::recovery::RestartInventory,
     finished: impl FnOnce(String) + Send + 'static,
 ) -> Result<()> {
     let RestartInvocation {
@@ -100,6 +101,8 @@ pub fn spawn_restart(
     command
         .args(["ctl", "shutdown", "--stop-all", "--relaunch", "--exe"])
         .arg(&gui)
+        .arg("--confirmed-inventory")
+        .arg(serde_json::to_string(&inventory)?)
         .env("TERMINATOR_DATA_DIR", &data)
         .env("TERMINATOR_RUNTIME_DIR", &runtime)
         .env(
@@ -161,6 +164,22 @@ pub fn restart_result(
 }
 
 pub fn verify_replacement(state: &terminator_core::State, executable: &Path) -> Result<()> {
+    if let Some(active) = state
+        .generations
+        .iter()
+        .find(|g| g.owner.id == state.generation)
+    {
+        ensure!(
+            active.error.is_none()
+                && state.attachment_helper_available == Some(true)
+                && crate::daemon_upgrade::same_file_contents(
+                    &active.owner.data.join("bin/terminator-daemon"),
+                    &executable.with_file_name("terminator-daemon")
+                )?,
+            "Active generation does not match this installation"
+        );
+        return Ok(());
+    }
     let expected = executable
         .with_file_name("terminator-daemon")
         .canonicalize()?;
@@ -294,6 +313,48 @@ fn show_message(title: &str, description: &str, _open_applications: bool) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detached_helper_receives_the_exact_confirmed_inventory() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let hook = dir.path().join("helper");
+        std::fs::write(
+            &hook,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$TERMINATOR_DATA_DIR/arguments\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let inventory = terminator_core::recovery::RestartInventory {
+            generation: "confirmed-generation".into(),
+            sessions: ["session-a".into(), "session-b".into()].into(),
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        spawn_restart(
+            RestartInvocation {
+                hook,
+                gui: dir.path().join("gui"),
+                data: dir.path().into(),
+                runtime: dir.path().join("run"),
+                config: dir.path().join("config.toml"),
+            },
+            inventory.clone(),
+            move |_| {
+                let _ = tx.send(());
+            },
+        )
+        .unwrap();
+        rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let arguments = std::fs::read_to_string(dir.path().join("arguments")).unwrap();
+        let arguments: Vec<_> = arguments.lines().collect();
+        let index = arguments
+            .iter()
+            .position(|arg| *arg == "--confirmed-inventory")
+            .unwrap();
+        let received: terminator_core::recovery::RestartInventory =
+            serde_json::from_str(arguments[index + 1]).unwrap();
+        assert_eq!(received, inventory);
+    }
     #[test]
     fn helper_continues_and_logs_after_gui_process_exits() {
         const CHILD: &str = "TERMINATOR_RESTART_TEST_PARENT_EXIT";
@@ -307,6 +368,7 @@ mod tests {
                     config: data.join("config.toml"),
                     data,
                 },
+                terminator_core::recovery::RestartInventory::capture(&Default::default()),
                 |_| {},
             )
             .unwrap();
@@ -418,6 +480,7 @@ mod tests {
                 runtime: dir.path().join("run"),
                 config: config_dir.join("config.toml"),
             },
+            terminator_core::recovery::RestartInventory::capture(&Default::default()),
             move |message| {
                 let _ = tx.send(message);
             },

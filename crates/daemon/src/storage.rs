@@ -8,6 +8,7 @@ use std::{
 use terminator_core::*;
 pub struct Store {
     conn: Connection,
+    owner: Option<String>,
 }
 impl Store {
     pub fn open(paths: &Paths) -> Result<(Self, State)> {
@@ -26,9 +27,28 @@ impl Store {
                 Err(rusqlite::Error::QueryReturnedNoRows) => State::default(),
                 Err(e) => return Err(e.into()),
             };
-        Ok((Self { conn }, state))
+        Ok((Self { conn, owner: None }, state))
+    }
+    pub fn bind_owner(&mut self, owner: String) {
+        self.owner = Some(owner);
     }
     pub fn save(&self, state: &State) -> Result<()> {
+        let mut owned;
+        let state = if let Some(owner) = &self.owner {
+            ensure!(&state.generation == owner, "Session store owner changed");
+            ensure!(
+                state.sessions.iter().all(|s| &s.generation == owner),
+                "Foreign session in owner store"
+            );
+            owned = state.clone();
+            owned.projects.clear();
+            owned.worktrees.clear();
+            owned.selected_project = None;
+            owned.generations.clear();
+            &owned
+        } else {
+            state
+        };
         self.conn.execute("INSERT INTO app_state(id,json) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET json=excluded.json WHERE json_extract(excluded.json,'$.revision') >= json_extract(app_state.json,'$.revision')",params![serde_json::to_string(state)?])?;
         Ok(())
     }
@@ -191,13 +211,16 @@ impl History {
         Ok(session)
     }
     pub fn prune(&mut self, settings: &Settings) -> Result<Vec<String>> {
+        self.prune_with_budget(settings, settings.total_mib * 1024 * 1024)
+    }
+    pub fn prune_with_budget(&mut self, settings: &Settings, budget: u64) -> Result<Vec<String>> {
         let mut paths: Vec<_> = self.segments.keys().cloned().collect();
         paths.sort_by_key(|p| self.segments[p].created);
         let mut removed = Vec::new();
         for path in paths {
             let segment = &self.segments[&path];
             if now().saturating_sub(segment.created) > settings.history_days * 86400
-                || self.total > settings.total_mib * 1024 * 1024
+                || self.total > budget
                 || self.per_session[&segment.session] > settings.session_mib * 1024 * 1024
             {
                 removed.push(self.delete(&path)?);

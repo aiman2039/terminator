@@ -1647,9 +1647,10 @@ impl Viewer<'_> {
         }
         let mut link = None;
         if mode != markdown::Mode::Edit {
-            self.app
-                .markdown
-                .watch(markdown::Source::new(&self.app.paths, session));
+            self.app.markdown.watch(markdown::Source::new(
+                &self.app.state.session_paths(&self.app.paths, &session.id),
+                session,
+            ));
         }
         match mode {
             markdown::Mode::Edit => self.terminal_view(ui, session),
@@ -1687,7 +1688,20 @@ impl Viewer<'_> {
         if !self.app.backends.contains_key(sid) {
             let id = self.app.next_backend;
             self.app.next_backend += 1;
-            let helper = match installation::attachment_helper(&self.app.state) {
+            let owner = self
+                .app
+                .state
+                .generations
+                .iter()
+                .find(|g| g.owner.id == session.generation);
+            let endpoint = owner
+                .map(|g| g.owner.paths())
+                .unwrap_or_else(|| self.app.paths.clone());
+            let helper_result = owner
+                .and_then(|g| g.helper.clone())
+                .map(Ok)
+                .unwrap_or_else(|| installation::attachment_helper(&self.app.state));
+            let helper = match helper_result {
                 Ok(p) => p,
                 Err(e) => {
                     ui.label(e.to_string());
@@ -1703,8 +1717,8 @@ impl Viewer<'_> {
                     args: vec![
                         "attach".into(),
                         sid.clone(),
-                        self.app.paths.data.to_string_lossy().into(),
-                        self.app.paths.runtime.to_string_lossy().into(),
+                        endpoint.data.to_string_lossy().into(),
+                        endpoint.runtime.to_string_lossy().into(),
                     ],
                     working_directory: None,
                 },

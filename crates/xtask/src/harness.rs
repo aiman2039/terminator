@@ -191,10 +191,14 @@ impl Harness {
         token: Option<&str>,
         hint: Option<Value>,
     ) -> Result<UnixStream> {
-        let mut stream = UnixStream::connect(self.root.join("run/daemon.sock"))?;
+        let paths = terminator_core::generations::owner_for(
+            &terminator_core::Paths::at(self.root.clone()),
+            &serde_json::from_value(request.clone())?,
+        )?;
+        let mut stream = UnixStream::connect(paths.socket())?;
         stream.set_read_timeout(Some(Duration::from_secs(3)))?;
         stream.set_write_timeout(Some(Duration::from_secs(3)))?;
-        let auth = fs::read_to_string(self.root.join("run/auth"))?;
+        let auth = paths.token()?;
         let mut envelope =
             json!({"version":1,"auth":token.unwrap_or(auth.trim()),"request":request});
         if let Some(hint) = hint {
@@ -308,7 +312,22 @@ impl Drop for Harness {
                 },
                 5,
             );
-            let _ = self.rpc(json!("Shutdown"));
+            let paths = terminator_core::Paths::at(self.root.clone());
+            if let Ok(catalog) = terminator_core::generations::Catalog::open(&paths)
+                && let Ok(owners) = catalog.generations()
+            {
+                for owner in owners {
+                    let endpoint = owner.paths();
+                    let _ =
+                        terminator_core::rpc(&endpoint, terminator_core::Request::ShutdownIfIdle);
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while endpoint.socket().exists() && Instant::now() < deadline {
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                }
+            } else {
+                let _ = self.rpc(json!("Shutdown"));
+            }
             if let Some(daemon) = &mut self.daemon {
                 let _ = wait_child(&mut daemon.0, Duration::from_secs(5));
             }

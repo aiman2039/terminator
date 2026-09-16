@@ -22,7 +22,28 @@ A terminal ID is independent of its project path, PID, or provider conversation.
 
 Environment-based session capabilities are the fast path. For agents such as Muse that clear hook environments, installers include the local endpoint paths. The helper must then find an actual live ancestor shell in this daemon's inventory. It never correlates by working directory or window title. A provider running in an unrelated shared process cannot be assigned to a terminal by this fallback.
 
-SQLite serializes the application state with monotonic revision guards to prevent an older concurrent save overwriting a newer one. A new daemon generation reconciles previously live records as interrupted; it does not revive a PID or execute a resume command. IPC/database versions reject incompatible future formats.
+`catalog.sqlite3` holds shared projects, layouts, settings, worktrees and the active
+owner. Registered generations each keep a separate `state.sqlite3`, history,
+socket, authentication token, daemon lock and immutable executable copies. Only
+the active owner saves shared workspace data; session stores reject foreign
+ownership. Session UUIDs and their original generation remain unchanged across
+upgrades. Catalog and owner revisions are tracked independently. IPC/database
+versions reject incompatible future formats.
+
+The core client routes workspace/creation requests to the active owner and
+session requests to the original owner, aggregating their inventories. Attachment
+bridges and shell hooks use the owner's endpoint and private helper. Environment-free
+hooks require exactly one matching live ancestor across the inventory. GUI editor
+close and Markdown preview sockets also resolve through the session owner.
+
+Activation, creation admission, cwd updates and worktree mutations share a file
+lock. A draining owner redirects requests before execution; clients retry only
+that explicit rejection, never a timeout or uncertain creation response. Worktree
+removal checks every owner and refuses when an unavailable owner prevents proof
+of safety. Maintenance runs outside the socket accept loop. The active service
+coordinates the global history budget by asking live owners to prune their own
+files; retired history remains readable and is pruned by the active service.
+Shared settings refresh without restarting any owned process.
 
 Layout serialization normalizes non-finite initial rectangle coordinates used by the docking library. Tabs, proportions, and focused nodes survive restoration even when saved before the first layout pass.
 
@@ -142,22 +163,45 @@ write acknowledgments permit exit; errors or a deadline restore interaction.
 The macOS bridge intercepts `NSApplication.terminate:` while retaining winit's
 delegate and calls its original implementation on the main queue after saving.
 
-The daemon survives GUI replacement. Optional `daemon_version` metadata and
-`shutdown-if-idle-v1` allow a later GUI launch or the running GUI to retire an older idle daemon.
-The GUI attempts automatic repair once per daemon generation after sessions end;
-failed attempts remain manually retryable in Settings.
-A same-version daemon is also eligible when its helper is unavailable or it
-predates `stable-helper-v1`. Unknown/newer versions and daemons without
-`shutdown-if-idle-v1` remain untouched.
-When live sessions block that idle path, **Restart session service** confirms,
-then a detached helper (`setsid`, not a session child) runs
-`ctl shutdown --stop-all --relaunch`. It checkpoints and quits the GUI, stops
-sessions without force-kill, shuts the daemon down, drops `ui.lock`, and
-respawns this installation's GUI with the same data/runtime environment.
-Sparkle Install and Relaunch stays GUI-only. The check and shutdown decision share the
-session-creation lock. A failed RPC
-with a held daemon lock is a connection error, not permission to replace it.
-See `docs/UPDATES.md` for packaging, native fixture and signed rollout boundaries.
+Generation-aware services advertise `daemon-generations-v1`. On launch, the app
+stages the installed daemon/helper, starts a candidate with creation disabled,
+and verifies authenticated generation/build/catalog identity, executable contents
+and helper execution. Under the coordination lock it selects the candidate and
+marks the previous owner draining. Existing PTYs remain with their original
+owner, including unsaved editors. Draining services flush and retire when idle,
+even without a GUI. Their executable/helper copies are removed; databases and
+history remain. A failed candidate preserves the active service and exposes a
+retry in Settings. A candidate that never spawned or whose child exited before
+initialization is removed from the registry under coordination and its owner lock;
+its private files are removed and its startup log is retained separately. Active
+or uncertain owners cannot be discarded. Newer or incompatible services are not downgraded.
+
+The first migration is different: a legacy daemon keeps serving all live sessions.
+Once idle, the GUI checkpoints, requests acknowledged idle shutdown and acquires
+the legacy lock. Migration backs up the database, copies historical records and
+history, advances the legacy version guard and atomically publishes the catalog.
+The original data and backup remain recoverable if import fails. If the legacy
+service already exited, the exclusive legacy lock permits reconciling its stale
+live records as interrupted in the imported copy. Recorded PIDs are neither
+signalled nor adopted, and original records remain in the backup. Generation
+services retain shared legacy-lock guards, preventing old executables from
+starting a competing legacy daemon. Appearance and navigation paths are unchanged.
+Unknown legacy versions and services without safe idle shutdown remain untouched.
+
+An unavailable socket does not establish death. Recovery requires the owner lock
+and an absent recorded process; a reused PID is conservatively unavailable.
+Only that owner's records become interrupted, and no commands or editors are
+rerun. Future sessions use a verified replacement.
+
+**Stop all sessions and restart** remains explicit recovery. It freezes creation,
+carries the exact generation and session IDs captured at the GUI confirmation
+through the worker and detached helper, and rejects any newly live session before
+closing the GUI or sending a stop. It checkpoints/closes the GUI, stops sessions across
+owners without force-kill, waits for retirement, and reopens the installation.
+Cancellation preserves every owner. Partial failure is reported. The freeze is
+released on completion; an absent recovery process permits stale-freeze recovery.
+Sparkle Install and Relaunch remains a GUI operation. See `docs/UPDATES.md` for
+packaging and signed rollout boundaries.
 
 ## Installation and history health
 
@@ -185,7 +229,7 @@ health before evaluating conditional-snapshot hints, so a helper removal or
 permission change invalidates cached health. Status diagnostics show GUI/daemon
 versions and the daemon path; live sessions always prevent automatic retirement.
 
-Settings → Updates → Installation lists live sessions with ordinary navigation
+For legacy services, Settings → Updates → Installation lists live sessions with ordinary navigation
 back to their tabs. Explicit repair saves the workspace on the GUI worker,
 rechecks the observed daemon generation/version/capability and sends only
 `ShutdownIfIdle`. After the socket is removed and lock is released it starts the

@@ -25,6 +25,29 @@ impl App {
         target: editor_close::Target,
         sessions: Vec<String>,
     ) -> bool {
+        // A mixed-owner batch needs a distributed preflight; preserve the normal
+        // confirmation flow instead of partially closing across owners.
+        let owners: std::collections::BTreeSet<_> = sessions
+            .iter()
+            .filter_map(|id| {
+                self.state
+                    .sessions
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .map(|s| s.generation.clone())
+            })
+            .collect();
+        if !self.state.generations.is_empty()
+            && (owners.len() != 1
+                || !self.state.generations.iter().any(|g| {
+                    owners.contains(&g.owner.id)
+                        && g.capabilities
+                            .iter()
+                            .any(|c| c == terminator_core::idle_close::CAPABILITY)
+                }))
+        {
+            return false;
+        }
         if !self
             .state
             .capabilities
@@ -52,7 +75,10 @@ impl App {
             .jobs
             .send(Job::CloseIdle(
                 target.clone(),
-                self.state.generation.clone(),
+                owners
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| self.state.generation.clone()),
                 sessions,
             ))
             .is_err()

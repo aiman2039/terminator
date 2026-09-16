@@ -15,6 +15,7 @@ use terminator_core::*;
 
 pub struct Options {
     pub stop_all: bool,
+    pub confirmed: Option<recovery::RestartInventory>,
     pub timeout: Duration,
     pub relaunch: Option<PathBuf>,
 }
@@ -214,13 +215,14 @@ fn wait_daemon_exit(paths: &Paths, timeout: Duration) -> Result<()> {
 }
 
 fn finish_cleanup(paths: &Paths, state: State, stop_all: bool, timeout: Duration) -> Result<usize> {
-    let state = current(paths, &state.generation)?;
     let targets: HashSet<_> = state
         .sessions
         .iter()
         .filter(|s| s.lifecycle.live())
         .map(|s| s.id.clone())
         .collect();
+    let state = current(paths, &state.generation)?;
+    check_scope(&state, &targets)?;
     ensure!(
         stop_all || targets.is_empty(),
         "A session started while the GUI was closing. It was preserved; save your work and retry with --stop-all"
@@ -231,6 +233,15 @@ fn finish_cleanup(paths: &Paths, state: State, stop_all: bool, timeout: Duration
             targets.len()
         );
     }
+    let retiring = if generations::exists(paths) {
+        generations::Catalog::open(paths)?
+            .generations()?
+            .into_iter()
+            .filter(|g| g.status != generations::Status::Retired)
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
     for sid in &targets {
         stop_session(paths, &state.generation, &targets, sid)?;
     }
@@ -248,7 +259,32 @@ fn finish_cleanup(paths: &Paths, state: State, stop_all: bool, timeout: Duration
         matches!(rpc(paths, request)?, Response::Ok),
         "Daemon shutdown was not acknowledged"
     );
-    wait_daemon_exit(paths, timeout)?;
+    if generations::exists(paths) {
+        for owner in retiring {
+            let endpoint = owner.paths();
+            if owner.id == state.generation {
+                wait_daemon_exit(&endpoint, timeout)?;
+                continue;
+            }
+            match rpc(&endpoint, Request::ShutdownIfIdle) {
+                Ok(Response::Ok) => wait_daemon_exit(&endpoint, timeout)?,
+                result => {
+                    let retired = generations::Catalog::open(paths)?
+                        .generations()?
+                        .iter()
+                        .any(|g| g.id == owner.id && g.status == generations::Status::Retired);
+                    ensure!(
+                        retired,
+                        "Owner {} did not acknowledge shutdown: {result:?}",
+                        owner.id
+                    );
+                    wait_daemon_exit(&endpoint, timeout)?;
+                }
+            }
+        }
+    } else {
+        wait_daemon_exit(paths, timeout)?;
+    }
     Ok(targets.len())
 }
 
@@ -257,7 +293,11 @@ pub fn run(paths: &Paths, state: State, options: Options) -> Result<Value> {
         stop_all,
         timeout,
         relaunch,
+        confirmed,
     } = options;
+    if let Some(confirmed) = &confirmed {
+        confirmed.validate(&state)?;
+    }
     refuse_managed_session(&state)?;
     let live = state.sessions.iter().filter(|s| s.lifecycle.live()).count();
     ensure!(
@@ -265,6 +305,40 @@ pub fn run(paths: &Paths, state: State, options: Options) -> Result<Value> {
         "{live} live sessions remain. Save your work, then use --stop-all to terminate them (unsaved editor buffers will be lost)"
     );
     validate_relaunch(relaunch.as_deref())?;
+    struct Thaw<'a>(&'a Paths);
+    impl Drop for Thaw<'_> {
+        fn drop(&mut self) {
+            if let Ok(_guard) = generations::coordinate(self.0)
+                && let Ok(catalog) = generations::Catalog::open(self.0)
+            {
+                let _ = catalog.freeze(false);
+            }
+        }
+    }
+    let _thaw = if generations::exists(paths) {
+        let _guard = generations::coordinate(paths)?;
+        generations::Catalog::open(paths)?.freeze(true)?;
+        Some(Thaw(paths))
+    } else {
+        None
+    };
+    if _thaw.is_some() {
+        let frozen = current(paths, &state.generation)?;
+        if let Some(confirmed) = &confirmed {
+            confirmed.validate(&frozen)?;
+        }
+        let confirmed: HashSet<_> = state
+            .sessions
+            .iter()
+            .filter(|s| s.lifecycle.live())
+            .map(|s| s.id.clone())
+            .collect();
+        check_scope(&frozen, &confirmed)?;
+        ensure!(
+            frozen.generations.iter().all(|g| g.error.is_none()),
+            "An owner is unavailable; no sessions were stopped"
+        );
+    }
     let lock = close_gui(paths, timeout)?;
     let generation = state.generation.clone();
     let result = finish_cleanup(paths, state, stop_all, timeout);
@@ -283,6 +357,7 @@ pub fn run(paths: &Paths, state: State, options: Options) -> Result<Value> {
         Ok(())
     })();
     drop(lock);
+    drop(_thaw);
     let relaunch_error = relaunch
         .as_ref()
         .and_then(|exe| spawn_relaunch(paths, exe).err());
@@ -341,6 +416,7 @@ mod tests {
 
     fn options(stop_all: bool, relaunch: Option<PathBuf>) -> Options {
         Options {
+            confirmed: None,
             stop_all,
             timeout: Duration::from_secs(1),
             relaunch,
@@ -378,6 +454,30 @@ mod tests {
             "rows":24,"cols":80,"generation":"fixture","truncated":false,"cwd_confirmed":false
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn gui_confirmation_rejects_late_session_before_closing_or_stopping_anything() {
+        let (_dir, paths) = fixture();
+        let daemon = UnixListener::bind(paths.socket()).unwrap();
+        let gui = UnixListener::bind(paths.runtime.join("gui.sock")).unwrap();
+        let mut state = State {
+            generation: "confirmed-owner".into(),
+            sessions: vec![live_session()],
+            ..Default::default()
+        };
+        let confirmed = recovery::RestartInventory::capture(&state);
+        let mut late = live_session();
+        late.id = "created-after-confirmation".into();
+        state.sessions.push(late);
+        let mut options = options(true, None);
+        options.confirmed = Some(confirmed);
+        let error = run(&paths, state, options).unwrap_err();
+        assert!(error.to_string().contains("after confirmation"));
+        daemon.set_nonblocking(true).unwrap();
+        gui.set_nonblocking(true).unwrap();
+        assert!(daemon.accept().is_err(), "No Stop may be sent");
+        assert!(gui.accept().is_err(), "The GUI must stay open");
     }
 
     #[test]

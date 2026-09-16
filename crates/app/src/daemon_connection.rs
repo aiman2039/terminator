@@ -1,10 +1,9 @@
 //! Starting/replacing a daemon always preserves live sessions and held locks.
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use fs2::FileExt;
 use std::{
     fs,
     path::Path,
-    process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -20,9 +19,18 @@ pub fn can_replace_daemon(state: &State) -> bool {
             .ok()
             .zip(semver::Version::parse(env!("CARGO_PKG_VERSION")).ok())
             .is_some_and(|(running, bundled)| {
-                running < bundled
+                (running <= bundled
+                    && state.generations.iter().any(|g| {
+                        g.owner.id == state.generation
+                            && (g.error.is_some() || g.owner.status == generations::Status::Retired)
+                    }))
+                    || running < bundled
                     || (running == bundled
-                        && (state.attachment_helper_available != Some(true)
+                        && (!state
+                            .capabilities
+                            .iter()
+                            .any(|c| c == generations::CAPABILITY)
+                            || state.attachment_helper_available != Some(true)
                             || !state
                                 .capabilities
                                 .iter()
@@ -37,11 +45,12 @@ pub fn can_retire_daemon(state: &State) -> bool {
             .capabilities
             .iter()
             .any(|c| c == SHUTDOWN_IF_IDLE_CAPABILITY)
-        && !state.sessions.iter().any(|s| s.lifecycle.live())
+        && (!state.generations.is_empty() || !state.sessions.iter().any(|s| s.lifecycle.live()))
 }
 
 pub fn can_restart_service(state: &State) -> bool {
-    can_replace_daemon(state) && state.sessions.iter().any(|s| s.lifecycle.live())
+    (can_replace_daemon(state) || !state.generations.is_empty())
+        && state.sessions.iter().any(|s| s.lifecycle.live())
 }
 
 fn wait_for_retirement(paths: &Paths) -> Result<()> {
@@ -65,6 +74,19 @@ fn wait_for_retirement(paths: &Paths) -> Result<()> {
 }
 
 pub fn ensure_running(paths: &Paths, executable: &Path) -> Result<()> {
+    if generations::exists(paths) {
+        match crate::daemon_upgrade::activate(paths, executable) {
+            Ok(()) => {
+                let _ = fs::remove_file(paths.data.join("service-upgrade-error.txt"));
+                return Ok(());
+            }
+            Err(error) if rpc(paths, Request::Snapshot).is_ok() => {
+                atomic_write(&paths.data.join("service-upgrade-error.txt"), format!("Service upgrade pending: {error:#}. Existing sessions were preserved; retry in Settings → Updates.").as_bytes())?;
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        }
+    }
     if let Ok(Response::State(state)) = rpc(paths, Request::Snapshot)
         && can_retire_daemon(&state)
         // A concurrent creation can make this fail; keep that daemon.
@@ -72,10 +94,22 @@ pub fn ensure_running(paths: &Paths, executable: &Path) -> Result<()> {
     {
         wait_for_retirement(paths)?;
     }
-    start_if_needed(paths, executable)
+    if rpc(paths, Request::Snapshot).is_ok() {
+        return Ok(());
+    }
+    generations::migrate_after_legacy_exit(paths)?;
+    crate::daemon_upgrade::activate(paths, executable)
 }
 
 pub fn repair(paths: &Paths, executable: &Path, generation: &str) -> Result<Box<State>> {
+    if generations::exists(paths) {
+        crate::daemon_upgrade::activate(paths, executable)?;
+        let _ = fs::remove_file(paths.data.join("service-upgrade-error.txt"));
+        if let Response::State(state) = rpc(paths, Request::Snapshot)? {
+            return Ok(state);
+        }
+        anyhow::bail!("Could not verify the active service");
+    }
     // Check the installed replacement before retiring even an idle daemon.
     for name in ["terminator-daemon", "terminator-hook"] {
         ensure!(
@@ -100,7 +134,7 @@ pub fn repair(paths: &Paths, executable: &Path, generation: &str) -> Result<Box<
         "Safe restart was not acknowledged"
     );
     wait_for_retirement(paths)?;
-    start_if_needed(paths, executable)?;
+    ensure_running(paths, executable)?;
     match rpc(paths, Request::Snapshot)? {
         Response::State(state) => {
             ensure!(
@@ -113,65 +147,13 @@ pub fn repair(paths: &Paths, executable: &Path, generation: &str) -> Result<Box<
                         .any(|c| c == STABLE_HELPER_CAPABILITY),
                 "The replacement service does not report a working private helper. Reopen the latest installed Terminator app"
             );
-            crate::installation::verify_replacement(&state, executable)?;
+            if state.generations.is_empty() {
+                crate::installation::verify_replacement(&state, executable)?;
+            }
             Ok(state)
         }
         _ => anyhow::bail!("Could not verify the repaired session service"),
     }
-}
-
-fn start_if_needed(paths: &Paths, executable: &Path) -> Result<()> {
-    if rpc(paths, Request::Snapshot).is_ok() {
-        return Ok(());
-    }
-    // A failed RPC is never evidence that a live daemon may be replaced.
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(paths.runtime.join("daemon.lock"))?;
-    lock.try_lock_exclusive().context(
-        "Running daemon is unresponsive or incompatible; its sessions have been preserved",
-    )?;
-    FileExt::unlock(&lock)?;
-    let daemon = executable.with_file_name("terminator-daemon");
-    ensure!(
-        executable_available(&daemon),
-        "Build or reinstall the complete Terminator app"
-    );
-    let log = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(paths.data.join("daemon.log"))?;
-    let mut command = Command::new(daemon);
-    command
-        .env("TERMINATOR_DATA_DIR", &paths.data)
-        .env("TERMINATOR_RUNTIME_DIR", &paths.runtime)
-        .stdin(Stdio::null())
-        .stdout(log.try_clone()?)
-        .stderr(log);
-    use std::os::unix::process::CommandExt;
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut child = command.spawn()?;
-    thread::spawn(move || {
-        let _ = child.wait();
-    });
-    let start = Instant::now();
-    while rpc(paths, Request::Snapshot).is_err() {
-        ensure!(
-            start.elapsed() < Duration::from_secs(5),
-            "Daemon did not start; inspect daemon.log and reopen Terminator to retry"
-        );
-        thread::sleep(Duration::from_millis(50));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

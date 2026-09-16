@@ -1,5 +1,16 @@
 # Validation evidence — 2026-09-08
 
+## Explicit session restart warning (2026-09-16)
+
+The restart confirmation uses bold danger-colored text for session termination
+and unsaved editor loss, with a “Stop all sessions and restart” button.
+
+- Workspace formatting and test-support build passed.
+- `cargo xtask gui installation --output /tmp/terminator-restart-warning-preview`
+  passed using disposable sessions, including cancellation and restart/relaunch.
+- Inspected native capture: `/tmp/terminator-restart-warning-preview/installation/restart-confirm.png`.
+  No user sessions were restarted.
+
 ## Keyboard protocol and updater review fixes (2026-09-16)
 
 Modified navigation keys and F1–F12 now use the kitty protocol's CSI letter/tilde
@@ -2097,3 +2108,101 @@ not rerun.
   Go, Snooze, and Dismiss behavior and sidebar row click targets.
 - Validation is static/headless; native appearance and hover placement have not
   been visually verified. No live GUI or daemon sessions were restarted.
+
+
+## Seamless daemon generations — 2026-09-16
+
+Implemented the shared catalog, scoped owner databases/history, authenticated
+owner routing, candidate verification/activation, idle retirement, crash
+reconciliation, cross-owner worktree safeguards, global history coordination,
+and generation diagnostics/recovery. Appearance/navigation locations and
+`AGENTS.md` are unchanged. Existing unrelated edits were preserved. All process
+and migration checks below used disposable data and fixture processes; no live
+user daemon or sessions were restarted.
+
+Passed on local macOS:
+
+- `cargo fmt --all --check`, workspace all-target/all-feature Clippy with
+  `-D warnings`, the workspace binary/example test-support build, and
+  `git diff --check`.
+- `cargo test --workspace --all-features --locked --offline`: 308 tests passed;
+  the opt-in real-PTY test is excluded from that count and was run separately.
+  Catalog regressions cover ownership, active-only workspace writes, activation
+  serialization, freeze rollback, unavailable-owner preservation, interrupted
+  migration/retry, incompatible candidates, and explicit redirect versus
+  uncertain-response creation handling.
+- `cargo test -p terminator --all-features three_generations_preserve --locked
+  --offline -- --ignored --nocapture`: passed. Three staged generations of the
+  current build preserve shell/editor PIDs, a running job and an unsaved Neovim
+  buffer. New sessions use the active owner. Removing the fixture installation
+  leaves owner bridges/helpers usable. History, notices, editor save/close and
+  input reach old owners. A broken candidate preserves the active generation;
+  an unavailable owner keeps ownership; a crashed owner alone becomes interrupted.
+  Draining owners retire and historical output remains readable.
+- `cargo xtask integration`: passed PTY reconnect, hooks/notifications,
+  deduplication, cwd routing, CLI controls, worktree safety, shutdown/relaunch,
+  eight creation/idle-shutdown races, 6 MiB history backpressure without truncation,
+  stable-helper replacement/removal, oversized snapshots, stalled attachments,
+  and terminal-editor argument checks.
+- `cargo xtask gui generations --output target/validation/seamless-upgrades-final`:
+  passed real initial migration, two-owner diagnostics, unsaved Markdown preview
+  from the draining editor, GUI quit/relaunch with original PIDs, the red warning
+  counting all three sessions, cancellation, confirmed all-owner cleanup, and
+  reopening without rerunning historical sessions. The unsaved file stayed
+  unchanged on disk through cancellation and destructive cleanup.
+
+Evidence is under `target/validation/seamless-upgrades-final/`: workspace,
+integration and real-PTY logs, plus `generations/generations.json` and five native
+captures (`first-migration`, `updated-service-ready`,
+`all-owners-restart-warning`, `restart-cancelled`, `after-confirmed-recovery`).
+The update-status and warning captures were visually inspected. Sandbox-denied
+socket/watcher attempts were rerun successfully outside the sandbox using the
+same isolated fixtures.
+
+Boundaries: these fixtures stage multiple generations of this build, not three
+released binary versions or a signed Sparkle installation. Linux native behavior,
+signed cross-release rollout, prolonged load across many retained generations,
+and real provider hook execution across upgrades remain unverified. PID reuse
+is handled conservatively as unavailable rather than proof of death. Mixed-owner
+idle-close batches retain the existing confirmation flow. Migration retains the
+original database/history and its backup for recovery.
+
+
+### Review fixes — legacy crashes, confirmation scope and failed startup
+
+- A legacy daemon's held lock still blocks migration, including an unresponsive
+  service. Once the exclusive legacy lock establishes that it exited, migration
+  imports stale running records as interrupted without adopting, signalling or
+  rerunning their PIDs. Session IDs/owner identities and original backup records
+  are preserved. A new native fixture crashes only its disposable legacy daemon
+  and verifies GUI startup/migration succeeds without restarting its shell.
+- Restart confirmation captures the active generation and exact live-session IDs
+  in the GUI job and passes them as structured JSON to the detached helper.
+  Validation rejects added/replacement sessions or a changed generation before
+  any GUI-close or stop request. Ended approved sessions are permitted. Legacy
+  cleanup also checks its original inventory after the GUI checkpoint instead of
+  silently broadening the target set. Regression tests cover the queued job,
+  helper argument transport, same-count identity changes, and absence of any
+  close/stop request after invalid confirmation. The native fixture creates a new
+  session after approval, confirms CLI cleanup refuses, and checks all four PIDs.
+- Candidate registration now has a guard before executable spawn. Failed spawn
+  and child exit before storage initialization remove only a matching Prepared
+  registration under the coordination/owner locks. Active owners and uncertain
+  running candidates are preserved. Private failed-candidate files are removed;
+  diagnostic logs remain under `failed-candidate-<id>.log`. Real-PTY coverage
+  injects an invalid executable and an immediately exiting daemon and verifies
+  the active generation, registry count and private-directory count are unchanged.
+
+Passed: formatting, workspace all-target/all-feature Clippy with `-D warnings`,
+workspace binary/example build, 315 workspace tests, the separately invoked real
+three-generation PTY/Neovim test, `cargo xtask integration`, and both native
+`generations` and `installation` suites. The installation suite also exercises
+confirmed detached GUI restart and relaunch. Its legacy connection fixture now
+keeps a live legacy shell so automatic idle migration cannot remove the socket
+under test; the idle-repair fixture follows the automatic migration path.
+
+Evidence: `target/validation/seamless-review-fixes/` contains the test/integration
+logs and native captures/reports, including `generations/legacy-crash-recovered.png`
+and `installation/restart-relaunch.json`. All tests used isolated processes and
+state. Linux native and signed cross-release validation remain outside this local
+run; no live user service was restarted and `AGENTS.md` was unchanged.

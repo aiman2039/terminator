@@ -56,11 +56,13 @@ impl Drop for Disconnect {
 }
 enum HistoryJob {
     Append(String, Vec<u8>),
+    Prune(u64, mpsc::Sender<Result<Vec<String>, String>>),
     Flush(mpsc::Sender<Result<(), String>>),
     Clear(Option<String>, bool, mpsc::Sender<Result<(), String>>),
 }
 struct Shared {
     helper: helper::Helper,
+    catalog_paths: Option<Paths>,
     state: Mutex<State>,
     store: Mutex<storage::Store>,
     sessions: Mutex<HashMap<String, Arc<Mutex<Runtime>>>>,
@@ -93,6 +95,57 @@ impl Shared {
             runtime.lock().unwrap().inputs_in_flight -= 1;
         }
         result.map_err(Into::into)
+    }
+
+    fn prune_global(self: &Arc<Self>, owners: &[generations::Generation]) -> Result<()> {
+        let mut segments = Vec::new();
+        let mut budgets = HashMap::<String, u64>::new();
+        for owner in owners
+            .iter()
+            .filter(|g| g.status != generations::Status::Prepared)
+        {
+            budgets.insert(owner.id.clone(), 0);
+            for path in storage::history_files(&owner.paths(), None) {
+                let metadata = fs::metadata(&path)?;
+                *budgets.get_mut(&owner.id).unwrap() += metadata.len();
+                segments.push((metadata.modified()?, owner.id.clone(), metadata.len()));
+            }
+        }
+        segments.sort_by_key(|s| s.0);
+        let limit = self.state.lock().unwrap().settings.total_mib * 1024 * 1024;
+        let original_budgets = budgets.clone();
+        let mut total: u64 = budgets.values().sum();
+        for (_, owner, bytes) in segments {
+            if total <= limit {
+                break;
+            }
+            total = total.saturating_sub(bytes);
+            *budgets.get_mut(&owner).unwrap() -= bytes;
+        }
+        let mine = self.state.lock().unwrap().generation.clone();
+        for owner in owners
+            .iter()
+            .filter(|g| g.status != generations::Status::Prepared)
+        {
+            let reduced = budgets[&owner.id] < original_budgets[&owner.id];
+            if !reduced && owner.status != generations::Status::Retired {
+                continue;
+            }
+            let request = Request::PruneHistory {
+                budget: if reduced { budgets[&owner.id] } else { limit },
+            };
+            if owner.status == generations::Status::Retired {
+                self.handle(Request::Archived {
+                    generation: owner.id.clone(),
+                    request: Box::new(request),
+                })?;
+            } else if owner.id == mine {
+                self.handle(request)?;
+            } else {
+                rpc(&owner.paths(), request)?;
+            }
+        }
+        Ok(())
     }
 
     fn history_clear(&self, session: Option<String>, remove: bool) -> Result<()> {
@@ -392,7 +445,159 @@ impl Shared {
         Ok(record)
     }
     fn handle(self: &Arc<Self>, request: Request) -> Result<Response> {
+        let shared_write = matches!(
+            &request,
+            Request::AddProject { .. }
+                | Request::SaveLayout { .. }
+                | Request::SelectProject { .. }
+                | Request::Settings(_)
+                | Request::WorktreeAdd { .. }
+                | Request::WorktreeRemove { .. }
+        );
+        let admission = shared_write
+            || matches!(
+                &request,
+                Request::Create { .. } | Request::CreateReview { .. }
+            );
+        let coordinated = admission
+            || matches!(
+                &request,
+                Request::Cwd { .. }
+                    | Request::Shutdown
+                    | Request::ShutdownIfIdle
+                    | Request::RetireIfDraining
+            );
+        let _coordination = if coordinated {
+            self.catalog_paths
+                .as_ref()
+                .map(generations::coordinate)
+                .transpose()?
+        } else {
+            None
+        };
+        if let Some(paths) = &self.catalog_paths {
+            let catalog = generations::Catalog::open(paths)?;
+            let mut state = self.state.lock().unwrap();
+            if admission && catalog.active()?.as_deref() != Some(&state.generation) {
+                return Ok(Response::Redirect {
+                    generation: catalog.active()?.context("No active generation")?,
+                });
+            }
+            if admission && !shared_write && !catalog.admitted(&state.generation)? {
+                return Ok(Response::Error(
+                    "Creation rejected before execution: recovery is in progress".into(),
+                ));
+            }
+            if coordinated {
+                catalog.refresh(&mut state)?;
+            }
+        }
         match request {
+            Request::PruneHistory { budget } => {
+                let (tx, rx) = mpsc::channel();
+                self.history.send(HistoryJob::Prune(budget, tx))?;
+                let ids = rx
+                    .recv_timeout(Duration::from_secs(3))?
+                    .map_err(anyhow::Error::msg)?;
+                let mut state = self.state.lock().unwrap();
+                for session in &mut state.sessions {
+                    if ids.contains(&session.id) {
+                        session.truncated = true;
+                    }
+                }
+                state.revision += 1;
+            }
+            Request::Archived {
+                generation,
+                request,
+            } => {
+                let root = self
+                    .catalog_paths
+                    .as_ref()
+                    .context("No generation catalog")?;
+                let _coordination = generations::coordinate(root)?;
+                let owner = generations::Catalog::open(root)?
+                    .generations()?
+                    .into_iter()
+                    .find(|g| g.id == generation && g.status == generations::Status::Retired)
+                    .context("Owner is not retired")?;
+                let paths = owner.paths();
+                let (store, mut state) = storage::Store::open(&paths)?;
+                ensure!(
+                    !state.sessions.iter().any(|s| s.lifecycle.live()),
+                    "Retired owner still has live records"
+                );
+                match *request {
+                    Request::PruneHistory { budget } => {
+                        generations::Catalog::open(root)?.refresh(&mut state)?;
+                        let ids = storage::History::new(paths)?
+                            .prune_with_budget(&state.settings, budget)?;
+                        for session in &mut state.sessions {
+                            if ids.contains(&session.id) {
+                                session.truncated = true;
+                            }
+                        }
+                    }
+                    Request::History { session } => {
+                        let record = state
+                            .sessions
+                            .iter()
+                            .find(|s| s.id == session)
+                            .context("Unknown historical session")?;
+                        return Ok(Response::Text(storage::text(&paths, record)?));
+                    }
+                    Request::Rename { session, label } => {
+                        ensure!(label.len() <= 256, "Label too long");
+                        state
+                            .sessions
+                            .iter_mut()
+                            .find(|s| s.id == session)
+                            .context("Unknown session")?
+                            .label = label;
+                    }
+                    Request::Focus { session } => state.focus(&session),
+                    Request::Notice { id, action } => {
+                        let n = state
+                            .notifications
+                            .iter_mut()
+                            .find(|n| n.id == id)
+                            .context("Unknown notification")?;
+                        match action.as_str() {
+                            "read" => n.read = true,
+                            "dismiss" => n.dismissed = true,
+                            "snooze" => n.snoozed_until = now() + 600,
+                            _ => bail!("Unknown notification action"),
+                        }
+                    }
+                    Request::DismissTerminalNotice { id } => {
+                        state
+                            .terminal_notices
+                            .iter_mut()
+                            .find(|n| n.id == id)
+                            .context("Unknown notice")?
+                            .dismissed = true;
+                    }
+                    Request::Remove { session } => {
+                        storage::History::new(paths)?.clear(Some(&session), true)?;
+                        state.sessions.retain(|s| s.id != session);
+                        state.agents.retain(|a| a.session_id != session);
+                        state.notifications.retain(|n| n.session_id != session);
+                        state.terminal_notices.retain(|n| n.session_id != session);
+                    }
+                    Request::ClearHistory { session } => {
+                        storage::History::new(paths)?.clear(session.as_deref(), false)?;
+                        for s in &mut state.sessions {
+                            if session.as_ref().is_none_or(|id| id == &s.id) {
+                                s.truncated = true;
+                            }
+                        }
+                    }
+                    _ => bail!("Operation requires a live session owner"),
+                }
+                state.revision += 1;
+                store.save(&state)?;
+                return Ok(Response::Ok);
+            }
             Request::CloseIdleSessions {
                 generation,
                 sessions,
@@ -472,8 +677,16 @@ impl Shared {
                     .find(|w| w.project_id == project && !w.removed)
                     .context("Project is not an active managed worktree")?
                     .clone();
-                let sessions = state.sessions.clone();
+                let mut sessions = state.sessions.clone();
                 drop(state);
+                if let Some(paths) = &self.catalog_paths {
+                    let inventory = generations::snapshot(paths)?;
+                    ensure!(
+                        inventory.generations.iter().all(|g| g.error.is_none()),
+                        "Cannot establish worktree safety while an owner is unavailable"
+                    );
+                    sessions = inventory.sessions;
+                }
                 worktrees::ensure_unused(&record.path, &project, &sessions)?;
                 worktrees::remove(&record.common_dir, &record.path)?;
                 let mut state = self.state.lock().unwrap();
@@ -755,7 +968,25 @@ impl Shared {
                     "string(len(filter(getbufinfo(), 'v:val.changed')))",
                 );
             }
-            Request::Shutdown | Request::ShutdownIfIdle => {
+            Request::Shutdown | Request::ShutdownIfIdle | Request::RetireIfDraining => {
+                if matches!(request, Request::RetireIfDraining) {
+                    let root = self
+                        .catalog_paths
+                        .as_ref()
+                        .context("No generation catalog")?;
+                    let mine = self.state.lock().unwrap().generation.clone();
+                    ensure!(
+                        generations::Catalog::open(root)?
+                            .generations()?
+                            .iter()
+                            .any(|g| g.id == mine
+                                && matches!(
+                                    g.status,
+                                    generations::Status::Prepared | generations::Status::Draining
+                                )),
+                        "Generation is active"
+                    );
+                }
                 let _creation_guard = self.worktree_operations.lock().unwrap();
                 ensure!(
                     !self
@@ -772,10 +1003,17 @@ impl Shared {
                 rx.recv_timeout(Duration::from_secs(3))?
                     .map_err(anyhow::Error::msg)?;
                 self.persist()?;
+                if let Some(root) = &self.catalog_paths {
+                    generations::Catalog::open(root)?
+                        .retire(&self.state.lock().unwrap().generation)?;
+                }
                 self.shutdown.store(true, Ordering::Release);
                 return Ok(Response::Ok);
             }
             _ => bail!("Request requires an attached stream"),
+        }
+        if shared_write && let Some(paths) = &self.catalog_paths {
+            generations::Catalog::open(paths)?.save_workspace(&self.state.lock().unwrap())?;
         }
         self.persist()?;
         Ok(Response::Ok)
@@ -975,6 +1213,23 @@ fn main() -> Result<()> {
         paths.runtime = p.into();
     }
     paths.init()?;
+    let catalog_paths = std::env::var_os("TERMINATOR_CATALOG_DATA").map(|data| Paths {
+        data: data.into(),
+        runtime: std::env::var_os("TERMINATOR_CATALOG_RUNTIME")
+            .expect("Catalog runtime")
+            .into(),
+    });
+    let _legacy_guard = if let Some(root) = &catalog_paths {
+        let guard = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(root.runtime.join("daemon.lock"))?;
+        FileExt::try_lock_shared(&guard).context("Legacy service has not retired")?;
+        Some(guard)
+    } else {
+        None
+    };
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -993,8 +1248,18 @@ fn main() -> Result<()> {
     listener.set_nonblocking(true)?;
     let auth = id();
     atomic_write(&paths.auth(), auth.as_bytes())?;
-    let (store, mut state) = storage::Store::open(&paths)?;
+    let (mut store, mut state) = storage::Store::open(&paths)?;
     state.recover();
+    if let Some(root) = &catalog_paths {
+        let owner = std::env::var("TERMINATOR_GENERATION")?;
+        ensure!(
+            state.sessions.is_empty(),
+            "Generation directory must be new; never restart owned processes"
+        );
+        state.generation = owner.clone();
+        store.bind_owner(owner);
+        generations::Catalog::open(root)?.refresh(&mut state)?;
+    }
     state.daemon_version = Some(env!("CARGO_PKG_VERSION").into());
     state.capabilities = vec![
         terminator_core::idle_close::CAPABILITY.into(),
@@ -1007,11 +1272,21 @@ fn main() -> Result<()> {
         SCREEN_CAPABILITY.into(),
         METADATA_SETTINGS_CAPABILITY.into(),
     ];
+    if catalog_paths.is_some() {
+        state.daemon_build = Some(generations::build_identity(
+            std::env::current_exe()?
+                .parent()
+                .context("Missing executable directory")?,
+        )?);
+        state.daemon_catalog_version = Some(generations::CATALOG_VERSION);
+        state.capabilities.push(generations::CAPABILITY.into());
+    }
     store.save(&state)?;
     let (history, history_rx) = mpsc::sync_channel::<HistoryJob>(512);
     let (alerts, alert_rx) = mpsc::sync_channel::<String>(64);
     let shared = Arc::new(Shared {
         helper,
+        catalog_paths,
         state: Mutex::new(state),
         store: Mutex::new(store),
         sessions: Mutex::new(HashMap::new()),
@@ -1041,6 +1316,14 @@ fn main() -> Result<()> {
         loop {
             let Some(s) = weak.upgrade() else { break };
             match history_rx.recv_timeout(Duration::from_millis(250)) {
+                Ok(HistoryJob::Prune(budget, tx)) => {
+                    let settings = s.state.lock().unwrap().settings.clone();
+                    let _ = tx.send(
+                        history
+                            .prune_with_budget(&settings, budget)
+                            .map_err(|e| e.to_string()),
+                    );
+                }
                 Ok(HistoryJob::Append(sid, data)) => {
                     if let Err(e) = history.append(&sid, &data) {
                         let mut state = s.state.lock().unwrap();
@@ -1133,8 +1416,72 @@ fn main() -> Result<()> {
                 continue;
             };
             drop(state);
-            notifications::send(s.paths.clone(), summary, nid);
+            notifications::send(
+                s.catalog_paths.clone().unwrap_or_else(|| s.paths.clone()),
+                summary,
+                nid,
+            );
             last = Instant::now();
+        }
+    });
+    let weak = Arc::downgrade(&shared);
+    thread::spawn(move || {
+        let born = Instant::now();
+        let mut global_prune = Instant::now() - Duration::from_secs(30);
+        loop {
+            thread::sleep(Duration::from_secs(1));
+            let Some(shared) = weak.upgrade() else {
+                break;
+            };
+            if shared.shutdown.load(Ordering::Acquire) {
+                break;
+            }
+            let result = (|| -> Result<()> {
+                if let Some(root) = &shared.catalog_paths {
+                    let _coordination = generations::coordinate(root)?;
+                    let catalog = generations::Catalog::open(root)?;
+                    let owner = shared.state.lock().unwrap().generation.clone();
+                    catalog.refresh(&mut shared.state.lock().unwrap())?;
+                    let owners = catalog.generations()?;
+                    let draining = owners.iter().any(|g| {
+                        g.id == owner
+                            && (g.status == generations::Status::Draining
+                                || (g.status == generations::Status::Prepared
+                                    && born.elapsed() > Duration::from_secs(30)))
+                    });
+                    let active_owner = catalog.active()?.as_deref() == Some(&owner);
+                    drop(_coordination);
+                    if active_owner {
+                        if global_prune.elapsed() >= Duration::from_secs(30) {
+                            if let Err(error) = shared.prune_global(&owners) {
+                                shared.degraded(&format!("Global history retention: {error:#}"));
+                            }
+                            global_prune = Instant::now();
+                        }
+                        for other in owners
+                            .iter()
+                            .filter(|g| g.id != owner && g.status != generations::Status::Retired)
+                        {
+                            let _ = generations::recover_exited(root, other);
+                        }
+                    }
+                    if draining
+                        && !shared
+                            .state
+                            .lock()
+                            .unwrap()
+                            .sessions
+                            .iter()
+                            .any(|s| s.lifecycle.live())
+                    {
+                        let _ = shared.handle(Request::RetireIfDraining);
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                shared.degraded(&format!("Generation maintenance: {error:#}"));
+            }
         }
     });
     let active = Arc::new(AtomicUsize::new(0));
@@ -1159,5 +1506,16 @@ fn main() -> Result<()> {
     shared.persist()?;
     let _ = fs::remove_file(shared.paths.socket());
     shared.helper.cleanup()?;
+    if shared.catalog_paths.is_some() {
+        let _ = fs::remove_file(shared.paths.auth());
+        let bin = shared.paths.data.join("bin");
+        if bin.is_dir() {
+            fs::remove_dir_all(bin)?;
+        }
+    }
+    if let Some(root) = &shared.catalog_paths {
+        let _coordination = generations::coordinate(root)?;
+        generations::Catalog::open(root)?.retire(&shared.state.lock().unwrap().generation)?;
+    }
     Ok(())
 }

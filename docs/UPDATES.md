@@ -85,19 +85,31 @@ modal deferred-quit loop (which prevents GUI checkpoint progress) and synchronou
 termination notifications re-entering winit. Native installation cancellation
 restores GUI interaction. Review this bridge when upgrading winit or Sparkle.
 
-No GUI update stops the daemon, rotates authentication, replays commands, or
-relaunches agents/editors. After a newer GUI reconnects to a live older or
-broken service, **Restart session service** is an explicit confirm-then-detach
-stop-all that reopens this installation; it is not part of Sparkle Install and
-Relaunch. A later GUI launch or an idle check while the GUI is open may retire an older daemon, or a
-same-version daemon with unavailable/unreported helper health or without
-`stable-helper-v1`, only when it
-advertises `shutdown-if-idle-v1` and has no live sessions. That request shares
-the session-creation lock and persists before acknowledging shutdown; subsequent
-creation requests fail. Daemons without that capability, unknown/newer versions,
-and live daemons remain in place. RPC
-failure with a held daemon lock is a connection error, never authority to replace
-the daemon. Reboot/daemon-crash recovery is separate from GUI-update continuity.
+GUI updates do not stop existing session owners or relaunch their shells,
+agents, or editors. Services advertising `daemon-generations-v1` can coexist:
+the installed daemon/helper are staged privately, authenticated and checked before
+atomic activation. New sessions use the active generation; existing sessions keep
+their original PTYs, PIDs and unsaved buffers. Idle draining owners retire without
+requiring an open GUI. Failed preparation preserves the previous owner and offers
+a retry in Settings. Unknown/newer or incompatible storage/protocol versions are
+not automatically downgraded or migrated past live-owner compatibility.
+
+The initial transition from a legacy service waits for its sessions to finish.
+An acknowledged `shutdown-if-idle-v1` shutdown and exclusive legacy lock precede
+backup/import and atomic catalog publication. Live legacy services are preserved.
+If the legacy service has already exited, stale live records are imported as
+interrupted under its exclusive lock; no historical process is restarted.
+The legacy database version guard and shared legacy locks prevent older binaries
+from starting a competing service after migration.
+
+Settings shows **Updated service ready**, earlier owners' live-session counts,
+and navigation to those sessions. **Stop all sessions and restart** is separate,
+explicit destructive recovery. Its confirmation counts all owners and pins their
+exact session IDs and active generation. A newly live session invalidates that
+approval before the helper closes the GUI or stops anything. The helper
+freezes creation, checkpoints the GUI and stops the confirmed inventory without
+force-kill. Unavailability is not evidence of process death, and partial recovery
+failure is reported. See `docs/ARCHITECTURE.md` for storage and routing details.
 
 ## Fixtures and production rollout
 
@@ -206,3 +218,19 @@ native recovery screen, live-session protection and successful idle repair.
 installation, then verifies helper execution and new session creation with the
 same daemon and original shell PID. These fixtures do not exercise Gatekeeper or
 a signed Sparkle installation.
+
+## Generation fixtures
+
+Build the workspace binaries and test-support GUI first. Run:
+
+```sh
+cargo test -p terminator --all-features three_generations_preserve --locked -- --ignored --nocapture
+cargo xtask gui generations --output target/validation/seamless-upgrades
+```
+
+The first fixture stages three generations of the current build and exercises
+real shells, a running job, an unsaved Neovim buffer, candidate failure,
+unavailable/crashed owners, installation removal and retirement. The native
+fixture covers initial migration, generation diagnostics, an unsaved Markdown
+preview, GUI relaunch, the all-owner warning, cancellation and confirmed cleanup. These are isolated
+local fixtures, not a signed Sparkle rollout or cross-release compatibility proof.

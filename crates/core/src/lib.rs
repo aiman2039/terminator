@@ -1,7 +1,9 @@
 //! Versioned local protocol and persistent, renderer-independent models.
 pub mod appearance;
+pub mod generations;
 pub mod idle_close;
 pub mod metadata;
+pub mod recovery;
 pub mod snapshot;
 pub mod ui_control;
 pub mod worktrees;
@@ -70,7 +72,7 @@ pub fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Paths {
     pub data: PathBuf,
     pub runtime: PathBuf,
@@ -427,7 +429,11 @@ pub struct TerminalNotice {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
+    pub catalog_revision: u64,
+    pub generations: Vec<generations::Health>,
     pub daemon_version: Option<String>,
+    pub daemon_build: Option<String>,
+    pub daemon_catalog_version: Option<u32>,
     /// Runtime health; absent on older daemons. Refreshed before snapshots.
     pub daemon_executable: Option<PathBuf>,
     /// Private executable pinned for the lifetime of this daemon, when supported.
@@ -449,6 +455,15 @@ pub struct State {
     pub degraded: Option<String>,
 }
 impl State {
+    /// Resolve from the already-loaded inventory; safe to use in GUI rendering.
+    pub fn session_paths(&self, fallback: &Paths, session: &str) -> Paths {
+        self.sessions
+            .iter()
+            .find(|s| s.id == session)
+            .and_then(|s| self.generations.iter().find(|g| g.owner.id == s.generation))
+            .map(|g| g.owner.paths())
+            .unwrap_or_else(|| fallback.clone())
+    }
     /// Terminal messages are untrusted UI notices, never agent lifecycle events.
     pub fn terminal_notice(
         &mut self,
@@ -664,6 +679,13 @@ impl State {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Request {
+    PruneHistory {
+        budget: u64,
+    },
+    Archived {
+        generation: String,
+        request: Box<Request>,
+    },
     CloseIdleSessions {
         generation: String,
         sessions: Vec<String>,
@@ -780,6 +802,7 @@ pub enum Request {
     },
     Shutdown,
     ShutdownIfIdle,
+    RetireIfDraining,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Envelope {
@@ -794,6 +817,7 @@ pub struct Envelope {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
+    Redirect { generation: String },
     IdleSessionsClosed(Vec<idle_close::Outcome>),
     SnapshotChunk { data: String, last: bool },
     Worktrees(Vec<worktrees::GitWorktree>),
@@ -808,7 +832,9 @@ pub enum Response {
 }
 impl Response {
     pub fn checked(self) -> Result<Self> {
-        if let Self::Error(e) = self {
+        if let Self::Redirect { generation } = self {
+            bail!("Request rejected before execution; use active generation {generation}")
+        } else if let Self::Error(e) = self {
             bail!("{e}")
         } else {
             Ok(self)
@@ -841,6 +867,8 @@ fn connect_hint(
     token: Option<String>,
     snapshot_hint: Option<SnapshotHint>,
 ) -> Result<UnixStream> {
+    let routed = generations::owner_for(paths, &request)?;
+    let paths = &routed;
     let mut s = UnixStream::connect(paths.socket()).context("Session daemon unavailable")?;
     s.set_read_timeout(Some(Duration::from_secs(
         if matches!(&request, Request::CloseIdleSessions { .. }) {
@@ -866,24 +894,128 @@ fn connect_hint(
     Ok(s)
 }
 pub fn rpc(paths: &Paths, request: Request) -> Result<Response> {
-    let mut s = connect(paths, request, None)?;
-    snapshot::read_response(&mut s)?.checked()
+    if matches!(request, Request::Snapshot) && generations::exists(paths) {
+        return Ok(Response::State(Box::new(generations::snapshot(paths)?)));
+    }
+    if generations::exists(paths)
+        && matches!(
+            &request,
+            Request::Heartbeat { .. } | Request::ClearHistory { session: None }
+        )
+    {
+        for owner in generations::Catalog::open(paths)?.generations()? {
+            if owner.status == generations::Status::Prepared {
+                continue;
+            }
+            if owner.status == generations::Status::Retired {
+                if matches!(&request, Request::ClearHistory { .. }) {
+                    rpc(
+                        paths,
+                        Request::Archived {
+                            generation: owner.id,
+                            request: Box::new(request.clone()),
+                        },
+                    )?;
+                }
+            } else {
+                rpc(&owner.paths(), request.clone())?;
+            }
+        }
+        return Ok(Response::Ok);
+    }
+    if generations::exists(paths) {
+        let target = generations::owner_for(paths, &request)?;
+        if let Some(owner) = generations::Catalog::open(paths)?
+            .generations()?
+            .into_iter()
+            .find(|g| g.data == target.data && g.status == generations::Status::Retired)
+            && !matches!(
+                request,
+                Request::Archived { .. }
+                    | Request::Shutdown
+                    | Request::ShutdownIfIdle
+                    | Request::Snapshot
+            )
+        {
+            return rpc(
+                paths,
+                Request::Archived {
+                    generation: owner.id,
+                    request: Box::new(request),
+                },
+            );
+        }
+    }
+    for _ in 0..3 {
+        let mut stream = connect(paths, request.clone(), None)?;
+        let response = snapshot::read_response(&mut stream)?;
+        if let Response::Redirect { generation } = &response
+            && generations::exists(paths)
+            && matches!(
+                &request,
+                Request::Create { .. }
+                    | Request::CreateReview { .. }
+                    | Request::AddProject { .. }
+                    | Request::SaveLayout { .. }
+                    | Request::SelectProject { .. }
+                    | Request::Settings(_)
+                    | Request::WorktreeAdd { .. }
+                    | Request::WorktreeRemove { .. }
+            )
+        {
+            ensure!(
+                generations::Catalog::open(paths)?
+                    .generations()?
+                    .iter()
+                    .any(|g| &g.id == generation),
+                "Redirect names an unregistered owner"
+            );
+            continue;
+        }
+        return response.checked();
+    }
+    bail!("Active service changed repeatedly before execution; retry the operation")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotHint {
     pub generation: String,
     pub revision: u64,
+    #[serde(default)]
+    pub catalog_revision: u64,
+    #[serde(default)]
+    pub owner_revisions: Vec<(String, u64, Option<String>, generations::Status)>,
 }
 impl State {
     pub fn snapshot_hint(&self) -> SnapshotHint {
         SnapshotHint {
             generation: self.generation.clone(),
             revision: self.revision,
+            catalog_revision: self.catalog_revision,
+            owner_revisions: self
+                .generations
+                .iter()
+                .map(|g| {
+                    (
+                        g.owner.id.clone(),
+                        g.revision,
+                        g.error.clone(),
+                        g.owner.status.clone(),
+                    )
+                })
+                .collect(),
         }
     }
 }
 pub fn conditional_snapshot(paths: &Paths, hint: Option<SnapshotHint>) -> Result<Response> {
+    if generations::exists(paths) {
+        let state = generations::snapshot(paths)?;
+        return if hint.as_ref() == Some(&state.snapshot_hint()) {
+            Ok(Response::Unchanged)
+        } else {
+            Ok(Response::State(Box::new(state)))
+        };
+    }
     let mut stream = connect_hint(paths, Request::Snapshot, None, hint)?;
     snapshot::read_response(&mut stream)?.checked()
 }

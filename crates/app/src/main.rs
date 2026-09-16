@@ -1,4 +1,5 @@
 mod daemon_connection;
+mod daemon_upgrade;
 use daemon_connection::{can_restart_service, can_retire_daemon};
 mod exit;
 mod installation;
@@ -149,7 +150,7 @@ enum After {
 enum Job {
     CloseIdle(editor_close::Target, String, Vec<String>),
     RepairInstallation(String, exit::Checkpoint),
-    RestartSessionService,
+    RestartSessionService(recovery::RestartInventory),
     CreateWorktree(worktree_ui::WorktreeDraft),
     Control(Box<Request>, After),
     OpenProject(PathBuf, u64),
@@ -465,7 +466,7 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
                                 worktree_ui::create(&draft, |request| rpc(&paths, request))?;
                             tx.send(Update::WorktreeCreated(state, project, draft.open_terminal))?;
                         }
-                        Job::RestartSessionService => {
+                        Job::RestartSessionService(inventory) => {
                             let restart_tx = tx.clone();
                             let restart_ctx = ctx.clone();
                             let result = (|| {
@@ -474,6 +475,7 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
                                         &std::env::current_exe()?,
                                         &paths,
                                     )?,
+                                    inventory,
                                     move |message| {
                                         let _ = restart_tx.send(Update::RestartFinished(message));
                                         restart_ctx.request_repaint();
@@ -909,6 +911,7 @@ impl App {
             .as_ref()
             .err()
             .map(|e| format!("UI preferences: {e:#}"));
+        let upgrade_error = fs::read_to_string(paths.data.join("service-upgrade-error.txt")).ok();
         let preferences = loaded.unwrap_or_default();
         let (jobs, rx) = mpsc::channel();
         let (tx, updates) = mpsc::channel();
@@ -1021,7 +1024,7 @@ impl App {
             metadata_request: None,
             metadata_generation: 0,
             context_path: None,
-            error: preference_error,
+            error: preference_error.or(upgrade_error),
             info: None,
             add_project: false,
             settings_open: false,
@@ -1119,6 +1122,8 @@ impl App {
                         "can_restart":self.connected && can_restart_service(&self.state),
                         "settings_visible":self.settings_open && self.settings_section == SettingsSection::Updates,
                         "generation":self.state.generation,
+                        "generations":self.state.generations,
+                        "live_count":self.state.sessions.iter().filter(|s| s.lifecycle.live()).count(),
                         "error":self.error,
                     });
                     snapshot["attention"] = serde_json::json!(ctx.data(|data| {
@@ -3133,7 +3138,10 @@ mod daemon_compatibility_tests {
     fn unknown_healthy_current_and_newer_daemons_are_preserved() {
         let mut state = State {
             attachment_helper_available: Some(true),
-            capabilities: vec![STABLE_HELPER_CAPABILITY.into()],
+            capabilities: vec![
+                STABLE_HELPER_CAPABILITY.into(),
+                generations::CAPABILITY.into(),
+            ],
             ..State::default()
         };
         assert!(!can_retire_daemon(&state));
@@ -3159,6 +3167,7 @@ fn main() -> Result<()> {
     } else {
         Paths::discover()?
     };
+    let paths = generations::workspace_paths(&paths)?;
     paths.init()?;
     let lock = fs::OpenOptions::new()
         .create(true)
@@ -3382,6 +3391,11 @@ mod navigation_tests {
         // Even a healthy sibling helper must migrate to a pinned copy when idle.
         assert!(can_retire_daemon(&state));
         state.capabilities.push(STABLE_HELPER_CAPABILITY.into());
+        assert!(
+            can_retire_daemon(&state),
+            "An idle legacy service must migrate to generation ownership"
+        );
+        state.capabilities.push(generations::CAPABILITY.into());
         assert!(!can_retire_daemon(&state));
         state.attachment_helper_available = Some(false);
         state.capabilities.clear();
@@ -3562,7 +3576,7 @@ mod navigation_tests {
         assert!(app.restart_pending);
         assert!(matches!(
             requests.try_recv().unwrap(),
-            Job::RestartSessionService
+            Job::RestartSessionService(_)
         ));
         assert!(requests.try_recv().is_err());
     }
@@ -3580,6 +3594,29 @@ mod navigation_tests {
         app.restart_confirm = false;
         assert!(requests.try_recv().is_err());
         assert!(!app.restart_pending);
+    }
+
+    #[test]
+    fn restart_job_keeps_the_inventory_at_confirmation() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state.generation = "confirmed-owner".into();
+        app.state.daemon_version = Some("0.0.1".into());
+        app.state.capabilities = vec![SHUTDOWN_IF_IDLE_CAPABILITY.into()];
+        app.state
+            .sessions
+            .push(session_fixture("approved", SessionKind::Shell));
+        app.begin_session_restart();
+        app.state
+            .sessions
+            .push(session_fixture("late", SessionKind::Shell));
+        let Job::RestartSessionService(inventory) = requests.try_recv().unwrap() else {
+            panic!("restart job");
+        };
+        assert_eq!(inventory.generation, "confirmed-owner");
+        assert_eq!(inventory.sessions, ["approved".into()].into());
+        assert!(inventory.validate(&app.state).is_err());
     }
 
     fn visible_ids(app: &App) -> Vec<String> {
