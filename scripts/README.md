@@ -16,6 +16,31 @@ all checks plus tests on native macOS and Linux for pushes and pull requests to
 `master`, or via manual dispatch. Local checks, CI, and releases use Rust 1.97.1, pinned locally by
 `rust-toolchain.toml` with rustfmt and Clippy.
 
+## Dependency security
+
+`.github/workflows/security.yaml` runs on master pushes, pull requests, Monday
+07:17 UTC, and manual dispatch. It fails the job on known lockfile
+vulnerabilities (`cargo audit`, `cargo deny`, OSV-Scanner, GitHub dependency
+review). Snyk, Socket, and OWASP Dependency-Check skip or warn unless their
+secrets are set.
+
+Local equivalents:
+
+```sh
+cargo audit
+cargo deny check --all-features
+```
+
+Keep `.cargo/audit.toml` and `deny.toml` advisory ignores in sync.
+
+Dependabot owns Cargo version PRs (`.github/dependabot.yml`). Renovate owns
+GitHub Actions PRs (`renovate.json`); install the
+[Mend Renovate GitHub App](https://github.com/apps/renovate). Enable Dependabot
+alerts and security updates in the repository Code security settings.
+
+Optional secrets: `SNYK_TOKEN`, `SOCKET_SECURITY_API_KEY`, `NVD_API_KEY`.
+OpenSSF Scorecard is `.github/workflows/scorecard.yaml` (master + weekly).
+
 
 Project-owned Python automation has moved to `crates/xtask`. Run commands from
 `terminator/`; no Python interpreter is used by these tasks.
@@ -138,3 +163,9 @@ and must only be run with user authorization. `TERMINATOR_TEST_CODEX_FOCUS_ONLY=
 limits it to focused/hovered navigation. Both normal and `--no-alt-screen` launches
 are checked. The fixture does not resume stored account conversations or edit saved
 Codex configuration. JSON evidence contains line numbers and terminal metadata.
+
+`cargo xtask gui generations` validates initial idle migration and the native
+multi-generation status, unsaved Markdown preview, GUI relaunch, all-owner restart
+warning, cancellation and confirmed cleanup. The real PTY upgrade fixture is
+`cargo test -p terminator --all-features three_generations_preserve --locked -- --ignored --nocapture`
+after building the workspace binaries; it requires Neovim.

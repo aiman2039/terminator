@@ -6,6 +6,14 @@
 
 <p align="center">Your terminals, AI agents, and project files in one place.<br>For macOS and Linux.</p>
 
+<p align="center">
+  <a href="https://github.com/aiman2039/terminator/actions/workflows/ci.yaml"><img src="https://github.com/aiman2039/terminator/actions/workflows/ci.yaml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/aiman2039/terminator/actions/workflows/security.yaml"><img src="https://github.com/aiman2039/terminator/actions/workflows/security.yaml/badge.svg" alt="Security"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/aiman2039/terminator/network/updates"><img src="https://img.shields.io/badge/dependabot-enabled-brightgreen?logo=dependabot" alt="Dependabot"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/aiman2039/terminator"><img src="https://api.scorecard.dev/projects/github.com/aiman2039/terminator/badge" alt="OpenSSF Scorecard"></a>
+</p>
+
 ![Split terminals with project navigation and a file sidebar](docs/screenshots/split-file-opening.png)
 
 **Keep your work together.** Organize projects, work side by side, and return to running terminals after closing the app.

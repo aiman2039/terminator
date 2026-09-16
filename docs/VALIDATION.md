@@ -1,5 +1,24 @@
 # Validation evidence — 2026-09-08
 
+## Dependency security workflows (2026-09-16)
+
+Added Dependabot (Cargo only), Renovate (`github-actions` only), `deny.toml`,
+`.cargo/audit.toml`, `.github/workflows/security.yaml`, and
+`.github/workflows/scorecard.yaml`. README badges link CI, Security, MIT,
+Dependabot, and OpenSSF Scorecard.
+
+- `cargo audit` on this tree: 0 vulnerabilities, 5 unmaintained warnings (not
+  treated as CI failures).
+- License allowlist in `deny.toml` was taken from `cargo metadata --locked`
+  SPDX strings. `cargo-husky` has no crates.io license field and is clarified
+  as MIT (dev-only hook installer).
+- OWASP Dependency-Check is `continue-on-error: true` because CPE matching is
+  noisy on Cargo; flip to blocking after a suppression baseline exists.
+- Snyk and Socket skip when `SNYK_TOKEN` / `SOCKET_SECURITY_API_KEY` are unset.
+- Hosted Security/Scorecard runs, secret-backed Snyk/Socket scans, Renovate App
+  onboarding, and Dependabot alert enablement were not executed in this change.
+  Scorecard badge 404s until the first `publish_results` run succeeds.
+
 ## Explicit session restart warning (2026-09-16)
 
 The restart confirmation uses bold danger-colored text for session termination

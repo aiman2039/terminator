@@ -1,0 +1,225 @@
+name: Security
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  merge_group:
+    branches: [master]
+  schedule:
+    - cron: '17 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-audit:
+    name: cargo-audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Audit Cargo.lock
+        run: cargo audit
+
+  cargo-deny:
+    name: cargo-deny (${{ matrix.checks }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        checks:
+          - advisories
+          - bans licenses sources
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          command-arguments: ${{ matrix.checks }}
+
+  osv-pr:
+    name: OSV-Scanner (PR)
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@v2.6.0
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+  osv-scheduled:
+    name: OSV-Scanner
+    if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.6.0
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: low
+          license-check: false
+          comment-summary-in-pr: on-failure
+
+  snyk:
+    name: Snyk SBOM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Detect SNYK_TOKEN
+        id: creds
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          if [ -n "$SNYK_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SNYK_TOKEN not configured; skipping Snyk"
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.creds.outputs.present == 'true'
+        with:
+          toolchain: '1.97.1'
+      - uses: taiki-e/install-action@v2
+        if: steps.creds.outputs.present == 'true'
+        with:
+          tool: cargo-cyclonedx
+      - name: Generate CycloneDX SBOMs
+        if: steps.creds.outputs.present == 'true'
+        run: cargo cyclonedx --format json --all-features --spec-version 1.5
+      - uses: snyk/actions/setup@master
+        if: steps.creds.outputs.present == 'true'
+      - name: Snyk SBOM test
+        if: steps.creds.outputs.present == 'true'
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          set -eu
+          files="$(find . -name '*.cdx.json' -not -path './target/*')"
+          if [ -z "$files" ]; then
+            echo "::error::cargo cyclonedx produced no CycloneDX files"
+            exit 1
+          fi
+          status=0
+          for f in $files; do
+            echo "snyk sbom test --file=$f"
+            snyk sbom test --file="$f" || status=1
+          done
+          exit "$status"
+
+  socket:
+    name: Socket
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}
+      - name: Detect SOCKET_SECURITY_API_KEY
+        id: creds
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+        run: |
+          if [ -n "$SOCKET_SECURITY_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SOCKET_SECURITY_API_KEY not configured; skipping Socket"
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.creds.outputs.present == 'true'
+        with:
+          python-version: '3.12'
+      - name: Socket scan
+        if: steps.creds.outputs.present == 'true'
+        env:
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_SECURITY_API_KEY }}
+          GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          pip install --upgrade socketsecurity
+          pr_number=0
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            pr_number="${{ github.event.pull_request.number }}"
+          fi
+          socketcli --target-path "$GITHUB_WORKSPACE" --scm github --pr-number "$pr_number"
+
+  owasp:
+    name: OWASP Dependency-Check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    # CPE matching is noisy on Cargo; keep the job visible but do not block
+    # merge until a suppression baseline exists. See docs/VALIDATION.md.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Run OWASP Dependency-Check
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          set -eu
+          extra=()
+          if [ -n "${NVD_API_KEY:-}" ]; then
+            extra+=(--nvdApiKey "$NVD_API_KEY")
+          else
+            echo "::notice::NVD_API_KEY not configured; scan may be rate-limited"
+          fi
+          mkdir -p owasp-reports
+          docker run --rm \
+            -v "$PWD":/src \
+            owasp/dependency-check:13.0.0 \
+            --scan /src \
+            --exclude /src/target \
+            --exclude /src/.git \
+            --format SARIF \
+            --format HTML \
+            --out /src/owasp-reports \
+            --project terminator \
+            --enableExperimental \
+            --failOnCVSS 7 \
+            "${extra[@]}"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: owasp-dependency-check
+          path: owasp-reports
+          if-no-files-found: ignore
+          retention-days: 14

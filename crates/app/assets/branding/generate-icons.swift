@@ -14,6 +14,10 @@ import UniformTypeIdentifiers
 
 let cornerRadiusRatio = 0.225
 
+/// The source artwork has wide off-white padding that reads as empty space in
+/// the Dock, so it is drawn scaled up by this factor to fill the tile.
+let iconFillScale = 1.4
+
 struct Paths {
     let source: URL
     let branding: URL
@@ -240,7 +244,9 @@ func masked(_ source: CGImage) -> CGImage {
     ctx.scaleBy(x: 1, y: -1)
     ctx.addPath(continuousRoundedPath(size: CGFloat(width)))
     ctx.clip()
-    ctx.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+    let side = CGFloat(width)
+    let bleed = side * (iconFillScale - 1) / 2
+    ctx.draw(source, in: CGRect(x: -bleed, y: -bleed, width: side + bleed * 2, height: side + bleed * 2))
     guard let image = ctx.makeImage() else {
         die("Failed to rasterize masked icon")
     }

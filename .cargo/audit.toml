@@ -1,0 +1,3 @@
+# cargo-audit config. Keep RUSTSEC ignores in sync with deny.toml [advisories].ignore.
+[advisories]
+ignore = []

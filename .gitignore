@@ -11,6 +11,10 @@ __pycache__/
 /tmp-state/
 /scripts/.signing.sh.swp
 
+# Generated SBOMs / scanner output
+*.cdx.json
+/owasp-reports/
+
 docs/MACOS_SIGNING_SETUP.md
 scripts/signing-cleanup.sh
 scripts/signing-github.sh
