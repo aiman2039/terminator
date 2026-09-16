@@ -265,6 +265,7 @@ impl App {
                                     },
                                     None,
                                 ),
+                                Some(Tab::Player) => ("Player".into(), "FileMusic", None),
                                 None => ("Workspace".into(), "Terminal", None),
                             };
                             let active = workspace.active == group.id;
@@ -525,6 +526,7 @@ impl App {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .into_owned(),
+                    Tab::Player => "Player".into(),
                 };
                 if appearance::menu_item(ui, &label, "Terminal", "").clicked() {
                     self.focus_tab = Some(tab);
@@ -1307,6 +1309,7 @@ impl TabViewer for Viewer<'_> {
                 .to_string_lossy()
                 .into_owned()
                 .into(),
+            Tab::Player => "Player".into(),
             Tab::Terminal(sid) => self
                 .app
                 .state
@@ -1331,6 +1334,9 @@ impl TabViewer for Viewer<'_> {
         [false, false]
     }
     fn on_close(&mut self, tab: &mut Tab) -> OnCloseResponse {
+        if matches!(tab, Tab::Player) {
+            self.app.player.stop();
+        }
         if let Tab::Terminal(sid) = tab {
             if self
                 .app
@@ -1390,6 +1396,7 @@ impl TabViewer for Viewer<'_> {
         match tab {
             Tab::Image { path } => self.app.image_view(ui, path),
             Tab::Html { path } => self.app.html_view(ui, path),
+            Tab::Player => self.app.player_view(ui),
             Tab::Diff { .. } => self.app.diff_view(ui, tab),
             Tab::Terminal(sid) => {
                 let Some(session) = self

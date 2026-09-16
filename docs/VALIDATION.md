@@ -1,5 +1,12 @@
 # Validation evidence — 2026-09-08
 
+## Notification sound and GUI player (2026-09-16)
+
+- `cargo test --package terminator-core --package terminator-daemon notification_sound` / `os_banner_sound`: passed.
+- `cargo test --package terminator --offline`: 217 passed (includes layout v5 player tab, audio open without Neovim, stream URL rejection, wav decoder).
+- `cargo clippy --package terminator --package terminator-core --package terminator-daemon --all-targets -- -D warnings`: passed.
+- Live OS banner sound and Icecast playback need a desktop audio device; not established by the unit suite.
+
 ## Dependency security workflows (2026-09-16)
 
 Added Dependabot (Cargo only), Renovate (`github-actions` only), `deny.toml`,

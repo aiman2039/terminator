@@ -1268,6 +1268,7 @@ fn main() -> Result<()> {
         snapshot::CAPABILITY.into(),
         NVIM_REVIEW_CAPABILITY.into(),
         TERMINAL_NOTICES_CAPABILITY.into(),
+        NOTIFICATION_SOUND_CAPABILITY.into(),
         WORKTREES_CAPABILITY.into(),
         SCREEN_CAPABILITY.into(),
         METADATA_SETTINGS_CAPABILITY.into(),
@@ -1415,12 +1416,14 @@ fn main() -> Result<()> {
             let Some(summary) = summary else {
                 continue;
             };
+            let sound = state.settings.notification_sound;
             drop(state);
-            notifications::send(
-                s.catalog_paths.clone().unwrap_or_else(|| s.paths.clone()),
+            notifications::send(notifications::DesktopAlert {
+                paths: s.catalog_paths.clone().unwrap_or_else(|| s.paths.clone()),
                 summary,
-                nid,
-            );
+                notice: nid,
+                sound,
+            });
             last = Instant::now();
         }
     });

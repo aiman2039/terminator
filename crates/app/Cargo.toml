@@ -26,6 +26,8 @@ egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
 egui_commonmark = { version = "0.25", default-features = false, features = ["better_syntax_highlighting"] }
 pulldown-cmark = { version = "0.13", default-features = false }
 url = "2"
+rodio = "0.21"
+ureq = "2"
 blitz-html = { version = "=0.3.0-beta.2", default-features = false }
 blitz-dom = { version = "=0.3.0-beta.2", default-features = false, features = ["svg", "woff", "system-fonts"] }
 blitz-paint = { version = "=0.3.0-beta.2", default-features = false, features = ["svg"] }

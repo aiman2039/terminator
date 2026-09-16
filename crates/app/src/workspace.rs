@@ -42,7 +42,7 @@ impl Workspace {
             let workspace: Self = serde_json::from_value(terminator_core::sanitize_layout(value))
                 .context("Invalid project tabs")?;
             ensure!(
-                matches!(workspace.version, 2..=4),
+                matches!(workspace.version, 2..=5),
                 "Unsupported project tab layout version"
             );
             ensure!(!workspace.tabs.is_empty(), "Project tab layout has no tabs");
@@ -101,7 +101,8 @@ impl Workspace {
     }
     pub fn add(&mut self, id: String, pane: Tab) {
         match pane {
-            Tab::Html { .. } => self.version = 4,
+            Tab::Player => self.version = 5,
+            Tab::Html { .. } => self.version = self.version.max(4),
             Tab::Image { .. } => self.version = self.version.max(3),
             _ => {}
         }
@@ -211,7 +212,7 @@ mod tests {
                 .to_string()
                 .contains("focus")
         );
-        for version in [2, 3, 4] {
+        for version in [2, 3, 4, 5] {
             let mut saved = terminator_core::sanitize_layout(
                 serde_json::to_value(Workspace::from_layout(dock.clone())).unwrap(),
             );
@@ -256,6 +257,11 @@ mod tests {
         assert!(restored.contains(&Tab::Html {
             path: "/page.html".into()
         }));
+        workspace.add("player".into(), Tab::Player);
+        assert_eq!(workspace.version, 5);
+        let saved = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
+        let restored = Workspace::load(saved).unwrap();
+        assert!(restored.contains(&Tab::Player));
     }
     #[test]
     fn legacy_splits_migrate_without_losing_sessions() {

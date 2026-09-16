@@ -4,7 +4,7 @@ use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
 };
 use terminator_core::{Agent, Notification, Project, Session, TerminalNotice};
 
@@ -138,6 +138,12 @@ pub enum SidebarTool {
     History,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RadioStation {
+    pub name: String,
+    pub url: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPreferences {
     pub version: u32,
@@ -156,6 +162,10 @@ pub struct UiPreferences {
     pub hidden_projects: HashSet<String>,
     pub project_sort: ProjectSort,
     pub project_activity: HashMap<String, u64>,
+    pub player_playlists: HashMap<String, Vec<PathBuf>>,
+    pub player_index: HashMap<String, usize>,
+    pub player_volume: f32,
+    pub radio_stations: Vec<RadioStation>,
 }
 impl Default for UiPreferences {
     fn default() -> Self {
@@ -176,6 +186,10 @@ impl Default for UiPreferences {
             hidden_projects: HashSet::new(),
             project_sort: ProjectSort::NameAsc,
             project_activity: HashMap::new(),
+            player_playlists: HashMap::new(),
+            player_index: HashMap::new(),
+            player_volume: 0.8,
+            radio_stations: Vec::new(),
         }
     }
 }
@@ -195,6 +209,11 @@ impl UiPreferences {
             prefs.width.clamp(220.0, 480.0)
         } else {
             285.0
+        };
+        prefs.player_volume = if prefs.player_volume.is_finite() {
+            prefs.player_volume.clamp(0.0, 1.0)
+        } else {
+            0.8
         };
         Ok(prefs)
     }

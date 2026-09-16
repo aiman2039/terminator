@@ -51,13 +51,13 @@ Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcom
 
 Settings → Agent hooks installs, repairs, and removes managed hooks for Claude Code, Codex, OpenCode, Muse, and Grok. Installation preserves unrelated hooks and writes a backup before changing an existing configuration. It never installs agent binaries or configures accounts.
 
-Read [the integration contract and capability notes](INTEGRATIONS.md) before connecting a custom agent. Installed hooks are inert outside terminals owned by this application. Notification defaults cover input, permission, completion, and failure events where the agent exposes them; opening the relevant terminal dismisses the notification without changing agent state.
+Read [the integration contract and capability notes](INTEGRATIONS.md) before connecting a custom agent. Installed hooks are inert outside terminals owned by this application. Notification defaults cover input, permission, completion, and failure events where the agent exposes them; opening the relevant terminal dismisses the notification without changing agent state. Settings → Notifications can play a system sound with desktop banners (default on). The in-app Agents inbox stays silent. The control requires a daemon that advertises `notification-sound-v1`.
 
 ## Local state and updates
 
 The default data directory follows the OS application-data convention. `TERMINATOR_DATA_DIR=/absolute/path` or `terminator --data-dir /absolute/path` selects an isolated installation. The runtime directory contains a private Unix socket and authentication file; do not share these files.
 
-SQLite stores projects, layouts, session metadata, agent state, and notification state. `ui-preferences.json` stores versioned per-installation navigation/sidebar choices, project sort/activity, and the one-time typography and Attention migration markers. Attention migration turns on side placement once after the daemon acknowledges the settings update; later placement choices are preserved. Side placement keeps the compact Agents row as the persistent indicator and does not overlay Git, Explorer, or History. The Islands update sets terminal/editor size to 13 once; subsequent user size choices are preserved. Inter and JetBrains Mono are bundled with their licenses. Scrollback is stored separately and pruned by configurable age/per-session/total limits. Defaults: 30 days, 50 MiB/session, 2 GiB total. Metadata and resume commands remain until explicitly removed. Truncated output is labeled.
+SQLite stores projects, layouts, session metadata, agent state, and notification state. `ui-preferences.json` stores versioned per-installation navigation/sidebar choices, project sort/activity, player playlists/volume/custom radio stations, and the one-time typography and Attention migration markers. Attention migration turns on side placement once after the daemon acknowledges the settings update; later placement choices are preserved. Side placement keeps the compact Agents row as the persistent indicator and does not overlay Git, Explorer, or History. The Islands update sets terminal/editor size to 13 once; subsequent user size choices are preserved. Inter and JetBrains Mono are bundled with their licenses. Scrollback is stored separately and pruned by configurable age/per-session/total limits. Defaults: 30 days, 50 MiB/session, 2 GiB total. Metadata and resume commands remain until explicitly removed. Truncated output is labeled.
 
 A running daemon keeps its current executable version until it exits. GUI updates
 reconnect to compatible daemons, whose private terminal helpers survive app
@@ -259,6 +259,12 @@ formats. SVGs are rasterized with resvg; external references are not loaded.
 Corrupt or over-limit images display an error instead of opening binary text.
 Image-bearing layouts use version 3; ordinary version-2 workspaces remain readable.
 Older GUIs refuse the newer layout rather than overwriting it.
+
+Click mp3, flac, ogg, wav, m4a, opus, or aac to open a GUI-only **Player** tab
+(no PTY). Palette → **Open player**. Transport, playlist, volume, and radio
+stations share that tab. Bundled Icecast/Shoutcast HTTP(S) streams plus custom
+stream URLs. Open as text and Open externally still work. Playback stops when
+the GUI exits or the player tab closes. Player-bearing layouts use version 5.
 
 `terminator-hook ctl --help` exposes explicit controls. Examples:
 

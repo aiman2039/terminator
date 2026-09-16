@@ -323,6 +323,7 @@ pub struct Settings {
     pub notifications_side: bool,
     pub terminal_notifications: bool,
     pub terminal_notifications_os: bool,
+    pub notification_sound: bool,
     pub pr_metadata: bool,
     pub editor_mode: EditorMode,
     pub review_mode: ReviewMode,
@@ -357,6 +358,7 @@ impl Default for Settings {
             notifications_side: true,
             terminal_notifications: true,
             terminal_notifications_os: false,
+            notification_sound: true,
             pr_metadata: false,
             editor_mode: EditorMode::Embedded,
             review_mode: ReviewMode::Native,
@@ -417,6 +419,7 @@ pub const SHUTDOWN_IF_IDLE_CAPABILITY: &str = "shutdown-if-idle-v1";
 pub const STABLE_HELPER_CAPABILITY: &str = "stable-helper-v1";
 pub const SCREEN_CAPABILITY: &str = "screen-v1";
 pub const TERMINAL_NOTICES_CAPABILITY: &str = "terminal-notices-v1";
+pub const NOTIFICATION_SOUND_CAPABILITY: &str = "notification-sound-v1";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TerminalNotice {
     pub id: String,
@@ -1269,6 +1272,17 @@ mod snapshot_tests {
         state.recover();
         state.revision = previous.revision;
         assert_ne!(previous, state.snapshot_hint());
+    }
+    #[test]
+    fn notification_sound_defaults_on_and_round_trips() {
+        assert!(Settings::default().notification_sound);
+        let parsed: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(parsed.notification_sound);
+        let off: Settings =
+            serde_json::from_value(serde_json::json!({"notification_sound": false})).unwrap();
+        assert!(!off.notification_sound);
+        let encoded = serde_json::to_value(&off).unwrap();
+        assert_eq!(encoded["notification_sound"], false);
     }
 }
 

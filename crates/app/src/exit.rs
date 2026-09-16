@@ -51,6 +51,7 @@ impl Checkpoint {
 impl App {
     pub(super) fn begin_exit(&mut self) {
         if !self.exit.active() {
+            self.player.stop();
             self.exit_attempt = self.exit_attempt.wrapping_add(1);
             self.exit = Exit::Waiting(Instant::now());
         }

@@ -4,26 +4,53 @@ use std::{
 };
 use terminator_core::{Paths, atomic_write};
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+
+pub struct DesktopAlert {
+    pub paths: Paths,
+    pub summary: String,
+    pub notice: String,
+    pub sound: bool,
+}
+
 pub fn initialize() {
     #[cfg(target_os = "macos")]
     {
         let _ = notify_rust::set_application("dev.terminator.app");
     }
 }
-pub fn send(paths: Paths, summary: String, notice: String) {
+
+fn sound_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Glass"
+    } else {
+        "message-new-instant"
+    }
+}
+
+pub fn send(
+    DesktopAlert {
+        paths,
+        summary,
+        notice,
+        sound,
+    }: DesktopAlert,
+) {
     if ACTIVE.fetch_add(1, Ordering::Relaxed) >= 16 {
         ACTIVE.fetch_sub(1, Ordering::Relaxed);
         return;
     }
     std::thread::spawn(move || {
-        if let Ok(handle) = notify_rust::Notification::new()
+        let mut notification = notify_rust::Notification::new();
+        notification
             .summary(&summary)
             .body("Open the notification to view the session context.")
             .appname("Terminator")
             .action("default", "Open context")
-            .timeout(10000)
-            .show()
-        {
+            .timeout(10000);
+        if sound {
+            notification.sound_name(sound_name());
+        }
+        if let Ok(handle) = notification.show() {
             handle.wait_for_action(|action| {
                 if action == "__closed" {
                     return;
@@ -89,4 +116,18 @@ pub fn idle() {
         CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, true);
     }
     std::thread::sleep(std::time::Duration::from_millis(10).saturating_sub(started.elapsed()));
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn os_banner_sound_name_is_platform_default() {
+        let name = super::sound_name();
+        assert!(!name.is_empty());
+        if cfg!(target_os = "macos") {
+            assert_eq!(name, "Glass");
+        } else {
+            assert_eq!(name, "message-new-instant");
+        }
+    }
 }

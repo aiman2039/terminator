@@ -50,7 +50,7 @@ impl SettingsSection {
         match self {
             Self::Appearance => "theme accent density color hex font",
             Self::Terminal => "shell nvim editor neovim zsh bash fish folder access privacy",
-            Self::Notifications => "alert os desktop dismiss",
+            Self::Notifications => "alert os desktop dismiss sound",
             Self::History => "days mib scrollback disk",
             Self::Shortcuts => "keymap command shortcut chord palette",
             Self::AgentHooks => "claude codex opencode muse grok install hook",
@@ -742,6 +742,20 @@ impl App {
             &mut self.settings_draft.notifications_side,
             "Place notifications at the side",
         );
+        if self.field_visible("Play sound with desktop notifications", "sound alert") {
+            ui.add_enabled_ui(
+                self.state
+                    .capabilities
+                    .iter()
+                    .any(|c| c == NOTIFICATION_SOUND_CAPABILITY),
+                |ui| {
+                    ui.checkbox(
+                        &mut self.settings_draft.notification_sound,
+                        "Play sound with desktop notifications",
+                    );
+                },
+            );
+        }
         ui.add_enabled_ui(
             self.state
                 .capabilities

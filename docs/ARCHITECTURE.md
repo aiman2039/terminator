@@ -91,7 +91,7 @@ original editor and its unsaved-close lifecycle remain daemon-owned.
 
 ## Platform boundaries
 
-macOS builds use Cocoa/native dialogs and a locally signed `.app` bundle. Linux builds use native windowing with X11/Wayland and portal file dialogs. The daemon's OS-notification callback worker is separate from terminal handling. macOS pumps its native notification run loop on the daemon thread; Linux uses the desktop notification service. No Electron, Chromium, or webview is included.
+macOS builds use Cocoa/native dialogs and a locally signed `.app` bundle. Linux builds use native windowing with X11/Wayland and portal file dialogs. The daemon's OS-notification callback worker is separate from terminal handling. macOS pumps its native notification run loop on the daemon thread; Linux uses the desktop notification service. Desktop banners may include a platform sound name when `notification_sound` is on (`notification-sound-v1`). In-app attention stays silent. No Electron, Chromium, or webview is included.
 
 
 ## Preview, metadata, and automation boundaries
@@ -118,9 +118,13 @@ is a point-in-time check; it cannot lock out arbitrary external OS or Git action
 Image previews belong to the GUI and allocate no PTYs. A dedicated bounded worker
 loads raster/SVG data, with stale-generation rejection and a texture-memory budget.
 Only paths are persisted in version-3 image-bearing layouts. HTML previews use the
-same GUI-only path with Blitz CPU raster and layout version 4. Unknown layout
-versions remain read-only. Explicit text/external actions retain the editor paths.
-HTML Open in browser uses the existing system-browser worker; no JS or webview.
+same GUI-only path with Blitz CPU raster and layout version 4. Audio player tabs
+are GUI-only layout version 5: one player per project, `rodio` on a worker for
+local files and HTTP(S) Icecast/Shoutcast streams. Playback stops when the GUI
+exits or the player tab closes. Radio UI is native egui; Blitz stays HTML-file
+raster. Unknown layout versions remain read-only. Explicit text/external actions
+retain the editor paths. HTML Open in browser uses the existing system-browser
+worker; no JS or webview.
 
 `gui.sock` is a separate, mode-0600 authenticated GUI endpoint for explicit
 presentation commands. It does not move PTY ownership into the GUI. The daemon's

@@ -10,6 +10,7 @@ pub(crate) enum PaletteItem {
     AddProject,
     NewTerminal,
     NewWorktree,
+    OpenPlayer,
 }
 
 impl PaletteItem {
@@ -25,13 +26,18 @@ impl PaletteItem {
             Self::AddProject => "Add project".into(),
             Self::NewTerminal => "New terminal".into(),
             Self::NewWorktree => "New task worktree".into(),
+            Self::OpenPlayer => "Open player".into(),
         }
     }
 }
 
 impl App {
     pub(super) fn palette_items(&self) -> Vec<PaletteItem> {
-        let mut items = vec![PaletteItem::AddProject, PaletteItem::NewTerminal];
+        let mut items = vec![
+            PaletteItem::AddProject,
+            PaletteItem::NewTerminal,
+            PaletteItem::OpenPlayer,
+        ];
         if self
             .state
             .capabilities
@@ -169,6 +175,11 @@ impl App {
             PaletteItem::AddProject => self.add_project = true,
             PaletteItem::NewTerminal => self.create(None),
             PaletteItem::NewWorktree => self.open_worktree_wizard(),
+            PaletteItem::OpenPlayer => {
+                if let Some(project) = self.selected.clone() {
+                    self.open_player_tab(&project);
+                }
+            }
         }
     }
 }

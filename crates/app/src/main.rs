@@ -20,6 +20,7 @@ mod markdown;
 mod markdown_images;
 mod metadata_refresh;
 mod nvim_rpc;
+mod player;
 mod refresh;
 mod settings_ui;
 use settings_ui::{BrowseTarget, SettingsSection};
@@ -71,6 +72,7 @@ pub(crate) enum Tab {
     Html {
         path: PathBuf,
     },
+    Player,
     Terminal(String),
     Diff {
         cwd: PathBuf,
@@ -195,6 +197,7 @@ enum Update {
     Metadata(u64, metadata::Metadata),
     OpenImage(String, PathBuf, After),
     OpenHtml(String, PathBuf, After),
+    OpenPlayer(String, After),
     Image(PathBuf, u64, Result<egui::ColorImage, String>),
     Html(PathBuf, u64, Result<egui::ColorImage, String>),
     TestPickerClosed,
@@ -799,6 +802,7 @@ struct App {
     active_session: Option<String>,
     images: HashMap<PathBuf, image_preview::Preview>,
     htmls: HashMap<PathBuf, html_preview::Preview>,
+    player: player::Controller,
     markdown: markdown::Previews,
     visible_images: HashSet<PathBuf>,
     visible_htmls: HashSet<PathBuf>,
@@ -988,6 +992,7 @@ impl App {
             active_session: None,
             images: HashMap::new(),
             htmls: HashMap::new(),
+            player: player::Controller::new(),
             markdown,
             visible_images: HashSet::new(),
             visible_htmls: HashSet::new(),
@@ -1363,6 +1368,9 @@ impl App {
                 }
                 Update::OpenHtml(project, path, after) => {
                     self.place_gui_tab(project, Tab::Html { path }, after);
+                }
+                Update::OpenPlayer(project, after) => {
+                    self.place_gui_tab(project, Tab::Player, after);
                 }
                 Update::Image(path, generation, result) => {
                     let used: usize = self
@@ -1765,7 +1773,7 @@ impl App {
                         .sessions
                         .iter()
                         .any(|s| &s.id == sid && s.lifecycle.live()),
-                    Tab::Diff { .. } | Tab::Image { .. } | Tab::Html { .. } => true,
+                    Tab::Diff { .. } | Tab::Image { .. } | Tab::Html { .. } | Tab::Player => true,
                 };
                 let survives = old_group
                     .as_ref()
@@ -1908,7 +1916,8 @@ impl App {
             .entry(project.into())
             .or_insert_with(Workspace::empty);
         match tab {
-            Tab::Html { .. } => dock.version = 4,
+            Tab::Player => dock.version = 5,
+            Tab::Html { .. } => dock.version = dock.version.max(4),
             Tab::Image { .. } => dock.version = dock.version.max(3),
             _ => {}
         }
@@ -2078,6 +2087,12 @@ impl App {
         if !external && !text && html_preview::supported(&path) {
             if let Some(project) = self.selected.clone() {
                 self.open_html(&project, path, split);
+            }
+            return;
+        }
+        if !external && !text && player::supported(&path) {
+            if let Some(project) = self.selected.clone() {
+                self.open_audio(&project, path, split);
             }
             return;
         }
@@ -2475,6 +2490,14 @@ impl App {
                     std::path::absolute(&pending.path).unwrap_or(pending.path),
                     pending.after,
                 ));
+            } else if html_preview::supported(&pending.path) {
+                let _ = self.update_tx.send(Update::OpenHtml(
+                    pending.project,
+                    std::path::absolute(&pending.path).unwrap_or(pending.path),
+                    pending.after,
+                ));
+            } else if player::supported(&pending.path) {
+                self.open_audio(&pending.project, pending.path, None);
             } else if self.state.settings.editor_mode == EditorMode::External {
                 let _ = self.jobs.send(Job::External(pending.path));
             } else {
@@ -2894,9 +2917,9 @@ impl eframe::App for App {
                         .map(|(_, tab)| tab.clone())
                     {
                         Some(Tab::Terminal(sid)) => self.active_session = Some(sid),
-                        Some(Tab::Diff { .. } | Tab::Image { .. } | Tab::Html { .. }) => {
-                            self.active_session = None
-                        }
+                        Some(
+                            Tab::Diff { .. } | Tab::Image { .. } | Tab::Html { .. } | Tab::Player,
+                        ) => self.active_session = None,
                         None => {}
                     }
                     if dock.iter_all_tabs().next().is_none() {
@@ -2962,6 +2985,7 @@ impl eframe::App for App {
                                 Tab::Image { path } | Tab::Html { path } => {
                                     path.parent().map(PathBuf::from)
                                 }
+                                Tab::Player => None,
                             })
                             .or_else(|| self.selected_project().map(|p| p.path.clone()));
                         let _ = self.jobs.send(Job::rpc(
@@ -5009,6 +5033,24 @@ mod navigation_tests {
         assert_eq!(app.layouts["a"].version, 4);
         assert!(app.state.sessions.is_empty());
         assert!(!requests.try_iter().any(|j|matches!(j,Job::Control(request,_) if matches!(*request,Request::Create { editor:true,.. }))));
+    }
+    #[test]
+    fn audio_open_creates_player_tab_and_keeps_original_project() {
+        let (mut app, ctx, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.open_file("/a/song.MP3".into(), None, None, false);
+        app.select_project("b".into());
+        app.process_updates(&ctx);
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        assert!(app.layouts["a"].contains(&Tab::Player));
+        assert_eq!(app.layouts["a"].version, 5);
+        assert!(app.state.sessions.is_empty());
+        assert!(!requests.try_iter().any(|j|matches!(j,Job::Control(request,_) if matches!(*request,Request::Create { editor:true,.. }))));
+        assert_eq!(
+            app.preferences.player_playlists["a"],
+            vec![PathBuf::from("/a/song.MP3")]
+        );
     }
     #[test]
     fn image_split_survives_layout_temporarily_owned_by_renderer() {
