@@ -163,6 +163,12 @@ pub fn run(o: &Options) -> Result<()> {
             8,
         )?;
         let initial = snapshot(&h)?;
+        if cfg!(target_os = "macos") {
+            ensure!(
+                initial["update_menu"] == true,
+                "Check for Updates is missing from the application menu"
+            );
+        }
         if std::env::var_os("TERMINATOR_TEST_SPARKLE_FRAMEWORK").is_some() {
             ensure!(
                 initial["updater_available"] == true,

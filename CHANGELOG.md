@@ -2,9 +2,25 @@
 
 ## Unreleased
 
+- Always show **Check for Updates…** in the application menu, matching AppDock.
+  Sparkle still loads only from an installed release; other launches explain why
+  updates are unavailable instead of hiding the item.
+- Probe for Sparkle updates as soon as the updater can check, then every minute.
+  Automatic checks default on. Do not consume the minute or get stuck while
+  Sparkle is not ready.
+
+- Forward unbound Command/Ctrl chords in a focused terminal as kitty CSI u
+  (Command is Super, so Cmd+E reaches Neovim as `<D-e>`). Settings shortcuts,
+  Cmd/Ctrl+C/V copy and paste, and Ctrl+A–Z control characters are unchanged.
+
+- Ship Apple Silicon-only macOS releases. Drop the Intel slice, universal lipo,
+  and `macos-15-intel` runner. The hosted DMG is `terminator-vVERSION-macos.dmg`.
+  Linux x86-64 is unchanged. Local Intel source builds still compile.
+
 - Sort the PROJECTS sidebar by name (A → Z / Z → A) or latest activity.
-  The choice persists in UI preferences. Latest activity uses last focus plus
-  session, agent, and notice timestamps.
+  The choice persists in UI preferences. Latest activity uses session, agent,
+  and notice timestamps, plus restoring, adding, or creating a project.
+  Selecting a visible project does not move it.
 
 - Restart a mismatched session service from the status bar or Settings →
   Installation: confirm, then a detached helper stops live sessions and reopens
@@ -49,6 +65,7 @@
 
 Compatibility: additive, opt-in snapshot response framing; no dependency,
 persistence-format or protocol-version bump.
+Hosted macOS releases are Apple Silicon only; Intel Macs can still be built from source.
 Running daemons keep their binary version until they exit; building or reopening
 only the GUI does not replace them. Neovim reviews require the advertised
 `nvim-review-v1` capability and Neovim 0.10+; older daemons use the built-in diff.

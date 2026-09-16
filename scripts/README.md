@@ -66,7 +66,8 @@ renders the saved file, then checks that live rendering resumes on the same PID.
 The regular Markdown fixture also tests unsaved text through a prompt and Refresh,
 Preview on the initial file click, and persistence of an explicit Edit choice.
 It checks that filename, view tabs and refresh icon share one row without overlap.
-`project-sidebar` sorts visible projects by name and latest activity, then
+`project-sidebar` sorts visible projects by name and latest activity (clicking a
+visible project does not reorder it), then
 removes/restores active projects and tests an empty sidebar
 across GUI restarts while retaining the same shell/editor PIDs, unsaved buffers,
 file bytes and project layouts. Both cases run as part of `gui all`.

@@ -67,3 +67,13 @@ Use `TERMINATOR_DATA_DIR` for isolated development. Never commit authentication 
 Appearance lives in `~/.config/terminator/config.toml`, honoring `XDG_CONFIG_HOME` and `TERMINATOR_CONFIG_DIR`; explicit data-directory installations keep it in their isolated data directory. Preserve comments and unrelated TOML keys when saving. SQLite holds functional/session state, `ui-preferences.json` holds navigation/sidebar preferences, and scrollback is stored separately.
 
 Hook installation is an explicit Settings action that preserves unrelated configuration and creates backups. Tests must use isolated hook fixtures rather than changing user agent configurations. Never infer agent lifecycle state from terminal text or automatically launch agents.
+
+## Updates
+- We should have "check for updates" button in the menu
+- Periodically check for updates once per minute
+
+## AI 
+- Always be brief and concise, if the user need more info they will ask for you to elaborate more
+- Always opt first for known popular packages and dont reinvent the wheel
+- Always ask for specific permission and show what you want to chage in AGENTS.md
+

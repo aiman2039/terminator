@@ -21,7 +21,7 @@ The gaps below are findings or proposed engineering work from this repository, n
 | Hook installation | Configuration owned by other tools | Explicit installers edit external configuration with backups. | User-selected access and supported configuration APIs work for every offered integration; unsupported integration remains disabled. |
 | Neovim and agent tools | External executable and plugin access | Ordinary Neovim loads user configuration; bundled CodeDiff uses isolated snapshots; agents are user-launched. | Test executable access, dynamic libraries, plugins, tool credentials, subprocesses, and network access in a clean account. |
 | Signing and packaging | Store submission pipeline | Local apps are ad-hoc signed; direct releases have their own signing and Sparkle assembly. | Separate Store bundle identity, entitlements, provisioning, archive, validation, and receipt handling if needed. |
-| Updates | Store-only application updates | `package::universal` embeds Sparkle; `updater` presents its controls. | Exclude Sparkle framework, feed keys, updater UI, and native callbacks from Store builds; retain daemon compatibility across Store replacements. |
+| Updates | Store-only application updates | `package::assemble` embeds Sparkle; `updater` presents its controls. | Exclude Sparkle framework, feed keys, updater UI, and native callbacks from Store builds; retain daemon compatibility across Store replacements. |
 
 Source evidence: `docs/ARCHITECTURE.md`, `docs/INTEGRATIONS.md`, `crates/daemon/src/shell.rs`, `crates/daemon/src/helper.rs`, `crates/xtask/src/package.rs`, and `crates/app/src/updater.rs`. Local package access descriptions do not confer sandbox entitlements or prove shell/editor access.
 

@@ -5,23 +5,23 @@ Rust 1.97.1 and the committed Cargo.lock. It does not use Docker.
 
 | Platform | Runner | Release asset |
 | --- | --- | --- |
-| macOS Apple Silicon | `macos-15` | Included in `terminator-vVERSION-universal-macos.dmg` |
-| macOS Intel | `macos-15-intel` | Included in the same universal DMG |
+| macOS Apple Silicon | `macos-15` | `terminator-vVERSION-macos.dmg` |
 | Linux x86-64 | `ubuntu-24.04` | `terminator-vVERSION-x86_64-unknown-linux-gnu.tar.gz` |
 | Linux ARM64 | `ubuntu-24.04-arm` | `terminator-vVERSION-aarch64-unknown-linux-gnu.tar.gz` |
 
 Each package includes the GUI, daemon, hook executable, and the existing
-packager's resources and dependency notices. macOS ZIPs are intermediate native
-slices used to assemble the universal app. Linux archives contain a `terminator/`
-directory. `SHA256SUMS.txt` covers the DMG, both Linux archives and `appcast.xml`.
+packager's resources and dependency notices. The macOS ZIP is an intermediate
+Apple Silicon app; assembly embeds Sparkle and does not lipo extra slices.
+Linux archives contain a `terminator/` directory. `SHA256SUMS.txt` covers the
+DMG, both Linux archives and `appcast.xml`.
 Neovim is not bundled; install Neovim 0.10+ for CodeDiff reviews.
 
 ## Build dependencies and caches
 
-Separate macOS and Linux matrices use `.github/actions/release-build` and run
-all four native builds concurrently. macOS assembly depends only on the macOS
-matrix; final draft upload still requires Linux and macOS to succeed. The Apple
-Silicon job also uploads its development `xtask` binary in a tar archive to retain
+Separate macOS and Linux jobs use `.github/actions/release-build` and run
+the three native builds concurrently. macOS assembly depends only on the Apple
+Silicon job; final draft upload still requires Linux and macOS to succeed. That
+macOS job also uploads its development `xtask` binary in a tar archive to retain
 executable permissions. Assembly and DMG creation run that exact same-revision
 tool, with no additional Cargo/toolchain setup or assembly compiler cache.
 
@@ -82,8 +82,8 @@ Configure these repository Actions secrets before a manual release:
 - `APPLE_APP_SPECIFIC_PASSWORD`: an app-specific password for that account.
 - `APPLE_TEAM_ID`: the developer team that issued the certificate.
 
-The assembly job imports the certificate into a temporary keychain after combining
-the native slices. It signs the nested Sparkle executables and bundles, the three
+The assembly job imports the certificate into a temporary keychain after embedding
+Sparkle into the Apple Silicon app. It signs the nested Sparkle executables and bundles, the three
 application executables and the app with hardened runtime and secure timestamps.
 It notarizes/staples the app, creates the DMG, then signs and notarizes/staples the
 DMG before generating the signed Sparkle appcast.
@@ -97,6 +97,8 @@ and [GitHub's certificate setup](https://docs.github.com/en/actions/how-tos/depl
 
 ## Support boundaries
 
+- Hosted macOS releases are Apple Silicon only. Intel Macs are not in the DMG;
+  they can still be built from source and are unvalidated.
 - The release workflow requires Developer ID signing and Apple notarization.
   The packager declares macOS 12 as its minimum, but these runner-built releases have not been
   validated on that older OS.

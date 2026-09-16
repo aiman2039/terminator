@@ -362,6 +362,34 @@ mod tests {
     }
 
     #[test]
+    fn consuming_a_registered_shortcut_removes_the_key_event() {
+        let chord = parse("command+T").unwrap();
+        let ctx = egui::Context::default();
+        let mut output =
+            ctx.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: chord.key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: chord.modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ui| {
+                    assert!(consume(ui.ctx(), "command+T"));
+                    ui.ctx().input(|input| {
+                        assert!(!input.events.iter().any(|event| {
+                            matches!(event, egui::Event::Key { key: Key::T, .. })
+                        }));
+                    });
+                },
+            );
+        output.textures_delta.clear();
+    }
+
+    #[test]
     #[cfg(target_os = "macos")]
     fn captured_control_shortcut_consumes_control_without_command() {
         let value = from_input(Modifiers::CTRL, Key::T).unwrap();

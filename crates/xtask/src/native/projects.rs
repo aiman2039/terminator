@@ -39,7 +39,7 @@ fn sort_sidebar(h: &Harness, o: &Options, first: &Value, second: &Value) -> Resu
         json!([
             {"at_ms":800,"target":"project-sort"},
             {"at_ms":1600,"target":"sort-latest-activity"},
-            {"at_ms":2400,"target":format!("project-row:{}", id(first))}
+            {"at_ms":2400,"target":format!("project-row:{}", id(second))}
         ]),
         4200,
         |_| wait_sidebar(h, &asc),

@@ -237,24 +237,52 @@ pub fn run(debug: bool, timings: bool, output_dir: Option<PathBuf>) -> Result<()
     Ok(())
 }
 
+pub struct AssembleInput<'a> {
+    pub app: &'a Path,
+    pub sparkle: &'a Path,
+    pub build_number: u64,
+    pub destination: &'a Path,
+}
+
 /// Native jobs build each daemon and its embedded CodeDiff together. Assembly
-/// only combines those exact executable slices; it never cross-compiles them.
-pub fn universal(
-    arm: &Path,
-    intel: &Path,
-    sparkle: &Path,
-    build_number: u64,
-    destination: &Path,
-) -> Result<()> {
-    ensure!(
-        cfg!(target_os = "macos"),
-        "Universal assembly requires macOS"
-    );
+/// embeds Sparkle into that Apple Silicon app; it never rebuilds or lipos slices.
+pub fn assemble(input: AssembleInput<'_>) -> Result<()> {
+    let AssembleInput {
+        app,
+        sparkle,
+        build_number,
+        destination,
+    } = input;
+    ensure!(cfg!(target_os = "macos"), "Assembly requires macOS");
     ensure!(build_number > 0, "Build number must be positive");
-    // Detect restored/previous output before reading inputs or assembling slices.
+    // Detect restored/previous output before reading inputs or assembling.
     let target = new_assembly_output(destination)?;
-    let public_key = std::env::var("SPARKLE_PUBLIC_ED_KEY")
-        .context("SPARKLE_PUBLIC_ED_KEY must contain the public update key")?;
+    let public_key = sparkle_public_key()?;
+    let app_info = validated_app_info(app)?;
+    require_sparkle_version(sparkle)?;
+    fs::create_dir_all(destination)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".assemble-")
+        .tempdir_in(destination)?;
+    let staged = staging.path().join("Terminator.app");
+    copy_tree(app, &staged)?;
+    verify_app_executables(&staged)?;
+    embed_sparkle(&staged, sparkle)?;
+    write_update_plist(&staged, app_info, build_number, public_key)?;
+    verify_arm64_macho(&staged)?;
+    // Also check at publication time in case another task created the output.
+    new_assembly_output(destination)?;
+    fs::rename(staged, &target)?;
+    println!("{}", target.display());
+    Ok(())
+}
+
+fn sparkle_public_key() -> Result<String> {
+    parse_sparkle_public_key(std::env::var("SPARKLE_PUBLIC_ED_KEY").ok())
+}
+
+fn parse_sparkle_public_key(value: Option<String>) -> Result<String> {
+    let public_key = value.context("SPARKLE_PUBLIC_ED_KEY must contain the public update key")?;
     use base64::Engine;
     ensure!(
         base64::engine::general_purpose::STANDARD
@@ -263,34 +291,29 @@ pub fn universal(
             == 32,
         "Invalid public Ed25519 key"
     );
-    let arm_info = plist::Value::from_file(arm.join("Contents/Info.plist"))?;
-    let intel_info = plist::Value::from_file(intel.join("Contents/Info.plist"))?;
-    for key in [
-        "CFBundleIdentifier",
-        "CFBundleShortVersionString",
-        "LSMinimumSystemVersion",
-    ] {
-        ensure!(
-            arm_info.as_dictionary().and_then(|d| d.get(key))
-                == intel_info.as_dictionary().and_then(|d| d.get(key)),
-            "Architecture metadata differs: {key}"
-        );
-    }
+    Ok(public_key)
+}
+
+fn validated_app_info(app: &Path) -> Result<plist::Dictionary> {
+    let info = plist::Value::from_file(app.join("Contents/Info.plist"))?;
     for (key, expected) in [
         ("CFBundleIdentifier", "dev.terminator.app"),
         ("LSMinimumSystemVersion", "12.0"),
     ] {
         ensure!(
-            arm_info
-                .as_dictionary()
+            info.as_dictionary()
                 .and_then(|d| d.get(key))
                 .and_then(plist::Value::as_string)
                 == Some(expected),
             "Unexpected app metadata: {key}"
         );
     }
-    let framework = sparkle.join("Sparkle.framework");
-    let framework_info = plist::Value::from_file(framework.join("Resources/Info.plist"))?;
+    info.into_dictionary().context("Missing app dictionary")
+}
+
+fn require_sparkle_version(sparkle: &Path) -> Result<()> {
+    let framework_info =
+        plist::Value::from_file(sparkle.join("Sparkle.framework/Resources/Info.plist"))?;
     ensure!(
         framework_info
             .as_dictionary()
@@ -299,44 +322,39 @@ pub fn universal(
             == Some("2.10.0"),
         "Expected Sparkle 2.10.0"
     );
-    fs::create_dir_all(destination)?;
-    let staging = tempfile::Builder::new()
-        .prefix(".universal-")
-        .tempdir_in(destination)?;
-    let app = staging.path().join("Terminator.app");
-    copy_tree(arm, &app)?;
+    Ok(())
+}
+
+fn verify_app_executables(app: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
     for name in ["terminator", "terminator-daemon", "terminator-hook"] {
-        let relative = Path::new("Contents/MacOS").join(name);
-        for (source, arch) in [(arm, "arm64"), (intel, "x86_64")] {
-            let mut verify = Command::new("lipo");
-            verify
-                .arg(source.join(&relative))
-                .args(["-verify_arch", arch]);
-            output(verify)?;
-        }
-        fs::remove_file(app.join(&relative))?;
-        let mut lipo = Command::new("lipo");
-        lipo.arg("-create")
-            .arg(arm.join(&relative))
-            .arg(intel.join(&relative))
-            .arg("-output")
-            .arg(app.join(&relative));
-        output(lipo)?;
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(app.join(&relative), fs::Permissions::from_mode(0o755))?;
+        let path = app.join("Contents/MacOS").join(name);
+        let mut verify = Command::new("lipo");
+        verify.arg(&path).args(["-verify_arch", "arm64"]);
+        output(verify)?;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
     }
+    Ok(())
+}
+
+fn embed_sparkle(app: &Path, sparkle: &Path) -> Result<()> {
     copy_tree(
-        &framework,
+        &sparkle.join("Sparkle.framework"),
         &app.join("Contents/Frameworks/Sparkle.framework"),
     )?;
-    let license = sparkle.join("LICENSE");
     fs::copy(
-        license,
+        sparkle.join("LICENSE"),
         app.join("Contents/Resources/licenses/Sparkle-LICENSE"),
     )?;
-    let mut info = arm_info
-        .into_dictionary()
-        .context("Missing app dictionary")?;
+    Ok(())
+}
+
+fn write_update_plist(
+    app: &Path,
+    mut info: plist::Dictionary,
+    build_number: u64,
+    public_key: String,
+) -> Result<()> {
     info.insert("CFBundleVersion".into(), build_number.to_string().into());
     info.insert(
         "SUFeedURL".into(),
@@ -353,11 +371,6 @@ pub fn universal(
     }
     info.insert("SUShowReleaseNotes".into(), false.into());
     plist::Value::Dictionary(info).to_file_xml(app.join("Contents/Info.plist"))?;
-    verify_universal(&app)?;
-    // Also check at publication time in case another task created the output.
-    new_assembly_output(destination)?;
-    fs::rename(app, &target)?;
-    println!("{}", target.display());
     Ok(())
 }
 
@@ -373,22 +386,20 @@ fn new_assembly_output(destination: &Path) -> Result<PathBuf> {
     }
 }
 
-fn verify_universal(path: &Path) -> Result<()> {
+fn verify_arm64_macho(path: &Path) -> Result<()> {
     for entry in fs::read_dir(path)? {
         let entry = entry?;
         if entry.file_type()?.is_symlink() {
             continue;
         }
         if entry.file_type()?.is_dir() {
-            verify_universal(&entry.path())?;
+            verify_arm64_macho(&entry.path())?;
         } else {
             let mut file = Command::new("file");
             file.arg("-b").arg(entry.path());
             if String::from_utf8(output(file)?)?.contains("Mach-O") {
                 let mut verify = Command::new("lipo");
-                verify
-                    .arg(entry.path())
-                    .args(["-verify_arch", "arm64", "x86_64"]);
+                verify.arg(entry.path()).args(["-verify_arch", "arm64"]);
                 output(verify)?;
             }
         }
@@ -564,7 +575,13 @@ mod tests {
         let target = dir.path().join("Terminator.app");
         fs::create_dir(&target).unwrap();
         let missing = dir.path().join("missing-input");
-        let error = universal(&missing, &missing, &missing, 1, dir.path()).unwrap_err();
+        let error = assemble(AssembleInput {
+            app: &missing,
+            sparkle: &missing,
+            build_number: 1,
+            destination: dir.path(),
+        })
+        .unwrap_err();
         assert!(
             error
                 .to_string()
@@ -599,6 +616,96 @@ mod tests {
                 .unwrap()
                 .file_type()
                 .is_symlink()
+        );
+    }
+
+    #[test]
+    fn sparkle_public_key_must_be_32_byte_ed25519() {
+        let key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string();
+        assert_eq!(parse_sparkle_public_key(Some(key.clone())).unwrap(), key);
+        assert!(parse_sparkle_public_key(None).is_err());
+        assert!(parse_sparkle_public_key(Some("AAAA".into())).is_err());
+    }
+
+    #[test]
+    fn app_info_requires_terminator_bundle_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let info = dir.path().join("Contents/Info.plist");
+        fs::create_dir_all(info.parent().unwrap()).unwrap();
+        plist::Value::Dictionary(plist::Dictionary::new())
+            .to_file_xml(&info)
+            .unwrap();
+        assert!(validated_app_info(dir.path()).is_err());
+        let mut valid = plist::Dictionary::new();
+        valid.insert(
+            "CFBundleIdentifier".into(),
+            "dev.terminator.app".to_string().into(),
+        );
+        valid.insert("LSMinimumSystemVersion".into(), "12.0".to_string().into());
+        plist::Value::Dictionary(valid).to_file_xml(&info).unwrap();
+        assert!(validated_app_info(dir.path()).is_ok());
+    }
+
+    #[test]
+    fn sparkle_framework_must_be_2_10_0() {
+        let dir = tempfile::tempdir().unwrap();
+        let info = dir.path().join("Sparkle.framework/Resources/Info.plist");
+        fs::create_dir_all(info.parent().unwrap()).unwrap();
+        let mut wrong = plist::Dictionary::new();
+        wrong.insert(
+            "CFBundleShortVersionString".into(),
+            "2.9.0".to_string().into(),
+        );
+        plist::Value::Dictionary(wrong).to_file_xml(&info).unwrap();
+        assert!(require_sparkle_version(dir.path()).is_err());
+        let mut right = plist::Dictionary::new();
+        right.insert(
+            "CFBundleShortVersionString".into(),
+            "2.10.0".to_string().into(),
+        );
+        plist::Value::Dictionary(right).to_file_xml(&info).unwrap();
+        assert!(require_sparkle_version(dir.path()).is_ok());
+    }
+
+    #[test]
+    fn assembled_plist_enables_signed_automatic_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("Terminator.app");
+        fs::create_dir_all(app.join("Contents")).unwrap();
+        let mut info = plist::Dictionary::new();
+        info.insert("CFBundleIdentifier".into(), "dev.terminator.app".into());
+        write_update_plist(&app, info, 25, "public-key".into()).unwrap();
+        let written = plist::Value::from_file(app.join("Contents/Info.plist")).unwrap();
+        let dict = written.as_dictionary().unwrap();
+        assert_eq!(
+            dict.get("CFBundleVersion")
+                .and_then(plist::Value::as_string),
+            Some("25")
+        );
+        assert_eq!(
+            dict.get("SUFeedURL").and_then(plist::Value::as_string),
+            Some("https://github.com/aiman2039/terminator/releases/latest/download/appcast.xml")
+        );
+        assert_eq!(
+            dict.get("SUPublicEDKey").and_then(plist::Value::as_string),
+            Some("public-key")
+        );
+        for key in [
+            "SUEnableAutomaticChecks",
+            "SUAutomaticallyUpdate",
+            "SURequireSignedFeed",
+            "SUVerifyUpdateBeforeExtraction",
+        ] {
+            assert_eq!(
+                dict.get(key).and_then(plist::Value::as_boolean),
+                Some(true),
+                "{key}"
+            );
+        }
+        assert_eq!(
+            dict.get("SUShowReleaseNotes")
+                .and_then(plist::Value::as_boolean),
+            Some(false)
         );
     }
 }

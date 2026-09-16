@@ -46,6 +46,18 @@ focus event filter. This prevents widget navigation from briefly focusing and
 highlighting dock separators. A headless egui regression covers Tab, Shift+Tab,
 arrows, Escape, and repeated presses while confirming input remains available.
 
+## Unbound Command/Ctrl chords (2026-09-16)
+
+Keys with no static binding are no longer dropped while Ctrl or Command is
+held (egui-winit omits `Event::Text` for those modifiers). Unbound chords are
+written as kitty CSI u: Command is Super (`Cmd+E` → `CSI 101;9 u`), Ctrl stays
+Ctrl. Existing bindings still win (Ctrl+A–Z C0, arrows, macOS Cmd+C/V copy and
+paste). Alt-only letters remain Text events so Option continues to compose.
+
+Modified navigation keys and F1–F12 preserve the protocol's CSI letter/tilde
+suffixes instead of emitting private-use CSI u codes. Regression coverage checks
+all navigation keys, F1–F12, and the F13/F35 CSI u boundaries.
+
 ## 2026-09-15: hover wheel routing and local-history bypass
 
 Wheel eligibility now follows the enabled, clipped response under the pointer,

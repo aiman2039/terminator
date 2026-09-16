@@ -1,16 +1,16 @@
 # macOS releases and session continuity
 
-The release workflow builds native Apple Silicon and Intel slices in parallel
-with Linux. It then runs `xtask universal` using the tooling binary uploaded by
-the Apple Silicon job to assemble the three executables without rebuilding them.
-macOS assembly waits only for the macOS matrix. Its package output lives under
-`RUNNER_TEMP`, outside the native jobs' Cargo caches. The same prebuilt tool
-creates the DMG, so assembly requires no Rust installation or compiler cache.
-The daemon build verifies the architecture of its embedded CodeDiff library before
-embedding it. Assembly checks every Mach-O executable in the app and Sparkle
-framework for both `arm64` and `x86_64`, preserves symlinks, and includes Sparkle's
-license. The minimum macOS version remains 12 and the bundle identifier remains
-`dev.terminator.app`.
+The release workflow builds the Apple Silicon app in parallel with Linux. It then
+runs `xtask assemble` using the tooling binary uploaded by the macOS job to embed
+Sparkle without rebuilding the executables. macOS assembly waits only for that
+Apple Silicon job. Its package output lives under `RUNNER_TEMP`, outside the
+native jobs' Cargo caches. The same prebuilt tool creates the DMG, so assembly
+requires no Rust installation or compiler cache. The daemon build verifies the
+architecture of its embedded CodeDiff library before embedding it. Assembly
+checks every Mach-O executable in the app and Sparkle framework for `arm64`,
+preserves symlinks, and includes Sparkle's license. The pinned Sparkle framework
+may still contain an unused Intel slice. The minimum macOS version remains 12
+and the bundle identifier remains `dev.terminator.app`.
 
 Sparkle is pinned to 2.10.0, archive SHA-256
 `c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c`.
@@ -29,7 +29,7 @@ bytes. Deltas are disabled. The feed is:
 `https://github.com/aiman2039/terminator/releases/latest/download/appcast.xml`
 
 Enclosures use immutable `releases/download/vVERSION/` URLs. A draft receives the
-universal DMG, both Linux archives, appcast, and SHA256SUMS before publication.
+macOS DMG, both Linux archives, appcast, and SHA256SUMS before publication.
 Published assets cannot be replaced by a rerun; bump the version instead.
 Publication requires `SIGNED_UPDATE_VALIDATED=true` and the
 `production-release` GitHub environment. Keep that variable unset until the
@@ -51,10 +51,13 @@ uploaded by packaging.
 ## Native updates and exit
 
 Sparkle's `SPUStandardUpdaterController` is loaded from the app's own framework
-bundle on the main thread. The application menu has **Check for Updates…** and
-Settings has **Updates**. The GUI probes immediately when available, then every
-60 seconds using `checkForUpdateInformation`, following AppDock's app-owned
-schedule. The existing automatic-check choice is migrated once to
+bundle on the main thread. The application menu always has **Check for Updates…**,
+including development launches that cannot load Sparkle; those explain why instead
+of querying the production feed. Settings has **Updates**. The GUI probes
+immediately once Sparkle reports it can check, then every 60 seconds using
+`checkForUpdateInformation`, following AppDock's app-owned schedule. Automatic
+checks default on when unset. Sparkle is not asked for update-check permission.
+The existing automatic-check choice is migrated once to
 `TerminatorAutomaticUpdateChecks` before disabling Sparkle's separate timer.
 Polling pauses during GUI exit and active Sparkle sessions, with no catch-up burst
 after sleep. A successful probe hands each new version to Sparkle's background
@@ -121,8 +124,8 @@ session creation. It exercises window close and native Quit and records captures
 and `continuity.json`. This local replacement is not a signed Sparkle update.
 
 Before enabling publication, exercise two genuinely Developer-ID-signed,
-notarized fixture versions with increasing build numbers on both Intel and Apple
-Silicon. Retain the two DMGs, signed appcast, checksums, OS/architecture, daemon
+notarized fixture versions with increasing build numbers on Apple Silicon.
+Retain the two DMGs, signed appcast, checksums, OS/architecture, daemon
 generation, session/PID inventory, and before/after layout evidence. Cover:
 
 - Install and Relaunch, and installation on normal quit without reopening.
@@ -139,8 +142,7 @@ upgrade to the first Sparkle-enabled release; subsequent updates are in-app.
 
 Primary references: [Sparkle setup](https://sparkle-project.org/documentation/),
 [programmatic setup](https://sparkle-project.org/documentation/programmatic-setup/),
-[updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html),
-[Apple universal binaries](https://developer.apple.com/documentation/apple-silicon/building-a-universal-macos-binary).
+[updater delegate](https://sparkle-project.org/documentation/api-reference/Protocols/SPUUpdaterDelegate.html).
 
 ## Local installer validation
 

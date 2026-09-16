@@ -77,16 +77,8 @@ jobs:
 
   build-macos:
     needs: prepare
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            target: aarch64-apple-darwin
-          - runner: macos-15-intel
-            target: x86_64-apple-darwin
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
+    name: Build aarch64-apple-darwin
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
@@ -95,8 +87,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/release-build
         with:
-          runner-label: ${{ matrix.runner }}
-          target: ${{ matrix.target }}
+          runner-label: macos-15
+          target: aarch64-apple-darwin
           rust-version: ${{ env.RUST_VERSION }}
           tag: ${{ needs.prepare.outputs.tag }}
 
@@ -154,16 +146,15 @@ jobs:
           pattern: macos-slice-*
           path: ${{ runner.temp }}/slices
           merge-multiple: true
-      - name: Fetch pinned Sparkle and assemble prebuilt slices
+      - name: Fetch pinned Sparkle and assemble the Apple Silicon app
         run: |
           set -euo pipefail
           curl --fail --location --retry 3 https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-2.10.0.tar.xz -o "$RUNNER_TEMP/Sparkle.tar.xz"
           echo "c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c  $RUNNER_TEMP/Sparkle.tar.xz" | shasum -a 256 --check
-          mkdir -p "$RUNNER_TEMP/sparkle" "$RUNNER_TEMP/slices/arm" "$RUNNER_TEMP/slices/intel"
+          mkdir -p "$RUNNER_TEMP/sparkle" "$RUNNER_TEMP/slices/arm"
           tar -xf "$RUNNER_TEMP/Sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
           ditto -x -k "$RUNNER_TEMP/slices/terminator-${TAG}-aarch64-apple-darwin.zip" "$RUNNER_TEMP/slices/arm"
-          ditto -x -k "$RUNNER_TEMP/slices/terminator-${TAG}-x86_64-apple-darwin.zip" "$RUNNER_TEMP/slices/intel"
-          "$RUNNER_TEMP/assembly-tools/xtask" universal --arm "$RUNNER_TEMP/slices/arm/Terminator.app" --intel "$RUNNER_TEMP/slices/intel/Terminator.app" \
+          "$RUNNER_TEMP/assembly-tools/xtask" assemble --app "$RUNNER_TEMP/slices/arm/Terminator.app" \
             --sparkle "$RUNNER_TEMP/sparkle" --build-number "$GITHUB_RUN_NUMBER" --output "$RUNNER_TEMP/terminator-package"
       - name: Require a monotonically increasing published build number
         run: |
@@ -259,7 +250,7 @@ jobs:
           xcrun stapler validate "$app"
           spctl --assess --type execute --verbose=2 "$app"
           mkdir -p dist
-          dmg="dist/terminator-${TAG}-universal-macos.dmg"
+          dmg="dist/terminator-${TAG}-macos.dmg"
           "$RUNNER_TEMP/assembly-tools/xtask" dmg --app "$app" --output "$dmg"
           codesign --force --sign "$identity" --keychain "$keychain" --timestamp "$dmg"
           codesign --verify --strict "$dmg"
@@ -300,7 +291,7 @@ jobs:
           test -s dist/appcast.xml
       - uses: actions/upload-artifact@v7
         with:
-          name: release-universal-macos
+          name: release-macos
           path: |
             dist/*.dmg
             dist/appcast.xml

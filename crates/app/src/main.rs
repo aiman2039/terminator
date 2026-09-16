@@ -1108,6 +1108,7 @@ impl App {
                 #[cfg(feature = "test-support")]
                 {
                     snapshot["updater_available"] = serde_json::json!(self.updater.available());
+                    snapshot["update_menu"] = serde_json::json!(self.updater.menu_installed());
                     snapshot["installation"] = serde_json::json!({
                         "connected":self.connected,
                         "problem":self.installation_problem(),
@@ -1427,7 +1428,7 @@ impl App {
                     self.refresh_request = None;
                     self.apply_state(*state);
                     if generation == self.selection_generation {
-                        self.select_project(project);
+                        self.reveal_project(project);
                     } else if let Some(project) = self.selected.clone() {
                         // Undo older AddProject selection side effects on the daemon.
                         self.send(Request::SelectProject { project });
@@ -1625,7 +1626,7 @@ impl App {
                 }
                 Update::WorktreeCreated(state, project, open_terminal) => {
                     self.apply_state(*state);
-                    self.select_project(project);
+                    self.reveal_project(project);
                     if open_terminal {
                         self.create(None);
                     }
@@ -1848,11 +1849,16 @@ impl App {
         }
     }
     fn select_project(&mut self, project: String) {
-        // Explicit navigation or reopening a folder restores its sidebar entry.
-        self.preferences.hidden_projects.remove(&project);
-        self.preferences
-            .project_activity
-            .insert(project.clone(), now());
+        self.apply_project_selection(project, false);
+    }
+    fn reveal_project(&mut self, project: String) {
+        self.apply_project_selection(project, true);
+    }
+    fn apply_project_selection(&mut self, project: String, force_activity: bool) {
+        let restored = self.preferences.hidden_projects.remove(&project);
+        if restored || force_activity {
+            self.touch_project_activity(&project);
+        }
         if self.selected.as_ref() != Some(&project) {
             self.finish_rename(true);
         }
@@ -1867,6 +1873,11 @@ impl App {
                 _ => None,
             });
         self.send(Request::SelectProject { project });
+    }
+    fn touch_project_activity(&mut self, project: &str) {
+        self.preferences
+            .project_activity
+            .insert(project.to_string(), now());
     }
     fn hide_project(&mut self, project: &str) {
         if !self.state.projects.iter().any(|p| p.id == project) {
@@ -2628,6 +2639,8 @@ impl eframe::App for App {
             });
             self.last_heartbeat = Instant::now();
             self.maybe_upgrade_idle_daemon();
+        }
+        if !self.exit.active() {
             self.updater.poll();
         }
         ctx.request_repaint_after(Duration::from_secs(1));
@@ -3589,6 +3602,56 @@ mod navigation_tests {
         app.preferences.project_activity.insert("b".into(), 2);
         assert_eq!(visible_ids(&app), ["b", "a"]);
         app.select_project("a".into());
+        assert_eq!(visible_ids(&app), ["b", "a"]);
+        assert_eq!(app.preferences.project_activity["a"], 1);
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.go_session("shell");
+        assert_eq!(visible_ids(&app), ["b", "a"]);
+        assert_eq!(app.preferences.project_activity["a"], 1);
+    }
+
+    #[test]
+    fn restoring_a_hidden_project_ranks_it_by_latest_activity() {
+        let (mut app, _, _) = fixture();
+        app.preferences.project_sort = ProjectSort::LatestActivity;
+        app.preferences.project_activity.insert("a".into(), 1);
+        app.preferences.project_activity.insert("b".into(), 2);
+        app.hide_project("a");
+        assert_eq!(visible_ids(&app), ["b"]);
+        assert_eq!(app.preferences.project_activity["b"], 2);
+        app.select_project("a".into());
+        assert_eq!(visible_ids(&app), ["a", "b"]);
+        assert!(app.preferences.project_activity["a"] >= 2);
+        assert_eq!(app.preferences.project_activity["b"], 2);
+    }
+
+    #[test]
+    fn opening_or_creating_a_project_ranks_it_by_latest_activity() {
+        let (mut app, ctx, _) = fixture();
+        app.preferences.project_sort = ProjectSort::LatestActivity;
+        app.preferences.project_activity.insert("a".into(), 1);
+        app.preferences.project_activity.insert("b".into(), 2);
+        app.update_tx
+            .send(Update::OpenedProject(
+                Box::new(app.state.clone()),
+                "a".into(),
+                app.selection_generation,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(visible_ids(&app), ["a", "b"]);
+        assert!(app.preferences.project_activity["a"] >= 2);
+        app.preferences.project_activity.insert("a".into(), 1);
+        app.update_tx
+            .send(Update::WorktreeCreated(
+                Box::new(app.state.clone()),
+                "a".into(),
+                false,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
         assert_eq!(visible_ids(&app), ["a", "b"]);
         assert!(app.preferences.project_activity["a"] >= 2);
     }

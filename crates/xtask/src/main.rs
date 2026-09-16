@@ -69,12 +69,10 @@ enum Task {
         #[arg(long)]
         output: PathBuf,
     },
-    /// Assemble two prebuilt macOS apps with the pinned Sparkle framework.
-    Universal {
+    /// Embed Sparkle into a prebuilt Apple Silicon app.
+    Assemble {
         #[arg(long)]
-        arm: PathBuf,
-        #[arg(long)]
-        intel: PathBuf,
+        app: PathBuf,
         #[arg(long)]
         sparkle: PathBuf,
         #[arg(long)]
@@ -179,13 +177,17 @@ fn main() -> Result<()> {
             timings,
         } => package::local_dmg(release, styled, output, timings),
         Task::Dmg { app, output } => package::dmg(&app, &output),
-        Task::Universal {
-            arm,
-            intel,
+        Task::Assemble {
+            app,
             sparkle,
             build_number,
             output,
-        } => package::universal(&arm, &intel, &sparkle, build_number, &output),
+        } => package::assemble(package::AssembleInput {
+            app: &app,
+            sparkle: &sparkle,
+            build_number,
+            destination: &output,
+        }),
         Task::Integration => {
             integration::run()?;
             integration::controls()?;

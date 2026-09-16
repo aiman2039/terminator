@@ -541,21 +541,14 @@ fn process_keyboard_key(
     if !pressed {
         return InputAction::Ignore;
     }
-
-    let terminal_mode = backend.last_content().terminal_mode;
-    let binding_action =
-        bindings_layout.get_action(InputKind::KeyCode(key), modifiers, terminal_mode);
-
-    match binding_action {
-        BindingAction::Char(c) => {
-            let mut buf = [0, 0, 0, 0];
-            let str = c.encode_utf8(&mut buf);
-            InputAction::BackendCall(BackendCommand::Write(str.as_bytes().to_vec()))
-        }
-        BindingAction::Esc(seq) => {
-            InputAction::BackendCall(BackendCommand::Write(seq.as_bytes().to_vec()))
-        }
-        _ => InputAction::Ignore,
+    match crate::keyboard::bytes_for_pressed_key(
+        bindings_layout,
+        key,
+        modifiers,
+        backend.last_content().terminal_mode,
+    ) {
+        Some(bytes) => InputAction::BackendCall(BackendCommand::Write(bytes)),
+        None => InputAction::Ignore,
     }
 }
 

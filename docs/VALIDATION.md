@@ -1,5 +1,42 @@
 # Validation evidence — 2026-09-08
 
+## Keyboard protocol and updater review fixes (2026-09-16)
+
+Modified navigation keys and F1–F12 now use the kitty protocol's CSI letter/tilde
+encodings; F13–F35 retain CSI u. macOS updater helpers are compiled only on macOS
+or in tests, avoiding unused-code warnings in the Linux application target.
+
+- `cargo test -p egui_term --locked --offline keyboard::tests`: 7 passed,
+  including navigation keys, F1–F12, and F13/F35 boundaries.
+- `cargo test -p terminator --locked --offline updater::`: 6 passed.
+- Workspace Clippy with all targets/features and `-D warnings`, workspace
+  formatting, and explicit formatting of the vendored keyboard module passed.
+- Checks ran on macOS; Linux compilation and native Neovim input were not run.
+
+## Unbound Command/Ctrl terminal chords (2026-09-16)
+
+Unbound Command/Ctrl keys are forwarded as kitty CSI u (Cmd+E → `CSI 101;9 u`).
+Ctrl+E stays ENQ. Copy chords are not forwarded. Settings `command+T` still
+consumes and removes the key event so it is not also typed.
+
+- Unit: `egui_term` keyboard encoding; app shortcut consumption.
+- Native desktop typing of Cmd+E into a live Neovim mapping was not recaptured
+  in this change.
+
+## Stable latest-activity sidebar (2026-09-15)
+
+Selecting a visible project no longer stamps `project_activity`. Latest activity
+ranks session, agent, and notice times, plus restore/add/worktree. Click, palette,
+go-session, and hide-next keep order.
+
+- Unit tests: visible select/go-session keep rank; restore/add/worktree move to
+  top; hide-next does not bump the remaining project.
+- `cargo test --workspace --all-features --locked` passed. Clippy `-D warnings`
+  and rustfmt passed.
+- `cargo xtask gui project-sidebar` passed. Latest-activity capture clicks the
+  non-top project and still waits for activity order (first project remains first
+  from its later editor session), including after GUI restart.
+
 ## HTML Blitz preview (2026-09-15)
 
 - Decision: no Chromium/CEF/webview. Local `.html`/`.htm`/`.xhtml` open as

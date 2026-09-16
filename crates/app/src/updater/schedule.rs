@@ -16,12 +16,13 @@ pub(super) struct UpdateSchedule {
     offered: HashSet<String>,
 }
 impl UpdateSchedule {
-    pub fn next_action(&mut self, now: Duration, enabled: bool, busy: bool) -> Action {
+    pub fn next_action(&mut self, now: Duration, enabled: bool, available: bool) -> Action {
         if !enabled {
             self.pending = None;
             return Action::None;
         }
-        if busy || self.probing {
+        // Sparkle not ready / session in progress: retry without consuming the minute.
+        if !available || self.probing {
             return Action::None;
         }
         if let Some(version) = self.pending.take()
@@ -63,41 +64,56 @@ mod tests {
     #[test]
     fn checks_immediately_then_each_minute_without_overlap_or_wake_bursts() {
         let mut s = UpdateSchedule::default();
-        assert_eq!(s.next_action(at(0), false, false), Action::None);
-        assert_eq!(s.next_action(at(0), true, true), Action::None);
-        assert_eq!(s.next_action(at(0), true, false), Action::Probe);
-        assert_eq!(s.next_action(at(60), true, false), Action::None);
+        assert_eq!(s.next_action(at(0), false, true), Action::None);
+        assert_eq!(s.next_action(at(0), true, false), Action::None);
+        assert_eq!(s.next_action(at(0), true, true), Action::Probe);
+        assert_eq!(s.next_action(at(60), true, true), Action::None);
         s.finished(false);
-        assert_eq!(s.next_action(at(59), true, false), Action::None);
-        assert_eq!(s.next_action(at(60), true, false), Action::Probe);
+        assert_eq!(s.next_action(at(59), true, true), Action::None);
+        assert_eq!(s.next_action(at(60), true, true), Action::Probe);
         s.finished(false);
-        assert_eq!(s.next_action(at(600), true, false), Action::Probe);
+        assert_eq!(s.next_action(at(600), true, true), Action::Probe);
         s.finished(false);
-        assert_eq!(s.next_action(at(600), true, false), Action::None);
+        assert_eq!(s.next_action(at(600), true, true), Action::None);
+    }
+
+    #[test]
+    fn not_ready_retries_without_consuming_the_minute() {
+        let mut s = UpdateSchedule::default();
+        assert_eq!(s.next_action(at(0), true, false), Action::None);
+        assert_eq!(s.next_action(at(0), true, true), Action::Probe);
+    }
+
+    #[test]
+    fn found_without_a_probe_does_not_offer() {
+        let mut s = UpdateSchedule::default();
+        s.found("1".into());
+        s.finished(false);
+        assert_eq!(s.next_action(at(0), true, true), Action::Probe);
     }
 
     #[test]
     fn only_successful_completed_probes_offer_each_version_once() {
         let mut s = UpdateSchedule::default();
-        assert_eq!(s.next_action(at(0), true, false), Action::Probe);
+        assert_eq!(s.next_action(at(0), true, true), Action::Probe);
         s.found("1".into());
-        assert_eq!(s.next_action(at(1), true, false), Action::None);
+        assert_eq!(s.next_action(at(1), true, true), Action::None);
         s.finished(true);
-        assert_eq!(s.next_action(at(2), true, false), Action::None);
-        assert_eq!(s.next_action(at(60), true, false), Action::Probe);
+        assert_eq!(s.next_action(at(2), true, true), Action::None);
+        assert_eq!(s.next_action(at(60), true, true), Action::Probe);
         s.found("1".into());
         s.finished(false);
-        assert_eq!(s.next_action(at(61), true, true), Action::None);
-        assert_eq!(s.next_action(at(61), true, false), Action::Offer);
-        assert_eq!(s.next_action(at(120), true, false), Action::Probe);
+        assert_eq!(s.next_action(at(61), true, false), Action::None);
+        assert_eq!(s.next_action(at(61), true, true), Action::Offer);
+        assert_eq!(s.next_action(at(120), true, true), Action::Probe);
         s.found("1".into());
         s.finished(false);
-        assert_eq!(s.next_action(at(121), true, false), Action::None);
+        assert_eq!(s.next_action(at(121), true, true), Action::None);
         s.reset();
-        assert_eq!(s.next_action(at(122), true, false), Action::Probe);
+        assert_eq!(s.next_action(at(122), true, true), Action::Probe);
         s.found("2".into());
         s.finished(false);
-        assert_eq!(s.next_action(at(123), false, false), Action::None);
-        assert_eq!(s.next_action(at(124), true, false), Action::None);
+        assert_eq!(s.next_action(at(123), false, true), Action::None);
+        assert_eq!(s.next_action(at(124), true, true), Action::None);
     }
 }
