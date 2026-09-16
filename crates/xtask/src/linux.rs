@@ -26,7 +26,7 @@ pub fn check(browser: bool, wayland: bool) -> Result<()> {
     let shell = xshell::Shell::new()?;
     let _env = shell.push_env("DEBIAN_FRONTEND", "noninteractive");
     xshell::cmd!(shell, "apt-get update -qq").run()?;
-    xshell::cmd!(shell,"apt-get install -y -qq --no-install-recommends pkg-config libfontconfig1-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 git curl ca-certificates neovim xvfb xauth openbox dbus-x11 xdg-desktop-portal xdg-desktop-portal-gtk lsof weston").run()?;
+    xshell::cmd!(shell,"apt-get install -y -qq --no-install-recommends pkg-config libfontconfig1-dev libasound2-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libgl1-mesa-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 git curl ca-certificates neovim xvfb xauth openbox dbus-x11 xdg-desktop-portal xdg-desktop-portal-gtk lsof weston").run()?;
     if browser {
         xshell::cmd!(
             shell,
