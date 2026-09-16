@@ -2085,3 +2085,15 @@ not rerun.
   Clippy with `-D warnings`, rustfmt, and `git diff --check` passed.
 - These are unit/headless checks, not native GUI or real-daemon worktree validation.
   Existing pending edits were preserved; no live sessions were restarted.
+
+## Compact agent notifications — 2026-09-16
+
+- Agent cards use smaller status/session labels, neutral backgrounds, and arrow,
+  moon (10-minute snooze), and dismiss icons with tooltips. Hovering the header
+  shows the message and session directory. The sidebar header omits the Agents
+  label and centers its bell and count in a compact 28-point row.
+- Passed application all-target/all-feature check and Clippy with `-D warnings`,
+  rustfmt, and `git diff --check`. Nine existing `click_` tests passed, including
+  Go, Snooze, and Dismiss behavior and sidebar row click targets.
+- Validation is static/headless; native appearance and hover placement have not
+  been visually verified. No live GUI or daemon sessions were restarted.

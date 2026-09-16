@@ -11,3 +11,6 @@ Right/down splits, rename, select-all, left/up extend the same pane icon family.
 
 `refresh-cw.svg` also comes from Lucide 0.577.0, with the same license and
 white-stroke adaptation, for the native Markdown refresh control.
+
+`moon.svg` comes from Lucide 0.577.0 with the same license and white-stroke
+adaptation, for the notification snooze action.

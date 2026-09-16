@@ -76,10 +76,10 @@ impl App {
             .data_mut(|data| data.insert_temp(egui::Id::new("agent-bar-badge"), badge.clone()));
         let response = appearance::row(
             ui,
-            "Agents",
+            "",
             "Bell",
             self.preferences.left_agents,
-            34.0,
+            28.0,
             &badge,
             appearance::color(if waiting > 0 {
                 &self.theme.status_waiting
@@ -88,6 +88,8 @@ impl App {
             }),
         )
         .on_hover_text("Pending agent notifications. Click to switch between Agents and Projects.");
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Agents"));
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "left-agent-bar", response.rect);
         if response.clicked() {
@@ -1209,14 +1211,12 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
     };
     let inner = egui::Frame::group(ui.style())
         .stroke(stroke)
-        .corner_radius(8)
-        .fill(appearance::color(if selected || highlight {
-            &theme.selection
-        } else {
-            &theme.window
-        }))
-        .inner_margin(8.0)
+        .corner_radius(6)
+        .fill(appearance::color(&theme.window))
+        .inner_margin(6.0)
         .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 3.0);
             let header = ui
                 .vertical(|ui| {
                     ui.colored_label(
@@ -1228,24 +1228,29 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
                             }
                             _ => notice.state.label(),
                         })
-                        .strong(),
+                        .size(12.0),
                     );
                     if let Some(session) = session {
-                        ui.add(egui::Label::new(&session.label).truncate())
-                            .on_hover_text(session.cwd.display().to_string());
+                        ui.add(
+                            egui::Label::new(RichText::new(&session.label).size(12.0)).truncate(),
+                        );
                     }
                 })
                 .response
-                .interact(egui::Sense::click());
+                .interact(egui::Sense::click())
+                .on_hover_ui(|ui| {
+                    ui.set_max_width(360.0);
+                    if let Some(session) = session {
+                        ui.weak(session.cwd.display().to_string());
+                    }
+                    ui.label(notice_preview(&notice.summary));
+                });
             #[cfg(feature = "test-support")]
             diagnostics::record(
                 ui.ctx(),
                 &format!("agent-row:{}", notice.session_id),
                 header.rect,
             );
-            ui.add(egui::Label::new(notice_preview(&notice.summary)).truncate())
-                .on_hover_text(&notice.summary);
-            ui.add_space(4.0);
             if notice.resolved {
                 ui.weak("This event has resolved.");
             }
@@ -1255,7 +1260,7 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
                 AttentionAction::None
             };
             ui.horizontal_wrapped(|ui| {
-                let go = ui.button("Go to context →");
+                let go = appearance::sidebar_action(ui, "ArrowRight", "Go to context");
                 #[cfg(feature = "test-support")]
                 diagnostics::record(
                     ui.ctx(),
@@ -1265,7 +1270,7 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
                 if go.clicked() {
                     action = AttentionAction::Go;
                 }
-                let snooze = ui.button("Snooze 10 min");
+                let snooze = appearance::sidebar_action(ui, "Moon", "Snooze 10 minutes");
                 #[cfg(feature = "test-support")]
                 diagnostics::record(
                     ui.ctx(),
@@ -1275,7 +1280,7 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
                 if snooze.clicked() {
                     action = AttentionAction::Snooze;
                 }
-                let dismiss = ui.button("Dismiss");
+                let dismiss = appearance::sidebar_action(ui, "X", "Dismiss");
                 #[cfg(feature = "test-support")]
                 diagnostics::record(
                     ui.ctx(),
