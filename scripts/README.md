@@ -21,17 +21,19 @@ all checks plus tests on native macOS and Linux for pushes and pull requests to
 `.github/workflows/security.yaml` runs on master pushes, pull requests, Monday
 07:17 UTC, and manual dispatch. It fails the job on known lockfile
 vulnerabilities (`cargo audit`, `cargo deny`, OSV-Scanner, GitHub dependency
-review). Snyk, Socket, and OWASP Dependency-Check skip or warn unless their
-secrets are set.
+review). Snyk, Socket, and OWASP Dependency-Check skip unless their secrets
+are set. OWASP 13 needs `NVD_API_KEY`; an empty key aborts the NVD update.
 
 Local equivalents:
 
 ```sh
 cargo audit
 cargo deny check --all-features
+osv-scanner --config osv-scanner.toml -r .
 ```
 
-Keep `.cargo/audit.toml` and `deny.toml` advisory ignores in sync.
+Keep `.cargo/audit.toml`, `deny.toml`, and `osv-scanner.toml` advisory ignores
+in sync.
 
 Dependabot owns Cargo version PRs (`.github/dependabot.yml`). Renovate owns
 GitHub Actions PRs (`renovate.json`); install the

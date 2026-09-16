@@ -1,4 +1,4 @@
-# cargo-audit config. Keep RUSTSEC ignores in sync with deny.toml [advisories].ignore.
+# cargo-audit config. Keep RUSTSEC ignores in sync with deny.toml and osv-scanner.toml.
 [advisories]
 # Unmaintained notices only (no CVEs). All transitive except paste in vendored egui_dock.
 # Replacements blocked on syntect / resvg 0.45 / egui 0.36.

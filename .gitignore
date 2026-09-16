@@ -14,6 +14,7 @@ __pycache__/
 # Generated SBOMs / scanner output
 *.cdx.json
 /owasp-reports/
+/owasp-data/
 
 docs/MACOS_SIGNING_SETUP.md
 scripts/signing-cleanup.sh

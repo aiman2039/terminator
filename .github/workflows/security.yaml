@@ -56,6 +56,11 @@ jobs:
     name: OSV-Scanner (PR)
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@v2.6.0
+    with:
+      scan-args: |-
+        --config=osv-scanner.toml
+        -r
+        ./
     permissions:
       actions: read
       contents: read
@@ -65,6 +70,11 @@ jobs:
     name: OSV-Scanner
     if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.6.0
+    with:
+      scan-args: |-
+        --config=osv-scanner.toml
+        -r
+        ./
     permissions:
       actions: read
       contents: read
@@ -191,20 +201,34 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Detect NVD_API_KEY
+        id: creds
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          if [ -n "${NVD_API_KEY:-}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::NVD_API_KEY not configured; skipping OWASP Dependency-Check"
+          fi
+      - uses: actions/cache@v4
+        if: steps.creds.outputs.present == 'true'
+        with:
+          path: owasp-data
+          key: owasp-nvd-13.0.0
       - name: Run OWASP Dependency-Check
+        if: steps.creds.outputs.present == 'true'
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
           set -eu
-          extra=()
-          if [ -n "${NVD_API_KEY:-}" ]; then
-            extra+=(--nvdApiKey "$NVD_API_KEY")
-          else
-            echo "::notice::NVD_API_KEY not configured; scan may be rate-limited"
-          fi
-          mkdir -p owasp-reports
+          mkdir -p owasp-reports owasp-data
           docker run --rm \
+            -e NVD_API_KEY \
+            -u "$(id -u):$(id -g)" \
             -v "$PWD":/src \
+            -v "$PWD/owasp-data":/usr/share/dependency-check/data \
             owasp/dependency-check:13.0.0 \
             --scan /src \
             --exclude /src/target \
@@ -215,7 +239,7 @@ jobs:
             --project terminator \
             --enableExperimental \
             --failOnCVSS 7 \
-            "${extra[@]}"
+            --nvdApiKey "$NVD_API_KEY"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

@@ -14,7 +14,11 @@ Dependabot, and OpenSSF Scorecard.
   as MIT (dev-only hook installer).
 - OWASP Dependency-Check is `continue-on-error: true` because CPE matching is
   noisy on Cargo; flip to blocking after a suppression baseline exists.
+  The job skips when `NVD_API_KEY` is unset (OWASP 13 fails NVD updates on an
+  empty key). When set, NVD data is cached under `owasp-data/`.
 - Snyk and Socket skip when `SNYK_TOKEN` / `SOCKET_SECURITY_API_KEY` are unset.
+- OSV-Scanner uses `osv-scanner.toml` with the same unmaintained RUSTSEC ignores
+  as `deny.toml` / `.cargo/audit.toml`.
 - Hosted Security/Scorecard runs, secret-backed Snyk/Socket scans, Renovate App
   onboarding, and Dependabot alert enablement were not executed in this change.
   Scorecard badge 404s until the first `publish_results` run succeeds.
