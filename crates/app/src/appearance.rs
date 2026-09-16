@@ -323,10 +323,70 @@ pub fn menu_item(ui: &mut egui::Ui, label: &str, icon: &str, shortcut: &str) -> 
     response
 }
 pub fn target_header(ui: &mut egui::Ui, target: &str) {
-    ui.set_width(300.0);
-    ui.add(egui::Label::new(egui::RichText::new(target).small().weak()).truncate())
-        .on_hover_text(target);
+    wrapping_path(
+        ui,
+        target,
+        FontId::proportional(11.0),
+        ui.visuals().weak_text_color(),
+    );
     ui.separator();
+}
+
+/// One row when the path fits; wrap to two rows only when it does not.
+pub fn wrapping_path(
+    ui: &mut egui::Ui,
+    path: &str,
+    font: FontId,
+    color: Color32,
+) -> egui::Response {
+    let natural = ui
+        .painter()
+        .layout_no_wrap(path.to_owned(), font.clone(), color)
+        .size()
+        .x;
+    let avail = ui.available_width().max(0.0);
+    let rows = usize::from(natural > avail) + 1;
+    let mut job = egui::text::LayoutJob::simple(path.to_owned(), font, color, avail);
+    job.wrap.max_rows = rows;
+    job.wrap.break_anywhere = true;
+    let galley = ui.painter().layout_job(job);
+    let (rect, response) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+    ui.painter()
+        .with_clip_rect(rect)
+        .galley(rect.min, galley, color);
+    response.on_hover_text(path)
+}
+
+pub struct WrappingPathRow<R> {
+    #[allow(dead_code, reason = "tests inspect path and action rects")]
+    pub path: egui::Response,
+    #[allow(dead_code, reason = "tests inspect path and action rects")]
+    pub actions: R,
+}
+
+/// Path plus actions on one wrapping row: one line when they fit, wrap when they do not.
+pub fn wrapping_path_row<R>(
+    ui: &mut egui::Ui,
+    path: &str,
+    add_actions: impl FnOnce(&mut egui::Ui) -> R,
+) -> WrappingPathRow<R> {
+    let mut path_response = None;
+    let actions = ui
+        .horizontal_wrapped(|ui| {
+            path_response = Some(wrapping_path(
+                ui,
+                path,
+                FontId::proportional(12.0),
+                ui.visuals().text_color(),
+            ));
+            add_actions(ui)
+        })
+        .inner;
+    WrappingPathRow {
+        path: path_response
+            .unwrap_or_else(|| ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover())),
+        actions,
+    }
 }
 /// Git tint applies to the filename and badge; the icon stays bright.
 pub fn file_row(
@@ -1142,6 +1202,113 @@ mod row_tests {
         assert!(bar.cancel.rect.width() > 8.0);
         assert!(!bar.save.rect.intersects(bar.discard.rect));
         assert_eq!(bar.choice(), None);
+    }
+
+    const PASTE_PATH: &str =
+        "/var/folders/0r/9s1qpwv16qd5km4kkkjr11w80000gn/T/terminator-paste-TrXSrw.png";
+
+    fn run_at_width<T>(width: f32, mut add: impl FnMut(&mut egui::Ui) -> T) -> T {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let mut value = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 200.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                value = Some(add(ui));
+            },
+        );
+        output.textures_delta.clear();
+        value.expect("ui ran")
+    }
+
+    fn line_height(ui: &egui::Ui, font: FontId) -> f32 {
+        ui.painter()
+            .layout_no_wrap("X".into(), font, ui.visuals().text_color())
+            .size()
+            .y
+    }
+
+    fn wrapping_path_lines(width: f32) -> i32 {
+        run_at_width(width, |ui| {
+            let font = FontId::proportional(12.0);
+            let response = wrapping_path(ui, PASTE_PATH, font.clone(), ui.visuals().text_color());
+            (response.rect.height() / line_height(ui, font)).round() as i32
+        })
+    }
+
+    fn image_toolbar(width: f32) -> (egui::Rect, Vec<egui::Rect>) {
+        run_at_width(width, |ui| {
+            let row = wrapping_path_row(ui, PASTE_PATH, |ui| {
+                [
+                    ui.button("Reload"),
+                    ui.button("Open as text"),
+                    ui.button("Open externally"),
+                ]
+                .map(|response| response.rect)
+            });
+            (row.path.rect, row.actions.to_vec())
+        })
+    }
+
+    #[test]
+    fn wrapping_path_stays_one_row_when_it_fits() {
+        assert_eq!(wrapping_path_lines(720.0), 1);
+    }
+
+    #[test]
+    fn wrapping_path_uses_two_rows_when_narrow() {
+        assert_eq!(wrapping_path_lines(140.0), 2);
+    }
+
+    #[test]
+    fn image_toolbar_keeps_path_and_actions_on_one_row_when_wide() {
+        for width in [1000.0, 1200.0] {
+            let (path, buttons) = image_toolbar(width);
+            assert_eq!(buttons.len(), 3, "width={width}");
+            let mut rects = vec![path];
+            rects.extend(buttons);
+            for pair in rects.windows(2) {
+                assert!(
+                    (pair[0].center().y - pair[1].center().y).abs() < 0.1,
+                    "width={width}: {pair:?}"
+                );
+                assert!(
+                    pair[0].right() <= pair[1].left() + 0.1,
+                    "width={width}: {pair:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn image_toolbar_wraps_actions_when_narrow() {
+        let (path, buttons) = image_toolbar(180.0);
+        assert!(
+            buttons
+                .iter()
+                .any(|button| button.center().y - path.center().y > path.height() * 0.4),
+            "narrow toolbar should wrap actions below the path: path={path:?} buttons={buttons:?}"
+        );
+    }
+
+    #[test]
+    fn hover_path_does_not_exceed_two_rows() {
+        let lines = run_at_width(440.0, |ui| {
+            let font = FontId::proportional(11.0);
+            let response =
+                wrapping_path(ui, PASTE_PATH, font.clone(), ui.visuals().weak_text_color());
+            (response.rect.height() / line_height(ui, font)).round() as i32
+        });
+        assert!(
+            (1..=2).contains(&lines),
+            "hover path should be one or two rows, lines={lines}"
+        );
     }
 
     #[test]

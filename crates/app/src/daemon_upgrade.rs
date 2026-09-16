@@ -160,6 +160,8 @@ fn activate_candidate(paths: &Paths, executable: &Path, force: bool) -> Result<(
                 &executable.with_file_name("terminator-hook"),
             )?
         {
+            let _guard = generations::coordinate(paths)?;
+            Catalog::open(paths)?.restore_serving()?;
             return Ok(());
         }
     }

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Keep creating tabs and splits if the serving generation is wrongly marked
+  Retired. Catalog-active owners stay live for Create; the daemon restores
+  Active and skips archive prune while sessions are still running.
+
 - Play a system sound with desktop banners. Settings → Notifications has
   **Play sound with desktop notifications** (default on). The in-app Agents
   inbox stays silent. Older running daemons hide the control until updated.
@@ -9,7 +13,10 @@
 - Open mp3/flac/ogg/wav/m4a/opus/aac in a GUI-only Winamp-style player tab
   (layout version 5). Palette → Open player. Icecast/Shoutcast HTTP(S) radio
   shares the same tab. Audio stops when the GUI exits or the player tab closes.
-  No webview; Blitz remains HTML-file raster only.
+  The player is native egui.
+
+- Open HTML and http(s) in a GUI-only Browser tab (layout version 6, OS webview).
+  v4 Html tabs migrate. Isolated profile. Covered panes hide the native view.
 
 - Always show **Check for Updates…** in the application menu, matching AppDock.
   Sparkle still loads only from an installed release; other launches explain why

@@ -42,14 +42,15 @@ After the test-support build, use `cargo xtask gui CASE` with `workspace-tabs`, 
 
 ## Coding Style & Naming Conventions
 
-Use rustfmt defaults, four-space indentation, `snake_case` functions/modules, and `PascalCase` types. Keep IPC and lifecycle models in `core`; keep blocking work outside GUI rendering. Prefer existing native packages over custom rendering infrastructure. No Electron, Chromium, or webview.
+Use rustfmt defaults, four-space indentation, `snake_case` functions/modules, and `PascalCase` types. Keep IPC and lifecycle models in `core`; keep blocking work outside GUI rendering. Prefer existing native packages over custom rendering infrastructure. No Electron, Chromium, CEF, or Servo. GUI-only OS webview tabs (WKWebView / WebKitGTK via wry) are allowed. They die with the GUI, persist path/URL in layout, use an isolated data-dir profile, and load local HTML files plus http(s) only. Hide the native view when the pane is covered. No JS bridge into the app.
 
 ## Architecture & Behavior Constraints
 
 - The daemon owns persistent PTYs, shells, and editors; the GUI attaches to them. Closing the GUI must leave sessions running. Historical sessions are not automatically restarted.
 - Each project owns top-level tabs, each with its own split layout and focus. Preserve the originating project/tab for asynchronous creation. Layout JSON is versioned; do not overwrite unknown versions or restart sessions during migration.
 - Opening a supported image creates a GUI-only preview tab without a PTY; explicit Open as text bypasses preview. Opening a text file creates a new editor session in a new top-level tab; explicit editor-split actions stay in the current tab. Clean file-only tabs close directly. Unsaved buffers offer Save and close, Discard changes, or Cancel on an in-file bar; unknown editor state must not silently discard changes. The rest of the GUI stays usable while that bar is visible. Shell/active-agent tabs retain the background-or-terminate choice.
-- Opening a supported audio file creates a GUI-only player tab without a PTY; Open as text bypasses the player. One player per project; radio shares it. Playback stops when the GUI exits or the player tab closes. No webview. Blitz remains HTML-file raster only.
+- Opening a supported HTML file or an http(s) URL creates a GUI-only Browser tab without a PTY (layout v6). WKWebView/WebKitGTK via wry; dies with the GUI; isolated data-dir profile. Hide the native view when the pane is covered. Open as text bypasses it.
+- Opening a supported audio file creates a GUI-only player tab without a PTY; Open as text bypasses the player. One player per project; radio shares it. Playback stops when the GUI exits or the player tab closes. The player is native egui.
 - OS notification sound is Settings → Notifications (default on). In-app Agents inbox stays silent. Gate the checkbox on notification-sound-v1.
 - Ordinary editors load the user's Neovim configuration. Git reviews use bundled CodeDiff with an isolated profile and read-only snapshots: HEAD to index for staged changes, index to disk for working changes. Reopening refreshes a review; review actions must not mutate Git state.
 - Gate new daemon requests on advertised capabilities. Git reviews default to the native GUI viewer. Neovim CodeDiff is Settings → Diff viewer, and still requires `nvim-review-v1`. Missing that capability falls back to native. A newly built GUI or package does not replace a running daemon; preserve compatibility with live older daemons.

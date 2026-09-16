@@ -39,12 +39,17 @@ impl Workspace {
             return Ok(Self::empty());
         }
         if value.get("version").is_some() {
-            let workspace: Self = serde_json::from_value(terminator_core::sanitize_layout(value))
-                .context("Invalid project tabs")?;
+            let mut value = terminator_core::sanitize_layout(value);
+            crate::rewrite_html_tabs(&mut value);
+            let mut workspace: Self =
+                serde_json::from_value(value).context("Invalid project tabs")?;
             ensure!(
-                matches!(workspace.version, 2..=5),
+                matches!(workspace.version, 2..=6),
                 "Unsupported project tab layout version"
             );
+            if contains_browser(&workspace) {
+                workspace.version = workspace.version.max(6);
+            }
             ensure!(!workspace.tabs.is_empty(), "Project tab layout has no tabs");
             let mut ids = std::collections::HashSet::new();
             ensure!(
@@ -100,12 +105,7 @@ impl Workspace {
             .any(|tab| tab.layout.find_tab(pane).is_some())
     }
     pub fn add(&mut self, id: String, pane: Tab) {
-        match pane {
-            Tab::Player => self.version = 5,
-            Tab::Html { .. } => self.version = self.version.max(4),
-            Tab::Image { .. } => self.version = self.version.max(3),
-            _ => {}
-        }
+        self.version = self.version.max(pane.layout_version());
         self.tabs
             .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
         self.tabs.push(WorkspaceTab {
@@ -152,6 +152,16 @@ impl Workspace {
 }
 // Serde restores raw docking indices without the checks used by UI setters.
 // Reject invalid persisted focus before any App or renderer indexing occurs.
+fn contains_browser(workspace: &Workspace) -> bool {
+    workspace.tabs.iter().any(|tab| {
+        matches!(tab.primary, Some(Tab::Browser { .. }))
+            || tab
+                .layout
+                .iter_all_tabs()
+                .any(|(_, pane)| matches!(pane, Tab::Browser { .. }))
+    })
+}
+
 fn validate_layout(layout: &DockState<Tab>) -> Result<()> {
     ensure!(
         matches!(
@@ -212,7 +222,7 @@ mod tests {
                 .to_string()
                 .contains("focus")
         );
-        for version in [2, 3, 4, 5] {
+        for version in [2, 3, 4, 5, 6] {
             let mut saved = terminator_core::sanitize_layout(
                 serde_json::to_value(Workspace::from_layout(dock.clone())).unwrap(),
             );
@@ -245,23 +255,76 @@ mod tests {
         assert!(restored.contains(&Tab::Image {
             path: "/image.png".into()
         }));
-        workspace.add(
-            "html".into(),
-            Tab::Html {
-                path: "/page.html".into(),
-            },
-        );
-        assert_eq!(workspace.version, 4);
+        workspace.add("html".into(), Tab::browser_file("/page.html".into()));
+        assert_eq!(workspace.version, 6);
         let saved = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
         let restored = Workspace::load(saved).unwrap();
-        assert!(restored.contains(&Tab::Html {
-            path: "/page.html".into()
-        }));
+        assert!(restored.contains(&Tab::browser_file("/page.html".into())));
+        workspace.add("player".into(), Tab::Player);
+        assert_eq!(workspace.version, 6);
+        let saved = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
+        let restored = Workspace::load(saved).unwrap();
+        assert!(restored.contains(&Tab::Player));
+    }
+
+    #[test]
+    fn v4_html_tabs_migrate_to_browser() {
+        let mut workspace = Workspace::empty();
+        workspace.add("html".into(), Tab::browser_file("/page.html".into()));
+        let mut saved = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
+        saved["version"] = serde_json::json!(4);
+        demote_browser_tabs_to_html(&mut saved);
+        let restored = Workspace::load(saved).unwrap();
+        assert!(restored.contains(&Tab::browser_file("/page.html".into())));
+        assert_eq!(restored.version, 6);
+    }
+
+    #[test]
+    fn unsupported_layout_version_is_rejected() {
+        let mut saved =
+            terminator_core::sanitize_layout(serde_json::to_value(Workspace::empty()).unwrap());
+        saved["version"] = serde_json::json!(7);
+        assert!(
+            Workspace::load(saved)
+                .unwrap_err()
+                .to_string()
+                .contains("Unsupported")
+        );
+    }
+
+    #[test]
+    fn player_only_layout_stays_version_five() {
+        let mut workspace = Workspace::empty();
         workspace.add("player".into(), Tab::Player);
         assert_eq!(workspace.version, 5);
         let saved = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
         let restored = Workspace::load(saved).unwrap();
+        assert_eq!(restored.version, 5);
         assert!(restored.contains(&Tab::Player));
+    }
+
+    fn demote_browser_tabs_to_html(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(browser) = map.remove("Browser") {
+                    let path = browser
+                        .get("target")
+                        .and_then(|target| target.get("File"))
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    map.insert("Html".into(), serde_json::json!({ "path": path }));
+                }
+                for nested in map.values_mut() {
+                    demote_browser_tabs_to_html(nested);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for nested in items {
+                    demote_browser_tabs_to_html(nested);
+                }
+            }
+            _ => {}
+        }
     }
     #[test]
     fn legacy_splits_migrate_without_losing_sessions() {

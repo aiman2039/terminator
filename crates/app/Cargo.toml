@@ -26,15 +26,9 @@ egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
 egui_commonmark = { version = "0.25", default-features = false, features = ["better_syntax_highlighting"] }
 pulldown-cmark = { version = "0.13", default-features = false }
 url = "2"
+wry = "0.57"
 rodio = "0.21"
 ureq = "2"
-blitz-html = { version = "=0.3.0-beta.2", default-features = false }
-blitz-dom = { version = "=0.3.0-beta.2", default-features = false, features = ["svg", "woff", "system-fonts"] }
-blitz-paint = { version = "=0.3.0-beta.2", default-features = false, features = ["svg"] }
-blitz-traits = { version = "=0.3.0-beta.2", default-features = false }
-anyrender = "0.13"
-anyrender_vello_cpu = "0.17"
-peniko = "0.6"
 semver = "1"
 rmp-serde = "1.3"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
@@ -63,6 +57,9 @@ base64.workspace = true
 version = "1.5.0"
 default-features = false
 features = ["user-hooks"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = "0.3.1"

@@ -136,27 +136,6 @@ impl Preview {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         if let Some(texture) = &self.texture {
             let size = texture.size_vec2();
-            let mut actual_size = false;
-            ui.horizontal(|ui| {
-                ui.weak(format!(
-                    "{} × {} pixels",
-                    texture.size()[0],
-                    texture.size()[1]
-                ));
-                let fit = ui.button("Fit");
-                #[cfg(feature = "test-support")]
-                crate::diagnostics::record(ui.ctx(), "image-fit", fit.rect);
-                if fit.clicked() {
-                    self.scene = egui::Rect::NOTHING;
-                }
-                if ui.button("100%").clicked() {
-                    actual_size = true;
-                }
-            });
-            if actual_size {
-                self.scene =
-                    egui::Rect::from_center_size(size.to_pos2() * 0.5, ui.available_size());
-            }
             let response =
                 egui::Scene::new()
                     .zoom_range(0.01..=16.0)

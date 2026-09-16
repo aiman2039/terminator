@@ -11,9 +11,11 @@ mod dialogs_ui;
 mod sidebar_ui;
 use sidebar_ui::{AttentionAction, AttentionCard, attention_card};
 mod appearance;
+mod browser;
+mod browser_host;
 mod external_editor;
 mod file_actions;
-mod html_preview;
+pub(crate) use browser::{BrowserTarget, rewrite_html_tabs};
 mod icons;
 mod image_preview;
 mod markdown;
@@ -69,8 +71,8 @@ pub(crate) enum Tab {
     Image {
         path: PathBuf,
     },
-    Html {
-        path: PathBuf,
+    Browser {
+        target: BrowserTarget,
     },
     Player,
     Terminal(String),
@@ -83,6 +85,21 @@ pub(crate) enum Tab {
 impl Tab {
     fn key(&self) -> String {
         serde_json::to_string(self).unwrap_or_default()
+    }
+
+    pub(crate) fn browser_file(path: PathBuf) -> Self {
+        Self::Browser {
+            target: BrowserTarget::File(path),
+        }
+    }
+
+    fn layout_version(&self) -> u32 {
+        match self {
+            Self::Browser { .. } => 6,
+            Self::Player => 5,
+            Self::Image { .. } => 3,
+            Self::Diff { .. } | Self::Terminal(_) => 2,
+        }
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -196,10 +213,9 @@ enum Update {
     ),
     Metadata(u64, metadata::Metadata),
     OpenImage(String, PathBuf, After),
-    OpenHtml(String, PathBuf, After),
+    OpenBrowser(String, BrowserTarget, After),
     OpenPlayer(String, After),
     Image(PathBuf, u64, Result<egui::ColorImage, String>),
-    Html(PathBuf, u64, Result<egui::ColorImage, String>),
     TestPickerClosed,
     PickedProject(Option<PathBuf>, u64),
     OpenedProject(Box<State>, String, u64),
@@ -801,15 +817,15 @@ struct App {
     selected: Option<String>,
     active_session: Option<String>,
     images: HashMap<PathBuf, image_preview::Preview>,
-    htmls: HashMap<PathBuf, html_preview::Preview>,
+    browser_host: browser_host::BrowserHost,
+    visible_browsers: Vec<browser_host::VisibleBrowser>,
+    browser_urls: HashMap<String, String>,
+    browser_submit: Option<(String, BrowserTarget)>,
     player: player::Controller,
     markdown: markdown::Previews,
     visible_images: HashSet<PathBuf>,
-    visible_htmls: HashSet<PathBuf>,
     image_generation: u64,
-    html_generation: u64,
     image_jobs: mpsc::SyncSender<(PathBuf, u64)>,
-    html_jobs: mpsc::SyncSender<(PathBuf, u64)>,
     backends: HashMap<String, TerminalBackend>,
     visible_sessions: HashSet<String>,
     backend_ids: HashMap<u64, String>,
@@ -937,21 +953,6 @@ impl App {
                 repaint.request_repaint();
             }
         });
-        let (html_jobs, html_requests) = mpsc::sync_channel::<(PathBuf, u64)>(2);
-        let html_updates = tx.clone();
-        let html_repaint = ctx.clone();
-        thread::spawn(move || {
-            while let Ok((path, generation)) = html_requests.recv() {
-                let result = html_preview::decode(&path).map_err(|e| format!("{e:#}"));
-                if html_updates
-                    .send(Update::Html(path, generation, result))
-                    .is_err()
-                {
-                    break;
-                }
-                html_repaint.request_repaint();
-            }
-        });
         let p = paths.clone();
         let context = ctx.clone();
         thread::spawn(move || worker(p, context, rx, tx));
@@ -991,15 +992,15 @@ impl App {
             selected: None,
             active_session: None,
             images: HashMap::new(),
-            htmls: HashMap::new(),
+            browser_host: browser_host::BrowserHost::new(),
+            visible_browsers: Vec::new(),
+            browser_urls: HashMap::new(),
+            browser_submit: None,
             player: player::Controller::new(),
             markdown,
             visible_images: HashSet::new(),
-            visible_htmls: HashSet::new(),
             image_generation: 0,
-            html_generation: 0,
             image_jobs,
-            html_jobs,
             backends: HashMap::new(),
             visible_sessions: HashSet::new(),
             backend_ids: HashMap::new(),
@@ -1366,8 +1367,8 @@ impl App {
                 Update::OpenImage(project, path, after) => {
                     self.place_gui_tab(project, Tab::Image { path }, after);
                 }
-                Update::OpenHtml(project, path, after) => {
-                    self.place_gui_tab(project, Tab::Html { path }, after);
+                Update::OpenBrowser(project, target, after) => {
+                    self.place_gui_tab(project, Tab::Browser { target }, after);
                 }
                 Update::OpenPlayer(project, after) => {
                     self.place_gui_tab(project, Tab::Player, after);
@@ -1402,9 +1403,6 @@ impl App {
                             Err(error) => preview.error = Some(error),
                         }
                     }
-                }
-                Update::Html(path, generation, result) => {
-                    self.apply_html_preview(ctx, path, generation, result);
                 }
                 Update::TestPickerClosed => self.picker_active = false,
                 Update::HookStatus(status) => self.hook_status = status,
@@ -1494,7 +1492,7 @@ impl App {
                             && let Some(project) = &project
                         {
                             self.open_image(project, path, None);
-                        } else if html_preview::supported(&path)
+                        } else if crate::browser::supported_file(&path)
                             && let Some(project) = &project
                         {
                             self.open_html(project, path, None);
@@ -1773,7 +1771,9 @@ impl App {
                         .sessions
                         .iter()
                         .any(|s| &s.id == sid && s.lifecycle.live()),
-                    Tab::Diff { .. } | Tab::Image { .. } | Tab::Html { .. } | Tab::Player => true,
+                    Tab::Diff { .. } | Tab::Image { .. } | Tab::Browser { .. } | Tab::Player => {
+                        true
+                    }
                 };
                 let survives = old_group
                     .as_ref()
@@ -1915,12 +1915,7 @@ impl App {
             .layouts
             .entry(project.into())
             .or_insert_with(Workspace::empty);
-        match tab {
-            Tab::Player => dock.version = 5,
-            Tab::Html { .. } => dock.version = dock.version.max(4),
-            Tab::Image { .. } => dock.version = dock.version.max(3),
-            _ => {}
-        }
+        dock.version = dock.version.max(tab.layout_version());
         if let Some(path) = dock.find_tab(&tab) {
             let _ = dock.set_active_tab(path);
             dock.set_focused_node_and_surface(path.node_path());
@@ -2084,7 +2079,7 @@ impl App {
             }
             return;
         }
-        if !external && !text && html_preview::supported(&path) {
+        if !external && !text && crate::browser::supported_file(&path) {
             if let Some(project) = self.selected.clone() {
                 self.open_html(&project, path, split);
             }
@@ -2132,11 +2127,54 @@ impl App {
             .as_ref()
             .map(|sid| Tab::Terminal(sid.clone()));
         let after = self.editor_target(project, origin.as_ref(), split);
-        let _ = self.update_tx.send(Update::OpenHtml(
-            project.into(),
-            std::path::absolute(&path).unwrap_or(path),
-            after,
-        ));
+        let Tab::Browser { target } = Tab::browser_file(std::path::absolute(&path).unwrap_or(path))
+        else {
+            return;
+        };
+        let _ = self
+            .update_tx
+            .send(Update::OpenBrowser(project.into(), target, after));
+    }
+    fn browser_covered(&self) -> bool {
+        self.settings_open
+            || self.command_dialog_open()
+            || self.picker_active
+            || self.close_session.is_some()
+            || self.close_workspace.is_some()
+            || self.notice_detail_modal_open()
+            || self.open_path
+            || self.add_project
+            || self.rename_session.is_some()
+    }
+
+    fn sync_browsers(&mut self, frame: &eframe::Frame) {
+        self.browser_host.sync(browser_host::SyncInput {
+            frame,
+            visible: &self.visible_browsers,
+            occluded: self.browser_covered(),
+            data_dir: &self.paths.data,
+        });
+        if let Some(project) = self.selected.clone() {
+            for url in self.browser_host.take_opens() {
+                let _ = self.open_browser_url(&project, &url, None);
+            }
+        }
+    }
+
+    fn open_browser_url(&mut self, project: &str, url: &str, split: Option<&str>) -> Result<()> {
+        let origin = self
+            .active_session
+            .as_ref()
+            .map(|sid| Tab::Terminal(sid.clone()));
+        let after = self.editor_target(project, origin.as_ref(), split);
+        self.update_tx
+            .send(Update::OpenBrowser(
+                project.into(),
+                BrowserTarget::from_http_url(url)?,
+                after,
+            ))
+            .map_err(|_| anyhow::anyhow!("Browser open queue closed"))?;
+        Ok(())
     }
     fn place_gui_tab(&mut self, project: String, tab: Tab, after: After) {
         match after {
@@ -2173,42 +2211,37 @@ impl App {
             }
         }
     }
-    fn apply_html_preview(
-        &mut self,
-        ctx: &egui::Context,
-        path: PathBuf,
-        generation: u64,
-        result: Result<egui::ColorImage, String>,
-    ) {
-        let used: usize = self
-            .htmls
-            .values()
-            .filter_map(|preview| preview.texture.as_ref())
-            .map(|texture| texture.size()[0] * texture.size()[1] * 4)
-            .sum();
-        let Some(preview) = self
-            .htmls
-            .get_mut(&path)
-            .filter(|preview| preview.generation == generation)
-        else {
+    fn apply_browser_submit(&mut self) {
+        let Some((old_key, target)) = self.browser_submit.take() else {
             return;
         };
-        preview.loading = false;
-        match result {
-            Ok(image) if used + image.pixels.len() * 4 <= 64 * 1024 * 1024 => {
-                preview.texture = Some(ctx.load_texture(
-                    format!("html:{}:{generation}", path.display()),
-                    image,
-                    egui::TextureOptions::LINEAR,
-                ));
+        let Some(project) = self.selected.clone() else {
+            return;
+        };
+        let Some(workspace) = self.layouts.get_mut(&project) else {
+            return;
+        };
+        for group in &mut workspace.tabs {
+            if group
+                .primary
+                .as_ref()
+                .is_some_and(|tab| tab.key() == old_key)
+            {
+                group.primary = Some(Tab::Browser {
+                    target: target.clone(),
+                });
             }
-            Ok(_) => {
-                preview.error = Some(
-                    "Preview memory limit reached; close another HTML preview and retry.".into(),
-                );
+            for (_, tab) in group.layout.iter_all_tabs_mut() {
+                if tab.key() == old_key {
+                    *tab = Tab::Browser {
+                        target: target.clone(),
+                    };
+                }
             }
-            Err(error) => preview.error = Some(error),
         }
+        workspace.version = workspace.version.max(6);
+        self.browser_host.drop_view(&old_key);
+        self.browser_urls.remove(&old_key);
     }
     fn go_session(&mut self, sid: &str) {
         self.finish_rename(true);
@@ -2291,7 +2324,7 @@ impl App {
                     );
                     return;
                 }
-                if html_preview::supported(path)
+                if crate::browser::supported_file(path)
                     && matches!(action, FileAction::Open | FileAction::Split)
                 {
                     self.open_html(
@@ -2490,10 +2523,10 @@ impl App {
                     std::path::absolute(&pending.path).unwrap_or(pending.path),
                     pending.after,
                 ));
-            } else if html_preview::supported(&pending.path) {
-                let _ = self.update_tx.send(Update::OpenHtml(
+            } else if crate::browser::supported_file(&pending.path) {
+                let _ = self.update_tx.send(Update::OpenBrowser(
                     pending.project,
-                    std::path::absolute(&pending.path).unwrap_or(pending.path),
+                    BrowserTarget::File(std::path::absolute(&pending.path).unwrap_or(pending.path)),
                     pending.after,
                 ));
             } else if player::supported(&pending.path) {
@@ -2678,6 +2711,7 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.popups.begin_frame(&ctx);
         if self.exit.active() {
+            self.browser_host.hide_all();
             ui.centered_and_justified(|ui| {
                 ui.label("Saving workspace before closing…");
             });
@@ -2686,7 +2720,7 @@ impl eframe::App for App {
         self.visible_dirs.clear();
         self.visible_sessions.clear();
         self.visible_images.clear();
-        self.visible_htmls.clear();
+        self.visible_browsers.clear();
         self.markdown.begin_frame();
         #[cfg(feature = "test-support")]
         self.diagnostics.frame(&ctx);
@@ -2918,7 +2952,10 @@ impl eframe::App for App {
                     {
                         Some(Tab::Terminal(sid)) => self.active_session = Some(sid),
                         Some(
-                            Tab::Diff { .. } | Tab::Image { .. } | Tab::Html { .. } | Tab::Player,
+                            Tab::Diff { .. }
+                            | Tab::Image { .. }
+                            | Tab::Browser { .. }
+                            | Tab::Player,
                         ) => self.active_session = None,
                         None => {}
                     }
@@ -2982,8 +3019,9 @@ impl eframe::App for App {
                                     .find(|s| &s.id == id)
                                     .map(|s| s.cwd.clone()),
                                 Tab::Diff { cwd, .. } => Some(cwd.clone()),
-                                Tab::Image { path } | Tab::Html { path } => {
-                                    path.parent().map(PathBuf::from)
+                                Tab::Image { path } => path.parent().map(PathBuf::from),
+                                Tab::Browser { target } => {
+                                    target.file().and_then(Path::parent).map(PathBuf::from)
                                 }
                                 Tab::Player => None,
                             })
@@ -3069,8 +3107,6 @@ impl eframe::App for App {
             });
         self.images
             .retain(|path, _| self.visible_images.contains(path));
-        self.htmls
-            .retain(|path, _| self.visible_htmls.contains(path));
         self.markdown.end_frame(&ctx);
         self.backends
             .retain(|sid, _| self.visible_sessions.contains(sid));
@@ -3146,6 +3182,8 @@ impl eframe::App for App {
             window_resize_edges(ui);
         }
         self.modals(&ctx, frame);
+        self.apply_browser_submit();
+        self.sync_browsers(frame);
         self.popups.end_frame();
         // Let this frame's second click cancel the pending open before expiring it.
         self.flush_pending_file_click(&ctx);
@@ -5027,12 +5065,52 @@ mod navigation_tests {
         app.select_project("b".into());
         app.process_updates(&ctx);
         assert_eq!(app.selected.as_deref(), Some("b"));
-        assert!(app.layouts["a"].contains(&Tab::Html {
-            path: "/a/index.HTML".into()
-        }));
-        assert_eq!(app.layouts["a"].version, 4);
+        assert!(app.layouts["a"].contains(&Tab::browser_file("/a/index.HTML".into())));
+        assert_eq!(app.layouts["a"].version, 6);
         assert!(app.state.sessions.is_empty());
         assert!(!requests.try_iter().any(|j|matches!(j,Job::Control(request,_) if matches!(*request,Request::Create { editor:true,.. }))));
+    }
+    #[test]
+    fn http_url_opens_browser_tab_and_rejects_other_schemes() {
+        let (mut app, ctx, _dir) = fixture();
+        app.open_browser_url("a", "https://example.com/app", None)
+            .unwrap();
+        app.select_project("b".into());
+        app.process_updates(&ctx);
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        assert!(app.layouts["a"].contains(&Tab::Browser {
+            target: BrowserTarget::Url("https://example.com/app".into())
+        }));
+        assert_eq!(app.layouts["a"].version, 6);
+        assert!(app.state.sessions.is_empty());
+        assert!(
+            app.open_browser_url("a", "javascript:alert(1)", None)
+                .is_err()
+        );
+        assert!(
+            app.open_browser_url("a", "file:///tmp/x.html", None)
+                .is_err()
+        );
+    }
+    #[test]
+    fn browser_url_submit_replaces_tab_target() {
+        let (mut app, ctx, _dir) = fixture();
+        app.open_browser_url("a", "https://example.com/app", None)
+            .unwrap();
+        app.process_updates(&ctx);
+        app.selected = Some("a".into());
+        let old = Tab::Browser {
+            target: BrowserTarget::Url("https://example.com/app".into()),
+        };
+        app.browser_submit = Some((
+            old.key(),
+            BrowserTarget::from_http_url("https://example.com/other").unwrap(),
+        ));
+        app.apply_browser_submit();
+        assert!(app.layouts["a"].contains(&Tab::Browser {
+            target: BrowserTarget::from_http_url("https://example.com/other").unwrap()
+        }));
+        assert!(!app.layouts["a"].contains(&old));
     }
     #[test]
     fn audio_open_creates_player_tab_and_keeps_original_project() {

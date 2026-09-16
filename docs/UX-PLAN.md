@@ -19,7 +19,7 @@ local `orca-ui` (Tauri CLI chrome only), and this repo’s settings/worktree cod
 These are not optional. They come from `AGENTS.md`, `docs/ARCHITECTURE.md`, and
 `docs/INTEGRATIONS.md`.
 
-- Native `eframe`/`egui` only. No Electron, Chromium, CEF, OS webview, or Servo.
+- Native `eframe`/`egui` only. No Electron, Chromium, CEF, or Servo. OS webview tabs are GUI-only (wry).
 - The daemon owns PTYs, shells, and editors. Closing the GUI must leave sessions
   running. Do not restart live sessions to ship UI.
 - Gate new daemon requests on advertised capabilities (`worktrees-v1`, and any
@@ -38,7 +38,7 @@ These are not optional. They come from `AGENTS.md`, `docs/ARCHITECTURE.md`, and
 
 Orca features we are **not** taking in this plan:
 
-- Design Mode / per-worktree embedded browser
+- Design Mode / per-worktree embedded browser (in-app OS webview tabs are a separate GUI-only feature)
 - Native chat UI, agent hibernation, cloud VMs, mobile companion
 - Orchestration DAGs, computer-use, public artifacts
 - Geist/glass visual identity, i18n packs, plugin marketplaces

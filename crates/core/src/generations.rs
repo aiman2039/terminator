@@ -328,6 +328,28 @@ impl Catalog {
         )?;
         Ok(())
     }
+
+    /// Catalog-active + Retired is a stuck serving owner, not history.
+    /// Idle shutdown still retires first; skip this once `shutdown` is set.
+    pub fn restore_serving(&self) -> Result<bool> {
+        let Some(active) = self.active()? else {
+            return Ok(false);
+        };
+        let mut g = self
+            .generations()?
+            .into_iter()
+            .find(|g| g.id == active)
+            .context("Unknown active owner")?;
+        if g.status != Status::Retired {
+            return Ok(false);
+        }
+        g.status = Status::Active;
+        self.0.execute(
+            "UPDATE generations SET json=?2 WHERE id=?1",
+            params![active, serde_json::to_string(&g)?],
+        )?;
+        Ok(true)
+    }
     pub fn refresh(&self, state: &mut State) -> Result<()> {
         let json: String = self
             .0
@@ -443,11 +465,20 @@ pub fn saved(paths: &Paths) -> Result<State> {
 
 /// Lock release plus an absent recorded process proves death. PID reuse is
 /// conservatively treated as unavailable rather than declaring ownership lost.
+pub fn historical(owner: &Generation, active: Option<&str>) -> bool {
+    owner.status == Status::Retired && active != Some(owner.id.as_str())
+}
+
 pub fn recover_exited(root: &Paths, owner: &Generation) -> Result<bool> {
     let Some(pid) = owner.pid else {
         return Ok(false);
     };
     let _coordination = coordinate(root)?;
+    if Catalog::open(root)?.active()?.as_deref() == Some(owner.id.as_str())
+        && std::os::unix::net::UnixStream::connect(owner.paths().socket()).is_ok()
+    {
+        return Ok(false);
+    }
     let lock = fs::OpenOptions::new()
         .write(true)
         .open(owner.runtime.join("daemon.lock"))?;
@@ -575,7 +606,7 @@ pub fn snapshot(paths: &Paths) -> Result<State> {
         if owner.status == Status::Prepared {
             continue;
         }
-        let (state, error) = if owner.status == Status::Retired {
+        let (state, error) = if historical(&owner, Some(active.as_str())) {
             (saved(&owner.paths())?, None)
         } else {
             match crate::rpc(&owner.paths(), Request::Snapshot) {
@@ -1073,5 +1104,175 @@ mod tests {
         assert!(catalog.freeze(true).is_err());
         catalog.freeze(false).unwrap();
         assert!(catalog.admitted(&a.id).unwrap());
+    }
+
+    #[test]
+    fn restore_serving_repairs_catalog_active_marked_retired() {
+        let (_dir, paths, mut catalog) = fixture();
+        let a = owner(&paths, &catalog);
+        catalog.activate(&a.id).unwrap();
+        catalog.retire(&a.id).unwrap();
+        assert_eq!(catalog.generations().unwrap()[0].status, Status::Retired);
+        assert_eq!(catalog.active().unwrap().as_deref(), Some(a.id.as_str()));
+        assert!(catalog.restore_serving().unwrap());
+        assert_eq!(catalog.generations().unwrap()[0].status, Status::Active);
+        assert!(catalog.admitted(&a.id).unwrap());
+        assert!(!catalog.restore_serving().unwrap());
+    }
+
+    #[test]
+    fn create_reaches_catalog_active_owner_marked_retired() {
+        use std::os::unix::net::UnixListener;
+        let (_dir, paths, mut catalog) = fixture();
+        let a = owner(&paths, &catalog);
+        catalog.activate(&a.id).unwrap();
+        catalog.retire(&a.id).unwrap();
+        atomic_write(&a.paths().auth(), b"fixture").unwrap();
+        let listener = UnixListener::bind(a.paths().socket()).unwrap();
+        let generation = a.id.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let envelope: Envelope = read_frame(&mut stream).unwrap();
+            assert!(
+                matches!(envelope.request, Request::Create { .. }),
+                "Create must not be wrapped as Archived"
+            );
+            write_frame(
+                &mut stream,
+                &Response::Created(session(&generation, Lifecycle::Running)),
+            )
+            .unwrap();
+        });
+        let Response::Created(_) = rpc(
+            &paths,
+            Request::Create {
+                project: id(),
+                cwd: None,
+                file: None,
+                line: None,
+                column: None,
+                editor: false,
+            },
+        )
+        .unwrap() else {
+            panic!("created");
+        };
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn historical_owner_requests_stay_archived() {
+        use std::os::unix::net::UnixListener;
+        let (_dir, paths, mut catalog) = fixture();
+        let a = owner(&paths, &catalog);
+        let b = owner(&paths, &catalog);
+        catalog.activate(&a.id).unwrap();
+        let record = session(&a.id, Lifecycle::Ended);
+        save(
+            &a,
+            &State {
+                generation: a.id.clone(),
+                sessions: vec![record.clone()],
+                ..Default::default()
+            },
+        );
+        catalog.activate(&b.id).unwrap();
+        catalog.retire(&a.id).unwrap();
+        atomic_write(&b.paths().auth(), b"fixture").unwrap();
+        let listener = UnixListener::bind(b.paths().socket()).unwrap();
+        let expected = record.id.clone();
+        let archived = a.id.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let envelope: Envelope = read_frame(&mut stream).unwrap();
+            match envelope.request {
+                Request::Archived {
+                    generation,
+                    request,
+                } => {
+                    assert_eq!(generation, archived);
+                    assert!(matches!(
+                        *request,
+                        Request::History { session } if session == expected
+                    ));
+                }
+                other => panic!("{other:?}"),
+            }
+            write_frame(&mut stream, &Response::Ok).unwrap();
+        });
+        rpc(
+            &paths,
+            Request::History {
+                session: record.id.clone(),
+            },
+        )
+        .unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn snapshot_contacts_catalog_active_owner_marked_retired() {
+        use std::os::unix::net::UnixListener;
+        let (_dir, paths, mut catalog) = fixture();
+        let a = owner(&paths, &catalog);
+        catalog.activate(&a.id).unwrap();
+        save(
+            &a,
+            &State {
+                generation: a.id.clone(),
+                daemon_version: Some("from-disk".into()),
+                ..Default::default()
+            },
+        );
+        catalog.retire(&a.id).unwrap();
+        atomic_write(&a.paths().auth(), b"fixture").unwrap();
+        let listener = UnixListener::bind(a.paths().socket()).unwrap();
+        let generation = a.id.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let envelope: Envelope = read_frame(&mut stream).unwrap();
+            assert!(matches!(envelope.request, Request::Snapshot));
+            snapshot::write_response(
+                &mut stream,
+                &Response::State(Box::new(State {
+                    generation,
+                    daemon_version: Some("from-socket".into()),
+                    ..Default::default()
+                })),
+                envelope.snapshot_chunks,
+            )
+            .unwrap();
+        });
+        let state = snapshot(&paths).unwrap();
+        assert_eq!(state.daemon_version.as_deref(), Some("from-socket"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn recover_exited_does_not_retire_a_listening_catalog_active_owner() {
+        use std::os::unix::net::UnixListener;
+        let (_dir, paths, mut catalog) = fixture();
+        let a = owner(&paths, &catalog);
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        catalog.set_pid(&a.id, pid).unwrap();
+        catalog.activate(&a.id).unwrap();
+        save(
+            &a,
+            &State {
+                generation: a.id.clone(),
+                sessions: vec![session(&a.id, Lifecycle::Running)],
+                ..Default::default()
+            },
+        );
+        let _listener = UnixListener::bind(a.paths().socket()).unwrap();
+        let registered = catalog.generations().unwrap().remove(0);
+        assert!(!recover_exited(&paths, &registered).unwrap());
+        assert_eq!(
+            Catalog::open(&paths).unwrap().generations().unwrap()[0].status,
+            Status::Active
+        );
+        assert!(saved(&a.paths()).unwrap().sessions[0].lifecycle.live());
     }
 }

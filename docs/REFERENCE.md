@@ -30,7 +30,7 @@ open target/package/Terminator.app
 
 `--debug` produces a faster development bundle. Bundles are signed ad hoc locally; they are not notarized or published. On Linux, the same task produces a relocatable archive and desktop entry. X11 and Wayland backends are compiled; native file selection uses the desktop's XDG portal on Linux and NSOpenPanel on macOS.
 
-Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcommon0`, `libgl1`, and the usual X11/Wayland desktop libraries. Linux compilation also needs `pkg-config`, `libfontconfig1-dev` so resvg/blitz can use system fonts, `libasound2-dev` for rodio/ALSA, plus the matching X11/Wayland/GL headers. Install an XDG desktop portal backend appropriate to your desktop for file dialogs. `cargo xtask linux-check` configures a disposable Linux test container; `scripts/README.md` lists the Rust validation tasks.
+Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcommon0`, `libgl1`, and the usual X11/Wayland desktop libraries. Linux compilation also needs `pkg-config`, `libfontconfig1-dev` so resvg can use system fonts, `libasound2-dev` for rodio/ALSA, plus the matching X11/Wayland/GL headers. WebKitGTK is required for in-app Browser tabs on Linux (X11). Install an XDG desktop portal backend appropriate to your desktop for file dialogs. `cargo xtask linux-check` configures a disposable Linux test container; `scripts/README.md` lists the Rust validation tasks.
 
 ## Daily workflow
 
@@ -246,11 +246,12 @@ Mermaid and typeset math are not included. Preview text is limited to 1 MiB.
 Custom terminal editors without Neovim RPC show a clearly labeled **Saved file**
 preview. Ordinary Neovim configuration and Git review profiles are unchanged.
 
-HTML files open as a GUI-only Blitz preview tab (no PTY, no JavaScript). The
-header always offers **Open in browser** (`file://` to the system browser) when
-the raster is incomplete, plus Reload and Open as text for Neovim. Explorer,
-Git, and terminal menus still offer **Open in browser**. No Chromium or webview
-is bundled. HTML-bearing layouts use version 4. Transitive `stylo` is MPL-2.0.
+HTML files and http(s) URLs open as a GUI-only **Browser** tab (OS webview, no PTY).
+The header offers Back, Forward, Reload, **Open in browser** (system browser), and
+Open as text for local files. The native view hides when the pane is covered and
+dies with the GUI. Isolated profile under the data directory. No Chromium is
+bundled. Browser-bearing layouts use version 6; v4 HTML tabs migrate. Linux
+Wayland cannot host a child webview yet — use Open in browser.
 
 Click PNG, JPEG, WebP, GIF, BMP, ICO, TIFF, or SVG files to open a native image tab.
 Fit, 100%, pan/zoom, Reload, Open as text, and Open externally are available.

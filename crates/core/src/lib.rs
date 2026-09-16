@@ -906,48 +906,26 @@ pub fn rpc(paths: &Paths, request: Request) -> Result<Response> {
             Request::Heartbeat { .. } | Request::ClearHistory { session: None }
         )
     {
-        for owner in generations::Catalog::open(paths)?.generations()? {
-            if owner.status == generations::Status::Prepared {
-                continue;
-            }
-            if owner.status == generations::Status::Retired {
-                if matches!(&request, Request::ClearHistory { .. }) {
-                    rpc(
-                        paths,
-                        Request::Archived {
-                            generation: owner.id,
-                            request: Box::new(request.clone()),
-                        },
-                    )?;
-                }
-            } else {
-                rpc(&owner.paths(), request.clone())?;
-            }
-        }
+        fanout_owners(paths, &request)?;
         return Ok(Response::Ok);
     }
-    if generations::exists(paths) {
-        let target = generations::owner_for(paths, &request)?;
-        if let Some(owner) = generations::Catalog::open(paths)?
-            .generations()?
-            .into_iter()
-            .find(|g| g.data == target.data && g.status == generations::Status::Retired)
-            && !matches!(
-                request,
-                Request::Archived { .. }
-                    | Request::Shutdown
-                    | Request::ShutdownIfIdle
-                    | Request::Snapshot
-            )
-        {
-            return rpc(
-                paths,
-                Request::Archived {
-                    generation: owner.id,
-                    request: Box::new(request),
-                },
-            );
-        }
+    if generations::exists(paths)
+        && let Some(owner) = archived_generation(paths, &request)?
+        && !matches!(
+            request,
+            Request::Archived { .. }
+                | Request::Shutdown
+                | Request::ShutdownIfIdle
+                | Request::Snapshot
+        )
+    {
+        return rpc(
+            paths,
+            Request::Archived {
+                generation: owner,
+                request: Box::new(request),
+            },
+        );
     }
     for _ in 0..3 {
         let mut stream = connect(paths, request.clone(), None)?;
@@ -978,6 +956,41 @@ pub fn rpc(paths: &Paths, request: Request) -> Result<Response> {
         return response.checked();
     }
     bail!("Active service changed repeatedly before execution; retry the operation")
+}
+
+fn fanout_owners(paths: &Paths, request: &Request) -> Result<()> {
+    let catalog = generations::Catalog::open(paths)?;
+    let active = catalog.active()?;
+    for owner in catalog.generations()? {
+        if owner.status == generations::Status::Prepared {
+            continue;
+        }
+        if generations::historical(&owner, active.as_deref()) {
+            if matches!(request, Request::ClearHistory { .. }) {
+                rpc(
+                    paths,
+                    Request::Archived {
+                        generation: owner.id,
+                        request: Box::new(request.clone()),
+                    },
+                )?;
+            }
+        } else {
+            rpc(&owner.paths(), request.clone())?;
+        }
+    }
+    Ok(())
+}
+
+fn archived_generation(paths: &Paths, request: &Request) -> Result<Option<String>> {
+    let catalog = generations::Catalog::open(paths)?;
+    let active = catalog.active()?;
+    let target = generations::owner_for(paths, request)?;
+    Ok(catalog
+        .generations()?
+        .into_iter()
+        .find(|g| g.data == target.data && generations::historical(g, active.as_deref()))
+        .map(|g| g.id))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

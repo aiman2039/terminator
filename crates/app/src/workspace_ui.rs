@@ -249,22 +249,19 @@ impl App {
                                         )
                                     })
                                     .unwrap_or(("Terminal".into(), "Terminal", None)),
-                                Some(Tab::Diff { path, .. })
-                                | Some(Tab::Image { path })
-                                | Some(Tab::Html { path }) => (
+                                Some(Tab::Diff { path, .. }) | Some(Tab::Image { path }) => (
                                     path.file_name()
                                         .unwrap_or_default()
                                         .to_string_lossy()
                                         .into_owned(),
                                     if matches!(primary, Some(Tab::Image { .. })) {
                                         "FileImage"
-                                    } else if matches!(primary, Some(Tab::Html { .. })) {
-                                        "FileCode"
                                     } else {
                                         "FileDiff"
                                     },
                                     None,
                                 ),
+                                Some(Tab::Browser { target }) => (target.title(), "FileCode", None),
                                 Some(Tab::Player) => ("Player".into(), "FileMusic", None),
                                 None => ("Workspace".into(), "Terminal", None),
                             };
@@ -521,11 +518,12 @@ impl App {
                         .find(|s| &s.id == sid)
                         .map(|s| s.label.clone())
                         .unwrap_or_else(|| "Terminal".into()),
-                    Tab::Diff { path, .. } | Tab::Image { path } | Tab::Html { path } => path
+                    Tab::Diff { path, .. } | Tab::Image { path } => path
                         .file_name()
                         .unwrap_or_default()
                         .to_string_lossy()
                         .into_owned(),
+                    Tab::Browser { target } => target.title(),
                     Tab::Player => "Player".into(),
                 };
                 if appearance::menu_item(ui, &label, "Terminal", "").clicked() {
@@ -618,19 +616,37 @@ impl App {
     fn image_view(&mut self, ui: &mut egui::Ui, path: &std::path::Path) {
         self.visible_images.insert(path.into());
         let mut as_text = false;
-        ui.horizontal(|ui| {
-            ui.add(egui::Label::new(path.display().to_string()).truncate())
-                .on_hover_text(path.display().to_string());
-            if ui.button("Reload").clicked() {
-                self.images.remove(path);
-            }
+        let mut reload = false;
+        let mut fit = false;
+        let mut actual = false;
+        appearance::wrapping_path_row(ui, &path.display().to_string(), |ui| {
+            reload = ui.button("Reload").clicked();
             as_text = ui.button("Open as text").clicked();
             if ui.button("Open externally").clicked() {
                 let _ = self.jobs.send(Job::External(path.into()));
             }
+            if let Some(texture) = self
+                .images
+                .get(path)
+                .and_then(|preview| preview.texture.as_ref())
+            {
+                ui.weak(format!(
+                    "{} × {} pixels",
+                    texture.size()[0],
+                    texture.size()[1]
+                ));
+                let fit_btn = ui.button("Fit");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "image-fit", fit_btn.rect);
+                fit = fit_btn.clicked();
+                actual = ui.button("100%").clicked();
+            }
         });
         if as_text {
             self.open_file_mode(path.into(), None, None, false, true);
+        }
+        if reload {
+            self.images.remove(path);
         }
         if !self.images.contains_key(path) && self.images.len() >= 8 {
             ui.weak("Close another image preview to load this image.");
@@ -645,47 +661,90 @@ impl App {
                 .try_send((path.into(), preview.generation))
                 .is_ok();
         }
+        if fit {
+            preview.scene = egui::Rect::NOTHING;
+        }
+        if actual && let Some(size) = preview.texture.as_ref().map(egui::TextureHandle::size_vec2) {
+            preview.scene = egui::Rect::from_center_size(size.to_pos2() * 0.5, ui.available_size());
+        }
         preview.show(ui);
     }
-    fn html_view(&mut self, ui: &mut egui::Ui, path: &std::path::Path) {
-        self.visible_htmls.insert(path.into());
+    fn browser_view(&mut self, ui: &mut egui::Ui, key: String, target: &BrowserTarget) {
+        let href = crate::browser::href(target).unwrap_or_else(|_| target.title());
+        let mut draft = self
+            .browser_urls
+            .remove(&key)
+            .unwrap_or_else(|| href.clone());
+        if draft.is_empty() {
+            draft = href;
+        }
         let mut as_text = false;
-        let mut browser = false;
-        ui.horizontal(|ui| {
-            ui.add(egui::Label::new(path.display().to_string()).truncate())
-                .on_hover_text(path.display().to_string());
-            if ui.button("Reload").clicked() {
-                self.htmls.remove(path);
-            }
-            as_text = ui.button("Open as text").clicked();
+        let mut system = false;
+        let mut reload = false;
+        let mut back = false;
+        let mut forward = false;
+        let mut go = false;
+        ui.horizontal_wrapped(|ui| {
+            back = ui.button("Back").clicked();
+            forward = ui.button("Forward").clicked();
+            let url = ui.add(
+                egui::TextEdit::singleline(&mut draft)
+                    .desired_width(240.0)
+                    .hint_text("https://"),
+            );
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "browser-url", url.rect);
+            let go_btn = ui.button("Go");
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "browser-go", go_btn.rect);
+            go = go_btn.clicked()
+                || (url.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+            reload = ui.button("Reload").clicked();
+            as_text = target.file().is_some() && ui.button("Open as text").clicked();
             let open = ui.button("Open in browser");
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "html-open-browser", open.rect);
-            browser = open.clicked();
+            system = open.clicked();
         });
-        if as_text {
+        if go
+            && let Ok(next) = BrowserTarget::from_http_url(&draft)
+            && next != *target
+        {
+            self.browser_submit = Some((key.clone(), next));
+        }
+        self.browser_urls.insert(key.clone(), draft);
+        if back {
+            self.browser_host.go_back(&key);
+        }
+        if forward {
+            self.browser_host.go_forward(&key);
+        }
+        if reload && !self.browser_host.reload_view(&key) {
+            self.browser_host.drop_view(&key);
+        }
+        if as_text && let Some(path) = target.file() {
             self.open_file_mode(path.into(), None, None, false, true);
         }
-        if browser {
-            self.open_in_browser(path);
+        if system {
+            match target {
+                BrowserTarget::File(path) => self.open_in_browser(path),
+                BrowserTarget::Url(url) => {
+                    let _ = self.jobs.send(Job::Browser(url.clone()));
+                }
+            }
         }
-        if !self.htmls.contains_key(path) && self.htmls.len() >= 4 {
-            ui.weak("Close another HTML preview to load this page.");
-            return;
-        }
-        let preview = self.htmls.entry(path.into()).or_default();
-        if !preview.loading && preview.texture.is_none() && preview.error.is_none() {
-            self.html_generation = self.html_generation.wrapping_add(1);
-            preview.generation = self.html_generation;
-            preview.loading = self
-                .html_jobs
-                .try_send((path.into(), preview.generation))
-                .is_ok();
-        }
-        preview.show(ui);
-        if preview.error.is_some() {
+        if let Some(error) = self.browser_host.error(&key) {
+            ui.colored_label(ui.visuals().error_fg_color, error);
             ui.weak("Open in browser to view the page in your system browser.");
         }
+        let rect = ui.available_rect_before_wrap();
+        let _ = ui.allocate_rect(rect, egui::Sense::hover());
+        self.visible_browsers
+            .push(crate::browser_host::VisibleBrowser {
+                key,
+                target: target.clone(),
+                rect,
+            });
     }
     fn diff_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
         let Tab::Diff { path, staged, .. } = tab else {
@@ -1303,12 +1362,13 @@ impl TabViewer for Viewer<'_> {
     }
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
-            Tab::Image { path } | Tab::Html { path } => path
+            Tab::Image { path } => path
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned()
                 .into(),
+            Tab::Browser { target } => target.title().into(),
             Tab::Player => "Player".into(),
             Tab::Terminal(sid) => self
                 .app
@@ -1336,6 +1396,14 @@ impl TabViewer for Viewer<'_> {
     fn on_close(&mut self, tab: &mut Tab) -> OnCloseResponse {
         if matches!(tab, Tab::Player) {
             self.app.player.stop();
+        }
+        if let Tab::Browser { target } = tab {
+            self.app.browser_host.drop_view(
+                &Tab::Browser {
+                    target: target.clone(),
+                }
+                .key(),
+            );
         }
         if let Tab::Terminal(sid) = tab {
             if self
@@ -1395,7 +1463,13 @@ impl TabViewer for Viewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
             Tab::Image { path } => self.app.image_view(ui, path),
-            Tab::Html { path } => self.app.html_view(ui, path),
+            Tab::Browser { target } => {
+                let key = Tab::Browser {
+                    target: target.clone(),
+                }
+                .key();
+                self.app.browser_view(ui, key, target);
+            }
             Tab::Player => self.app.player_view(ui),
             Tab::Diff { .. } => self.app.diff_view(ui, tab),
             Tab::Terminal(sid) => {

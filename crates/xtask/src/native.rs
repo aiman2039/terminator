@@ -145,6 +145,7 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "ui-cleanup",
             "external-editor",
             "images",
+            "browser",
             "control",
             "terminal-actions",
             "reviews",
@@ -226,6 +227,7 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "ui-cleanup" => cleanup(&opts)?,
             "external-editor" => external(&opts)?,
             "images" => images(&opts)?,
+            "browser" => browser(&opts)?,
             "terminal-actions" | "ui-flat" | "ui-plan3" => terminal_actions(&opts)?,
             "reviews" => reviews::run(&opts)?,
             "legacy-diff" => reviews::legacy(&opts)?,
@@ -905,6 +907,69 @@ fn external(o: &Options) -> Result<()> {
         "Arguments or path changed"
     );
     h.assert_pids(&[s])
+}
+fn browser(o: &Options) -> Result<()> {
+    let (h, _, s, root) = setup("browser")?;
+    fs::write(
+        root.join("page.html"),
+        r#"<!doctype html><title>Terminator browser fixture</title><style>body{background:#1d4ed8;color:#fff;font:24px sans-serif;padding:32px}</style><h1 id="ok">loading</h1><script>document.getElementById('ok').textContent='ready'</script>"#,
+    )?;
+    plain(
+        &h,
+        o,
+        "html",
+        json!([{"at_ms":1100,"target":"explorer-file:page.html"}]),
+        3500,
+    )?;
+    let state = h.state()?;
+    let layout = state["projects"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|project| &project["layout"])
+        .find(|layout| {
+            layout["version"] == 6
+                || layout.to_string().contains("Browser")
+                || layout.to_string().contains("page.html")
+        });
+    ensure!(
+        sessions(&state).len() == 6,
+        "HTML allocated an editor: {} sessions, layout {:?}",
+        sessions(&state).len(),
+        state["projects"][0]["layout"]
+    );
+    ensure!(
+        layout.is_some_and(|layout| layout["version"] == 6),
+        "Browser tab did not persist layout v6: {:?}",
+        state["projects"]
+    );
+    plain(
+        &h,
+        o,
+        "browser-close",
+        json!([{"at_ms":1100,"target":"workspace-close:page.html"}]),
+        3000,
+    )?;
+    ensure!(
+        h.state()?["projects"][0]["layout"]["tabs"]
+            .as_array()
+            .unwrap()
+            .len()
+            == 1,
+        "Browser close did not remove tab"
+    );
+    plain(
+        &h,
+        o,
+        "explicit-text",
+        json!([{"at_ms":1100,"target":"explorer-file:page.html","right_click":true},{"at_ms":1600,"target":"Open as text"}]),
+        3500,
+    )?;
+    ensure!(
+        sessions(&h.state()?).len() == 7,
+        "Open as text did not create an editor"
+    );
+    h.assert_pids(&s)
 }
 fn images(o: &Options) -> Result<()> {
     let (h, _, s, root) = setup("images")?;

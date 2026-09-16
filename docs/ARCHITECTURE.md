@@ -91,7 +91,7 @@ original editor and its unsaved-close lifecycle remain daemon-owned.
 
 ## Platform boundaries
 
-macOS builds use Cocoa/native dialogs and a locally signed `.app` bundle. Linux builds use native windowing with X11/Wayland and portal file dialogs. The daemon's OS-notification callback worker is separate from terminal handling. macOS pumps its native notification run loop on the daemon thread; Linux uses the desktop notification service. Desktop banners may include a platform sound name when `notification_sound` is on (`notification-sound-v1`). In-app attention stays silent. No Electron, Chromium, or webview is included.
+macOS builds use Cocoa/native dialogs and a locally signed `.app` bundle. Linux builds use native windowing with X11/Wayland and portal file dialogs. The daemon's OS-notification callback worker is separate from terminal handling. macOS pumps its native notification run loop on the daemon thread; Linux uses the desktop notification service. Desktop banners may include a platform sound name when `notification_sound` is on (`notification-sound-v1`). In-app attention stays silent. No Electron, Chromium, CEF, or Servo is included. GUI-only OS webview tabs use WKWebView / WebKitGTK via wry and die with the GUI.
 
 
 ## Preview, metadata, and automation boundaries
@@ -117,14 +117,13 @@ is a point-in-time check; it cannot lock out arbitrary external OS or Git action
 
 Image previews belong to the GUI and allocate no PTYs. A dedicated bounded worker
 loads raster/SVG data, with stale-generation rejection and a texture-memory budget.
-Only paths are persisted in version-3 image-bearing layouts. HTML previews use the
-same GUI-only path with Blitz CPU raster and layout version 4. Audio player tabs
-are GUI-only layout version 5: one player per project, `rodio` on a worker for
-local files and HTTP(S) Icecast/Shoutcast streams. Playback stops when the GUI
-exits or the player tab closes. Radio UI is native egui; Blitz stays HTML-file
-raster. Unknown layout versions remain read-only. Explicit text/external actions
-retain the editor paths. HTML Open in browser uses the existing system-browser
-worker; no JS or webview.
+Only paths are persisted in version-3 image-bearing layouts. HTML and http(s) pages use GUI-only `Tab::Browser` (layout version 6) with an OS
+webview child view. v4 `Html` tabs migrate to `Browser` file targets. Covered
+panes hide the native view. Audio player tabs are GUI-only layout version 5: one
+player per project, `rodio` on a worker for local files and HTTP(S) Icecast/Shoutcast
+streams. Playback stops when the GUI exits or the player tab closes. Radio UI is
+native egui. Unknown layout versions remain read-only. Explicit text/external
+actions retain the editor paths. Open in browser still uses the system-browser worker.
 
 `gui.sock` is a separate, mode-0600 authenticated GUI endpoint for explicit
 presentation commands. It does not move PTY ownership into the GUI. The daemon's
@@ -178,7 +177,9 @@ history remain. A failed candidate preserves the active service and exposes a
 retry in Settings. A candidate that never spawned or whose child exited before
 initialization is removed from the registry under coordination and its owner lock;
 its private files are removed and its startup log is retained separately. Active
-or uncertain owners cannot be discarded. Newer or incompatible services are not downgraded.
+or uncertain owners cannot be discarded. A catalog-active owner that is still
+listening is not treated as archived; a Retired mark on that owner is restored
+while it remains the serving generation. Newer or incompatible services are not downgraded.
 
 The first migration is different: a legacy daemon keeps serving all live sessions.
 Once idle, the GUI checkpoints, requests acknowledged idle shutdown and acquires

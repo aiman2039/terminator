@@ -1,5 +1,17 @@
 # Validation evidence — 2026-09-08
 
+## Catalog-active owner marked Retired (2026-09-16)
+
+- Symptom: Create (new tab/split) wrapped as `Archived` → `Operation requires a live session owner`. Prune toasted `Retired owner still has live records`.
+- Unit: `restore_serving_repairs_catalog_active_marked_retired`, `create_reaches_catalog_active_owner_marked_retired`, `historical_owner_requests_stay_archived`, `snapshot_contacts_catalog_active_owner_marked_retired`, `recover_exited_does_not_retire_a_listening_catalog_active_owner`.
+
+## OS webview browser tabs (2026-09-16)
+
+- Decision: GUI-owned `Tab::Browser` (layout v6) via wry WKWebView/WebKitGTK. Dies with the GUI. v4 `Html` migrates. Isolated `webview/` profile. Local HTML + http(s). Covered panes hide the native view. Downloads denied. `window.open` http(s) opens another Browser tab. Wayland fail closed.
+- Unit: layout migrate, v7 reject, player-only stays v5, html/http allowlist, relative file href reject, profile dir, eviction order, URL submit replaces tab, open keeps originating project, no editor PTY. `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` passed.
+- Blitz raster, worker, and `html_preview` removed. URL bar Go/Enter navigates http(s) in-place.
+- `cargo xtask gui browser` passed: open JS `page.html` (layout v6, no extra PTY), close tab, Open as text (editor session). PNG capture does not include OS webview pixels (child NSView).
+
 ## Notification sound and GUI player (2026-09-16)
 
 - `cargo test --package terminator-core --package terminator-daemon notification_sound` / `os_banner_sound`: passed.

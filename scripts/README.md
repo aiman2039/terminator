@@ -69,7 +69,7 @@ Project-owned Python automation has moved to `crates/xtask`. Run commands from
 | `command_counts.py` | `cargo xtask command-counts --seconds 6 --output counts.json` |
 | `muse_echo.py --muse PATH` | `cargo xtask muse-echo --muse PATH` |
 
-New cases: `cargo xtask gui images`, `cargo xtask gui control`,
+New cases: `cargo xtask gui images`, `cargo xtask gui browser`, `cargo xtask gui control`,
 `cargo xtask gui window-controls`, `cargo xtask gui split-file-opening`,
 `cargo xtask gui markdown`, `cargo xtask gui markdown-busy`, and `cargo xtask browser-check`.
 `cargo xtask gui project-sidebar` covers project sort, removal and restoration.
