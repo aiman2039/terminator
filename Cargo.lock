@@ -5044,7 +5044,7 @@ dependencies = [
  "anyrender",
  "anyrender_vello_cpu",
  "arboard",
- "base64 0.22.1",
+ "base64 0.23.1",
  "blitz-dom",
  "blitz-html",
  "blitz-paint",
@@ -5087,7 +5087,7 @@ name = "terminator-core"
 version = "0.29.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "directories",
  "fs2",
  "libc",
@@ -5106,7 +5106,7 @@ name = "terminator-daemon"
 version = "0.29.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "cc",
  "fs2",
  "libc",
@@ -5126,7 +5126,7 @@ name = "terminator-hook"
 version = "0.29.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "clap",
  "fs2",
  "libc",
@@ -6729,7 +6729,7 @@ name = "xtask"
 version = "0.29.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "clap",
  "core-foundation",
  "core-graphics",
