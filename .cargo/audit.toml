@@ -1,3 +1,11 @@
 # cargo-audit config. Keep RUSTSEC ignores in sync with deny.toml [advisories].ignore.
 [advisories]
-ignore = []
+# Unmaintained notices only (no CVEs). All transitive except paste in vendored egui_dock.
+# Replacements blocked on syntect / resvg 0.45 / egui 0.36.
+ignore = [
+    "RUSTSEC-2025-0141", # bincode via syntect
+    "RUSTSEC-2024-0436", # paste via vendored egui_dock
+    "RUSTSEC-2026-0206", # rustybuzz via resvg
+    "RUSTSEC-2026-0192", # ttf-parser via resvg
+    "RUSTSEC-2024-0320", # yaml-rust via syntect
+]
