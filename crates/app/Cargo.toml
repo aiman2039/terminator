@@ -26,6 +26,7 @@ egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
 egui_commonmark = { version = "0.25", default-features = false, features = ["better_syntax_highlighting"] }
 pulldown-cmark = { version = "0.13", default-features = false }
 url = "2"
+uuid.workspace = true
 wry = "0.57"
 rodio = "0.21"
 ureq = "2"
@@ -64,5 +65,5 @@ gtk = "0.18"
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = "0.3.1"
 objc2 = "0.6.4"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSString", "NSUserDefaults"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSBundle", "NSString", "NSUserDefaults", "NSProcessInfo"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSAlert", "NSMenu", "NSMenuItem"] }

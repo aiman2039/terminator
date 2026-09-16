@@ -3,20 +3,18 @@ use crate::browser::{self, BrowserTarget};
 use anyhow::Result;
 use eframe::egui;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::Path,
     sync::{Arc, Mutex},
     time::Instant,
 };
 use wry::{
-    NewWindowResponse, Rect, WebContext, WebView, WebViewBuilder,
+    NewWindowResponse, PageLoadEvent, Rect, WebContext, WebView, WebViewBuilder,
     dpi::{LogicalPosition, LogicalSize},
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
 };
 
 const MAX_VIEWS: usize = 4;
-#[cfg(target_os = "macos")]
-const DATA_STORE: [u8; 16] = *b"terminator.webv1";
 
 pub(crate) struct VisibleBrowser {
     pub key: String,
@@ -28,13 +26,15 @@ struct Hosted {
     view: WebView,
     target: BrowserTarget,
     used: Instant,
+    allow_local: bool,
 }
 
 pub(crate) struct BrowserHost {
     context: Option<WebContext>,
     views: HashMap<String, Hosted>,
     errors: HashMap<String, String>,
-    opens: Arc<Mutex<Vec<String>>>,
+    opens: Arc<Mutex<Vec<(String, String)>>>,
+    navigations: Arc<Mutex<Vec<(String, BrowserTarget)>>>,
 }
 
 pub(crate) struct SyncInput<'a> {
@@ -51,6 +51,7 @@ impl BrowserHost {
             views: HashMap::new(),
             errors: HashMap::new(),
             opens: Arc::new(Mutex::new(Vec::new())),
+            navigations: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -61,6 +62,52 @@ impl BrowserHost {
     pub fn drop_view(&mut self, key: &str) {
         self.views.remove(key);
         self.errors.remove(key);
+    }
+
+    pub fn retain(&mut self, keys: &HashSet<String>) {
+        self.views.retain(|key, _| keys.contains(key));
+        self.errors.retain(|key, _| keys.contains(key));
+    }
+
+    pub fn navigate(&mut self, key: &str, target: &BrowserTarget) -> bool {
+        let Some(hosted) = self.views.get(key) else {
+            return false;
+        };
+        let result = browser::href(target)
+            .map_err(|e| e.to_string())
+            .and_then(|href| hosted.view.load_url(&href).map_err(wry_error));
+        if let Err(error) = result {
+            self.errors.insert(key.into(), error);
+        }
+        true
+    }
+
+    pub fn committed(&mut self, key: &str, target: BrowserTarget) {
+        if let Some(hosted) = self.views.get_mut(key) {
+            hosted.target = target;
+        }
+    }
+
+    pub fn take_navigations(&self) -> Vec<(String, BrowserTarget)> {
+        let mut changes: HashMap<_, _> = self
+            .navigations
+            .lock()
+            .map(|mut pending| std::mem::take(&mut *pending))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(key, _)| self.views.contains_key(key))
+            .collect();
+        // Also capture same-document navigation (e.g. history.pushState), which
+        // does not necessarily produce a page-load callback.
+        for (key, hosted) in &self.views {
+            if let Ok(url) = hosted.view.url()
+                && let Some(target) = browser::navigation_target(&url, hosted.allow_local)
+                && target != hosted.target
+            {
+                changes.insert(key.clone(), target);
+            }
+        }
+        changes.into_iter().collect()
     }
 
     pub fn go_back(&self, key: &str) {
@@ -82,7 +129,7 @@ impl BrowserHost {
             .is_some()
     }
 
-    pub fn take_opens(&self) -> Vec<String> {
+    pub fn take_opens(&self) -> Vec<(String, String)> {
         self.opens
             .lock()
             .map(|mut pending| std::mem::take(&mut *pending))
@@ -173,13 +220,14 @@ impl BrowserHost {
             hosted.used = Instant::now();
             return Ok(());
         }
-        let view = self.create_view(frame, &href, bounds, data_dir)?;
+        let view = self.create_view(frame, pane, bounds, data_dir)?;
         self.views.insert(
             pane.key.clone(),
             Hosted {
                 view,
                 target: pane.target.clone(),
                 used: Instant::now(),
+                allow_local: pane.target.file().is_some(),
             },
         );
         Ok(())
@@ -188,10 +236,12 @@ impl BrowserHost {
     fn create_view(
         &mut self,
         frame: &eframe::Frame,
-        href: &str,
+        pane: &VisibleBrowser,
         bounds: Rect,
         data_dir: &Path,
     ) -> Result<WebView, String> {
+        let href = browser::href(&pane.target).map_err(|e| e.to_string())?;
+        let allow_local = pane.target.file().is_some();
         let profile = browser::ensure_profile(data_dir).map_err(|error| error.to_string())?;
         if self.context.is_none() {
             self.context = Some(WebContext::new(Some(profile)));
@@ -201,22 +251,38 @@ impl BrowserHost {
             .as_mut()
             .ok_or_else(|| "Webview profile was not created".to_string())?;
         let builder = WebViewBuilder::new_with_web_context(context)
-            .with_url(href)
+            .with_url(&href)
+            .with_navigation_handler(move |url| {
+                browser::navigation_target(&url, allow_local).is_some()
+            })
+            .with_on_page_load_handler({
+                let events = self.navigations.clone();
+                let key = pane.key.clone();
+                move |event, url| {
+                    if matches!(event, PageLoadEvent::Finished)
+                        && let Some(target) = browser::navigation_target(&url, allow_local)
+                        && let Ok(mut pending) = events.lock()
+                    {
+                        pending.push((key.clone(), target));
+                    }
+                }
+            })
             .with_bounds(bounds)
             .with_visible(true)
             .with_download_started_handler(|_, _| false)
             .with_new_window_req_handler({
                 let opens = self.opens.clone();
+                let key = pane.key.clone();
                 move |url, _| {
                     if browser::parse_url(&url).is_ok()
                         && let Ok(mut pending) = opens.lock()
                     {
-                        pending.push(url);
+                        pending.push((key.clone(), url));
                     }
                     NewWindowResponse::Deny
                 }
             });
-        let builder = apply_store(builder);
+        let builder = apply_store(builder, data_dir)?;
         builder.build_as_child(frame).map_err(wry_error)
     }
 
@@ -293,7 +359,6 @@ fn eviction_victim<'a>(
         .copied()
         .filter(|(key, _)| !listed.contains(key))
         .min_by_key(|(_, used)| *used)
-        .or_else(|| mounted.iter().copied().min_by_key(|(_, used)| *used))
         .map(|(key, _)| key.to_owned())
 }
 
@@ -308,14 +373,31 @@ fn wry_error(error: wry::Error) -> String {
     format!("{error}. Use Open in browser.")
 }
 
-fn apply_store(builder: WebViewBuilder<'_>) -> WebViewBuilder<'_> {
+fn apply_store<'a>(
+    builder: WebViewBuilder<'a>,
+    data_dir: &Path,
+) -> Result<WebViewBuilder<'a>, String> {
     #[cfg(target_os = "macos")]
     {
         use wry::WebViewBuilderExtDarwin;
-        builder.with_data_store_identifier(DATA_STORE)
+        if objc2_foundation::NSProcessInfo::processInfo()
+            .operatingSystemVersion()
+            .majorVersion
+            >= 14
+        {
+            let identifier = browser::profile_identifier(data_dir).map_err(|e| e.to_string())?;
+            Ok(builder.with_data_store_identifier(identifier))
+        } else {
+            // Named persistent stores are unavailable before macOS 14. Never fall
+            // back to the shared default store; older systems use private browsing.
+            Ok(builder.with_incognito(true))
+        }
     }
     #[cfg(not(target_os = "macos"))]
-    builder
+    {
+        let _ = data_dir;
+        Ok(builder)
+    }
 }
 
 #[cfg(test)]
@@ -324,7 +406,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
-    fn eviction_prefers_unlisted_oldest_then_listed() {
+    fn eviction_only_removes_hidden_views() {
         let t0 = Instant::now();
         let t1 = t0 + Duration::from_secs(1);
         let t2 = t1 + Duration::from_secs(1);
@@ -335,7 +417,7 @@ mod tests {
         );
         assert_eq!(
             eviction_victim(mounted.iter().copied(), &["keep", "old", "newer"]).as_deref(),
-            Some("keep")
+            None
         );
     }
 }

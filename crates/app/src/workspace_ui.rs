@@ -261,7 +261,9 @@ impl App {
                                     },
                                     None,
                                 ),
-                                Some(Tab::Browser { target }) => (target.title(), "FileCode", None),
+                                Some(Tab::Browser { target, .. }) => {
+                                    (target.title(), "FileCode", None)
+                                }
                                 Some(Tab::Player) => ("Player".into(), "FileMusic", None),
                                 None => ("Workspace".into(), "Terminal", None),
                             };
@@ -523,7 +525,7 @@ impl App {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .into_owned(),
-                    Tab::Browser { target } => target.title(),
+                    Tab::Browser { target, .. } => target.title(),
                     Tab::Player => "Player".into(),
                 };
                 if appearance::menu_item(ui, &label, "Terminal", "").clicked() {
@@ -1368,7 +1370,7 @@ impl TabViewer for Viewer<'_> {
                 .to_string_lossy()
                 .into_owned()
                 .into(),
-            Tab::Browser { target } => target.title().into(),
+            Tab::Browser { target, .. } => target.title().into(),
             Tab::Player => "Player".into(),
             Tab::Terminal(sid) => self
                 .app
@@ -1394,17 +1396,6 @@ impl TabViewer for Viewer<'_> {
         [false, false]
     }
     fn on_close(&mut self, tab: &mut Tab) -> OnCloseResponse {
-        if matches!(tab, Tab::Player) {
-            self.app.player.stop();
-        }
-        if let Tab::Browser { target } = tab {
-            self.app.browser_host.drop_view(
-                &Tab::Browser {
-                    target: target.clone(),
-                }
-                .key(),
-            );
-        }
         if let Tab::Terminal(sid) = tab {
             if self
                 .app
@@ -1463,11 +1454,8 @@ impl TabViewer for Viewer<'_> {
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
         match tab {
             Tab::Image { path } => self.app.image_view(ui, path),
-            Tab::Browser { target } => {
-                let key = Tab::Browser {
-                    target: target.clone(),
-                }
-                .key();
+            Tab::Browser { id, target } => {
+                let key = id.clone();
                 self.app.browser_view(ui, key, target);
             }
             Tab::Player => self.app.player_view(ui),

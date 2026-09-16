@@ -72,6 +72,8 @@ pub(crate) enum Tab {
         path: PathBuf,
     },
     Browser {
+        #[serde(default)]
+        id: String,
         target: BrowserTarget,
     },
     Player,
@@ -84,11 +86,17 @@ pub(crate) enum Tab {
 }
 impl Tab {
     fn key(&self) -> String {
+        if let Self::Browser { id, .. } = self
+            && !id.is_empty()
+        {
+            return id.clone();
+        }
         serde_json::to_string(self).unwrap_or_default()
     }
 
     pub(crate) fn browser_file(path: PathBuf) -> Self {
         Self::Browser {
+            id: String::new(),
             target: BrowserTarget::File(path),
         }
     }
@@ -214,7 +222,7 @@ enum Update {
     Metadata(u64, metadata::Metadata),
     OpenImage(String, PathBuf, After),
     OpenBrowser(String, BrowserTarget, After),
-    OpenPlayer(String, After),
+    OpenPlayer(String, After, Option<(PathBuf, usize)>),
     Image(PathBuf, u64, Result<egui::ColorImage, String>),
     TestPickerClosed,
     PickedProject(Option<PathBuf>, u64),
@@ -1368,10 +1376,24 @@ impl App {
                     self.place_gui_tab(project, Tab::Image { path }, after);
                 }
                 Update::OpenBrowser(project, target, after) => {
-                    self.place_gui_tab(project, Tab::Browser { target }, after);
+                    let existing = self.layouts.get(&project).and_then(|workspace| {
+                        workspace.tabs.iter().flat_map(|group| group.layout.iter_all_tabs())
+                            .map(|(_, tab)| tab)
+                            .find(|tab| matches!(tab, Tab::Browser { target: current, .. } if *current == target))
+                            .cloned()
+                    });
+                    self.place_gui_tab(
+                        project,
+                        existing.unwrap_or_else(|| Tab::Browser { id: id(), target }),
+                        after,
+                    );
                 }
-                Update::OpenPlayer(project, after) => {
-                    self.place_gui_tab(project, Tab::Player, after);
+                Update::OpenPlayer(project, after, audio) => {
+                    self.place_gui_tab(project.clone(), Tab::Player, after);
+                    if let Some((path, index)) = audio {
+                        self.player.set_volume(self.preferences.player_volume);
+                        self.player.play_file(&project, path, index);
+                    }
                 }
                 Update::Image(path, generation, result) => {
                     let used: usize = self
@@ -2127,7 +2149,8 @@ impl App {
             .as_ref()
             .map(|sid| Tab::Terminal(sid.clone()));
         let after = self.editor_target(project, origin.as_ref(), split);
-        let Tab::Browser { target } = Tab::browser_file(std::path::absolute(&path).unwrap_or(path))
+        let Tab::Browser { target, .. } =
+            Tab::browser_file(std::path::absolute(&path).unwrap_or(path))
         else {
             return;
         };
@@ -2154,8 +2177,20 @@ impl App {
             occluded: self.browser_covered(),
             data_dir: &self.paths.data,
         });
-        if let Some(project) = self.selected.clone() {
-            for url in self.browser_host.take_opens() {
+        for (key, url) in self.browser_host.take_opens() {
+            let project = self
+                .layouts
+                .iter()
+                .find(|(_, workspace)| {
+                    workspace.tabs.iter().any(|group| {
+                        group
+                            .layout
+                            .iter_all_tabs()
+                            .any(|(_, tab)| tab.key() == key)
+                    })
+                })
+                .map(|(project, _)| project.clone());
+            if let Some(project) = project {
                 let _ = self.open_browser_url(&project, &url, None);
             }
         }
@@ -2212,36 +2247,70 @@ impl App {
         }
     }
     fn apply_browser_submit(&mut self) {
-        let Some((old_key, target)) = self.browser_submit.take() else {
-            return;
-        };
-        let Some(project) = self.selected.clone() else {
-            return;
-        };
-        let Some(workspace) = self.layouts.get_mut(&project) else {
-            return;
-        };
-        for group in &mut workspace.tabs {
-            if group
-                .primary
-                .as_ref()
-                .is_some_and(|tab| tab.key() == old_key)
-            {
-                group.primary = Some(Tab::Browser {
-                    target: target.clone(),
-                });
+        if let Some((key, target)) = self.browser_submit.take() {
+            if self.browser_host.navigate(&key, &target) {
+                return;
             }
-            for (_, tab) in group.layout.iter_all_tabs_mut() {
-                if tab.key() == old_key {
-                    *tab = Tab::Browser {
-                        target: target.clone(),
-                    };
+            // No mounted view (e.g. unsupported platform): persist the requested target.
+            self.apply_browser_navigation(&key, target);
+        }
+    }
+
+    fn apply_browser_navigation(&mut self, key: &str, target: BrowserTarget) {
+        for workspace in self.layouts.values_mut() {
+            for group in &mut workspace.tabs {
+                for tab in group
+                    .primary
+                    .iter_mut()
+                    .chain(group.layout.iter_all_tabs_mut().map(|(_, tab)| tab))
+                {
+                    if tab.key() == key
+                        && let Tab::Browser {
+                            target: current, ..
+                        } = tab
+                    {
+                        *current = target.clone();
+                    }
                 }
             }
         }
-        workspace.version = workspace.version.max(6);
-        self.browser_host.drop_view(&old_key);
-        self.browser_urls.remove(&old_key);
+        self.browser_urls.insert(
+            key.into(),
+            crate::browser::href(&target).unwrap_or_default(),
+        );
+        self.browser_host.committed(key, target);
+    }
+
+    fn reconcile_gui_resources(&mut self) {
+        let mut browsers = HashSet::new();
+        let mut players = HashSet::new();
+        for (project, workspace) in &self.layouts {
+            for group in &workspace.tabs {
+                for (_, tab) in group.layout.iter_all_tabs() {
+                    match tab {
+                        Tab::Browser { .. } => {
+                            browsers.insert(tab.key());
+                        }
+                        Tab::Player => {
+                            players.insert(project.clone());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        self.browser_host.retain(&browsers);
+        self.browser_urls.retain(|key, _| browsers.contains(key));
+        self.visible_browsers
+            .retain(|pane| browsers.contains(&pane.key));
+        if self
+            .player
+            .project
+            .as_ref()
+            .is_some_and(|project| !players.contains(project))
+        {
+            self.player.stop();
+        }
     }
     fn go_session(&mut self, sid: &str) {
         self.finish_rename(true);
@@ -2702,6 +2771,11 @@ impl eframe::App for App {
             self.maybe_upgrade_idle_daemon();
         }
         if !self.exit.active() {
+            for (key, target) in self.browser_host.take_navigations() {
+                self.apply_browser_navigation(&key, target);
+            }
+            self.reconcile_gui_resources();
+            self.poll_player();
             self.updater.poll();
         }
         ctx.request_repaint_after(Duration::from_secs(1));
@@ -3020,7 +3094,7 @@ impl eframe::App for App {
                                     .map(|s| s.cwd.clone()),
                                 Tab::Diff { cwd, .. } => Some(cwd.clone()),
                                 Tab::Image { path } => path.parent().map(PathBuf::from),
-                                Tab::Browser { target } => {
+                                Tab::Browser { target, .. } => {
                                     target.file().and_then(Path::parent).map(PathBuf::from)
                                 }
                                 Tab::Player => None,
@@ -3183,6 +3257,7 @@ impl eframe::App for App {
         }
         self.modals(&ctx, frame);
         self.apply_browser_submit();
+        self.reconcile_gui_resources();
         self.sync_browsers(frame);
         self.popups.end_frame();
         // Let this frame's second click cancel the pending open before expiring it.
@@ -5079,6 +5154,7 @@ mod navigation_tests {
         app.process_updates(&ctx);
         assert_eq!(app.selected.as_deref(), Some("b"));
         assert!(app.layouts["a"].contains(&Tab::Browser {
+            id: String::new(),
             target: BrowserTarget::Url("https://example.com/app".into())
         }));
         assert_eq!(app.layouts["a"].version, 6);
@@ -5099,19 +5175,91 @@ mod navigation_tests {
             .unwrap();
         app.process_updates(&ctx);
         app.selected = Some("a".into());
-        let old = Tab::Browser {
-            target: BrowserTarget::Url("https://example.com/app".into()),
-        };
+        let old = app.layouts["a"].active_pane().unwrap().clone();
         app.browser_submit = Some((
             old.key(),
             BrowserTarget::from_http_url("https://example.com/other").unwrap(),
         ));
         app.apply_browser_submit();
         assert!(app.layouts["a"].contains(&Tab::Browser {
+            id: String::new(),
             target: BrowserTarget::from_http_url("https://example.com/other").unwrap()
         }));
         assert!(!app.layouts["a"].contains(&old));
     }
+    #[test]
+    fn background_player_advances_its_own_project_playlist() {
+        let (mut app, _, _dir) = fixture();
+        app.selected = Some("b".into());
+        app.preferences
+            .player_playlists
+            .insert("a".into(), vec!["/a/one.wav".into(), "/a/two.wav".into()]);
+        app.preferences
+            .player_playlists
+            .insert("b".into(), vec!["/b/other.wav".into()]);
+        app.player = player::Controller::finished_fixture("a", Some(0));
+        app.poll_player();
+        assert_eq!(app.player.project.as_deref(), Some("a"));
+        assert_eq!(app.preferences.player_index.get("a"), Some(&1));
+        assert!(!app.preferences.player_index.contains_key("b"));
+    }
+
+    #[test]
+    fn radio_completion_does_not_start_a_playlist() {
+        let (mut app, _, _dir) = fixture();
+        app.preferences
+            .player_playlists
+            .insert("a".into(), vec!["/a/one.wav".into(), "/a/two.wav".into()]);
+        app.player = player::Controller::finished_fixture("a", None);
+        app.poll_player();
+        assert!(!app.preferences.player_index.contains_key("a"));
+    }
+
+    #[test]
+    fn closing_a_top_level_player_stops_only_its_owner() {
+        let (mut app, _, _dir) = fixture();
+        app.layouts
+            .get_mut("a")
+            .unwrap()
+            .add("player-a".into(), Tab::Player);
+        app.layouts
+            .get_mut("b")
+            .unwrap()
+            .add("player-b".into(), Tab::Player);
+        app.player = player::Controller::finished_fixture("a", Some(0));
+        app.layouts.get_mut("b").unwrap().close("player-b");
+        app.reconcile_gui_resources();
+        assert_eq!(app.player.project.as_deref(), Some("a"));
+        app.layouts.get_mut("a").unwrap().close("player-a");
+        app.reconcile_gui_resources();
+        assert!(app.player.project.is_none());
+    }
+
+    #[test]
+    fn navigation_retains_identity_and_updates_the_originating_project() {
+        let (mut app, ctx, _dir) = fixture();
+        app.open_browser_url("a", "https://example.com/start", None)
+            .unwrap();
+        app.process_updates(&ctx);
+        let key = app.layouts["a"].active_pane().unwrap().key();
+        app.selected = Some("b".into());
+        let target = BrowserTarget::from_http_url("https://example.com/next").unwrap();
+        app.apply_browser_navigation(&key, target.clone());
+        assert_eq!(app.layouts["a"].active_pane().unwrap().key(), key);
+        assert_eq!(app.browser_urls[&key], "https://example.com/next");
+        assert!(
+            matches!(app.layouts["a"].active_pane(), Some(Tab::Browser { target: current, .. }) if *current == target)
+        );
+        assert_eq!(
+            app.layouts["a"].tabs[0].primary.as_ref().unwrap().key(),
+            key
+        );
+        let tab_id = app.layouts["a"].active.clone();
+        app.layouts.get_mut("a").unwrap().close(&tab_id);
+        app.reconcile_gui_resources();
+        assert!(!app.browser_urls.contains_key(&key));
+    }
+
     #[test]
     fn audio_open_creates_player_tab_and_keeps_original_project() {
         let (mut app, ctx, _dir) = fixture();

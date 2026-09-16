@@ -40,7 +40,7 @@ jobs:
             build-essential pkg-config libssl-dev libfontconfig1-dev \
             libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev \
             libgl1-mesa-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
-            libasound2-dev
+            libasound2-dev libwebkit2gtk-4.1-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.97.1'

@@ -912,7 +912,11 @@ fn browser(o: &Options) -> Result<()> {
     let (h, _, s, root) = setup("browser")?;
     fs::write(
         root.join("page.html"),
-        r#"<!doctype html><title>Terminator browser fixture</title><style>body{background:#1d4ed8;color:#fff;font:24px sans-serif;padding:32px}</style><h1 id="ok">loading</h1><script>document.getElementById('ok').textContent='ready'</script>"#,
+        r#"<!doctype html><title>Terminator browser fixture</title><style>body{background:#1d4ed8;color:#fff;font:24px sans-serif;padding:32px}</style><h1 id="ok">loading</h1><script>document.getElementById('ok').textContent='ready';setTimeout(()=>location.href='next.html',200)</script>"#,
+    )?;
+    fs::write(
+        root.join("next.html"),
+        "<!doctype html><title>Navigation complete</title><h1>Second page</h1>",
     )?;
     plain(
         &h,
@@ -943,11 +947,15 @@ fn browser(o: &Options) -> Result<()> {
         "Browser tab did not persist layout v6: {:?}",
         state["projects"]
     );
+    ensure!(
+        layout.is_some_and(|layout| layout.to_string().contains("next.html")),
+        "Native page navigation did not update the saved browser target"
+    );
     plain(
         &h,
         o,
         "browser-close",
-        json!([{"at_ms":1100,"target":"workspace-close:page.html"}]),
+        json!([{"at_ms":1100,"target":"workspace-close:next.html"}]),
         3000,
     )?;
     ensure!(

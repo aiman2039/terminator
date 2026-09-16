@@ -30,7 +30,7 @@ open target/package/Terminator.app
 
 `--debug` produces a faster development bundle. Bundles are signed ad hoc locally; they are not notarized or published. On Linux, the same task produces a relocatable archive and desktop entry. X11 and Wayland backends are compiled; native file selection uses the desktop's XDG portal on Linux and NSOpenPanel on macOS.
 
-Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcommon0`, `libgl1`, and the usual X11/Wayland desktop libraries. Linux compilation also needs `pkg-config`, `libfontconfig1-dev` so resvg can use system fonts, `libasound2-dev` for rodio/ALSA, plus the matching X11/Wayland/GL headers. WebKitGTK is required for in-app Browser tabs on Linux (X11). Install an XDG desktop portal backend appropriate to your desktop for file dialogs. `cargo xtask linux-check` configures a disposable Linux test container; `scripts/README.md` lists the Rust validation tasks.
+Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcommon0`, `libgl1`, and the usual X11/Wayland desktop libraries. Linux compilation also needs `pkg-config`, `libfontconfig1-dev` so resvg can use system fonts, `libasound2-dev` for rodio/ALSA, plus the matching X11/Wayland/GL headers. `libwebkit2gtk-4.1-dev` is required at build time; `libwebkit2gtk-4.1-0` is required at runtime. WebKitGTK is required for in-app Browser tabs on Linux (X11). Install an XDG desktop portal backend appropriate to your desktop for file dialogs. `cargo xtask linux-check` configures a disposable Linux test container; `scripts/README.md` lists the Rust validation tasks.
 
 ## Daily workflow
 
@@ -249,7 +249,8 @@ preview. Ordinary Neovim configuration and Git review profiles are unchanged.
 HTML files and http(s) URLs open as a GUI-only **Browser** tab (OS webview, no PTY).
 The header offers Back, Forward, Reload, **Open in browser** (system browser), and
 Open as text for local files. The native view hides when the pane is covered and
-dies with the GUI. Isolated profile under the data directory. No Chromium is
+dies with the GUI. Its profile is isolated by data directory (platform storage
+details below). No Chromium is
 bundled. Browser-bearing layouts use version 6; v4 HTML tabs migrate. Linux
 Wayland cannot host a child webview yet — use Open in browser.
 
@@ -328,3 +329,18 @@ local CDP page endpoint, the browser subcommands `navigate`, `snapshot`, `click`
 `fill`, `evaluate`, and `screenshot` accept `--endpoint ws://127.0.0.1:PORT/devtools/page/ID`.
 They neither embed nor download a browser. A remote endpoint requires an explicit
 local tunnel. HTML/CSS snapshots and screenshots are produced only when requested.
+
+Browser navigation uses persistent pane IDs (compatible with layout v6); legacy
+browser entries receive IDs when loaded. Links, redirects and history navigation
+use the same HTTP(S)/local-HTML policy as opening a tab. Closing a pane or its
+containing top-level tab destroys its webview. WebKitGTK stores its profile below
+the data directory. macOS 14+ uses a named WebKit store whose UUID is saved under
+that directory; macOS 12–13 uses nonpersistent private browsing to avoid sharing
+the default store. OS-managed macOS store contents are not in the data directory.
+
+Playback has an explicit owning project and is polled from app logic, including
+when the GUI is minimized. Switching projects does not change the current
+playlist. Closing the owner's Player stops playback; closing another project's
+Player does not. Only one audio source plays at a time. Radio uses connection and
+per-read timeouts without a total stream deadline; initial output honors saved
+volume, including mute.

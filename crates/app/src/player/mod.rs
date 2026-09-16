@@ -26,16 +26,30 @@ pub struct Controller {
     engine: Handle,
     status: Status,
     file_index: Option<usize>,
+    pub(super) project: Option<String>,
     station_draft: String,
     volume: f32,
 }
 
 impl Controller {
+    #[cfg(test)]
+    pub(super) fn finished_fixture(project: &str, file_index: Option<usize>) -> Self {
+        Self {
+            engine: Handle::finished_fixture(),
+            status: Status::Stopped,
+            file_index,
+            project: Some(project.into()),
+            station_draft: String::new(),
+            volume: 0.8,
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             engine: Handle::spawn(),
             status: Status::Stopped,
             file_index: None,
+            project: None,
             station_draft: String::new(),
             volume: 0.8,
         }
@@ -49,7 +63,7 @@ impl Controller {
                 Outcome::Finished => finished = true,
             }
         }
-        if finished {
+        if finished && self.project.as_deref() == Some(project) && self.file_index.is_some() {
             return self.play_offset(project, playlist, 1);
         }
         None
@@ -58,6 +72,7 @@ impl Controller {
     pub fn stop(&mut self) {
         self.engine.stop();
         self.file_index = None;
+        self.project = None;
         self.status = Status::Stopped;
     }
 
@@ -69,18 +84,20 @@ impl Controller {
         }
     }
 
-    pub fn play_file(&mut self, path: PathBuf, index: usize) {
+    pub fn play_file(&mut self, project: &str, path: PathBuf, index: usize) {
         let title = path
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
+        self.project = Some(project.into());
         self.file_index = Some(index);
         self.engine.volume(self.volume);
         self.engine.play(Playable::File { path, title });
     }
 
-    pub fn play_station(&mut self, name: String, url: String) {
+    pub fn play_station(&mut self, project: &str, name: String, url: String) {
+        self.project = Some(project.into());
         self.file_index = None;
         self.engine.volume(self.volume);
         self.engine.play(Playable::Stream { url, title: name });
@@ -88,7 +105,7 @@ impl Controller {
 
     pub fn play_offset(
         &mut self,
-        _project: &str,
+        project: &str,
         playlist: &[PathBuf],
         delta: isize,
     ) -> Option<usize> {
@@ -96,13 +113,17 @@ impl Controller {
             self.stop();
             return None;
         }
-        let current = self.file_index.unwrap_or(0);
+        let current = if self.project.as_deref() == Some(project) {
+            self.file_index.unwrap_or(0)
+        } else {
+            0
+        };
         let next = current.saturating_add_signed(delta).min(playlist.len() - 1);
         if delta > 0 && next == current && current + 1 >= playlist.len() {
             self.stop();
             return None;
         }
-        self.play_file(playlist[next].clone(), next);
+        self.play_file(project, playlist[next].clone(), next);
         Some(next)
     }
 
@@ -126,6 +147,14 @@ impl Controller {
 }
 
 impl App {
+    pub(super) fn poll_player(&mut self) {
+        let project = self.player.project.clone().unwrap_or_default();
+        let playlist = self.playlist(&project);
+        if let Some(index) = self.player.poll(&project, &playlist) {
+            self.preferences.player_index.insert(project, index);
+        }
+    }
+
     pub(super) fn open_audio(&mut self, project: &str, path: PathBuf, split: Option<&str>) {
         let path = std::path::absolute(&path).unwrap_or(path);
         {
@@ -144,16 +173,16 @@ impl App {
             .get(project)
             .and_then(|playlist| playlist.iter().position(|item| item == &path))
             .unwrap_or(0);
-        self.player.set_volume(self.preferences.player_volume);
-        self.player.play_file(path, index);
         let origin = self
             .active_session
             .as_ref()
             .map(|sid| Tab::Terminal(sid.clone()));
         let after = self.editor_target(project, origin.as_ref(), split);
-        let _ = self
-            .update_tx
-            .send(Update::OpenPlayer(project.into(), after));
+        let _ = self.update_tx.send(Update::OpenPlayer(
+            project.into(),
+            after,
+            Some((path, index)),
+        ));
     }
 
     pub(super) fn open_player_tab(&mut self, project: &str) {
@@ -164,7 +193,7 @@ impl App {
         let after = self.editor_target(project, origin.as_ref(), None);
         let _ = self
             .update_tx
-            .send(Update::OpenPlayer(project.into(), after));
+            .send(Update::OpenPlayer(project.into(), after, None));
     }
 
     pub(super) fn player_view(&mut self, ui: &mut egui::Ui) {
@@ -173,26 +202,21 @@ impl App {
             return;
         };
         self.player.set_volume(self.preferences.player_volume);
-        let next = self.player.poll(
-            &project,
-            self.preferences
-                .player_playlists
-                .get(&project)
-                .map_or(&[], Vec::as_slice),
-        );
-        if let Some(index) = next {
-            self.preferences.player_index.insert(project.clone(), index);
-        }
         ui.ctx().request_repaint_after(Duration::from_millis(200));
         self.player_chrome(ui, &project);
         ui.separator();
         self.player_playlist(ui, &project);
         ui.separator();
-        self.player_radio(ui);
+        self.player_radio(ui, &project);
     }
 
     fn player_chrome(&mut self, ui: &mut egui::Ui, project: &str) {
-        let status = self.player.status.clone();
+        let owns_player = self.player.project.as_deref() == Some(project);
+        let status = if owns_player {
+            self.player.status.clone()
+        } else {
+            Status::Stopped
+        };
         match &status {
             Status::Playing { title, .. } | Status::Paused { title, .. } => {
                 ui.strong(title);
@@ -224,22 +248,22 @@ impl App {
                 let playlist = self.playlist(project);
                 self.player.play_offset(project, &playlist, -1);
             }
-            let play_label = if self.player.playing() {
+            let play_label = if owns_player && self.player.playing() {
                 "Pause"
             } else {
                 "Play"
             };
             if ui.button(play_label).clicked() {
-                if matches!(self.player.status, Status::Stopped | Status::Error(_)) {
+                if matches!(status, Status::Stopped | Status::Error(_)) {
                     let playlist = self.playlist(project);
                     if let Some(path) = playlist.first() {
-                        self.player.play_file(path.clone(), 0);
+                        self.player.play_file(project, path.clone(), 0);
                     }
                 } else {
                     self.player.toggle();
                 }
             }
-            if ui.button("Stop").clicked() {
+            if ui.button("Stop").clicked() && owns_player {
                 self.player.stop();
             }
             if ui.button(">|").clicked() {
@@ -257,7 +281,7 @@ impl App {
             }
         });
         let typing = ui.memory(|memory| memory.has_focus(egui::Id::new("player-station-url")));
-        if !typing && ui.input(|i| i.key_pressed(egui::Key::Space)) {
+        if owns_player && !typing && ui.input(|i| i.key_pressed(egui::Key::Space)) {
             ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
             self.player.toggle();
         }
@@ -317,7 +341,8 @@ impl App {
                         .to_string_lossy()
                         .into_owned();
                     ui.horizontal(|ui| {
-                        let selected = self.player.file_index == Some(index);
+                        let selected = self.player.project.as_deref() == Some(project)
+                            && self.player.file_index == Some(index);
                         if ui.selectable_label(selected, name).double_clicked() {
                             play = Some(index);
                         }
@@ -330,7 +355,7 @@ impl App {
         if let Some(index) = play
             && let Some(path) = playlist.get(index)
         {
-            self.player.play_file(path.clone(), index);
+            self.player.play_file(project, path.clone(), index);
             self.preferences.player_index.insert(project.into(), index);
         }
         if let Some(index) = remove {
@@ -339,18 +364,25 @@ impl App {
             {
                 list.remove(index);
             }
-            if self.player.file_index == Some(index) {
+            if self.player.project.as_deref() == Some(project)
+                && self.player.file_index == Some(index)
+            {
                 self.player.stop();
+            } else if self.player.project.as_deref() == Some(project)
+                && let Some(current) = self.player.file_index.as_mut()
+                && index < *current
+            {
+                *current -= 1;
             }
         }
     }
 
-    fn player_radio(&mut self, ui: &mut egui::Ui) {
+    fn player_radio(&mut self, ui: &mut egui::Ui, project: &str) {
         ui.strong("Radio");
         for station in radio::bundled() {
             if ui.button(station.name).clicked() {
                 self.player
-                    .play_station(station.name.into(), station.url.into());
+                    .play_station(project, station.name.into(), station.url.into());
             }
         }
         ui.separator();
@@ -371,7 +403,7 @@ impl App {
             && let Some(station) = self.preferences.radio_stations.get(index)
         {
             self.player
-                .play_station(station.name.clone(), station.url.clone());
+                .play_station(project, station.name.clone(), station.url.clone());
         }
         if let Some(index) = remove
             && index < self.preferences.radio_stations.len()
@@ -386,12 +418,12 @@ impl App {
                     .id(egui::Id::new("player-station-url")),
             );
             if ui.button("Add").clicked() {
-                self.add_custom_station();
+                self.add_custom_station(project);
             }
         });
     }
 
-    fn add_custom_station(&mut self) {
+    fn add_custom_station(&mut self, project: &str) {
         match parse_stream_url(&self.player.station_draft) {
             Ok(url) => {
                 let name = url.clone();
@@ -401,6 +433,7 @@ impl App {
                 });
                 self.player.station_draft.clear();
                 self.player.play_station(
+                    project,
                     self.preferences
                         .radio_stations
                         .last()

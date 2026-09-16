@@ -296,3 +296,18 @@ A reset-boundary feeder clears extension modes in stream order on RIS; it does n
 create another screen model or infer lifecycle from text. Long-running native
 fixtures may opt into rendering while occluded through the test-support build;
 normal application occlusion/minimization behavior is preserved.
+
+Browser navigation uses persistent pane IDs (compatible with layout v6); legacy
+browser entries receive IDs when loaded. Links, redirects and history navigation
+use the same HTTP(S)/local-HTML policy as opening a tab. Closing a pane or its
+containing top-level tab destroys its webview. WebKitGTK stores its profile below
+the data directory. macOS 14+ uses a named WebKit store whose UUID is saved under
+that directory; macOS 12–13 uses nonpersistent private browsing to avoid sharing
+the default store. OS-managed macOS store contents are not in the data directory.
+
+Playback has an explicit owning project and is polled from app logic, including
+when the GUI is minimized. Switching projects does not change the current
+playlist. Closing the owner's Player stops playback; closing another project's
+Player does not. Only one audio source plays at a time. Radio uses connection and
+per-read timeouts without a total stream deadline; initial output honors saved
+volume, including mute.

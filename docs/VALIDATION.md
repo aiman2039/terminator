@@ -2248,3 +2248,36 @@ logs and native captures/reports, including `generations/legacy-crash-recovered.
 and `installation/restart-relaunch.json`. All tests used isolated processes and
 state. Linux native and signed cross-release validation remain outside this local
 run; no live user service was restarted and `AGENTS.md` was unchanged.
+
+## 2026-09-16 — Commit-review fixes
+
+- Added WebKitGTK 4.1 development dependencies to Linux CI, release setup and the
+  disposable Linux harness; documented runtime packages. Linux execution was not
+  available in this macOS run.
+- Browser tabs keep stable pane IDs across navigation and legacy-v6 migration.
+  Navigation policy covers links/redirects, committed URLs update persistence and
+  external-open targets, and cleanup reconciles all project layouts. Profile IDs
+  persist separately per data directory; macOS 12–13 deliberately uses private,
+  nonpersistent storage instead of the default WebKit store.
+- Player logic runs independently of visible tabs, retains the originating
+  project, ignores old-source completion events, and stops when its owning tab
+  closes. Radio has per-operation timeouts, not a total response deadline. Saved
+  volume is applied before the first source reaches the output sink.
+- `cargo fmt --all --check`, `git diff --check`, and
+  `cargo clippy --workspace --all-targets --all-features --locked --offline -- -D warnings`
+  passed. Test-support workspace binaries/examples built successfully.
+- `cargo test --workspace --all-features --locked --offline -- --test-threads=1`:
+  351 passed, one existing real-PTY test ignored. Tests require local socket and
+  filesystem-watcher access outside the restricted sandbox. An unchanged
+  `legacy_exit_recovery_requires_lock_and_preserves_original_records` test
+  intermittently failed in a parallel run; the full serial rerun passed.
+- Regressions cover background playlist ownership, top-level Player closure,
+  radio completion, stale playback events, initial mute, stream lifetime, browser
+  navigation policy, stable IDs, and profile isolation. The stream test uses a
+  loopback HTTP server; audio tests use an in-memory mixer, not speakers.
+- `target/debug/xtask gui browser --output /tmp/terminator-review-native-navigation`
+  passed using disposable state and fixture-owned sessions: native JavaScript
+  navigation from `page.html` to `next.html` updated the saved target; top-level
+  close and Open as text passed. Captures are under that output directory.
+  Egui captures exclude the OS webview overlay, so they do not prove its pixels.
+  macOS 12–13 fallback, Linux rendering and live radio/audio output remain untested.

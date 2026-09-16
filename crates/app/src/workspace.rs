@@ -63,6 +63,30 @@ impl Workspace {
                 workspace.tabs.iter().any(|t| t.id == workspace.active),
                 "Active project tab is missing"
             );
+            for group in &mut workspace.tabs {
+                for (_, pane) in group.layout.iter_all_tabs_mut() {
+                    if let Tab::Browser { id, .. } = pane
+                        && id.is_empty()
+                    {
+                        *id = terminator_core::id();
+                    }
+                }
+                if let Some(Tab::Browser { id, target }) = &mut group.primary
+                    && id.is_empty()
+                {
+                    *id = group
+                        .layout
+                        .iter_all_tabs()
+                        .find_map(|(_, pane)| match pane {
+                            Tab::Browser {
+                                id,
+                                target: current,
+                            } if current == target => Some(id.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_else(terminator_core::id);
+                }
+            }
             for tab in &workspace.tabs {
                 validate_layout(&tab.layout)?;
             }
@@ -100,11 +124,21 @@ impl Workspace {
         }
     }
     pub fn contains(&self, pane: &Tab) -> bool {
-        self.tabs
-            .iter()
-            .any(|tab| tab.layout.find_tab(pane).is_some())
+        self.tabs.iter().any(|tab| {
+            tab.layout.iter_all_tabs().any(|(_, existing)| match pane {
+                Tab::Browser { id, target } if id.is_empty() => {
+                    matches!(existing, Tab::Browser { target: current, .. } if current == target)
+                }
+                _ => existing == pane,
+            })
+        })
     }
-    pub fn add(&mut self, id: String, pane: Tab) {
+    pub fn add(&mut self, id: String, mut pane: Tab) {
+        if let Tab::Browser { id, .. } = &mut pane
+            && id.is_empty()
+        {
+            *id = terminator_core::id();
+        }
         self.version = self.version.max(pane.layout_version());
         self.tabs
             .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
@@ -199,6 +233,43 @@ impl DerefMut for Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_browser_ids_migrate_once_and_primary_matches_the_pane() {
+        let mut workspace = Workspace::empty();
+        workspace.add("browser".into(), Tab::browser_file("/tmp/page.html".into()));
+        let mut value = terminator_core::sanitize_layout(serde_json::to_value(workspace).unwrap());
+        fn remove_browser_ids(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    if let Some(browser) = map
+                        .get_mut("Browser")
+                        .and_then(serde_json::Value::as_object_mut)
+                    {
+                        browser.remove("id");
+                    }
+                    for nested in map.values_mut() {
+                        remove_browser_ids(nested);
+                    }
+                }
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        remove_browser_ids(value);
+                    }
+                }
+                _ => {}
+            }
+        }
+        remove_browser_ids(&mut value);
+        let loaded = Workspace::load(value).unwrap();
+        let key = loaded.active_pane().unwrap().key();
+        assert_eq!(loaded.tabs[0].primary.as_ref().unwrap().key(), key);
+        let restored = Workspace::load(terminator_core::sanitize_layout(
+            serde_json::to_value(&loaded).unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(restored.active_pane().unwrap().key(), key);
+    }
+
     #[test]
     fn missing_main_surface_is_rejected_before_pane_access() {
         let mut saved =

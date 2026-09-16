@@ -64,8 +64,44 @@ pub(crate) fn href(target: &BrowserTarget) -> Result<String> {
         BrowserTarget::File(path) => url::Url::from_file_path(path)
             .map(|url| url.to_string())
             .map_err(|()| anyhow::anyhow!("HTML path is not absolute")),
-        BrowserTarget::Url(url) => Ok(url.clone()),
+        BrowserTarget::Url(url) => parse_url(url),
     }
+}
+
+/// Apply the same policy to initial loads, links, redirects, and history navigation.
+pub(crate) fn navigation_target(value: &str, allow_local: bool) -> Option<BrowserTarget> {
+    let url = url::Url::parse(value).ok()?;
+    if url.scheme() == "file" && allow_local {
+        let path = url.to_file_path().ok()?;
+        return supported_file(&path).then_some(BrowserTarget::File(path));
+    }
+    BrowserTarget::from_http_url(value).ok()
+}
+
+/// A random persistent identifier belongs to this data directory, not the app bundle.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn profile_identifier(data: &Path) -> Result<[u8; 16]> {
+    use fs2::FileExt;
+    use std::io::{Read, Write};
+    let path = ensure_profile(data)?.join("store-id");
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    file.lock_exclusive()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    if bytes.is_empty() {
+        let id = uuid::Uuid::new_v4();
+        file.write_all(id.as_bytes())?;
+        file.sync_all()?;
+        return Ok(*id.as_bytes());
+    }
+    Ok(*uuid::Uuid::from_slice(&bytes)
+        .context("Invalid browser profile identifier")?
+        .as_bytes())
 }
 
 /// Rewrite persisted `Tab::Html { path }` objects into `Tab::Browser`.
@@ -99,6 +135,34 @@ pub(crate) fn rewrite_html_tabs(value: &mut serde_json::Value) {
 mod tests {
     use super::{BrowserTarget, parse_url, profile_dir, rewrite_html_tabs, supported_file};
     use std::path::Path;
+
+    #[test]
+    fn navigation_checks_links_redirects_and_local_file_types() {
+        for blocked in [
+            "javascript:alert(1)",
+            "data:text/html,hello",
+            "ftp://example.com/a",
+            "file:///etc/passwd",
+            "https://user:password@example.com",
+        ] {
+            assert!(
+                super::navigation_target(blocked, true).is_none(),
+                "{blocked}"
+            );
+        }
+        assert!(super::navigation_target("file:///tmp/page.html", false).is_none());
+        assert!(super::navigation_target("file:///tmp/page.html", true).is_some());
+        assert!(super::navigation_target("https://example.com/next", false).is_some());
+    }
+
+    #[test]
+    fn profiles_are_stable_and_isolated_between_data_directories() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let id = super::profile_identifier(first.path()).unwrap();
+        assert_eq!(id, super::profile_identifier(first.path()).unwrap());
+        assert_ne!(id, super::profile_identifier(second.path()).unwrap());
+    }
 
     #[test]
     fn html_tab_objects_become_browser_files() {

@@ -2,6 +2,7 @@
 use anyhow::{Context, Result, bail};
 use rodio::Source as _;
 use std::{
+    cell::Cell,
     fs::File,
     io::{self, Read, Seek, SeekFrom},
     path::PathBuf,
@@ -38,26 +39,48 @@ pub enum Status {
 }
 
 enum Command {
-    Play(Playable),
+    Play(u64, Playable),
     Pause,
     Resume,
-    Stop,
+    Stop(u64),
     Seek(Duration),
     Volume(f32),
     Shutdown,
 }
 
-enum Event {
-    Status(Status),
-    Finished,
+struct Event {
+    generation: u64,
+    outcome: Outcome,
 }
 
 pub struct Handle {
     commands: Sender<Command>,
     events: Receiver<Event>,
+    generation: Cell<u64>,
 }
 
 impl Handle {
+    #[cfg(test)]
+    pub(super) fn finished_fixture() -> Self {
+        let (commands, _command_rx) = mpsc::channel();
+        let (tx, events) = mpsc::channel();
+        tx.send(Event {
+            generation: 0,
+            outcome: Outcome::Finished,
+        })
+        .unwrap();
+        tx.send(Event {
+            generation: 0,
+            outcome: Outcome::Status(Status::Stopped),
+        })
+        .unwrap();
+        Self {
+            commands,
+            events,
+            generation: Cell::new(0),
+        }
+    }
+
     pub fn spawn() -> Self {
         let (commands, command_rx) = mpsc::channel();
         let (event_tx, events) = mpsc::channel();
@@ -65,11 +88,17 @@ impl Handle {
             .name("terminator-player".into())
             .spawn(move || Worker::run(command_rx, event_tx))
             .ok();
-        Self { commands, events }
+        Self {
+            commands,
+            events,
+            generation: Cell::new(0),
+        }
     }
 
     pub fn play(&self, source: Playable) {
-        let _ = self.commands.send(Command::Play(source));
+        let generation = self.generation.get().wrapping_add(1);
+        self.generation.set(generation);
+        let _ = self.commands.send(Command::Play(generation, source));
     }
 
     pub fn pause(&self) {
@@ -81,7 +110,9 @@ impl Handle {
     }
 
     pub fn stop(&self) {
-        let _ = self.commands.send(Command::Stop);
+        let generation = self.generation.get().wrapping_add(1);
+        self.generation.set(generation);
+        let _ = self.commands.send(Command::Stop(generation));
     }
 
     pub fn seek(&self, position: Duration) {
@@ -96,8 +127,8 @@ impl Handle {
         let mut out = Vec::new();
         loop {
             match self.events.try_recv() {
-                Ok(Event::Status(status)) => out.push(Outcome::Status(status)),
-                Ok(Event::Finished) => out.push(Outcome::Finished),
+                Ok(event) if event.generation == self.generation.get() => out.push(event.outcome),
+                Ok(_) => {}
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     out.push(Outcome::Status(Status::Error(
@@ -130,11 +161,13 @@ struct Worker {
     duration: Option<Duration>,
     seekable: bool,
     playing: bool,
+    volume: f32,
+    generation: u64,
 }
 
 impl Worker {
-    fn run(commands: Receiver<Command>, events: Sender<Event>) {
-        let mut worker = Self {
+    fn new(events: Sender<Event>) -> Self {
+        Self {
             events,
             stream: None,
             sink: None,
@@ -142,14 +175,26 @@ impl Worker {
             duration: None,
             seekable: false,
             playing: false,
-        };
+            volume: 1.0,
+            generation: 0,
+        }
+    }
+
+    fn run(commands: Receiver<Command>, events: Sender<Event>) {
+        let mut worker = Self::new(events);
         loop {
             match commands.recv_timeout(Duration::from_millis(50)) {
                 Ok(Command::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
-                Ok(Command::Play(source)) => worker.play(source),
+                Ok(Command::Play(generation, source)) => {
+                    worker.generation = generation;
+                    worker.play(source);
+                }
                 Ok(Command::Pause) => worker.pause(),
                 Ok(Command::Resume) => worker.resume(),
-                Ok(Command::Stop) => worker.stop(),
+                Ok(Command::Stop(generation)) => {
+                    worker.generation = generation;
+                    worker.stop();
+                }
                 Ok(Command::Seek(position)) => worker.seek(position),
                 Ok(Command::Volume(volume)) => worker.set_volume(volume),
                 Err(RecvTimeoutError::Timeout) => worker.tick(),
@@ -163,10 +208,16 @@ impl Worker {
         }
         let stream =
             rodio::OutputStreamBuilder::open_default_stream().context("No audio output device")?;
-        let sink = rodio::Sink::connect_new(stream.mixer());
+        let sink = self.new_sink(stream.mixer());
         self.stream = Some(stream);
         self.sink = Some(sink);
         Ok(())
+    }
+
+    fn new_sink(&self, mixer: &rodio::mixer::Mixer) -> rodio::Sink {
+        let sink = rodio::Sink::connect_new(mixer);
+        sink.set_volume(self.volume);
+        sink
     }
 
     fn play(&mut self, source: Playable) {
@@ -204,8 +255,8 @@ impl Worker {
     fn append_stream(&mut self, url: &str, title: String) -> Result<()> {
         let sink = self.sink.as_ref().context("Audio output missing")?;
         sink.clear();
-        let response = ureq::get(url)
-            .timeout(Duration::from_secs(15))
+        let response = stream_agent(Duration::from_secs(15))
+            .get(url)
             .call()
             .with_context(|| format!("Connect {url}"))?;
         let content_type = response.content_type().to_ascii_lowercase();
@@ -276,8 +327,9 @@ impl Worker {
     }
 
     fn set_volume(&mut self, volume: f32) {
+        self.volume = volume.clamp(0.0, 1.0);
         if let Some(sink) = &self.sink {
-            sink.set_volume(volume.clamp(0.0, 1.0));
+            sink.set_volume(self.volume);
         }
     }
 
@@ -287,7 +339,10 @@ impl Worker {
         };
         if self.playing && sink.empty() {
             self.playing = false;
-            let _ = self.events.send(Event::Finished);
+            let _ = self.events.send(Event {
+                generation: self.generation,
+                outcome: Outcome::Finished,
+            });
             self.emit(Status::Stopped);
             return;
         }
@@ -310,8 +365,20 @@ impl Worker {
     }
 
     fn emit(&self, status: Status) {
-        let _ = self.events.send(Event::Status(status));
+        let _ = self.events.send(Event {
+            generation: self.generation,
+            outcome: Outcome::Status(status),
+        });
     }
+}
+
+// A live response has no total deadline. Each stalled connection/read is bounded.
+fn stream_agent(timeout: Duration) -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(timeout)
+        .timeout_read(timeout)
+        .timeout_write(timeout)
+        .build()
 }
 
 struct StreamInner {
@@ -387,6 +454,66 @@ mod tests {
             out.extend(&sample.to_le_bytes());
         }
         out
+    }
+
+    #[test]
+    fn completion_from_an_old_source_cannot_advance_the_new_source() {
+        let handle = super::Handle::finished_fixture();
+        handle.play(super::Playable::Stream {
+            url: "https://example.com/radio".into(),
+            title: "Radio".into(),
+        });
+        assert!(
+            !handle
+                .poll()
+                .iter()
+                .any(|event| matches!(event, super::Outcome::Finished))
+        );
+    }
+
+    #[test]
+    fn saved_mute_is_applied_before_the_first_source() {
+        let (tx, _) = std::sync::mpsc::channel();
+        let mut worker = super::Worker::new(tx);
+        worker.set_volume(0.0);
+        let (mixer, _source) = rodio::mixer::mixer(1, 8000);
+        let sink = worker.new_sink(&mixer);
+        assert_eq!(sink.volume(), 0.0);
+    }
+
+    #[test]
+    fn streaming_reader_has_no_total_lifetime_deadline() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+            time::Duration,
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0; 1024];
+            assert!(socket.read(&mut request).unwrap() > 0);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n")
+                .unwrap();
+            for _ in 0..4 {
+                thread::sleep(Duration::from_millis(400));
+                socket.write_all(b"x").unwrap();
+            }
+        });
+        let response = super::stream_agent(Duration::from_secs(1))
+            .get(&format!("http://{address}"))
+            .call()
+            .unwrap();
+        let mut body = String::new();
+        response.into_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(body, "xxxx");
+        server.join().unwrap();
     }
 
     #[test]
