@@ -18,7 +18,7 @@ egui_dock = { version = "0.21", features = ["serde"] }
 egui_term = { path = "../../vendor/egui_term" }
 open = "5"
 rfd = "0.17"
-pollster = "0.4"
+pollster = "1.0"
 fs2 = "0.4"
 notify = "8"
 resvg = { version = "0.45.1", default-features = false, features = ["text", "system-fonts", "raster-images"] }
