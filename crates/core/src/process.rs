@@ -194,22 +194,25 @@ mod tests {
     fn session_leader_pid_equals_session_id() {
         let dir = tempfile::tempdir().unwrap();
         let ready = dir.path().join("ready");
+        let staging = dir.path().join("ready.tmp");
         let mut command = Command::new("sh");
-        command
-            .arg("-c")
-            .arg(format!("echo $$ > {}; sleep 8", ready.display()));
+        command.arg("-c").arg(format!(
+            "echo $$ > {staging} && mv {staging} {ready}; sleep 8",
+            staging = staging.display(),
+            ready = ready.display()
+        ));
         let mut child = spawn_session_leader(command).unwrap();
         assert!(child.wait().unwrap().success());
         let start = Instant::now();
-        while !ready.exists() {
+        let pid = loop {
             assert!(start.elapsed() < Duration::from_secs(3));
+            if let Ok(contents) = std::fs::read_to_string(&ready)
+                && let Ok(pid) = contents.trim().parse::<i32>()
+            {
+                break pid;
+            }
             std::thread::sleep(Duration::from_millis(20));
-        }
-        let pid: i32 = std::fs::read_to_string(&ready)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        };
         let sid = unsafe { libc::getsid(pid) };
         assert_eq!(sid, pid);
         unsafe {
