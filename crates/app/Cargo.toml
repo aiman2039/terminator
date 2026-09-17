@@ -30,7 +30,7 @@ uuid.workspace = true
 wry = "0.57"
 rodio = "0.21"
 spectrum-analyzer = "2"
-ureq = "2"
+ureq = "3"
 semver = "1"
 rmp-serde = "1.3"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
