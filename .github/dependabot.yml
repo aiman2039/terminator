@@ -11,3 +11,7 @@ updates:
         update-types: [patch]
       cargo-minor:
         update-types: [minor]
+    ignore:
+      # glib 0.20 is gtk-rs 0.20 / gtk4; Linux webview is wry 0.57 + gtk3 (webkit2gtk).
+      # RUSTSEC-2024-0429 / GHSA-wrw7-89jp-8q8g; also ignored in deny.toml.
+      - dependency-name: glib
