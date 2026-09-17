@@ -175,11 +175,7 @@ impl App {
             PaletteItem::AddProject => self.add_project = true,
             PaletteItem::NewTerminal => self.create(None),
             PaletteItem::NewWorktree => self.open_worktree_wizard(),
-            PaletteItem::OpenPlayer => {
-                if let Some(project) = self.selected.clone() {
-                    self.open_player_tab(&project);
-                }
-            }
+            PaletteItem::OpenPlayer => self.open_player(),
         }
     }
 }

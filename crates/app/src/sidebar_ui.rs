@@ -19,82 +19,91 @@ impl App {
         )
     }
     pub(super) fn notifications(&mut self, ui: &mut egui::Ui) {
-        let pending = self
-            .state
-            .notifications
-            .iter()
-            .filter(|n| notice_pending(n, now()))
-            .count()
-            + self
+        ui.horizontal_wrapped(|ui| {
+            let pending = self
                 .state
-                .terminal_notices
+                .notifications
                 .iter()
-                .filter(|n| !n.dismissed)
-                .count();
-        let label = if pending == 0 {
-            String::new()
-        } else {
-            pending.to_string()
-        };
-        let button = egui::Button::image_and_text(
-            egui::Image::new(icons::source("Bell")).fit_to_exact_size(egui::vec2(16.0, 16.0)),
-            label,
-        )
-        .frame(false);
-        let response = ui
-            .add(button)
-            .on_hover_text(format!("{pending} pending notifications"));
-        #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "attention-bell", response.rect);
-        let popup = egui::Popup::from_toggle_button_response(&response).show(|ui| {
-            ui.set_width(300.0);
-            ui.set_max_height(460.0);
-            ui.push_id("attention-popup", |ui| self.agents_view(ui));
+                .filter(|n| notice_pending(n, now()))
+                .count()
+                + self
+                    .state
+                    .terminal_notices
+                    .iter()
+                    .filter(|n| !n.dismissed)
+                    .count();
+            let label = if pending == 0 {
+                String::new()
+            } else {
+                pending.to_string()
+            };
+            let button = egui::Button::image_and_text(
+                egui::Image::new(icons::source("Bell")).fit_to_exact_size(egui::vec2(16.0, 16.0)),
+                label,
+            )
+            .frame(false);
+            let response = ui
+                .add(button)
+                .on_hover_text(format!("{pending} pending notifications"));
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "attention-bell", response.rect);
+            let popup = egui::Popup::from_toggle_button_response(&response).show(|ui| {
+                ui.set_width(300.0);
+                ui.set_max_height(460.0);
+                ui.push_id("attention-popup", |ui| self.agents_view(ui));
+            });
+            #[cfg(feature = "test-support")]
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(egui::Id::new("attention-state"), (pending, popup.is_some()))
+            });
+            let _ = popup;
         });
-        #[cfg(feature = "test-support")]
-        ui.ctx().data_mut(|data| {
-            data.insert_temp(egui::Id::new("attention-state"), (pending, popup.is_some()))
-        });
-        let _ = popup;
     }
     pub(super) fn agent_bar(&mut self, ui: &mut egui::Ui) {
-        let waiting = self.waiting_notice_count();
-        let unread = self
-            .state
-            .notifications
-            .iter()
-            .filter(|notice| !notice.read && notice_pending(notice, now()))
-            .count();
-        let badge = match (waiting, unread) {
-            (0, 0) => String::new(),
-            (0, unread) => format!("{unread} unread"),
-            (waiting, 0) => format!("{waiting} waiting"),
-            (waiting, unread) => format!("{waiting} waiting · {unread} unread"),
-        };
-        #[cfg(feature = "test-support")]
-        ui.ctx()
-            .data_mut(|data| data.insert_temp(egui::Id::new("agent-bar-badge"), badge.clone()));
-        let response = appearance::row(
-            ui,
-            "",
-            "Bell",
-            self.preferences.left_agents,
-            28.0,
-            &badge,
-            appearance::color(if waiting > 0 {
-                &self.theme.status_waiting
-            } else {
-                &self.theme.text
-            }),
-        )
-        .on_hover_text("Pending agent notifications. Click to switch between Agents and Projects.");
-        response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Agents"));
-        #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "left-agent-bar", response.rect);
-        if response.clicked() {
-            self.preferences.left_agents = !self.preferences.left_agents;
-        }
+        ui.horizontal(|ui| {
+            self.player_toggle_button(ui);
+            let waiting = self.waiting_notice_count();
+            let unread = self
+                .state
+                .notifications
+                .iter()
+                .filter(|notice| !notice.read && notice_pending(notice, now()))
+                .count();
+            let badge = match (waiting, unread) {
+                (0, 0) => String::new(),
+                (0, unread) => format!("{unread} unread"),
+                (waiting, 0) => format!("{waiting} waiting"),
+                (waiting, unread) => format!("{waiting} waiting · {unread} unread"),
+            };
+            #[cfg(feature = "test-support")]
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(egui::Id::new("agent-bar-badge"), badge.clone()));
+            let response = appearance::row(
+                ui,
+                "",
+                "Bell",
+                self.preferences.left_agents,
+                28.0,
+                &badge,
+                appearance::color(if waiting > 0 {
+                    &self.theme.status_waiting
+                } else {
+                    &self.theme.text
+                }),
+            )
+            .on_hover_text(
+                "Pending agent notifications. Click to switch between Agents and Projects.",
+            );
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Agents")
+            });
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "left-agent-bar", response.rect);
+            if response.clicked() {
+                self.preferences.left_agents = !self.preferences.left_agents;
+            }
+        });
+        self.player_live_controls(ui);
         ui.separator();
     }
     fn project_sort_menu(&mut self, ui: &mut egui::Ui) {
@@ -671,12 +680,8 @@ impl App {
                     diagnostics::record(ui.ctx(), &format!("explorer-file:{}", label), r.rect);
                     let pointer = FilePointer {
                         path: entry.path.clone(),
-                        deleted: self
-                            .change_for(&entry.path)
-                            .is_some_and(|c| c.decoration() == 'D'),
-                        staged: self
-                            .change_for(&entry.path)
-                            .and_then(services::Change::default_staged),
+                        deleted: false,
+                        staged: None,
                     };
                     self.file_pointer_action(&r, pointer);
                     appearance::context_menu(&r, |ui| {
@@ -1194,6 +1199,116 @@ fn notice_preview(markdown: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+const ATTENTION_ACTION_SIZE: f32 = 22.0;
+const ATTENTION_ACTION_COUNT: f32 = 3.0;
+
+fn attention_status(state: AgentState) -> &'static str {
+    match state {
+        AgentState::Completed => "Agent done",
+        AgentState::WaitingInput | AgentState::WaitingPermission => "Agent waiting",
+        _ => state.label(),
+    }
+}
+
+fn attention_title_job(
+    notice: &Notification,
+    session: Option<&Session>,
+    theme: &AppearanceConfig,
+    muted: Color32,
+    text: Color32,
+) -> egui::text::LayoutJob {
+    let font = egui::FontId::proportional(12.0);
+    let mut job = egui::text::LayoutJob {
+        wrap: egui::text::TextWrapping {
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('…'),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let format = |color: Color32| egui::TextFormat {
+        font_id: font.clone(),
+        color,
+        ..Default::default()
+    };
+    job.append(
+        attention_status(notice.state),
+        0.0,
+        format(state_color(notice.state, theme)),
+    );
+    if let Some(session) = session {
+        job.append(" · ", 0.0, format(muted));
+        job.append(&session.label, 0.0, format(text));
+    }
+    job
+}
+
+fn attention_title(
+    ui: &mut egui::Ui,
+    notice: &Notification,
+    session: Option<&Session>,
+    theme: &AppearanceConfig,
+) -> egui::Response {
+    let muted = ui.visuals().weak_text_color();
+    let text = ui.visuals().text_color();
+    let mut job = attention_title_job(notice, session, theme, muted, text);
+    let natural = ui.painter().layout_job(job.clone()).size().x;
+    let width = natural.min(ui.available_size_before_wrap().x.max(0.0));
+    job.wrap.max_width = width;
+    let galley = ui.painter().layout_job(job);
+    let size = egui::vec2(width, galley.size().y.max(ATTENTION_ACTION_SIZE));
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    ui.painter().with_clip_rect(rect).galley(
+        egui::pos2(rect.min.x, rect.center().y - galley.size().y * 0.5),
+        galley,
+        text,
+    );
+    response
+}
+
+fn attention_actions(ui: &mut egui::Ui, session_id: &str) -> AttentionAction {
+    let width = ATTENTION_ACTION_SIZE * ATTENTION_ACTION_COUNT;
+    if ui.available_size_before_wrap().x < width {
+        ui.end_row();
+    }
+    ui.push_id(session_id, |ui| {
+        ui.horizontal(|ui| {
+            ui.set_max_width(width);
+            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+            ui.spacing_mut().interact_size =
+                egui::vec2(ATTENTION_ACTION_SIZE, ATTENTION_ACTION_SIZE);
+            let mut action = AttentionAction::None;
+            for (icon, tip, name, next) in [
+                ("ArrowRight", "Go to context", "go", AttentionAction::Go),
+                (
+                    "Moon",
+                    "Snooze 10 minutes",
+                    "snooze",
+                    AttentionAction::Snooze,
+                ),
+                ("X", "Dismiss", "dismiss", AttentionAction::Dismiss),
+            ] {
+                let response = appearance::sidebar_action(ui, icon, tip);
+                #[cfg(feature = "test-support")]
+                diagnostics::record(
+                    ui.ctx(),
+                    &format!("agent-{name}:{session_id}"),
+                    response.rect,
+                );
+                #[cfg(not(feature = "test-support"))]
+                let _ = name;
+                if response.clicked() {
+                    action = next;
+                }
+            }
+            action
+        })
+        .inner
+    })
+    .inner
+}
+
 pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> AttentionAction {
     let AttentionCard {
         theme,
@@ -1213,84 +1328,41 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
         .stroke(stroke)
         .corner_radius(6)
         .fill(appearance::color(&theme.window))
-        .inner_margin(6.0)
+        .inner_margin(egui::Margin::symmetric(6, 4))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing = egui::vec2(4.0, 3.0);
-            let header = ui
-                .vertical(|ui| {
-                    ui.colored_label(
-                        state_color(notice.state, theme),
-                        RichText::new(match notice.state {
-                            AgentState::Completed => "Agent done",
-                            AgentState::WaitingInput | AgentState::WaitingPermission => {
-                                "Agent waiting"
-                            }
-                            _ => notice.state.label(),
-                        })
-                        .size(12.0),
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 2.0);
+            let action = ui
+                .horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 2.0);
+                    let header = attention_title(ui, notice, session, theme).on_hover_ui(|ui| {
+                        ui.set_max_width(360.0);
+                        if let Some(session) = session {
+                            ui.weak(session.cwd.display().to_string());
+                        }
+                        ui.label(notice_preview(&notice.summary));
+                    });
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(
+                        ui.ctx(),
+                        &format!("agent-row:{}", notice.session_id),
+                        header.rect,
                     );
-                    if let Some(session) = session {
-                        ui.add(
-                            egui::Label::new(RichText::new(&session.label).size(12.0)).truncate(),
-                        );
+                    let mut action = if header.clicked() {
+                        AttentionAction::Go
+                    } else {
+                        AttentionAction::None
+                    };
+                    let buttons = attention_actions(ui, &notice.session_id);
+                    if buttons != AttentionAction::None {
+                        action = buttons;
                     }
+                    action
                 })
-                .response
-                .interact(egui::Sense::click())
-                .on_hover_ui(|ui| {
-                    ui.set_max_width(360.0);
-                    if let Some(session) = session {
-                        ui.weak(session.cwd.display().to_string());
-                    }
-                    ui.label(notice_preview(&notice.summary));
-                });
-            #[cfg(feature = "test-support")]
-            diagnostics::record(
-                ui.ctx(),
-                &format!("agent-row:{}", notice.session_id),
-                header.rect,
-            );
+                .inner;
             if notice.resolved {
                 ui.weak("This event has resolved.");
             }
-            let mut action = if header.clicked() {
-                AttentionAction::Go
-            } else {
-                AttentionAction::None
-            };
-            ui.horizontal_wrapped(|ui| {
-                let go = appearance::sidebar_action(ui, "ArrowRight", "Go to context");
-                #[cfg(feature = "test-support")]
-                diagnostics::record(
-                    ui.ctx(),
-                    &format!("agent-go:{}", notice.session_id),
-                    go.rect,
-                );
-                if go.clicked() {
-                    action = AttentionAction::Go;
-                }
-                let snooze = appearance::sidebar_action(ui, "Moon", "Snooze 10 minutes");
-                #[cfg(feature = "test-support")]
-                diagnostics::record(
-                    ui.ctx(),
-                    &format!("agent-snooze:{}", notice.session_id),
-                    snooze.rect,
-                );
-                if snooze.clicked() {
-                    action = AttentionAction::Snooze;
-                }
-                let dismiss = appearance::sidebar_action(ui, "X", "Dismiss");
-                #[cfg(feature = "test-support")]
-                diagnostics::record(
-                    ui.ctx(),
-                    &format!("agent-dismiss:{}", notice.session_id),
-                    dismiss.rect,
-                );
-                if dismiss.clicked() {
-                    action = AttentionAction::Dismiss;
-                }
-            });
             action
         });
     // Header and action buttons own clicks. A later frame-wide click target

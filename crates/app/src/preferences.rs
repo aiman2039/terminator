@@ -144,6 +144,12 @@ pub struct RadioStation {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Playlist {
+    pub name: String,
+    pub tracks: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPreferences {
     pub version: u32,
@@ -162,9 +168,15 @@ pub struct UiPreferences {
     pub hidden_projects: HashSet<String>,
     pub project_sort: ProjectSort,
     pub project_activity: HashMap<String, u64>,
+    pub playlists: Vec<Playlist>,
+    pub selected_playlist: String,
+    #[serde(default, skip_serializing)]
     pub player_playlists: HashMap<String, Vec<PathBuf>>,
     pub player_index: HashMap<String, usize>,
     pub player_volume: f32,
+    pub player_shuffle: bool,
+    pub player_repeat: bool,
+    pub player_samples_seeded: bool,
     pub radio_stations: Vec<RadioStation>,
 }
 impl Default for UiPreferences {
@@ -186,9 +198,14 @@ impl Default for UiPreferences {
             hidden_projects: HashSet::new(),
             project_sort: ProjectSort::NameAsc,
             project_activity: HashMap::new(),
+            playlists: Vec::new(),
+            selected_playlist: String::new(),
             player_playlists: HashMap::new(),
             player_index: HashMap::new(),
             player_volume: 0.8,
+            player_shuffle: false,
+            player_repeat: false,
+            player_samples_seeded: false,
             radio_stations: Vec::new(),
         }
     }
@@ -215,7 +232,47 @@ impl UiPreferences {
         } else {
             0.8
         };
+        prefs.migrate_playlists();
         Ok(prefs)
+    }
+
+    fn migrate_playlists(&mut self) {
+        if self.playlists.is_empty() && !self.player_playlists.is_empty() {
+            let mut tracks = Vec::new();
+            let mut owners: Vec<_> = self.player_playlists.keys().cloned().collect();
+            owners.sort();
+            for owner in owners {
+                let Some(list) = self.player_playlists.get(&owner) else {
+                    continue;
+                };
+                for path in list {
+                    if !tracks.contains(path) {
+                        tracks.push(path.clone());
+                    }
+                }
+            }
+            if !tracks.is_empty() {
+                self.playlists.push(Playlist {
+                    name: "Default".into(),
+                    tracks,
+                });
+                if self.selected_playlist.is_empty() {
+                    self.selected_playlist = "Default".into();
+                }
+            }
+        }
+        self.player_playlists.clear();
+        if self
+            .playlists
+            .iter()
+            .all(|playlist| playlist.name != self.selected_playlist)
+        {
+            self.selected_playlist = self
+                .playlists
+                .first()
+                .map(|playlist| playlist.name.clone())
+                .unwrap_or_default();
+        }
     }
     pub fn save(&self, data: &Path) -> Result<()> {
         fs::create_dir_all(data)?;
@@ -232,10 +289,129 @@ impl UiPreferences {
         self.visible = self.tool != tool || !self.visible;
         self.tool = tool;
     }
+
+    pub fn ensure_default_playlist(&mut self) {
+        if self.playlists.is_empty() {
+            self.playlists.push(Playlist {
+                name: "Default".into(),
+                tracks: Vec::new(),
+            });
+        }
+        if self
+            .playlists
+            .iter()
+            .all(|playlist| playlist.name != self.selected_playlist)
+        {
+            self.selected_playlist = self.playlists[0].name.clone();
+        }
+    }
+
+    pub fn selected_tracks(&self) -> &[PathBuf] {
+        self.playlists
+            .iter()
+            .find(|playlist| playlist.name == self.selected_playlist)
+            .map(|playlist| playlist.tracks.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn selected_tracks_mut(&mut self) -> Option<&mut Vec<PathBuf>> {
+        let name = self.selected_playlist.clone();
+        self.playlists
+            .iter_mut()
+            .find(|playlist| playlist.name == name)
+            .map(|playlist| &mut playlist.tracks)
+    }
+
+    pub fn create_playlist(&mut self, name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() || self.playlists.iter().any(|playlist| playlist.name == name) {
+            return false;
+        }
+        self.playlists.push(Playlist {
+            name: name.into(),
+            tracks: Vec::new(),
+        });
+        self.selected_playlist = name.into();
+        true
+    }
+
+    pub fn rename_selected_playlist(&mut self, name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty()
+            || self
+                .playlists
+                .iter()
+                .any(|playlist| playlist.name == name && playlist.name != self.selected_playlist)
+        {
+            return false;
+        }
+        let Some(playlist) = self
+            .playlists
+            .iter_mut()
+            .find(|playlist| playlist.name == self.selected_playlist)
+        else {
+            return false;
+        };
+        if let Some(index) = self.player_index.remove(&playlist.name) {
+            self.player_index.insert(name.into(), index);
+        }
+        playlist.name = name.into();
+        self.selected_playlist = name.into();
+        true
+    }
+
+    pub fn delete_selected_playlist(&mut self) {
+        let name = self.selected_playlist.clone();
+        self.playlists.retain(|playlist| playlist.name != name);
+        self.player_index.remove(&name);
+        self.selected_playlist = self
+            .playlists
+            .first()
+            .map(|playlist| playlist.name.clone())
+            .unwrap_or_default();
+    }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_project_playlists_merge_into_default() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("ui-preferences.json"),
+            r#"{"version":1,"player_playlists":{"a":["/a/one.mp3"],"b":["/b/two.mp3","/a/one.mp3"]}}"#,
+        )
+        .unwrap();
+        let prefs = UiPreferences::load(dir.path()).unwrap();
+        assert_eq!(prefs.selected_playlist, "Default");
+        assert_eq!(
+            prefs.selected_tracks(),
+            [PathBuf::from("/a/one.mp3"), PathBuf::from("/b/two.mp3")].as_slice()
+        );
+        assert!(prefs.player_playlists.is_empty());
+        prefs.save(dir.path()).unwrap();
+        let raw = fs::read_to_string(dir.path().join("ui-preferences.json")).unwrap();
+        assert!(!raw.contains("player_playlists"));
+        assert!(raw.contains("Default"));
+    }
+
+    #[test]
+    fn playlists_can_be_created_renamed_and_deleted() {
+        let mut prefs = UiPreferences::default();
+        prefs.ensure_default_playlist();
+        assert!(prefs.create_playlist("Focus"));
+        assert!(!prefs.create_playlist("Focus"));
+        assert_eq!(prefs.selected_playlist, "Focus");
+        assert!(prefs.rename_selected_playlist("Deep"));
+        assert_eq!(prefs.selected_playlist, "Deep");
+        prefs.delete_selected_playlist();
+        assert_eq!(prefs.selected_playlist, "Default");
+        prefs.delete_selected_playlist();
+        assert!(prefs.playlists.is_empty());
+        prefs.ensure_default_playlist();
+        assert_eq!(prefs.selected_playlist, "Default");
+    }
+
     #[test]
     fn old_preferences_request_attention_migration_once() {
         let old: UiPreferences =

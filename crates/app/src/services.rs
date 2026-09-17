@@ -97,6 +97,7 @@ impl Change {
         }
     }
     /// Working-tree side wins when both exist. Conflicts are not auto-reviewed.
+    #[cfg(test)]
     pub fn default_staged(&self) -> Option<bool> {
         if self.conflict() {
             None

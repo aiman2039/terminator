@@ -1458,7 +1458,10 @@ impl TabViewer for Viewer<'_> {
                 let key = id.clone();
                 self.app.browser_view(ui, key, target);
             }
-            Tab::Player => self.app.player_view(ui),
+            Tab::Player => {
+                self.app.player_open = true;
+                ui.close();
+            }
             Tab::Diff { .. } => self.app.diff_view(ui, tab),
             Tab::Terminal(sid) => {
                 let Some(session) = self

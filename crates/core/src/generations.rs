@@ -76,7 +76,18 @@ pub fn workspace_paths(paths: &Paths) -> Result<Paths> {
 }
 
 pub fn exists(paths: &Paths) -> bool {
-    paths.data.join("catalog.sqlite3").is_file()
+    catalog_version(paths).is_some_and(|version| version > 0)
+}
+
+fn catalog_version(paths: &Paths) -> Option<u32> {
+    let path = paths.data.join("catalog.sqlite3");
+    if path.metadata().ok()?.len() == 0 {
+        return None;
+    }
+    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .ok()?
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .ok()
 }
 
 /// All callers acquire this before activation or admitting a creation/mutation.
@@ -890,6 +901,18 @@ mod tests {
             !recover_exited(&paths, &registered).unwrap(),
             "A live process still owns the identity even without the lock"
         );
+    }
+
+    #[test]
+    fn empty_catalog_file_does_not_block_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::at(dir.path().into());
+        paths.init().unwrap();
+        fs::write(paths.data.join("catalog.sqlite3"), []).unwrap();
+        assert!(!exists(&paths));
+        migrate_idle(&paths).unwrap();
+        assert_eq!(catalog_version(&paths), Some(CATALOG_VERSION));
+        Catalog::open(&paths).unwrap();
     }
 
     #[test]

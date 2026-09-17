@@ -156,6 +156,25 @@ impl Workspace {
         self.tabs.retain(|tab| tab.id != id);
         self.normalize(previous);
     }
+
+    pub fn strip_player(&mut self) {
+        let previous = self.active_index();
+        for tab in &mut self.tabs {
+            while let Some(path) = tab.layout.find_tab(&Tab::Player) {
+                tab.layout.remove_tab(path);
+            }
+            if tab.primary == Some(Tab::Player) {
+                tab.primary = tab
+                    .layout
+                    .iter_all_tabs()
+                    .next()
+                    .map(|(_, pane)| pane.clone());
+            }
+        }
+        self.tabs
+            .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
+        self.normalize(previous);
+    }
     pub fn remove_session(&mut self, sid: &str) {
         let previous = self.active_index();
         for tab in &mut self.tabs {
@@ -372,6 +391,16 @@ mod tests {
         let restored = Workspace::load(saved).unwrap();
         assert_eq!(restored.version, 5);
         assert!(restored.contains(&Tab::Player));
+    }
+
+    #[test]
+    fn strip_player_removes_player_panes_and_keeps_other_tabs() {
+        let mut workspace = Workspace::empty();
+        workspace.add("shell".into(), Tab::Terminal("s".into()));
+        workspace.add("player".into(), Tab::Player);
+        workspace.strip_player();
+        assert!(!workspace.contains(&Tab::Player));
+        assert!(workspace.contains(&Tab::Terminal("s".into())));
     }
 
     fn demote_browser_tabs_to_html(value: &mut serde_json::Value) {

@@ -116,13 +116,6 @@ enum RenameSurface {
     Pane,
     Sidebar,
 }
-struct PendingFileClick {
-    path: PathBuf,
-    at: f64,
-    project: String,
-    cwd: Option<PathBuf>,
-    after: After,
-}
 struct FilePointer {
     path: PathBuf,
     deleted: bool,
@@ -139,28 +132,13 @@ enum FileClick {
     None,
     Open,
     Review,
-    DelayOpen,
 }
 fn file_click(deleted: bool, reviewable: bool, double_clicked: bool, clicked: bool) -> FileClick {
-    if deleted {
-        return if clicked || double_clicked {
-            FileClick::Review
-        } else {
-            FileClick::None
-        };
-    }
-    if double_clicked {
-        return if reviewable {
-            FileClick::Review
-        } else {
-            FileClick::Open
-        };
-    }
-    if !clicked {
+    if !clicked && !double_clicked {
         return FileClick::None;
     }
-    if reviewable {
-        FileClick::DelayOpen
+    if deleted || reviewable {
+        FileClick::Review
     } else {
         FileClick::Open
     }
@@ -222,7 +200,6 @@ enum Update {
     Metadata(u64, metadata::Metadata),
     OpenImage(String, PathBuf, After),
     OpenBrowser(String, BrowserTarget, After),
-    OpenPlayer(String, After, Option<(PathBuf, usize)>),
     Image(PathBuf, u64, Result<egui::ColorImage, String>),
     TestPickerClosed,
     PickedProject(Option<PathBuf>, u64),
@@ -240,6 +217,7 @@ enum Update {
         project: Option<String>,
         cwd: PathBuf,
     },
+    PickedAudio(Vec<PathBuf>),
     PickedPath {
         path: Option<PathBuf>,
         target: BrowseTarget,
@@ -853,7 +831,6 @@ struct App {
     texts: HashMap<String, String>,
     diffs: HashMap<String, Result<diff::DiffDocument, String>>,
     diff_split: HashSet<String>,
-    pending_file_click: Option<PendingFileClick>,
     loading: HashSet<String>,
     dirs: HashMap<PathBuf, Vec<services::Entry>>,
     directory_errors: HashMap<PathBuf, services::DirectoryError>,
@@ -867,6 +844,7 @@ struct App {
     info: Option<String>,
     add_project: bool,
     settings_open: bool,
+    player_open: bool,
     editor_preset: usize,
     test_editor: bool,
     settings_draft: Settings,
@@ -899,6 +877,8 @@ struct App {
     search: String,
     search_session: Option<String>,
     open_path: bool,
+    pick_audio: bool,
+    pick_audio_dir: bool,
     path_text: String,
     last_save: Instant,
     refresh: Sender<Option<refresh::Request>>,
@@ -1028,7 +1008,6 @@ impl App {
             texts: HashMap::new(),
             diffs: HashMap::new(),
             diff_split: HashSet::new(),
-            pending_file_click: None,
             loading: HashSet::new(),
             dirs: HashMap::new(),
             directory_errors: HashMap::new(),
@@ -1042,6 +1021,7 @@ impl App {
             info: None,
             add_project: false,
             settings_open: false,
+            player_open: false,
             editor_preset: external_editor::CUSTOM,
             test_editor: false,
             settings_draft: Settings::default(),
@@ -1074,6 +1054,8 @@ impl App {
             search: String::new(),
             search_session: None,
             open_path: false,
+            pick_audio: false,
+            pick_audio_dir: false,
             path_text: String::new(),
             last_save: Instant::now(),
             refresh,
@@ -1169,6 +1151,10 @@ impl App {
                             .collect::<Vec<_>>()
                     );
                     snapshot["project_sort"] = serde_json::to_value(self.preferences.project_sort)?;
+                    snapshot["player"] = serde_json::json!({
+                        "chrome":self.fixture_rect(ctx,"player-chrome"),
+                        "project":self.player.project,
+                    });
                     snapshot["markdown_header"] = serde_json::json!({
                         "title":self.fixture_rect(ctx,"markdown-title"),
                         "edit":self.fixture_rect(ctx,"markdown-mode:Edit"),
@@ -1388,13 +1374,6 @@ impl App {
                         after,
                     );
                 }
-                Update::OpenPlayer(project, after, audio) => {
-                    self.place_gui_tab(project.clone(), Tab::Player, after);
-                    if let Some((path, index)) = audio {
-                        self.player.set_volume(self.preferences.player_volume);
-                        self.player.play_file(&project, path, index);
-                    }
-                }
                 Update::Image(path, generation, result) => {
                     let used: usize = self
                         .images
@@ -1503,6 +1482,10 @@ impl App {
                         }
                     }
                 }
+                Update::PickedAudio(paths) => {
+                    self.picker_active = false;
+                    self.add_audio_files(paths);
+                }
                 Update::PickedFile { path, project, cwd } => {
                     #[cfg(feature = "test-support")]
                     if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
@@ -1518,6 +1501,10 @@ impl App {
                             && let Some(project) = &project
                         {
                             self.open_html(project, path, None);
+                        } else if player::supported(&path)
+                            && let Some(project) = &project
+                        {
+                            self.open_audio(project, path, None);
                         } else if self.state.settings.editor_mode == EditorMode::External {
                             let _ = self.jobs.send(Job::External(path));
                         } else if let Some(project) = project {
@@ -2283,18 +2270,11 @@ impl App {
 
     fn reconcile_gui_resources(&mut self) {
         let mut browsers = HashSet::new();
-        let mut players = HashSet::new();
-        for (project, workspace) in &self.layouts {
+        for workspace in self.layouts.values() {
             for group in &workspace.tabs {
                 for (_, tab) in group.layout.iter_all_tabs() {
-                    match tab {
-                        Tab::Browser { .. } => {
-                            browsers.insert(tab.key());
-                        }
-                        Tab::Player => {
-                            players.insert(project.clone());
-                        }
-                        _ => {}
+                    if let Tab::Browser { .. } = tab {
+                        browsers.insert(tab.key());
                     }
                 }
             }
@@ -2303,13 +2283,8 @@ impl App {
         self.browser_urls.retain(|key, _| browsers.contains(key));
         self.visible_browsers
             .retain(|pane| browsers.contains(&pane.key));
-        if self
-            .player
-            .project
-            .as_ref()
-            .is_some_and(|project| !players.contains(project))
-        {
-            self.player.stop();
+        for workspace in self.layouts.values_mut() {
+            workspace.strip_player();
         }
     }
     fn go_session(&mut self, sid: &str) {
@@ -2501,6 +2476,12 @@ impl App {
         };
         if native {
             let tab = Tab::Diff { cwd, path, staged };
+            if let Some(workspace) = self.layouts.get_mut(&project)
+                && workspace.activate_containing(&tab)
+            {
+                self.active_session = None;
+                return;
+            }
             self.layouts
                 .entry(project)
                 .or_insert_with(Workspace::empty)
@@ -2547,82 +2528,14 @@ impl App {
             response.clicked(),
         ) {
             FileClick::None => {}
-            FileClick::Open => {
-                self.pending_file_click = None;
-                self.open_file(info.path, None, None, false);
-            }
+            FileClick::Open => self.open_file(info.path, None, None, false),
             FileClick::Review => self.open_review(info),
-            FileClick::DelayOpen => {
-                self.delay_file_open(&response.ctx, info.path);
-            }
         }
     }
-    fn delay_file_open(&mut self, ctx: &egui::Context, path: PathBuf) {
-        let Some(project) = self.selected.clone() else {
-            return;
-        };
-        self.pending_file_click = Some(PendingFileClick {
-            path,
-            at: ctx.input(|i| i.time),
-            cwd: self.cwd(),
-            after: self.editor_target(&project, None, None),
-            project,
-        });
-    }
     fn open_review(&mut self, info: FilePointer) {
-        self.pending_file_click = None;
         if let (Some(root), Some(staged)) = (self.git_root(), info.staged) {
             self.add_diff(root, info.path, staged);
         }
-    }
-    fn flush_pending_file_click(&mut self, ctx: &egui::Context) {
-        let Some(pending) = self.pending_file_click.as_ref() else {
-            return;
-        };
-        let wait = ctx.options(|o| o.input_options.max_double_click_delay);
-        let elapsed = ctx.input(|i| i.time) - pending.at;
-        if elapsed < wait {
-            ctx.request_repaint_after(Duration::from_secs_f64(wait - elapsed));
-            return;
-        }
-        if let Some(pending) = self.pending_file_click.take() {
-            if image_preview::supported(&pending.path) {
-                let _ = self.update_tx.send(Update::OpenImage(
-                    pending.project,
-                    std::path::absolute(&pending.path).unwrap_or(pending.path),
-                    pending.after,
-                ));
-            } else if crate::browser::supported_file(&pending.path) {
-                let _ = self.update_tx.send(Update::OpenBrowser(
-                    pending.project,
-                    BrowserTarget::File(std::path::absolute(&pending.path).unwrap_or(pending.path)),
-                    pending.after,
-                ));
-            } else if player::supported(&pending.path) {
-                self.open_audio(&pending.project, pending.path, None);
-            } else if self.state.settings.editor_mode == EditorMode::External {
-                let _ = self.jobs.send(Job::External(pending.path));
-            } else {
-                let _ = self.jobs.send(Job::rpc(
-                    Request::Create {
-                        project: pending.project,
-                        cwd: pending.cwd,
-                        file: Some(pending.path),
-                        line: None,
-                        column: None,
-                        editor: true,
-                    },
-                    pending.after,
-                ));
-            }
-        }
-    }
-    fn change_for(&self, path: &Path) -> Option<&services::Change> {
-        self.context
-            .as_ref()?
-            .changes
-            .iter()
-            .find(|change| change.path == path)
     }
     fn editors_only(&self, ids: &[String]) -> bool {
         !ids.is_empty()
@@ -2799,6 +2712,7 @@ impl eframe::App for App {
         #[cfg(feature = "test-support")]
         self.diagnostics.frame(&ctx);
         let block_shortcuts = self.settings_open
+            || self.player_open
             || self.command_dialog_open()
             || self.shortcut_capture.is_some()
             || self.rename_session.is_some()
@@ -3260,8 +3174,6 @@ impl eframe::App for App {
         self.reconcile_gui_resources();
         self.sync_browsers(frame);
         self.popups.end_frame();
-        // Let this frame's second click cancel the pending open before expiring it.
-        self.flush_pending_file_click(&ctx);
         appearance::click_cursor(&ctx);
         #[cfg(feature = "test-support")]
         self.diagnostics.capture(&ctx);
@@ -4249,11 +4161,11 @@ mod navigation_tests {
         assert!(app.state.sessions.is_empty());
     }
     #[test]
-    fn file_clicks_open_review_only_for_dirty_double_clicks_and_deletes() {
+    fn file_clicks_open_review_for_git_modified_files() {
         assert_eq!(Settings::default().review_mode, ReviewMode::Native);
         for (deleted, reviewable, double_clicked, clicked, expected) in [
             (false, false, false, true, FileClick::Open),
-            (false, true, false, true, FileClick::DelayOpen),
+            (false, true, false, true, FileClick::Review),
             (false, true, true, true, FileClick::Review),
             (false, false, true, true, FileClick::Open),
             (true, true, false, true, FileClick::Review),
@@ -4268,8 +4180,8 @@ mod navigation_tests {
         }
     }
     #[test]
-    fn dirty_double_click_opens_a_native_diff_and_cancels_a_pending_open() {
-        let (mut app, ctx, _dir) = fixture();
+    fn git_click_opens_a_native_diff() {
+        let (mut app, _, _dir) = fixture();
         app.context = Some(services::ContextData {
             cwd: "/a".into(),
             root: Some("/a".into()),
@@ -4282,53 +4194,20 @@ mod navigation_tests {
         app.selected = Some("a".into());
         let (jobs, requests) = mpsc::channel();
         app.jobs = jobs.into();
-        app.delay_file_open(&ctx, "/a/clean.rs".into());
         app.open_review(FilePointer {
             path: "/a/dirty.rs".into(),
             deleted: false,
             staged: Some(false),
         });
-        assert!(app.pending_file_click.is_none());
         let Job::Diff(Tab::Diff { path, staged, .. }) = requests.recv().unwrap() else {
-            panic!("Dirty double-click must open a native diff");
+            panic!("Git click must open a native diff");
         };
         assert_eq!(path, PathBuf::from("/a/dirty.rs"));
         assert!(!staged);
         assert!(requests.try_recv().is_err());
     }
     #[test]
-    fn delayed_dirty_click_opens_the_file_only_after_the_double_click_window() {
-        let (mut app, ctx, _dir) = fixture();
-        ctx.options_mut(|o| o.input_options.max_double_click_delay = 0.5);
-        app.selected = Some("a".into());
-        let (jobs, requests) = mpsc::channel();
-        app.jobs = jobs.into();
-        app.delay_file_open(&ctx, "/a/dirty.rs".into());
-        assert!(app.pending_file_click.is_some());
-        app.flush_pending_file_click(&ctx);
-        assert!(app.pending_file_click.is_some());
-        assert!(requests.try_recv().is_err());
-        app.pending_file_click.as_mut().unwrap().at = ctx.input(|i| i.time) - 0.4;
-        app.flush_pending_file_click(&ctx);
-        assert!(app.pending_file_click.is_some());
-        assert!(requests.try_recv().is_err());
-        app.pending_file_click.as_mut().unwrap().at = ctx.input(|i| i.time) - 0.6;
-        app.flush_pending_file_click(&ctx);
-        assert!(app.pending_file_click.is_none());
-        let Job::Control(request, _) = requests.recv().unwrap() else {
-            panic!("Expired dirty click must open the file");
-        };
-        assert!(matches!(
-            *request,
-            Request::Create {
-                file: Some(ref file),
-                editor: true,
-                ..
-            } if file == Path::new("/a/dirty.rs")
-        ));
-    }
-    #[test]
-    fn dirty_double_click_after_250_ms_does_not_launch_an_editor() {
+    fn git_click_reuses_an_open_diff_instead_of_duplicating() {
         let (mut app, ctx, _dir) = fixture();
         app.context = Some(services::ContextData {
             cwd: "/a".into(),
@@ -4380,65 +4259,77 @@ mod navigation_tests {
                             staged: Some(false),
                         },
                     );
-                    app.flush_pending_file_click(&ctx);
                 },
             );
             output.textures_delta.clear();
         }
         assert!(matches!(requests.try_recv().unwrap(), Job::Diff(_)));
         assert!(requests.try_recv().is_err());
-        assert!(app.pending_file_click.is_none());
+        assert_eq!(
+            app.layouts["a"]
+                .iter_all_tabs()
+                .filter(|(_, tab)| matches!(tab, Tab::Diff { .. }))
+                .count(),
+            1
+        );
     }
     #[test]
-    fn delayed_dirty_file_open_keeps_its_origin_after_project_navigation() {
-        let (mut app, ctx, _dir) = fixture();
+    fn explorer_click_on_a_dirty_html_file_opens_the_browser() {
+        let (mut app, ctx, dir) = fixture();
+        let path = dir.path().join("page.html");
+        fs::write(&path, "<html></html>").unwrap();
+        app.dirs.insert(
+            dir.path().into(),
+            vec![services::Entry {
+                path: path.clone(),
+                directory: false,
+                ignored: false,
+            }],
+        );
+        app.context = Some(services::ContextData {
+            cwd: dir.path().into(),
+            root: Some(dir.path().into()),
+            git_dirs: vec![],
+            branch: "main".into(),
+            changes: vec![services::Change {
+                path: path.clone(),
+                status: " M".into(),
+            }],
+            decorations: std::collections::HashMap::from([(path.clone(), 'M')]),
+            error: None,
+        });
         let (jobs, requests) = mpsc::channel();
         app.jobs = jobs.into();
-        app.delay_file_open(&ctx, "/a/dirty.rs".into());
-        let After::Workspace(origin_tab, _) =
-            app.pending_file_click.as_ref().unwrap().after.clone()
-        else {
-            panic!("File click must capture a new workspace tab");
+        let mut draw = |events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(260.0, 80.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.tree(ui, dir.path(), 0),
+            );
+            output.textures_delta.clear();
         };
-        app.select_project("b".into());
-        assert!(matches!(requests.try_recv().unwrap(), Job::Control(_, _)));
-        app.pending_file_click.as_mut().unwrap().at = ctx.input(|i| i.time) - 1.0;
-        app.flush_pending_file_click(&ctx);
-        let Job::Control(request, After::Workspace(tab, _)) = requests.try_recv().unwrap() else {
-            panic!("Delayed click must create an editor in its original workspace");
-        };
-        assert_eq!(tab, origin_tab);
-        assert!(matches!(
-            *request,
-            Request::Create { project, cwd, file: Some(file), editor: true, .. }
-                if project == "a" && cwd.as_deref() == Some(Path::new("/a")) && file == Path::new("/a/dirty.rs")
-        ));
-        assert_eq!(app.selected.as_deref(), Some("b"));
-        assert!(requests.try_recv().is_err());
-    }
-    #[test]
-    fn delayed_dirty_image_open_keeps_its_origin_after_project_navigation() {
-        let (mut app, ctx, _dir) = fixture();
-        app.delay_file_open(&ctx, "/a/dirty.png".into());
-        app.select_project("b".into());
-        app.pending_file_click.as_mut().unwrap().at = ctx.input(|i| i.time) - 1.0;
-        app.flush_pending_file_click(&ctx);
+        draw(vec![]);
+        let pos = egui::pos2(55.0, 12.0);
+        draw(vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            draw(vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            }]);
+        }
         app.process_updates(&ctx);
-        assert!(
-            app.layouts["a"]
-                .find_tab(&Tab::Image {
-                    path: "/a/dirty.png".into()
-                })
-                .is_some()
-        );
-        assert!(
-            app.layouts["b"]
-                .find_tab(&Tab::Image {
-                    path: "/a/dirty.png".into()
-                })
-                .is_none()
-        );
-        assert_eq!(app.selected.as_deref(), Some("b"));
+        assert!(app.layouts["a"].contains(&Tab::browser_file(
+            std::path::absolute(&path).unwrap_or(path)
+        )));
+        assert!(!requests.try_iter().any(|job| matches!(job, Job::Diff(_))));
     }
     #[test]
     fn git_reviews_open_distinct_top_level_tabs_in_the_origin_project() {
@@ -5191,48 +5082,57 @@ mod navigation_tests {
     fn background_player_advances_its_own_project_playlist() {
         let (mut app, _, _dir) = fixture();
         app.selected = Some("b".into());
-        app.preferences
-            .player_playlists
-            .insert("a".into(), vec!["/a/one.wav".into(), "/a/two.wav".into()]);
-        app.preferences
-            .player_playlists
-            .insert("b".into(), vec!["/b/other.wav".into()]);
+        app.preferences.playlists = vec![crate::preferences::Playlist {
+            name: "Default".into(),
+            tracks: vec!["/a/one.wav".into(), "/a/two.wav".into()],
+        }];
+        app.preferences.selected_playlist = "Default".into();
         app.player = player::Controller::finished_fixture("a", Some(0));
         app.poll_player();
         assert_eq!(app.player.project.as_deref(), Some("a"));
-        assert_eq!(app.preferences.player_index.get("a"), Some(&1));
-        assert!(!app.preferences.player_index.contains_key("b"));
+        assert_eq!(app.preferences.player_index.get("Default"), Some(&1));
     }
 
     #[test]
     fn radio_completion_does_not_start_a_playlist() {
         let (mut app, _, _dir) = fixture();
-        app.preferences
-            .player_playlists
-            .insert("a".into(), vec!["/a/one.wav".into(), "/a/two.wav".into()]);
+        app.preferences.playlists = vec![crate::preferences::Playlist {
+            name: "Default".into(),
+            tracks: vec!["/a/one.wav".into(), "/a/two.wav".into()],
+        }];
+        app.preferences.selected_playlist = "Default".into();
         app.player = player::Controller::finished_fixture("a", None);
         app.poll_player();
-        assert!(!app.preferences.player_index.contains_key("a"));
+        assert!(!app.preferences.player_index.contains_key("Default"));
     }
 
     #[test]
-    fn closing_a_top_level_player_stops_only_its_owner() {
+    fn closing_a_player_tab_does_not_stop_playback() {
         let (mut app, _, _dir) = fixture();
         app.layouts
             .get_mut("a")
             .unwrap()
             .add("player-a".into(), Tab::Player);
-        app.layouts
-            .get_mut("b")
-            .unwrap()
-            .add("player-b".into(), Tab::Player);
         app.player = player::Controller::finished_fixture("a", Some(0));
-        app.layouts.get_mut("b").unwrap().close("player-b");
-        app.reconcile_gui_resources();
-        assert_eq!(app.player.project.as_deref(), Some("a"));
         app.layouts.get_mut("a").unwrap().close("player-a");
         app.reconcile_gui_resources();
-        assert!(app.player.project.is_none());
+        assert_eq!(app.player.project.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn radio_next_wraps_bundled_stations() {
+        let (mut app, _, _dir) = fixture();
+        app.play_station_at("a", 0);
+        assert_eq!(app.player.station_index, Some(0));
+        app.play_station_offset("a", 1);
+        assert_eq!(app.player.station_index, Some(1));
+        app.play_station_offset("a", -1);
+        assert_eq!(app.player.station_index, Some(0));
+        app.play_station_offset("a", -1);
+        assert_eq!(
+            app.player.station_index,
+            Some(player::radio::bundled().len() - 1)
+        );
     }
 
     #[test]
@@ -5261,7 +5161,7 @@ mod navigation_tests {
     }
 
     #[test]
-    fn audio_open_creates_player_tab_and_keeps_original_project() {
+    fn audio_open_plays_without_a_player_tab_and_keeps_original_project() {
         let (mut app, ctx, _dir) = fixture();
         let (jobs, requests) = mpsc::channel();
         app.jobs = jobs.into();
@@ -5269,15 +5169,35 @@ mod navigation_tests {
         app.select_project("b".into());
         app.process_updates(&ctx);
         assert_eq!(app.selected.as_deref(), Some("b"));
-        assert!(app.layouts["a"].contains(&Tab::Player));
-        assert_eq!(app.layouts["a"].version, 5);
+        assert!(!app.layouts["a"].contains(&Tab::Player));
+        assert_eq!(app.player.project.as_deref(), Some("a"));
         assert!(app.state.sessions.is_empty());
         assert!(!requests.try_iter().any(|j|matches!(j,Job::Control(request,_) if matches!(*request,Request::Create { editor:true,.. }))));
+        assert_eq!(app.preferences.selected_playlist, "Default");
         assert_eq!(
-            app.preferences.player_playlists["a"],
-            vec![PathBuf::from("/a/song.MP3")]
+            app.preferences.selected_tracks(),
+            [PathBuf::from("/a/song.MP3")].as_slice()
         );
     }
+
+    #[test]
+    fn adding_audio_files_appends_to_the_selected_playlist() {
+        let (mut app, _, _dir) = fixture();
+        app.add_audio_files(vec![
+            "/a/one.MP3".into(),
+            "/a/two.flac".into(),
+            "/a/notes.txt".into(),
+        ]);
+        assert_eq!(
+            app.preferences.selected_tracks(),
+            [PathBuf::from("/a/one.MP3"), PathBuf::from("/a/two.flac")].as_slice()
+        );
+        assert_eq!(app.player.project.as_deref(), Some("a"));
+        app.add_audio_files(vec!["/a/three.ogg".into()]);
+        assert_eq!(app.preferences.selected_tracks().len(), 3);
+        assert_eq!(app.player.project.as_deref(), Some("a"));
+    }
+
     #[test]
     fn image_split_survives_layout_temporarily_owned_by_renderer() {
         let (mut app, ctx, _dir) = fixture();
@@ -5543,6 +5463,88 @@ mod navigation_tests {
 
     #[test]
     #[cfg(feature = "test-support")]
+    fn player_chrome_paints_next_to_the_project_bell() {
+        let (mut app, ctx, _dir) = fixture();
+        let target = |name: &str| {
+            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+        };
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.agent_bar(ui);
+        });
+        output.textures_delta.clear();
+        let bell = target("left-agent-bar").expect("project bell");
+        let chrome = target("player-chrome").expect("player chrome");
+        assert!(
+            chrome.min.x < bell.min.x,
+            "player icon must sit left of the project bell, chrome={chrome:?} bell={bell:?}"
+        );
+    }
+
+    #[test]
+    fn opening_player_seeds_sample_tracks_once() {
+        let (mut app, _, _dir) = fixture();
+        app.open_player();
+        assert_eq!(app.preferences.selected_tracks().len(), 3);
+        assert!(
+            app.preferences
+                .selected_tracks()
+                .iter()
+                .all(|path| path.extension().is_some_and(|ext| ext == "wav"))
+        );
+        app.preferences
+            .selected_tracks_mut()
+            .expect("playlist")
+            .clear();
+        app.open_player();
+        assert!(app.preferences.selected_tracks().is_empty());
+    }
+
+    #[test]
+    fn player_icon_opens_a_global_window_not_a_tab() {
+        let (mut app, _, _dir) = fixture();
+        app.open_player();
+        assert!(app.player_open);
+        assert!(!app.layouts["a"].contains(&Tab::Player));
+        app.open_player();
+        assert!(app.player_open);
+        assert_eq!(
+            app.layouts["a"]
+                .iter_all_tabs()
+                .filter(|(_, tab)| matches!(tab, Tab::Player))
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn leftover_player_tabs_are_stripped_without_stopping_playback() {
+        let (mut app, _, _dir) = fixture();
+        app.layouts
+            .get_mut("a")
+            .unwrap()
+            .add("player-a".into(), Tab::Player);
+        app.player = player::Controller::finished_fixture("a", Some(0));
+        app.reconcile_gui_resources();
+        assert!(!app.layouts["a"].contains(&Tab::Player));
+        assert_eq!(app.player.project.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn opening_the_player_closes_a_leftover_player_tab() {
+        let (mut app, _, _dir) = fixture();
+        app.layouts
+            .get_mut("a")
+            .unwrap()
+            .add("player-a".into(), Tab::Player);
+        app.open_player();
+        assert!(app.player_open);
+        assert!(!app.layouts["a"].contains(&Tab::Player));
+        app.open_player();
+        assert!(app.player_open);
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
     fn attention_actions_fit_minimum_sidebar_widths() {
         for width in [170.0, 220.0, 320.0] {
             let (mut app, ctx, _dir) = fixture();
@@ -5566,12 +5568,30 @@ mod navigation_tests {
                 |ui| {
                     let bounds = ui.max_rect();
                     app.agents_view(ui);
+                    let mut action_rects = Vec::new();
                     for action in ["go", "snooze", "dismiss"] {
                         let rect =
                             agent_target(&ctx, &format!("agent-{action}:live-shell")).unwrap();
                         assert!(
                             bounds.contains_rect(rect),
                             "width {width}: {action} {rect:?} outside {bounds:?}"
+                        );
+                        action_rects.push(rect);
+                    }
+                    assert!(
+                        (action_rects[0].center().y - action_rects[2].center().y).abs() < 2.0,
+                        "width {width}: actions should stay one cluster {:?}",
+                        action_rects
+                    );
+                    if width >= 320.0 {
+                        let row = agent_target(&ctx, "agent-row:live-shell").unwrap();
+                        assert!(
+                            (row.center().y - action_rects[0].center().y).abs() < 8.0,
+                            "width {width}: title and actions should share one row"
+                        );
+                        assert!(
+                            action_rects[0].min.x >= row.max.x - 2.0,
+                            "width {width}: actions should follow the title"
                         );
                     }
                 },

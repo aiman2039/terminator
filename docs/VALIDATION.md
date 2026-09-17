@@ -14,6 +14,21 @@
 - Blitz raster, worker, and `html_preview` removed. URL bar Go/Enter navigates http(s) in-place.
 - `cargo xtask gui browser` passed: open JS `page.html` (layout v6, no extra PTY), close tab, Open as text (editor session). PNG capture does not include OS webview pixels (child NSView).
 
+## Winamp-style full Player (2026-09-16)
+
+- Full Player is one floating Winamp-style window (not a tab). Leftover `Tab::Player` panes are stripped without stopping playback. Classic 275×2 stacked chrome (main/EQ/playlist).
+- Shuffle remaining-bag + repeat wrap covered by unit tests. Playlist ADD/REM/SEL/MISC/LIST stacks; radio via ADD url / Stations.
+- `cargo test --package terminator --all-features --offline --locked`: 271 passed, 1 ignored.
+- `cargo clippy --package terminator --all-targets --all-features --offline --locked -- -D warnings` passed.
+
+## Explorer defaults and chrome player (2026-09-16)
+
+- Explorer git-dirty HTML opens the Browser tab, not a diff. Git sidebar click opens a native diff and reuses the existing tab. Audio open plays without creating `Tab::Player`. Radio next wraps bundled stations. Closing a leftover Player tab does not stop playback.
+- Chrome player icon paints left of the project-sidebar Agents bell; the icon opens a global Player window, not a tab.
+- `cargo test --package terminator --all-features --offline --locked`: 268 passed, 1 ignored.
+- `cargo clippy --package terminator --all-targets --all-features --offline --locked -- -D warnings` passed.
+- Native `git-open` now expects a Diff tab; not re-run on a desktop in this change.
+
 ## Notification sound and GUI player (2026-09-16)
 
 - `cargo test --package terminator-core --package terminator-daemon notification_sound` / `os_banner_sound`: passed.
@@ -146,10 +161,10 @@ height, stay left-aligned, and number/`+/-` columns are pixel-measured.
 Git reviews default to a GUI `Tab::Diff` built with similar (line and word hunks)
 and syntect (syntax), computed on the existing jobs worker. Settings → Terminal
 & Editor → Diff viewer can select Neovim CodeDiff when `nvim-review-v1` is
-present. Double-click on a git-dirty Explorer or Git-status file opens the
-working-tree side when that side is dirty, otherwise staged; deleted files still
-open a diff immediately. Click still opens the editor after a short delay on
-dirty rows so the first click of a double-click does not also open the file.
+present. Explorer always opens the file's default viewer, including git-dirty rows.
+Git sidebar click on a modified, untracked, or deleted file opens the diff
+(working-tree side when that side is dirty, otherwise staged). Conflicts still
+open the file. Context **Open file** uses the default viewer.
 
 - Unit tests cover snapshot sides, word-level inserts, untracked/binary/outside
   paths, Native vs Neovim routing, and `Change::default_staged`.
@@ -158,15 +173,12 @@ dirty rows so the first click of a double-click does not also open the file.
 - Live native GUI paint, delay-click timing, and a real Neovim-mode review were
   not re-run in this change; record that follow-up in a later entry.
 
-Review fixes use egui's input clock and configured double-click interval, with
-pending opens flushed after the frame's click handlers. Delayed editor/image
-opens retain the original project, cwd and tab target. Native diff paths reject
+Native diff paths reject
 symlinks before resolving directory aliases, preserving the selected Git entry.
 
-- Regressions cover a simulated 280 ms double-click without an editor launch,
-  a configured 500 ms interval, project navigation before editor/image creation,
-  internal/external/dangling symlinks on both diff sides, and deletion through a
-  repository directory alias.
+- Regressions cover Git click opening a native diff without duplicating the tab,
+  explorer dirty HTML opening the browser, internal/external/dangling symlinks
+  on both diff sides, and deletion through a repository directory alias.
 - `env -u TERMINATOR_SESSION_ID cargo test --workspace --all-features --locked --quiet`:
   all 208 tests passed. The inherited session marker otherwise trips two hook
   fixtures' outside-Terminator guard; the successful run allowed isolated Unix

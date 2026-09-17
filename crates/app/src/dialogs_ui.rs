@@ -354,6 +354,45 @@ impl App {
                 ctx.request_repaint();
             });
         }
+        if self.pick_audio && !self.picker_active {
+            self.pick_audio = false;
+            self.picker_active = true;
+            let cwd = self.dialog_directory();
+            let dialog = rfd::AsyncFileDialog::new()
+                .set_parent(frame)
+                .set_title("Add audio files")
+                .add_filter("Audio", player::AUDIO_EXTENSIONS);
+            let tx = self.update_tx.clone();
+            let ctx = ctx.clone();
+            thread::spawn(move || {
+                let dialog = dialog.set_directory(services::existing_directory(cwd));
+                let paths = pollster::block_on(dialog.pick_files())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|file| file.path().to_path_buf())
+                    .collect();
+                let _ = tx.send(Update::PickedAudio(paths));
+                ctx.request_repaint();
+            });
+        }
+        if self.pick_audio_dir && !self.picker_active {
+            self.pick_audio_dir = false;
+            self.picker_active = true;
+            let cwd = self.dialog_directory();
+            let dialog = rfd::AsyncFileDialog::new()
+                .set_parent(frame)
+                .set_title("Add audio directory");
+            let tx = self.update_tx.clone();
+            let ctx = ctx.clone();
+            thread::spawn(move || {
+                let dialog = dialog.set_directory(services::existing_directory(cwd));
+                let paths = pollster::block_on(dialog.pick_folder())
+                    .map(|folder| player::audio_from_dir(folder.path()))
+                    .unwrap_or_default();
+                let _ = tx.send(Update::PickedAudio(paths));
+                ctx.request_repaint();
+            });
+        }
         if self.open_path && !self.picker_active {
             #[cfg(feature = "test-support")]
             if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
@@ -418,6 +457,9 @@ impl App {
         }
         if self.settings_open {
             self.settings(ctx);
+        }
+        if self.player_open {
+            self.player_window(ctx);
         }
         if self.palette_open {
             self.palette(ctx);

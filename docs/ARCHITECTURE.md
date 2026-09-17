@@ -307,7 +307,13 @@ the default store. OS-managed macOS store contents are not in the data directory
 
 Playback has an explicit owning project and is polled from app logic, including
 when the GUI is minimized. Switching projects does not change the current
-playlist. Closing the owner's Player stops playback; closing another project's
-Player does not. Only one audio source plays at a time. Radio uses connection and
+playlist. Closing the Player window or a leftover Player tab does not stop
+playback; the GUI exit
+path does. Only one audio source plays at a time. Radio uses connection and
 per-read timeouts without a total stream deadline; initial output honors saved
-volume, including mute.
+volume, including mute. Mini-controls bind to the owning project, not the
+selected one. The full Player window is one themed floating window (never a workspace tab):
+transport, optional EQ, playlist. Spectrum paints only while playing. Opening
+the player closes leftover Player tabs. EQ sliders are visual only.
+Playlist stacks match Webamp ADD/REM/SEL/MISC/LIST. Shuffle uses a remaining-track
+bag; repeat wraps sequential play and reshuffles the bag.

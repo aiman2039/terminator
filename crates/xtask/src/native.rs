@@ -1113,10 +1113,17 @@ fn terminal_actions(o: &Options) -> Result<()> {
         json!([{"at_ms":1000,"target":"tool-Git"},{"at_ms":1900,"target":"git-file-README.md"}]),
         3500,
     )?;
+    let git_state = h.state()?;
+    let layout = git_state["projects"][0]["layout"].to_string();
     ensure!(
-        sessions(&h.state()?).iter().any(|s| s["kind"] == "editor"
-            && s["file"].as_str().is_some_and(|p| p.ends_with("README.md"))),
-        "Git file click did not open editor"
+        layout.contains("README.md") && layout.contains("Diff"),
+        "Git file click did not open a diff: {layout}"
+    );
+    ensure!(
+        sessions(&git_state).iter().all(|s| s["file"]
+            .as_str()
+            .is_none_or(|path| !path.ends_with("README.md"))),
+        "Git file click opened an editor"
     );
     h.layout(&p, &s)?;
     for session in &s {
