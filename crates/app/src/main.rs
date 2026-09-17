@@ -3460,6 +3460,10 @@ mod navigation_tests {
         assert!(!app.terminal_input_enabled("shell"));
         app.palette_open = false;
         assert!(app.terminal_input_enabled("shell"));
+        app.player_open = true;
+        assert!(!app.terminal_input_enabled("shell"));
+        app.player_open = false;
+        assert!(app.terminal_input_enabled("shell"));
         app.worktree_draft = Some(worktree_ui::WorktreeDraft {
             source: "a".into(),
             start: "HEAD".into(),

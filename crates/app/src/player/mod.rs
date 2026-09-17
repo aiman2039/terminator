@@ -728,10 +728,15 @@ impl App {
     }
 
     fn radio_visible(&self) -> Vec<radio::Station> {
-        let query = self.player.radio_query.trim().to_lowercase();
         self.radio_listing()
             .into_iter()
-            .filter(|station| radio::matches_filter(station, &query, &self.player.radio_category))
+            .filter(|station| {
+                radio::matches_filter(
+                    station,
+                    &self.player.radio_query,
+                    &self.player.radio_category,
+                )
+            })
             .collect()
     }
 

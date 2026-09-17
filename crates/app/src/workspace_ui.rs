@@ -38,6 +38,7 @@ impl App {
     pub(super) fn terminal_input_enabled(&self, sid: &str) -> bool {
         !self.picker_active
             && !self.settings_open
+            && !self.player_open
             && !self.command_dialog_open()
             && !self.add_project
             && !self.notice_detail_modal_open()

@@ -38,28 +38,43 @@ fn load_catalog() -> Vec<Station> {
         .unwrap_or_default()
 }
 
-pub fn categories() -> Vec<String> {
-    let mut out = Vec::new();
-    for station in catalog() {
-        if !station.category.is_empty() && !out.iter().any(|item| item == &station.category) {
-            out.push(station.category.clone());
+pub fn categories() -> &'static [String] {
+    static CATEGORIES: OnceLock<Vec<String>> = OnceLock::new();
+    CATEGORIES.get_or_init(|| {
+        let mut out = Vec::new();
+        for station in catalog() {
+            if !station.category.is_empty() && !out.iter().any(|item| item == &station.category) {
+                out.push(station.category.clone());
+            }
         }
-    }
-    out.sort();
-    out
+        out.sort();
+        out
+    })
 }
 
 pub fn matches_filter(station: &Station, query: &str, category: &str) -> bool {
-    if !category.is_empty() && station.category != category {
+    if !category.is_empty() && !station.category.eq_ignore_ascii_case(category) {
         return false;
     }
+    let query = query.trim().to_lowercase();
     if query.is_empty() {
         return true;
     }
-    station.name.to_lowercase().contains(query)
-        || station.category.to_lowercase().contains(query)
-        || station.country.to_lowercase().contains(query)
-        || station.language.to_lowercase().contains(query)
+    let blob = station_blob(station);
+    query.split_whitespace().all(|word| blob.contains(word))
+}
+
+fn station_blob(station: &Station) -> String {
+    format!(
+        "{} {} {} {} {} {}",
+        station.name,
+        station.category,
+        station.country,
+        station.language,
+        station.url,
+        station.homepage
+    )
+    .to_lowercase()
 }
 
 pub fn parse_stream_url(raw: &str) -> Result<String> {
@@ -114,6 +129,8 @@ mod tests {
             .find(|station| station.name.contains("Groove Salad"))
             .expect("groove");
         assert!(matches_filter(groove, "salad", ""));
+        assert!(matches_filter(groove, "GROOVE salad", ""));
+        assert!(matches_filter(groove, "somafm", ""));
         assert!(matches_filter(groove, "", "ambient"));
         assert!(!matches_filter(groove, "jazz", ""));
         assert!(!matches_filter(groove, "", "jazz"));
