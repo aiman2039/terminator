@@ -107,94 +107,7 @@ impl App {
         if self.close_workspace.is_none() && self.close_session.is_none() {
             self.idle_close_fallback = None;
         }
-        if let Some((project, tab_id)) = self.close_workspace.clone() {
-            let sessions = self
-                .layouts
-                .get(&project)
-                .and_then(|workspace| workspace.tabs.iter().find(|tab| tab.id == tab_id))
-                .map(|tab| {
-                    tab.layout
-                        .iter_all_tabs()
-                        .filter_map(|(_, tab)| match tab {
-                            Tab::Terminal(sid) => Some(sid.clone()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let live: Vec<_> = sessions
-                .iter()
-                .filter(|id| {
-                    self.state
-                        .sessions
-                        .iter()
-                        .any(|s| &s.id == *id && s.lifecycle.live())
-                })
-                .cloned()
-                .collect();
-            if live.is_empty() {
-                if let Some(workspace) = self.layouts.get_mut(&project) {
-                    workspace.close(&tab_id);
-                }
-                self.close_workspace = None;
-            } else if self.editors_only(&live) {
-                self.close_workspace = None;
-                if !self.skip_editor_close_request(&live) {
-                    self.close_editors(
-                        editor_close::Target::Workspace(project, tab_id),
-                        live,
-                        editor_close::Mode::Check,
-                    );
-                }
-            } else if self.check_idle_close(
-                editor_close::Target::Workspace(project.clone(), tab_id.clone()),
-                live.clone(),
-            ) {
-                // Keep the original identity while the worker checks all terminals.
-            } else {
-                let mut open = true;
-                self.popups
-                    .window(ctx, "Close tab?")
-                    .open(&mut open)
-                    .collapsible(false)
-                    .resizable(false)
-                    .show(ctx, |ui| {
-                        ui.label(format!(
-                            "This tab contains {} running session(s).",
-                            live.len()
-                        ));
-                        ui.weak(
-                            "Keep their processes running in the background, or terminate them.",
-                        );
-                        ui.horizontal(|ui| {
-                            let response = ui.button("Keep running");
-                            #[cfg(feature = "test-support")]
-                            diagnostics::record(ui.ctx(), "workspace-keep-running", response.rect);
-                            let background = response.clicked();
-                            let terminate = ui.button("Terminate sessions").clicked();
-                            if background || terminate {
-                                if terminate {
-                                    for session in &live {
-                                        self.send(Request::Stop {
-                                            session: session.clone(),
-                                        });
-                                    }
-                                }
-                                if let Some(workspace) = self.layouts.get_mut(&project) {
-                                    workspace.close(&tab_id);
-                                }
-                                self.close_workspace = None;
-                            }
-                            if ui.button("Cancel").clicked() {
-                                self.close_workspace = None;
-                            }
-                        });
-                    });
-                if !open {
-                    self.close_workspace = None;
-                }
-            }
-        }
+        self.poll_workspace_close(ctx);
         if let Some(sid) = self.close_session.clone() {
             let session = self.state.sessions.iter().find(|s| s.id == sid).cloned();
             if session
@@ -497,6 +410,112 @@ impl App {
                     ctx.request_repaint();
                 });
             }
+        }
+    }
+
+    pub(super) fn poll_workspace_close(&mut self, ctx: &egui::Context) {
+        loop {
+            let Some((project, tab_id)) = self.close_workspace.clone() else {
+                return;
+            };
+            let live = self.live_workspace_sessions(&project, &tab_id);
+            if live.is_empty() {
+                self.close_workspace_tab_now(&project, &tab_id);
+                continue;
+            }
+            if self.editors_only(&live) {
+                self.close_workspace = None;
+                if !self.skip_editor_close_request(&live) {
+                    self.close_editors(
+                        editor_close::Target::Workspace(project, tab_id),
+                        live,
+                        editor_close::Mode::Check,
+                    );
+                }
+                return;
+            }
+            if self.check_idle_close(
+                editor_close::Target::Workspace(project.clone(), tab_id.clone()),
+                live.clone(),
+            ) {
+                return;
+            }
+            self.confirm_workspace_close(ctx, &project, &tab_id, live);
+            return;
+        }
+    }
+
+    fn live_workspace_sessions(&self, project: &str, tab_id: &str) -> Vec<String> {
+        let sessions = self
+            .layouts
+            .get(project)
+            .and_then(|workspace| workspace.tabs.iter().find(|tab| tab.id == tab_id))
+            .map(|tab| {
+                tab.layout
+                    .iter_all_tabs()
+                    .filter_map(|(_, tab)| match tab {
+                        Tab::Terminal(sid) => Some(sid.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        sessions
+            .into_iter()
+            .filter(|id| {
+                self.state
+                    .sessions
+                    .iter()
+                    .any(|session| &session.id == id && session.lifecycle.live())
+            })
+            .collect()
+    }
+
+    fn confirm_workspace_close(
+        &mut self,
+        ctx: &egui::Context,
+        project: &str,
+        tab_id: &str,
+        live: Vec<String>,
+    ) {
+        let mut open = true;
+        let mut decided = false;
+        self.popups
+            .window(ctx, "Close tab?")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label(format!(
+                    "This tab contains {} running session(s).",
+                    live.len()
+                ));
+                ui.weak("Keep their processes running in the background, or terminate them.");
+                ui.horizontal(|ui| {
+                    let response = ui.button("Keep running");
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(ui.ctx(), "workspace-keep-running", response.rect);
+                    let background = response.clicked();
+                    let terminate = ui.button("Terminate sessions").clicked();
+                    if background || terminate {
+                        if terminate {
+                            for session in &live {
+                                self.send(Request::Stop {
+                                    session: session.clone(),
+                                });
+                            }
+                        }
+                        self.close_workspace_tab_now(project, tab_id);
+                        decided = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        self.abort_workspace_close();
+                        decided = true;
+                    }
+                });
+            });
+        if !open && !decided {
+            self.abort_workspace_close();
         }
     }
 }

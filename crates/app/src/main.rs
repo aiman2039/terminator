@@ -798,6 +798,8 @@ struct App {
     layouts: HashMap<String, Workspace>,
     layout_readonly: HashSet<String>,
     close_workspace: Option<(String, String)>,
+    close_workspace_queue: Vec<String>,
+    workspace_insert: HashMap<String, usize>,
     workspace_visible: Option<(String, String)>,
     layout_saved: HashMap<String, String>,
     selected: Option<String>,
@@ -975,6 +977,8 @@ impl App {
             layouts: HashMap::new(),
             layout_readonly: HashSet::new(),
             close_workspace: None,
+            close_workspace_queue: Vec::new(),
+            workspace_insert: HashMap::new(),
             workspace_visible: None,
             layout_saved: HashMap::new(),
             selected: None,
@@ -1534,10 +1538,11 @@ impl App {
                     if session.kind == SessionKind::Editor {
                         self.editor_origins.insert(session.id.clone(), anchors);
                     }
+                    let index = self.workspace_insert.remove(&id).unwrap_or(usize::MAX);
                     self.layouts
                         .entry(project.clone())
                         .or_insert_with(Workspace::empty)
-                        .add(id, Tab::Terminal(session.id.clone()));
+                        .add_at(index, id, Tab::Terminal(session.id.clone()));
                     if self.selected.as_ref() == Some(&project) {
                         self.active_session = Some(session.id.clone());
                     }
@@ -1978,7 +1983,11 @@ impl App {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| "/".into())
     }
-    fn create(&self, split: Option<&str>) {
+    fn create(&mut self, split: Option<&str>) {
+        if split.is_none() {
+            self.create_workspace_tab(None);
+            return;
+        }
         if let Some(project) = &self.selected {
             let _ = self.jobs.send(Job::rpc(
                 Request::Create {
@@ -1989,13 +1998,60 @@ impl App {
                     column: None,
                     editor: false,
                 },
-                if split.is_none() {
-                    After::Workspace(id(), Vec::new())
-                } else {
-                    self.editor_target(project, None, split)
-                },
+                self.editor_target(project, None, split),
             ));
         }
+    }
+    fn create_workspace_tab(&mut self, index: Option<usize>) {
+        let Some(project) = self.selected.clone() else {
+            return;
+        };
+        let tab_id = id();
+        if let Some(index) = index {
+            self.workspace_insert.insert(tab_id.clone(), index);
+        }
+        let _ = self.jobs.send(Job::rpc(
+            Request::Create {
+                project,
+                cwd: self.cwd(),
+                file: None,
+                line: None,
+                column: None,
+                editor: false,
+            },
+            After::Workspace(tab_id, Vec::new()),
+        ));
+    }
+    fn begin_workspace_close_tabs(&mut self, project: &str, ids: Vec<String>) {
+        self.rename_session = None;
+        let mut ids = ids.into_iter();
+        let Some(first) = ids.next() else {
+            return;
+        };
+        self.close_workspace_queue = ids.collect();
+        self.close_workspace = Some((project.to_owned(), first));
+    }
+    fn abort_workspace_close(&mut self) {
+        self.close_workspace = None;
+        self.close_workspace_queue.clear();
+    }
+    fn close_workspace_tab_now(&mut self, project: &str, tab_id: &str) {
+        if let Some(workspace) = self.layouts.get_mut(project) {
+            workspace.close(tab_id);
+        }
+        self.advance_workspace_close(project);
+    }
+    fn advance_workspace_close(&mut self, project: &str) {
+        let existing: HashSet<String> = self
+            .layouts
+            .get(project)
+            .map(|workspace| workspace.tabs.iter().map(|tab| tab.id.clone()).collect())
+            .unwrap_or_default();
+        self.close_workspace_queue
+            .retain(|id| existing.contains(id));
+        let next =
+            (!self.close_workspace_queue.is_empty()).then(|| self.close_workspace_queue.remove(0));
+        self.close_workspace = next.map(|id| (project.to_owned(), id));
     }
     fn editor_target(&self, project: &str, origin: Option<&Tab>, split: Option<&str>) -> After {
         let mut anchors = Vec::new();
@@ -2604,6 +2660,9 @@ impl App {
             appearance::UnsavedCloseChoice::Cancel => {
                 self.editor_close_prompts
                     .retain(|(_, prompted, _)| prompted != &ids);
+                if matches!(target, editor_close::Target::Workspace(..)) {
+                    self.abort_workspace_close();
+                }
             }
             appearance::UnsavedCloseChoice::Save => {
                 self.close_editors(target, ids, editor_close::Mode::Save);
@@ -2629,9 +2688,7 @@ impl App {
                     .retain(|(_, prompted, _)| !prompted.iter().any(|id| ids.contains(id)));
                 match target {
                     editor_close::Target::Workspace(project, id) => {
-                        if let Some(workspace) = self.layouts.get_mut(&project) {
-                            workspace.close(&id);
-                        }
+                        self.close_workspace_tab_now(&project, &id);
                     }
                     editor_close::Target::Pane(sid) => self.remove_tab(&sid),
                 }
@@ -4811,6 +4868,115 @@ mod navigation_tests {
     }
 
     #[test]
+    fn workspace_created_inserts_at_requested_index() {
+        let (mut app, ctx, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add("t0".into(), Tab::Terminal("s0".into()));
+        workspace.add("t1".into(), Tab::Terminal("s1".into()));
+        app.workspace_insert.insert("mid".into(), 1);
+        app.update_tx
+            .send(Update::WorkspaceCreated(
+                session_fixture("mid-session", SessionKind::Shell),
+                "mid".into(),
+                vec![],
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(
+            app.layouts["a"]
+                .tabs
+                .iter()
+                .map(|tab| tab.id.as_str())
+                .collect::<Vec<_>>(),
+            ["t0", "mid", "t1"]
+        );
+        assert_eq!(app.layouts["a"].active, "mid");
+        assert!(app.workspace_insert.is_empty());
+    }
+
+    #[test]
+    fn add_tab_to_the_left_records_insert_index() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.selected = Some("a".into());
+        app.create_workspace_tab(Some(1));
+        let Job::Control(_, After::Workspace(id, anchors)) = received.try_recv().unwrap() else {
+            panic!("Expected workspace create")
+        };
+        assert!(anchors.is_empty());
+        assert_eq!(app.workspace_insert.get(&id), Some(&1));
+    }
+
+    #[test]
+    fn close_tabs_to_the_left_queues_then_cancel_keeps_the_rest() {
+        let (mut app, _, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add("t0".into(), Tab::Terminal("s0".into()));
+        workspace.add("t1".into(), Tab::Terminal("s1".into()));
+        workspace.add("t2".into(), Tab::Terminal("s2".into()));
+        app.begin_workspace_close_tabs("a", vec!["t0".into(), "t1".into()]);
+        assert_eq!(app.close_workspace, Some(("a".into(), "t0".into())));
+        assert_eq!(app.close_workspace_queue, ["t1"]);
+        app.close_workspace_tab_now("a", "t0");
+        assert_eq!(app.close_workspace, Some(("a".into(), "t1".into())));
+        assert!(!app.layouts["a"].tabs.iter().any(|tab| tab.id == "t0"));
+        assert!(app.layouts["a"].tabs.iter().any(|tab| tab.id == "t2"));
+        app.abort_workspace_close();
+        assert!(app.close_workspace.is_none());
+        assert!(app.close_workspace_queue.is_empty());
+        assert!(app.layouts["a"].tabs.iter().any(|tab| tab.id == "t1"));
+    }
+
+    #[test]
+    fn empty_workspace_tabs_drain_without_prompt() {
+        let (mut app, ctx, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add(
+            "t0".into(),
+            Tab::Image {
+                path: "/a.png".into(),
+            },
+        );
+        workspace.add(
+            "t1".into(),
+            Tab::Image {
+                path: "/b.png".into(),
+            },
+        );
+        workspace.add(
+            "t2".into(),
+            Tab::Image {
+                path: "/c.png".into(),
+            },
+        );
+        app.begin_workspace_close_tabs("a", vec!["t0".into(), "t1".into()]);
+        app.poll_workspace_close(&ctx);
+        assert!(app.close_workspace.is_none());
+        assert!(app.close_workspace_queue.is_empty());
+        assert_eq!(
+            app.layouts["a"]
+                .tabs
+                .iter()
+                .map(|tab| tab.id.as_str())
+                .collect::<Vec<_>>(),
+            ["t2"]
+        );
+    }
+
+    #[test]
+    fn unsaved_close_cancel_aborts_remaining_workspace_tabs() {
+        let (mut app, _, _dir) = fixture();
+        app.close_workspace_queue = vec!["t1".into()];
+        app.apply_unsaved_close_choice(
+            appearance::UnsavedCloseChoice::Cancel,
+            editor_close::Target::Workspace("a".into(), "t0".into()),
+            vec!["editor".into()],
+        );
+        assert!(app.close_workspace_queue.is_empty());
+    }
+
+    #[test]
     fn failed_directory_refresh_preserves_cached_entries_until_retry_succeeds() {
         let (mut app, ctx, _dir) = fixture();
         let path = PathBuf::from("/a");
@@ -5131,7 +5297,7 @@ mod navigation_tests {
         app.play_station_offset("a", -1);
         assert_eq!(
             app.player.station_index,
-            Some(player::radio::bundled().len() - 1)
+            Some(player::radio::catalog().len() - 1)
         );
     }
 

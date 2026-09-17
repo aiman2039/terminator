@@ -51,7 +51,7 @@ pub struct TerminalView<'a> {
 
 impl Widget for TerminalView<'_> {
     fn ui(self, ui: &mut egui::Ui) -> Response {
-        let (layout, painter) = ui.allocate_painter(self.size, egui::Sense::click());
+        let (layout, painter) = ui.allocate_painter(self.size, egui::Sense::click_and_drag());
 
         let widget_id = self.widget_id;
         let mut state = ui.memory(|m| {
@@ -155,15 +155,7 @@ impl<'a> TerminalView<'a> {
         let modifiers = layout.ctx.input(|i| i.modifiers);
         let events = layout.ctx.input(|i| i.events.clone());
         for event in events {
-            let wheel = matches!(event, egui::Event::MouseWheel { .. });
-            if !layout.enabled() || (!wheel && !layout.has_focus()) || (wheel && !wheel_target) {
-                continue;
-            }
-            if matches!(
-                event,
-                egui::Event::PointerButton { .. } | egui::Event::MouseWheel { .. }
-            ) && !layout.contains_pointer()
-            {
+            if !input_event_applies(&event, layout, state.is_dragged, wheel_target) {
                 continue;
             }
             if self.external_links
@@ -484,21 +476,7 @@ fn process_keyboard_event(
                 BackendCommand::Write(text.as_bytes().to_vec())
             },
         ),
-        egui::Event::Copy => {
-            #[cfg(not(any(target_os = "ios", target_os = "macos")))]
-            if modifiers.contains(Modifiers::COMMAND | Modifiers::SHIFT) {
-                let content = backend.selectable_content();
-                InputAction::WriteToClipboard(content)
-            } else {
-                // Hotfix - Send ^C when there's not selection on view.
-                InputAction::BackendCall(BackendCommand::Write([0x3].to_vec()))
-            }
-            #[cfg(any(target_os = "ios", target_os = "macos"))]
-            {
-                let content = backend.selectable_content();
-                InputAction::WriteToClipboard(content)
-            }
-        }
+        egui::Event::Copy => copy_input_action(backend.selectable_content(), modifiers),
         egui::Event::Key {
             key,
             pressed,
@@ -647,15 +625,9 @@ fn process_left_button(
     modifiers: &Modifiers,
     pressed: bool,
 ) -> InputAction {
-    let terminal_mode = backend.last_content().terminal_mode;
-    if terminal_mode.intersects(TermMode::MOUSE_MODE) {
-        InputAction::BackendCall(BackendCommand::MouseReport(
-            MouseButton::LeftButton,
-            *modifiers,
-            state.current_mouse_position_on_grid,
-            pressed,
-        ))
-    } else if pressed {
+    refresh_pointer_cell(state, layout, backend, position);
+    state.is_dragged = pressed;
+    if pressed {
         process_left_button_pressed(state, layout, position)
     } else {
         process_left_button_released(state, layout, backend, bindings_layout, position, modifiers)
@@ -734,25 +706,11 @@ fn process_mouse_move(
         terminal_content.grid.display_offset(),
     );
 
-    let mut actions = vec![];
-    // Handle command or selection update based on terminal mode and modifiers
+    let mut actions = Vec::new();
     if state.is_dragged {
-        let terminal_mode = terminal_content.terminal_mode;
-        let cmd = if terminal_mode.contains(TermMode::MOUSE_MOTION) && modifiers.is_none() {
-            InputAction::BackendCall(BackendCommand::MouseReport(
-                MouseButton::LeftMove,
-                *modifiers,
-                state.current_mouse_position_on_grid,
-                true,
-            ))
-        } else {
-            InputAction::BackendCall(BackendCommand::SelectUpdate(cursor_x, cursor_y))
-        };
-
-        actions.push(cmd);
+        actions.extend(drag_actions(cursor_x, cursor_y, layout.rect.height()));
     }
 
-    // Handle link hover if applicable
     if modifiers.command_only() {
         actions.push(InputAction::BackendCall(BackendCommand::ProcessLink(
             LinkAction::Hover,
@@ -760,6 +718,75 @@ fn process_mouse_move(
         )));
     }
 
+    actions
+}
+
+fn refresh_pointer_cell(
+    state: &mut TerminalViewState,
+    layout: &Response,
+    backend: &TerminalBackend,
+    position: Pos2,
+) {
+    let content = backend.last_content();
+    state.current_mouse_position_on_grid = TerminalBackend::selection_point(
+        position.x - layout.rect.min.x,
+        position.y - layout.rect.min.y,
+        &content.terminal_size,
+        content.grid.display_offset(),
+    );
+}
+
+fn input_event_applies(
+    event: &egui::Event,
+    layout: &Response,
+    is_dragged: bool,
+    wheel_target: bool,
+) -> bool {
+    if !layout.enabled() {
+        return false;
+    }
+    match event {
+        egui::Event::MouseWheel { .. } => wheel_target,
+        egui::Event::PointerButton { pressed, .. } => {
+            layout.contains_pointer() || (!pressed && is_dragged)
+        }
+        egui::Event::PointerMoved(_) => layout.contains_pointer() || is_dragged,
+        _ => layout.has_focus(),
+    }
+}
+
+fn copy_input_action(content: String, modifiers: Modifiers) -> InputAction {
+    if content.is_empty() {
+        interrupt_if_unshifted_copy(modifiers)
+    } else {
+        InputAction::WriteToClipboard(content)
+    }
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "macos")))]
+fn interrupt_if_unshifted_copy(modifiers: Modifiers) -> InputAction {
+    if modifiers.shift {
+        InputAction::Ignore
+    } else {
+        InputAction::BackendCall(BackendCommand::Write([0x3].to_vec()))
+    }
+}
+
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn interrupt_if_unshifted_copy(_modifiers: Modifiers) -> InputAction {
+    InputAction::Ignore
+}
+
+fn drag_actions(cursor_x: f32, cursor_y: f32, layout_height: f32) -> Vec<InputAction> {
+    let mut actions = Vec::new();
+    if cursor_y < 0.0 {
+        actions.push(InputAction::BackendCall(BackendCommand::ScrollLocal(1)));
+    } else if cursor_y > layout_height {
+        actions.push(InputAction::BackendCall(BackendCommand::ScrollLocal(-1)));
+    }
+    actions.push(InputAction::BackendCall(BackendCommand::SelectUpdate(
+        cursor_x, cursor_y,
+    )));
     actions
 }
 
@@ -884,5 +911,62 @@ mod scroll_tests {
             actions.as_slice(),
             [InputAction::BackendCall(BackendCommand::ScrollLocal(-1))]
         ));
+    }
+}
+
+#[cfg(test)]
+mod pointer_tests {
+    use super::*;
+
+    #[test]
+    fn drag_selects_even_when_the_application_wants_mouse_reports() {
+        let actions = drag_actions(4.0, 8.0, 100.0);
+        assert!(matches!(
+            actions.as_slice(),
+            [InputAction::BackendCall(BackendCommand::SelectUpdate(
+                4.0, 8.0
+            ))]
+        ));
+    }
+
+    #[test]
+    fn host_drag_updates_selection_and_autoscrolls() {
+        let actions = drag_actions(4.0, -2.0, 100.0);
+        assert!(matches!(
+            actions.as_slice(),
+            [
+                InputAction::BackendCall(BackendCommand::ScrollLocal(1)),
+                InputAction::BackendCall(BackendCommand::SelectUpdate(_, _))
+            ]
+        ));
+    }
+
+    #[test]
+    fn nonempty_copy_writes_clipboard() {
+        let action = copy_input_action("hello".into(), Modifiers::NONE);
+        assert!(matches!(action, InputAction::WriteToClipboard(text) if text == "hello"));
+    }
+
+    #[test]
+    fn empty_shifted_copy_does_not_clear_clipboard() {
+        let action = copy_input_action(String::new(), Modifiers::SHIFT);
+        assert!(matches!(action, InputAction::Ignore));
+    }
+
+    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[test]
+    fn empty_ctrl_c_interrupts() {
+        let action = copy_input_action(String::new(), Modifiers::NONE);
+        assert!(matches!(
+            action,
+            InputAction::BackendCall(BackendCommand::Write(bytes)) if bytes == [0x3]
+        ));
+    }
+
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    #[test]
+    fn empty_cmd_c_does_not_clear_clipboard() {
+        let action = copy_input_action(String::new(), Modifiers::NONE);
+        assert!(matches!(action, InputAction::Ignore));
     }
 }

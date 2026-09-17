@@ -41,7 +41,7 @@ Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcom
 - Launch agents and manage worktrees in the terminal yourself. The app does not launch agents or perform Git writes.
 - Project arrows expand/collapse independently of selection and persist across restarts. **Sort** beside PROJECTS orders visible projects by name A → Z (default), name Z → A, or latest activity; the choice persists in `ui-preferences.json`. Latest activity is the latest of session creation, agent updates, notice times, and restoring, adding, or creating a project. Selecting a visible project does not change its rank. The window header holds project tabs and the Explorer, Agents, Git, and Settings icons. Explorer, Agents, and Git switch the right sidebar; click the active tool to collapse it. The left Agents row stays compact (waiting/unread counts) until opened. Explorer, Git, and History do not list attention events. Agents lists undismissed, unsnoozed notifications for the owning project or All projects, including retained events from ended sessions and terminal notices. Unresolved waiting events appear first. Waiting input and permission notices leave the inbox when the agent continues or a newer request replaces them; completed and failed notices remain until the session is focused or the notice is dismissed. The Agents header waiting badge uses that same list, not live agent sessions. Working agents without notifications do not create cards. Sidebar width and scope persist globally. Settings → Place notifications at the side hides the top Attention strip (default); unchecking it restores the top strip.
 - Select a project to restore its own layout. A terminal that changes directory stays under its owning project; the file/Git sidebar follows its effective directory.
-- Single-click anywhere on an Explorer file row to open a new editor tab. Right-click a file path to open the editor, a new editor split, or an external editor. `command+O` uses the native file picker (Cmd+O on macOS, Ctrl+Shift+O on Linux). Change it in Settings → Shortcuts. Settings shortcuts are consumed by the GUI and are not typed into the terminal. Other Command/Ctrl chords go to the focused terminal as kitty CSI u (Command is Super, so Neovim `<D-e>` works); Ctrl+A–Z stay control characters, and Cmd/Ctrl+C/V copy and paste.
+- Single-click anywhere on an Explorer file row to open a new editor tab. Right-click a file path to open the editor, a new editor split, or an external editor. `command+O` uses the native file picker (Cmd+O on macOS, Ctrl+Shift+O on Linux). Change it in Settings → Shortcuts. Settings shortcuts are consumed by the GUI and are not typed into the terminal. Other Command/Ctrl chords go to the focused terminal as kitty CSI u (Command is Super, so Neovim `<D-e>` works); Ctrl+A–Z stay control characters, and Cmd/Ctrl+C/V copy and paste. Drag selects terminal text even in nvim or a full-screen agent; then Cmd+C (macOS) or Ctrl+Shift+C (Linux) copies it. Empty copy does not clear the clipboard. The wheel still goes to the app when it enables mouse reporting.
 - Settings → Terminal & Editor retains embedded Neovim, terminal-editor, and external-editor modes. External presets include System default, VS Code, Cursor, RustRover, Zed, and Custom. Named presets use macOS application launching or Linux CLI launchers. Custom takes an executable and one literal argument per row; the absolute file path is appended without shell evaluation. **Choose file and test…** launches the draft without saving. Missing launchers and failed exits appear in the status bar; long-running editors remain independent of the GUI.
 - The default editor is real Neovim, rendered inside the native terminal widget and controlled through Neovim RPC for save/compare actions. Your Neovim configuration and plugins load normally. An editor-side tree can therefore come from your own configuration.
 - Closing a tab with live shells or agents asks whether to terminate or background them. Clean file-only tabs close directly. Closing the GUI leaves the daemon and sessions running.
@@ -185,7 +185,7 @@ hooks or infer agent state from terminal text automatically.
 
 The selected terminal is outlined with the appearance accent color (blue by
 default). Rename a terminal through its right-click menu, its tab menu, or its
-Projects row; double-clicking a top tab also edits its name inline. Press Enter to save or Escape to cancel.
+Projects row; double-clicking a top tab also edits its name inline. Press Enter to save or Escape to cancel. Right-click a top-level tab to close it, close all tabs to the left or right, or add a new top-level terminal to the left or right.
 
 File opening always creates a separate editor session in a new top-level tab.
 Use “Open in editor split” to place an editor beside a pane in the current tab. When Vim exits, its view closes
@@ -271,7 +271,9 @@ then custom stations. The sound-wave icon or playlist button opens a single glob
 window; leftover Player tabs are closed. First open seeds **Default** with bundled
 tone files (`pulse.wav`, `hum.wav`, `chime.wav`) if that playlist is empty.
 Files can be seeked; live radio cannot. Shuffle and repeat persist.
-ADD url and MISC → Stations play radio. Palette → **Open player**.
+The Radio button switches the Player to the bundled station catalog
+(search and category filters). Users can add HTTP(S) stations. Live radio
+cannot seek. Palette → **Open player**.
 Open as text and Open externally still work. Playback stops when the GUI exits,
 not when the Player window closes.
 

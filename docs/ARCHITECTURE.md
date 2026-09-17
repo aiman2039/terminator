@@ -10,7 +10,7 @@ All application code lives in this Cargo workspace. The root `../plan.md` record
 
 ## Terminal boundary
 
-The daemon, not the GUI or its bridge processes, owns the real shells and editor PTYs. The GUI uses the existing Alacritty-backed `egui_term` widget. Its child is a small attachment bridge connected to the daemon; losing that bridge does not terminate the original shell.
+The daemon, not the GUI or its bridge processes, owns the real shells and editor PTYs. The GUI uses the existing Alacritty-backed `egui_term` widget. Its child is a small attachment bridge connected to the daemon; losing that bridge does not terminate the original shell. Left-drag always selects host text. Application mouse reporting is used for the wheel (nvim, full-screen agents). Empty Copy does not overwrite the clipboard.
 
 The daemon uses one `vt100` parser and screen model for bounded screen/history snapshots and terminal query responses through its callback API (xterm DA, DECRQM for alt-screen/mouse, OSC 4/10/11/12). The GUI retains the Alacritty-backed terminal widget. There is no duplicate daemon-side Alacritty parser. Reconnection sends generated screen/history state, followed by ordered raw output. Historical display goes through the parser and cannot replay clipboard/OSC side effects. Full compatibility with every vendor-specific terminal extension is not established by the current smoke suite.
 
@@ -313,7 +313,10 @@ path does. Only one audio source plays at a time. Radio uses connection and
 per-read timeouts without a total stream deadline; initial output honors saved
 volume, including mute. Mini-controls bind to the owning project, not the
 selected one. The full Player window is one themed floating window (never a workspace tab):
-transport, optional EQ, playlist. Spectrum paints only while playing. Opening
+transport, optional EQ, playlist. Spectrum is an FFT of the playback tap (`spectrum-analyzer`). The row stays
+reserved at a fixed height. Opening
 the player closes leftover Player tabs. EQ sliders are visual only.
-Playlist stacks match Webamp ADD/REM/SEL/MISC/LIST. Shuffle uses a remaining-track
+Radio mode loads `assets/radio/stations.json` (merged catalogs). Custom stations
+persist in ui-preferences. Playlist stacks match Webamp ADD/REM/SEL/MISC/LIST.
+Shuffle uses a remaining-track
 bag; repeat wraps sequential play and reshuffles the bag.

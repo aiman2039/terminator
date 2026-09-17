@@ -2,6 +2,7 @@
 mod engine;
 mod playlist;
 pub(super) mod radio;
+mod tap;
 mod ui;
 
 use super::*;
@@ -100,6 +101,11 @@ pub struct Controller {
     rng: u64,
     current_path: Option<PathBuf>,
     durations: HashMap<PathBuf, Duration>,
+    spectrum: [f32; tap::BARS],
+    radio_mode: bool,
+    radio_query: String,
+    radio_category: String,
+    radio_draft_name: String,
 }
 
 impl Controller {
@@ -133,6 +139,11 @@ impl Controller {
             rng,
             current_path: None,
             durations: HashMap::new(),
+            spectrum: [0.0; tap::BARS],
+            radio_mode: false,
+            radio_query: String::new(),
+            radio_category: String::new(),
+            radio_draft_name: String::new(),
         }
     }
 
@@ -164,13 +175,20 @@ impl Controller {
             repeat,
         } = input;
         let mut finished = false;
+        let mut status = None;
         for outcome in self.engine.poll() {
             match outcome {
-                Outcome::Status(status) => self.status = status,
+                Outcome::Status(next) => status = Some(next),
                 Outcome::Finished => finished = true,
             }
         }
+        if let Some(next) = status
+            && !(finished && matches!(next, Status::Stopped))
+        {
+            self.status = next;
+        }
         self.cache_duration();
+        self.refresh_spectrum();
         if finished && self.project.as_deref() == Some(project) && self.file_index.is_some() {
             return self.play_offset(Skip {
                 project,
@@ -181,6 +199,24 @@ impl Controller {
             });
         }
         None
+    }
+
+    fn refresh_spectrum(&mut self) {
+        if matches!(self.status, Status::Playing { .. })
+            && let Some(next) = self.engine.spectrum_bars()
+        {
+            for (bar, target) in self.spectrum.iter_mut().zip(next) {
+                *bar = if target > *bar {
+                    target
+                } else {
+                    *bar * 0.78 + target * 0.22
+                };
+            }
+            return;
+        }
+        for bar in &mut self.spectrum {
+            *bar *= 0.86;
+        }
     }
 
     fn cache_duration(&mut self) {
@@ -432,6 +468,7 @@ impl App {
     pub(super) fn open_player(&mut self) {
         self.seed_sample_playlist();
         self.dismiss_player_tabs();
+        self.player.radio_mode = self.preferences.player_radio_mode;
         self.player_open = true;
     }
 
@@ -466,19 +503,33 @@ impl App {
 
     pub(super) fn player_toggle_button(&mut self, ui: &mut egui::Ui) {
         ui.ctx().request_repaint_after(Duration::from_millis(200));
-        let icon = Self::player_tool_button(ui, "AudioLines", "Player");
+        let icon = Self::player_icon_button(
+            ui,
+            "AudioLines",
+            if self.preferences.player_chrome_collapsed && self.player_active() {
+                "Show player"
+            } else {
+                "Player"
+            },
+            self.player_active(),
+        );
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "player-chrome", icon.rect);
         if icon.clicked() {
-            self.open_player();
+            if self.preferences.player_chrome_collapsed && self.player_active() {
+                self.preferences.player_chrome_collapsed = false;
+            } else {
+                self.open_player();
+            }
         }
     }
 
     pub(super) fn player_live_controls(&mut self, ui: &mut egui::Ui) {
-        if !self.player_active() {
+        if !self.player_active() || self.preferences.player_chrome_collapsed {
             return;
         }
         ui.vertical(|ui| {
+            ui.set_min_width(ui.available_width());
             self.player_mini_now_playing(ui);
             ui.horizontal(|ui| {
                 self.player_transport(ui, false);
@@ -508,15 +559,16 @@ impl App {
             Status::Stopped => ("Player", Duration::ZERO, None),
         };
         let total = duration.map(format_clock).unwrap_or_else(|| "--:--".into());
-        let clock = format!("{} / {total}", format_clock(position));
-        let mut shown = title.to_string();
-        if shown.chars().count() > 22 {
-            shown = format!("{}…", shown.chars().take(21).collect::<String>());
-        }
-        ui.horizontal(|ui| {
-            ui.weak(egui::RichText::new(clock).monospace().size(12.0));
-            ui.label(shown).on_hover_text(title);
-        });
+        let clock = format!("{:>5} / {total:<5}", format_clock(position));
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), 18.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.weak(egui::RichText::new(clock).monospace().size(12.0));
+                ui.add(egui::Label::new(title).truncate())
+                    .on_hover_text(title);
+            },
+        );
     }
 
     fn player_transport(&mut self, ui: &mut egui::Ui, details: bool) {
@@ -543,6 +595,9 @@ impl App {
         }
         if !details && Self::player_tool_button(ui, "ListMusic", "Player").clicked() {
             self.open_player();
+        }
+        if !details && Self::player_tool_button(ui, "PanelTopClose", "Hide player").clicked() {
+            self.preferences.player_chrome_collapsed = true;
         }
     }
 
@@ -592,11 +647,17 @@ impl App {
     }
 
     fn player_start(&mut self, project: &str) {
+        if self.player.radio_mode
+            && let Some(station) = self.radio_visible().into_iter().next()
+        {
+            self.play_radio(project, station);
+            return;
+        }
         let playlist = self.playlist();
         if let Some(path) = playlist.first() {
             self.player.play_file(project, path.clone(), 0);
-        } else if !self.player_stations().is_empty() {
-            self.play_station_at(project, 0);
+        } else if let Some(station) = self.radio_visible().into_iter().next() {
+            self.play_radio(project, station);
         } else {
             self.pick_audio = true;
         }
@@ -643,36 +704,75 @@ impl App {
         }
     }
 
-    fn player_stations(&self) -> Vec<(String, String)> {
-        radio::bundled()
-            .iter()
-            .map(|station| (station.name.to_string(), station.url.to_string()))
-            .chain(
-                self.preferences
-                    .radio_stations
-                    .iter()
-                    .map(|station| (station.name.clone(), station.url.clone())),
-            )
+    fn radio_listing(&self) -> Vec<radio::Station> {
+        let mut out = radio::catalog().to_vec();
+        for custom in &self.preferences.radio_stations {
+            if out.iter().any(|station| station.url == custom.url) {
+                continue;
+            }
+            out.push(radio::Station {
+                name: custom.name.clone(),
+                url: custom.url.clone(),
+                country: String::new(),
+                language: String::new(),
+                category: if custom.category.is_empty() {
+                    "custom".into()
+                } else {
+                    custom.category.clone()
+                },
+                homepage: String::new(),
+                icon: custom.icon.clone(),
+            });
+        }
+        out
+    }
+
+    fn radio_visible(&self) -> Vec<radio::Station> {
+        let query = self.player.radio_query.trim().to_lowercase();
+        self.radio_listing()
+            .into_iter()
+            .filter(|station| radio::matches_filter(station, &query, &self.player.radio_category))
             .collect()
     }
 
+    fn play_radio(&mut self, project: &str, station: radio::Station) {
+        let listing = self.radio_listing();
+        let index = listing
+            .iter()
+            .position(|item| item.url == station.url)
+            .unwrap_or(0);
+        self.player
+            .play_station(project, station.name, station.url, index);
+    }
+
+    #[cfg(test)]
     pub(super) fn play_station_at(&mut self, project: &str, index: usize) {
-        let stations = self.player_stations();
-        let Some((name, url)) = stations.get(index).cloned() else {
+        let stations = self.radio_visible();
+        let Some(station) = stations.get(index).cloned() else {
             return;
         };
-        self.player.play_station(project, name, url, index);
+        self.play_radio(project, station);
     }
 
     pub(super) fn play_station_offset(&mut self, project: &str, delta: isize) {
-        let stations = self.player_stations();
+        let stations = self.radio_visible();
         if stations.is_empty() {
             return;
         }
+        let listing = self.radio_listing();
+        let current = self
+            .player
+            .station_index
+            .and_then(|index| listing.get(index).map(|station| station.url.as_str()));
+        let pos = current
+            .and_then(|url| stations.iter().position(|station| station.url == url))
+            .unwrap_or(0);
         let len = stations.len() as isize;
-        let current = self.player.station_index.unwrap_or(0) as isize;
-        let next = (current + delta).rem_euclid(len) as usize;
-        self.play_station_at(project, next);
+        let next = (pos as isize + delta).rem_euclid(len) as usize;
+        let Some(station) = stations.get(next).cloned() else {
+            return;
+        };
+        self.play_radio(project, station);
     }
 
     fn player_play_index(&mut self, project: &str, index: usize) {
@@ -815,15 +915,32 @@ impl App {
     fn add_custom_station(&mut self, project: &str) {
         match parse_stream_url(&self.player.station_draft) {
             Ok(url) => {
-                let name = url.clone();
+                let name = if self.player.radio_draft_name.trim().is_empty() {
+                    url.clone()
+                } else {
+                    self.player.radio_draft_name.trim().to_string()
+                };
                 self.preferences.radio_stations.push(RadioStation {
-                    name,
+                    name: name.clone(),
                     url: url.clone(),
+                    category: "custom".into(),
+                    icon: String::new(),
                 });
                 self.player.station_draft.clear();
+                self.player.radio_draft_name.clear();
                 self.player.url_prompt = false;
-                let index = radio::bundled().len() + self.preferences.radio_stations.len() - 1;
-                self.play_station_at(project, index);
+                self.play_radio(
+                    project,
+                    radio::Station {
+                        name,
+                        url,
+                        country: String::new(),
+                        language: String::new(),
+                        category: "custom".into(),
+                        homepage: String::new(),
+                        icon: String::new(),
+                    },
+                );
             }
             Err(error) => {
                 self.player.status = Status::Error(format!("{error:#}"));
@@ -903,6 +1020,25 @@ mod tests {
             PathBuf::from("/a/two.mp3"),
             PathBuf::from("/a/three.mp3"),
         ]
+    }
+
+    #[test]
+    fn finishing_a_track_keeps_chrome_until_the_next_starts() {
+        let mut player = Controller::finished_fixture("a", Some(0));
+        player.status = Status::Playing {
+            title: "one".into(),
+            position: Duration::from_secs(3),
+            duration: Some(Duration::from_secs(3)),
+            seekable: true,
+        };
+        let next = player.poll(PollInput {
+            project: "a",
+            playlist: &tracks(),
+            shuffle: false,
+            repeat: false,
+        });
+        assert_eq!(next, Some(1));
+        assert!(!matches!(player.status, Status::Stopped));
     }
 
     #[test]

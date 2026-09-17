@@ -1,4 +1,5 @@
 //! Playback worker. Decode and mix off the GUI thread.
+use super::tap;
 use anyhow::{Context, Result, bail};
 use rodio::Source as _;
 use std::{
@@ -57,6 +58,7 @@ pub struct Handle {
     commands: Sender<Command>,
     events: Receiver<Event>,
     generation: Cell<u64>,
+    tap: tap::Handle,
 }
 
 impl Handle {
@@ -78,21 +80,29 @@ impl Handle {
             commands,
             events,
             generation: Cell::new(0),
+            tap: tap::Handle::new(),
         }
     }
 
     pub fn spawn() -> Self {
         let (commands, command_rx) = mpsc::channel();
         let (event_tx, events) = mpsc::channel();
+        let tap = tap::Handle::new();
+        let worker_tap = tap.clone();
         thread::Builder::new()
             .name("terminator-player".into())
-            .spawn(move || Worker::run(command_rx, event_tx))
+            .spawn(move || Worker::run(command_rx, event_tx, worker_tap))
             .ok();
         Self {
             commands,
             events,
             generation: Cell::new(0),
+            tap,
         }
+    }
+
+    pub fn spectrum_bars(&self) -> Option<[f32; tap::BARS]> {
+        self.tap.bars()
     }
 
     pub fn play(&self, source: Playable) {
@@ -163,6 +173,7 @@ struct Worker {
     playing: bool,
     volume: f32,
     generation: u64,
+    tap: tap::Handle,
 }
 
 impl Worker {
@@ -177,11 +188,13 @@ impl Worker {
             playing: false,
             volume: 1.0,
             generation: 0,
+            tap: tap::Handle::new(),
         }
     }
 
-    fn run(commands: Receiver<Command>, events: Sender<Event>) {
+    fn run(commands: Receiver<Command>, events: Sender<Event>, tap: tap::Handle) {
         let mut worker = Self::new(events);
+        worker.tap = tap;
         loop {
             match commands.recv_timeout(Duration::from_millis(50)) {
                 Ok(Command::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
@@ -228,6 +241,7 @@ impl Worker {
     }
 
     fn play_source(&mut self, source: Playable) -> Result<()> {
+        self.tap.clear();
         self.ensure_output()?;
         match source {
             Playable::File { path, title } => self.append_file(&path, title)?,
@@ -248,7 +262,7 @@ impl Worker {
         self.duration = decoder.total_duration();
         self.seekable = true;
         self.title = title;
-        sink.append(decoder);
+        sink.append(self.tap.wrap(decoder));
         Ok(())
     }
 
@@ -271,7 +285,7 @@ impl Worker {
         self.duration = decoder.total_duration();
         self.seekable = false;
         self.title = title;
-        sink.append(decoder);
+        sink.append(self.tap.wrap(decoder));
         Ok(())
     }
 
@@ -301,6 +315,7 @@ impl Worker {
             sink.clear();
             sink.pause();
         }
+        self.tap.clear();
         self.playing = false;
         self.title.clear();
         self.duration = None;
@@ -343,7 +358,6 @@ impl Worker {
                 generation: self.generation,
                 outcome: Outcome::Finished,
             });
-            self.emit(Status::Stopped);
             return;
         }
         if self.playing {

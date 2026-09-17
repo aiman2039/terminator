@@ -133,7 +133,10 @@ impl Workspace {
             })
         })
     }
-    pub fn add(&mut self, id: String, mut pane: Tab) {
+    pub fn add(&mut self, id: String, pane: Tab) {
+        self.add_at(self.tabs.len(), id, pane);
+    }
+    pub fn add_at(&mut self, index: usize, id: String, mut pane: Tab) {
         if let Tab::Browser { id, .. } = &mut pane
             && id.is_empty()
         {
@@ -142,14 +145,33 @@ impl Workspace {
         self.version = self.version.max(pane.layout_version());
         self.tabs
             .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
-        self.tabs.push(WorkspaceTab {
-            id: id.clone(),
-            primary: Some(pane.clone()),
-            layout: DockState::new(vec![pane]),
-        });
+        let index = index.min(self.tabs.len());
+        self.tabs.insert(
+            index,
+            WorkspaceTab {
+                id: id.clone(),
+                primary: Some(pane.clone()),
+                layout: DockState::new(vec![pane]),
+            },
+        );
         self.active = id;
         self.main_surface_mut()
             .set_focused_node(egui_dock::NodeIndex::root());
+    }
+    pub fn ids_before(&self, id: &str) -> Vec<String> {
+        self.tabs
+            .iter()
+            .map(|tab| tab.id.clone())
+            .take_while(|tab| tab != id)
+            .collect()
+    }
+    pub fn ids_after(&self, id: &str) -> Vec<String> {
+        self.tabs
+            .iter()
+            .map(|tab| tab.id.clone())
+            .skip_while(|tab| tab != id)
+            .skip(1)
+            .collect()
     }
     pub fn close(&mut self, id: &str) {
         let previous = self.active_index();
@@ -468,6 +490,29 @@ mod tests {
         assert_eq!(restored.tabs.len(), 2);
         assert!(restored.contains(&Tab::Terminal("editor".into())));
     }
+    #[test]
+    fn add_at_inserts_between_existing_tabs_and_clamps() {
+        let mut workspace = Workspace::empty();
+        workspace.add("a".into(), Tab::Terminal("a".into()));
+        workspace.add("c".into(), Tab::Terminal("c".into()));
+        workspace.add_at(1, "b".into(), Tab::Terminal("b".into()));
+        assert_eq!(
+            workspace
+                .tabs
+                .iter()
+                .map(|tab| tab.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b", "c"]
+        );
+        assert_eq!(workspace.active, "b");
+        assert_eq!(workspace.ids_before("b"), vec!["a"]);
+        assert_eq!(workspace.ids_after("b"), vec!["c"]);
+        workspace.add_at(99, "d".into(), Tab::Terminal("d".into()));
+        assert_eq!(workspace.tabs.last().map(|tab| tab.id.as_str()), Some("d"));
+        assert_eq!(workspace.ids_before("a"), Vec::<String>::new());
+        assert_eq!(workspace.ids_after("d"), Vec::<String>::new());
+    }
+
     #[test]
     fn closing_one_tab_keeps_other_layouts_and_focus() {
         let mut workspace =

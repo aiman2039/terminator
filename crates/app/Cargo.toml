@@ -29,6 +29,7 @@ url = "2"
 uuid.workspace = true
 wry = "0.57"
 rodio = "0.21"
+spectrum-analyzer = "2"
 ureq = "2"
 semver = "1"
 rmp-serde = "1.3"

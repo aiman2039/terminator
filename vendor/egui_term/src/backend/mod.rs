@@ -20,6 +20,7 @@ use std::borrow::Cow;
 use std::cmp::min;
 use std::io::Result;
 use std::ops::{Index, RangeInclusive};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{mpsc, Arc};
 
@@ -141,6 +142,7 @@ pub struct TerminalBackend {
     size: TerminalSize,
     notifier: Notifier,
     last_content: RenderableContent,
+    grid_dirty: Arc<AtomicBool>,
 }
 
 impl TerminalBackend {
@@ -185,11 +187,14 @@ impl TerminalBackend {
         let notifier = Notifier(pty_event_loop.channel());
 
         let url_regex = RegexSearch::new(r#"(ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file://|git://|ssh:|ftp://)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>"\s{-}\^⟨⟩`]+"#).unwrap();
+        let grid_dirty = Arc::new(AtomicBool::new(true));
+        let grid_dirty_for_events = grid_dirty.clone();
         let _pty_event_loop_thread = pty_event_loop.spawn();
         let _pty_event_subscription = std::thread::Builder::new()
             .name(format!("pty_event_subscription_{}", id))
             .spawn(move || loop {
                 if let Ok(event) = event_receiver.recv() {
+                    grid_dirty_for_events.store(true, Ordering::Relaxed);
                     if pty_event_proxy_sender.send((id, event.clone())).is_err() {
                         break;
                     }
@@ -213,10 +218,19 @@ impl TerminalBackend {
             size: terminal_size,
             notifier,
             last_content: initial_content,
+            grid_dirty,
         })
     }
 
     pub fn process_command(&mut self, cmd: BackendCommand) {
+        if let BackendCommand::Resize(layout_size, font_size) = &cmd {
+            if self.resize_is_noop(*layout_size, *font_size) {
+                return;
+            }
+        }
+        if Self::command_dirties_grid(&cmd) {
+            self.grid_dirty.store(true, Ordering::Relaxed);
+        }
         let term = self.term.clone();
         let mut term = term.lock();
         match cmd {
@@ -235,9 +249,11 @@ impl TerminalBackend {
             }
             BackendCommand::SelectStart(selection_type, x, y) => {
                 self.start_selection(&mut term, selection_type, x, y);
+                self.capture_selection(&term);
             }
             BackendCommand::SelectUpdate(x, y) => {
                 self.update_selection(&mut term, x, y);
+                self.capture_selection(&term);
             }
             BackendCommand::ProcessLink(link_action, point) => {
                 self.process_link_action(&term, link_action, point);
@@ -246,6 +262,29 @@ impl TerminalBackend {
                 self.process_mouse_report(button, modifiers, point, pressed);
             }
         };
+    }
+
+    fn resize_is_noop(&self, layout_size: Size, font_size: Size) -> bool {
+        layout_size == self.size.layout_size
+            && font_size.width as u16 == self.size.cell_width
+            && font_size.height as u16 == self.size.cell_height
+    }
+
+    fn command_dirties_grid(cmd: &BackendCommand) -> bool {
+        matches!(
+            cmd,
+            BackendCommand::Write(_)
+                | BackendCommand::Scroll(_)
+                | BackendCommand::ScrollLocal(_)
+                | BackendCommand::Resize(_, _)
+        )
+    }
+
+    fn capture_selection(&mut self, terminal: &Term<EventProxy>) {
+        self.last_content.selectable_range = terminal
+            .selection
+            .as_ref()
+            .and_then(|selection| selection.to_range(terminal));
     }
 
     pub fn selection_point(
@@ -275,7 +314,8 @@ impl TerminalBackend {
 
     /// Select the terminal grid including retained scrollback, without sending input.
     pub fn select_all(&mut self) {
-        let mut term = self.term.lock();
+        let term = self.term.clone();
+        let mut term = term.lock();
         let grid = term.grid();
         let mut selection = Selection::new(
             AlacrittySelectionType::Simple,
@@ -287,14 +327,18 @@ impl TerminalBackend {
             Side::Right,
         );
         term.selection = Some(selection);
+        self.capture_selection(&term);
     }
     pub fn selectable_content(&self) -> String {
         selected_text(self.last_content())
     }
 
     pub fn sync(&mut self) -> &RenderableContent {
-        let term = self.term.clone();
-        let mut terminal = term.lock();
+        if !self.grid_dirty.swap(false, Ordering::Relaxed) {
+            return self.last_content();
+        }
+        let terminal = self.term.clone();
+        let mut terminal = terminal.lock();
         let selectable_range = match &terminal.selection {
             Some(s) => s.to_range(&terminal),
             None => None,
@@ -303,7 +347,7 @@ impl TerminalBackend {
         let cursor = terminal.grid_mut().cursor_cell().clone();
         self.last_content.grid = terminal.grid().clone();
         self.last_content.selectable_range = selectable_range;
-        self.last_content.cursor = cursor.clone();
+        self.last_content.cursor = cursor;
         self.last_content.terminal_mode = *terminal.mode();
         self.last_content.terminal_size = self.size;
         self.last_content()

@@ -1,6 +1,39 @@
 //! Workspace and terminal rendering.
 use super::*;
 
+struct WorkspaceTabMenu {
+    close: bool,
+    close_left: bool,
+    close_right: bool,
+    add_left: bool,
+    add_right: bool,
+}
+
+struct WorkspaceTabMenuSpec<'a> {
+    sid: Option<&'a str>,
+    index: usize,
+    count: usize,
+}
+
+fn click_menu_item(ui: &mut egui::Ui, label: &str, icon: &str) -> bool {
+    let clicked = appearance::menu_item(ui, label, icon, "").clicked();
+    if clicked {
+        ui.close();
+    }
+    clicked
+}
+
+fn click_enabled_menu_item(ui: &mut egui::Ui, enabled: bool, label: &str, icon: &str) -> bool {
+    let clicked = ui
+        .add_enabled_ui(enabled, |ui| appearance::menu_item(ui, label, icon, ""))
+        .inner
+        .clicked();
+    if clicked {
+        ui.close();
+    }
+    clicked
+}
+
 impl App {
     pub(super) fn terminal_input_enabled(&self, sid: &str) -> bool {
         !self.picker_active
@@ -175,6 +208,9 @@ impl App {
     ) {
         let mut switch = None;
         let mut close = None;
+        let mut close_left = None;
+        let mut close_right = None;
+        let mut add_at = None;
         let current = (project.to_owned(), workspace.active.clone());
         let reveal = self.workspace_visible.as_ref() != Some(&current);
         self.workspace_visible = Some(current);
@@ -223,7 +259,8 @@ impl App {
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.x = 1.0;
                     ui.horizontal(|ui| {
-                        for group in &workspace.tabs {
+                        let tab_count = workspace.tabs.len();
+                        for (index, group) in workspace.tabs.iter().enumerate() {
                             let primary = group
                                 .primary
                                 .as_ref()
@@ -402,12 +439,28 @@ impl App {
                                 )
                             });
                             appearance::context_menu(&response, |ui| {
-                                if let Some(sid) = &sid {
-                                    self.rename_action(ui, sid, RenameSurface::Workspace);
-                                }
-                                if appearance::menu_item(ui, "Close tab…", "X", "").clicked() {
+                                let action = self.workspace_tab_menu(
+                                    ui,
+                                    WorkspaceTabMenuSpec {
+                                        sid: sid.as_deref(),
+                                        index,
+                                        count: tab_count,
+                                    },
+                                );
+                                if action.close {
                                     close = Some(group.id.clone());
-                                    ui.close();
+                                }
+                                if action.close_left {
+                                    close_left = Some(group.id.clone());
+                                }
+                                if action.close_right {
+                                    close_right = Some(group.id.clone());
+                                }
+                                if action.add_left {
+                                    add_at = Some(index);
+                                }
+                                if action.add_right {
+                                    add_at = Some(index + 1);
                                 }
                             });
                             #[cfg(feature = "test-support")]
@@ -475,8 +528,42 @@ impl App {
             self.hover_popup = None;
         }
         if let Some(id) = close {
-            self.rename_session = None;
-            self.close_workspace = Some((project.into(), id));
+            self.begin_workspace_close_tabs(project, vec![id]);
+        }
+        if let Some(id) = close_left {
+            self.begin_workspace_close_tabs(project, workspace.ids_before(&id));
+        }
+        if let Some(id) = close_right {
+            self.begin_workspace_close_tabs(project, workspace.ids_after(&id));
+        }
+        if let Some(index) = add_at {
+            self.create_workspace_tab(Some(index));
+        }
+    }
+
+    fn workspace_tab_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        spec: WorkspaceTabMenuSpec<'_>,
+    ) -> WorkspaceTabMenu {
+        let WorkspaceTabMenuSpec { sid, index, count } = spec;
+        if let Some(sid) = sid {
+            self.rename_action(ui, sid, RenameSurface::Workspace);
+        }
+        let close = click_menu_item(ui, "Close tab…", "X");
+        ui.separator();
+        let close_left = click_enabled_menu_item(ui, index > 0, "Close all tabs to the left…", "X");
+        let close_right =
+            click_enabled_menu_item(ui, index + 1 < count, "Close all tabs to the right…", "X");
+        ui.separator();
+        let add_left = click_menu_item(ui, "Add tab to the left", "Plus");
+        let add_right = click_menu_item(ui, "Add tab to the right", "Plus");
+        WorkspaceTabMenu {
+            close,
+            close_left,
+            close_right,
+            add_left,
+            add_right,
         }
     }
     fn new_terminal_menu(&mut self, ui: &mut egui::Ui, pane: Option<egui_dock::NodePath>) {
@@ -1860,32 +1947,39 @@ impl Viewer<'_> {
                 session: sid.clone(),
             });
         }
-        let backend = self.app.backends.get(sid).unwrap();
-        #[cfg(feature = "test-support")]
-        if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
-            let content = backend.last_content();
-            let snapshot = (
-                focused,
-                content.grid.display_offset(),
-                content.terminal_mode.bits(),
-            );
-            let key = egui::Id::new(("scroll-evidence", sid));
-            if ui.ctx().data(|d| d.get_temp::<(bool, usize, u32)>(key)) != Some(snapshot) {
-                eprintln!(
-                    "Scroll evidence: session={sid} focused={} offset={} modes={}",
-                    snapshot.0, snapshot.1, snapshot.2
+        let dragging = ui.input(|i| i.pointer.any_down());
+        let (mouse_reporting, target) = {
+            let backend = self.app.backends.get(sid).unwrap();
+            #[cfg(feature = "test-support")]
+            if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
+                let content = backend.last_content();
+                let snapshot = (
+                    focused,
+                    content.grid.display_offset(),
+                    content.terminal_mode.bits(),
                 );
-                ui.ctx().data_mut(|d| d.insert_temp(key, snapshot));
+                let key = egui::Id::new(("scroll-evidence", sid));
+                if ui.ctx().data(|d| d.get_temp::<(bool, usize, u32)>(key)) != Some(snapshot) {
+                    eprintln!(
+                        "Scroll evidence: session={sid} focused={} offset={} modes={}",
+                        snapshot.0, snapshot.1, snapshot.2
+                    );
+                    ui.ctx().data_mut(|d| d.insert_temp(key, snapshot));
+                }
             }
-        }
-        let mouse_reporting = backend
-            .last_content()
-            .terminal_mode
-            .intersects(egui_term::TerminalMode::MOUSE_MODE);
-        let target = response.hover_pos().and_then(|pos| {
-            backend.target_at(pos.x - response.rect.left(), pos.y - response.rect.top())
-        });
-        let selected = backend.selectable_content();
+            let mouse_reporting = backend
+                .last_content()
+                .terminal_mode
+                .intersects(egui_term::TerminalMode::MOUSE_MODE);
+            let target = if dragging {
+                None
+            } else {
+                response.hover_pos().and_then(|pos| {
+                    backend.target_at(pos.x - response.rect.left(), pos.y - response.rect.top())
+                })
+            };
+            (mouse_reporting, target)
+        };
         let token = target.as_ref().map(|t| t.text.clone()).unwrap_or_default();
         let key = format!("target:{}:{}:{}", sid, session.cwd.display(), token);
         if !token.is_empty()
@@ -1951,10 +2045,15 @@ impl Viewer<'_> {
         }
         let menu_key = egui::Id::new(("terminal-menu-target", sid.as_str()));
         if response.secondary_clicked() {
+            let selected = self
+                .app
+                .backends
+                .get(sid)
+                .map_or_else(String::new, TerminalBackend::selectable_content);
             let text = if selected.trim().is_empty() {
                 token.clone()
             } else {
-                selected.clone()
+                selected
             };
             let key = format!("target:{}:{}:{}", sid, session.cwd.display(), text);
             ui.ctx().data_mut(|d| d.insert_temp(menu_key, key.clone()));
@@ -1966,6 +2065,11 @@ impl Viewer<'_> {
             }
         }
         appearance::context_menu(&response, |ui| {
+            let selected = self
+                .app
+                .backends
+                .get(sid)
+                .map_or_else(String::new, TerminalBackend::selectable_content);
             let command = if cfg!(target_os = "macos") {
                 "⌘"
             } else {

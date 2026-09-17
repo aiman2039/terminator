@@ -1,5 +1,18 @@
 # Validation evidence — 2026-09-08
 
+## Workspace tab context actions (2026-09-17)
+
+- Top-level tab menu: close all to the left/right (queued through existing
+  `close_workspace` idle/editor/keep-running prompts; Cancel aborts the rest)
+  and add tab to the left/right (same create as `+`, inserted at index).
+- Unit: `add_at_inserts_between_existing_tabs_and_clamps`,
+  `workspace_created_inserts_at_requested_index`,
+  `add_tab_to_the_left_records_insert_index`,
+  `close_tabs_to_the_left_queues_then_cancel_keeps_the_rest`,
+  `empty_workspace_tabs_drain_without_prompt`,
+  `unsaved_close_cancel_aborts_remaining_workspace_tabs`.
+- Native `workspace-tabs` fixture not re-run; menu hits are unit-covered.
+
 ## Catalog-active owner marked Retired (2026-09-16)
 
 - Symptom: Create (new tab/split) wrapped as `Archived` → `Operation requires a live session owner`. Prune toasted `Retired owner still has live records`.
@@ -1172,7 +1185,7 @@ The report is `.artifacts/load.json`. This run preceded later terminal-query, na
 - Native picker calls use `rfd` with the current directory and parent window, and both platform builds pass. Automated selection/cancellation through real macOS or Linux desktop picker UI was not completed.
 - OS notification permission prompts and click activation need a real logged-in desktop validation matrix. In-app hook notifications are covered by tests.
 - Linux testing used X11/Xvfb; a real Wayland desktop and additional CPU/OS distributions are not covered.
-- Claude/Codex/OpenCode/Grok installed versions and public schemas were inspected, and installer/normalizer fixtures pass. No paid provider model runs were used. Their complete live event combinations remain provider/version-specific validation work.
+- Claude/Codex/OpenCode/Grok installed versions and public schemas were inspected, and installer/normalizer fixtures pass. OpenCode permission/question v1 and v2 payloads are covered by isolated normalizer tests; the dual-entry plugin is not exercised against a live OpenCode CLI. No paid provider model runs were used. Their complete live event combinations remain provider/version-specific validation work.
 - Custom shell startup arrangements, every user's Neovim plugin set, and vendor-specific terminal extensions are not exhaustively tested. The app deliberately loads the user's editor configuration; a user-configured `Lexplore` startup action can add an editor-side file tree.
 
 No agent accounts/configurations were changed during validation. Hook installation tests used isolated fixture directories. No deployment, publication, notarization, or external message sending was performed.
@@ -2262,6 +2275,15 @@ logs and native captures/reports, including `generations/legacy-crash-recovered.
 and `installation/restart-relaunch.json`. All tests used isolated processes and
 state. Linux native and signed cross-release validation remain outside this local
 run; no live user service was restarted and `AGENTS.md` was unchanged.
+
+## 2026-09-17 — Terminal selection and copy
+
+- Widget unit tests cover left-drag host select (including when the app
+  requests mouse reports), autoscroll `SelectUpdate`, nonempty clipboard copy,
+  and empty Copy (macOS no-op; Linux Ctrl+C interrupt). Wheel reports in mouse
+  mode are unchanged.
+- Native drag-select in live nvim/Codex and physical clipboard transfer are
+  not claimed. `AGENTS.md` unchanged.
 
 ## 2026-09-16 — Commit-review fixes
 

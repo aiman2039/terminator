@@ -121,12 +121,7 @@ impl App {
                 }
             }
             editor_close::Target::Workspace(project, tab) => {
-                if let Some(workspace) = self.layouts.get_mut(project) {
-                    workspace.close(tab);
-                }
-                if self.close_workspace.as_ref() == Some(&(project.clone(), tab.clone())) {
-                    self.close_workspace = None;
-                }
+                self.close_workspace_tab_now(project, tab);
             }
         }
     }

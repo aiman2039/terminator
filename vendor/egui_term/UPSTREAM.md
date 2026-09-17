@@ -46,6 +46,16 @@ focus event filter. This prevents widget navigation from briefly focusing and
 highlighting dock separators. A headless egui regression covers Tab, Shift+Tab,
 arrows, Escape, and repeated presses while confirming input remains available.
 
+## Mouse-mode selection and copy (2026-09-17)
+
+Left-drag always selects host text, even when the application enables mouse
+reporting. Wheel still sends mouse reports (Shift bypasses to local scroll).
+Pointer release outside the pane ends the drag. Empty Copy does not write an
+empty clipboard (Linux Ctrl+C still interrupts when there is no selection).
+`sync()` clones the Alacritty grid only after PTY/output/scroll/resize;
+selection updates the cached range in place. Widget sense is `click_and_drag`
+so the pointer stays captured.
+
 ## Unbound Command/Ctrl chords (2026-09-16)
 
 Keys with no static binding are no longer dropped while Ctrl or Command is

@@ -141,6 +141,10 @@ pub enum SidebarTool {
 pub struct RadioStation {
     pub name: String,
     pub url: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub icon: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -177,6 +181,8 @@ pub struct UiPreferences {
     pub player_shuffle: bool,
     pub player_repeat: bool,
     pub player_samples_seeded: bool,
+    pub player_chrome_collapsed: bool,
+    pub player_radio_mode: bool,
     pub radio_stations: Vec<RadioStation>,
 }
 impl Default for UiPreferences {
@@ -206,6 +212,8 @@ impl Default for UiPreferences {
             player_shuffle: false,
             player_repeat: false,
             player_samples_seeded: false,
+            player_chrome_collapsed: false,
+            player_radio_mode: false,
             radio_stations: Vec::new(),
         }
     }

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Top-level tab right-click: close all tabs to the left/right, add a tab to
+  the left/right. Close left/right reuses the existing per-tab keep-running,
+  idle, and unsaved-editor prompts; Cancel stops the rest.
+
+- Terminal left-drag always selects host text, including in nvim and
+  full-screen agents that enable mouse reporting. Wheel still goes to the
+  app. Empty Cmd/Ctrl+C no longer clears the clipboard. Dragging is cheaper
+  (no full-grid clone until output changes).
+
+- OpenCode Agent Hooks forward permission and question events (v1 and v2),
+  matching Claude/Codex/Grok notification coverage. Repair an existing
+  OpenCode install to pick this up.
+
+- Compact Agents inbox cards to one row (`Agent waiting · Terminal 5` plus
+  go / snooze / dismiss) when the sidebar is wide enough. Actions wrap as a
+  group when it is not.
+
 - Keep creating tabs and splits if the serving generation is wrongly marked
   Retired. Catalog-active owners stay live for Create; the daemon restores
   Active and skips archive prune while sessions are still running.
@@ -10,10 +27,19 @@
   **Play sound with desktop notifications** (default on). The in-app Agents
   inbox stays silent. Older running daemons hide the control until updated.
 
-- Open mp3/flac/ogg/wav/m4a/opus/aac in a GUI-only Winamp-style player tab
-  (layout version 5). Palette → Open player. Icecast/Shoutcast HTTP(S) radio
-  shares the same tab. Audio stops when the GUI exits or the player tab closes.
-  The player is native egui.
+- Open mp3/flac/ogg/wav/m4a/opus/aac in the chrome player next to the
+  project-sidebar Agents bell. Playing shows title plus previous / play-pause /
+  next / playlist. The icon opens a single global Player window (like Settings,
+  not a tab). Opening it again does not spawn another window; leftover Player
+  tabs close. The full window is a Winamp-inspired stacked deck: LCD + transport,
+  visual EQ, playlist with ADD/REM/SEL/MISC/LIST. Shuffle and repeat persist.
+  Icecast/Shoutcast HTTP(S) radio shares the same engine (ADD url / Stations).
+  Named playlists are global. Opening a file appends to the selected playlist.
+  Audio stops when the GUI exits, not when the Player window closes. The player
+  is native egui.
+
+- Explorer always uses default viewers (html → browser, images, markdown
+  preview, audio). Git sidebar click on a changed file opens the diff.
 
 - Open HTML and http(s) in a GUI-only Browser tab (layout version 6, OS webview).
   v4 Html tabs migrate. Isolated profile. Covered panes hide the native view.

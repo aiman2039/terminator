@@ -342,6 +342,7 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         "ListMusic" => egui::include_image!("../assets/icons/list-music.svg"),
         "Shuffle" => egui::include_image!("../assets/icons/shuffle.svg"),
         "Repeat" => egui::include_image!("../assets/icons/repeat.svg"),
+        "Radio" => egui::include_image!("../assets/icons/radio.svg"),
         "Bell" => egui::include_image!("../assets/icons/bell.svg"),
         "History" => egui::include_image!("../assets/icons/history.svg"),
         "Folder" => egui::include_image!("../assets/icons/folder.svg"),

@@ -16,6 +16,6 @@ white-stroke adaptation, for the native Markdown refresh control.
 adaptation, for the notification snooze action.
 
 `audio-lines.svg`, `skip-back.svg`, `play.svg`, `pause.svg`, `skip-forward.svg`,
-`list-music.svg`, `square.svg`, `shuffle.svg`, and `repeat.svg` come from
+`list-music.svg`, `square.svg`, `shuffle.svg`, `repeat.svg`, and `radio.svg` come from
 Lucide 0.577.0 with the same license and white-stroke adaptation, for the chrome
 player.

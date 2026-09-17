@@ -190,6 +190,10 @@ pub fn run(debug: bool, timings: bool, output_dir: Option<PathBuf>) -> Result<()
         )?;
         fs::copy(root().join("LICENSE"), resources.join("LICENSE"))?;
         copy_tree(&root().join("docs"), &resources.join("docs"))?;
+        copy_tree(
+            &root().join("crates/app/assets/radio"),
+            &resources.join("radio"),
+        )?;
         licenses(&resources.join("licenses"))?;
         let mut sign = Command::new("codesign");
         sign.args(["--force", "--deep", "--sign", "-"]).arg(&app);
@@ -224,6 +228,7 @@ pub fn run(debug: bool, timings: bool, output_dir: Option<PathBuf>) -> Result<()
             app.join("terminator.png"),
         )?;
         fs::copy(root().join("README.md"), app.join("README.md"))?;
+        copy_tree(&root().join("crates/app/assets/radio"), &app.join("radio"))?;
         licenses(&app.join("licenses"))?;
         let file = fs::File::create(staging.path().join("terminator-linux.tar.gz"))?;
         let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());

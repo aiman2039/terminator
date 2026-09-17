@@ -27,7 +27,7 @@ fn draw(app: &mut App, ui: &mut Ui) {
     if playing {
         ui.ctx().request_repaint_after(Duration::from_millis(80));
     }
-    main_panel(app, ui, &project, playing);
+    main_panel(app, ui, &project);
     if app.player.eq_open {
         ui.add_space(8.0);
         ui.separator();
@@ -38,7 +38,11 @@ fn draw(app: &mut App, ui: &mut Ui) {
         ui.add_space(8.0);
         ui.separator();
         ui.add_space(6.0);
-        playlist_panel(app, ui, &project);
+        if app.player.radio_mode {
+            radio_panel(app, ui, &project);
+        } else {
+            playlist_panel(app, ui, &project);
+        }
     }
     space_toggle(app, ui, &project);
 }
@@ -47,6 +51,8 @@ fn space_toggle(app: &mut App, ui: &mut Ui, project: &str) {
     let typing = ui.memory(|memory| {
         memory.has_focus(egui::Id::new("player-station-url"))
             || memory.has_focus(egui::Id::new("player-playlist-name"))
+            || memory.has_focus(egui::Id::new("player-radio-search"))
+            || memory.has_focus(egui::Id::new("player-radio-name"))
     });
     let owns = app.player.project.as_deref() == Some(project);
     if owns && !typing && ui.input(|i| i.key_pressed(egui::Key::Space)) {
@@ -55,7 +61,7 @@ fn space_toggle(app: &mut App, ui: &mut Ui, project: &str) {
     }
 }
 
-fn main_panel(app: &mut App, ui: &mut Ui, project: &str, playing: bool) {
+fn main_panel(app: &mut App, ui: &mut Ui, project: &str) {
     let owns = app.player.project.as_deref() == Some(project);
     let status = if owns {
         app.player.status.clone()
@@ -64,7 +70,7 @@ fn main_panel(app: &mut App, ui: &mut Ui, project: &str, playing: bool) {
     };
     title_row(ui, &status);
     seek_row(app, ui, &status);
-    vis_row(ui, playing);
+    vis_row(ui, &app.player.spectrum);
     ui.add_space(6.0);
     volume_row(app, ui);
     ui.add_space(4.0);
@@ -79,7 +85,9 @@ fn title_row(ui: &mut Ui, status: &Status) {
         Status::Error(error) => (error.as_str(), ui.visuals().error_fg_color),
         Status::Stopped => ("Not playing", ui.visuals().weak_text_color()),
     };
-    ui.label(egui::RichText::new(title).strong().color(color).size(14.0));
+    ui.add(
+        egui::Label::new(egui::RichText::new(title).strong().color(color).size(14.0)).truncate(),
+    );
 }
 
 fn seek_row(app: &mut App, ui: &mut Ui, status: &Status) {
@@ -166,20 +174,14 @@ fn paint_seek_bar(ui: &Ui, rect: Rect, fraction: f32, seekable: bool) {
     }
 }
 
-fn vis_row(ui: &mut Ui, playing: bool) {
+fn vis_row(ui: &mut Ui, spectrum: &[f32]) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::hover());
     let accent = ui.visuals().selection.stroke.color;
-    let t = ui.input(|i| i.time) as f32;
-    let bars = 32;
+    let bars = spectrum.len().max(1);
     let gap = 2.0;
     let bar_w = ((rect.width() - 4.0) / bars as f32 - gap).max(1.5);
-    for i in 0..bars {
-        let phase = t * 8.0 + i as f32 * 0.4;
-        let wave = if playing {
-            (phase.sin() * 0.35 + 0.55 + (phase * 0.31).cos() * 0.12).clamp(0.12, 1.0)
-        } else {
-            0.12
-        };
+    for (i, value) in spectrum.iter().enumerate() {
+        let wave = value.clamp(0.04, 1.0);
         let h = (rect.height() - 4.0) * wave;
         let x = rect.min.x + 2.0 + i as f32 * (bar_w + gap);
         let bar = Rect::from_min_max(
@@ -241,8 +243,29 @@ fn controls_row(app: &mut App, ui: &mut Ui) {
         if App::player_icon_button(ui, "FileSliders", "Equalizer", app.player.eq_open).clicked() {
             app.player.eq_open = !app.player.eq_open;
         }
-        if App::player_icon_button(ui, "ListMusic", "Playlist", app.player.pl_open).clicked() {
-            app.player.pl_open = !app.player.pl_open;
+        if App::player_icon_button(
+            ui,
+            "ListMusic",
+            "Files",
+            app.player.pl_open && !app.player.radio_mode,
+        )
+        .clicked()
+        {
+            app.player.radio_mode = false;
+            app.preferences.player_radio_mode = false;
+            app.player.pl_open = true;
+        }
+        if App::player_icon_button(
+            ui,
+            "Radio",
+            "Radio",
+            app.player.pl_open && app.player.radio_mode,
+        )
+        .clicked()
+        {
+            app.player.radio_mode = true;
+            app.preferences.player_radio_mode = true;
+            app.player.pl_open = true;
         }
     });
 }
@@ -577,21 +600,109 @@ fn list_menu(app: &mut App, ui: &mut Ui) {
     });
 }
 
-fn stations_menu(app: &mut App, ui: &mut Ui, project: &str) {
-    let stations = app.player_stations();
-    let mut play = None;
-    ui.horizontal_wrapped(|ui| {
-        for (index, (name, _)) in stations.iter().enumerate() {
-            let lit = app.player.radio() && app.player.station_index == Some(index);
-            if ui.selectable_label(lit, name).clicked() {
-                play = Some(index);
-            }
-        }
-    });
-    if let Some(index) = play {
-        app.play_station_at(project, index);
+fn stations_menu(app: &mut App, ui: &mut Ui, _project: &str) {
+    if ui.button("Open radio catalog").clicked() {
+        app.player.radio_mode = true;
+        app.preferences.player_radio_mode = true;
+        app.player.pl_open = true;
         app.player.stack = None;
     }
+}
+
+fn radio_panel(app: &mut App, ui: &mut Ui, project: &str) {
+    ui.horizontal(|ui| {
+        ui.strong("Radio");
+        ui.add(
+            egui::TextEdit::singleline(&mut app.player.radio_query)
+                .hint_text("Search stations")
+                .desired_width(160.0)
+                .id(egui::Id::new("player-radio-search")),
+        );
+        let categories = radio::categories();
+        let mut category = app.player.radio_category.clone();
+        egui::ComboBox::from_id_salt("player-radio-category")
+            .selected_text(if category.is_empty() {
+                "All categories".to_string()
+            } else {
+                category.clone()
+            })
+            .width(140.0)
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut category, String::new(), "All categories");
+                for name in categories {
+                    ui.selectable_value(&mut category, name.clone(), name);
+                }
+            });
+        app.player.radio_category = category;
+    });
+    ui.add_space(4.0);
+    let stations = app.radio_visible();
+    let playing_url = if app.player.radio() {
+        app.radio_listing()
+            .get(app.player.station_index.unwrap_or(0))
+            .map(|station| station.url.clone())
+    } else {
+        None
+    };
+    let mut play = None;
+    let height = (ui.available_height() - 72.0).max(120.0);
+    egui::ScrollArea::vertical()
+        .id_salt("player-radio")
+        .max_height(height)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            if stations.is_empty() {
+                ui.weak("No stations match.");
+                return;
+            }
+            for station in &stations {
+                let lit = playing_url.as_deref() == Some(station.url.as_str());
+                ui.horizontal(|ui| {
+                    station_icon(ui, station);
+                    let mut label = station.name.clone();
+                    if !station.country.is_empty() {
+                        label = format!("{label}  {}", station.country);
+                    }
+                    if ui.selectable_label(lit, label).clicked() {
+                        play = Some(station.clone());
+                    }
+                });
+            }
+        });
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut app.player.radio_draft_name)
+                .hint_text("Name")
+                .desired_width(100.0)
+                .id(egui::Id::new("player-radio-name")),
+        );
+        ui.add(
+            egui::TextEdit::singleline(&mut app.player.station_draft)
+                .hint_text("https://host/stream")
+                .desired_width(180.0)
+                .id(egui::Id::new("player-station-url")),
+        );
+        if ui.button("Add station").clicked() {
+            app.add_custom_station(project);
+        }
+    });
+    ui.weak(format!("{} stations", stations.len()));
+    if let Some(station) = play {
+        app.play_radio(project, station);
+    }
+}
+
+fn station_icon(ui: &mut Ui, station: &radio::Station) {
+    let (rect, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+    let tint = if station.icon.is_empty() {
+        appearance::ICON_COLOR
+    } else {
+        ui.visuals().selection.stroke.color
+    };
+    egui::Image::new(icons::source("Radio"))
+        .tint(tint)
+        .paint_at(ui, rect);
 }
 
 fn chip(ui: &mut Ui, label: &str, active: bool) -> egui::Response {

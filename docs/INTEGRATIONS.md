@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | Claude Code | `~/.claude/settings.json` | Start, prompt/tool progress, input/permission notification, permission request, completion, failure, end | Installed CLI 2.1.260 identified; official hook schema and isolated installer/normalizer tests. No paid model run was made. |
 | Codex | `~/.codex/config.toml` under `hooks` | Start, prompt/tool progress, permission, input tool request, completion, interrupt/end | CLI 0.153.4 identified; its `hooks` feature is enabled. Configuration matches the upstream schema. Failure/input coverage depends on the events exposed by that CLI. |
-| OpenCode | `~/.config/opencode/plugins/terminator.js` | Session status/idle/error/end, permission and question events | CLI 1.18.29 identified; plugin follows the published event API. Generated sequence and invocation IDs avoid conflating repeated deliveries. Live provider combinations were not exercised. |
+| OpenCode | `~/.config/opencode/plugins/terminator.js` | Session status/idle/error/end; permission and question (v1 and v2), matching Claude/Codex/Grok notification coverage | CLI 1.18.31 identified; dual-entry plugin (`server()` for 1.18.29+, `setup()` subscribe for V2). Generated sequence and invocation IDs avoid conflating repeated deliveries. Live provider combinations were not exercised. Existing installs need Settings → Agent hooks → Repair. |
 | Muse Code | `~/.muse/hooks.json` | Start, prompt/tool progress, permission, completion/end | CLI 1.0.3-R2198.1 tested end to end with the offline echo provider and isolated project hooks. Its cleared hook environment is handled by ancestor correlation. |
 | Grok Build | `~/.grok/hooks/terminator.json` | Start, prompt/tool progress, input/permission notification, completion/failure/end | CLI 1.0.13 identified; official Grok hook format. Imported Claude hook commands are ignored when the actual agent is Grok, avoiding duplicate agent attribution. |
 
@@ -47,7 +47,7 @@ The app displays provider resume commands for manual copying; it never executes 
 
 - [Claude Code hooks](https://code.claude.com/docs/en/hooks)
 - [Codex hook engine](https://github.com/openai/codex/tree/main/codex-rs/hooks) and [config schema](https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json)
-- [OpenCode plugins](https://opencode.ai/docs/plugins/)
+- [OpenCode plugins](https://opencode.ai/docs/plugins/) and [V2 plugin migration](https://opencode.ai/v2/docs/build/plugins/migrate-v1)
 - [Muse Code SDK](https://github.com/meta-models/muse-code-sdk); installed CLI echo-provider testing verifies the project hook path and payloads.
 - [Grok hook guide](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md)
 
