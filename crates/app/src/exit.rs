@@ -119,14 +119,12 @@ impl App {
     }
     pub(super) fn exit_checkpoint(&self) -> Result<Checkpoint> {
         Ok(Checkpoint {
-            layouts: self
-                .layouts
-                .iter()
-                .filter(|(project, _)| !self.layout_readonly.contains(*project))
-                .map(|(project, layout)| (project.clone(), layout.clone()))
-                .collect(),
+            layouts: self.persistable_layouts(),
             preferences: self.preferences_writable.then(|| self.preferences.clone()),
-            selected: self.selected.clone(),
+            selected: self
+                .selected
+                .clone()
+                .filter(|project| self.has_project(project)),
             focused: self.active_session.clone(),
         })
     }
@@ -319,6 +317,44 @@ mod tests {
         assert!(!app.exit.active());
         app.begin_exit();
         assert!(matches!(app.exit, Exit::Waiting(_)));
+    }
+    #[test]
+    fn unknown_project_layout_save_does_not_abort_exit() {
+        let (mut app, ctx, _dir, _) = fixture();
+        app.begin_exit();
+        app.update_tx
+            .send(Update::LayoutSaved(
+                "ghost".into(),
+                "{}".into(),
+                Err("Unknown project".into()),
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(app.exit.active());
+        assert!(app.error.is_none());
+    }
+    #[test]
+    fn exit_checkpoint_omits_unknown_projects() {
+        let (mut app, _, _dir, _) = fixture();
+        app.state.projects.push(Project {
+            id: "project".into(),
+            name: "Project".into(),
+            path: _dir.path().into(),
+            layout: serde_json::Value::Null,
+        });
+        app.layouts.insert("project".into(), Workspace::empty());
+        app.layouts.insert("ghost".into(), Workspace::empty());
+        app.selected = Some("ghost".into());
+        let checkpoint = app.exit_checkpoint().unwrap();
+        assert_eq!(
+            checkpoint
+                .layouts
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>(),
+            ["project"]
+        );
+        assert!(checkpoint.selected.is_none());
     }
     #[test]
     fn final_checkpoint_includes_pending_created_tab_and_preserves_unknown_layouts() {

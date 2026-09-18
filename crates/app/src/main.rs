@@ -996,7 +996,7 @@ impl App {
                 Update::LayoutsPrepared(generation, layouts) => {
                     if generation == self.layout_generation && !self.exit.active() {
                         for (project, value, text) in layouts {
-                            if !self.layout_readonly.contains(&project)
+                            if self.can_persist_layout(&project)
                                 && self.layout_saved.get(&project) != Some(&text)
                                 && self.layout_pending.get(&project) != Some(&text)
                                 && self
@@ -1017,13 +1017,7 @@ impl App {
                         Ok(()) => {
                             self.layout_saved.insert(project, text);
                         }
-                        Err(error) => {
-                            if self.exit.active() {
-                                self.cancel_exit(error);
-                            } else {
-                                self.error = Some(error);
-                            }
-                        }
+                        Err(error) => self.layout_save_failed(error),
                     }
                 }
 
@@ -1665,6 +1659,7 @@ impl App {
                 self.layouts.insert(p.id.clone(), dock);
             }
         }
+        self.reconcile_project_inventory(&state.projects);
         for ended in ended_sessions {
             if self
                 .rename_session
@@ -1752,7 +1747,10 @@ impl App {
             self.selected = state
                 .selected_project
                 .clone()
-                .filter(|id| !self.preferences.hidden_projects.contains(id))
+                .filter(|id| {
+                    !self.preferences.hidden_projects.contains(id)
+                        && state.projects.iter().any(|project| &project.id == id)
+                })
                 .or_else(|| {
                     state
                         .projects
@@ -2279,13 +2277,49 @@ impl App {
             self.send(Request::Focus { session: s.id });
         }
     }
-    fn save_layouts(&mut self) {
-        let layouts = self
-            .layouts
+    fn has_project(&self, project: &str) -> bool {
+        self.state.projects.iter().any(|p| p.id == project)
+    }
+    fn can_persist_layout(&self, project: &str) -> bool {
+        !self.layout_readonly.contains(project) && self.has_project(project)
+    }
+    fn persistable_layouts(&self) -> Vec<(String, Workspace)> {
+        self.layouts
             .iter()
-            .filter(|(project, _)| !self.layout_readonly.contains(*project))
+            .filter(|(project, _)| self.can_persist_layout(project))
             .map(|(project, layout)| (project.clone(), layout.clone()))
-            .collect();
+            .collect()
+    }
+    fn reconcile_project_inventory(&mut self, projects: &[Project]) {
+        let known: HashSet<&str> = projects.iter().map(|project| project.id.as_str()).collect();
+        self.layouts.retain(|id, _| known.contains(id.as_str()));
+        self.layout_saved
+            .retain(|id, _| known.contains(id.as_str()));
+        self.layout_pending
+            .retain(|id, _| known.contains(id.as_str()));
+        self.layout_readonly
+            .retain(|id| known.contains(id.as_str()));
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|id| !known.contains(id.as_str()))
+        {
+            self.selected = None;
+            self.active_session = None;
+        }
+    }
+    fn layout_save_failed(&mut self, error: String) {
+        if error.contains("Unknown project") {
+            return;
+        }
+        if self.exit.active() {
+            self.cancel_exit(error);
+        } else {
+            self.error = Some(error);
+        }
+    }
+    fn save_layouts(&mut self) {
+        let layouts = self.persistable_layouts();
         self.layout_generation = self.layout_generation.wrapping_add(1);
         let _ = self
             .jobs
@@ -4432,6 +4466,36 @@ mod navigation_tests {
                 .try_iter()
                 .any(|job| matches!(job,Job::SaveLayout(ref project,_,_) if project=="a"))
         );
+    }
+    #[test]
+    fn save_layouts_skips_unknown_projects() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.layouts.insert("ghost".into(), Workspace::empty());
+        app.save_layouts();
+        let Job::PrepareLayouts(_, layouts) = requests.try_recv().unwrap() else {
+            panic!("expected prepared layouts")
+        };
+        assert!(layouts.iter().all(|(project, _)| project != "ghost"));
+        assert!(layouts.iter().any(|(project, _)| project == "a"));
+    }
+    #[test]
+    fn snapshot_drops_layouts_for_removed_projects() {
+        let (mut app, _, _dir) = fixture();
+        app.layouts.insert("ghost".into(), Workspace::empty());
+        app.layout_saved.insert("ghost".into(), "{}".into());
+        app.layout_pending.insert("ghost".into(), "{}".into());
+        app.layout_readonly.insert("ghost".into());
+        app.selected = Some("ghost".into());
+        let mut state = app.state.clone();
+        state.revision += 1;
+        app.apply_state(state);
+        assert!(!app.layouts.contains_key("ghost"));
+        assert!(!app.layout_saved.contains_key("ghost"));
+        assert!(!app.layout_pending.contains_key("ghost"));
+        assert!(!app.layout_readonly.contains("ghost"));
+        assert_ne!(app.selected.as_deref(), Some("ghost"));
     }
     #[test]
     fn sidebar_navigation_selects_owning_top_level_tab() {
