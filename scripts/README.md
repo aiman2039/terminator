@@ -171,3 +171,39 @@ multi-generation status, unsaved Markdown preview, GUI relaunch, all-owner resta
 warning, cancellation and confirmed cleanup. The real PTY upgrade fixture is
 `cargo test -p terminator --all-features three_generations_preserve --locked -- --ignored --nocapture`
 after building the workspace binaries; it requires Neovim.
+
+## Responsive services validation
+
+```sh
+cargo xtask async-boundary
+cargo test -p terminator-core --features async-client --locked async_ -- --test-threads=1
+cargo test -p terminator --all-features --locked stalled_radio_git_and_neovim -- --test-threads=1
+cargo xtask gui responsiveness --seconds 15
+```
+
+The native responsiveness fixture uses isolated daemons/state, loopback radio and
+Neovim servers that withhold responses, and a stalled mock Git child. It checks
+100 rapid switches, unrelated focus acknowledgments, operation/pipeline limits,
+Stop cleanup, and a 100 ms acknowledgment p95 / 250 ms result-processing maximum.
+It records CPU, RSS, threads, descriptors and queue/worker counts in
+`responsiveness.json`; CPU percentages are observations, not portable assertions.
+`--seconds 1800` continues switching during a 30-minute resource soak.
+
+For release acceptance, build all sibling binaries and run the matching driver:
+
+```sh
+CARGO_HUSKY_DONT_INSTALL_HOOKS=1 cargo build --release --workspace --bins --examples --features terminator/test-support --locked
+TERMINATOR_TEST_BIN_DIR="$PWD/target/release" target/release/xtask gui responsiveness --seconds 1800 --output target/validation/async-services-release
+```
+
+The separately ignored live check opens the real default audio device muted,
+requires PCM from 103FM within 20 seconds, then checks Stop cleanup:
+
+```sh
+cargo test -p terminator --all-features --locked live_103fm -- --ignored --nocapture --test-threads=1
+```
+
+All harness launches strip inherited `TERMINATOR_*` variables before applying
+fixture-owned data/runtime/config and test settings. This includes catalog and
+generation routing; setting only a temporary data directory is insufficient.
+See `docs/VALIDATION.md` for measured results and remaining validation boundaries.

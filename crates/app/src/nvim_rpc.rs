@@ -2,18 +2,21 @@
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use serde_json::Value;
+use std::{io, path::Path, time::Duration};
+#[cfg(test)]
 use std::{
-    io::{self, Read, Write},
+    io::{Read, Write},
     os::{fd::AsRawFd, unix::net::UnixStream},
-    path::Path,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
+#[cfg(test)]
 pub struct Connection {
     stream: UnixStream,
     deadline: Instant,
     next: u64,
 }
+#[cfg(test)]
 impl Connection {
     pub fn connect(path: &Path, timeout: Duration) -> Result<Self> {
         Ok(Self {
@@ -45,17 +48,20 @@ impl Connection {
         Ok(parts[3].clone())
     }
 }
+#[cfg(test)]
 fn remaining(deadline: Instant) -> io::Result<Duration> {
     deadline
         .checked_duration_since(Instant::now())
         .filter(|d| !d.is_zero())
         .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "Neovim request deadline exceeded"))
 }
+#[cfg(test)]
 struct Limited<'a> {
     stream: &'a UnixStream,
     deadline: Instant,
     remaining: usize,
 }
+#[cfg(test)]
 impl Read for Limited<'_> {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         if bytes.is_empty() {
@@ -109,6 +115,86 @@ pub fn timed_out(error: &anyhow::Error) -> bool {
             )
         })
     })
+}
+
+pub struct AsyncConnection {
+    stream: tokio::net::UnixStream,
+    deadline: tokio::time::Instant,
+    next: u64,
+    cpu: terminator_core::async_service::NativePool,
+}
+impl AsyncConnection {
+    pub async fn connect(
+        path: &Path,
+        timeout: Duration,
+        cpu: terminator_core::async_service::NativePool,
+    ) -> Result<Self> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let stream = tokio::time::timeout_at(deadline, tokio::net::UnixStream::connect(path))
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Neovim connection deadline exceeded",
+                )
+            })??;
+        Ok(Self {
+            stream,
+            deadline,
+            next: 0,
+            cpu,
+        })
+    }
+    pub async fn call(&mut self, method: &str, args: Value, limit: usize) -> Result<Value> {
+        use terminator_core::async_service::CancellationToken;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        self.next += 1;
+        let id = self.next;
+        let deadline = self.deadline;
+        tokio::time::timeout_at(deadline, async {
+            self.stream
+                .write_all(&rmp_serde::to_vec(&(0, id, method, args))?)
+                .await?;
+            let mut bytes = Vec::new();
+            loop {
+                ensure!(bytes.len() < limit, "Neovim response exceeds preview limit");
+                let mut chunk = [0; 8192];
+                let available = chunk.len().min(limit - bytes.len());
+                let n = self.stream.read(&mut chunk[..available]).await?;
+                ensure!(n > 0, "Neovim connection closed before response");
+                bytes.extend_from_slice(&chunk[..n]);
+                let parse = move || {
+                    let mut decoder = rmp_serde::Deserializer::from_read_ref(&bytes);
+                    decoder.set_max_depth(32);
+                    let parsed = Value::deserialize(&mut decoder);
+                    Ok((bytes, parsed))
+                };
+                let (buffer, parsed) = if n <= 4096 && limit <= 4096 {
+                    parse()?
+                } else {
+                    self.cpu.run(&CancellationToken::new(), parse).await?
+                };
+                bytes = buffer;
+                let mut response = match parsed {
+                    Ok(value) => value,
+                    Err(
+                        rmp_serde::decode::Error::InvalidMarkerRead(ref e)
+                        | rmp_serde::decode::Error::InvalidDataRead(ref e),
+                    ) if e.kind() == io::ErrorKind::UnexpectedEof => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                let parts = response.as_array().context("Invalid Neovim response")?;
+                ensure!(
+                    parts.len() == 4 && parts[0] == 1 && parts[1] == id,
+                    "Unexpected Neovim response identity"
+                );
+                ensure!(parts[2].is_null(), "Neovim request failed: {}", parts[2]);
+                return Ok(response.as_array_mut().unwrap().pop().unwrap());
+            }
+        })
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Neovim request deadline exceeded"))?
+    }
 }
 
 #[cfg(test)]

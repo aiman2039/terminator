@@ -1,10 +1,7 @@
 //! Native, read-only media tabs. Decode on a worker, never in a paint callback.
 use anyhow::{Context, Result, ensure};
 use eframe::egui::{self, ColorImage, TextureHandle};
-use std::{
-    io::{Cursor, Read},
-    path::Path,
-};
+use std::{io::Cursor, path::Path};
 
 const MAX_FILE: u64 = 32 * 1024 * 1024;
 const MAX_PIXELS: u64 = 16 * 1024 * 1024;
@@ -21,7 +18,10 @@ pub fn supported(path: &Path) -> bool {
         })
 }
 
-pub fn decode(path: &Path) -> Result<ColorImage> {
+pub fn read(
+    path: &Path,
+    cancel: &terminator_core::async_service::CancellationToken,
+) -> Result<Vec<u8>> {
     use std::os::unix::fs::OpenOptionsExt;
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -29,16 +29,26 @@ pub fn decode(path: &Path) -> Result<ColorImage> {
         .open(path)
         .context("Open image")?;
     ensure!(file.metadata()?.is_file(), "Image is not a regular file");
-    let mut bytes = Vec::new();
-    file.take(MAX_FILE + 1).read_to_end(&mut bytes)?;
+    let bytes = terminator_core::async_service::read_chunks(file, (MAX_FILE + 1) as usize, cancel)?;
     ensure!(
         bytes.len() as u64 <= MAX_FILE,
         "Image exceeds the 32 MiB file limit"
     );
-    if path
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"))
-    {
+    Ok(bytes)
+}
+#[cfg(test)]
+pub fn decode(path: &Path) -> Result<ColorImage> {
+    decode_bytes(
+        read(
+            path,
+            &terminator_core::async_service::CancellationToken::new(),
+        )?,
+        path.extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("svg")),
+    )
+}
+pub fn decode_bytes(bytes: Vec<u8>, svg: bool) -> Result<ColorImage> {
+    if svg {
         // resvg supplies a self-contained rasterizer. Resolve no external files.
         // Constrain the output independently of untrusted SVG dimensions.
         let mut options = resvg::usvg::Options::default();
@@ -118,6 +128,7 @@ pub struct Preview {
     pub texture: Option<TextureHandle>,
     pub error: Option<String>,
     pub loading: bool,
+    pub cancellation: Option<terminator_core::async_service::CancellationToken>,
     pub generation: u64,
     pub scene: egui::Rect,
 }
@@ -127,15 +138,38 @@ impl Default for Preview {
             texture: None,
             error: None,
             loading: false,
+            cancellation: None,
             generation: 0,
             scene: egui::Rect::NOTHING,
+        }
+    }
+}
+impl Drop for Preview {
+    fn drop(&mut self) {
+        if let Some(cancellation) = &self.cancellation {
+            cancellation.cancel();
         }
     }
 }
 impl Preview {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         if let Some(texture) = &self.texture {
+            if let Some(error) = &self.error {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    format!("Showing previous image: {error}"),
+                );
+            }
             let size = texture.size_vec2();
+            // The first async completion may arrive while the dock is being laid
+            // out. Scene applies its transform before its own invalid-rect reset.
+            if !self.scene.is_finite() || !self.scene.is_positive() {
+                self.scene = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            }
+            let available = ui.available_size_before_wrap();
+            if !available.is_finite() || available.x <= 0.0 || available.y <= 0.0 {
+                return;
+            }
             let response =
                 egui::Scene::new()
                     .zoom_range(0.01..=16.0)
@@ -156,10 +190,62 @@ impl Preview {
     }
 }
 
+pub async fn load(
+    service: &crate::gui_services::Services,
+    path: std::path::PathBuf,
+    cancel: &terminator_core::async_service::CancellationToken,
+) -> Result<ColorImage> {
+    let svg = path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"));
+    let operation = cancel.clone();
+    let bytes = service
+        .fs()
+        .run(cancel, move || read(&path, &operation))
+        .await?;
+    service
+        .cpu()
+        .run(cancel, move || decode_bytes(bytes, svg))
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs::File;
+    #[test]
+    fn first_async_image_completion_and_fit_use_finite_scene_bounds() {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "fixture",
+            ColorImage::filled([64, 32], egui::Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        let mut preview = Preview::default();
+        preview.texture = Some(texture);
+        for _ in 0..2 {
+            preview.scene = egui::Rect::NOTHING;
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| preview.show(ui));
+            output.textures_delta.clear();
+            assert!(preview.scene.is_finite());
+        }
+    }
+
+    #[test]
+    fn removing_preview_cancels_its_pending_decode() {
+        let cancellation = terminator_core::async_service::CancellationToken::new();
+        let preview = Preview {
+            cancellation: Some(cancellation.clone()),
+            texture: None,
+            error: None,
+            loading: true,
+            generation: 1,
+            scene: egui::Rect::NOTHING,
+        };
+        drop(preview);
+        assert!(cancellation.is_cancelled());
+    }
+
     #[test]
     fn decodes_pixels_and_reports_corrupt_or_oversized_files() {
         let dir = tempfile::tempdir().unwrap();

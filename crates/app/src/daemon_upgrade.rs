@@ -617,6 +617,7 @@ mod tests {
             &paths,
             std::slice::from_ref(&editor.id),
             crate::editor_close::Mode::Save,
+            Duration::from_secs(2),
         )
         .unwrap();
         unsafe {

@@ -735,21 +735,29 @@ impl App {
         if as_text {
             self.open_file_mode(path.into(), None, None, false, true);
         }
-        if reload {
-            self.images.remove(path);
+        if reload && let Some(preview) = self.images.get_mut(path) {
+            if let Some(cancel) = preview.cancellation.take() {
+                cancel.cancel();
+            }
+            preview.loading = false;
+            preview.error = None;
         }
         if !self.images.contains_key(path) && self.images.len() >= 8 {
             ui.weak("Close another image preview to load this image.");
             return;
         }
         let preview = self.images.entry(path.into()).or_default();
-        if !preview.loading && preview.texture.is_none() && preview.error.is_none() {
+        if reload || (!preview.loading && preview.texture.is_none() && preview.error.is_none()) {
             self.image_generation = self.image_generation.wrapping_add(1);
             preview.generation = self.image_generation;
-            preview.loading = self
+            preview.cancellation = self
                 .image_jobs
                 .try_send((path.into(), preview.generation))
-                .is_ok();
+                .ok();
+            preview.loading = preview.cancellation.is_some();
+            if !preview.loading {
+                ui.ctx().request_repaint_after(Duration::from_millis(50));
+            }
         }
         if fit {
             preview.scene = egui::Rect::NOTHING;
@@ -837,9 +845,10 @@ impl App {
             });
     }
     fn diff_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
-        let Tab::Diff { path, staged, .. } = tab else {
+        let Tab::Diff { cwd, path, staged } = tab else {
             return;
         };
+        let is_md = crate::markdown::supported(path);
         let key = tab.key();
         ui.horizontal(|ui| {
             ui.weak(path.display().to_string());
@@ -858,8 +867,18 @@ impl App {
             if side_by_side.clicked() {
                 self.diff_split.insert(key.clone());
             }
+            if is_md {
+                let preview = self.diff_preview.contains(&key);
+                if ui.selectable_label(preview, "Preview").clicked() {
+                    if preview {
+                        self.diff_preview.remove(&key);
+                    } else {
+                        self.diff_preview.insert(key.clone());
+                    }
+                }
+            }
             if ui.small_button("Refresh").clicked() {
-                self.diffs.remove(&key);
+                self.diff_preview.remove(&key);
                 self.loading.insert(key.clone());
                 let _ = self.jobs.send(Job::Diff(tab.clone()));
             }
@@ -869,15 +888,29 @@ impl App {
         }
         match self.diffs.get(&key) {
             Some(Ok(doc)) => {
-                let split = self.diff_split.contains(&key);
-                let colors = DiffColors {
-                    added: appearance::color(&self.theme.git_added),
-                    deleted: appearance::color(&self.theme.git_deleted),
-                    accent: appearance::color(&self.theme.accent),
-                    text: appearance::color(&self.theme.text),
-                };
-                let doc = doc.clone();
-                paint_diff_document(ui, &doc, split, colors, &key);
+                if is_md && self.diff_preview.contains(&key) {
+                    let path = cwd.join(path);
+                    if let Some(link) =
+                        paint_markdown_diff_preview(ui, doc, &mut self.markdown, &path, &key)
+                    {
+                        match link {
+                            markdown::Link::File(path) => self.open_file(path, None, None, false),
+                            markdown::Link::Web(url) => {
+                                let _ = self.jobs.send(Job::Browser(url));
+                            }
+                        }
+                    }
+                } else {
+                    let split = self.diff_split.contains(&key);
+                    let colors = DiffColors {
+                        added: appearance::color(&self.theme.git_added),
+                        deleted: appearance::color(&self.theme.git_deleted),
+                        accent: appearance::color(&self.theme.accent),
+                        text: appearance::color(&self.theme.text),
+                    };
+                    let doc = doc.clone();
+                    paint_diff_document(ui, &doc, split, colors, &key);
+                }
             }
             Some(Err(error)) => {
                 ui.colored_label(appearance::color(&self.theme.status_failed), error);
@@ -1082,7 +1115,34 @@ fn paint_diff_document(
     })
     .inner
 }
-
+fn paint_markdown_diff_preview(
+    ui: &mut egui::Ui,
+    doc: &diff::DiffDocument,
+    previews: &mut markdown::Previews,
+    path: &std::path::Path,
+    scroll_key: &str,
+) -> Option<markdown::Link> {
+    let mut link = None;
+    ui.columns(2, |columns| {
+        for (index, (col, (text, label))) in columns
+            .iter_mut()
+            .zip([
+                (&doc.left_text, &doc.left_label),
+                (&doc.right_text, &doc.right_label),
+            ])
+            .enumerate()
+        {
+            col.vertical(|ui| {
+                ui.strong(label.as_str());
+                let key = format!("diff-preview:{scroll_key}:{index}");
+                if let Some(clicked) = previews.snapshot(&key, path, text).show(ui, &key) {
+                    link = Some(clicked);
+                }
+            });
+        }
+    });
+    link
+}
 fn paint_diff_split_row(
     ui: &mut egui::Ui,
     row: &diff::SplitRow,
@@ -2205,6 +2265,8 @@ mod tests {
         diff::DiffDocument {
             left_label: "Index".into(),
             right_label: "Working tree".into(),
+            left_text: String::new(),
+            right_text: String::new(),
             unified: vec![sample_line()],
             split: vec![],
         }
@@ -2249,7 +2311,7 @@ mod tests {
         if split {
             app.diff_split.insert(tab.key());
         }
-        app.diffs.insert(tab.key(), Ok(doc));
+        app.diffs.insert(tab.key(), Ok(doc.into()));
         paint_diff_view(&mut app, &ctx, &tab)
     }
 
@@ -2283,6 +2345,29 @@ mod tests {
     }
 
     #[test]
+    fn reopened_diff_uses_unified_after_default_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        app.selected = Some("project".into());
+        let tab = Tab::Diff {
+            cwd: dir.path().into(),
+            path: dir.path().join("file.md"),
+            staged: false,
+        };
+        let Tab::Diff { cwd, path, staged } = &tab else {
+            unreachable!()
+        };
+        app.state.settings.diff_split_default = true;
+        app.add_diff(cwd.clone(), path.clone(), *staged);
+        assert!(app.diff_split.contains(&tab.key()));
+        app.layouts.clear();
+        app.state.settings.diff_split_default = false;
+        app.add_diff(cwd.clone(), path.clone(), *staged);
+        assert!(!app.diff_split.contains(&tab.key()));
+    }
+
+    #[test]
     fn unified_diff_text_stays_in_the_viewport() {
         let painted = paint_doc(sample_doc(), false);
         let (pos, text) = require_text(&painted, "visible-diff-marker");
@@ -2312,6 +2397,8 @@ mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
+                left_text: String::new(),
+                right_text: String::new(),
                 unified: vec![
                     line(diff::LineKind::Equal, Some(8), Some(8), "x"),
                     line(
@@ -2341,6 +2428,8 @@ mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
+                left_text: String::new(),
+                right_text: String::new(),
                 unified: vec![line(
                     diff::LineKind::Delete,
                     Some(100),
@@ -2374,6 +2463,8 @@ mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
+                left_text: String::new(),
+                right_text: String::new(),
                 unified: vec![line(diff::LineKind::Insert, None, Some(102), "added-line")],
                 split: vec![],
             },
@@ -2395,6 +2486,8 @@ mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
+                left_text: String::new(),
+                right_text: String::new(),
                 unified: vec![],
                 split: vec![diff::SplitRow {
                     left: Some(line(diff::LineKind::Delete, Some(5), None, "left-only")),
@@ -2433,6 +2526,8 @@ mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
+                left_text: String::new(),
+                right_text: String::new(),
                 unified: vec![
                     line(diff::LineKind::Equal, Some(1), Some(1), "row-a"),
                     line(diff::LineKind::Equal, Some(2), Some(2), "row-b"),
@@ -2456,6 +2551,8 @@ mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
+                left_text: String::new(),
+                right_text: String::new(),
                 unified: vec![line(diff::LineKind::Equal, Some(97), Some(97), "unchanged")],
                 split: vec![],
             },
@@ -2482,6 +2579,8 @@ mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
+                left_text: String::new(),
+                right_text: String::new(),
                 unified: vec![line(diff::LineKind::Hunk, None, None, "@@ -3,2 +3,2 @@")],
                 split: vec![],
             },
@@ -2504,6 +2603,8 @@ mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
+                left_text: String::new(),
+                right_text: String::new(),
                 unified: vec![line(diff::LineKind::Insert, None, Some(10000), "wide-line")],
                 split: vec![],
             },
@@ -2547,6 +2648,8 @@ mod tests {
             diff::DiffDocument {
                 left_label: "old".into(),
                 right_label: "new".into(),
+                left_text: String::new(),
+                right_text: String::new(),
                 unified: vec![],
                 split: vec![
                     diff::SplitRow {
@@ -2641,6 +2744,8 @@ mod tests {
         diff::DiffDocument {
             left_label: "old".into(),
             right_label: "new".into(),
+            left_text: String::new(),
+            right_text: String::new(),
             unified,
             split,
         }
@@ -2749,5 +2854,51 @@ mod tests {
         let (long, _) = scroll_doc(&ctx, &doc, false);
         let (short, _) = scroll_doc(&ctx, &sample_doc(), false);
         assert!(long.content_size.x > short.content_size.x * 2.0);
+    }
+
+    #[test]
+    fn markdown_diff_preview_renders_both_sides() {
+        let doc = diff::DiffDocument {
+            left_label: "Left".into(),
+            right_label: "Right".into(),
+            left_text: "# Hello\n\nThis is the old **markdown**.".into(),
+            right_text: "# Hello\n\nThis is the *updated* markdown.".into(),
+            unified: vec![],
+            split: vec![],
+        };
+        let ctx = egui::Context::default();
+        let mut previews = markdown::Previews::new(&ctx);
+        for (index, text) in [&doc.left_text, &doc.right_text].into_iter().enumerate() {
+            previews.snapshot(
+                &format!("diff-preview:test-preview:{index}"),
+                std::path::Path::new("/repo/test.md"),
+                text,
+            );
+        }
+        previews.wait_prepared();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 400.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                paint_markdown_diff_preview(
+                    ui,
+                    &doc,
+                    &mut previews,
+                    std::path::Path::new("/repo/test.md"),
+                    "test-preview",
+                );
+            },
+        );
+        output.textures_delta.clear();
+        let painted = painted_text(&output.shapes);
+        assert!(painted.iter().any(|(_, t)| t.contains("Hello")));
+        assert!(painted.iter().any(|(_, t)| t.contains("Left")));
+        assert!(painted.iter().any(|(_, t)| t.contains("Right")));
+        assert!(painted.iter().any(|(_, t)| t.contains("updated")));
     }
 }

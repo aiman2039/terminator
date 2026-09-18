@@ -147,12 +147,7 @@ impl Harness {
             bin().join(name)
         };
         let mut c = Command::new(executable);
-        for (key, _) in std::env::vars_os() {
-            let name = key.to_string_lossy();
-            if name.starts_with("TERMINATOR_TEST_") || name.starts_with("TERMINATOR_CAPTURE_") {
-                c.env_remove(key);
-            }
-        }
+        clear_inherited_terminator(&mut c, std::env::vars_os().map(|(key, _)| key));
         c.env_remove("TERMINATOR_SESSION_ID")
             .env_remove("TERMINATOR_SESSION_TOKEN")
             .env_remove("TERMINATOR_RUNTIME_DIR")
@@ -333,5 +328,47 @@ impl Drop for Harness {
             }
         }
         self.daemon.take();
+    }
+}
+
+fn clear_inherited_terminator(
+    command: &mut Command,
+    keys: impl IntoIterator<Item = std::ffi::OsString>,
+) {
+    for key in keys {
+        if key.to_string_lossy().starts_with("TERMINATOR_") {
+            command.env_remove(key);
+        }
+    }
+}
+#[cfg(test)]
+mod isolation_tests {
+    use super::*;
+    #[test]
+    fn inherited_catalog_generation_and_session_routing_cannot_escape_fixture() {
+        let mut command = Command::new("fixture");
+        let names = [
+            "TERMINATOR_CATALOG_DATA",
+            "TERMINATOR_CATALOG_RUNTIME",
+            "TERMINATOR_GENERATION",
+            "TERMINATOR_DATA_DIR",
+            "TERMINATOR_RUNTIME_DIR",
+            "TERMINATOR_SESSION_ID",
+            "TERMINATOR_SESSION_TOKEN",
+        ];
+        clear_inherited_terminator(&mut command, names.iter().map(std::ffi::OsString::from));
+        command.env("TERMINATOR_DATA_DIR", "/isolated/fixture");
+        for name in names {
+            let value = command
+                .get_envs()
+                .find(|(key, _)| *key == std::ffi::OsStr::new(name))
+                .unwrap()
+                .1;
+            if name == "TERMINATOR_DATA_DIR" {
+                assert_eq!(value, Some(std::ffi::OsStr::new("/isolated/fixture")));
+            } else {
+                assert!(value.is_none(), "inherited route {name} was retained");
+            }
+        }
     }
 }

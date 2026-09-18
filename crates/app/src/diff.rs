@@ -1,5 +1,7 @@
 //! Read-only Git snapshots rendered with similar + syntect. Never runs on the GUI thread.
-use anyhow::{Context, Result, bail, ensure};
+#[cfg(test)]
+use anyhow::bail;
+use anyhow::{Context, Result, ensure};
 use similar::{ChangeTag, DiffTag, TextDiff};
 use std::{
     io::Read,
@@ -18,6 +20,7 @@ use syntect::{
 const LIMIT: usize = 1024 * 1024;
 const CONTEXT: usize = 3;
 
+#[cfg(test)]
 pub struct DiffRequest<'a> {
     pub cwd: &'a Path,
     pub path: &'a Path,
@@ -63,10 +66,13 @@ pub struct SplitRow {
 pub struct DiffDocument {
     pub left_label: String,
     pub right_label: String,
+    pub left_text: String,
+    pub right_text: String,
     pub unified: Vec<DiffLine>,
     pub split: Vec<SplitRow>,
 }
 
+#[cfg(test)]
 pub fn document(DiffRequest { cwd, path, staged }: DiffRequest<'_>) -> Result<DiffDocument> {
     let root = git_root(cwd)?;
     let relative = relative_path(&root, path)?;
@@ -74,6 +80,7 @@ pub fn document(DiffRequest { cwd, path, staged }: DiffRequest<'_>) -> Result<Di
     Ok(build(&relative, &left, &right, staged))
 }
 
+#[cfg(test)]
 fn git_root(cwd: &Path) -> Result<PathBuf> {
     let bytes = git(cwd, &["rev-parse", "--show-toplevel"])?;
     let text = std::str::from_utf8(&bytes)?.trim();
@@ -116,6 +123,7 @@ fn relative_path(root: &Path, path: &Path) -> Result<PathBuf> {
     Ok(relative.to_path_buf())
 }
 
+#[cfg(test)]
 fn git(cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
     let mut cmd = Command::new("git");
     cmd.env("GIT_OPTIONAL_LOCKS", "0")
@@ -125,6 +133,7 @@ fn git(cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
     crate::services::run(cmd)
 }
 
+#[cfg(test)]
 fn git_os(cwd: &Path, args: &[&std::ffi::OsStr]) -> Result<Vec<u8>> {
     let mut cmd = Command::new("git");
     cmd.env("GIT_OPTIONAL_LOCKS", "0")
@@ -134,6 +143,7 @@ fn git_os(cwd: &Path, args: &[&std::ffi::OsStr]) -> Result<Vec<u8>> {
     crate::services::run(cmd)
 }
 
+#[cfg(test)]
 fn blob(root: &Path, oid: &str) -> Result<Vec<u8>> {
     if oid.bytes().all(|b| b == b'0') {
         return Ok(vec![]);
@@ -162,6 +172,7 @@ fn worktree_file(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn changed_blob(root: &Path, path: &Path, staged: bool) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     let mut args: Vec<&std::ffi::OsStr> = vec![
         "diff".as_ref(),
@@ -212,6 +223,7 @@ fn changed_blob(root: &Path, path: &Path, staged: bool) -> Result<Option<(Vec<u8
     Ok(None)
 }
 
+#[cfg(test)]
 fn snapshots(root: &Path, path: &Path, staged: bool) -> Result<(String, String)> {
     let pair = match changed_blob(root, path, staged)? {
         Some(pair) => pair,
@@ -409,6 +421,8 @@ fn build(path: &Path, left: &str, right: &str, staged: bool) -> DiffDocument {
     DiffDocument {
         left_label: if staged { "HEAD" } else { "Index" }.into(),
         right_label: if staged { "Index" } else { "Working tree" }.into(),
+        left_text: left.into(),
+        right_text: right.into(),
         unified,
         split,
     }
@@ -519,6 +533,176 @@ fn change_line(
     }
 }
 
+pub async fn document_async(
+    service: &crate::gui_services::Services,
+    cwd: PathBuf,
+    path: PathBuf,
+    staged: bool,
+    cancel: &terminator_core::async_service::CancellationToken,
+) -> Result<DiffDocument> {
+    let root_bytes = git_async(
+        service,
+        &cwd,
+        vec!["rev-parse".into(), "--show-toplevel".into()],
+    )
+    .await?;
+    let root = PathBuf::from(std::str::from_utf8(&root_bytes)?.trim());
+    let (root, relative) = service
+        .fs()
+        .run(cancel, move || {
+            let root = root.canonicalize().context("Resolve Git root")?;
+            let relative = relative_path(&root, &path)?;
+            Ok((root, relative))
+        })
+        .await?;
+    let mut args: Vec<std::ffi::OsString> = [
+        "diff",
+        "--raw",
+        "-z",
+        "--no-abbrev",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--find-renames",
+    ]
+    .into_iter()
+    .map(Into::into)
+    .collect();
+    if staged {
+        args.push("--cached".into());
+    }
+    let raw = git_async(service, &root, args).await?;
+    let mut fields = raw.split(|b| *b == 0).filter(|f| !f.is_empty());
+    let mut oids = None;
+    while let Some(header) = fields.next() {
+        let parts: Vec<_> = std::str::from_utf8(header)?.split_whitespace().collect();
+        ensure!(parts.len() == 5, "Invalid Git diff record");
+        let first = fields.next().context("Missing Git path")?;
+        let target = if parts[4].starts_with(['R', 'C']) {
+            fields.next().context("Missing rename target")?
+        } else {
+            first
+        };
+        if target != relative.as_os_str().as_bytes() {
+            continue;
+        }
+        ensure!(
+            !parts[4].starts_with('U'),
+            "Resolve this file's merge conflict in your editor before opening a two-way diff"
+        );
+        ensure!(
+            parts[0] != ":160000"
+                && parts[1] != "160000"
+                && parts[0] != ":120000"
+                && parts[1] != "120000",
+            "Diff review supports regular files, not symlinks or submodules"
+        );
+        oids = Some((parts[2].to_owned(), parts[3].to_owned()));
+        break;
+    }
+    let (left, right) = if let Some((left, right)) = oids {
+        let left = blob_async(service, &root, &left).await?;
+        let right = if staged {
+            blob_async(service, &root, &right).await?
+        } else {
+            let path = root.join(&relative);
+            service
+                .fs()
+                .run(cancel, move || worktree_file(&path))
+                .await?
+        };
+        (left, right)
+    } else {
+        ensure!(
+            !staged,
+            "This file has no staged changes; refresh Git status"
+        );
+        let tracked = git_async(
+            service,
+            &root,
+            vec![
+                "ls-files".into(),
+                "-z".into(),
+                "--".into(),
+                relative.as_os_str().to_owned(),
+            ],
+        )
+        .await?;
+        ensure!(
+            tracked.is_empty(),
+            "This file has no working-tree changes; refresh Git status"
+        );
+        let path = root.join(&relative);
+        let right = service
+            .fs()
+            .run(cancel, move || {
+                ensure!(path.exists(), "File no longer exists; refresh Git status");
+                worktree_file(&path)
+            })
+            .await?;
+        (Vec::new(), right)
+    };
+    service
+        .cpu()
+        .run(cancel, move || {
+            Ok(build(
+                &relative,
+                &decode_side(&left)?,
+                &decode_side(&right)?,
+                staged,
+            ))
+        })
+        .await
+}
+async fn blob_async(
+    service: &crate::gui_services::Services,
+    root: &Path,
+    oid: &str,
+) -> Result<Vec<u8>> {
+    if oid.bytes().all(|b| b == b'0') {
+        return Ok(Vec::new());
+    }
+    let bytes = git_async(
+        service,
+        root,
+        vec!["cat-file".into(), "blob".into(), oid.into()],
+    )
+    .await?;
+    ensure!(bytes.len() <= LIMIT, "Diff file exceeds 1 MiB");
+    Ok(bytes)
+}
+pub(crate) async fn git_async(
+    service: &crate::gui_services::Services,
+    cwd: &Path,
+    args: Vec<std::ffi::OsString>,
+) -> Result<Vec<u8>> {
+    let mut command = Command::new("git");
+    command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .arg("-C")
+        .arg(cwd)
+        .args(args);
+    let directory = cwd.to_owned();
+    let key = service
+        .fs()
+        .run(
+            &terminator_core::async_service::CancellationToken::new(),
+            move || Ok(terminator_core::async_process::git_key(&directory)),
+        )
+        .await?;
+    Ok(service
+        .processes()
+        .run(
+            command,
+            terminator_core::CommandOptions {
+                stdout_limit: 4 * 1024 * 1024,
+                ..Default::default()
+            },
+            Some(key),
+        )
+        .await?
+        .stdout)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,6 +752,14 @@ mod tests {
         .unwrap();
         assert_eq!(staged.left_label, "HEAD");
         assert_eq!(staged.right_label, "Index");
+        assert_eq!(
+            staged.left_text, "fn main() { base(); }\n",
+            "left_text should contain the old blob content"
+        );
+        assert_eq!(
+            staged.right_text, "fn main() { staged(); }\n",
+            "right_text should contain the staged content"
+        );
         let joined: String = staged
             .unified
             .iter()
@@ -589,6 +781,14 @@ mod tests {
             staged: false,
         })
         .unwrap();
+        assert_eq!(
+            working.left_text, "fn main() { staged(); }\n",
+            "working left_text should be the staged content"
+        );
+        assert_eq!(
+            working.right_text, "fn main() { working(); }\n",
+            "working right_text should be the working tree content"
+        );
         let joined: String = working
             .unified
             .iter()

@@ -5,61 +5,47 @@ use eframe::egui::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex, mpsc},
-    thread,
+    sync::{Arc, Mutex},
 };
 
 type Decoded = Result<Arc<egui::ColorImage>, String>;
 struct Entry {
     ticket: u64,
     result: Option<Decoded>,
+    cancel: terminator_core::async_service::CancellationToken,
 }
 pub struct Images {
     entries: Arc<Mutex<HashMap<String, Entry>>>,
-    requests: mpsc::SyncSender<(String, u64, egui::Context)>,
+    services: crate::gui_services::Services,
+    #[cfg(test)]
+    _owner: Option<Mutex<crate::gui_services::Owner>>,
     next: std::sync::atomic::AtomicU64,
 }
 impl Images {
+    #[cfg(test)]
     pub fn install(ctx: &egui::Context) -> Arc<Self> {
-        let entries = Arc::new(Mutex::new(HashMap::<String, Entry>::new()));
-        let (requests, incoming) = mpsc::sync_channel::<(String, u64, egui::Context)>(8);
-        let cache = entries.clone();
-        thread::spawn(move || {
-            while let Ok((uri, ticket, ctx)) = incoming.recv() {
-                let path = uri
-                    .strip_prefix("markdown-image:")
-                    .and_then(|s| url::Url::parse(s).ok())
-                    .and_then(|u| u.to_file_path().ok());
-                let result = path
-                    .ok_or_else(|| "Invalid local image path".to_owned())
-                    .and_then(|path| {
-                        crate::image_preview::decode(&path)
-                            .map(Arc::new)
-                            .map_err(|e| format!("{e:#}"))
-                    });
-                let mut entries = cache.lock().unwrap();
-                let used: usize = entries
-                    .values()
-                    .filter_map(|v| v.result.as_ref())
-                    .filter_map(|r| r.as_ref().ok())
-                    .map(|i| i.pixels.len() * 4)
-                    .sum();
-                if let Some(entry) = entries.get_mut(&uri).filter(|e| e.ticket == ticket) {
-                    entry.result = Some(result.and_then(|image| {
-                        if used + image.pixels.len() * 4 > 64 * 1024 * 1024 {
-                            Err("Markdown images exceed the 64 MiB preview limit".into())
-                        } else {
-                            Ok(image)
-                        }
-                    }));
-                    ctx.request_repaint();
-                }
-            }
-        });
+        let paths = terminator_core::Paths::at(std::env::temp_dir().join(terminator_core::id()));
+        let (tx, _) = std::sync::mpsc::channel();
+        let (services, owner) = crate::gui_services::Services::new(paths, ctx.clone(), tx).unwrap();
         let loader = Arc::new(Self {
-            entries,
-            requests,
+            entries: Default::default(),
+            services,
             next: Default::default(),
+            _owner: Some(Mutex::new(owner)),
+        });
+        ctx.add_image_loader(loader.clone());
+        loader
+    }
+    pub fn with_services(
+        ctx: &egui::Context,
+        services: crate::gui_services::Services,
+    ) -> Arc<Self> {
+        let loader = Arc::new(Self {
+            entries: Default::default(),
+            services,
+            next: Default::default(),
+            #[cfg(test)]
+            _owner: None,
         });
         ctx.add_image_loader(loader.clone());
         loader
@@ -110,25 +96,62 @@ impl ImageLoader for Images {
             ));
         }
         let ticket = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        match self.requests.try_send((uri.into(), ticket, ctx.clone())) {
-            Ok(()) => {
-                entries.insert(
-                    uri.into(),
-                    Entry {
-                        ticket,
-                        result: None,
-                    },
-                );
-            }
-            Err(mpsc::TrySendError::Full(_)) => {
-                ctx.request_repaint_after(std::time::Duration::from_millis(100))
-            }
-            Err(_) => {
-                return Err(LoadError::Loading(
-                    "Image preview worker unavailable".into(),
-                ));
-            }
+        use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
+        let token = CancellationToken::new();
+        let cancelled = token.clone();
+        let cache = self.entries.clone();
+        let service = self.services.clone();
+        let target = uri.to_owned();
+        let repaint = ctx.clone();
+        let context =
+            OperationContext::new("markdown-image", target.clone(), Policy::ReplaceableRead);
+        let result = self
+            .services
+            .handle()
+            .submit(context, token.clone(), async move {
+                let path = target
+                    .strip_prefix("markdown-image:")
+                    .and_then(|s| url::Url::parse(s).ok())
+                    .and_then(|u| u.to_file_path().ok());
+                let result = match path {
+                    Some(path) => crate::image_preview::load(&service, path, &cancelled)
+                        .await
+                        .map(Arc::new)
+                        .map_err(|e| format!("{e:#}")),
+                    None => Err("Invalid local image path".into()),
+                };
+                let mut entries = cache.lock().unwrap();
+                let used: usize = entries
+                    .values()
+                    .filter_map(|e| e.result.as_ref())
+                    .filter_map(|r| r.as_ref().ok())
+                    .map(|i| i.pixels.len() * 4)
+                    .sum();
+                if let Some(entry) = entries.get_mut(&target).filter(|e| e.ticket == ticket) {
+                    entry.result = Some(result.and_then(|image| {
+                        if used + image.pixels.len() * 4 > 64 * 1024 * 1024 {
+                            Err("Markdown images exceed the 64 MiB preview limit".into())
+                        } else {
+                            Ok(image)
+                        }
+                    }));
+                }
+                repaint.request_repaint();
+                Ok(Vec::new())
+            });
+        if result.is_ok() {
+            entries.insert(
+                uri.into(),
+                Entry {
+                    ticket,
+                    result: None,
+                    cancel: token,
+                },
+            );
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
+
         Ok(ImagePoll::Pending { size: None })
     }
     fn forget(&self, uri: &str) {
@@ -153,6 +176,12 @@ impl ImageLoader for Images {
             .unwrap()
             .values()
             .any(|v| v.result.is_none())
+    }
+}
+
+impl Drop for Entry {
+    fn drop(&mut self) {
+        self.cancel.cancel();
     }
 }
 

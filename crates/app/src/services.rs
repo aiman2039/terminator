@@ -131,6 +131,7 @@ pub struct DirectoryError {
     pub message: String,
 }
 
+#[cfg(test)]
 pub fn directory_result(
     path: &Path,
     in_git: bool,
@@ -144,6 +145,28 @@ pub fn directory_result(
     })
 }
 
+pub fn entries_raw(
+    path: &Path,
+    cancel: &terminator_core::async_service::CancellationToken,
+) -> Result<Vec<Entry>> {
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(path)? {
+        anyhow::ensure!(!cancel.is_cancelled(), "Directory scan cancelled");
+        let entry = entry?;
+        anyhow::ensure!(
+            entries.len() < 1000,
+            "Directory exceeds the 1,000-entry display limit"
+        );
+        entries.push(Entry {
+            ignored: entry.file_name() == ".git",
+            path: entry.path(),
+            directory: entry.file_type()?.is_dir(),
+        });
+    }
+    entries.sort_by(|a, b| b.directory.cmp(&a.directory).then(a.path.cmp(&b.path)));
+    Ok(entries)
+}
+#[cfg(test)]
 pub fn entries_known(path: &Path, in_git: bool) -> Result<Vec<Entry>> {
     let mut entries = Vec::new();
     for entry in fs::read_dir(path)? {
@@ -184,9 +207,11 @@ pub fn entries_known(path: &Path, in_git: bool) -> Result<Vec<Entry>> {
     entries.sort_by(|a, b| b.directory.cmp(&a.directory).then(a.path.cmp(&b.path)));
     Ok(entries)
 }
+#[cfg(test)]
 pub fn run(cmd: Command) -> Result<Vec<u8>> {
     run_status(cmd, false, None)
 }
+#[cfg(test)]
 fn run_status(cmd: Command, allow_no_matches: bool, input: Option<Vec<u8>>) -> Result<Vec<u8>> {
     Ok(terminator_core::run_command(
         cmd,
@@ -203,6 +228,7 @@ fn run_status(cmd: Command, allow_no_matches: bool, input: Option<Vec<u8>>) -> R
     )?
     .stdout)
 }
+#[cfg(test)]
 fn git(cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
     let mut c = Command::new("git");
     c.env("GIT_OPTIONAL_LOCKS", "0")
@@ -211,6 +237,7 @@ fn git(cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
         .args(args);
     run(c)
 }
+#[cfg(test)]
 pub fn context_cached(
     cwd: &Path,
     cache: &mut std::collections::HashMap<PathBuf, (PathBuf, Vec<PathBuf>)>,
@@ -405,6 +432,151 @@ pub fn existing_directory(mut path: PathBuf) -> PathBuf {
     }
     path
 }
+pub async fn context_async(
+    service: &crate::gui_services::Services,
+    cwd: PathBuf,
+    cancel: &terminator_core::async_service::CancellationToken,
+) -> ContextData {
+    let mut result = ContextData {
+        cwd: cwd.clone(),
+        root: None,
+        git_dirs: vec![],
+        branch: String::new(),
+        changes: vec![],
+        decorations: Default::default(),
+        error: None,
+    };
+    let git = |root: PathBuf, args: Vec<std::ffi::OsString>| async move {
+        crate::diff::git_async(service, &root, args).await
+    };
+    let root = match git(
+        cwd.clone(),
+        vec!["rev-parse".into(), "--show-toplevel".into()],
+    )
+    .await
+    {
+        Ok(bytes) => PathBuf::from(String::from_utf8_lossy(&bytes).trim()),
+        Err(_) => return result,
+    };
+    let root = service
+        .fs()
+        .run(cancel, move || Ok(root.canonicalize()?))
+        .await
+        .unwrap_or_else(|_| cwd.clone());
+    for arg in ["--absolute-git-dir", "--git-common-dir"] {
+        if let Ok(bytes) = git(root.clone(), vec!["rev-parse".into(), arg.into()]).await {
+            let path = PathBuf::from(String::from_utf8_lossy(&bytes).trim());
+            result.git_dirs.push(if path.is_absolute() {
+                path
+            } else {
+                cwd.join(path)
+            });
+        }
+    }
+    result.root = Some(root.clone());
+    result.branch = git(root.clone(), vec!["branch".into(), "--show-current".into()])
+        .await
+        .map(|b| String::from_utf8_lossy(&b).trim().to_owned())
+        .unwrap_or_default();
+    if result.branch.is_empty() {
+        result.branch = "Detached HEAD".into();
+    }
+    match git(
+        root.clone(),
+        vec![
+            "status".into(),
+            "--porcelain=v1".into(),
+            "-z".into(),
+            "--untracked-files=all".into(),
+        ],
+    )
+    .await
+    {
+        Ok(raw) => {
+            let mut parts = raw.split(|b| *b == 0);
+            while let Some(part) = parts.next() {
+                if part.len() < 4 {
+                    continue;
+                }
+                let status = String::from_utf8_lossy(&part[..2]).into_owned();
+                use std::os::unix::ffi::OsStrExt;
+                let path = root.join(std::ffi::OsStr::from_bytes(&part[3..]));
+                if status.contains('R') || status.contains('C') {
+                    let _ = parts.next();
+                }
+                result.changes.push(Change { path, status });
+            }
+        }
+        Err(error) => result.error = Some(error.to_string()),
+    }
+    result.decorations = decorations(&root, &result.changes);
+    result
+}
+
+pub async fn directory_async(
+    service: &crate::gui_services::Services,
+    path: PathBuf,
+    root: Option<PathBuf>,
+    cancel: &terminator_core::async_service::CancellationToken,
+) -> std::result::Result<Vec<Entry>, DirectoryError> {
+    use std::os::unix::ffi::OsStrExt;
+    let result = async {
+        let folder = path.clone();
+        let operation = cancel.clone();
+        let mut entries = service
+            .fs()
+            .run(cancel, move || entries_raw(&folder, &operation))
+            .await?;
+        if let Some(root) = root {
+            let mut command = Command::new("git");
+            command
+                .env("GIT_OPTIONAL_LOCKS", "0")
+                .arg("-C")
+                .arg(&path)
+                .args(["check-ignore", "--stdin", "-z"]);
+            let mut input = Vec::new();
+            for entry in &entries {
+                input.extend_from_slice(entry.path.as_os_str().as_bytes());
+                input.push(0);
+            }
+            let key = service
+                .fs()
+                .run(cancel, move || {
+                    Ok(terminator_core::async_process::git_key(&root))
+                })
+                .await?;
+            let output = service
+                .processes()
+                .run(
+                    command,
+                    terminator_core::CommandOptions {
+                        input: Some(input),
+                        stdout_limit: 4 * 1024 * 1024,
+                        accepted_exit_codes: Some(vec![0, 1]),
+                        ..Default::default()
+                    },
+                    Some(key),
+                )
+                .await?;
+            for entry in &mut entries {
+                entry.ignored |= output
+                    .stdout
+                    .split(|b| *b == 0)
+                    .any(|p| p == entry.path.as_os_str().as_bytes());
+            }
+        }
+        Ok::<_, anyhow::Error>(entries)
+    }
+    .await;
+    result.map_err(|error| DirectoryError {
+        path,
+        kind: error
+            .downcast_ref::<std::io::Error>()
+            .map_or(std::io::ErrorKind::Other, std::io::Error::kind),
+        message: error.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

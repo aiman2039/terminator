@@ -38,8 +38,11 @@ fn load_catalog() -> Vec<Station> {
         .unwrap_or_default()
 }
 
+static CATEGORIES: OnceLock<Vec<String>> = OnceLock::new();
+pub fn categories_ready() -> &'static [String] {
+    CATEGORIES.get().map(Vec::as_slice).unwrap_or(&[])
+}
 pub fn categories() -> &'static [String] {
-    static CATEGORIES: OnceLock<Vec<String>> = OnceLock::new();
     CATEGORIES.get_or_init(|| {
         let mut out = Vec::new();
         for station in catalog() {

@@ -1,5 +1,11 @@
 //! Versioned local protocol and persistent, renderer-independent models.
 pub mod appearance;
+#[cfg(feature = "async-client")]
+pub mod async_client;
+#[cfg(feature = "async-client")]
+pub mod async_process;
+#[cfg(feature = "async-client")]
+pub mod async_service;
 pub mod generations;
 pub mod idle_close;
 pub mod metadata;
@@ -336,6 +342,8 @@ pub struct Settings {
     pub total_mib: u64,
     pub scrollback_lines: usize,
     pub font_size: f32,
+    pub editor_close_timeout_secs: u64,
+    pub diff_split_default: bool,
     pub keybindings: std::collections::BTreeMap<String, String>,
 }
 impl Default for Settings {
@@ -376,6 +384,8 @@ impl Default for Settings {
             total_mib: 2048,
             scrollback_lines: 10_000,
             font_size: 13.0,
+            editor_close_timeout_secs: 1,
+            diff_split_default: false,
             keybindings: [
                 ("new_terminal".into(), "command+T".into()),
                 ("open_file".into(), "command+O".into()),
@@ -409,6 +419,10 @@ impl Settings {
             (9.0..=32.0).contains(&self.font_size),
             "Font size must be 9–32"
         );
+        ensure!(
+            (1..=30).contains(&self.editor_close_timeout_secs),
+            "Editor close timeout must be 1–30 seconds"
+        );
         Ok(())
     }
 }
@@ -419,6 +433,7 @@ pub const SHUTDOWN_IF_IDLE_CAPABILITY: &str = "shutdown-if-idle-v1";
 pub const STABLE_HELPER_CAPABILITY: &str = "stable-helper-v1";
 pub const SCREEN_CAPABILITY: &str = "screen-v1";
 pub const TERMINAL_NOTICES_CAPABILITY: &str = "terminal-notices-v1";
+pub const DIFF_CLOSE_SETTINGS_CAPABILITY: &str = "diff-close-settings-v1";
 pub const NOTIFICATION_SOUND_CAPABILITY: &str = "notification-sound-v1";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TerminalNotice {
@@ -432,6 +447,9 @@ pub struct TerminalNotice {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
+    /// Local async-client observation order; never sent or persisted.
+    #[serde(skip)]
+    pub client_observation: u64,
     pub catalog_revision: u64,
     pub generations: Vec<generations::Health>,
     pub daemon_version: Option<String>,
@@ -932,17 +950,7 @@ pub fn rpc(paths: &Paths, request: Request) -> Result<Response> {
         let response = snapshot::read_response(&mut stream)?;
         if let Response::Redirect { generation } = &response
             && generations::exists(paths)
-            && matches!(
-                &request,
-                Request::Create { .. }
-                    | Request::CreateReview { .. }
-                    | Request::AddProject { .. }
-                    | Request::SaveLayout { .. }
-                    | Request::SelectProject { .. }
-                    | Request::Settings(_)
-                    | Request::WorktreeAdd { .. }
-                    | Request::WorktreeRemove { .. }
-            )
+            && redirect_allowed(&request)
         {
             ensure!(
                 generations::Catalog::open(paths)?
@@ -956,6 +964,20 @@ pub fn rpc(paths: &Paths, request: Request) -> Result<Response> {
         return response.checked();
     }
     bail!("Active service changed repeatedly before execution; retry the operation")
+}
+
+fn redirect_allowed(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::Create { .. }
+            | Request::CreateReview { .. }
+            | Request::AddProject { .. }
+            | Request::SaveLayout { .. }
+            | Request::SelectProject { .. }
+            | Request::Settings(_)
+            | Request::WorktreeAdd { .. }
+            | Request::WorktreeRemove { .. }
+    )
 }
 
 fn fanout_owners(paths: &Paths, request: &Request) -> Result<()> {
@@ -1216,6 +1238,28 @@ mod tests {
     #[test]
     fn shell_quote_is_literal() {
         assert_eq!(quote("a'b$(x)"), "'a'\\''b$(x)'");
+    }
+    #[test]
+    fn new_settings_defaults_include_editor_close_timeout() {
+        let s = Settings::default();
+        assert_eq!(s.editor_close_timeout_secs, 1);
+    }
+    #[test]
+    fn new_settings_defaults_include_diff_split_default() {
+        let s = Settings::default();
+        assert!(!s.diff_split_default);
+    }
+    #[test]
+    fn settings_serialization_round_trips_new_fields() {
+        let s = Settings {
+            editor_close_timeout_secs: 5,
+            diff_split_default: true,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.editor_close_timeout_secs, 5);
+        assert!(restored.diff_split_default);
     }
 }
 

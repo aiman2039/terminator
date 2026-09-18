@@ -49,7 +49,9 @@ impl SettingsSection {
     fn keywords(self) -> &'static str {
         match self {
             Self::Appearance => "theme accent density color hex font",
-            Self::Terminal => "shell nvim editor neovim zsh bash fish folder access privacy",
+            Self::Terminal => {
+                "shell nvim editor neovim zsh bash fish folder access privacy diff split close timeout"
+            }
             Self::Notifications => "alert os desktop dismiss sound",
             Self::History => "days mib scrollback disk",
             Self::Shortcuts => "keymap command shortcut chord palette",
@@ -68,6 +70,49 @@ pub(crate) enum BrowseTarget {
 }
 
 impl App {
+    fn diff_close_settings(&mut self, ui: &mut egui::Ui) -> egui::Response {
+        let supported = self
+            .state
+            .capabilities
+            .iter()
+            .any(|c| c == DIFF_CLOSE_SETTINGS_CAPABILITY);
+        let response = ui.add_enabled_ui(supported, |ui| {
+            if self.field_visible("Diff default layout", "unified split side by side") {
+                settings_controls::settings_row(
+                    ui,
+                    "Diff default layout",
+                    "Default view for new native Git diffs.",
+                    |ui| {
+                        settings_controls::segmented(
+                            ui,
+                            &mut self.settings_draft.diff_split_default,
+                            &[("Unified", false), ("Side by side", true)],
+                        );
+                    },
+                );
+            }
+            if self.field_visible("Editor close timeout", "seconds delay quit") {
+                settings_controls::settings_row(
+                    ui,
+                    "Editor close timeout",
+                    "How long to wait for Neovim to close before force-stopping.",
+                    |ui| {
+                        ui.add(
+                            egui::Slider::new(
+                                &mut self.settings_draft.editor_close_timeout_secs,
+                                1..=30,
+                            )
+                            .suffix(" s"),
+                        );
+                    },
+                );
+            }
+        });
+        response.response.on_disabled_hover_text(
+            "These settings require an updated daemon. Restart it after finishing your live sessions.",
+        )
+    }
+
     pub(super) fn open_settings(&mut self) {
         self.settings_draft = self.state.settings.clone();
         shortcuts::fill_defaults(&mut self.settings_draft.keybindings);
@@ -551,6 +596,7 @@ impl App {
                 },
             );
         }
+        self.diff_close_settings(ui);
         if self.field_visible("Editor executable", "nvim neovim")
             && self.settings_draft.editor_mode != EditorMode::External
         {
@@ -966,9 +1012,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn older_daemons_cannot_edit_unsupported_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        for supported in [false, true] {
+            app.state.capabilities = if supported {
+                vec![DIFF_CLOSE_SETTINGS_CAPABILITY.into()]
+            } else {
+                vec![]
+            };
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                assert_eq!(app.diff_close_settings(ui).enabled(), supported);
+            });
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
     fn section_titles_match_fixture_targets() {
         assert_eq!(SettingsSection::Terminal.title(), "Terminal & Editor");
         assert_eq!(SettingsSection::Updates.title(), "Updates");
         assert_eq!(SettingsSection::ALL.len(), 7);
+    }
+
+    #[test]
+    fn diff_layout_and_close_timeout_keywords_match_field_names() {
+        let keywords = SettingsSection::Terminal.keywords();
+        assert!(
+            keywords.contains("diff"),
+            "Terminal section keywords should mention diff"
+        );
+        assert!(
+            keywords.contains("timeout"),
+            "Terminal section keywords should mention timeout"
+        );
+        assert!(
+            keywords.contains("split"),
+            "Terminal section keywords should mention split"
+        );
+        assert!(
+            keywords.contains("close"),
+            "Terminal section keywords should mention close"
+        );
     }
 }

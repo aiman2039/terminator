@@ -43,7 +43,9 @@ pub fn run() -> Result<()> {
         ensure!(
             state["selected_project"] == expected
                 && state["projects"].as_array().unwrap().len() == 2,
-            "Project selection must be idempotent"
+            "Project selection must be idempotent: expected {expected}, selected {}, projects {}",
+            state["selected_project"],
+            state["projects"].as_array().unwrap().len()
         );
         h.assert_pids(std::slice::from_ref(&s))?;
     }

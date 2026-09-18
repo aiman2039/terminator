@@ -1,4 +1,5 @@
 //! Repository automation in Rust. No Python interpreter or downloaded test runner.
+mod async_boundary;
 mod browser_fixture;
 mod harness;
 mod idle_fixture;
@@ -20,6 +21,8 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Task {
+    /// Reject disallowed blocking adapters in GUI and async-client sources.
+    AsyncBoundary,
     /// Compose local launch assets from validated native captures.
     LaunchAssets,
     /// Verify idle shells close without confirmation using isolated real shells.
@@ -156,6 +159,7 @@ fn main() -> Result<()> {
         return integration::git_shim();
     }
     match Args::parse().task {
+        Task::AsyncBoundary => async_boundary::run(),
         Task::LaunchAssets => launch::run(),
         Task::IdleClose => idle_fixture::run(),
         Task::BrowserCheck => browser_fixture::run(),

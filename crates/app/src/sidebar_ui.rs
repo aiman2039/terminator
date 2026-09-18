@@ -2,6 +2,20 @@
 use super::*;
 use std::cmp::Reverse;
 
+fn skip_clipped_git_row(ui: &mut egui::Ui) -> bool {
+    let rect = egui::Rect::from_min_size(
+        ui.next_widget_position(),
+        egui::vec2(ui.available_width(), 24.0),
+    );
+    if ui.is_rect_visible(rect) {
+        false
+    } else {
+        // egui scopes and allocate_space each consume one automatic ID.
+        ui.allocate_space(rect.size());
+        true
+    }
+}
+
 impl App {
     pub(super) fn explorer_tooltip(&self) -> String {
         let Some(cwd) = self.cwd() else {
@@ -1055,6 +1069,11 @@ impl App {
                         .default_open(true)
                         .show(ui, |ui| {
                             for change in entries {
+                                // Keep layout height without constructing thousands of off-screen
+                                // buttons, labels, tooltips, and context menus on every frame.
+                                if skip_clipped_git_row(ui) {
+                                    continue;
+                                }
                                 let name = change
                                     .path
                                     .strip_prefix(context.root.as_ref().unwrap())
@@ -1373,6 +1392,40 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_git_sidebar_only_builds_visible_rows() {
+        let ctx = egui::Context::default();
+        let mut rendered = 0;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.set_clip_rect(egui::Rect::from_min_size(
+                    ui.next_widget_position(),
+                    egui::vec2(300.0, 400.0),
+                ));
+                let start = ui.next_widget_position().y;
+                let stride = 24.0 + ui.spacing().item_spacing.y;
+                for _ in 0..23_315 {
+                    if skip_clipped_git_row(ui) {
+                        continue;
+                    }
+                    rendered += 1;
+                    appearance::file_row(
+                        ui,
+                        "file.rs",
+                        icons::file_icon(std::path::Path::new("file.rs")),
+                        false,
+                        24.0,
+                        "M",
+                        egui::Color32::WHITE,
+                    );
+                }
+                assert!((ui.next_widget_position().y - start - stride * 23_315.0).abs() < 2.0);
+            });
+        });
+        output.textures_delta.clear();
+        assert!(rendered > 0 && rendered < 40, "built {rendered} rows");
+    }
 
     #[test]
     fn message_preview_preserves_words_and_punctuation_without_markdown() {
