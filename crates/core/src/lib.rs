@@ -336,6 +336,8 @@ pub struct Settings {
     pub total_mib: u64,
     pub scrollback_lines: usize,
     pub font_size: f32,
+    pub editor_close_timeout_secs: u64,
+    pub diff_split_default: bool,
     pub keybindings: std::collections::BTreeMap<String, String>,
 }
 impl Default for Settings {
@@ -376,6 +378,8 @@ impl Default for Settings {
             total_mib: 2048,
             scrollback_lines: 10_000,
             font_size: 13.0,
+            editor_close_timeout_secs: 1,
+            diff_split_default: false,
             keybindings: [
                 ("new_terminal".into(), "command+T".into()),
                 ("open_file".into(), "command+O".into()),
@@ -409,6 +413,10 @@ impl Settings {
             (9.0..=32.0).contains(&self.font_size),
             "Font size must be 9–32"
         );
+        ensure!(
+            (1..=30).contains(&self.editor_close_timeout_secs),
+            "Editor close timeout must be 1–30 seconds"
+        );
         Ok(())
     }
 }
@@ -419,6 +427,7 @@ pub const SHUTDOWN_IF_IDLE_CAPABILITY: &str = "shutdown-if-idle-v1";
 pub const STABLE_HELPER_CAPABILITY: &str = "stable-helper-v1";
 pub const SCREEN_CAPABILITY: &str = "screen-v1";
 pub const TERMINAL_NOTICES_CAPABILITY: &str = "terminal-notices-v1";
+pub const DIFF_CLOSE_SETTINGS_CAPABILITY: &str = "diff-close-settings-v1";
 pub const NOTIFICATION_SOUND_CAPABILITY: &str = "notification-sound-v1";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TerminalNotice {
@@ -1216,6 +1225,28 @@ mod tests {
     #[test]
     fn shell_quote_is_literal() {
         assert_eq!(quote("a'b$(x)"), "'a'\\''b$(x)'");
+    }
+    #[test]
+    fn new_settings_defaults_include_editor_close_timeout() {
+        let s = Settings::default();
+        assert_eq!(s.editor_close_timeout_secs, 1);
+    }
+    #[test]
+    fn new_settings_defaults_include_diff_split_default() {
+        let s = Settings::default();
+        assert!(!s.diff_split_default);
+    }
+    #[test]
+    fn settings_serialization_round_trips_new_fields() {
+        let s = Settings {
+            editor_close_timeout_secs: 5,
+            diff_split_default: true,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.editor_close_timeout_secs, 5);
+        assert!(restored.diff_split_default);
     }
 }
 

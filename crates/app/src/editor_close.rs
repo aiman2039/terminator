@@ -6,8 +6,7 @@ use std::{
 };
 use terminator_core::*;
 
-const QUIT_TIMEOUT: Duration = Duration::from_secs(2);
-const CLOSE_WAIT: Duration = Duration::from_secs(2);
+const QUIT_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -21,12 +20,12 @@ pub enum Mode {
     Discard,
 }
 
-pub fn close(paths: &Paths, ids: &[String], mode: Mode) -> Result<()> {
+pub fn close(paths: &Paths, ids: &[String], mode: Mode, timeout: Duration) -> Result<()> {
     let state = snapshot(paths)?;
     let live = live_editors(&state, ids)?;
     preflight(paths, &live, mode)?;
     request_quit(paths, &state, &live, mode)?;
-    finish_close(paths, ids, mode)
+    finish_close(paths, ids, mode, timeout)
 }
 
 fn snapshot(paths: &Paths) -> Result<Box<State>> {
@@ -206,13 +205,13 @@ fn wait_until_closed(paths: &Paths, ids: &[String], timeout: Duration, mode: Mod
     }
 }
 
-fn finish_close(paths: &Paths, ids: &[String], mode: Mode) -> Result<()> {
-    if wait_until_closed(paths, ids, CLOSE_WAIT, mode)? {
+fn finish_close(paths: &Paths, ids: &[String], mode: Mode, timeout: Duration) -> Result<()> {
+    if wait_until_closed(paths, ids, timeout, mode)? {
         return Ok(());
     }
     if mode == Mode::Discard {
         stop_live(paths, ids)?;
-        if wait_until_closed(paths, ids, CLOSE_WAIT, mode)? {
+        if wait_until_closed(paths, ids, timeout, mode)? {
             return Ok(());
         }
     }

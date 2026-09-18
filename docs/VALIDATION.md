@@ -2317,3 +2317,20 @@ run; no live user service was restarted and `AGENTS.md` was unchanged.
   close and Open as text passed. Captures are under that output directory.
   Egui captures exclude the OS webview overlay, so they do not prove its pixels.
   macOS 12–13 fallback, Linux rendering and live radio/audio output remain untested.
+
+## 2026-09-18 — Diff preview and settings review fixes
+
+- New diff-layout and editor-close-timeout controls require the daemon's
+  `diff-close-settings-v1` capability; older daemons show disabled controls with
+  an explanation instead of silently losing changes.
+- Markdown diff snapshots reuse the editor preview's document-relative link
+  resolution, scheme filtering, bounded local-image loader and resource cleanup.
+  Reopening a diff applies both Unified and Side by side defaults explicitly.
+- Focused regressions cover capability-gated controls, reopening after switching
+  the default to Unified, snapshot links/images, refreshed link hooks and cleanup.
+- `cargo test --workspace --all-features --locked --offline -- --test-threads=1`:
+  391 passed, one existing real-PTY test ignored. Workspace Clippy with all
+  targets/features and `-D warnings`, formatting and diff whitespace checks passed.
+- Native GUI clicks and a live older daemon were not exercised; compatibility
+  gating and rendering were verified with isolated state and headless egui tests.
+  No live daemon was restarted.

@@ -63,6 +63,8 @@ pub struct SplitRow {
 pub struct DiffDocument {
     pub left_label: String,
     pub right_label: String,
+    pub left_text: String,
+    pub right_text: String,
     pub unified: Vec<DiffLine>,
     pub split: Vec<SplitRow>,
 }
@@ -409,6 +411,8 @@ fn build(path: &Path, left: &str, right: &str, staged: bool) -> DiffDocument {
     DiffDocument {
         left_label: if staged { "HEAD" } else { "Index" }.into(),
         right_label: if staged { "Index" } else { "Working tree" }.into(),
+        left_text: left.into(),
+        right_text: right.into(),
         unified,
         split,
     }
@@ -568,6 +572,14 @@ mod tests {
         .unwrap();
         assert_eq!(staged.left_label, "HEAD");
         assert_eq!(staged.right_label, "Index");
+        assert_eq!(
+            staged.left_text, "fn main() { base(); }\n",
+            "left_text should contain the old blob content"
+        );
+        assert_eq!(
+            staged.right_text, "fn main() { staged(); }\n",
+            "right_text should contain the staged content"
+        );
         let joined: String = staged
             .unified
             .iter()
@@ -589,6 +601,14 @@ mod tests {
             staged: false,
         })
         .unwrap();
+        assert_eq!(
+            working.left_text, "fn main() { staged(); }\n",
+            "working left_text should be the staged content"
+        );
+        assert_eq!(
+            working.right_text, "fn main() { working(); }\n",
+            "working right_text should be the working tree content"
+        );
         let joined: String = working
             .unified
             .iter()

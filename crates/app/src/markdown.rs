@@ -247,6 +247,7 @@ fn prepare(snapshot: Snapshot) -> Document {
 
 pub struct Preview {
     document: Option<Document>,
+    snapshot_source: Option<(PathBuf, String)>,
     error: Option<String>,
     cache: CommonMarkCache,
     pub editor_focused: bool,
@@ -256,6 +257,7 @@ impl Default for Preview {
     fn default() -> Self {
         Self {
             document: None,
+            snapshot_source: None,
             error: None,
             cache: CommonMarkCache::default(),
             editor_focused: true,
@@ -438,6 +440,24 @@ impl Previews {
         self.retained.insert(sid.into());
         self.entries.entry(sid.into()).or_default()
     }
+    /// Render immutable Git content through the same resolver and bounded image loader.
+    pub fn snapshot(&mut self, key: &str, path: &Path, text: &str) -> &mut Preview {
+        let preview = self.retain(key);
+        if !preview
+            .snapshot_source
+            .as_ref()
+            .is_some_and(|(old_path, old_text)| old_path == path && old_text == text)
+        {
+            preview.apply(Ok(prepare(Snapshot {
+                path: path.to_owned(),
+                text: text.to_owned(),
+                revision: None,
+                paused: false,
+            })));
+            preview.snapshot_source = Some((path.to_owned(), text.to_owned()));
+        }
+        preview
+    }
     pub fn watch(&mut self, source: Source) {
         self.visible.push(source);
     }
@@ -493,6 +513,50 @@ mod tests {
             revision: None,
             paused: false,
         }
+    }
+
+    #[test]
+    fn diff_snapshots_resolve_links_refresh_and_release_resources() {
+        let ctx = egui::Context::default();
+        let mut previews = Previews::new(&ctx);
+        let path = Path::new("/repo/docs/readme.md");
+        previews.begin_frame();
+        let preview = previews.snapshot(
+            "diff:left",
+            path,
+            "[Next](../next.md) ![pic](images/a.png) [bad](command:run)",
+        );
+        let doc = preview.document.as_ref().unwrap();
+        assert_eq!(
+            doc.links["../next.md"],
+            Some(Link::File("/repo/next.md".into()))
+        );
+        assert_eq!(doc.links["command:run"], None);
+        assert!(
+            doc.images
+                .contains("markdown-image:file:///repo/docs/images/a.png")
+        );
+        assert_eq!(preview.cache.get_link_hook("../next.md"), Some(false));
+        previews.snapshot("diff:right", path, "# Right snapshot");
+        previews.end_frame(&ctx);
+        assert_eq!(previews.entries.len(), 2);
+        previews.begin_frame();
+        let preview = previews.snapshot("diff:left", path, "[New](new.md)");
+        assert!(
+            !preview
+                .document
+                .as_ref()
+                .unwrap()
+                .links
+                .contains_key("../next.md")
+        );
+        assert_eq!(preview.cache.get_link_hook("../next.md"), None);
+        assert_eq!(preview.cache.get_link_hook("new.md"), Some(false));
+        previews.end_frame(&ctx);
+        assert_eq!(previews.entries.len(), 1);
+        previews.begin_frame();
+        previews.end_frame(&ctx);
+        assert!(previews.entries.is_empty());
     }
 
     #[test]

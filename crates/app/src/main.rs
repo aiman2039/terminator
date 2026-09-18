@@ -166,7 +166,12 @@ enum Job {
     ExitSave(u64, exit::Checkpoint),
     SaveAppearance(Box<AppearanceConfig>, String),
     HookStatus,
-    CloseEditors(editor_close::Target, Vec<String>, editor_close::Mode),
+    CloseEditors(
+        editor_close::Target,
+        Vec<String>,
+        editor_close::Mode,
+        Duration,
+    ),
     ResolveTarget(String, String, PathBuf),
     Browser(String),
     PasteClipboard(String),
@@ -521,8 +526,8 @@ fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update
                             .map_err(|e| format!("{e:#}"));
                             tx.send(Update::IdleClosed(target, ids, result))?;
                         }
-                        Job::CloseEditors(target, ids, mode) => {
-                            let result = editor_close::close(&paths, &ids, mode)
+                        Job::CloseEditors(target, ids, mode, timeout) => {
+                            let result = editor_close::close(&paths, &ids, mode, timeout)
                                 .map_err(|e| format!("{e:#}"));
                             tx.send(Update::EditorsClosed(target, ids, result))?;
                         }
@@ -833,6 +838,7 @@ struct App {
     texts: HashMap<String, String>,
     diffs: HashMap<String, Result<diff::DiffDocument, String>>,
     diff_split: HashSet<String>,
+    diff_preview: HashSet<String>,
     loading: HashSet<String>,
     dirs: HashMap<PathBuf, Vec<services::Entry>>,
     directory_errors: HashMap<PathBuf, services::DirectoryError>,
@@ -1012,6 +1018,7 @@ impl App {
             texts: HashMap::new(),
             diffs: HashMap::new(),
             diff_split: HashSet::new(),
+            diff_preview: HashSet::new(),
             loading: HashSet::new(),
             dirs: HashMap::new(),
             directory_errors: HashMap::new(),
@@ -2544,7 +2551,13 @@ impl App {
                 .add(id(), tab.clone());
             self.active_session = None;
             self.diffs.remove(&tab.key());
+            self.diff_preview.remove(&tab.key());
             self.loading.insert(tab.key());
+            if self.state.settings.diff_split_default {
+                self.diff_split.insert(tab.key());
+            } else {
+                self.diff_split.remove(&tab.key());
+            }
             self.error = None;
             if self.neovim_review_unavailable() {
                 self.info = Some("Using built-in diff. Neovim review needs the updated daemon; restart it after finishing your live sessions.".into());
@@ -2707,7 +2720,10 @@ impl App {
             return;
         }
         self.editor_close_sessions.extend(ids.iter().cloned());
-        let _ = self.jobs.send(Job::CloseEditors(target, ids, mode));
+        let timeout = Duration::from_secs(self.state.settings.editor_close_timeout_secs);
+        let _ = self
+            .jobs
+            .send(Job::CloseEditors(target, ids, mode, timeout));
     }
 }
 impl eframe::App for App {
@@ -4028,7 +4044,7 @@ mod navigation_tests {
         );
         assert!(matches!(
             requests.try_recv().unwrap(),
-            Job::CloseEditors(_, _, editor_close::Mode::Discard)
+            Job::CloseEditors(_, _, editor_close::Mode::Discard, _)
         ));
         app.close_editors(
             editor_close::Target::Pane("file".into()),

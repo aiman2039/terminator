@@ -1299,6 +1299,7 @@ fn main() -> Result<()> {
         NVIM_REVIEW_CAPABILITY.into(),
         TERMINAL_NOTICES_CAPABILITY.into(),
         NOTIFICATION_SOUND_CAPABILITY.into(),
+        DIFF_CLOSE_SETTINGS_CAPABILITY.into(),
         WORKTREES_CAPABILITY.into(),
         SCREEN_CAPABILITY.into(),
         METADATA_SETTINGS_CAPABILITY.into(),
