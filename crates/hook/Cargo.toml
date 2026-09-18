@@ -27,7 +27,7 @@ features = ["derive"]
 version = "5"
 
 [dependencies.tungstenite]
-version = "0.28"
+version = "0.30"
 default-features = false
 features = ["handshake"]
 

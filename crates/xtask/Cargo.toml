@@ -28,6 +28,6 @@ core-graphics = { version = "0.23", features = ["elcapitan"] }
 core-foundation = "0.10"
 
 [dependencies.tungstenite]
-version = "0.28"
+version = "0.30"
 default-features = false
 features = ["handshake"]
