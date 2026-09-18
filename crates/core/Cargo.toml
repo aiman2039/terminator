@@ -39,7 +39,7 @@ optional = true
 tempfile = "3"
 
 [dependencies.sysinfo]
-version = "0.38"
+version = "0.39"
 default-features = false
 features = ["system"]
 

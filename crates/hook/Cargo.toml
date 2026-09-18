@@ -14,7 +14,7 @@ base64.workspace = true
 libc.workspace = true
 fs2 = "0.4"
 signal-hook = "0.3"
-sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 
 [dev-dependencies]
 tempfile = "3"
