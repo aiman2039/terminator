@@ -17,18 +17,24 @@ impl Exit {
 }
 
 pub(super) struct Checkpoint {
-    layouts: Vec<(String, serde_json::Value)>,
+    layouts: Vec<(String, Workspace)>,
     preferences: Option<UiPreferences>,
     selected: Option<String>,
     focused: Option<String>,
 }
 impl Checkpoint {
+    #[cfg(test)]
     pub fn save(self, paths: &Paths) -> Result<()> {
         let mut requests = self
             .layouts
             .into_iter()
-            .map(|(project, layout)| Request::SaveLayout { project, layout })
-            .collect::<Vec<_>>();
+            .map(|(project, layout)| {
+                Ok(Request::SaveLayout {
+                    project,
+                    layout: sanitize_layout(serde_json::to_value(layout)?),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         if let Some(project) = self.selected {
             requests.push(Request::SelectProject { project });
         }
@@ -47,11 +53,51 @@ impl Checkpoint {
         }
         Ok(())
     }
+    pub async fn save_async(self, client: &async_client::Client) -> Result<()> {
+        let mut requests = client
+            .catalog
+            .run(&async_service::CancellationToken::new(), move || {
+                self.layouts
+                    .into_iter()
+                    .map(|(project, layout)| {
+                        Ok(Request::SaveLayout {
+                            project,
+                            layout: sanitize_layout(serde_json::to_value(layout)?),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .await?;
+        if let Some(project) = self.selected {
+            requests.push(Request::SelectProject { project });
+        }
+        if let Some(session) = self.focused {
+            requests.push(Request::Focus { session });
+        }
+        requests.push(Request::Heartbeat { focused: false });
+        for request in requests {
+            anyhow::ensure!(
+                matches!(client.rpc(request).await?, Response::Ok),
+                "Exit persistence was not acknowledged"
+            );
+        }
+        if let Some(preferences) = self.preferences {
+            let data = client.paths.data.clone();
+            client
+                .catalog
+                .run(&async_service::CancellationToken::new(), move || {
+                    preferences.save(&data)
+                })
+                .await?;
+        }
+        Ok(())
+    }
 }
 impl App {
     pub(super) fn begin_exit(&mut self) {
         if !self.exit.active() {
             self.player.stop();
+            self.services.pause_reads(true);
             self.browser_host.shutdown();
             self.exit_attempt = self.exit_attempt.wrapping_add(1);
             self.exit = Exit::Waiting(Instant::now());
@@ -59,9 +105,13 @@ impl App {
     }
     pub(super) fn native_installation_cancelled(&mut self) {
         self.exit = Exit::Idle;
+        self.services.pause_reads(false);
+        self.services.handle().reopen_admission();
     }
     pub(super) fn cancel_exit(&mut self, error: String) {
         self.exit = Exit::Idle;
+        self.services.pause_reads(false);
+        self.services.handle().reopen_admission();
         self.error = Some(format!(
             "Could not close Terminator: {error}. Please retry closing."
         ));
@@ -73,13 +123,8 @@ impl App {
                 .layouts
                 .iter()
                 .filter(|(project, _)| !self.layout_readonly.contains(*project))
-                .map(|(project, layout)| {
-                    Ok((
-                        project.clone(),
-                        sanitize_layout(serde_json::to_value(layout)?),
-                    ))
-                })
-                .collect::<Result<_>>()?,
+                .map(|(project, layout)| (project.clone(), layout.clone()))
+                .collect(),
             preferences: self.preferences_writable.then(|| self.preferences.clone()),
             selected: self.selected.clone(),
             focused: self.active_session.clone(),
@@ -92,6 +137,42 @@ impl App {
         };
         if started.elapsed() > Duration::from_secs(15) {
             self.cancel_exit("Timed out waiting for pending operations or persistence".into());
+            return;
+        }
+        if let Some(services) = &self.jobs.services {
+            let applied = self.service_ready.is_empty()
+                && self.service_owner.events.is_empty()
+                && !self.service_owner.supervisor.has_results()
+                && self
+                    .service_owner
+                    .snapshot
+                    .try_lock()
+                    .ok()
+                    .is_some_and(|state| state.is_none());
+            if matches!(self.exit, Exit::Waiting(_))
+                && !self.picker_active
+                && services.idle()
+                && applied
+            {
+                match self.exit_checkpoint() {
+                    Ok(checkpoint) => {
+                        self.exit = Exit::Saving(started, self.exit_attempt);
+                        if self
+                            .jobs
+                            .send(Job::ExitSave(self.exit_attempt, checkpoint))
+                            .is_err()
+                        {
+                            self.cancel_exit(
+                                "Services are busy; final checkpoint was not admitted".into(),
+                            );
+                        } else {
+                            self.services.handle().close_admission();
+                        }
+                    }
+                    Err(error) => self.cancel_exit(format!("{error:#}")),
+                }
+            }
+            ctx.request_repaint_after(Duration::from_millis(20));
             return;
         }
         if matches!(self.exit, Exit::Waiting(_)) && !self.picker_active {
@@ -112,18 +193,27 @@ impl App {
 /// is itself drained before taking the final GUI snapshot.
 #[derive(Clone)]
 pub(super) struct JobQueue {
-    sender: Sender<Job>,
+    sender: Option<Sender<Job>>,
+    services: Option<gui_services::Services>,
     serial: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 impl From<Sender<Job>> for JobQueue {
     fn from(sender: Sender<Job>) -> Self {
         Self {
-            sender,
+            sender: Some(sender),
+            services: None,
             serial: Default::default(),
         }
     }
 }
 impl JobQueue {
+    pub fn supervised(services: gui_services::Services) -> Self {
+        Self {
+            sender: None,
+            services: Some(services),
+            serial: Default::default(),
+        }
+    }
     pub fn serial(&self) -> u64 {
         self.serial.load(std::sync::atomic::Ordering::Acquire)
     }
@@ -132,7 +222,11 @@ impl JobQueue {
             self.serial
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         }
-        self.sender.send(job).map_err(|_| ())
+        if let Some(services) = &self.services {
+            services.send(job)
+        } else {
+            self.sender.as_ref().ok_or(())?.send(job).map_err(|_| ())
+        }
     }
 }
 
@@ -272,7 +366,7 @@ mod tests {
             checkpoint
                 .layouts
                 .iter()
-                .any(|(_, layout)| layout.to_string().contains("editor"))
+                .any(|(_, layout)| serde_json::to_string(layout).unwrap().contains("editor"))
         );
         app.layout_readonly.insert("project".into());
         assert!(app.exit_checkpoint().unwrap().layouts.is_empty());

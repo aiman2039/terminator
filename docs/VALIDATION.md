@@ -2334,3 +2334,110 @@ run; no live user service was restarted and `AGENTS.md` was unchanged.
 - Native GUI clicks and a live older daemon were not exercised; compatibility
   gating and rendering were verified with isolated state and headless egui tests.
   No live daemon was restarted.
+
+## 2026-09-18: responsive GUI services
+
+The GUI now uses tracked async services, bounded native pools, async Unix IPC and
+Neovim transport, an async temporary-child supervisor, prepared PCM audio output,
+and an operation-based exit checkpoint. No running user daemon was restarted,
+no release was deployed, and AGENTS.md was unchanged.
+
+### Automated and native evidence
+
+- Formatting, workspace Clippy with all targets/features and warnings denied,
+  workspace builds, and the async-boundary source guard passed.
+- Serial macOS workspace tests passed: 299 app, 65 core, 22 daemon, 12 hook,
+  9 integrations, and 8 xtask tests. Explicit hardware/PTY tests are separate.
+- Real-PTY integration passed with isolated state, including reconnect identity,
+  worktrees, oversized snapshots, history, helper recovery, and shutdown safety.
+- Release native fixtures passed for editor lifecycle, clean/dirty file close,
+  focus/close, Markdown, blocking Markdown prompts, images, reviews, legacy
+  daemons, GUI control, and multiple daemon generations. Captures are under
+  `target/validation/async-services-final/`.
+- Independent Linux workspace builds/tests and real-PTY integration passed in a
+  disposable container. With Neovim 0.11.5, the Xvfb images, file-close,
+  Markdown, reviews, legacy-diff, and control fixtures all passed.
+- The muted live 103FM check produced PCM on the default output device in
+  5,097.5 ms and released the stopped pipeline in 56.3 ms. This is one bounded
+  network/device observation, not a service-availability guarantee.
+- The muted local-audio check passed pause, seek while paused, resume, and natural
+  completion using a generated WAV and the real default output device.
+
+Focused regressions cover bounded admission, queued/executing cancellation,
+panics, continuous reaping, blocked native workers, process-group cleanup,
+fragmented/oversized IPC, uncertain mutations without replay, independent editor
+progress during simultaneous radio/Git/Neovim stalls, stale snapshot ordering,
+unavailable-owner records, preview cancellation, and GUI request deadlines.
+Native tests exposed and fixed non-finite initial image-scene geometry and duplicate
+editor creation on rapid explorer clicks. A cancelled Markdown preparation now
+forces a fresh read without replacing cached unsaved text during a prompt.
+
+### Release measurements
+
+The same isolated fixture drove 100 rapid station switches and focus actions with
+loopback radio/Neovim servers withholding responses and a stalled mock Git child.
+The pre-change build came from the recorded Git HEAD with instrumentation only;
+the original services/audio engine were retained. The corrected harness launched
+both versions. The baseline does not expose pipeline cleanup counters, so its
+Stop figure is acknowledgment latency only.
+
+| Measurement | Pre-change release | Migrated release |
+| --- | ---: | ---: |
+| Focus acknowledgment p95 | 35.36 ms | 16.75 ms |
+| Station-switch acknowledgment p95 | 49.85 ms | 15.99 ms |
+| Stop acknowledgment | 32.29 ms | 11.67 ms |
+| Maximum UI result-processing pass | 3.03 ms | 0.30 ms |
+| RSS before / after short run | 190,624 / 203,280 KiB | 198,192 / 206,976 KiB |
+| Threads before / after | 28 / 33 | 30 / 29 |
+| Descriptors before / after | 38 / 38 | 46 / 43 |
+
+Reports and baseline instrumentation are in:
+
+- `target/validation/async-services-baseline/`
+- `target/validation/async-services-release-short/`
+- `target/validation/async-services-soak/partial-soak.json` (stopped at the user's
+  request; last resource sample at 1676 seconds, not a completed
+  30-minute acceptance run)
+
+CPU percentages are observations, not portable assertions. The extended fixture
+forces repeated rendering of six terminal panes; a CPU sample during the soak
+showed terminal rendering/OpenGL work while async and decoder workers were parked.
+The sample is in `target/validation/async-services-audit/soak-cpu-sample.txt`.
+The result-processing timer measures service-result application, not all renderer
+or OS compositor work. Audible quality and Linux physical audio hardware were not
+validated; the device checks were muted on macOS.
+
+### Fixture isolation incident
+
+Early fixture runs inherited `TERMINATOR_CATALOG_DATA`, catalog runtime and
+generation variables from the parent environment. Despite temporary data paths,
+the fixture daemon accessed shared project/settings catalog state. This explains
+the initial integration failure reporting 26 projects and invalidates those early
+runs as isolated evidence. The harness now removes every inherited `TERMINATOR_*`
+variable before applying fixture-owned values, with a regression test. Daemon
+startup now also rejects a generation whose registered endpoint does not match
+its data/runtime paths.
+
+A read-only audit found 10 project records matching the temporary-fixture path
+pattern, including an ID from this run. The audit is
+`/tmp/terminator-fixture-catalog-audit.json`, without credentials. Shared settings
+were written by affected fixtures, but their previous values are not known. No
+live-catalog cleanup or guessed settings rollback was performed. All subsequently
+reported integration/native results used the corrected isolation.
+
+### Fixture catalog repair (2026-09-18)
+
+At the user's request, removed the ten audited temporary-fixture project entries
+under the daemon's coordination lock in a single SQLite transaction. None had
+session references in registered generation stores; all 16 other projects,
+settings, selected project, worktrees, and session stores were preserved. A
+private SQLite backup was saved beside the catalog as
+`catalog.before-fixture-repair-20260918T183633.sqlite3`. Integrity and post-write
+checks passed, and a subsequent read confirmed zero audited fixture entries.
+
+Before repair, the current shell was already `/bin/zsh`; current settings agreed
+across the saved generation states. No settings rollback was needed for the
+observed `/bin/sh` override, and no older settings snapshot was applied. This
+does not reconstruct an exact pre-incident settings history. Repair evidence is
+in `/tmp/terminator-fixture-catalog-repair.json`. No daemon was restarted and no
+session was stopped.

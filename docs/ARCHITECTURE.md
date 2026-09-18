@@ -65,8 +65,8 @@ Embedded mode starts a real Neovim process with a private RPC endpoint and the u
 
 Markdown is a presentation mode of an existing editor session, not another dock
 tab identity or PTY. `markdown.rs` renders through `egui_commonmark`, and
-`ui-preferences.json` stores modes by session ID. A separate worker polls only
-visible previews at 350 ms intervals. It uses bounded MessagePack requests on the
+`ui-preferences.json` stores modes by session ID. A tracked async actor polls visible previews at 350 ms intervals, with bounded
+concurrency across editors. It uses bounded MessagePack requests on the
 editor's existing Neovim socket, checking fast `nvim_get_mode` before requesting
 text with `nvim_exec_lua`. No client process, new daemon request or runtime plugin
 is needed, so older running daemons remain compatible. The expression resolves the
@@ -83,7 +83,7 @@ not trigger filename clicks or close the editor accidentally.
 
 Watch generations reject delayed results after navigation. Failed refreshes keep
 the last preview with an error label. Local Markdown images use the bounded image
-decoder on a separate worker, with a 32-image/64 MiB cache and stale-result
+decoder through the shared filesystem/CPU pools, with a 32-image/64 MiB cache and stale-result
 rejection. Hidden tabs release preview caches and image textures. Markdown links
 are routed to explicit local-file or HTTP(S) opening actions; remote image fetches
 and HTML execution are absent. Preview focus suppresses editor input, while the
@@ -115,14 +115,13 @@ symlink aliases. Missing process identity/directory information refuses removal.
 Creation, cwd reports and removal share a coordinator lock. Process inspection
 is a point-in-time check; it cannot lock out arbitrary external OS or Git actions.
 
-Image previews belong to the GUI and allocate no PTYs. A dedicated bounded worker
-loads raster/SVG data, with stale-generation rejection and a texture-memory budget.
+Image previews belong to the GUI and allocate no PTYs. Bounded filesystem and CPU workers
+load raster/SVG data, with stale-generation rejection and a texture-memory budget.
 Only paths are persisted in version-3 image-bearing layouts. HTML and http(s) pages use GUI-only `Tab::Browser` (layout version 6) with an OS
 webview child view. v4 `Html` tabs migrate to `Browser` file targets. Covered
-panes hide the native view. Audio player tabs are GUI-only layout version 5: one
-player per project, `rodio` on a worker for local files and HTTP(S) Icecast/Shoutcast
-streams. Playback stops when the GUI exits or the player tab closes. Radio UI is
-native egui. Unknown layout versions remain read-only. Explicit text/external
+panes hide the native view. Legacy Player tabs (layout version 5) migrate to the single global Player window.
+Playback is GUI-only and uses the bounded async/native pipeline described below.
+Closing that window does not stop playback; GUI exit does. Radio UI is native egui. Unknown layout versions remain read-only. Explicit text/external
 actions retain the editor paths. Open in browser still uses the system-browser worker.
 
 `gui.sock` is a separate, mode-0600 authenticated GUI endpoint for explicit
@@ -155,13 +154,13 @@ tungstenite; no Chromium, Electron, or webview is bundled into the app.
 Worker/IPC responses, native exit requests, exit checkpoints and heartbeats run
 in `eframe::App::logic`, which is called on repaint requests even when the window
 is minimized or hidden. Rendering stays in `App::ui`. Heartbeats pause during the
-exit checkpoint so they cannot keep its job drain busy. Queued GUI requests carry
+exit checkpoint so they cannot keep its operation barrier busy. Queued GUI requests carry
 the server's response deadline; expired requests are rejected before acting,
 preventing a timed-out request from executing when an old UI queue resumes.
 
 Window close, native Quit and Sparkle share the GUI's asynchronous exit
-coordinator. A worker drain applies pending results; follow-up jobs trigger a
-further drain before the final layout/focus/preference checkpoint. Successful
+coordinator. An operation barrier applies accepted mutation results and their follow-up work
+before the final layout/focus/preference checkpoint. Successful
 write acknowledgments permit exit; errors or a deadline restore interaction.
 The macOS bridge intercepts `NSApplication.terminate:` while retaining winit's
 delegate and calls its original implementation on the main queue after saving.
@@ -235,7 +234,7 @@ permission change invalidates cached health. Status diagnostics show GUI/daemon
 versions and the daemon path; live sessions always prevent automatic retirement.
 
 For legacy services, Settings → Updates → Installation lists live sessions with ordinary navigation
-back to their tabs. Explicit repair saves the workspace on the GUI worker,
+back to their tabs. Explicit repair saves the workspace through the GUI service supervisor,
 rechecks the observed daemon generation/version/capability and sends only
 `ShutdownIfIdle`. After the socket is removed and lock is released it starts the
 installed daemon and verifies its new generation and private helper. Concurrent
@@ -320,3 +319,121 @@ Radio mode loads `assets/radio/stations.json` (merged catalogs). Custom stations
 persist in ui-preferences. Playlist stacks match Webamp ADD/REM/SEL/MISC/LIST.
 Shuffle uses a remaining-track
 bag; repeat wraps sequential play and reshuffles the bag.
+
+## GUI service execution and shutdown
+
+`gui_services::Services` replaces the shared sequential GUI worker. One
+`async_service::Supervisor` owns a Tokio runtime with two executor threads and a
+coordinator thread. Its `JoinSet` continuously reaps completions and panics.
+Ordinary operations have IDs, subsystem/resource identity, optional originating
+project/tab/session, generation, deadline, and cancellation policy. Admission is
+nonblocking: 32 ordinary tasks, 128 queued requests, and 128 completion slots.
+Long-lived actors are tracked separately, capped at 16. Replaceable reads cancel
+obsolete requests for the same key; accepted mutations remain tracked through
+acknowledgment or an explicit uncertain result. Editor mutations also acquire
+sorted per-editor locks, so independent editors progress concurrently.
+
+| Work | Application-owned execution bound |
+| --- | --- |
+| HTTP, IPC, Neovim, timers | Two async executor threads |
+| Temporary Git/metadata children | Four concurrent children, serialized by canonical common Git directory |
+| File acquisition and directory enumeration | Two native workers |
+| Catalog, tokens, configuration and local persistence | One native worker |
+| Images, diffs/highlighting, Markdown preparation and FFT | Two native CPU workers |
+| Continuous audio decoding/resampling | One native worker |
+| Synchronous platform adapters | One native worker |
+
+Each native pool has eight queued slots. Dropping an awaiting future cancels its
+queued native call. An executing synchronous library call retains its worker and
+occupancy until it returns; no replacement thread is created. Small bounded
+protocol messages can be encoded/decoded on the async executor so a stalled image
+library cannot monopolize editor control acknowledgments. Large messages use the
+CPU pool. Native font/image libraries may themselves perform synchronous reads;
+these calls remain confined to the bounded native pool.
+
+Snapshots use a latest-value slot, avoiding a backlog of full state copies.
+Mutating completions stay owned until the UI applies their results and any
+follow-up jobs. Other actor events use a 32-entry channel; Markdown has eight
+result slots. Service results and terminal events each yield after 64 messages or
+2 ms between handlers, then request another repaint. No handler can be preempted
+mid-call. Diff documents use `Arc`, previous successful previews remain visible
+while refreshing, and radio listings/filter results are cached until their inputs
+change. Filesystem notifications and selection changes use latest-value channels;
+a notification burst becomes a full rescan, with no accumulated path queue.
+
+The optional `terminator-core/async-client` feature retains the synchronous
+CLI/daemon APIs. Both clients share owner routing and the redirect allowlist.
+Socket framing retains authentication, the 8 MiB frame limit, chunk validation,
+capability checks and historical-owner routing. Async snapshot assembly has a
+256 MiB decoded ceiling, aggregates at most four owners concurrently, and rejects
+an active-owner change during assembly. Older revisions cannot overwrite newer
+GUI observations. Only explicit pre-execution redirects are retried; connection
+loss after a mutating write is an `UncertainMutation`, never an automatic replay.
+Neovim reads validate request IDs and share one response deadline, including the
+400 ms Markdown preview limit and blocking-prompt handling.
+
+Temporary subprocesses concurrently drain bounded stdout/stderr and feed stdin.
+Cancellation/timeout kills the process group and awaits child reaping, including
+inherited-pipe cases. External editors and detached recovery helpers have separate
+tracked observers and are never killed by that temporary-child policy. Existing
+pre-GUI daemon bootstrap/recovery code keeps its session-preserving synchronous
+compatibility path; GUI-triggered platform recovery runs on the native adapter.
+
+Quit pauses disposable refreshes, cancels replaceable reads, waits for accepted
+mutations and unapplied results, then clones the final checkpoint. Serialization
+and writes run off the UI thread. Admission closes after the checkpoint is
+accepted. Successful acknowledgments permit exit; the existing 15-second deadline
+or a write failure restores interaction and admission. Unknown layout versions
+remain read-only. Runtime destruction happens on the coordinator thread, never in
+an eframe callback; optional stuck native calls may survive until process exit.
+No daemon protocol or persisted layout/configuration format changed.
+
+### Audio pipeline
+
+A reusable async reqwest/Rustls client uses an explicit Hickory resolver. Resolver
+configuration and hosts-file loading happen on the native catalog worker.
+Compressed chunks are 16 KiB: 14 queued chunks plus one sender and one decoder
+chunk fit 256 KiB, excluding HTTP/TLS library buffers. PCM is an `rtrb` ring holding
+at most two seconds and capped at 4 MiB. Playback starts after 250 ms of prepared
+samples, or EOF for a shorter file. Rodio decodes/resamples only on the native
+worker. Prepared samples go directly to CPAL (Rodio's backend): its application
+callback only reads rings/atomics and produces samples or silence. This avoids
+Rodio's mixer mutex and removes `Sink::clear` from controls. FFT jobs run at most
+20 times per second on the CPU pool; obsolete analysis is cancelled.
+
+Stop/switch immediately changes an atomic generation. Old PCM cannot play after
+that invalidation. Radio Pause cancels HTTP/buffering; Resume connects to the same
+live station. Local Pause retains queued samples, and seeking starts a new decoder
+at the requested position. HTTP headers/connect have an eight-second deadline,
+startup and individual stalled reads have ten seconds, and healthy streams have
+no total lifetime timeout. Transient failures/EOF retry the same station after
+1, 2 and 4 seconds, with the budget reset after a sustained healthy interval.
+Permanent HTTP/format errors fail without replay. Status is latest-value
+Loading/Buffering/Reconnecting/Playing/Paused/Error; playlist ownership, natural
+completion, shuffle, repeat and saved volume remain GUI-owned.
+
+### Dependency and diagnostic boundaries
+
+Application source checks reject `spawn_blocking`, `block_in_place`, `tokio::fs`,
+threaded Tokio DNS lookup, reqwest blocking clients, and SyncIoBridge. The resolved
+Tokio feature graph does not enable `fs`; reqwest multipart, blocking, and stream
+file adapters are disabled. Source checking does not establish transitive safety:
+reqwest 0.12.28/Hickory 0.25.2 initialization, CPAL 0.16.0, Rodio 0.21.1, rtrb
+0.3.5, and rfd 0.17 call paths were inspected separately. HTTP/DNS libraries own
+internal async tasks; CPAL owns audio-device callbacks, notify owns OS watcher
+threads, rfd owns native dialog dispatch, and terminal/windowing frameworks retain
+their existing threads. These are separate from application worker limits.
+
+Authenticated GUI snapshots expose task/queue counts, required mutations, oldest
+operation age, native pool occupancy, child count and maximum UI result-processing
+time. Test-support snapshots additionally expose audio generations and active
+pipeline counts. They contain no tokens, document text, or stream URLs. The
+fixture-only player control is rejected by ordinary builds and requires an
+explicit fixture flag plus loopback HTTP in test builds.
+
+Fixture daemons additionally validate that their data/runtime paths match their
+registered generation before accessing the shared catalog. Development harnesses
+clear all inherited `TERMINATOR_*` routing before applying isolated overrides.
+Client observation ordering is an in-memory-only field excluded from serde;
+it does not change the daemon protocol or stored state. Unavailable owners retain
+last-observed records while their health error is updated.

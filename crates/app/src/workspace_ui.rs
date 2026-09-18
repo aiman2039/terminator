@@ -735,21 +735,29 @@ impl App {
         if as_text {
             self.open_file_mode(path.into(), None, None, false, true);
         }
-        if reload {
-            self.images.remove(path);
+        if reload && let Some(preview) = self.images.get_mut(path) {
+            if let Some(cancel) = preview.cancellation.take() {
+                cancel.cancel();
+            }
+            preview.loading = false;
+            preview.error = None;
         }
         if !self.images.contains_key(path) && self.images.len() >= 8 {
             ui.weak("Close another image preview to load this image.");
             return;
         }
         let preview = self.images.entry(path.into()).or_default();
-        if !preview.loading && preview.texture.is_none() && preview.error.is_none() {
+        if reload || (!preview.loading && preview.texture.is_none() && preview.error.is_none()) {
             self.image_generation = self.image_generation.wrapping_add(1);
             preview.generation = self.image_generation;
-            preview.loading = self
+            preview.cancellation = self
                 .image_jobs
                 .try_send((path.into(), preview.generation))
-                .is_ok();
+                .ok();
+            preview.loading = preview.cancellation.is_some();
+            if !preview.loading {
+                ui.ctx().request_repaint_after(Duration::from_millis(50));
+            }
         }
         if fit {
             preview.scene = egui::Rect::NOTHING;
@@ -870,7 +878,6 @@ impl App {
                 }
             }
             if ui.small_button("Refresh").clicked() {
-                self.diffs.remove(&key);
                 self.diff_preview.remove(&key);
                 self.loading.insert(key.clone());
                 let _ = self.jobs.send(Job::Diff(tab.clone()));
@@ -2304,7 +2311,7 @@ mod tests {
         if split {
             app.diff_split.insert(tab.key());
         }
-        app.diffs.insert(tab.key(), Ok(doc));
+        app.diffs.insert(tab.key(), Ok(doc.into()));
         paint_diff_view(&mut app, &ctx, &tab)
     }
 
@@ -2861,6 +2868,14 @@ mod tests {
         };
         let ctx = egui::Context::default();
         let mut previews = markdown::Previews::new(&ctx);
+        for (index, text) in [&doc.left_text, &doc.right_text].into_iter().enumerate() {
+            previews.snapshot(
+                &format!("diff-preview:test-preview:{index}"),
+                std::path::Path::new("/repo/test.md"),
+                text,
+            );
+        }
+        previews.wait_prepared();
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(

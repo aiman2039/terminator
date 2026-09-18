@@ -36,6 +36,7 @@ pub(crate) fn default_dest(source: &Path, branch: &str) -> PathBuf {
 }
 
 /// Resolve the created project on the worker, only after an acknowledged add.
+#[cfg(test)]
 pub(super) fn create(
     draft: &WorktreeDraft,
     mut request: impl FnMut(Request) -> Result<Response>,

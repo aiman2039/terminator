@@ -1,28 +1,49 @@
 //! One refresh coordinator: coalesced invalidations and no overlapping Git commands.
 use crate::{Update, services};
 use notify::{RecursiveMode, Watcher};
+#[cfg(test)]
 use std::{
     collections::HashMap,
-    path::PathBuf,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
     thread,
-    time::{Duration, Instant},
+    time::Instant,
 };
+use std::{path::PathBuf, time::Duration};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
     pub cwd: PathBuf,
     pub generation: u64,
     pub directories: Vec<PathBuf>,
 }
+#[cfg(test)]
 pub fn spawn(tx: Sender<Update>, ctx: eframe::egui::Context) -> Sender<Option<Request>> {
     let (send, rx) = mpsc::channel();
     thread::spawn(move || run(rx, tx, ctx));
     send
 }
+#[cfg(test)]
 fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Context) {
-    let (events, event_rx) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |event| {
-        let _ = events.send(event);
+    let (events, event_rx) = mpsc::sync_channel(128);
+    let overflow = Arc::new(AtomicBool::new(false));
+    let callback_overflow = overflow.clone();
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if event
+            .as_ref()
+            .is_ok_and(|event| matches!(event.kind, notify::EventKind::Access(_)))
+        {
+            return;
+        }
+        if event
+            .as_ref()
+            .is_ok_and(|event| event.paths.len() > MAX_DIRTY_PATHS)
+            || events.try_send(event).is_err()
+        {
+            callback_overflow.store(true, Ordering::Release);
+        }
     })
     .ok();
     let mut watched = Vec::<PathBuf>::new();
@@ -49,20 +70,28 @@ fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Con
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(_) => {}
         }
-        while let Ok(event) = event_rx.try_recv() {
+        if overflow.swap(false, Ordering::AcqRel) {
+            refresh_all = true;
+            dirty_paths.clear();
+            pending.get_or_insert_with(Instant::now);
+        }
+        for _ in 0..128 {
+            let Ok(event) = event_rx.try_recv() else {
+                break;
+            };
             match event {
                 Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => {
                     if event.need_rescan() {
                         refresh_all = true;
                     }
-                    dirty_paths.extend(event.paths.into_iter().map(|p| normalize(&p)));
-                    pending = Some(Instant::now())
+                    accumulate_dirty(&mut dirty_paths, event.paths, &mut refresh_all);
+                    pending.get_or_insert_with(Instant::now);
                 }
                 Ok(_) => {}
                 Err(_) => {
                     watch_ok = false;
                     refresh_all = true;
-                    pending = Some(Instant::now());
+                    pending.get_or_insert_with(Instant::now);
                 }
             }
         }
@@ -158,6 +187,19 @@ fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Con
     }
 }
 
+#[cfg(test)]
+const MAX_DIRTY_PATHS: usize = 1024;
+
+#[cfg(test)]
+fn accumulate_dirty(paths: &mut Vec<PathBuf>, incoming: Vec<PathBuf>, full: &mut bool) {
+    if *full || paths.len().saturating_add(incoming.len()) > MAX_DIRTY_PATHS {
+        paths.clear();
+        *full = true;
+        return;
+    }
+    paths.extend(incoming.into_iter().map(|path| normalize(&path)));
+}
+
 fn normalize(path: &std::path::Path) -> PathBuf {
     if let Ok(path) = path.canonicalize() {
         return path;
@@ -168,9 +210,102 @@ fn normalize(path: &std::path::Path) -> PathBuf {
     path.into()
 }
 
+/// Selection and filesystem notifications are latest-value channels: no event backlog.
+pub fn spawn_async(
+    service: crate::gui_services::Services,
+) -> tokio::sync::watch::Sender<Option<Request>> {
+    use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
+    let (sender, mut requests) = tokio::sync::watch::channel::<Option<Request>>(None);
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+    let mut context = OperationContext::new(
+        "refresh",
+        "visible-repository".into(),
+        Policy::ServiceLifetime,
+    );
+    context.deadline = None;
+    let handle = service.handle().clone();
+    let _ = handle.submit(context, cancel, async move {
+        let (events, mut changed) = tokio::sync::watch::channel(0_u64);
+        let watcher = service.fs().run(&token, move || {
+            Ok(notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                if !event.as_ref().is_ok_and(|e| matches!(e.kind, notify::EventKind::Access(_))) {
+                    events.send_modify(|n| *n = n.wrapping_add(1));
+                }
+            }).ok())
+        }).await?;
+        let watcher = std::sync::Arc::new(std::sync::Mutex::new(watcher));
+        let mut watched = Vec::<PathBuf>::new();
+        loop {
+            let request = requests.borrow_and_update().clone();
+            let Some(request) = request else {
+                tokio::select! { _ = token.cancelled() => break, result = requests.changed() => if result.is_err() { break } }
+                continue;
+            };
+            let operation = token.child_token();
+            let _guard = operation.clone().drop_guard();
+            let work = async {
+                let context = services::context_async(&service, request.cwd.clone(), &operation).await;
+                let mut targets = vec![context.root.clone().unwrap_or(request.cwd.clone())];
+                targets.extend(context.git_dirs.iter().cloned());
+                let old = watched.clone(); let cache = watcher.clone();
+                let (targets, fallback) = service.fs().run(&operation, move || {
+                    let mut targets: Vec<_> = targets.iter().map(|p| normalize(p)).collect();
+                    targets.sort(); targets.dedup();
+                    let all = targets.clone(); targets.retain(|p| !all.iter().any(|parent| parent != p && p.starts_with(parent)));
+                    let mut watcher = cache.lock().unwrap();
+                    let mut fallback = watcher.is_none();
+                    if let Some(watcher) = watcher.as_mut() && old != targets {
+                        for path in old { let _ = watcher.unwatch(&path); }
+                        for path in &targets { if watcher.watch(path, RecursiveMode::Recursive).is_err() { fallback = true; } }
+                    }
+                    Ok((targets, fallback))
+                }).await?;
+                let mut directories = Vec::new();
+                for path in &request.directories {
+                    let entries = services::directory_async(&service, path.clone(), context.root.clone(), &operation).await;
+                    directories.push((path.clone(), entries));
+                }
+                service.emit_read(Update::Refresh(request.generation, context, directories, fallback)).await?;
+                Ok::<_, anyhow::Error>((targets, fallback))
+            };
+            let result = tokio::select! {
+                _ = token.cancelled() => break,
+                result = requests.changed() => { if result.is_err() { break; } continue; }
+                result = work => result,
+            };
+            let fallback = match result { Ok((targets, fallback)) => { watched = targets; fallback }, Err(error) => { service.emit(Update::Error(format!("Refresh: {error:#}"))).await?; true } };
+            tokio::select! {
+                _ = token.cancelled() => break,
+                result = requests.changed() => if result.is_err() { break; },
+                _ = changed.changed() => {
+                    // Fixed coalescing window cannot be extended by a continuous writer.
+                    tokio::select! { _ = token.cancelled() => break, _ = tokio::time::sleep(Duration::from_millis(250)) => {} }
+                    changed.borrow_and_update();
+                },
+                _ = tokio::time::sleep(Duration::from_secs(if fallback { 3 } else { 30 })) => {},
+            }
+        }
+        service.fs().run(&CancellationToken::new(), move || { drop(watcher); Ok(()) }).await?;
+        Ok(Vec::new())
+    });
+    sender
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dirty_path_overflow_becomes_one_full_rescan() {
+        let mut paths = vec![PathBuf::from("old"); MAX_DIRTY_PATHS];
+        let mut full = false;
+        accumulate_dirty(&mut paths, vec![PathBuf::from("new")], &mut full);
+        assert!(full);
+        assert!(paths.is_empty());
+        accumulate_dirty(&mut paths, vec![PathBuf::from("later")], &mut full);
+        assert!(paths.is_empty());
+    }
+
     #[test]
     fn watches_atomic_saves_and_suspends_when_hidden() {
         let dir = tempfile::tempdir().unwrap();

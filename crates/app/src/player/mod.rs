@@ -78,6 +78,16 @@ pub struct PollInput<'a> {
     pub repeat: bool,
 }
 
+#[derive(Default)]
+struct RadioCache {
+    custom: Vec<RadioStation>,
+    base: usize,
+    all: std::sync::Arc<Vec<radio::Station>>,
+    query: String,
+    category: String,
+    visible_base: usize,
+    visible: std::sync::Arc<Vec<radio::Station>>,
+}
 pub struct Controller {
     engine: Handle,
     status: Status,
@@ -102,6 +112,8 @@ pub struct Controller {
     current_path: Option<PathBuf>,
     durations: HashMap<PathBuf, Duration>,
     spectrum: [f32; tap::BARS],
+    pub(super) radio_base: std::sync::Arc<Vec<radio::Station>>,
+    radio_cache: std::cell::RefCell<RadioCache>,
     radio_mode: bool,
     radio_query: String,
     radio_category: String,
@@ -140,6 +152,12 @@ impl Controller {
             current_path: None,
             durations: HashMap::new(),
             spectrum: [0.0; tap::BARS],
+            radio_base: if cfg!(test) {
+                std::sync::Arc::new(radio::catalog().to_vec())
+            } else {
+                Default::default()
+            },
+            radio_cache: Default::default(),
             radio_mode: false,
             radio_query: String::new(),
             radio_category: String::new(),
@@ -158,15 +176,25 @@ impl Controller {
         )
     }
 
-    pub fn new() -> Self {
+    pub fn new(services: crate::gui_services::Services) -> Self {
         let rng = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|elapsed| elapsed.as_nanos() as u64)
             .unwrap_or(1)
             .max(1);
-        Self::with_engine(Handle::spawn(), Status::Stopped, None, None, rng)
+        Self::with_engine(Handle::spawn(services), Status::Stopped, None, None, rng)
     }
 
+    #[cfg(feature = "test-support")]
+    pub fn fixture_play(&mut self, project: &str, url: String) {
+        self.volume = 0.0;
+        self.engine.volume(0.0);
+        self.play_station(project, "Fixture radio".into(), url, 0);
+    }
+    #[cfg(feature = "test-support")]
+    pub fn fixture_diagnostics(&self) -> serde_json::Value {
+        self.engine.diagnostics()
+    }
     pub fn poll(&mut self, input: PollInput<'_>) -> Option<usize> {
         let PollInput {
             project,
@@ -247,21 +275,68 @@ impl Controller {
     }
 
     pub fn pause(&mut self) {
-        match self.status {
-            Status::Playing { .. } => self.engine.pause(),
-            Status::Paused { .. } => self.engine.resume(),
+        match self.status.clone() {
+            Status::Playing {
+                title,
+                position,
+                duration,
+                seekable,
+            } => {
+                self.engine.pause();
+                self.status = Status::Paused {
+                    title,
+                    position,
+                    duration,
+                    seekable,
+                };
+            }
+            Status::Paused { .. } => self.resume(),
+            Status::Loading { title }
+            | Status::Buffering { title }
+            | Status::Reconnecting { title, .. } => {
+                self.engine.pause();
+                self.status = Status::Paused {
+                    title,
+                    position: Duration::ZERO,
+                    duration: None,
+                    seekable: self.file_index.is_some(),
+                };
+            }
             Status::Stopped | Status::Error(_) => {}
         }
     }
-
     pub fn toggle(&mut self) {
         self.pause();
     }
-
     pub fn resume(&mut self) {
-        if matches!(self.status, Status::Paused { .. }) {
+        if let Status::Paused {
+            title,
+            position,
+            duration,
+            seekable,
+        } = self.status.clone()
+        {
             self.engine.resume();
+            self.status = if seekable {
+                Status::Playing {
+                    title,
+                    position,
+                    duration,
+                    seekable,
+                }
+            } else {
+                Status::Loading { title }
+            };
         }
+    }
+    pub fn needs_poll(&self) -> bool {
+        matches!(
+            self.status,
+            Status::Loading { .. }
+                | Status::Buffering { .. }
+                | Status::Reconnecting { .. }
+                | Status::Playing { .. }
+        )
     }
 
     pub fn play_file(&mut self, project: &str, path: PathBuf, index: usize) {
@@ -272,6 +347,9 @@ impl Controller {
         self.current_path = Some(path.clone());
         self.shuffle_bag.retain(|item| *item != index);
         self.engine.volume(self.volume);
+        self.status = Status::Loading {
+            title: title.clone(),
+        };
         self.engine.play(Playable::File { path, title });
     }
 
@@ -281,6 +359,9 @@ impl Controller {
         self.station_index = Some(index);
         self.current_path = None;
         self.engine.volume(self.volume);
+        self.status = Status::Loading {
+            title: name.clone(),
+        };
         self.engine.play(Playable::Stream { url, title: name });
     }
 
@@ -478,7 +559,38 @@ impl App {
         }
         self.preferences.ensure_default_playlist();
         self.preferences.player_samples_seeded = true;
-        let samples = install_samples(&self.paths.data.join("player-samples"));
+        let data = self.paths.data.join("player-samples");
+        let service = self.services.clone();
+        let context = terminator_core::async_service::OperationContext::new(
+            "catalog",
+            "player-samples".into(),
+            terminator_core::async_service::Policy::OrderedMutation,
+        );
+        if self
+            .services
+            .handle()
+            .submit(
+                context,
+                terminator_core::async_service::CancellationToken::new(),
+                async move {
+                    let samples = service
+                        .client()
+                        .catalog
+                        .run(
+                            &terminator_core::async_service::CancellationToken::new(),
+                            move || Ok(install_samples(&data)),
+                        )
+                        .await?;
+                    Ok(vec![Update::PlayerSamples(samples)])
+                },
+            )
+            .is_err()
+        {
+            self.preferences.player_samples_seeded = false;
+            self.error = Some("Services are busy; reopen Player to install sample tracks".into());
+        }
+    }
+    pub(super) fn apply_player_samples(&mut self, samples: Vec<PathBuf>) {
         if samples.is_empty() {
             return;
         }
@@ -555,6 +667,9 @@ impl App {
                 duration,
                 ..
             } => (title.as_str(), *position, *duration),
+            Status::Loading { title }
+            | Status::Buffering { title }
+            | Status::Reconnecting { title, .. } => (title.as_str(), Duration::ZERO, None),
             Status::Error(error) => (error.as_str(), Duration::ZERO, None),
             Status::Stopped => ("Player", Duration::ZERO, None),
         };
@@ -648,7 +763,7 @@ impl App {
 
     fn player_start(&mut self, project: &str) {
         if self.player.radio_mode
-            && let Some(station) = self.radio_visible().into_iter().next()
+            && let Some(station) = self.radio_visible().first().cloned()
         {
             self.play_radio(project, station);
             return;
@@ -656,7 +771,7 @@ impl App {
         let playlist = self.playlist();
         if let Some(path) = playlist.first() {
             self.player.play_file(project, path.clone(), 0);
-        } else if let Some(station) = self.radio_visible().into_iter().next() {
+        } else if let Some(station) = self.radio_visible().first().cloned() {
             self.play_radio(project, station);
         } else {
             self.pick_audio = true;
@@ -677,7 +792,10 @@ impl App {
                 let duration = *duration;
                 self.player.seek_fraction(0.0, duration);
             }
-            Status::Playing { .. } => {}
+            Status::Playing { .. }
+            | Status::Loading { .. }
+            | Status::Buffering { .. }
+            | Status::Reconnecting { .. } => {}
             Status::Stopped | Status::Error(_) => self.player_start(&project),
         }
     }
@@ -704,40 +822,60 @@ impl App {
         }
     }
 
-    fn radio_listing(&self) -> Vec<radio::Station> {
-        let mut out = radio::catalog().to_vec();
-        for custom in &self.preferences.radio_stations {
-            if out.iter().any(|station| station.url == custom.url) {
-                continue;
+    fn radio_listing(&self) -> std::sync::Arc<Vec<radio::Station>> {
+        let base = std::sync::Arc::as_ptr(&self.player.radio_base) as usize;
+        let mut cache = self.player.radio_cache.borrow_mut();
+        if cache.base != base || cache.custom != self.preferences.radio_stations {
+            let mut all = self.player.radio_base.as_ref().clone();
+            for custom in &self.preferences.radio_stations {
+                if all.iter().any(|station| station.url == custom.url) {
+                    continue;
+                }
+                all.push(radio::Station {
+                    name: custom.name.clone(),
+                    url: custom.url.clone(),
+                    country: String::new(),
+                    language: String::new(),
+                    category: if custom.category.is_empty() {
+                        "custom".into()
+                    } else {
+                        custom.category.clone()
+                    },
+                    homepage: String::new(),
+                    icon: custom.icon.clone(),
+                });
             }
-            out.push(radio::Station {
-                name: custom.name.clone(),
-                url: custom.url.clone(),
-                country: String::new(),
-                language: String::new(),
-                category: if custom.category.is_empty() {
-                    "custom".into()
-                } else {
-                    custom.category.clone()
-                },
-                homepage: String::new(),
-                icon: custom.icon.clone(),
-            });
+            cache.all = std::sync::Arc::new(all);
+            cache.custom.clone_from(&self.preferences.radio_stations);
+            cache.base = base;
         }
-        out
+        cache.all.clone()
     }
-
-    fn radio_visible(&self) -> Vec<radio::Station> {
-        self.radio_listing()
-            .into_iter()
-            .filter(|station| {
-                radio::matches_filter(
-                    station,
-                    &self.player.radio_query,
-                    &self.player.radio_category,
-                )
-            })
-            .collect()
+    fn radio_visible(&self) -> std::sync::Arc<Vec<radio::Station>> {
+        let all = self.radio_listing();
+        let base = std::sync::Arc::as_ptr(&all) as usize;
+        let mut cache = self.player.radio_cache.borrow_mut();
+        if cache.visible_base != base
+            || cache.query != self.player.radio_query
+            || cache.category != self.player.radio_category
+        {
+            cache.visible = std::sync::Arc::new(
+                all.iter()
+                    .filter(|station| {
+                        radio::matches_filter(
+                            station,
+                            &self.player.radio_query,
+                            &self.player.radio_category,
+                        )
+                    })
+                    .cloned()
+                    .collect(),
+            );
+            cache.visible_base = base;
+            cache.query.clone_from(&self.player.radio_query);
+            cache.category.clone_from(&self.player.radio_category);
+        }
+        cache.visible.clone()
     }
 
     fn play_radio(&mut self, project: &str, station: radio::Station) {
@@ -994,6 +1132,20 @@ fn eq_treble() -> EqPreset {
 fn format_clock(duration: Duration) -> String {
     let total = duration.as_secs();
     format!("{}:{:02}", total / 60, total % 60)
+}
+
+#[cfg(test)]
+pub(crate) async fn fixture_download(url: String) -> Result<()> {
+    let client = reqwest::Client::builder().no_proxy().build()?;
+    let (sender, _receiver) = tokio::sync::mpsc::channel(14);
+    engine::download(
+        &client,
+        url,
+        sender,
+        Duration::from_secs(8),
+        Duration::from_secs(10),
+    )
+    .await
 }
 
 #[cfg(test)]

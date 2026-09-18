@@ -95,13 +95,20 @@ impl App {
             let cwd = self.dialog_directory();
             self.selection_generation = self.selection_generation.wrapping_add(1);
             let generation = self.selection_generation;
-            let tx = self.update_tx.clone();
-            let ctx = ctx.clone();
-            thread::spawn(move || {
-                let dialog = dialog.set_directory(services::existing_directory(cwd));
-                let path = pollster::block_on(dialog.pick_folder()).map(|p| p.path().to_path_buf());
-                let _ = tx.send(Update::PickedProject(path, generation));
-                ctx.request_repaint();
+            let service = self.services.clone();
+            self.services.dialog(async move {
+                let cwd = service
+                    .fs()
+                    .run(&async_service::CancellationToken::new(), move || {
+                        Ok(services::existing_directory(cwd))
+                    })
+                    .await?;
+                let dialog = dialog.set_directory(cwd);
+                let path = dialog.pick_folder().await.map(|p| p.path().to_path_buf());
+                service
+                    .emit(Update::PickedProject(path, generation))
+                    .await?;
+                Ok(())
             });
         }
         if self.close_workspace.is_none() && self.close_session.is_none() {
@@ -248,14 +255,15 @@ impl App {
             let cwd = self.dialog_directory();
             let settings = self.settings_draft.clone();
             let jobs = self.jobs.clone();
-            let tx = self.update_tx.clone();
-            let ctx = ctx.clone();
-            thread::spawn(move || {
-                let path = pollster::block_on(
-                    dialog
-                        .set_directory(services::existing_directory(cwd))
-                        .pick_file(),
-                );
+            let service = self.services.clone();
+            self.services.dialog(async move {
+                let cwd = service
+                    .fs()
+                    .run(&async_service::CancellationToken::new(), move || {
+                        Ok(services::existing_directory(cwd))
+                    })
+                    .await?;
+                let path = dialog.set_directory(cwd).pick_file().await;
                 if let Some(path) = path {
                     let _ = jobs.send(Job::TestExternal(
                         path.path().into(),
@@ -263,8 +271,8 @@ impl App {
                         settings.external_args,
                     ));
                 }
-                let _ = tx.send(Update::TestPickerClosed);
-                ctx.request_repaint();
+                service.emit(Update::TestPickerClosed).await?;
+                Ok(())
             });
         }
         if self.pick_audio && !self.picker_active {
@@ -275,17 +283,24 @@ impl App {
                 .set_parent(frame)
                 .set_title("Add audio files")
                 .add_filter("Audio", player::AUDIO_EXTENSIONS);
-            let tx = self.update_tx.clone();
-            let ctx = ctx.clone();
-            thread::spawn(move || {
-                let dialog = dialog.set_directory(services::existing_directory(cwd));
-                let paths = pollster::block_on(dialog.pick_files())
+            let service = self.services.clone();
+            self.services.dialog(async move {
+                let cwd = service
+                    .fs()
+                    .run(&async_service::CancellationToken::new(), move || {
+                        Ok(services::existing_directory(cwd))
+                    })
+                    .await?;
+                let dialog = dialog.set_directory(cwd);
+                let paths = dialog
+                    .pick_files()
+                    .await
                     .unwrap_or_default()
                     .into_iter()
                     .map(|file| file.path().to_path_buf())
                     .collect();
-                let _ = tx.send(Update::PickedAudio(paths));
-                ctx.request_repaint();
+                service.emit(Update::PickedAudio(paths)).await?;
+                Ok(())
             });
         }
         if self.pick_audio_dir && !self.picker_active {
@@ -295,15 +310,26 @@ impl App {
             let dialog = rfd::AsyncFileDialog::new()
                 .set_parent(frame)
                 .set_title("Add audio directory");
-            let tx = self.update_tx.clone();
-            let ctx = ctx.clone();
-            thread::spawn(move || {
-                let dialog = dialog.set_directory(services::existing_directory(cwd));
-                let paths = pollster::block_on(dialog.pick_folder())
-                    .map(|folder| player::audio_from_dir(folder.path()))
-                    .unwrap_or_default();
-                let _ = tx.send(Update::PickedAudio(paths));
-                ctx.request_repaint();
+            let service = self.services.clone();
+            self.services.dialog(async move {
+                let cwd = service
+                    .fs()
+                    .run(&async_service::CancellationToken::new(), move || {
+                        Ok(services::existing_directory(cwd))
+                    })
+                    .await?;
+                let dialog = dialog.set_directory(cwd);
+                let folder = dialog.pick_folder().await.map(|f| f.path().to_path_buf());
+                let paths = service
+                    .fs()
+                    .run(&async_service::CancellationToken::new(), move || {
+                        Ok(folder
+                            .map(|path| player::audio_from_dir(&path))
+                            .unwrap_or_default())
+                    })
+                    .await?;
+                service.emit(Update::PickedAudio(paths)).await?;
+                Ok(())
             });
         }
         if self.open_path && !self.picker_active {
@@ -324,13 +350,21 @@ impl App {
                 }
                 self.path_text.clear();
             }
-            let tx = self.update_tx.clone();
-            let ctx = ctx.clone();
-            thread::spawn(move || {
-                let dialog = dialog.set_directory(services::existing_directory(cwd.clone()));
-                let path = pollster::block_on(dialog.pick_file()).map(|p| p.path().to_path_buf());
-                let _ = tx.send(Update::PickedFile { path, project, cwd });
-                ctx.request_repaint();
+            let service = self.services.clone();
+            self.services.dialog(async move {
+                let selected = cwd.clone();
+                let directory = service
+                    .fs()
+                    .run(&async_service::CancellationToken::new(), move || {
+                        Ok(services::existing_directory(selected))
+                    })
+                    .await?;
+                let dialog = dialog.set_directory(directory);
+                let path = dialog.pick_file().await.map(|p| p.path().to_path_buf());
+                service
+                    .emit(Update::PickedFile { path, project, cwd })
+                    .await?;
+                Ok(())
             });
         }
         if let Some(sid) = self.search_session.clone() {
@@ -397,17 +431,22 @@ impl App {
                             BrowseTarget::WorktreeDest => "Choose parent folder",
                         });
                 let cwd = self.dialog_directory();
-                let tx = self.update_tx.clone();
-                let ctx = ctx.clone();
-                thread::spawn(move || {
-                    let dialog = dialog.set_directory(services::existing_directory(cwd));
+                let service = self.services.clone();
+                self.services.dialog(async move {
+                    let cwd = service
+                        .fs()
+                        .run(&async_service::CancellationToken::new(), move || {
+                            Ok(services::existing_directory(cwd))
+                        })
+                        .await?;
+                    let dialog = dialog.set_directory(cwd);
                     let path = if folder {
-                        pollster::block_on(dialog.pick_folder()).map(|p| p.path().to_path_buf())
+                        dialog.pick_folder().await.map(|p| p.path().to_path_buf())
                     } else {
-                        pollster::block_on(dialog.pick_file()).map(|p| p.path().to_path_buf())
+                        dialog.pick_file().await.map(|p| p.path().to_path_buf())
                     };
-                    let _ = tx.send(Update::PickedPath { path, target });
-                    ctx.request_repaint();
+                    service.emit(Update::PickedPath { path, target }).await?;
+                    Ok(())
                 });
             }
         }

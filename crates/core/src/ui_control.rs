@@ -7,6 +7,11 @@ use std::{os::unix::net::UnixStream, path::PathBuf, time::Duration};
 pub const CAPABILITY: &str = "gui-control-v1";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Request {
+    #[doc(hidden)]
+    FixturePlayer {
+        action: String,
+        url: Option<String>,
+    },
     Ping,
     Snapshot,
     ShowSession {
@@ -43,6 +48,20 @@ pub struct Response {
 impl Request {
     pub fn validate(&self) -> Result<()> {
         match self {
+            Self::FixturePlayer { action, url } => {
+                ensure!(
+                    matches!(action.as_str(), "play" | "stop" | "pause" | "resume"),
+                    "Invalid player fixture action"
+                );
+                if let Some(url) = url {
+                    let url = url::Url::parse(url)?;
+                    ensure!(
+                        url.scheme() == "http" && url.host_str() == Some("127.0.0.1"),
+                        "Player fixtures require loopback HTTP"
+                    );
+                }
+            }
+
             Self::ShowSession {
                 session,
                 anchor,

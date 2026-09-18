@@ -1,12 +1,15 @@
 //! Shell-free external launching. Waiting and stderr draining never occupy the GUI
 //! or its settings/refresh worker; a long-lived editor is never timed out or killed.
 use anyhow::{Context, Result};
+#[cfg(test)]
 use std::{
     io::Read,
-    path::Path,
-    process::{Command, Stdio},
     sync::{Arc, Mutex},
     thread,
+};
+use std::{
+    path::Path,
+    process::{Command, Stdio},
 };
 use terminator_core::{Settings, find_executable};
 
@@ -72,6 +75,7 @@ fn command(program: &str, args: &[String], path: &Path) -> Result<Command> {
         .stderr(Stdio::piped());
     Ok(command)
 }
+#[cfg(test)]
 pub fn launch(
     program: &str,
     args: &[String],
@@ -124,6 +128,95 @@ pub fn launch(
         done(result);
     });
     Ok(())
+}
+
+pub async fn launch_supervised(
+    service: crate::gui_services::Services,
+    program: String,
+    args: Vec<String>,
+    path: std::path::PathBuf,
+) -> Result<()> {
+    use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
+    use tokio::io::AsyncReadExt;
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let mut context = OperationContext::new(
+        "external-editor",
+        terminator_core::id(),
+        Policy::ServiceLifetime,
+    );
+    context.deadline = None;
+    let handle = service.handle().clone();
+    handle.submit(context, cancel, async move {
+        let result = service
+            .fs()
+            .run(&token, move || command(&program, &args, &path))
+            .await;
+        let command = match result {
+            Ok(command) => command,
+            Err(error) => {
+                let _ = started.send(Err(format!("{error:#}")));
+                return Ok(Vec::new());
+            }
+        };
+        let mut child = match tokio::process::Command::from(command)
+            .kill_on_drop(false)
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = started.send(Err(format!("Start external editor: {error}")));
+                return Ok(Vec::new());
+            }
+        };
+        let _ = started.send(Ok(()));
+        let mut stderr = child.stderr.take().unwrap();
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let collected = output.clone();
+        let read = async move {
+            let mut bytes = [0; 1024];
+            loop {
+                let n = stderr.read(&mut bytes).await?;
+                if n == 0 {
+                    return Ok::<_, std::io::Error>(());
+                }
+                let mut output = collected.lock().unwrap();
+                let n = n.min(4096usize.saturating_sub(output.len()));
+                output.extend_from_slice(&bytes[..n]);
+            }
+        };
+        tokio::pin!(read);
+        let mut drained = false;
+        let result = loop {
+            tokio::select! {
+                _ = token.cancelled() => return Ok(Vec::new()), // persistent external editor is never killed
+                result = &mut read, if !drained => { let _ = result; drained = true; }
+                result = child.wait() => break result?,
+            }
+        };
+        if !result.success() {
+            if !drained {
+                let _ =
+                    tokio::time::timeout(std::time::Duration::from_millis(100), &mut read).await;
+            }
+            let bytes = output.lock().unwrap();
+            let message: String = String::from_utf8_lossy(&bytes)
+                .chars()
+                .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+                .take(2048)
+                .collect();
+            return Ok(vec![crate::Update::Error(format!(
+                "External editor exited with {result}: {}",
+                message.trim()
+            ))]);
+        }
+        Ok(Vec::new())
+    })?;
+    ready
+        .await
+        .context("External editor launch cancelled before acknowledgment")?
+        .map_err(anyhow::Error::msg)
 }
 
 #[cfg(test)]

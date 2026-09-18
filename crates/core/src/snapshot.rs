@@ -53,7 +53,7 @@ pub fn read_response(reader: &mut impl Read) -> Result<Response> {
     Ok(response)
 }
 
-fn decode(data: &str) -> Result<Vec<u8>> {
+pub(crate) fn decode(data: &str) -> Result<Vec<u8>> {
     ensure!(
         data.len() <= CHUNK_BYTES.div_ceil(3) * 4,
         "Snapshot chunk too large"

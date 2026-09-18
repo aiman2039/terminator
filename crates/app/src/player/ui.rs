@@ -80,6 +80,9 @@ fn title_row(ui: &mut Ui, status: &Status) {
         Status::Playing { title, .. } | Status::Paused { title, .. } => {
             (title.as_str(), ui.visuals().text_color())
         }
+        Status::Loading { title }
+        | Status::Buffering { title }
+        | Status::Reconnecting { title, .. } => (title.as_str(), ui.visuals().weak_text_color()),
         Status::Error(error) => (error.as_str(), ui.visuals().error_fg_color),
         Status::Stopped => ("Not playing", ui.visuals().weak_text_color()),
     };
@@ -595,7 +598,7 @@ fn radio_panel(app: &mut App, ui: &mut Ui, project: &str) {
             .desired_width(f32::INFINITY)
             .lock_focus(true),
     );
-    let categories = radio::categories();
+    let categories = radio::categories_ready();
     let mut category = app.player.radio_category.clone();
     let category_label = if category.is_empty() {
         "All categories".to_string()

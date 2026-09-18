@@ -1,10 +1,11 @@
 //! Validate the launch location before creating data or starting persistent PTYs.
 use anyhow::{Context, Result, ensure};
+#[cfg(test)]
+use std::thread;
 use std::{
     fs::OpenOptions,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    thread,
 };
 use terminator_core::{Paths, executable_available, spawn_session_leader};
 
@@ -75,11 +76,15 @@ pub fn restart_invocation(executable: &Path, paths: &Paths) -> Result<RestartInv
     })
 }
 
-pub fn spawn_restart(
+pub struct RestartWatch {
+    pub completion: std::os::unix::net::UnixStream,
+    pub log_path: PathBuf,
+    pub log_start: u64,
+}
+pub fn begin_restart(
     invocation: RestartInvocation,
     inventory: terminator_core::recovery::RestartInventory,
-    finished: impl FnOnce(String) + Send + 'static,
-) -> Result<()> {
+) -> Result<RestartWatch> {
     let RestartInvocation {
         hook,
         gui,
@@ -96,7 +101,7 @@ pub fn spawn_restart(
     let log_path = data.join("restart.log");
     // A silent inherited socket tracks helper lifetime without routing its output
     // through the GUI. Losing the GUI must not give the helper a broken pipe.
-    let (mut completion, lifetime) = std::os::unix::net::UnixStream::pair()?;
+    let (completion, lifetime) = std::os::unix::net::UnixStream::pair()?;
     let mut command = Command::new(&hook);
     command
         .args(["ctl", "shutdown", "--stop-all", "--relaunch", "--exe"])
@@ -115,22 +120,43 @@ pub fn spawn_restart(
         .stdout(Stdio::null())
         .stderr(log);
     let mut child = spawn_session_leader(command)?;
+    // This is only the short-lived intermediate fork; the detached helper retains
+    // the completion socket and must outlive GUI shutdown.
+    let _ = child.wait();
+    completion.set_nonblocking(true)?;
+    Ok(RestartWatch {
+        completion,
+        log_path,
+        log_start,
+    })
+}
+pub fn restart_message(log_path: PathBuf, log_start: u64) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    (|| -> std::io::Result<String> {
+        let mut file = std::fs::File::open(log_path)?;
+        let start = log_start.max(file.metadata()?.len().saturating_sub(16 * 1024));
+        file.seek(SeekFrom::Start(start))?;
+        let mut bytes = Vec::new();
+        file.take(16 * 1024).read_to_end(&mut bytes)?;
+        Ok(String::from_utf8_lossy(&bytes).trim().to_owned())
+    })()
+    .unwrap_or_default()
+}
+#[cfg(test)]
+pub fn spawn_restart(
+    invocation: RestartInvocation,
+    inventory: terminator_core::recovery::RestartInventory,
+    finished: impl FnOnce(String) + Send + 'static,
+) -> Result<()> {
+    let RestartWatch {
+        mut completion,
+        log_path,
+        log_start,
+    } = begin_restart(invocation, inventory)?;
+    completion.set_nonblocking(false)?;
     thread::spawn(move || {
-        // The returned Child is the intermediate fork. EOF tracks the actual
-        // detached helper, which retains this pipe until it exits.
-        let _ = child.wait();
-        use std::io::{Read, Seek, SeekFrom};
         let _ = std::io::copy(&mut completion, &mut std::io::sink());
-        let message = (|| -> std::io::Result<String> {
-            let mut file = std::fs::File::open(log_path)?;
-            let start = log_start.max(file.metadata()?.len().saturating_sub(16 * 1024));
-            file.seek(SeekFrom::Start(start))?;
-            let mut bytes = Vec::new();
-            file.take(16 * 1024).read_to_end(&mut bytes)?;
-            Ok(String::from_utf8_lossy(&bytes).trim().to_owned())
-        })()
-        .unwrap_or_default();
-        finished(message);
+        finished(restart_message(log_path, log_start));
     });
     Ok(())
 }

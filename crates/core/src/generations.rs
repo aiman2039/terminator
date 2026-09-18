@@ -608,6 +608,21 @@ pub fn owner_for(paths: &Paths, request: &Request) -> Result<Paths> {
         .context("Active owner is unregistered")
 }
 
+/// Reject inherited owner routing before a daemon can write another catalog.
+pub fn validate_endpoint(root: &Paths, paths: &Paths, generation: &str) -> Result<()> {
+    let owner = Catalog::open(root)?
+        .generations()?
+        .into_iter()
+        .find(|g| g.id == generation)
+        .context("Generation is not registered in this catalog")?;
+    ensure!(
+        owner.data.canonicalize()? == paths.data.canonicalize()?
+            && owner.runtime.canonicalize()? == paths.runtime.canonicalize()?,
+        "Inherited generation/catalog routing does not match this data/runtime directory; clear inherited TERMINATOR_CATALOG_DATA, TERMINATOR_CATALOG_RUNTIME and TERMINATOR_GENERATION for isolated development"
+    );
+    Ok(())
+}
+
 pub fn snapshot(paths: &Paths) -> Result<State> {
     let catalog = Catalog::open(paths)?;
     let active = catalog.active()?.context("No active generation")?;
@@ -656,6 +671,23 @@ pub fn snapshot(paths: &Paths) -> Result<State> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inherited_catalog_cannot_bind_a_different_data_directory() {
+        let (_directory, root, catalog) = fixture();
+        let registered = owner(&root, &catalog);
+        assert!(validate_endpoint(&root, &registered.paths(), &registered.id).is_ok());
+        let other = tempfile::tempdir().unwrap();
+        let paths = Paths::at(other.path().into());
+        paths.init().unwrap();
+        assert!(
+            validate_endpoint(&root, &paths, &registered.id)
+                .unwrap_err()
+                .to_string()
+                .contains("does not match")
+        );
+        assert!(validate_endpoint(&root, &registered.paths(), "unknown").is_err());
+    }
 
     #[test]
     fn legacy_exit_recovery_requires_lock_and_preserves_original_records() {

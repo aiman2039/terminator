@@ -6,10 +6,8 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    io::Read,
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver, Sender},
-    thread,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use terminator_core::{Paths, Session, SessionKind};
@@ -79,6 +77,7 @@ struct Snapshot {
     #[serde(default)]
     paused: bool,
 }
+#[cfg(test)]
 fn read_source(source: &Source, previous: Option<&Snapshot>) -> Result<Option<Snapshot>> {
     if source.socket.exists() {
         let response = (|| -> Result<Option<serde_json::Value>> {
@@ -127,6 +126,7 @@ fn read_source(source: &Source, previous: Option<&Snapshot>) -> Result<Option<Sn
     }
     read_saved(source).map(Some)
 }
+#[cfg(test)]
 fn paused_snapshot(source: &Source, previous: Option<&Snapshot>) -> Result<Snapshot> {
     // Never replace an observed unsaved buffer with older disk contents.
     let mut snapshot = match previous.filter(|s| s.revision.is_some()) {
@@ -136,7 +136,17 @@ fn paused_snapshot(source: &Source, previous: Option<&Snapshot>) -> Result<Snaps
     snapshot.paused = true;
     Ok(snapshot)
 }
+#[cfg(test)]
 fn read_saved(source: &Source) -> Result<Snapshot> {
+    read_saved_cancel(
+        source,
+        &terminator_core::async_service::CancellationToken::new(),
+    )
+}
+fn read_saved_cancel(
+    source: &Source,
+    cancel: &terminator_core::async_service::CancellationToken,
+) -> Result<Snapshot> {
     // Custom terminal editors have no Neovim RPC. Clearly label their saved-file view.
     use std::os::unix::fs::OpenOptionsExt;
     let file = std::fs::OpenOptions::new()
@@ -148,8 +158,7 @@ fn read_saved(source: &Source) -> Result<Snapshot> {
         file.metadata()?.is_file(),
         "Markdown preview requires a regular file"
     );
-    let mut bytes = Vec::new();
-    file.take(MAX_DOCUMENT as u64 + 1).read_to_end(&mut bytes)?;
+    let bytes = terminator_core::async_service::read_chunks(file, MAX_DOCUMENT + 1, cancel)?;
     ensure!(
         bytes.len() <= MAX_DOCUMENT,
         "Markdown preview is limited to 1 MiB"
@@ -248,6 +257,8 @@ fn prepare(snapshot: Snapshot) -> Document {
 pub struct Preview {
     document: Option<Document>,
     snapshot_source: Option<(PathBuf, String)>,
+    snapshot_generation: u64,
+    applied_generation: u64,
     error: Option<String>,
     cache: CommonMarkCache,
     pub editor_focused: bool,
@@ -258,6 +269,8 @@ impl Default for Preview {
         Self {
             document: None,
             snapshot_source: None,
+            snapshot_generation: 0,
+            applied_generation: 0,
             error: None,
             cache: CommonMarkCache::default(),
             editor_focused: true,
@@ -343,6 +356,7 @@ impl Preview {
     }
 }
 
+#[derive(Clone)]
 struct Watch {
     generation: u64,
     sources: Vec<Source>,
@@ -351,8 +365,13 @@ struct Watch {
 type Loaded = (u64, String, Result<Document, String>);
 pub struct Previews {
     pub entries: HashMap<String, Preview>,
-    requests: Sender<Watch>,
-    results: Receiver<Loaded>,
+    requests: tokio::sync::watch::Sender<Watch>,
+    results: tokio::sync::mpsc::Receiver<Loaded>,
+    outgoing: tokio::sync::mpsc::Sender<Loaded>,
+    services: crate::gui_services::Services,
+    next_document: u64,
+    #[cfg(test)]
+    _owner: Option<crate::gui_services::Owner>,
     visible: Vec<Source>,
     watching: Vec<Source>,
     retained: HashSet<String>,
@@ -361,79 +380,136 @@ pub struct Previews {
     images: std::sync::Arc<crate::markdown_images::Images>,
 }
 impl Previews {
+    #[cfg(test)]
     pub fn new(ctx: &egui::Context) -> Self {
-        let (requests, incoming) = mpsc::channel::<Watch>();
-        let (outgoing, results) = mpsc::channel();
-        let repaint = ctx.clone();
-        thread::spawn(move || {
-            let mut watch = Watch {
-                generation: 0,
-                sources: Vec::new(),
-                retained: HashSet::new(),
-            };
-            let mut snapshots = HashMap::<String, Snapshot>::new();
-            loop {
-                match incoming.recv_timeout(INTERVAL) {
-                    Ok(mut next) => {
-                        while let Ok(newer) = incoming.try_recv() {
-                            next = newer;
-                        }
-                        watch = next;
-                        // Refresh and mode changes must not discard the last unsaved
-                        // snapshot while Neovim is at a blocking prompt.
-                        snapshots.retain(|sid, _| watch.retained.contains(sid));
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    Err(_) => {}
-                }
-                for source in &watch.sources {
-                    let previous = snapshots.get(&source.session);
-                    let result = match read_source(source, previous) {
-                        Ok(None) => continue,
-                        Ok(Some(snapshot)) if Some(&snapshot) == previous => continue,
-                        Ok(Some(snapshot)) => {
-                            snapshots.insert(source.session.clone(), snapshot.clone());
-                            Ok(prepare(snapshot))
-                        }
-                        Err(error) => {
-                            if let Some(snapshot) = snapshots.get_mut(&source.session) {
-                                snapshot.paused = true;
-                            }
-                            Err(format!("{error:#}"))
-                        }
-                    };
-                    if outgoing
-                        .send((watch.generation, source.session.clone(), result))
-                        .is_err()
-                    {
-                        return;
-                    }
-                    repaint.request_repaint();
-                }
-            }
+        let paths = Paths::at(std::env::temp_dir().join(terminator_core::id()));
+        let (tx, _) = std::sync::mpsc::channel();
+        let (services, owner) = crate::gui_services::Services::new(paths, ctx.clone(), tx).unwrap();
+        let mut previews = Self::with_services(ctx, services);
+        previews._owner = Some(owner);
+        previews
+    }
+    pub fn with_services(ctx: &egui::Context, services: crate::gui_services::Services) -> Self {
+        use futures_util::{StreamExt, stream};
+        use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
+        let (requests, mut incoming) = tokio::sync::watch::channel(Watch {
+            generation: 0,
+            sources: Vec::new(),
+            retained: HashSet::new(),
         });
-        let images = crate::markdown_images::Images::install(ctx);
+        let (outgoing, results) = tokio::sync::mpsc::channel(8);
+        let loaded = outgoing.clone();
+        let repaint = ctx.clone();
+        let service = services.clone();
+        let cancellation = CancellationToken::new();
+        let token = cancellation.clone();
+        let mut context = OperationContext::new(
+            "markdown",
+            "visible-editors".into(),
+            Policy::ServiceLifetime,
+        );
+        context.deadline = None;
+        let _ = services.handle().submit(context, cancellation, async move {
+            let snapshots = Arc::new(Mutex::new(HashMap::<String, Arc<Snapshot>>::new()));
+            let mut watched_generation = None;
+            let failed = Arc::new(Mutex::new(HashSet::<String>::new()));
+            loop {
+                let watch = incoming.borrow_and_update().clone();
+                snapshots.lock().unwrap().retain(|sid, _| watch.retained.contains(sid));
+                let changed = watched_generation != Some(watch.generation);
+                watched_generation = Some(watch.generation);
+                failed.lock().unwrap().retain(|sid| watch.retained.contains(sid));
+                let operation = token.child_token();
+                let _guard = operation.clone().drop_guard();
+                let work = async {
+                    let mut jobs = stream::iter(watch.sources.iter().cloned().map(|source| {
+                        let previous = snapshots.lock().unwrap().get(&source.session).cloned();
+                        let service = service.clone(); let operation = operation.clone(); let snapshots = snapshots.clone();
+                        let failed = failed.clone();
+                        let force = changed || failed.lock().unwrap().contains(&source.session);
+                        async move {
+                            let result = match read_source_async(&service, &source, previous.clone(), &operation, force).await {
+                                Ok(None) => return None,
+                                Ok(Some(snapshot)) if !force && previous.as_deref() == Some(&snapshot) => return None,
+                                Ok(Some(snapshot)) => {
+                                    let retained = Arc::new(snapshot.clone());
+                                    let result = service.cpu().run(&operation, move || Ok(prepare(snapshot))).await.map_err(|e| format!("{e:#}"));
+                                    if result.is_ok() { snapshots.lock().unwrap().insert(source.session.clone(), retained); failed.lock().unwrap().remove(&source.session); }
+                                    else { failed.lock().unwrap().insert(source.session.clone()); }
+                                    result
+                                }
+                                Err(error) => {
+                                    failed.lock().unwrap().insert(source.session.clone());
+                                    Err(format!("{error:#}"))
+                                }
+                            };
+                            Some((watch.generation, source.session, result))
+                        }
+                    })).buffer_unordered(4);
+                    while let Some(result) = jobs.next().await {
+                        if let Some(result) = result {
+                            if loaded.send(result).await.is_err() { break; }
+                            repaint.request_repaint();
+                        }
+                    }
+                };
+                tokio::select! {
+                    _ = token.cancelled() => break,
+                    result = incoming.changed() => { if result.is_err() { break; } continue; }
+                    _ = work => {},
+                }
+                tokio::select! { _ = token.cancelled() => break, result = incoming.changed() => if result.is_err() { break }, _ = tokio::time::sleep(INTERVAL) => {} }
+            }
+            Ok(Vec::new())
+        });
+        let images = crate::markdown_images::Images::with_services(ctx, services.clone());
         Self {
             entries: HashMap::new(),
             requests,
             results,
+            outgoing,
+            services,
+            next_document: 1 << 63,
             visible: Vec::new(),
             watching: Vec::new(),
             retained: HashSet::new(),
             generation: 0,
             refresh: false,
             images,
+            #[cfg(test)]
+            _owner: None,
         }
     }
     pub fn begin_frame(&mut self) {
         self.visible.clear();
         self.retained.clear();
+        self.process_results();
+    }
+    fn process_results(&mut self) {
         while let Ok((generation, sid, result)) = self.results.try_recv() {
-            if generation == self.generation
-                && let Some(preview) = self.entries.get_mut(&sid)
+            if let Some(preview) = self.entries.get_mut(&sid)
+                && (generation == self.generation || generation == preview.snapshot_generation)
             {
                 preview.apply(result);
+                preview.applied_generation = generation;
             }
+        }
+    }
+    #[cfg(test)]
+    pub fn wait_prepared(&mut self) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            self.process_results();
+            if self.entries.values().all(|p| {
+                p.snapshot_source.is_none() || p.applied_generation == p.snapshot_generation
+            }) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Markdown preparation did not complete"
+            );
+            std::thread::sleep(Duration::from_millis(2));
         }
     }
     pub fn retain(&mut self, sid: &str) -> &mut Preview {
@@ -442,19 +518,46 @@ impl Previews {
     }
     /// Render immutable Git content through the same resolver and bounded image loader.
     pub fn snapshot(&mut self, key: &str, path: &Path, text: &str) -> &mut Preview {
-        let preview = self.retain(key);
+        self.retained.insert(key.into());
+        let preview = self.entries.entry(key.into()).or_default();
         if !preview
             .snapshot_source
             .as_ref()
             .is_some_and(|(old_path, old_text)| old_path == path && old_text == text)
         {
-            preview.apply(Ok(prepare(Snapshot {
+            use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
+            self.next_document = self.next_document.wrapping_add(1);
+            let generation = self.next_document;
+            let snapshot = Snapshot {
                 path: path.to_owned(),
                 text: text.to_owned(),
                 revision: None,
                 paused: false,
-            })));
-            preview.snapshot_source = Some((path.to_owned(), text.to_owned()));
+            };
+            let service = self.services.clone();
+            let outgoing = self.outgoing.clone();
+            let id = key.to_owned();
+            let context =
+                OperationContext::new("markdown-document", id.clone(), Policy::ReplaceableRead);
+            let cancel = CancellationToken::new();
+            let token = cancel.clone();
+            if self
+                .services
+                .handle()
+                .submit(context, cancel, async move {
+                    let result = service
+                        .cpu()
+                        .run(&token, move || Ok(prepare(snapshot)))
+                        .await
+                        .map_err(|e| format!("{e:#}"));
+                    let _ = outgoing.send((generation, id, result)).await;
+                    Ok(Vec::new())
+                })
+                .is_ok()
+            {
+                preview.snapshot_source = Some((path.to_owned(), text.to_owned()));
+                preview.snapshot_generation = generation;
+            }
         }
         preview
     }
@@ -502,9 +605,117 @@ impl Previews {
     }
 }
 
+async fn read_source_async(
+    service: &crate::gui_services::Services,
+    source: &Source,
+    previous: Option<Arc<Snapshot>>,
+    cancel: &terminator_core::async_service::CancellationToken,
+    force: bool,
+) -> Result<Option<Snapshot>> {
+    let socket = source.socket.clone();
+    if service
+        .fs()
+        .run(cancel, move || Ok(socket.exists()))
+        .await?
+    {
+        let response = (async {
+            let mut rpc = crate::nvim_rpc::AsyncConnection::connect(
+                &source.socket,
+                Duration::from_millis(400),
+                service.cpu().clone(),
+            )
+            .await?;
+            // Fast requests still work at swap-file, hit-enter and input() prompts.
+            // Ordinary evaluation would be deferred until the user answers them.
+            let mode = rpc
+                .call("nvim_get_mode", serde_json::json!([]), 4096)
+                .await?;
+            if mode["blocking"].as_bool().context("Invalid Neovim mode")? {
+                return Ok(None);
+            }
+            let revision = previous
+                .as_deref()
+                .filter(|s| !force && !s.paused)
+                .and_then(|s| s.revision.as_ref());
+            let arguments =
+                serde_json::json!({"path":source.path, "previous":revision, "limit":MAX_DOCUMENT});
+            let code = format!("local _A = ...\n{}", include_str!("markdown_snapshot.lua"));
+            Ok(Some(
+                rpc.call(
+                    "nvim_exec_lua",
+                    serde_json::json!([code, [arguments]]),
+                    MAX_DOCUMENT * 6 + 16384,
+                )
+                .await?,
+            ))
+        })
+        .await;
+        let value = match response {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                return paused_async(service, source.clone(), previous.clone(), cancel)
+                    .await
+                    .map(Some);
+            }
+            Err(error) if crate::nvim_rpc::timed_out(&error) => {
+                return paused_async(service, source.clone(), previous.clone(), cancel)
+                    .await
+                    .map(Some);
+            }
+            Err(error) => return Err(error.context("Could not read the live editor buffer")),
+        };
+        let value: serde_json::Value =
+            serde_json::from_str(value.as_str().context("Invalid editor preview response")?)?;
+        if let Some(error) = value["error"].as_str() {
+            anyhow::bail!("{error}");
+        }
+        if value["unchanged"].as_bool() == Some(true) {
+            return Ok(None);
+        }
+        let snapshot: Snapshot = serde_json::from_value(value)?;
+        ensure!(
+            snapshot.text.len() <= MAX_DOCUMENT,
+            "Markdown preview is limited to 1 MiB"
+        );
+        return Ok(Some(snapshot));
+    }
+    if previous.as_deref().is_some_and(|s| s.revision.is_some()) {
+        return paused_async(service, source.clone(), previous, cancel)
+            .await
+            .map(Some);
+    }
+    let source = source.clone();
+    let operation = cancel.clone();
+    service
+        .fs()
+        .run(cancel, move || read_saved_cancel(&source, &operation))
+        .await
+        .map(Some)
+}
+async fn paused_async(
+    service: &crate::gui_services::Services,
+    source: Source,
+    previous: Option<Arc<Snapshot>>,
+    cancel: &terminator_core::async_service::CancellationToken,
+) -> Result<Snapshot> {
+    let operation = cancel.clone();
+    service
+        .fs()
+        .run(cancel, move || {
+            let mut snapshot = match previous.as_deref().filter(|s| s.revision.is_some()) {
+                Some(snapshot) => snapshot.clone(),
+                None => read_saved_cancel(&source, &operation)?,
+            };
+            snapshot.paused = true;
+            Ok(snapshot)
+        })
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
 
     fn snapshot(text: &str) -> Snapshot {
         Snapshot {
@@ -521,11 +732,13 @@ mod tests {
         let mut previews = Previews::new(&ctx);
         let path = Path::new("/repo/docs/readme.md");
         previews.begin_frame();
-        let preview = previews.snapshot(
+        previews.snapshot(
             "diff:left",
             path,
             "[Next](../next.md) ![pic](images/a.png) [bad](command:run)",
         );
+        previews.wait_prepared();
+        let preview = &previews.entries["diff:left"];
         let doc = preview.document.as_ref().unwrap();
         assert_eq!(
             doc.links["../next.md"],
@@ -541,7 +754,9 @@ mod tests {
         previews.end_frame(&ctx);
         assert_eq!(previews.entries.len(), 2);
         previews.begin_frame();
-        let preview = previews.snapshot("diff:left", path, "[New](new.md)");
+        previews.snapshot("diff:left", path, "[New](new.md)");
+        previews.wait_prepared();
+        let preview = &previews.entries["diff:left"];
         assert!(
             !preview
                 .document
@@ -790,15 +1005,15 @@ mod tests {
     fn stale_preview_updates_cannot_replace_a_newer_watch() {
         let ctx = egui::Context::default();
         let mut previews = Previews::new(&ctx);
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
         previews.results = rx;
         previews.generation = 2;
         previews.entries.insert("editor".into(), Preview::default());
-        tx.send((1, "editor".into(), Ok(prepare(snapshot("old")))))
+        tx.try_send((1, "editor".into(), Ok(prepare(snapshot("old")))))
             .unwrap();
         previews.begin_frame();
         assert!(previews.entries["editor"].document.is_none());
-        tx.send((2, "editor".into(), Ok(prepare(snapshot("new")))))
+        tx.try_send((2, "editor".into(), Ok(prepare(snapshot("new")))))
             .unwrap();
         previews.begin_frame();
         assert_eq!(

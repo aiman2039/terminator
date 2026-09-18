@@ -1249,6 +1249,13 @@ fn main() -> Result<()> {
             .expect("Catalog runtime")
             .into(),
     });
+    if let Some(root) = &catalog_paths {
+        generations::validate_endpoint(
+            root,
+            &paths,
+            &std::env::var("TERMINATOR_GENERATION").context("Missing generation identity")?,
+        )?;
+    }
     let _legacy_guard = if let Some(root) = &catalog_paths {
         let guard = fs::OpenOptions::new()
             .create(true)

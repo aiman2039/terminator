@@ -18,6 +18,23 @@ toml_edit = { version = "0.25", features = ["serde"] }
 rusqlite = { version = "0.38", features = ["bundled"] }
 fs2 = "0.4"
 
+[features]
+async-client = ["dep:tokio", "dep:tokio-util", "dep:futures-util"]
+
+[dependencies.tokio]
+version = "1"
+optional = true
+features = ["rt-multi-thread", "net", "time", "sync", "io-util", "process", "macros"]
+
+[dependencies.tokio-util]
+version = "0.7"
+optional = true
+features = ["rt"]
+
+[dependencies.futures-util]
+version = "0.3"
+optional = true
+
 [dev-dependencies]
 tempfile = "3"
 

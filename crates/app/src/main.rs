@@ -46,6 +46,8 @@ mod clipboard;
 #[cfg(feature = "test-support")]
 mod diagnostics;
 mod diff;
+mod gui_services;
+mod native_jobs;
 mod services;
 use anyhow::{Context, Result};
 use eframe::egui::{self, Color32, RichText};
@@ -56,12 +58,13 @@ use egui_dock::{DockArea, NodeIndex, TabViewer};
 use egui_term::{PtyEvent, TerminalBackend, TerminalView};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::thread;
 use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, Sender},
-    thread,
     time::{Duration, Instant},
 };
 use terminator_core::*;
@@ -116,6 +119,13 @@ enum RenameSurface {
     Pane,
     Sidebar,
 }
+struct FileActivation {
+    project: Option<String>,
+    path: PathBuf,
+    staged: Option<bool>,
+    action: FileClick,
+    at: Instant,
+}
 struct FilePointer {
     path: PathBuf,
     deleted: bool,
@@ -153,6 +163,8 @@ enum After {
     Text(String),
 }
 enum Job {
+    PrepareLayouts(u64, Vec<(String, Workspace)>),
+    SaveLayout(String, serde_json::Value, String),
     CloseIdle(editor_close::Target, String, Vec<String>),
     RepairInstallation(String, exit::Checkpoint),
     RestartSessionService(recovery::RestartInventory),
@@ -187,6 +199,10 @@ impl Job {
     }
 }
 enum Update {
+    LayoutsPrepared(u64, Vec<(String, serde_json::Value, String)>),
+    LayoutSaved(String, String, Result<(), String>),
+    RadioCatalog(std::sync::Arc<Vec<player::radio::Station>>),
+    PlayerSamples(Vec<PathBuf>),
     RestartFinished(String),
     WorktreeCreated(Box<State>, String, bool),
     IdleClosed(
@@ -197,9 +213,15 @@ enum Update {
     InstallationRepaired(Result<Box<State>, String>),
     ExitDrained(u64, u64),
     ExitSaved(u64, Result<(), String>),
+    #[cfg(test)]
     UiRequest(
         terminator_core::ui_control::Request,
         mpsc::SyncSender<Result<serde_json::Value, String>>,
+        Instant,
+    ),
+    AsyncUiRequest(
+        terminator_core::ui_control::Request,
+        tokio::sync::oneshot::Sender<Result<serde_json::Value, String>>,
         Instant,
     ),
     Metadata(u64, metadata::Metadata),
@@ -367,414 +389,13 @@ fn header_drag_space(ui: &mut egui::Ui) {
         begin_native_window_gesture(ui.ctx(), egui::ViewportCommand::StartDrag);
     }
 }
-fn external_opener(paths: &Paths, path: &std::path::Path) -> Result<(String, Vec<String>)> {
-    if image_preview::supported(path) {
-        return Ok(external_editor::image_opener());
-    }
-    let Response::State(state) = rpc(paths, Request::Snapshot)? else {
-        anyhow::bail!("Expected editor settings snapshot");
-    };
-    Ok((state.settings.external_editor, state.settings.external_args))
-}
-fn launch_external(
-    program: &str,
-    args: &[String],
-    path: &std::path::Path,
-    tx: Sender<Update>,
-    ctx: egui::Context,
-    test: bool,
-) -> Result<()> {
-    let updates = tx.clone();
-    external_editor::launch(program, args, path, move |result| {
-        if let Err(error) = result {
-            let _ = updates.send(Update::Error(format!("{error:#}")));
-        }
-        ctx.request_repaint();
-    })?;
-    if test {
-        let _ = tx.send(Update::Info(
-            "External editor launched with draft settings. Check the selected file in the editor."
-                .into(),
-        ));
-    }
-    Ok(())
-}
-fn worker(paths: Paths, ctx: egui::Context, rx: Receiver<Job>, tx: Sender<Update>) {
-    // Model-level tests inject responses explicitly. Keep their command channel
-    // alive without starting dozens of native config watchers or probing a daemon.
-    // The xtask PTY/GUI fixtures run the normal binary and exercise real I/O.
-    if cfg!(test) {
-        for job in rx {
-            match job {
-                Job::ExitDrain(id, serial) => {
-                    let _ = tx.send(Update::ExitDrained(id, serial));
-                }
-                Job::ExitSave(id, _) => {
-                    let _ = tx.send(Update::ExitSaved(id, Ok(())));
-                }
-                _ => {}
-            }
-        }
-        return;
-    }
-    let mut last = Instant::now() - Duration::from_secs(2);
-    let mut revision = None;
-    let config = config_path(&paths).ok();
-    let (config_events, config_rx) = mpsc::channel();
-    let watch_target = config.clone();
-    let mut config_watcher =
-        notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            if event.as_ref().map_or(true, |e| {
-                !matches!(e.kind, notify::EventKind::Access(_))
-                    && e.paths.iter().any(|path| {
-                        watch_target
-                            .as_ref()
-                            .is_some_and(|target| path.file_name() == target.file_name())
-                    })
-            }) {
-                let _ = config_events.send(());
-            }
-        })
-        .ok();
-    if let (Some(watcher), Some(path)) = (&mut config_watcher, &config) {
-        use notify::Watcher;
-        let mut parent = path.parent().unwrap_or(path);
-        while !parent.exists() {
-            let Some(next) = parent.parent() else { break };
-            parent = next;
-        }
-        if watcher
-            .watch(parent, notify::RecursiveMode::Recursive)
-            .is_err()
-        {
-            config_watcher = None;
-        }
-    }
-    let mut config_changed = None::<Instant>;
-    let mut config_source: Option<String> = None;
-    let mut config_check = Instant::now() - Duration::from_secs(2);
-    loop {
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(job) => {
-                let result = (|| -> Result<()> {
-                    match job {
-                        Job::RepairInstallation(generation, checkpoint) => {
-                            let result = (|| -> Result<Box<State>> {
-                                checkpoint.save(&paths)?;
-                                daemon_connection::repair(
-                                    &paths,
-                                    &std::env::current_exe()?,
-                                    &generation,
-                                )
-                            })()
-                            .map_err(|e| format!("{e:#}"));
-                            revision = None;
-                            tx.send(Update::InstallationRepaired(result))?;
-                        }
-                        Job::CreateWorktree(draft) => {
-                            let (state, project) =
-                                worktree_ui::create(&draft, |request| rpc(&paths, request))?;
-                            tx.send(Update::WorktreeCreated(state, project, draft.open_terminal))?;
-                        }
-                        Job::RestartSessionService(inventory) => {
-                            let restart_tx = tx.clone();
-                            let restart_ctx = ctx.clone();
-                            let result = (|| {
-                                installation::spawn_restart(
-                                    installation::restart_invocation(
-                                        &std::env::current_exe()?,
-                                        &paths,
-                                    )?,
-                                    inventory,
-                                    move |message| {
-                                        let _ = restart_tx.send(Update::RestartFinished(message));
-                                        restart_ctx.request_repaint();
-                                    },
-                                )
-                            })();
-                            if let Err(error) = result {
-                                tx.send(Update::RestartFinished(format!("{error:#}")))?;
-                                tx.send(Update::Error(format!("Could not restart: {error:#}")))?;
-                            }
-                        }
-                        Job::ResolveTarget(key, text, cwd) => {
-                            tx.send(Update::ResolvedTarget(
-                                key,
-                                services::resolve_target(&text, &cwd).ok(),
-                            ))?;
-                        }
-                        Job::PasteClipboard(session) => {
-                            if let Some(text) = clipboard::read_paste()? {
-                                tx.send(Update::ClipboardPaste(session, text))?;
-                            }
-                        }
-                        Job::Browser(url) => {
-                            open::that(url)?;
-                        }
-                        Job::CloseIdle(target, generation, ids) => {
-                            let result = rpc(
-                                &paths,
-                                Request::CloseIdleSessions {
-                                    generation,
-                                    sessions: ids.clone(),
-                                },
-                            )
-                            .and_then(|r| match r {
-                                Response::IdleSessionsClosed(outcomes) => Ok(outcomes),
-                                _ => anyhow::bail!("Unexpected idle-close response"),
-                            })
-                            .map_err(|e| format!("{e:#}"));
-                            tx.send(Update::IdleClosed(target, ids, result))?;
-                        }
-                        Job::CloseEditors(target, ids, mode, timeout) => {
-                            let result = editor_close::close(&paths, &ids, mode, timeout)
-                                .map_err(|e| format!("{e:#}"));
-                            tx.send(Update::EditorsClosed(target, ids, result))?;
-                        }
-                        Job::HookStatus => {
-                            let home = std::env::var_os("HOME")
-                                .map(PathBuf::from)
-                                .unwrap_or_default();
-                            tx.send(Update::HookStatus(
-                                terminator_integrations::AGENTS
-                                    .iter()
-                                    .map(|kind| {
-                                        (
-                                            (*kind).to_string(),
-                                            terminator_integrations::installed(&home, kind),
-                                        )
-                                    })
-                                    .collect(),
-                            ))?;
-                        }
-                        Job::SaveAppearance(theme, expected) => {
-                            let path = config.as_ref().context("No configuration path")?;
-                            let file = AppearanceFile::save(path, &theme, &expected)?;
-                            config_source = Some(file.source.clone());
-                            tx.send(Update::Appearance(Box::new(file)))?;
-                        }
-                        Job::ExitDrain(id, serial) => {
-                            tx.send(Update::ExitDrained(id, serial))?;
-                        }
-                        Job::ExitSave(id, checkpoint) => {
-                            let result = checkpoint.save(&paths).map_err(|e| format!("{e:#}"));
-                            tx.send(Update::ExitSaved(id, result))?;
-                        }
-                        Job::Preferences(prefs) => {
-                            let result = prefs
-                                .save(&paths.data)
-                                .map(|()| prefs)
-                                .map_err(|e| format!("Save UI preferences: {e:#}"));
-                            tx.send(Update::PreferencesSaved(result))?;
-                        }
-                        Job::MigrateAttention => {
-                            let result = (|| -> Result<()> {
-                                let Response::State(mut state) = rpc(&paths, Request::Snapshot)?
-                                else {
-                                    anyhow::bail!("Expected settings snapshot");
-                                };
-                                state.settings.notifications_side = true;
-                                state
-                                    .settings
-                                    .keybindings
-                                    .entry("open_file".into())
-                                    .or_insert_with(|| "command+O".into());
-                                anyhow::ensure!(
-                                    matches!(
-                                        rpc(&paths, Request::Settings(state.settings))?,
-                                        Response::Ok
-                                    ),
-                                    "Settings not acknowledged"
-                                );
-                                Ok(())
-                            })()
-                            .map_err(|e| format!("{e:#}"));
-                            tx.send(Update::AttentionMigrated(result))?;
-                            if let Response::State(state) = rpc(&paths, Request::Snapshot)? {
-                                tx.send(Update::State(state))?;
-                            }
-                        }
-                        Job::MigrateTypography => {
-                            let Response::State(mut state) = rpc(&paths, Request::Snapshot)? else {
-                                anyhow::bail!("Expected settings snapshot");
-                            };
-                            state.settings.font_size = 13.0;
-                            anyhow::ensure!(
-                                matches!(
-                                    rpc(&paths, Request::Settings(state.settings))?,
-                                    Response::Ok
-                                ),
-                                "Settings not acknowledged"
-                            );
-                            tx.send(Update::TypographyMigrated)?;
-                            if let Response::State(state) = rpc(&paths, Request::Snapshot)? {
-                                tx.send(Update::State(state))?;
-                            }
-                        }
-                        Job::OpenProject(path, generation) => {
-                            let path = path.canonicalize()?;
-                            anyhow::ensure!(path.is_dir(), "Project must be a directory");
-                            // Reopening a removed project keeps its identity and sessions,
-                            // even when its saved path uses a symlink to the selected folder.
-                            let Response::State(state) = rpc(&paths, Request::Snapshot)? else {
-                                anyhow::bail!("Expected project inventory");
-                            };
-                            let (state, project) = if let Some(project) =
-                                services::project_for_directory(&state.projects, &path)
-                            {
-                                let project = project.id.clone();
-                                (state, project)
-                            } else {
-                                rpc(&paths, Request::AddProject { path: path.clone() })?;
-                                let Response::State(state) = rpc(&paths, Request::Snapshot)? else {
-                                    anyhow::bail!("Expected project inventory");
-                                };
-                                let project =
-                                    services::project_for_directory(&state.projects, &path)
-                                        .context("Opened project missing from inventory")?
-                                        .id
-                                        .clone();
-                                (state, project)
-                            };
-                            tx.send(Update::OpenedProject(state, project, generation))?;
-                        }
-                        Job::Control(req, after) => match rpc(&paths, *req)? {
-                            Response::Created(session) => {
-                                if let After::Create(split) = after {
-                                    tx.send(Update::Created(session, split, None))?;
-                                } else if let After::CreateAt(anchors, split) = after {
-                                    tx.send(Update::Created(session, split, Some(anchors)))?;
-                                } else if let After::Workspace(id, anchors) = after {
-                                    tx.send(Update::WorkspaceCreated(session, id, anchors))?;
-                                }
-                            }
-                            Response::Text(text) => {
-                                if let After::Text(key) = after {
-                                    tx.send(Update::Text(key, text))?;
-                                }
-                            }
-                            _ => {}
-                        },
-                        Job::Diff(tab) => {
-                            if let Tab::Diff { cwd, path, staged } = &tab {
-                                let result = diff::document(diff::DiffRequest {
-                                    cwd,
-                                    path,
-                                    staged: *staged,
-                                })
-                                .map_err(|e| format!("{e:#}"));
-                                tx.send(Update::Diff(tab.key(), result))?;
-                            }
-                        }
-                        Job::Install(kind, remove) => {
-                            anyhow::ensure!(
-                                remove || find_executable(&kind).is_some(),
-                                "Install the {kind} CLI before configuring its hooks"
-                            );
-                            let home = std::env::var_os("HOME").context("No home directory")?;
-                            let helper = std::env::current_exe()?.with_file_name("terminator-hook");
-                            let path = terminator_integrations::install_at(
-                                std::path::Path::new(&home),
-                                &kind,
-                                &helper,
-                                remove,
-                                &paths,
-                            )?;
-                            tx.send(Update::Info(format!(
-                                "{} hooks: {}",
-                                if remove { "Removed" } else { "Installed" },
-                                path.display()
-                            )))?;
-                        }
-                        Job::External(path) => {
-                            let (program, args) = external_opener(&paths, &path)?;
-                            launch_external(
-                                &program,
-                                &args,
-                                &path,
-                                tx.clone(),
-                                ctx.clone(),
-                                false,
-                            )?;
-                        }
-                        Job::TestExternal(path, program, args) => {
-                            launch_external(&program, &args, &path, tx.clone(), ctx.clone(), true)?;
-                        }
-                    }
-                    Ok(())
-                })();
-                if let Err(e) = result {
-                    let error = format!("{e:#}");
-                    if daemon_connection::is_connection_error(&error) {
-                        revision = None;
-                    }
-                    let _ = tx.send(Update::Error(error));
-                }
-                ctx.request_repaint();
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(_) => {}
-        }
-        while config_rx.try_recv().is_ok() {
-            config_changed = Some(Instant::now());
-        }
-        if config_source.is_none()
-            || config_changed.is_some_and(|at| at.elapsed() >= Duration::from_millis(250))
-            || config_check.elapsed()
-                >= Duration::from_secs(if config_watcher.is_some() { 30 } else { 3 })
-        {
-            config_changed = None;
-            if let Some(path) = &config {
-                let source = fs::read_to_string(path).unwrap_or_default();
-                if config_source.as_ref() != Some(&source) {
-                    config_source = Some(source);
-                    match AppearanceFile::load(path) {
-                        Ok(file) => {
-                            let _ = tx.send(Update::Appearance(Box::new(file)));
-                        }
-                        Err(e) => {
-                            let _ = tx.send(Update::Error(format!("{}: {e:#}", path.display())));
-                        }
-                    }
-                    ctx.request_repaint();
-                }
-            }
-            config_check = Instant::now();
-        }
-        if last.elapsed() >= Duration::from_millis(100) {
-            if let Ok(notice) = fs::read_to_string(paths.runtime.join("activation")) {
-                let _ = fs::remove_file(paths.runtime.join("activation"));
-                let _ = tx.send(Update::Activation(notice));
-                ctx.request_repaint();
-            }
-            match conditional_snapshot(&paths, revision.clone()) {
-                Ok(Response::State(state)) => {
-                    if let Err(error) = std::env::current_exe()
-                        .map_err(anyhow::Error::from)
-                        .and_then(|exe| installation::restart_result(&paths, &state, &exe))
-                    {
-                        let _ = tx.send(Update::Error(format!("{error:#}")));
-                    }
-                    if revision.as_ref() != Some(&state.snapshot_hint()) {
-                        revision = Some(state.snapshot_hint());
-                        let _ = tx.send(Update::State(state));
-                        ctx.request_repaint();
-                    }
-                }
-                Err(e) => {
-                    // Obtain a full snapshot on reconnect even if the daemon's
-                    // generation/revision did not change during the outage.
-                    revision = None;
-                    let _ = tx.send(Update::Error(format!("Reconnecting: {e}")));
-                    ctx.request_repaint();
-                }
-                _ => {}
-            }
-            last = Instant::now();
-        }
-    }
-}
 struct App {
+    file_activation: Option<FileActivation>,
+    services: gui_services::Services,
+    service_owner: gui_services::Owner,
+    service_completion: Option<async_service::Completion<Vec<Update>>>,
+    service_ready: std::collections::VecDeque<Update>,
+    ui_service_peak_ms: f64,
     installation_error: Option<String>,
     repair_pending: bool,
     restart_pending: bool,
@@ -807,6 +428,8 @@ struct App {
     workspace_insert: HashMap<String, usize>,
     workspace_visible: Option<(String, String)>,
     layout_saved: HashMap<String, String>,
+    layout_pending: HashMap<String, String>,
+    layout_generation: u64,
     selected: Option<String>,
     active_session: Option<String>,
     images: HashMap<PathBuf, image_preview::Preview>,
@@ -818,7 +441,7 @@ struct App {
     markdown: markdown::Previews,
     visible_images: HashSet<PathBuf>,
     image_generation: u64,
-    image_jobs: mpsc::SyncSender<(PathBuf, u64)>,
+    image_jobs: gui_services::ImageJobs,
     backends: HashMap<String, TerminalBackend>,
     visible_sessions: HashSet<String>,
     backend_ids: HashMap<u64, String>,
@@ -836,7 +459,7 @@ struct App {
     focus_tab: Option<Tab>,
     terminal_context: HashMap<String, String>,
     texts: HashMap<String, String>,
-    diffs: HashMap<String, Result<diff::DiffDocument, String>>,
+    diffs: HashMap<String, Result<std::sync::Arc<diff::DiffDocument>, String>>,
     diff_split: HashSet<String>,
     diff_preview: HashSet<String>,
     loading: HashSet<String>,
@@ -844,7 +467,7 @@ struct App {
     directory_errors: HashMap<PathBuf, services::DirectoryError>,
     context: Option<services::ContextData>,
     metadata: Option<metadata::Metadata>,
-    metadata_jobs: Sender<Option<metadata_refresh::Request>>,
+    metadata_jobs: tokio::sync::watch::Sender<Option<metadata_refresh::Request>>,
     metadata_request: Option<metadata_refresh::Request>,
     metadata_generation: u64,
     context_path: Option<PathBuf>,
@@ -889,7 +512,7 @@ struct App {
     pick_audio_dir: bool,
     path_text: String,
     last_save: Instant,
-    refresh: Sender<Option<refresh::Request>>,
+    refresh: tokio::sync::watch::Sender<Option<refresh::Request>>,
     refresh_request: Option<refresh::Request>,
     refresh_generation: u64,
     visible_dirs: Vec<PathBuf>,
@@ -912,15 +535,21 @@ impl App {
     }
     fn new(cc: &eframe::CreationContext<'_>, paths: Paths) -> Self {
         let mut app = Self::with_context(&cc.egui_ctx, paths.clone());
-        match ui_control::spawn(paths, app.update_tx.clone(), cc.egui_ctx.clone()) {
+        match ui_control::spawn(paths, app.services.clone()) {
             Ok(server) => app.control_server = Some(server),
             Err(error) => app.error = Some(format!("GUI control server: {error:#}")),
+        }
+        #[cfg(feature = "test-support")]
+        if std::env::var_os("TERMINATOR_TEST_RESPONSIVENESS").is_some()
+            && let Some(socket) = std::env::var_os("TERMINATOR_TEST_STALL_NVIM")
+            && let Err(error) = app.services.fixture_stalls(socket.into())
+        {
+            app.error = Some(format!("Fixture stalls: {error:#}"));
         }
         app
     }
     fn with_context(ctx: &egui::Context, paths: Paths) -> Self {
         appearance::install(ctx);
-        let markdown = markdown::Previews::new(ctx);
         let loaded = UiPreferences::load(&paths.data);
         let preferences_writable = loaded.is_ok();
         let preference_error = loaded
@@ -929,32 +558,25 @@ impl App {
             .map(|e| format!("UI preferences: {e:#}"));
         let upgrade_error = fs::read_to_string(paths.data.join("service-upgrade-error.txt")).ok();
         let preferences = loaded.unwrap_or_default();
-        let (jobs, rx) = mpsc::channel();
         let (tx, updates) = mpsc::channel();
-        let refresh = refresh::spawn(tx.clone(), ctx.clone());
-        let metadata_jobs = metadata_refresh::spawn(tx.clone(), ctx.clone());
+        let (services, service_owner) =
+            gui_services::Services::new(paths.clone(), ctx.clone(), tx.clone())
+                .expect("start GUI services");
+        let markdown = markdown::Previews::with_services(ctx, services.clone());
+        let jobs = exit::JobQueue::supervised(services.clone());
+        let refresh = refresh::spawn_async(services.clone());
+        let metadata_jobs = metadata_refresh::spawn(services.clone());
         let update_tx = tx.clone();
-        let (image_jobs, image_requests) = mpsc::sync_channel::<(PathBuf, u64)>(8);
-        let image_updates = tx.clone();
-        let repaint = ctx.clone();
-        thread::spawn(move || {
-            while let Ok((path, generation)) = image_requests.recv() {
-                let result = image_preview::decode(&path).map_err(|e| format!("{e:#}"));
-                if image_updates
-                    .send(Update::Image(path, generation, result))
-                    .is_err()
-                {
-                    break;
-                }
-                repaint.request_repaint();
-            }
-        });
-        let p = paths.clone();
-        let context = ctx.clone();
-        thread::spawn(move || worker(p, context, rx, tx));
+        let image_jobs = gui_services::ImageJobs(services.clone());
         let _ = jobs.send(Job::HookStatus);
         let (pty_tx, pty_rx) = mpsc::channel();
         Self {
+            file_activation: None,
+            services: services.clone(),
+            service_owner,
+            service_completion: None,
+            service_ready: Default::default(),
+            ui_service_peak_ms: 0.0,
             exit: Default::default(),
             exit_attempt: 0,
             updater: updater::Updater::new(ctx),
@@ -987,6 +609,8 @@ impl App {
             workspace_insert: HashMap::new(),
             workspace_visible: None,
             layout_saved: HashMap::new(),
+            layout_pending: HashMap::new(),
+            layout_generation: 0,
             selected: None,
             active_session: None,
             images: HashMap::new(),
@@ -994,7 +618,7 @@ impl App {
             visible_browsers: Vec::new(),
             browser_urls: HashMap::new(),
             browser_submit: None,
-            player: player::Controller::new(),
+            player: player::Controller::new(services),
             markdown,
             visible_images: HashSet::new(),
             image_generation: 0,
@@ -1005,7 +629,7 @@ impl App {
             next_backend: 0,
             pty_tx,
             pty_rx,
-            jobs: jobs.into(),
+            jobs,
             updates,
             update_tx,
             picker_active: false,
@@ -1101,6 +725,26 @@ impl App {
         anyhow::ensure!(!self.exit.active(), "Terminator is saving before closing");
         let gui_ppp = ctx.pixels_per_point();
         match request {
+            #[cfg(not(feature = "test-support"))]
+            Ui::FixturePlayer { .. } => anyhow::bail!("Player fixture control is disabled"),
+            #[cfg(feature = "test-support")]
+            Ui::FixturePlayer { action, url } => {
+                anyhow::ensure!(
+                    std::env::var_os("TERMINATOR_TEST_RESPONSIVENESS").is_some(),
+                    "Player fixture control is disabled"
+                );
+                match action.as_str() {
+                    "play" => self.player.fixture_play(
+                        self.selected.as_deref().unwrap_or("fixture"),
+                        url.context("Missing fixture URL")?,
+                    ),
+                    "pause" => self.player.pause(),
+                    "resume" => self.player.resume(),
+                    "stop" => self.player.stop(),
+                    _ => anyhow::bail!("Invalid player fixture action"),
+                }
+            }
+
             Ui::Ping => {
                 return Ok(
                     serde_json::json!({"capabilities":[terminator_core::ui_control::CAPABILITY]}),
@@ -1115,6 +759,9 @@ impl App {
                         "resize-se":self.fixture_rect(ctx,"window-resize-3")
                     },
                     "window":ctx.input(|i|serde_json::json!({"inner":i.viewport().inner_rect.map(|r|[r.min.x,r.min.y,r.width(),r.height()]),"outer":i.viewport().outer_rect.map(|r|[r.min.x,r.min.y,r.width(),r.height()]),"maximized":i.viewport().maximized,"minimized":i.viewport().minimized,"gui_ppp":gui_ppp,"native_ppp":i.viewport().native_pixels_per_point}))});
+                snapshot["services"] = self.services.diagnostics();
+                snapshot["services"]["ui_processing_peak_ms"] =
+                    serde_json::json!(self.ui_service_peak_ms);
                 #[cfg(feature = "test-support")]
                 {
                     snapshot["updater_available"] = serde_json::json!(self.updater.available());
@@ -1165,6 +812,7 @@ impl App {
                     snapshot["player"] = serde_json::json!({
                         "chrome":self.fixture_rect(ctx,"player-chrome"),
                         "project":self.player.project,
+                        "engine":self.player.fixture_diagnostics(),
                     });
                     snapshot["markdown_header"] = serde_json::json!({
                         "title":self.fixture_rect(ctx,"markdown-title"),
@@ -1275,8 +923,112 @@ impl App {
         let _ = self.jobs.send(Job::rpc(request, After::None));
     }
     fn process_updates(&mut self, ctx: &egui::Context) {
-        while let Ok(update) = self.updates.try_recv() {
+        let processing_started = Instant::now();
+        let mut budget = native_jobs::ResultBudget::new();
+        loop {
+            if !budget.next() {
+                ctx.request_repaint();
+                break;
+            }
+            if self.service_ready.is_empty() {
+                self.service_completion.take();
+                if let Some(mut completion) = self.service_owner.supervisor.try_recv() {
+                    match completion.result.take().unwrap() {
+                        Ok(updates) => self.service_ready.extend(updates),
+                        Err(async_service::Failure::Cancelled) => {
+                            let key = &completion.context.resource;
+                            if matches!(completion.context.subsystem, "diff" | "files") {
+                                self.loading.remove(key);
+                            }
+                            if completion.context.subsystem == "images"
+                                && let Some(preview) = self.images.values_mut().find(|preview| {
+                                    preview.generation == completion.context.generation
+                                })
+                            {
+                                preview.loading = false;
+                                preview.cancellation = None;
+                            }
+                        }
+                        Err(error) => {
+                            let key = &completion.context.resource;
+                            match completion.context.subsystem {
+                                "diff" => self
+                                    .service_ready
+                                    .push_back(Update::Diff(key.clone(), Err(error.to_string()))),
+                                "files" => {
+                                    self.loading.remove(key);
+                                    self.service_ready
+                                        .push_back(Update::Error(error.to_string()));
+                                }
+                                "images" => self.service_ready.push_back(Update::Image(
+                                    PathBuf::from(key),
+                                    completion.context.generation,
+                                    Err(error.to_string()),
+                                )),
+                                _ => self
+                                    .service_ready
+                                    .push_back(Update::Error(error.to_string())),
+                            }
+                        }
+                    }
+                    self.service_completion = Some(completion);
+                    ctx.request_repaint();
+                }
+            }
+            let update = if let Some(update) = self.service_ready.pop_front() {
+                update
+            } else if let Some(state) = self
+                .service_owner
+                .snapshot
+                .try_lock()
+                .ok()
+                .and_then(|mut state| state.take())
+            {
+                Update::State(state)
+            } else if let Ok(update) = self.service_owner.events.try_recv() {
+                update
+            } else if let Ok(update) = self.updates.try_recv() {
+                update
+            } else {
+                break;
+            };
             match update {
+                Update::LayoutsPrepared(generation, layouts) => {
+                    if generation == self.layout_generation && !self.exit.active() {
+                        for (project, value, text) in layouts {
+                            if !self.layout_readonly.contains(&project)
+                                && self.layout_saved.get(&project) != Some(&text)
+                                && self.layout_pending.get(&project) != Some(&text)
+                                && self
+                                    .jobs
+                                    .send(Job::SaveLayout(project.clone(), value, text.clone()))
+                                    .is_ok()
+                            {
+                                self.layout_pending.insert(project, text);
+                            }
+                        }
+                    }
+                }
+                Update::LayoutSaved(project, text, result) => {
+                    if self.layout_pending.get(&project) == Some(&text) {
+                        self.layout_pending.remove(&project);
+                    }
+                    match result {
+                        Ok(()) => {
+                            self.layout_saved.insert(project, text);
+                        }
+                        Err(error) => {
+                            if self.exit.active() {
+                                self.cancel_exit(error);
+                            } else {
+                                self.error = Some(error);
+                            }
+                        }
+                    }
+                }
+
+                Update::RadioCatalog(catalog) => self.player.radio_base = catalog,
+                Update::PlayerSamples(samples) => self.apply_player_samples(samples),
                 Update::InstallationRepaired(result) => {
                     self.repair_pending = false;
                     match result {
@@ -1356,7 +1108,16 @@ impl App {
                 Update::EditorsClosed(target, ids, result) => {
                     self.editors_closed(target, ids, result);
                 }
+                #[cfg(test)]
                 Update::UiRequest(request, reply, deadline) => {
+                    let result = if Instant::now() >= deadline {
+                        Err("GUI request expired before processing; no action was performed".into())
+                    } else {
+                        self.ui_request(ctx, request).map_err(|e| format!("{e:#}"))
+                    };
+                    let _ = reply.send(result);
+                }
+                Update::AsyncUiRequest(request, reply, deadline) => {
                     let result = if Instant::now() >= deadline {
                         Err("GUI request expired before processing; no action was performed".into())
                     } else {
@@ -1398,8 +1159,15 @@ impl App {
                         .filter(|p| p.generation == generation)
                     {
                         preview.loading = false;
+                        let previous_bytes = preview
+                            .texture
+                            .as_ref()
+                            .map_or(0, |t| t.size()[0] * t.size()[1] * 4);
                         match result {
-                            Ok(image) if used + image.pixels.len() * 4 <= 128 * 1024 * 1024 => {
+                            Ok(image)
+                                if used.saturating_sub(previous_bytes) + image.pixels.len() * 4
+                                    <= 128 * 1024 * 1024 =>
+                            {
                                 preview.texture = Some(ctx.load_texture(
                                     format!("preview:{}:{generation}", path.display()),
                                     image,
@@ -1610,7 +1378,19 @@ impl App {
                 }
                 Update::Diff(key, result) => {
                     self.loading.remove(&key);
-                    self.diffs.insert(key, result);
+                    match result {
+                        Ok(document) => {
+                            self.diffs.insert(key, Ok(std::sync::Arc::new(document)));
+                        }
+                        Err(error) if self.diffs.get(&key).is_some_and(Result::is_ok) => {
+                            self.error = Some(format!(
+                                "Diff refresh failed; showing the previous view: {error}"
+                            ));
+                        }
+                        Err(error) => {
+                            self.diffs.insert(key, Err(error));
+                        }
+                    }
                 }
                 Update::Refresh(generation, context, directories, fallback) => {
                     if generation == self.refresh_generation
@@ -1619,6 +1399,17 @@ impl App {
                             .as_ref()
                             .is_some_and(|r| r.cwd == context.cwd)
                     {
+                        let context = match self.context.take() {
+                            Some(mut previous)
+                                if previous.cwd == context.cwd
+                                    && previous.root.is_some()
+                                    && (context.root.is_none() || context.error.is_some()) =>
+                            {
+                                previous.error = context.error.or_else(|| Some("Repository unavailable; showing the last successful status".into()));
+                                previous
+                            }
+                            _ => context,
+                        };
                         self.context = Some(context);
                         self.watch_fallback = fallback;
                         for (path, entries) in directories {
@@ -1690,7 +1481,15 @@ impl App {
                 Update::Info(i) => self.info = Some(i),
             }
         }
-        while let Ok((id, event)) = self.pty_rx.try_recv() {
+        let mut budget = native_jobs::ResultBudget::new();
+        loop {
+            if !budget.next() {
+                ctx.request_repaint();
+                break;
+            }
+            let Ok((id, event)) = self.pty_rx.try_recv() else {
+                break;
+            };
             if let PtyEvent::ClipboardStore(_, ref text) = event {
                 ctx.copy_text(text.clone());
             }
@@ -1701,8 +1500,118 @@ impl App {
                 self.backends.remove(&session);
             }
         }
+        self.ui_service_peak_ms = self
+            .ui_service_peak_ms
+            .max(processing_started.elapsed().as_secs_f64() * 1000.0);
     }
     fn apply_state(&mut self, mut state: State) {
+        if state.client_observation != 0 && self.state.client_observation > state.client_observation
+        {
+            return;
+        }
+        // Failed owners can only supply an older on-disk snapshot. Keep their
+        // last observed records while publishing the new unavailability status.
+        let unavailable: HashSet<_> = state
+            .generations
+            .iter()
+            .filter(|incoming| {
+                incoming.error.is_some()
+                    && self.state.generations.iter().any(|current| {
+                        current.owner.id == incoming.owner.id
+                            && current.revision > incoming.revision
+                    })
+            })
+            .map(|health| health.owner.id.clone())
+            .collect();
+        if !unavailable.is_empty() {
+            let sessions: HashSet<_> = state
+                .sessions
+                .iter()
+                .chain(&self.state.sessions)
+                .filter(|session| unavailable.contains(&session.generation))
+                .map(|session| session.id.clone())
+                .collect();
+            state
+                .sessions
+                .retain(|session| !unavailable.contains(&session.generation));
+            state.sessions.extend(
+                self.state
+                    .sessions
+                    .iter()
+                    .filter(|session| unavailable.contains(&session.generation))
+                    .cloned(),
+            );
+            state
+                .agents
+                .retain(|agent| !sessions.contains(&agent.session_id));
+            state.agents.extend(
+                self.state
+                    .agents
+                    .iter()
+                    .filter(|agent| sessions.contains(&agent.session_id))
+                    .cloned(),
+            );
+            state
+                .notifications
+                .retain(|notice| !sessions.contains(&notice.session_id));
+            state.notifications.extend(
+                self.state
+                    .notifications
+                    .iter()
+                    .filter(|notice| sessions.contains(&notice.session_id))
+                    .cloned(),
+            );
+            state
+                .terminal_notices
+                .retain(|notice| !sessions.contains(&notice.session_id));
+            state.terminal_notices.extend(
+                self.state
+                    .terminal_notices
+                    .iter()
+                    .filter(|notice| sessions.contains(&notice.session_id))
+                    .cloned(),
+            );
+            for incoming in &mut state.generations {
+                if unavailable.contains(&incoming.owner.id)
+                    && let Some(current) = self
+                        .state
+                        .generations
+                        .iter()
+                        .find(|current| current.owner.id == incoming.owner.id)
+                {
+                    incoming.revision = current.revision;
+                    incoming.live_sessions = current.live_sessions;
+                    incoming.capabilities.clone_from(&current.capabilities);
+                    incoming.helper.clone_from(&current.helper);
+                }
+            }
+            if state.generation == self.state.generation && unavailable.contains(&state.generation)
+            {
+                state.revision = self.state.revision;
+                state.capabilities.clone_from(&self.state.capabilities);
+                state.attachment_helper_available = self.state.attachment_helper_available;
+                state
+                    .attachment_helper_executable
+                    .clone_from(&self.state.attachment_helper_executable);
+            }
+        }
+        // An async poll may have begun before a creation/mutation acknowledgment.
+        // Never replace a newer owner/catalog observation with that older result.
+        if self.state_loaded
+            && (state.catalog_revision < self.state.catalog_revision
+                || (state.generation == self.state.generation
+                    && state.revision < self.state.revision)
+                || state.generations.iter().any(|incoming| {
+                    self.state.generations.iter().any(|current| {
+                        current.owner.id == incoming.owner.id
+                            && current.revision > incoming.revision
+                            && current.owner.status == incoming.owner.status
+                            && current.error == incoming.error
+                    })
+                }))
+        {
+            return;
+        }
         if self
             .error
             .as_deref()
@@ -2371,26 +2280,16 @@ impl App {
         }
     }
     fn save_layouts(&mut self) {
-        for (project, dock) in &self.layouts {
-            if self.layout_readonly.contains(project) {
-                continue;
-            }
-            if let Ok(value) = serde_json::to_value(dock) {
-                let value = sanitize_layout(value);
-                let text = value.to_string();
-                if self.layout_saved.get(project) != Some(&text) {
-                    #[cfg(feature = "test-support")]
-                    if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
-                        eprintln!("Fixture save {} tabs", dock.iter_all_tabs().count());
-                    }
-                    self.send(Request::SaveLayout {
-                        project: project.clone(),
-                        layout: value,
-                    });
-                    self.layout_saved.insert(project.clone(), text);
-                }
-            }
-        }
+        let layouts = self
+            .layouts
+            .iter()
+            .filter(|(project, _)| !self.layout_readonly.contains(*project))
+            .map(|(project, layout)| (project.clone(), layout.clone()))
+            .collect();
+        self.layout_generation = self.layout_generation.wrapping_add(1);
+        let _ = self
+            .jobs
+            .send(Job::PrepareLayouts(self.layout_generation, layouts));
     }
     fn remove_tab(&mut self, sid: &str) {
         for workspace in self.layouts.values_mut() {
@@ -2590,12 +2489,40 @@ impl App {
         self.context.as_ref().and_then(|c| c.root.clone())
     }
     fn file_pointer_action(&mut self, response: &egui::Response, info: FilePointer) {
-        match file_click(
+        let action = file_click(
             info.deleted,
             info.staged.is_some(),
             response.double_clicked(),
             response.clicked(),
-        ) {
+        );
+        let interval = Duration::from_secs_f64(
+            response
+                .ctx
+                .options(|options| options.input_options.max_double_click_delay),
+        );
+        self.activate_file_pointer(info, action, interval);
+    }
+    fn activate_file_pointer(&mut self, info: FilePointer, action: FileClick, interval: Duration) {
+        if action == FileClick::None {
+            return;
+        }
+        if self.file_activation.as_ref().is_some_and(|last| {
+            last.project == self.selected
+                && last.path == info.path
+                && last.staged == info.staged
+                && last.action == action
+                && last.at.elapsed() < interval
+        }) {
+            return;
+        }
+        self.file_activation = Some(FileActivation {
+            project: self.selected.clone(),
+            path: info.path.clone(),
+            staged: info.staged,
+            action,
+            at: Instant::now(),
+        });
+        match action {
             FileClick::None => {}
             FileClick::Open => self.open_file(info.path, None, None, false),
             FileClick::Review => self.open_review(info),
@@ -2762,6 +2689,9 @@ impl eframe::App for App {
             }
             self.reconcile_gui_resources();
             self.poll_player();
+            if self.player.needs_poll() {
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
             self.updater.poll();
         }
         ctx.request_repaint_after(Duration::from_secs(1));
@@ -2877,10 +2807,6 @@ impl eframe::App for App {
                 ));
                 ui.separator();
                 if self.installation_problem() {
-                    ui.colored_label(
-                        appearance::color(&self.theme.status_failed),
-                        "Terminal helper needs repair. Existing sessions are preserved.",
-                    );
                     let repair = ui.small_button("Fix installation…");
                     #[cfg(feature = "test-support")]
                     diagnostics::record(ui.ctx(), "fix-installation", repair.rect);
@@ -2888,12 +2814,16 @@ impl eframe::App for App {
                         self.open_installation_settings();
                     }
                     self.restart_session_button(ui, true);
+                    ui.colored_label(
+                        appearance::color(&self.theme.status_failed),
+                        "Terminal helper needs repair. Existing sessions are preserved.",
+                    );
                 } else if let Some(error) = self.error.clone() {
                     ui.horizontal_wrapped(|ui| {
-                        ui.colored_label(appearance::color(&self.theme.status_failed), error);
                         if ui.small_button("Dismiss").clicked() {
                             self.error = None;
                         }
+                        ui.colored_label(appearance::color(&self.theme.status_failed), error);
                     });
                 } else if let Some(message) = &self.state.degraded {
                     ui.colored_label(appearance::color(&self.theme.status_waiting), message);
@@ -2905,17 +2835,17 @@ impl eframe::App for App {
                             .iter()
                             .any(|c| c == STABLE_HELPER_CAPABILITY))
                 {
-                    ui.weak("App and session service use different installations.");
                     if ui.small_button("Review installation…").clicked() {
                         self.open_installation_settings();
                     }
                     self.restart_session_button(ui, true);
+                    ui.weak("App and session service use different installations.");
                 } else if let Some(info) = self.info.clone() {
                     ui.horizontal(|ui| {
-                        ui.label(info);
                         if ui.small_button("×").clicked() {
                             self.info = None;
                         }
+                        ui.label(info);
                     });
                 } else {
                     ui.horizontal(|ui| {
@@ -4238,6 +4168,24 @@ mod navigation_tests {
         assert!(app.state.sessions.is_empty());
     }
     #[test]
+    fn rapid_file_activation_opens_one_editor_and_a_later_click_opens_another() {
+        let (mut app, _, directory) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        let file = || FilePointer {
+            path: directory.path().join("file.rs"),
+            deleted: false,
+            staged: None,
+        };
+        app.activate_file_pointer(file(), FileClick::Open, Duration::from_millis(10));
+        app.activate_file_pointer(file(), FileClick::Open, Duration::from_millis(10));
+        assert_eq!(requests.try_iter().filter(|job| matches!(job, Job::Control(request, _) if matches!(request.as_ref(), Request::Create { .. }))).count(), 1);
+        thread::sleep(Duration::from_millis(15));
+        app.activate_file_pointer(file(), FileClick::Open, Duration::from_millis(10));
+        assert_eq!(requests.try_iter().filter(|job| matches!(job, Job::Control(request, _) if matches!(request.as_ref(), Request::Create { .. }))).count(), 1);
+    }
+
+    #[test]
     fn file_clicks_open_review_for_git_modified_files() {
         assert_eq!(Settings::default().review_mode, ReviewMode::Native);
         for (deleted, reviewable, double_clicked, clicked, expected) in [
@@ -4465,8 +4413,7 @@ mod navigation_tests {
         assert!(
             !requests
                 .try_iter()
-                .any(|job| matches!(job, Job::Control(request, _)
-            if matches!(*request, Request::SaveLayout { ref project, .. } if project == "a")))
+                .any(|job| matches!(job, Job::SaveLayout(ref project, _, _) if project == "a"))
         );
     }
     #[test]
@@ -4480,7 +4427,11 @@ mod navigation_tests {
         app.apply_state(state);
         app.save_layouts();
         assert!(app.layout_readonly.contains("a"));
-        assert!(!requests.try_iter().any(|job|matches!(job,Job::Control(request,_) if matches!(*request,Request::SaveLayout {ref project,..} if project=="a"))));
+        assert!(
+            !requests
+                .try_iter()
+                .any(|job| matches!(job,Job::SaveLayout(ref project,_,_) if project=="a"))
+        );
     }
     #[test]
     fn sidebar_navigation_selects_owning_top_level_tab() {
@@ -5667,9 +5618,91 @@ mod navigation_tests {
     }
 
     #[test]
-    fn opening_player_seeds_sample_tracks_once() {
+    fn older_observation_cannot_restore_a_previous_active_generation() {
+        let (mut app, _, _directory) = fixture();
+        let mut state = app.state.clone();
+        state.generation = "new-owner".into();
+        state.client_observation = 3;
+        app.apply_state(state.clone());
+        state.generation = "old-owner".into();
+        state.client_observation = 2;
+        app.apply_state(state);
+        assert_eq!(app.state.generation, "new-owner");
+    }
+
+    #[test]
+    fn unavailable_owner_keeps_last_records_but_updates_health() {
+        let (mut app, _, directory) = fixture();
+        let mut state = app.state.clone();
+        state.generation = "owner".into();
+        state.revision = 20;
+        let mut session = session_fixture("last-observed", SessionKind::Shell);
+        session.generation = "owner".into();
+        state.sessions.push(session);
+        state.generations.push(generations::Health {
+            owner: generations::Generation {
+                id: "owner".into(),
+                data: directory.path().into(),
+                runtime: directory.path().into(),
+                version: "0.35.0".into(),
+                build: "fixture".into(),
+                protocol: 1,
+                catalog: 1,
+                status: generations::Status::Active,
+                pid: None,
+            },
+            revision: 20,
+            error: None,
+            live_sessions: 1,
+            capabilities: Vec::new(),
+            helper: None,
+        });
+        app.apply_state(state.clone());
+        state.sessions.clear();
+        state.revision = 19;
+        state.generations[0].revision = 19;
+        state.generations[0].error = Some("Owner unavailable".into());
+        app.apply_state(state);
+        assert!(
+            app.state
+                .sessions
+                .iter()
+                .any(|session| session.id == "last-observed")
+        );
+        assert!(app.state.generations[0].error.is_some());
+    }
+
+    #[test]
+    fn late_snapshot_cannot_erase_a_newer_project_inventory() {
         let (mut app, _, _dir) = fixture();
+        let mut fresh = app.state.clone();
+        fresh.generation = "snapshot-owner".into();
+        fresh.revision = 20;
+        fresh.catalog_revision = 7;
+        let projects = fresh.projects.len();
+        assert!(projects > 0);
+        app.apply_state(fresh.clone());
+        let mut stale = fresh;
+        stale.revision = 19;
+        stale.projects.clear();
+        app.apply_state(stale);
+        assert_eq!(app.state.projects.len(), projects);
+        assert_eq!(app.state.revision, 20);
+    }
+
+    #[test]
+    fn opening_player_seeds_sample_tracks_once() {
+        let (mut app, ctx, _dir) = fixture();
         app.open_player();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while app.preferences.selected_tracks().is_empty() {
+            app.process_updates(&ctx);
+            assert!(
+                Instant::now() < deadline,
+                "Sample installation did not complete"
+            );
+            thread::sleep(Duration::from_millis(2));
+        }
         assert_eq!(app.preferences.selected_tracks().len(), 3);
         assert!(
             app.preferences

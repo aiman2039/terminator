@@ -1,5 +1,11 @@
 //! Versioned local protocol and persistent, renderer-independent models.
 pub mod appearance;
+#[cfg(feature = "async-client")]
+pub mod async_client;
+#[cfg(feature = "async-client")]
+pub mod async_process;
+#[cfg(feature = "async-client")]
+pub mod async_service;
 pub mod generations;
 pub mod idle_close;
 pub mod metadata;
@@ -441,6 +447,9 @@ pub struct TerminalNotice {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
+    /// Local async-client observation order; never sent or persisted.
+    #[serde(skip)]
+    pub client_observation: u64,
     pub catalog_revision: u64,
     pub generations: Vec<generations::Health>,
     pub daemon_version: Option<String>,
@@ -941,17 +950,7 @@ pub fn rpc(paths: &Paths, request: Request) -> Result<Response> {
         let response = snapshot::read_response(&mut stream)?;
         if let Response::Redirect { generation } = &response
             && generations::exists(paths)
-            && matches!(
-                &request,
-                Request::Create { .. }
-                    | Request::CreateReview { .. }
-                    | Request::AddProject { .. }
-                    | Request::SaveLayout { .. }
-                    | Request::SelectProject { .. }
-                    | Request::Settings(_)
-                    | Request::WorktreeAdd { .. }
-                    | Request::WorktreeRemove { .. }
-            )
+            && redirect_allowed(&request)
         {
             ensure!(
                 generations::Catalog::open(paths)?
@@ -965,6 +964,20 @@ pub fn rpc(paths: &Paths, request: Request) -> Result<Response> {
         return response.checked();
     }
     bail!("Active service changed repeatedly before execution; retry the operation")
+}
+
+fn redirect_allowed(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::Create { .. }
+            | Request::CreateReview { .. }
+            | Request::AddProject { .. }
+            | Request::SaveLayout { .. }
+            | Request::SelectProject { .. }
+            | Request::Settings(_)
+            | Request::WorktreeAdd { .. }
+            | Request::WorktreeRemove { .. }
+    )
 }
 
 fn fanout_owners(paths: &Paths, request: &Request) -> Result<()> {

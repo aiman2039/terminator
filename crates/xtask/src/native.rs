@@ -17,6 +17,7 @@ mod installation;
 mod launch;
 mod markdown;
 mod projects;
+mod responsiveness;
 mod reviews;
 mod updates;
 mod windows;
@@ -126,7 +127,7 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
         "Scale must be between 1 and 2"
     );
     ensure!(
-        (3..=60).contains(&opts.seconds),
+        (3..=60).contains(&opts.seconds) || (case == "responsiveness" && opts.seconds <= 1800),
         "Native duration must be 3–60 seconds"
     );
     let cases = if case == "all" {
@@ -227,6 +228,7 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "ui-cleanup" => cleanup(&opts)?,
             "external-editor" => external(&opts)?,
             "images" => images(&opts)?,
+            "responsiveness" => responsiveness::run(&opts)?,
             "browser" => browser(&opts)?,
             "terminal-actions" | "ui-flat" | "ui-plan3" => terminal_actions(&opts)?,
             "reviews" => reviews::run(&opts)?,
@@ -584,7 +586,7 @@ fn file_close(o: &Options) -> Result<()> {
     let (h, _, shells, root) = setup("file-close")?;
     let source = root.join("source.rs");
     fs::write(&source, "fn main() {}\n")?;
-    plain(
+    let close_log = plain(
         &h,
         o,
         "clean-file-close",
@@ -598,7 +600,11 @@ fn file_close(o: &Options) -> Result<()> {
         .collect::<Vec<_>>();
     ensure!(
         editors.len() == 1 && editors[0]["lifecycle"] == "ended",
-        "Double click or clean close failed"
+        "Double click or clean close failed: editor lifecycles {:?}; {close_log}",
+        editors
+            .iter()
+            .map(|editor| &editor["lifecycle"])
+            .collect::<Vec<_>>()
     );
     capture(
         &h,
