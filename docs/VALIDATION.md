@@ -2441,3 +2441,23 @@ observed `/bin/sh` override, and no older settings snapshot was applied. This
 does not reconstruct an exact pre-incident settings history. Repair evidence is
 in `/tmp/terminator-fixture-catalog-repair.json`. No daemon was restarted and no
 session was stopped.
+
+## 2026-09-18: slow new tabs and tab switching — Git sidebar
+
+The affected GUI was PID 96951 (`target/debug/terminator`), using the isolated
+`/tmp/terminator-ux/run/gui.sock`, not the older installed GUI initially sampled.
+Its active terminal cwd was `meta-dao`; a read-only Git status counted 23,315
+changed files. A five-second live sample attributed 1,492 of 1,815 main-thread
+samples (82%) to the Git sidebar, with 1,199 samples in `appearance::file_row`.
+The sidebar constructed every file's widgets, labels, tooltips and context menus
+on every frame, including off-screen entries. This work blocks event processing
+and completion application on the GUI thread. The same loop exists before the
+async migration (8439dd4); this capture identifies rendering work rather than an
+async wait. Debug compilation increases its cost.
+
+The sidebar now allocates layout space for clipped rows without building their
+widgets. A focused test with 23,315 entries verifies fewer than 40 constructed
+rows in a 400-point viewport and preserves total scroll height. The test passed;
+formatting, compile and whitespace checks passed. The running GUI has not been
+replaced: post-relaunch live latency is not yet measured. Capture:
+`target/validation/ui-latency-investigation/slow-debug-gui.txt`.

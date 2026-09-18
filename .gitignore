@@ -20,3 +20,4 @@ docs/MACOS_SIGNING_SETUP.md
 scripts/signing-cleanup.sh
 scripts/signing-github.sh
 scripts/signing.sh
+refs-research/*
