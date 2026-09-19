@@ -7,7 +7,9 @@ mod types;
 mod view;
 
 pub use backend::settings::BackendSettings;
-pub use backend::{BackendCommand, LinkTarget, PtyEvent, TerminalBackend, TerminalMode};
+pub use backend::{
+    BackendCommand, LinkTarget, PtyEvent, TerminalBackend, TerminalMode, TerminalSize,
+};
 pub use bindings::{Binding, BindingAction, InputKind, KeyboardBinding};
 pub use font::{FontSettings, TerminalFont};
 pub use theme::{ColorPalette, TerminalTheme};

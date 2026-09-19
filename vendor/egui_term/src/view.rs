@@ -4,11 +4,12 @@ use alacritty_terminal::term::cell;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::vte::ansi::{Color, NamedColor};
 use egui::epaint::RectShape;
+use egui::text::{LayoutJob, TextFormat};
 use egui::Modifiers;
 use egui::MouseWheelUnit;
 use egui::Shape;
 use egui::Widget;
-use egui::{Align2, Color32, FontFamily, FontId, Painter, Pos2, Rect, Response, Stroke, Vec2};
+use egui::{Align, Color32, FontFamily, FontId, Painter, Pos2, Rect, Response, Stroke, Vec2};
 use egui::{CornerRadius, Key};
 use egui::{Id, PointerButton};
 
@@ -286,6 +287,7 @@ struct TextRun {
     fg: Color32,
     font: FontId,
     text: String,
+    tracking: f32,
 }
 
 fn paint_terminal(
@@ -313,6 +315,10 @@ fn paint_terminal(
         CornerRadius::ZERO,
         global_bg,
     ))];
+    let tracking = cell_width
+        - layout
+            .ctx
+            .fonts_mut(|fonts| fonts.glyph_width(&regular, 'm'));
     let mut run = TextRun {
         origin: Pos2::ZERO,
         end_x: f32::NAN,
@@ -320,6 +326,7 @@ fn paint_terminal(
         fg: Color32::TRANSPARENT,
         font: regular.clone(),
         text: String::new(),
+        tracking,
     };
 
     for indexed in content.grid.display_iter() {
@@ -421,9 +428,24 @@ fn flush_text_run(painter: &Painter, shapes: &mut Vec<Shape>, run: &mut TextRun)
     let text = std::mem::take(&mut run.text);
     let origin = run.origin;
     let fg = run.fg;
-    shapes.push(
-        painter.fonts_mut(|fonts| Shape::text(fonts, origin, Align2::LEFT_TOP, text, font, fg)),
+    let tracking = run.tracking;
+    let mut job = LayoutJob {
+        break_on_newline: false,
+        ..Default::default()
+    };
+    job.append(
+        &text,
+        0.0,
+        TextFormat {
+            font_id: font,
+            color: fg,
+            extra_letter_spacing: tracking,
+            valign: Align::TOP,
+            ..Default::default()
+        },
     );
+    let galley = painter.fonts_mut(|fonts| fonts.layout_job(job));
+    shapes.push(Shape::galley(origin, galley, fg));
 }
 
 fn focus_terminal(layout: &Response) {
@@ -1100,5 +1122,61 @@ mod paint_tests {
     fn spaces_split_text_runs() {
         let galleys = text_galleys(&paint(&content_with("ab cd", None)));
         assert_eq!(galleys, ["ab", "cd"]);
+    }
+
+    #[test]
+    fn text_run_glyphs_sit_on_the_cell_grid() {
+        let mut content = content_with("hello", None);
+        content.terminal_size.cell_width = 12;
+        let shapes = paint(&content);
+        let text = shapes.iter().find_map(|shape| match shape {
+            Shape::Text(text) => Some(text),
+            _ => None,
+        });
+        let text = text.expect("text shape");
+        let row = text.galley.rows.first().expect("row");
+        let xs: Vec<f32> = row.glyphs.iter().map(|glyph| glyph.pos.x).collect();
+        assert_eq!(xs.len(), 5);
+        for (index, x) in xs.iter().enumerate() {
+            assert!(
+                (x - index as f32 * 12.0).abs() < 0.51,
+                "glyph {index} at {x}, expected {}",
+                index as f32 * 12.0
+            );
+        }
+    }
+
+    #[test]
+    fn cursor_sits_on_the_last_glyph_of_a_long_line() {
+        let line = "~/RustroverProjects/sphalerite-foundry/zinc-monorepo";
+        let last = line.chars().count() - 1;
+        let mut content = content_with(line, None);
+        content.terminal_size.cell_width = 12;
+        content.grid.cursor.point = Point::new(Line(0), Column(last));
+        let shapes = paint(&content);
+        let cell = 12.0;
+        let cursor = shapes.iter().find_map(|shape| match shape {
+            Shape::Rect(rect) if (rect.rect.width() - cell).abs() < 0.01 => Some(rect.rect.min.x),
+            _ => None,
+        });
+        let text = shapes.iter().rev().find_map(|shape| match shape {
+            Shape::Text(text) => Some(text),
+            _ => None,
+        });
+        let cursor_x = cursor.expect("cursor");
+        let text = text.expect("text");
+        let glyph = text
+            .galley
+            .rows
+            .first()
+            .and_then(|row| row.glyphs.last())
+            .expect("last glyph");
+        let glyph_x = text.pos.x + glyph.pos.x;
+        assert_eq!(glyph.chr, 'o');
+        assert!(
+            (cursor_x - glyph_x).abs() < 0.51,
+            "cursor {cursor_x} last glyph {glyph_x}"
+        );
+        assert!(cursor_x > 400.0, "expected a long line; cursor {cursor_x}");
     }
 }

@@ -1,3 +1,4 @@
+use super::TerminalSize;
 use std::path::PathBuf;
 
 const DEFAULT_SHELL: &str = "/bin/bash";
@@ -7,6 +8,7 @@ pub struct BackendSettings {
     pub shell: String,
     pub args: Vec<String>,
     pub working_directory: Option<PathBuf>,
+    pub size: TerminalSize,
 }
 
 impl Default for BackendSettings {
@@ -15,6 +17,7 @@ impl Default for BackendSettings {
             shell: DEFAULT_SHELL.to_string(),
             args: vec![],
             working_directory: None,
+            size: TerminalSize::default(),
         }
     }
 }

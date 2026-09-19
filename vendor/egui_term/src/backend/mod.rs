@@ -101,6 +101,28 @@ impl Default for TerminalSize {
     }
 }
 
+impl TerminalSize {
+    pub fn from_layout(layout_size: Size, font_size: Size) -> Self {
+        let height = font_size.height.floor().max(1.0);
+        let width = font_size.width.floor().max(1.0);
+        Self {
+            layout_size,
+            cell_height: font_size.height as u16,
+            cell_width: font_size.width as u16,
+            num_lines: (layout_size.height / height) as u16,
+            num_cols: (layout_size.width / width) as u16,
+        }
+    }
+
+    pub fn from_pane(pane: egui::Vec2, font_size: Size) -> Self {
+        Self::from_layout(Size::from(pane), font_size)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.num_cols == 0 || self.num_lines == 0
+    }
+}
+
 impl Dimensions for TerminalSize {
     fn total_lines(&self) -> usize {
         self.screen_lines()
@@ -120,6 +142,14 @@ impl Dimensions for TerminalSize {
 
     fn bottommost_line(&self) -> Line {
         Line(self.num_lines as i32 - 1)
+    }
+}
+
+fn pty_size(settings: &BackendSettings) -> TerminalSize {
+    if settings.size.is_empty() {
+        TerminalSize::default()
+    } else {
+        settings.size
     }
 }
 
@@ -152,13 +182,13 @@ impl TerminalBackend {
         pty_event_proxy_sender: Sender<(u64, PtyEvent)>,
         settings: BackendSettings,
     ) -> Result<Self> {
+        let terminal_size = pty_size(&settings);
         let pty_config = tty::Options {
             shell: Some(tty::Shell::new(settings.shell, settings.args)),
             working_directory: settings.working_directory,
             ..tty::Options::default()
         };
         let config = term::Config::default();
-        let terminal_size = TerminalSize::default();
         let pty = tty::new(&pty_config, terminal_size.into(), id)?;
         #[cfg(not(windows))]
         let pty_id = pty.child().id();
@@ -530,23 +560,16 @@ impl TerminalBackend {
             return;
         }
 
-        let lines = (layout_size.height / font_size.height.floor()) as u16;
-        let cols = (layout_size.width / font_size.width.floor()) as u16;
-        if lines > 0 && cols > 0 {
-            self.size = TerminalSize {
-                layout_size,
-                cell_height: font_size.height as u16,
-                cell_width: font_size.width as u16,
-                num_lines: lines,
-                num_cols: cols,
-            };
-
-            self.notifier.on_resize(self.size.into());
-            terminal.resize(TermSize::new(
-                self.size.num_cols as usize,
-                self.size.num_lines as usize,
-            ));
+        let size = TerminalSize::from_layout(layout_size, font_size);
+        if size.is_empty() {
+            return;
         }
+        self.size = size;
+        self.notifier.on_resize(self.size.into());
+        terminal.resize(TermSize::new(
+            self.size.num_cols as usize,
+            self.size.num_lines as usize,
+        ));
     }
 
     fn write<I: Into<Cow<'static, [u8]>>>(&self, input: I) {
@@ -901,6 +924,47 @@ mod target_tests {
             false,
         ));
         assert_eq!(selected_text(&content), "first\nsecond");
+    }
+
+    #[test]
+    fn from_layout_uses_floor_cell_size() {
+        let size = TerminalSize::from_layout(Size::new(80.0, 48.0), Size::new(8.0, 16.0));
+        assert_eq!(size.num_cols, 10);
+        assert_eq!(size.num_lines, 3);
+        assert_eq!(size.cell_width, 8);
+        assert_eq!(size.cell_height, 16);
+        assert!(!size.is_empty());
+        assert!(TerminalSize::from_layout(Size::new(4.0, 16.0), Size::new(8.0, 16.0)).is_empty());
+    }
+
+    #[test]
+    fn narrow_pane_pty_is_not_the_80x50_default() {
+        let font = Size::new(8.0, 16.0);
+        let pane = TerminalSize::from_pane(egui::vec2(70.0 * 8.0, 24.0 * 16.0), font);
+        assert_eq!(pane.num_cols, 70);
+        assert_eq!(pane.num_lines, 24);
+        let settings = BackendSettings {
+            size: pane,
+            ..BackendSettings::default()
+        };
+        let pty = pty_size(&settings);
+        assert_eq!(pty.num_cols, 70);
+        assert_ne!(pty.num_cols, TerminalSize::default().num_cols);
+        assert_eq!(pty.num_lines, 24);
+    }
+
+    #[test]
+    fn empty_pane_falls_back_to_the_default_pty() {
+        let empty = TerminalSize::from_layout(Size::new(0.0, 0.0), Size::new(8.0, 16.0));
+        assert!(empty.is_empty());
+        let settings = BackendSettings {
+            size: empty,
+            ..BackendSettings::default()
+        };
+        let pty = pty_size(&settings);
+        assert_eq!(pty.num_cols, 80);
+        assert_eq!(pty.num_lines, 50);
+        assert_eq!(pty_size(&BackendSettings::default()).num_cols, 80);
     }
 
     #[test]

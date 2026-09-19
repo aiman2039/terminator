@@ -239,6 +239,13 @@ fn dimensions() -> (u16, u16) {
     }
     (size.ws_row.max(1), size.ws_col.max(1))
 }
+fn write_winsize(writer: &Mutex<impl Write>) -> Result<()> {
+    let (rows, cols) = dimensions();
+    write_frame(
+        &mut *writer.lock().unwrap(),
+        &Request::Resize { rows, cols },
+    )
+}
 struct Raw(libc::termios);
 impl Drop for Raw {
     fn drop(&mut self) {
@@ -304,19 +311,17 @@ fn attach(session: &str, args: &[String]) -> Result<()> {
             .shutdown(std::net::Shutdown::Both);
     });
     let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGWINCH])?;
+    let sigwinch_writer = writer.clone();
     std::thread::spawn(move || {
         for _ in signals.forever() {
-            let (rows, cols) = dimensions();
-            if write_frame(
-                &mut *writer.lock().unwrap(),
-                &Request::Resize { rows, cols },
-            )
-            .is_err()
-            {
+            if write_winsize(sigwinch_writer.as_ref()).is_err() {
                 break;
             }
         }
     });
+    // Attach used the PTY size at spawn (often 80x50). Catch a GUI resize that
+    // raced before this handler existed so COLUMNS matches the painted grid.
+    let _ = write_winsize(writer.as_ref());
     let mut output = std::io::stdout();
     while let Ok(frame) = read_frame::<Response>(&mut stream) {
         match frame {
@@ -344,5 +349,22 @@ mod identity_tests {
         );
         assert!(legacy_identity(42, b"").is_none());
         assert!(legacy_identity(42, b"42").is_none());
+    }
+}
+
+#[cfg(test)]
+mod winsize_tests {
+    use super::*;
+    #[test]
+    fn write_winsize_sends_a_resize_frame() {
+        let buf = Mutex::new(Vec::new());
+        assert!(write_winsize(&buf).is_ok());
+        let bytes = buf.into_inner().unwrap_or_default();
+        assert!(!bytes.is_empty());
+        let req = read_frame::<Request>(&mut bytes.as_slice());
+        assert!(
+            matches!(req, Ok(Request::Resize { rows, cols }) if rows >= 1 && cols >= 1),
+            "{req:?}"
+        );
     }
 }

@@ -1929,6 +1929,13 @@ impl Viewer<'_> {
                     return;
                 }
             };
+            let font = egui_term::TerminalFont::new(egui_term::FontSettings {
+                font_type: egui::FontId::monospace(self.app.state.settings.font_size),
+            });
+            let size = egui_term::TerminalSize::from_pane(
+                ui.available_size(),
+                font.font_measure(ui.ctx()),
+            );
             match TerminalBackend::new(
                 id,
                 ui.ctx().clone(),
@@ -1942,6 +1949,7 @@ impl Viewer<'_> {
                         endpoint.runtime.to_string_lossy().into(),
                     ],
                     working_directory: None,
+                    size,
                 },
             ) {
                 Ok(b) => {

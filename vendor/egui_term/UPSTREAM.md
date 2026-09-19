@@ -52,7 +52,10 @@ arrows, Escape, and repeated presses while confirming input remains available.
 history stays in `FairMutex<Term>`. `RenderableContent.display_offset` is the
 live scroll for mouse reports and host fixtures. Copy uses
 `Term::selection_to_string()` cached in `selected_text`. `open_link` reads the
-live grid. Paint groups same-style cells into one `Shape::text` (`LEFT_TOP`).
+live grid. Paint groups same-style cells into one `LayoutJob` galley with
+`extra_letter_spacing` so glyphs sit on the integer cell grid (cursor, wrap, and
+text stay aligned). `TerminalSize::from_layout` is the single pane-to-grid
+mapping; the host PTY is created at the painted size instead of 80×50.
 
 ## Mouse-mode selection and copy (2026-09-17)
 
