@@ -105,15 +105,20 @@ impl Processes {
         let cancel = CancellationToken::new();
         let _cancel_on_drop = cancel.clone().drop_guard();
         let (reply, response) = oneshot::channel();
-        self.requests
-            .try_send(Request {
-                command,
-                options,
-                key,
-                cancel,
-                reply,
-            })
-            .map_err(|_| Failure::Overloaded)?;
+        let request = Request {
+            command,
+            options,
+            key,
+            cancel: cancel.clone(),
+            reply,
+        };
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(Failure::Cancelled.into()),
+            result = self.requests.send(request) => {
+                result.map_err(|_| Failure::Closed)?;
+            }
+        }
         response.await.map_err(|_| Failure::Closed)?
     }
 }

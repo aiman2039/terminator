@@ -486,16 +486,19 @@ impl NativePool {
         let cancellation = cancellation.child_token();
         let _cancel_queued_on_drop = cancellation.clone().drop_guard();
         let (reply, response) = oneshot::channel();
-        self.sender
-            .try_send(NativeJob {
-                cancellation: cancellation.clone(),
-                call: Box::new(move || {
-                    let result = std::panic::catch_unwind(AssertUnwindSafe(call))
-                        .unwrap_or_else(|_| Err(Failure::Panicked.into()));
-                    let _ = reply.send(result);
-                }),
-            })
-            .map_err(|_| Failure::Overloaded)?;
+        let job = NativeJob {
+            cancellation: cancellation.clone(),
+            call: Box::new(move || {
+                let result = std::panic::catch_unwind(AssertUnwindSafe(call))
+                    .unwrap_or_else(|_| Err(Failure::Panicked.into()));
+                let _ = reply.send(result);
+            }),
+        };
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Err(Failure::Cancelled.into()),
+            result = self.sender.send(job) => result.map_err(|_| Failure::Closed)?,
+        }
         response.await.map_err(|_| {
             if cancellation.is_cancelled() {
                 Failure::Cancelled
@@ -748,6 +751,44 @@ mod tests {
         assert!(!active.is_finished());
         release.send(()).unwrap();
         assert_eq!(active.await.unwrap().unwrap(), 7);
+    }
+    #[tokio::test]
+    async fn native_pool_waits_for_a_slot_instead_of_shedding() {
+        let pool = NativePool::new("native-wait", 1).unwrap();
+        let (entered, entry) = oneshot::channel();
+        let (release, gate) = std::sync::mpsc::channel();
+        let token = CancellationToken::new();
+        let blocked = pool.clone();
+        let blocked_token = token.clone();
+        let active = tokio::spawn(async move {
+            blocked
+                .run(&blocked_token, move || {
+                    let _ = entered.send(());
+                    gate.recv().unwrap();
+                    Ok(1_u8)
+                })
+                .await
+        });
+        entry.await.unwrap();
+        let mut extra = Vec::new();
+        for n in 0..(NATIVE_QUEUE_LIMIT + 4) {
+            let waiter = pool.clone();
+            extra.push(tokio::spawn(async move {
+                waiter
+                    .run(&CancellationToken::new(), move || Ok(n as u8))
+                    .await
+            }));
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(
+            extra.iter().any(|task| !task.is_finished()),
+            "waiters should block until the worker is free"
+        );
+        release.send(()).unwrap();
+        assert_eq!(active.await.unwrap().unwrap(), 1);
+        for (n, task) in extra.into_iter().enumerate() {
+            assert_eq!(task.await.unwrap().unwrap(), n as u8);
+        }
     }
     #[tokio::test]
     async fn continuous_completion_reaping_does_not_retain_tasks() {

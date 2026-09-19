@@ -389,6 +389,18 @@ fn header_drag_space(ui: &mut egui::Ui) {
         begin_native_window_gesture(ui.ctx(), egui::ViewportCommand::StartDrag);
     }
 }
+/// Cheap fingerprint of the checked-out dock backing `pane_by_tab`/`pane_tabs`.
+// Tab keys cost a JSON serialization each, so the maps are only rebuilt when
+// this changes instead of every frame. Same-count cross-pane moves slip
+// through and heal on the next structural change; readers only use the maps
+// while the dock is checked out of `layouts`.
+#[derive(Clone, PartialEq, Eq)]
+struct PaneIndex {
+    project: String,
+    group: String,
+    tabs: usize,
+    focus: Option<egui_dock::NodeIndex>,
+}
 struct App {
     file_activation: Option<FileActivation>,
     services: gui_services::Services,
@@ -456,6 +468,7 @@ struct App {
     pane_by_tab: HashMap<String, egui_dock::NodePath>,
 
     pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
+    pane_index: Option<PaneIndex>,
     focus_tab: Option<Tab>,
     terminal_context: HashMap<String, String>,
     texts: HashMap<String, String>,
@@ -529,6 +542,39 @@ struct App {
     connected: bool,
     control_server: Option<ui_control::Server>,
 }
+
+fn observation_is_stale(current: &State, incoming: &State) -> bool {
+    incoming.client_observation != 0
+        && current.client_observation > incoming.client_observation
+        && incoming.catalog_revision <= current.catalog_revision
+        && (incoming.generation != current.generation || incoming.revision <= current.revision)
+}
+
+fn inventory_is_stale(current: &State, incoming: &State) -> bool {
+    incoming.catalog_revision < current.catalog_revision
+        || (incoming.generation == current.generation && incoming.revision < current.revision)
+}
+
+fn service_failure_update(
+    context: &async_service::OperationContext,
+    error: &async_service::Failure,
+) -> Option<Update> {
+    match context.subsystem {
+        "diff" => Some(Update::Diff(
+            context.resource.clone(),
+            Err(error.to_string()),
+        )),
+        "files" => Some(Update::ResolvedTarget(context.resource.clone(), None)),
+        "images" => Some(Update::Image(
+            PathBuf::from(&context.resource),
+            context.generation,
+            Err(error.to_string()),
+        )),
+        "audio-spectrum" => None,
+        _ => Some(Update::Error(error.to_string())),
+    }
+}
+
 impl App {
     fn command_dialog_open(&self) -> bool {
         self.palette_open || self.worktree_draft.is_some() || self.worktree_remove.is_some()
@@ -637,6 +683,7 @@ impl App {
             pane_by_tab: HashMap::new(),
 
             pane_tabs: HashMap::new(),
+            pane_index: None,
             focus_tab: None,
             terminal_context: HashMap::new(),
             texts: HashMap::new(),
@@ -950,24 +997,13 @@ impl App {
                             }
                         }
                         Err(error) => {
-                            let key = &completion.context.resource;
-                            match completion.context.subsystem {
-                                "diff" => self
-                                    .service_ready
-                                    .push_back(Update::Diff(key.clone(), Err(error.to_string()))),
-                                "files" => {
+                            if let Some(update) =
+                                service_failure_update(&completion.context, &error)
+                            {
+                                if let Update::ResolvedTarget(key, _) = &update {
                                     self.loading.remove(key);
-                                    self.service_ready
-                                        .push_back(Update::Error(error.to_string()));
                                 }
-                                "images" => self.service_ready.push_back(Update::Image(
-                                    PathBuf::from(key),
-                                    completion.context.generation,
-                                    Err(error.to_string()),
-                                )),
-                                _ => self
-                                    .service_ready
-                                    .push_back(Update::Error(error.to_string())),
+                                self.service_ready.push_back(update);
                             }
                         }
                     }
@@ -975,9 +1011,7 @@ impl App {
                     ctx.request_repaint();
                 }
             }
-            let update = if let Some(update) = self.service_ready.pop_front() {
-                update
-            } else if let Some(state) = self
+            let update = if let Some(state) = self
                 .service_owner
                 .snapshot
                 .try_lock()
@@ -985,6 +1019,8 @@ impl App {
                 .and_then(|mut state| state.take())
             {
                 Update::State(state)
+            } else if let Some(update) = self.service_ready.pop_front() {
+                update
             } else if let Ok(update) = self.service_owner.events.try_recv() {
                 update
             } else if let Ok(update) = self.updates.try_recv() {
@@ -1499,8 +1535,7 @@ impl App {
             .max(processing_started.elapsed().as_secs_f64() * 1000.0);
     }
     fn apply_state(&mut self, mut state: State) {
-        if state.client_observation != 0 && self.state.client_observation > state.client_observation
-        {
+        if observation_is_stale(&self.state, &state) {
             return;
         }
         // Failed owners can only supply an older on-disk snapshot. Keep their
@@ -1591,19 +1626,8 @@ impl App {
         }
         // An async poll may have begun before a creation/mutation acknowledgment.
         // Never replace a newer owner/catalog observation with that older result.
-        if self.state_loaded
-            && (state.catalog_revision < self.state.catalog_revision
-                || (state.generation == self.state.generation
-                    && state.revision < self.state.revision)
-                || state.generations.iter().any(|incoming| {
-                    self.state.generations.iter().any(|current| {
-                        current.owner.id == incoming.owner.id
-                            && current.revision > incoming.revision
-                            && current.owner.status == incoming.owner.status
-                            && current.error == incoming.error
-                    })
-                }))
-        {
+        // A stale historical owner must not drop an active owner's session exit.
+        if self.state_loaded && inventory_is_stale(&self.state, &state) {
             return;
         }
         if self
@@ -1966,6 +1990,40 @@ impl App {
         let next =
             (!self.close_workspace_queue.is_empty()).then(|| self.close_workspace_queue.remove(0));
         self.close_workspace = next.map(|id| (project.to_owned(), id));
+    }
+    fn refresh_pane_maps(&mut self, project: &str, dock: &Workspace) {
+        let tabs = dock.iter_all_tabs().count();
+        let focus = dock.main_surface().focused_leaf();
+        let fresh = self.pane_index.as_ref().is_none_or(|cached| {
+            cached.project != project
+                || cached.group != dock.active
+                || cached.tabs != tabs
+                || cached.focus != focus
+        });
+        if fresh {
+            self.pane_index = Some(PaneIndex {
+                project: project.to_owned(),
+                group: dock.active.clone(),
+                tabs,
+                focus,
+            });
+            self.pane_by_tab = dock
+                .iter_all_tabs()
+                .map(|(path, tab)| (tab.key(), path.node_path()))
+                .collect();
+            self.pane_tabs = self
+                .pane_by_tab
+                .values()
+                .map(|path| {
+                    (
+                        *path,
+                        dock.leaf(*path)
+                            .map(|leaf| leaf.tabs.clone())
+                            .unwrap_or_default(),
+                    )
+                })
+                .collect();
+        }
     }
     fn editor_target(&self, project: &str, origin: Option<&Tab>, split: Option<&str>) -> After {
         let mut anchors = Vec::new();
@@ -3002,22 +3060,7 @@ impl eframe::App for App {
                         style.separator.color_idle = appearance::color(&self.theme.window);
                         style.main_surface_border_rounding = egui::CornerRadius::same(2);
                         style.tab.tab_body.corner_radius = egui::CornerRadius::same(2);
-                        self.pane_by_tab = dock
-                            .iter_all_tabs()
-                            .map(|(path, tab)| (tab.key(), path.node_path()))
-                            .collect();
-                        self.pane_tabs = self
-                            .pane_by_tab
-                            .values()
-                            .map(|path| {
-                                (
-                                    *path,
-                                    dock.leaf(*path)
-                                        .map(|leaf| leaf.tabs.clone())
-                                        .unwrap_or_default(),
-                                )
-                            })
-                            .collect();
+                        self.refresh_pane_maps(&project, &dock);
                         DockArea::new(&mut dock)
                             .style(style)
                             .show_add_buttons(true)
@@ -3545,6 +3588,34 @@ mod navigation_tests {
             app.apply_state(app.state.clone());
             assert_eq!(app.error.as_deref(), Some(message));
         }
+    }
+
+    #[test]
+    fn hover_and_spectrum_failures_do_not_use_the_status_banner() {
+        let files = async_service::OperationContext::new(
+            "files",
+            "hover".into(),
+            async_service::Policy::ReplaceableRead,
+        );
+        assert!(matches!(
+            service_failure_update(&files, &async_service::Failure::Overloaded),
+            Some(Update::ResolvedTarget(key, None)) if key == "hover"
+        ));
+        let spectrum = async_service::OperationContext::new(
+            "audio-spectrum",
+            "player".into(),
+            async_service::Policy::ReplaceableRead,
+        );
+        assert!(service_failure_update(&spectrum, &async_service::Failure::Overloaded).is_none());
+        let mutation = async_service::OperationContext::new(
+            "daemon",
+            "workspace".into(),
+            async_service::Policy::OrderedMutation,
+        );
+        assert!(matches!(
+            service_failure_update(&mutation, &async_service::Failure::Overloaded),
+            Some(Update::Error(message)) if message == "Services are busy; retry the action"
+        ));
     }
 
     #[test]
@@ -5434,6 +5505,28 @@ mod navigation_tests {
         );
     }
     #[test]
+    fn pane_maps_reuse_unchanged_dock_and_refresh_on_change() {
+        let (mut app, _, _dir) = fixture();
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        let dock = app.layouts.get("a").cloned().unwrap();
+        app.refresh_pane_maps("a", &dock);
+        assert_eq!(app.pane_by_tab.len(), 1);
+        // Same dock next frame: cleared maps staying empty proves no rebuild.
+        app.pane_by_tab.clear();
+        app.pane_tabs.clear();
+        app.refresh_pane_maps("a", &dock);
+        assert!(app.pane_by_tab.is_empty());
+        assert!(app.pane_tabs.is_empty());
+        // Structural change rebuilds the maps.
+        let mut changed = dock.clone();
+        changed.add("other".into(), Tab::Terminal("other".into()));
+        app.refresh_pane_maps("a", &changed);
+        assert!(
+            app.pane_by_tab
+                .contains_key(&Tab::Terminal("other".into()).key())
+        );
+    }
+    #[test]
     fn attention_migration_retries_without_ack_and_preserves_later_choices() {
         let (mut app, ctx, dir) = fixture();
         app.preferences_writable = true;
@@ -5681,6 +5774,32 @@ mod navigation_tests {
         );
     }
 
+    fn generation_health(
+        id: &str,
+        directory: &std::path::Path,
+        revision: u64,
+        status: generations::Status,
+    ) -> generations::Health {
+        generations::Health {
+            owner: generations::Generation {
+                id: id.into(),
+                data: directory.to_path_buf(),
+                runtime: directory.to_path_buf(),
+                version: "0.35.0".into(),
+                build: "fixture".into(),
+                protocol: 1,
+                catalog: 1,
+                status,
+                pid: None,
+            },
+            revision,
+            error: None,
+            live_sessions: 1,
+            capabilities: Vec::new(),
+            helper: None,
+        }
+    }
+
     #[test]
     fn older_observation_cannot_restore_a_previous_active_generation() {
         let (mut app, _, _directory) = fixture();
@@ -5692,6 +5811,103 @@ mod navigation_tests {
         state.client_observation = 2;
         app.apply_state(state);
         assert_eq!(app.state.generation, "new-owner");
+    }
+
+    #[test]
+    fn shell_exit_is_applied_when_a_newer_revision_has_an_older_observation() {
+        let (mut app, _, _directory) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        app.state.generation = "owner".into();
+        app.state.revision = 10;
+        app.state.client_observation = 5;
+        let mut ended = app.state.clone();
+        ended.client_observation = 4;
+        ended.revision = 11;
+        ended
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == "shell")
+            .unwrap()
+            .lifecycle = Lifecycle::Ended;
+        app.apply_state(ended);
+        assert!(
+            app.layouts["a"]
+                .find_tab(&Tab::Terminal("shell".into()))
+                .is_none()
+        );
+        assert_eq!(app.state.revision, 11);
+    }
+
+    #[test]
+    fn stale_historical_owner_does_not_block_shell_exit_cleanup() {
+        let (mut app, _, directory) = fixture();
+        let mut shell = session_fixture("shell", SessionKind::Shell);
+        shell.generation = "active".into();
+        app.state.sessions.push(shell);
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        app.state.generation = "active".into();
+        app.state.revision = 10;
+        app.state.client_observation = 5;
+        app.state.generations = vec![
+            generation_health("active", directory.path(), 10, generations::Status::Active),
+            generation_health(
+                "retired",
+                directory.path(),
+                50,
+                generations::Status::Retired,
+            ),
+        ];
+        let mut ended = app.state.clone();
+        ended.revision = 11;
+        ended.client_observation = 6;
+        ended.generations[0].revision = 11;
+        ended.generations[1].revision = 49;
+        ended
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == "shell")
+            .unwrap()
+            .lifecycle = Lifecycle::Ended;
+        app.apply_state(ended);
+        assert!(
+            app.layouts["a"]
+                .find_tab(&Tab::Terminal("shell".into()))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn poller_ended_snapshot_wins_over_an_older_job_snapshot() {
+        let (mut app, ctx, _directory) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        app.state.generation = "owner".into();
+        app.state.revision = 10;
+        app.state.client_observation = 1;
+        let mut stale = app.state.clone();
+        stale.client_observation = 3;
+        let mut ended = app.state.clone();
+        ended.client_observation = 2;
+        ended.revision = 11;
+        ended
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == "shell")
+            .unwrap()
+            .lifecycle = Lifecycle::Ended;
+        app.service_ready.push_back(Update::State(Box::new(stale)));
+        *app.service_owner.snapshot.lock().unwrap() = Some(Box::new(ended));
+        app.process_updates(&ctx);
+        assert!(
+            app.layouts["a"]
+                .find_tab(&Tab::Terminal("shell".into()))
+                .is_none()
+        );
     }
 
     #[test]

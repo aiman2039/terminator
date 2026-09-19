@@ -212,6 +212,7 @@ impl Services {
     pub fn send(&self, job: Job) -> Result<(), ()> {
         let context = context(&job);
         let rejected = rejection(&job);
+        let banner = context.policy != Policy::ReplaceableRead;
         let service = self.clone();
         let cancel = CancellationToken::new();
         let work_cancel = cancel.clone();
@@ -223,7 +224,9 @@ impl Services {
                 for update in rejected {
                     let _ = self.0.legacy_updates.send(update);
                 }
-                let _ = self.0.legacy_updates.send(Update::Error(error.to_string()));
+                if banner {
+                    let _ = self.0.legacy_updates.send(Update::Error(error.to_string()));
+                }
                 self.0.ctx.request_repaint();
                 Err(())
             }
@@ -1028,5 +1031,55 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
+    }
+
+    #[test]
+    fn replaceable_read_admission_failure_does_not_emit_status_error() {
+        let directory = tempfile::Builder::new()
+            .prefix("busy-banner-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (updates, rx) = mpsc::channel();
+        let (service, _owner) = Services::new(
+            Paths::at(directory.path().into()),
+            egui::Context::default(),
+            updates,
+        )
+        .unwrap();
+        service.handle().close_admission();
+        while rx.try_recv().is_ok() {}
+        assert!(
+            service
+                .send(Job::ResolveTarget(
+                    "hover".into(),
+                    "lib.rs".into(),
+                    PathBuf::from("/tmp"),
+                ))
+                .is_err()
+        );
+        let received: Vec<_> = rx.try_iter().collect();
+        assert!(
+            received.iter().any(
+                |update| matches!(update, Update::ResolvedTarget(key, None) if key == "hover")
+            ),
+            "rejected hover still resolves empty"
+        );
+        assert!(
+            received
+                .iter()
+                .all(|update| !matches!(update, Update::Error(_))),
+            "hover admission failure must not use the status banner"
+        );
+        assert!(
+            service
+                .send(Job::Preferences(UiPreferences::default()))
+                .is_err()
+        );
+        assert!(
+            rx.try_iter().any(
+                |update| matches!(update, Update::Error(message) if message == "Services are closing")
+            ),
+            "mutations still report admission failure"
+        );
     }
 }
