@@ -1217,46 +1217,59 @@ fn notice_preview(markdown: &str) -> String {
 const ATTENTION_ACTION_SIZE: f32 = 22.0;
 const ATTENTION_ACTION_COUNT: f32 = 3.0;
 
-fn attention_status(state: AgentState) -> &'static str {
+fn attention_status_icon(state: AgentState) -> &'static str {
     match state {
-        AgentState::Completed => "Agent done",
-        AgentState::WaitingInput | AgentState::WaitingPermission => "Agent waiting",
-        _ => state.label(),
+        AgentState::WaitingInput => "MessageCircleQuestion",
+        AgentState::WaitingPermission => "ShieldQuestion",
+        AgentState::Completed => "CircleCheck",
+        AgentState::Failed => "CircleAlert",
+        AgentState::Running => "LoaderCircle",
+        AgentState::Stopped => "CircleStop",
+        AgentState::Unknown => "CircleQuestion",
     }
 }
 
-fn attention_title_job(
-    notice: &Notification,
-    session: Option<&Session>,
-    theme: &AppearanceConfig,
-    muted: Color32,
-    text: Color32,
-) -> egui::text::LayoutJob {
-    let font = egui::FontId::proportional(12.0);
-    let mut job = egui::text::LayoutJob {
-        wrap: egui::text::TextWrapping {
-            max_rows: 1,
-            break_anywhere: true,
-            overflow_character: Some('…'),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let format = |color: Color32| egui::TextFormat {
-        font_id: font.clone(),
-        color,
-        ..Default::default()
-    };
-    job.append(
-        attention_status(notice.state),
-        0.0,
-        format(state_color(notice.state, theme)),
-    );
-    if let Some(session) = session {
-        job.append(" · ", 0.0, format(muted));
-        job.append(&session.label, 0.0, format(text));
+fn attention_status_detail(state: AgentState) -> &'static str {
+    match state {
+        AgentState::WaitingInput => "Reply in the terminal to continue.",
+        AgentState::WaitingPermission => "Approve or deny the agent's request.",
+        AgentState::Completed => "This turn finished.",
+        AgentState::Failed => "The agent reported an error.",
+        AgentState::Running => "The agent is working.",
+        AgentState::Stopped => "The agent was stopped.",
+        AgentState::Unknown => "No status has been reported yet.",
     }
-    job
+}
+
+fn attention_label_width(available: f32, spacing: f32) -> f32 {
+    let reserved = ATTENTION_ACTION_SIZE * (1.0 + ATTENTION_ACTION_COUNT) + spacing * 2.0;
+    (available - reserved).max(24.0)
+}
+
+fn attention_status_glyph(
+    ui: &mut egui::Ui,
+    state: AgentState,
+    theme: &AppearanceConfig,
+) -> egui::Response {
+    let tint = state_color(state, theme);
+    let response = ui
+        .add_sized(
+            [ATTENTION_ACTION_SIZE, ATTENTION_ACTION_SIZE],
+            egui::Button::image(
+                egui::Image::new(crate::icons::source(attention_status_icon(state)))
+                    .tint(tint)
+                    .fit_to_exact_size(egui::vec2(14.0, 14.0)),
+            )
+            .frame(false),
+        )
+        .on_hover_ui(|ui| {
+            ui.set_max_width(240.0);
+            ui.colored_label(tint, state.label());
+            ui.label(attention_status_detail(state));
+        });
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, state.label()));
+    response
 }
 
 fn attention_title(
@@ -1265,21 +1278,31 @@ fn attention_title(
     session: Option<&Session>,
     theme: &AppearanceConfig,
 ) -> egui::Response {
-    let muted = ui.visuals().weak_text_color();
-    let text = ui.visuals().text_color();
-    let mut job = attention_title_job(notice, session, theme, muted, text);
-    let natural = ui.painter().layout_job(job.clone()).size().x;
-    let width = natural.min(ui.available_size_before_wrap().x.max(0.0));
-    job.wrap.max_width = width;
-    let galley = ui.painter().layout_job(job);
-    let size = egui::vec2(width, galley.size().y.max(ATTENTION_ACTION_SIZE));
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    ui.painter().with_clip_rect(rect).galley(
-        egui::pos2(rect.min.x, rect.center().y - galley.size().y * 0.5),
-        galley,
-        text,
+    let spacing = ui.spacing().item_spacing.x;
+    let label_width = attention_label_width(ui.available_size_before_wrap().x, spacing);
+    let icon = attention_status_glyph(ui, notice.state, theme);
+    #[cfg(feature = "test-support")]
+    diagnostics::record(
+        ui.ctx(),
+        &format!("agent-status:{}", notice.session_id),
+        icon.rect,
     );
-    response
+    let text = session.map_or("Unknown session", |session| session.label.as_str());
+    let label = ui
+        .add_sized(
+            [label_width, ATTENTION_ACTION_SIZE],
+            egui::Label::new(RichText::new(text).size(12.0))
+                .truncate()
+                .sense(egui::Sense::click()),
+        )
+        .on_hover_ui(|ui| {
+            ui.set_max_width(360.0);
+            if let Some(session) = session {
+                ui.weak(session.cwd.display().to_string());
+            }
+            ui.label(notice_preview(&notice.summary));
+        });
+    icon.union(label)
 }
 
 fn attention_actions(ui: &mut egui::Ui, session_id: &str) -> AttentionAction {
@@ -1350,13 +1373,7 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
             let action = ui
                 .horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(4.0, 2.0);
-                    let header = attention_title(ui, notice, session, theme).on_hover_ui(|ui| {
-                        ui.set_max_width(360.0);
-                        if let Some(session) = session {
-                            ui.weak(session.cwd.display().to_string());
-                        }
-                        ui.label(notice_preview(&notice.summary));
-                    });
+                    let header = attention_title(ui, notice, session, theme);
                     #[cfg(feature = "test-support")]
                     diagnostics::record(
                         ui.ctx(),
@@ -1466,5 +1483,35 @@ mod tests {
         assert!(!notice_waiting(&notice));
         notice.resolved = false;
         assert!(notice_waiting(&notice));
+    }
+
+    #[test]
+    fn attention_status_icon_is_unique_per_state() {
+        let states = [
+            AgentState::Unknown,
+            AgentState::Running,
+            AgentState::WaitingInput,
+            AgentState::WaitingPermission,
+            AgentState::Completed,
+            AgentState::Failed,
+            AgentState::Stopped,
+        ];
+        let icons: Vec<_> = states.into_iter().map(attention_status_icon).collect();
+        let unique: std::collections::HashSet<_> = icons.iter().copied().collect();
+        assert_eq!(unique.len(), icons.len());
+        for state in states {
+            assert!(!attention_status_detail(state).is_empty());
+            assert!(!state.label().is_empty());
+        }
+    }
+
+    #[test]
+    fn attention_label_width_reserves_status_and_actions() {
+        let spacing = 4.0;
+        let available = 280.0;
+        let width = attention_label_width(available, spacing);
+        let used = width + ATTENTION_ACTION_SIZE * (1.0 + ATTENTION_ACTION_COUNT) + spacing * 2.0;
+        assert!((used - available).abs() < f32::EPSILON);
+        assert!(attention_label_width(40.0, spacing) >= 24.0);
     }
 }

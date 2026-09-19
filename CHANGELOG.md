@@ -23,9 +23,9 @@
   matching Claude/Codex/Grok notification coverage. Repair an existing
   OpenCode install to pick this up.
 
-- Compact Agents inbox cards to one row (`Agent waiting · Terminal 5` plus
-  go / snooze / dismiss) when the sidebar is wide enough. Actions wrap as a
-  group when it is not.
+- Compact Agents inbox cards to one row: a status icon, the session name,
+  and go / snooze / dismiss. Hover the icon for the status meaning. Actions
+  stay aligned across cards and wrap as a group when the sidebar is narrow.
 
 - Keep creating tabs and splits if the serving generation is wrongly marked
   Retired. Catalog-active owners stay live for Create; the daemon restores
