@@ -1,24 +1,22 @@
-//! Flat Terminator-themed player. One floating window.
+//! Flat Terminator-themed player. One center-pane singleton.
 use super::*;
 use eframe::egui::{self, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
 use engine::Status;
 
-pub(super) fn window(app: &mut App, ctx: &egui::Context) {
-    let mut open = true;
-    app.popups
-        .window(ctx, "Player")
-        .id(egui::Id::new("terminator-player"))
-        .collapsible(false)
-        .default_size([440.0, 560.0])
-        .min_size([360.0, 220.0])
-        .resizable([true, true])
-        .open(&mut open)
-        .show(ctx, |ui| {
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "player-window", ui.max_rect());
-            draw(app, ui);
+pub(super) fn center(app: &mut App, ui: &mut Ui) {
+    ui.set_min_size(ui.available_size());
+    ui.horizontal(|ui| {
+        ui.strong("Player");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if appearance::sidebar_action(ui, "X", "Close").clicked() {
+                app.hide_center_overlay();
+            }
         });
-    app.player_open &= open;
+    });
+    ui.add_space(8.0);
+    #[cfg(feature = "test-support")]
+    diagnostics::record(ui.ctx(), "player-window", ui.max_rect());
+    draw(app, ui);
 }
 
 fn draw(app: &mut App, ui: &mut Ui) {

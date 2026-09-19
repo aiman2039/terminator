@@ -119,9 +119,9 @@ Image previews belong to the GUI and allocate no PTYs. Bounded filesystem and CP
 load raster/SVG data, with stale-generation rejection and a texture-memory budget.
 Only paths are persisted in version-3 image-bearing layouts. HTML and http(s) pages use GUI-only `Tab::Browser` (layout version 6) with an OS
 webview child view. v4 `Html` tabs migrate to `Browser` file targets. Covered
-panes hide the native view. Legacy Player tabs (layout version 5) migrate to the single global Player window.
+panes hide the native view. Legacy Player tabs (layout version 5) migrate to the single global Player view in the main pane.
 Playback is GUI-only and uses the bounded async/native pipeline described below.
-Closing that window does not stop playback; GUI exit does. Radio UI is native egui. Unknown layout versions remain read-only. Explicit text/external
+Hiding that view does not stop playback; GUI exit does. Radio UI is native egui. Unknown layout versions remain read-only. Explicit text/external
 actions retain the editor paths. Open in browser still uses the system-browser worker.
 
 `gui.sock` is a separate, mode-0600 authenticated GUI endpoint for explicit
@@ -306,12 +306,12 @@ the default store. OS-managed macOS store contents are not in the data directory
 
 Playback has an explicit owning project and is polled from app logic, including
 when the GUI is minimized. Switching projects does not change the current
-playlist. Closing the Player window or a leftover Player tab does not stop
+playlist. Hiding the Player view or closing a leftover Player tab does not stop
 playback; the GUI exit
 path does. Only one audio source plays at a time. Radio uses connection and
 per-read timeouts without a total stream deadline; initial output honors saved
 volume, including mute. Mini-controls bind to the owning project, not the
-selected one. The full Player window is one themed floating window (never a workspace tab):
+selected one. The full Player view fills the main pane between the sidebars (never a popup or workspace tab):
 transport, optional EQ, playlist. Spectrum is an FFT of the playback tap (`spectrum-analyzer`). The row stays
 reserved at a fixed height. Opening
 the player closes leftover Player tabs. EQ sliders are visual only.

@@ -527,6 +527,7 @@ impl App {
             }
             workspace.active = id;
             self.hover_popup = None;
+            self.hide_center_overlay();
         }
         if let Some(id) = close {
             self.begin_workspace_close_tabs(project, vec![id]);
@@ -1607,7 +1608,7 @@ impl TabViewer for Viewer<'_> {
                 self.app.browser_view(ui, key, target);
             }
             Tab::Player => {
-                self.app.player_open = true;
+                self.app.open_player();
                 ui.close();
             }
             Tab::Diff { .. } => self.app.diff_view(ui, tab),

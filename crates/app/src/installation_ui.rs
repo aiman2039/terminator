@@ -154,7 +154,6 @@ impl App {
                             .collect();
                         for session in sessions {
                             if ui.button(format!("Show {}", session.label)).clicked() {
-                                self.settings_open = false;
                                 self.go_session(&session.id);
                             }
                         }
@@ -207,7 +206,6 @@ impl App {
                         .unwrap_or("Project");
                     ui.label(format!("{project} · {}", session.label));
                     if ui.small_button("Show session").clicked() {
-                        self.settings_open = false;
                         self.go_session(&session.id);
                     }
                 });

@@ -402,12 +402,6 @@ impl App {
                 self.search_session = None;
             }
         }
-        if self.settings_open {
-            self.settings(ctx);
-        }
-        if self.player_open {
-            self.player_window(ctx);
-        }
         if self.palette_open {
             self.palette(ctx);
         }

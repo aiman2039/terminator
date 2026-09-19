@@ -848,12 +848,8 @@ impl App {
         if self.state.agents.is_empty() && !self.hook_status.values().any(|installed| *installed) {
             ui.weak("Agent hooks are not configured");
             if ui.small_button("Set up hooks").clicked() {
-                self.settings_draft = self.state.settings.clone();
-                self.editor_preset = external_editor::selected(&self.settings_draft);
-                self.theme_draft = self.theme_committed.clone();
+                self.open_settings();
                 self.settings_section = SettingsSection::AgentHooks;
-                self.settings_open = true;
-                let _ = self.jobs.send(Job::HookStatus);
             }
             return;
         }

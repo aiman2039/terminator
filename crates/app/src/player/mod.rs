@@ -550,6 +550,7 @@ impl App {
         self.seed_sample_playlist();
         self.dismiss_player_tabs();
         self.player.radio_mode = self.preferences.player_radio_mode;
+        self.settings_open = false;
         self.player_open = true;
     }
 
@@ -609,8 +610,8 @@ impl App {
         }
     }
 
-    pub(super) fn player_window(&mut self, ctx: &egui::Context) {
-        ui::window(self, ctx);
+    pub(super) fn player_center(&mut self, ui: &mut egui::Ui) {
+        ui::center(self, ui);
     }
 
     pub(super) fn player_toggle_button(&mut self, ui: &mut egui::Ui) {

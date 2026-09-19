@@ -488,6 +488,7 @@ struct App {
     info: Option<String>,
     add_project: bool,
     settings_open: bool,
+    settings_session: bool,
     player_open: bool,
     editor_preset: usize,
     test_editor: bool,
@@ -703,6 +704,7 @@ impl App {
             info: None,
             add_project: false,
             settings_open: false,
+            settings_session: false,
             player_open: false,
             editor_preset: external_editor::CUSTOM,
             test_editor: false,
@@ -1217,7 +1219,7 @@ impl App {
                 Update::TestPickerClosed => self.picker_active = false,
                 Update::HookStatus(status) => self.hook_status = status,
                 Update::Appearance(file) => {
-                    let dirty = self.settings_open && self.theme_draft != self.theme_committed;
+                    let dirty = self.settings_session && self.theme_draft != self.theme_committed;
                     self.theme_conflict = dirty && file.config != self.theme_draft;
                     self.theme_committed = file.config.clone();
                     self.theme_source = file.source;
@@ -1317,6 +1319,7 @@ impl App {
                         } else if self.state.settings.editor_mode == EditorMode::External {
                             let _ = self.jobs.send(Job::External(path));
                         } else if let Some(project) = project {
+                            self.hide_center_overlay();
                             let after = self.editor_target(&project, None, None);
                             let _ = self.jobs.send(Job::rpc(
                                 Request::Create {
@@ -1922,6 +1925,7 @@ impl App {
             .unwrap_or_else(|| "/".into())
     }
     fn create(&mut self, split: Option<&str>) {
+        self.hide_center_overlay();
         if split.is_none() {
             self.create_workspace_tab(None);
             return;
@@ -1941,6 +1945,7 @@ impl App {
         }
     }
     fn create_workspace_tab(&mut self, index: Option<usize>) {
+        self.hide_center_overlay();
         let Some(project) = self.selected.clone() else {
             return;
         };
@@ -2132,6 +2137,7 @@ impl App {
             let _ = self.jobs.send(Job::External(path));
             return;
         }
+        self.hide_center_overlay();
         if let Some(project) = &self.selected {
             let _ = self.jobs.send(Job::rpc(
                 Request::Create {
@@ -2147,6 +2153,7 @@ impl App {
         }
     }
     fn open_image(&mut self, project: &str, path: PathBuf, split: Option<&str>) {
+        self.hide_center_overlay();
         let origin = self
             .active_session
             .as_ref()
@@ -2159,6 +2166,7 @@ impl App {
         ));
     }
     fn open_html(&mut self, project: &str, path: PathBuf, split: Option<&str>) {
+        self.hide_center_overlay();
         let origin = self
             .active_session
             .as_ref()
@@ -2175,6 +2183,7 @@ impl App {
     }
     fn browser_covered(&self) -> bool {
         self.settings_open
+            || self.player_open
             || self.command_dialog_open()
             || self.picker_active
             || self.close_session.is_some()
@@ -2212,6 +2221,7 @@ impl App {
     }
 
     fn open_browser_url(&mut self, project: &str, url: &str, split: Option<&str>) -> Result<()> {
+        self.hide_center_overlay();
         let origin = self
             .active_session
             .as_ref()
@@ -2315,7 +2325,28 @@ impl App {
             workspace.strip_player();
         }
     }
+    fn hide_center_overlay(&mut self) {
+        self.settings_open = false;
+        self.player_open = false;
+        self.shortcut_capture = None;
+    }
+
+    fn shortcut_allowed(&self, action: &str) -> bool {
+        if self.command_dialog_open()
+            || self.shortcut_capture.is_some()
+            || self.rename_session.is_some()
+            || self.picker_active
+        {
+            return false;
+        }
+        if self.settings_open || self.player_open {
+            return matches!(action, "open_settings" | "open_palette");
+        }
+        true
+    }
+
     fn go_session(&mut self, sid: &str) {
+        self.hide_center_overlay();
         self.finish_rename(true);
         if let Some(s) = self.state.sessions.iter().find(|s| s.id == sid).cloned() {
             self.select_project(s.project_id.clone());
@@ -2509,6 +2540,7 @@ impl App {
         let _ = self.jobs.send(Job::Browser(url));
     }
     fn add_diff(&mut self, cwd: PathBuf, path: PathBuf, staged: bool) {
+        self.hide_center_overlay();
         self.spawn_diff(SpawnDiff {
             cwd,
             path,
@@ -2744,6 +2776,200 @@ impl App {
             .jobs
             .send(Job::CloseEditors(target, ids, mode, timeout));
     }
+
+    fn center_pane(&mut self, ui: &mut egui::Ui) {
+        if self.settings_open {
+            self.settings_center(ui);
+            return;
+        }
+        if self.player_open {
+            self.player_center(ui);
+            return;
+        }
+        self.workspace_center(ui);
+    }
+
+    fn workspace_center(&mut self, ui: &mut egui::Ui) {
+        let Some(project) = self.selected.clone() else {
+            self.workspace_empty(ui);
+            return;
+        };
+        self.workspace_project(ui, project);
+    }
+
+    fn workspace_empty(&mut self, ui: &mut egui::Ui) {
+        let empty = self.state.projects.is_empty();
+        let setup = cfg!(target_os = "macos")
+            && self
+                .preferences
+                .needs_setup(self.state_loaded, self.state.projects.len());
+        ui.centered_and_justified(|ui| {
+            ui.vertical_centered(|ui| {
+                ui.heading(if empty {
+                    "A home for your terminals."
+                } else {
+                    "No project selected."
+                });
+                ui.label(if empty {
+                    "Persistent sessions. Project layouts. Agents within reach."
+                } else {
+                    "Restore a project from Removed, or add a folder."
+                });
+                if setup {
+                    return;
+                }
+                ui.add_space(12.0);
+                if ui
+                    .button(if empty {
+                        "Add your first project"
+                    } else {
+                        "Add project"
+                    })
+                    .clicked()
+                {
+                    self.add_project = true;
+                }
+            });
+        });
+    }
+
+    fn workspace_project(&mut self, ui: &mut egui::Ui, project: String) {
+        let mut dock = self
+            .layouts
+            .remove(&project)
+            .unwrap_or_else(Workspace::empty);
+        self.sync_active_session(&mut dock);
+        if dock.iter_all_tabs().next().is_none() {
+            self.workspace_blank(ui);
+        } else {
+            self.paint_dock(ui, &project, &mut dock);
+        }
+        self.apply_focus_tab(&mut dock);
+        self.apply_add_tab(&project, &mut dock);
+        self.paint_session_focus(ui, &dock);
+        self.layouts.insert(project, dock);
+    }
+
+    fn sync_active_session(&mut self, dock: &mut Workspace) {
+        match dock
+            .main_surface_mut()
+            .find_active_focused()
+            .map(|(_, tab)| tab.clone())
+        {
+            Some(Tab::Terminal(sid)) => self.active_session = Some(sid),
+            Some(Tab::Diff { .. } | Tab::Image { .. } | Tab::Browser { .. } | Tab::Player) => {
+                self.active_session = None;
+            }
+            None => {}
+        }
+    }
+
+    fn workspace_blank(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(ui.available_height() * 0.3);
+            ui.heading("Your workspace, ready.");
+            ui.label("Open a terminal. Run the tools you already use.");
+            ui.add_space(12.0);
+            if ui.button("Open terminal").clicked() {
+                self.create(None);
+            }
+        });
+    }
+
+    fn paint_dock(&mut self, ui: &mut egui::Ui, project: &str, dock: &mut Workspace) {
+        let mut style = egui_dock::Style::from_egui(ui.style());
+        style.tab_bar.height = 32.0;
+        style.buttons.add_tab_align = egui_dock::style::TabAddAlign::Left;
+        style.separator.width = self.theme.pane_divider_width;
+        style.separator.color_idle = appearance::color(&self.theme.window);
+        style.main_surface_border_rounding = egui::CornerRadius::same(2);
+        style.tab.tab_body.corner_radius = egui::CornerRadius::same(2);
+        self.refresh_pane_maps(project, dock);
+        DockArea::new(dock)
+            .style(style)
+            .show_add_buttons(true)
+            .show_leaf_close_all_buttons(false)
+            .show_leaf_collapse_buttons(false)
+            .show_inside(ui, &mut Viewer { app: self });
+    }
+
+    fn apply_focus_tab(&mut self, dock: &mut Workspace) {
+        if let Some(tab) = self.focus_tab.take()
+            && let Some(path) = dock.find_tab(&tab)
+        {
+            let _ = dock.set_active_tab(path);
+            dock.set_focused_node_and_surface(path.node_path());
+        }
+    }
+
+    fn apply_add_tab(&mut self, project: &str, dock: &mut Workspace) {
+        let Some((path, split)) = self.add_tab.take() else {
+            return;
+        };
+        let cwd = dock
+            .leaf(path)
+            .ok()
+            .and_then(|leaf| leaf.tabs.get(leaf.active.0))
+            .and_then(|tab| match tab {
+                Tab::Terminal(id) => self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .map(|s| s.cwd.clone()),
+                Tab::Diff { cwd, .. } => Some(cwd.clone()),
+                Tab::Image { path } => path.parent().map(PathBuf::from),
+                Tab::Browser { target, .. } => {
+                    target.file().and_then(Path::parent).map(PathBuf::from)
+                }
+                Tab::Player => None,
+            })
+            .or_else(|| self.selected_project().map(|p| p.path.clone()));
+        let _ = self.jobs.send(Job::rpc(
+            Request::Create {
+                project: project.to_owned(),
+                cwd,
+                file: None,
+                line: None,
+                column: None,
+                editor: false,
+            },
+            if split.is_none() {
+                After::Workspace(id(), vec![])
+            } else {
+                After::CreateAt(
+                    dock.leaf(path)
+                        .map(|leaf| leaf.tabs.clone())
+                        .unwrap_or_default(),
+                    split,
+                )
+            },
+        ));
+    }
+
+    fn paint_session_focus(&mut self, ui: &mut egui::Ui, dock: &Workspace) {
+        if self.highlight_session != self.active_session {
+            self.highlight_session = self.active_session.clone();
+            self.highlight_since = Instant::now();
+        }
+        if let Some(sid) = &self.active_session
+            && let Some(path) = dock.find_tab(&Tab::Terminal(sid.clone()))
+            && let Ok(leaf) = dock.leaf(path.node_path())
+        {
+            ui.painter().rect_stroke(
+                leaf.rect.shrink(1.0),
+                2,
+                appearance::focus_stroke(
+                    appearance::color(&self.theme.accent),
+                    self.highlight_since.elapsed(),
+                ),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if self.highlight_since.elapsed() < Duration::from_millis(1200) {
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
+        }
+    }
 }
 impl eframe::App for App {
     #[cfg(feature = "test-support")]
@@ -2806,53 +3032,46 @@ impl eframe::App for App {
         self.markdown.begin_frame();
         #[cfg(feature = "test-support")]
         self.diagnostics.frame(&ctx);
-        let block_shortcuts = self.settings_open
-            || self.player_open
-            || self.command_dialog_open()
-            || self.shortcut_capture.is_some()
-            || self.rename_session.is_some()
-            || self.picker_active;
-        if !block_shortcuts {
-            for action in shortcuts::ACTIONS.iter().map(|(action, _)| *action) {
-                let key = shortcuts::binding(&self.state.settings.keybindings, action);
-                if key.is_empty() || !shortcuts::consume(&ctx, &key) {
-                    continue;
+        for action in shortcuts::ACTIONS.iter().map(|(action, _)| *action) {
+            if !self.shortcut_allowed(action) {
+                continue;
+            }
+            let key = shortcuts::binding(&self.state.settings.keybindings, action);
+            if key.is_empty() || !shortcuts::consume(&ctx, &key) {
+                continue;
+            }
+            match action {
+                "open_file" => self.open_path = true,
+                "new_terminal" => self.create(None),
+                "split_right" => self.create(Some("right")),
+                "split_down" => self.create(Some("down")),
+                "open_settings" => self.open_settings(),
+                "open_palette" => {
+                    self.palette_open = true;
+                    self.palette_query.clear();
+                    self.palette_index = 0;
                 }
-                match action {
-                    "open_file" => self.open_path = true,
-                    "new_terminal" => self.create(None),
-                    "split_right" => self.create(Some("right")),
-                    "split_down" => self.create(Some("down")),
-                    "open_settings" => self.open_settings(),
-                    "open_palette" => {
-                        self.palette_open = true;
-                        self.palette_query.clear();
-                        self.palette_index = 0;
-                    }
-                    "next_pane" => {
-                        if let Some(d) =
-                            self.selected.as_ref().and_then(|p| self.layouts.get_mut(p))
-                        {
-                            let nodes = d
-                                .main_surface()
+                "next_pane" => {
+                    if let Some(d) = self.selected.as_ref().and_then(|p| self.layouts.get_mut(p)) {
+                        let nodes = d
+                            .main_surface()
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, n)| n.is_leaf())
+                            .map(|(i, _)| NodeIndex(i))
+                            .collect::<Vec<_>>();
+                        if !nodes.is_empty() {
+                            let current = d.main_surface().focused_leaf();
+                            let idx = nodes
                                 .iter()
-                                .enumerate()
-                                .filter(|(_, n)| n.is_leaf())
-                                .map(|(i, _)| NodeIndex(i))
-                                .collect::<Vec<_>>();
-                            if !nodes.is_empty() {
-                                let current = d.main_surface().focused_leaf();
-                                let idx = nodes
-                                    .iter()
-                                    .position(|n| Some(*n) == current)
-                                    .map(|i| (i + 1) % nodes.len())
-                                    .unwrap_or(0);
-                                d.main_surface_mut().set_focused_node(nodes[idx]);
-                            }
+                                .position(|n| Some(*n) == current)
+                                .map(|i| (i + 1) % nodes.len())
+                                .unwrap_or(0);
+                            d.main_surface_mut().set_focused_node(nodes[idx]);
                         }
                     }
-                    _ => {}
                 }
+                _ => {}
             }
         }
         if self.state_loaded {
@@ -3022,157 +3241,8 @@ impl eframe::App for App {
                     .fill(appearance::color(&self.theme.window))
                     .inner_margin(2),
             )
-            .show(ui, |ui| {
-                if let Some(project) = self.selected.clone() {
-                    let mut dock = self
-                        .layouts
-                        .remove(&project)
-                        .unwrap_or_else(Workspace::empty);
-                    match dock
-                        .main_surface_mut()
-                        .find_active_focused()
-                        .map(|(_, tab)| tab.clone())
-                    {
-                        Some(Tab::Terminal(sid)) => self.active_session = Some(sid),
-                        Some(
-                            Tab::Diff { .. }
-                            | Tab::Image { .. }
-                            | Tab::Browser { .. }
-                            | Tab::Player,
-                        ) => self.active_session = None,
-                        None => {}
-                    }
-                    if dock.iter_all_tabs().next().is_none() {
-                        ui.vertical_centered(|ui| {
-                            ui.add_space(ui.available_height() * 0.3);
-                            ui.heading("Your workspace, ready.");
-                            ui.label("Open a terminal. Run the tools you already use.");
-                            ui.add_space(12.0);
-                            if ui.button("Open terminal").clicked() {
-                                self.create(None);
-                            }
-                        });
-                    } else {
-                        let mut style = egui_dock::Style::from_egui(ui.style());
-                        style.tab_bar.height = 32.0;
-                        style.buttons.add_tab_align = egui_dock::style::TabAddAlign::Left;
-                        style.separator.width = self.theme.pane_divider_width;
-                        style.separator.color_idle = appearance::color(&self.theme.window);
-                        style.main_surface_border_rounding = egui::CornerRadius::same(2);
-                        style.tab.tab_body.corner_radius = egui::CornerRadius::same(2);
-                        self.refresh_pane_maps(&project, &dock);
-                        DockArea::new(&mut dock)
-                            .style(style)
-                            .show_add_buttons(true)
-                            .show_leaf_close_all_buttons(false)
-                            .show_leaf_collapse_buttons(false)
-                            .show_inside(ui, &mut Viewer { app: self });
-                    }
-                    if let Some(tab) = self.focus_tab.take()
-                        && let Some(path) = dock.find_tab(&tab)
-                    {
-                        let _ = dock.set_active_tab(path);
-                        dock.set_focused_node_and_surface(path.node_path());
-                    }
-                    if let Some((path, split)) = self.add_tab.take() {
-                        let cwd = dock
-                            .leaf(path)
-                            .ok()
-                            .and_then(|leaf| leaf.tabs.get(leaf.active.0))
-                            .and_then(|tab| match tab {
-                                Tab::Terminal(id) => self
-                                    .state
-                                    .sessions
-                                    .iter()
-                                    .find(|s| &s.id == id)
-                                    .map(|s| s.cwd.clone()),
-                                Tab::Diff { cwd, .. } => Some(cwd.clone()),
-                                Tab::Image { path } => path.parent().map(PathBuf::from),
-                                Tab::Browser { target, .. } => {
-                                    target.file().and_then(Path::parent).map(PathBuf::from)
-                                }
-                                Tab::Player => None,
-                            })
-                            .or_else(|| self.selected_project().map(|p| p.path.clone()));
-                        let _ = self.jobs.send(Job::rpc(
-                            Request::Create {
-                                project: project.clone(),
-                                cwd,
-                                file: None,
-                                line: None,
-                                column: None,
-                                editor: false,
-                            },
-                            if split.is_none() {
-                                After::Workspace(id(), vec![])
-                            } else {
-                                After::CreateAt(
-                                    dock.leaf(path)
-                                        .map(|leaf| leaf.tabs.clone())
-                                        .unwrap_or_default(),
-                                    split,
-                                )
-                            },
-                        ));
-                    }
-                    if self.highlight_session != self.active_session {
-                        self.highlight_session = self.active_session.clone();
-                        self.highlight_since = Instant::now();
-                    }
-                    if let Some(sid) = &self.active_session
-                        && let Some(path) = dock.find_tab(&Tab::Terminal(sid.clone()))
-                        && let Ok(leaf) = dock.leaf(path.node_path())
-                    {
-                        ui.painter().rect_stroke(
-                            leaf.rect.shrink(1.0),
-                            2,
-                            appearance::focus_stroke(
-                                appearance::color(&self.theme.accent),
-                                self.highlight_since.elapsed(),
-                            ),
-                            egui::StrokeKind::Inside,
-                        );
-                    }
-                    if self.highlight_since.elapsed() < Duration::from_millis(1200) {
-                        ctx.request_repaint_after(Duration::from_millis(16));
-                    }
-                    self.layouts.insert(project, dock);
-                } else {
-                    let empty = self.state.projects.is_empty();
-                    let setup = cfg!(target_os = "macos")
-                        && self
-                            .preferences
-                            .needs_setup(self.state_loaded, self.state.projects.len());
-                    ui.centered_and_justified(|ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.heading(if empty {
-                                "A home for your terminals."
-                            } else {
-                                "No project selected."
-                            });
-                            ui.label(if empty {
-                                "Persistent sessions. Project layouts. Agents within reach."
-                            } else {
-                                "Restore a project from Removed, or add a folder."
-                            });
-                            if setup {
-                                return;
-                            }
-                            ui.add_space(12.0);
-                            if ui
-                                .button(if empty {
-                                    "Add your first project"
-                                } else {
-                                    "Add project"
-                                })
-                                .clicked()
-                            {
-                                self.add_project = true;
-                            }
-                        });
-                    });
-                }
-            });
+            .show(ui, |ui| self.center_pane(ui));
+        self.preview_appearance(&ctx);
         self.images
             .retain(|path, _| self.visible_images.contains(path));
         self.markdown.end_frame(&ctx);
@@ -4833,14 +4903,14 @@ mod navigation_tests {
     #[test]
     fn appearance_preview_cancel_and_external_conflict() {
         let (mut app, ctx, _dir) = fixture();
-        app.settings_open = true;
+        app.open_settings();
         app.theme_draft.text = "#123456".into();
         app.preview_appearance(&ctx);
         assert_eq!(app.theme.text, "#123456");
-        app.settings_open = false;
+        app.hide_center_overlay();
         app.preview_appearance(&ctx);
         assert_eq!(app.theme, app.theme_committed);
-        app.settings_open = true;
+        app.open_settings();
         app.theme_draft.text = "#123456".into();
         let external = AppearanceConfig {
             text: "#654321".into(),
@@ -6040,6 +6110,58 @@ mod navigation_tests {
         assert!(!app.layouts["a"].contains(&Tab::Player));
         app.open_player();
         assert!(app.player_open);
+    }
+
+    #[test]
+    fn settings_and_player_are_center_singletons() {
+        let (mut app, _, _dir) = fixture();
+        app.open_settings();
+        app.settings_draft.shell = "/tmp/custom-shell".into();
+        app.settings_section = SettingsSection::Terminal;
+        app.settings_search = "shell".into();
+        app.hide_center_overlay();
+        assert!(!app.settings_open);
+        assert!(app.settings_session);
+        app.open_settings();
+        assert_eq!(app.settings_draft.shell, "/tmp/custom-shell");
+        assert_eq!(app.settings_section, SettingsSection::Terminal);
+        assert_eq!(app.settings_search, "shell");
+        app.open_player();
+        assert!(app.player_open);
+        assert!(!app.settings_open);
+        assert!(app.settings_session);
+        app.open_settings();
+        assert!(!app.player_open);
+        assert_eq!(app.settings_draft.shell, "/tmp/custom-shell");
+        app.end_settings_session();
+        app.open_settings();
+        assert!(app.settings_draft.shell.is_empty());
+        assert!(app.settings_search.is_empty());
+    }
+
+    #[test]
+    fn go_session_hides_center_overlay() {
+        let (mut app, _, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.open_player();
+        app.go_session("shell");
+        assert!(!app.player_open);
+        app.open_player();
+        assert!(app.player_open);
+    }
+
+    #[test]
+    fn create_hides_settings_without_ending_session() {
+        let (mut app, _, _dir) = fixture();
+        app.open_settings();
+        app.settings_search = "shell".into();
+        app.create(None);
+        assert!(!app.settings_open);
+        assert!(app.settings_session);
+        app.open_settings();
+        assert_eq!(app.settings_search, "shell");
     }
 
     #[test]

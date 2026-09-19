@@ -1,5 +1,14 @@
-//! Settings window and appearance preview.
+//! Settings center pane and appearance preview.
 use super::*;
+
+#[derive(Default)]
+struct SettingsFrame {
+    apply: bool,
+    cancel: bool,
+    hide: bool,
+    browse: Option<BrowseTarget>,
+    grant_folder: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SettingsSection {
@@ -113,7 +122,7 @@ impl App {
         )
     }
 
-    pub(super) fn open_settings(&mut self) {
+    fn begin_settings_session(&mut self) {
         self.settings_draft = self.state.settings.clone();
         shortcuts::fill_defaults(&mut self.settings_draft.keybindings);
         self.editor_preset = external_editor::selected(&self.settings_draft);
@@ -124,121 +133,170 @@ impl App {
         self.custom_editor = false;
         self.shortcut_capture = None;
         let _ = self.jobs.send(Job::HookStatus);
+        self.settings_session = true;
+    }
+
+    pub(super) fn open_settings(&mut self) {
+        if !self.settings_session {
+            self.begin_settings_session();
+        }
+        self.player_open = false;
         self.settings_open = true;
     }
 
-    pub(super) fn settings(&mut self, ctx: &egui::Context) {
-        let mut open = true;
-        let height = (ctx.content_rect().height() - 160.0).clamp(220.0, 580.0);
-        let mut apply = false;
-        let mut cancel = false;
-        let mut browse = None;
-        let mut grant_folder = false;
-        self.popups
-            .window(ctx, "Settings")
-            .open(&mut open)
-            .collapsible(false)
-            .default_size([760.0, height + 110.0])
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.settings_search)
-                            .hint_text("Search settings")
-                            .desired_width(280.0),
-                    );
-                    if !self.settings_search.is_empty() && ui.small_button("Clear").clicked() {
-                        self.settings_search.clear();
-                    }
-                });
-                ui.add_space(8.0);
-                if !self.section_visible(self.settings_section)
-                    && let Some(section) = SettingsSection::ALL
-                        .into_iter()
-                        .find(|section| self.section_visible(*section))
-                {
+    pub(super) fn end_settings_session(&mut self) {
+        self.settings_open = false;
+        self.settings_session = false;
+        self.shortcut_capture = None;
+    }
+
+    pub(super) fn settings_center(&mut self, ui: &mut egui::Ui) {
+        let mut frame = SettingsFrame::default();
+        self.paint_settings(ui, &mut frame);
+        self.finish_settings_frame(frame);
+    }
+
+    fn paint_settings(&mut self, ui: &mut egui::Ui, frame: &mut SettingsFrame) {
+        ui.set_min_size(ui.available_size());
+        ui.horizontal(|ui| {
+            ui.strong("Settings");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if appearance::sidebar_action(ui, "X", "Close").clicked() {
+                    frame.hide = true;
+                }
+            });
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.settings_search)
+                    .hint_text("Search settings")
+                    .desired_width(280.0),
+            );
+            if !self.settings_search.is_empty() && ui.small_button("Clear").clicked() {
+                self.settings_search.clear();
+            }
+        });
+        ui.add_space(8.0);
+        self.ensure_visible_section();
+        let footer_h = 44.0;
+        let body_h = (ui.available_height() - footer_h).max(80.0);
+        ui.horizontal_top(|ui| {
+            ui.set_min_height(body_h);
+            self.paint_settings_nav(ui, body_h);
+            let divider = ui.cursor().min;
+            ui.painter().line_segment(
+                [divider, divider + egui::vec2(0.0, body_h)],
+                ui.visuals().widgets.noninteractive.bg_stroke,
+            );
+            ui.add_space(12.0);
+            self.paint_settings_body(ui, body_h, frame);
+        });
+        ui.separator();
+        self.paint_settings_footer(ui, frame);
+    }
+
+    fn ensure_visible_section(&mut self) {
+        if !self.section_visible(self.settings_section)
+            && let Some(section) = SettingsSection::ALL
+                .into_iter()
+                .find(|section| self.section_visible(*section))
+        {
+            self.settings_section = section;
+        }
+    }
+
+    fn paint_settings_nav(&mut self, ui: &mut egui::Ui, height: f32) {
+        ui.vertical(|ui| {
+            ui.set_width(142.0);
+            ui.set_min_height(height);
+            ui.spacing_mut().item_spacing.y = 4.0;
+            for section in SettingsSection::ALL {
+                if !self.section_visible(section) {
+                    continue;
+                }
+                let row = appearance::row(
+                    ui,
+                    section.title(),
+                    section.icon(),
+                    self.settings_section == section,
+                    30.0,
+                    "",
+                    ui.visuals().weak_text_color(),
+                );
+                #[cfg(feature = "test-support")]
+                diagnostics::record(
+                    ui.ctx(),
+                    &format!("settings-section:{}", section.title()),
+                    row.rect,
+                );
+                if row.clicked() {
                     self.settings_section = section;
                 }
-                ui.horizontal_top(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(142.0);
-                        ui.set_min_height(height);
-                        ui.spacing_mut().item_spacing.y = 4.0;
-                        for section in SettingsSection::ALL {
-                            if !self.section_visible(section) {
-                                continue;
-                            }
-                            let row = appearance::row(
-                                ui,
-                                section.title(),
-                                section.icon(),
-                                self.settings_section == section,
-                                30.0,
-                                "",
-                                ui.visuals().weak_text_color(),
-                            );
-                            #[cfg(feature = "test-support")]
-                            diagnostics::record(
-                                ui.ctx(),
-                                &format!("settings-section:{}", section.title()),
-                                row.rect,
-                            );
-                            if row.clicked() {
-                                self.settings_section = section;
-                            }
-                        }
-                    });
-                    let divider = ui.cursor().min;
-                    ui.painter().line_segment(
-                        [divider, divider + egui::vec2(0.0, height)],
-                        ui.visuals().widgets.noninteractive.bg_stroke,
-                    );
-                    ui.add_space(12.0);
-                    ui.vertical(|ui| {
-                        ui.set_width(560.0);
-                        egui::ScrollArea::vertical()
-                            .id_salt(("settings-section", self.settings_section as u8))
-                            .max_height(height)
-                            .show(ui, |ui| match self.settings_section {
-                                SettingsSection::Appearance => self.appearance_settings(ui),
-                                SettingsSection::Terminal => {
-                                    browse = self.terminal_settings(ui, &mut grant_folder);
-                                }
-                                SettingsSection::Notifications => self.notification_settings(ui),
-                                SettingsSection::History => self.history_settings(ui),
-                                SettingsSection::Shortcuts => self.shortcut_settings(ui),
-                                SettingsSection::AgentHooks => self.hook_settings(ui),
-                                SettingsSection::Updates => {
-                                    self.installation_settings(ui);
-                                    ui.add_space(12.0);
-                                    ui.separator();
-                                    self.updater.settings(ui);
-                                }
-                            });
-                    });
-                });
-                ui.separator();
-                let validation = self.settings_validation();
-                if let Err(error) = &validation {
-                    ui.colored_label(appearance::color(&self.theme.status_failed), error);
-                }
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(
-                            validation.is_ok() && !self.theme_conflict,
-                            egui::Button::new("Apply"),
-                        )
-                        .clicked()
-                    {
-                        apply = true;
+            }
+        });
+    }
+
+    fn paint_settings_body(&mut self, ui: &mut egui::Ui, height: f32, frame: &mut SettingsFrame) {
+        ui.vertical(|ui| {
+            ui.set_min_width(ui.available_width().max(240.0));
+            egui::ScrollArea::vertical()
+                .id_salt(("settings-section", self.settings_section as u8))
+                .max_height(height)
+                .auto_shrink([false, false])
+                .show(ui, |ui| match self.settings_section {
+                    SettingsSection::Appearance => self.appearance_settings(ui),
+                    SettingsSection::Terminal => {
+                        let mut grant = false;
+                        frame.browse = self.terminal_settings(ui, &mut grant);
+                        frame.grant_folder |= grant;
                     }
-                    let response = ui.button("Cancel");
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(ui.ctx(), "settings-cancel", response.rect);
-                    if response.clicked() {
-                        cancel = true;
+                    SettingsSection::Notifications => self.notification_settings(ui),
+                    SettingsSection::History => self.history_settings(ui),
+                    SettingsSection::Shortcuts => self.shortcut_settings(ui),
+                    SettingsSection::AgentHooks => self.hook_settings(ui),
+                    SettingsSection::Updates => {
+                        self.installation_settings(ui);
+                        ui.add_space(12.0);
+                        ui.separator();
+                        self.updater.settings(ui);
                     }
                 });
-            });
+        });
+    }
+
+    fn paint_settings_footer(&mut self, ui: &mut egui::Ui, frame: &mut SettingsFrame) {
+        let validation = self.settings_validation();
+        if let Err(error) = &validation {
+            ui.colored_label(appearance::color(&self.theme.status_failed), error);
+        }
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    validation.is_ok() && !self.theme_conflict,
+                    egui::Button::new("Apply"),
+                )
+                .clicked()
+            {
+                frame.apply = true;
+            }
+            let response = ui.button("Cancel");
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "settings-cancel", response.rect);
+            if response.clicked() {
+                frame.cancel = true;
+            }
+        });
+    }
+
+    fn finish_settings_frame(&mut self, frame: SettingsFrame) {
+        let SettingsFrame {
+            apply,
+            cancel,
+            hide,
+            browse,
+            grant_folder,
+        } = frame;
         if grant_folder {
             self.add_project = true;
         }
@@ -253,14 +311,10 @@ impl App {
             self.send(Request::Settings(self.settings_draft.clone()));
         }
         if cancel {
-            self.settings_open = false;
-            self.shortcut_capture = None;
+            self.end_settings_session();
+        } else if hide {
+            self.hide_center_overlay();
         }
-        self.settings_open &= open;
-        if !self.settings_open {
-            self.shortcut_capture = None;
-        }
-        self.preview_appearance(ctx);
     }
 
     fn section_visible(&self, section: SettingsSection) -> bool {
