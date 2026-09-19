@@ -175,7 +175,9 @@ impl TerminalBackend {
         let event_proxy = EventProxy(event_sender);
         let mut term = Term::new(config, &terminal_size, event_proxy.clone());
         let initial_content = RenderableContent {
-            grid: term.grid().clone(),
+            grid: snapshot_viewport(term.grid()),
+            display_offset: term.grid().display_offset(),
+            selected_text: String::new(),
             selectable_range: None,
             terminal_mode: *term.mode(),
             terminal_size,
@@ -285,6 +287,7 @@ impl TerminalBackend {
             .selection
             .as_ref()
             .and_then(|selection| selection.to_range(terminal));
+        self.last_content.selected_text = terminal.selection_to_string().unwrap_or_default();
     }
 
     pub fn selection_point(
@@ -330,7 +333,7 @@ impl TerminalBackend {
         self.capture_selection(&term);
     }
     pub fn selectable_content(&self) -> String {
-        selected_text(self.last_content())
+        self.last_content.selected_text.clone()
     }
 
     pub fn sync(&mut self) -> &RenderableContent {
@@ -345,8 +348,10 @@ impl TerminalBackend {
         };
 
         let cursor = terminal.grid_mut().cursor_cell().clone();
-        self.last_content.grid = terminal.grid().clone();
+        self.last_content.grid = snapshot_viewport(terminal.grid());
+        self.last_content.display_offset = terminal.grid().display_offset();
         self.last_content.selectable_range = selectable_range;
+        self.last_content.selected_text = terminal.selection_to_string().unwrap_or_default();
         self.last_content.cursor = cursor;
         self.last_content.terminal_mode = *terminal.mode();
         self.last_content.terminal_size = self.size;
@@ -386,22 +391,25 @@ impl TerminalBackend {
     }
 
     fn open_link(&self) {
-        if let Some(range) = &self.last_content.hovered_hyperlink {
-            let start = range.start();
-            let end = range.end();
-
-            let mut url = String::from(self.last_content.grid.index(*start).c);
-            for indexed in self.last_content.grid.iter_from(*start) {
-                url.push(indexed.c);
-                if indexed.point == *end {
-                    break;
-                }
+        let Some(range) = &self.last_content.hovered_hyperlink else {
+            return;
+        };
+        let start = *range.start();
+        let end = *range.end();
+        let term = self.term.clone();
+        let term = term.lock();
+        let grid = term.grid();
+        let mut url = String::from(grid.index(start).c);
+        for indexed in grid.iter_from(start) {
+            url.push(indexed.c);
+            if indexed.point == end {
+                break;
             }
-
-            open::that(url).unwrap_or_else(|_| {
-                panic!("link opening is failed");
-            })
         }
+
+        open::that(url).unwrap_or_else(|_| {
+            panic!("link opening is failed");
+        })
     }
 
     fn process_mouse_report(
@@ -600,7 +608,11 @@ fn visible_regex_match_iter<'a>(
 }
 
 pub struct RenderableContent {
+    /// Visible cells only. Scrollback stays in the live `Term`.
     pub grid: Grid<Cell>,
+    /// Live `Term` display offset. Mouse reports and fixtures use this, not `grid`.
+    pub display_offset: usize,
+    pub selected_text: String,
     pub hovered_hyperlink: Option<RangeInclusive<Point>>,
     pub selectable_range: Option<SelectionRange>,
     pub cursor: Cell,
@@ -612,6 +624,8 @@ impl Default for RenderableContent {
     fn default() -> Self {
         Self {
             grid: Grid::new(0, 0, 0),
+            display_offset: 0,
+            selected_text: String::new(),
             hovered_hyperlink: None,
             selectable_range: None,
             cursor: Cell::default(),
@@ -619,6 +633,27 @@ impl Default for RenderableContent {
             terminal_size: TerminalSize::default(),
         }
     }
+}
+
+fn snapshot_viewport(src: &Grid<Cell>) -> Grid<Cell> {
+    let lines = src.screen_lines().max(1);
+    let cols = src.columns().max(1);
+    let offset = src.display_offset();
+    let mut dst = Grid::new(lines, cols, 0);
+    for indexed in src.display_iter() {
+        let row = indexed.point.line.0 + offset as i32;
+        if row < 0 {
+            continue;
+        }
+        let row = row as usize;
+        if row >= lines {
+            continue;
+        }
+        dst[Line(row as i32)][indexed.point.column] = indexed.cell.clone();
+    }
+    dst.cursor = src.cursor.clone();
+    dst.cursor.point.line = Line(src.cursor.point.line.0 + offset as i32);
+    dst
 }
 
 impl Drop for TerminalBackend {
@@ -636,6 +671,7 @@ impl EventListener for EventProxy {
     }
 }
 
+#[cfg(test)]
 fn selected_text(content: &RenderableContent) -> String {
     let Some(range) = content.selectable_range else {
         return String::new();
@@ -865,6 +901,61 @@ mod target_tests {
             false,
         ));
         assert_eq!(selected_text(&content), "first\nsecond");
+    }
+
+    #[test]
+    fn viewport_snapshot_does_not_retain_scrollback_rows() {
+        let mut grid = Grid::<Cell>::new(4, 8, 10_000);
+        grid.scroll_up(&(Line(0)..Line(4)), 500);
+        assert!(grid.history_size() >= 500);
+        let snap = snapshot_viewport(&grid);
+        assert_eq!(snap.screen_lines(), 4);
+        assert_eq!(snap.history_size(), 0);
+        assert_eq!(snap.display_offset(), 0);
+    }
+
+    #[test]
+    fn viewport_snapshot_copies_scrolled_visible_row_at_line_zero() {
+        let mut grid = Grid::<Cell>::new(2, 8, 100);
+        for (col, c) in "history!".chars().enumerate() {
+            grid[Line(0)][Column(col)].c = c;
+        }
+        grid.scroll_up(&(Line(0)..Line(2)), 1);
+        for (col, c) in "onscrn!!".chars().enumerate() {
+            grid[Line(0)][Column(col)].c = c;
+        }
+        grid.scroll_display(Scroll::Delta(1));
+        assert_eq!(grid.display_offset(), 1);
+        let snap = snapshot_viewport(&grid);
+        assert_eq!(snap.display_offset(), 0);
+        assert_eq!(snap.history_size(), 0);
+        let text: String = (0..8).map(|col| snap[Line(0)][Column(col)].c).collect();
+        assert_eq!(text, "history!");
+    }
+
+    #[test]
+    fn offscreen_copy_uses_cached_string_because_snapshot_has_no_history() {
+        let mut grid = Grid::<Cell>::new(2, 6, 4);
+        for (col, c) in "first".chars().enumerate() {
+            grid[Line(0)][Column(col)].c = c;
+        }
+        grid.scroll_up(&(Line(0)..Line(2)), 1);
+        for (col, c) in "second".chars().enumerate() {
+            grid[Line(0)][Column(col)].c = c;
+        }
+        let content = RenderableContent {
+            grid: snapshot_viewport(&grid),
+            selected_text: "first\nsecond".into(),
+            selectable_range: Some(SelectionRange::new(
+                Point::new(Line(-1), Column(0)),
+                Point::new(Line(0), Column(5)),
+                false,
+            )),
+            ..Default::default()
+        };
+        assert_eq!(content.selected_text, "first\nsecond");
+        assert_eq!(content.grid.history_size(), 0);
+        assert_eq!(content.grid.topmost_line(), Line(0));
     }
     #[test]
     fn wrapped_and_scrolled_wide_character_hit_testing() {

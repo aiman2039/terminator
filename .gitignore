@@ -21,3 +21,4 @@ scripts/signing-cleanup.sh
 scripts/signing-github.sh
 scripts/signing.sh
 refs-research/*
+vendor/egui_term/target/

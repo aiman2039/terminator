@@ -4,6 +4,18 @@ use terminator_core::appearance::{AppearanceConfig, rgb};
 /// Keep small navigation/action glyphs legible independently of secondary text.
 pub const ICON_COLOR: Color32 = Color32::from_rgb(242, 244, 248);
 
+/// Cap the egui font atlas. Glow reports 16384 on Metal; epaint allocates that width.
+pub const FONT_ATLAS_MAX_SIDE: usize = 4096;
+
+pub fn cap_max_texture_side(input: &mut egui::RawInput) {
+    input.max_texture_side = Some(
+        input
+            .max_texture_side
+            .unwrap_or(FONT_ATLAS_MAX_SIDE)
+            .min(FONT_ATLAS_MAX_SIDE),
+    );
+}
+
 /// Orca dark context menu fill: `--background` `#0a0a0a`, used as the solid
 /// stand-in for `dark:bg-[rgba(0,0,0,0.12)]` + `backdrop-blur-2xl`.
 pub const MENU_FILL: Color32 = Color32::from_rgb(10, 10, 10);
@@ -196,6 +208,7 @@ pub fn sidebar_action(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Respons
 pub fn sidebar_scroll(salt: &'static str) -> egui::ScrollArea {
     egui::ScrollArea::vertical()
         .id_salt(salt)
+        .auto_shrink([false, true])
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
 }
 
@@ -878,6 +891,25 @@ pub fn click_cursor(ctx: &egui::Context) {
 #[cfg(test)]
 mod row_tests {
     use super::*;
+
+    #[test]
+    fn font_atlas_side_is_capped_to_4096() {
+        let mut input = egui::RawInput {
+            max_texture_side: Some(16_384),
+            ..Default::default()
+        };
+        cap_max_texture_side(&mut input);
+        assert_eq!(input.max_texture_side, Some(FONT_ATLAS_MAX_SIDE));
+        let mut input = egui::RawInput {
+            max_texture_side: Some(2048),
+            ..Default::default()
+        };
+        cap_max_texture_side(&mut input);
+        assert_eq!(input.max_texture_side, Some(2048));
+        let mut missing = egui::RawInput::default();
+        cap_max_texture_side(&mut missing);
+        assert_eq!(missing.max_texture_side, Some(FONT_ATLAS_MAX_SIDE));
+    }
 
     #[test]
     fn app_and_terminal_fonts_cover_hebrew_letters() {

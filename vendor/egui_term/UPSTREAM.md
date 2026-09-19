@@ -46,15 +46,23 @@ focus event filter. This prevents widget navigation from briefly focusing and
 highlighting dock separators. A headless egui regression covers Tab, Shift+Tab,
 arrows, Escape, and repeated presses while confirming input remains available.
 
+## Viewport snapshot and style-run paint (2026-09-19)
+
+`last_content.grid` is a viewport-sized copy (`display_offset` 0). Live 10k
+history stays in `FairMutex<Term>`. `RenderableContent.display_offset` is the
+live scroll for mouse reports and host fixtures. Copy uses
+`Term::selection_to_string()` cached in `selected_text`. `open_link` reads the
+live grid. Paint groups same-style cells into one `Shape::text` (`LEFT_TOP`).
+
 ## Mouse-mode selection and copy (2026-09-17)
 
 Left-drag always selects host text, even when the application enables mouse
 reporting. Wheel still sends mouse reports (Shift bypasses to local scroll).
 Pointer release outside the pane ends the drag. Empty Copy does not write an
 empty clipboard (Linux Ctrl+C still interrupts when there is no selection).
-`sync()` clones the Alacritty grid only after PTY/output/scroll/resize;
-selection updates the cached range in place. Widget sense is `click_and_drag`
-so the pointer stays captured.
+`sync()` snapshots the visible grid only after PTY/output/scroll/resize;
+selection updates the cached range and copy string in place. Widget sense is
+`click_and_drag` so the pointer stays captured.
 
 ## Unbound Command/Ctrl chords (2026-09-16)
 

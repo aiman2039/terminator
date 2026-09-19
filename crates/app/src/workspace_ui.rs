@@ -2017,7 +2017,7 @@ impl Viewer<'_> {
                 let content = backend.last_content();
                 let snapshot = (
                     focused,
-                    content.grid.display_offset(),
+                    content.display_offset,
                     content.terminal_mode.bits(),
                 );
                 let key = egui::Id::new(("scroll-evidence", sid));

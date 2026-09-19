@@ -6,6 +6,7 @@ use std::{io::Cursor, path::Path};
 const MAX_FILE: u64 = 32 * 1024 * 1024;
 const MAX_PIXELS: u64 = 16 * 1024 * 1024;
 const MAX_SIDE: u32 = 16384;
+const MAX_PREVIEW_SIDE: u32 = 4096;
 
 pub fn supported(path: &Path) -> bool {
     path.extension()
@@ -121,7 +122,18 @@ fn raster(bytes: &[u8]) -> Result<image::DynamicImage> {
     let orientation = decoder.orientation()?;
     let mut image = image::DynamicImage::from_decoder(decoder)?;
     image.apply_orientation(orientation);
-    Ok(image)
+    Ok(downscale_preview(image))
+}
+
+fn downscale_preview(image: image::DynamicImage) -> image::DynamicImage {
+    if image.width() <= MAX_PREVIEW_SIDE && image.height() <= MAX_PREVIEW_SIDE {
+        return image;
+    }
+    image.resize(
+        MAX_PREVIEW_SIDE,
+        MAX_PREVIEW_SIDE,
+        image::imageops::FilterType::Triangle,
+    )
 }
 
 pub struct Preview {
@@ -255,10 +267,34 @@ mod tests {
         let decoded = decode(&path).unwrap();
         assert_eq!(decoded.size, [8, 4]);
         assert_eq!(decoded.pixels[0].a(), 128);
+        let large = dir.path().join("wide.png");
+        image::RgbaImage::from_pixel(5000, 20, image::Rgba([1, 2, 3, 255]))
+            .save(&large)
+            .unwrap();
+        let scaled = decode(&large).unwrap();
+        assert_eq!(scaled.size[0], MAX_PREVIEW_SIDE as usize);
+        assert!(scaled.size[1] <= 20 && scaled.size[1] >= 15);
         std::fs::write(&path, "not an image").unwrap();
         assert!(decode(&path).is_err());
         File::create(&path).unwrap().set_len(MAX_FILE + 1).unwrap();
         assert!(decode(&path).unwrap_err().to_string().contains("32 MiB"));
+    }
+
+    #[test]
+    fn preview_downscales_tall_images_and_leaves_small_images() {
+        let dir = tempfile::tempdir().unwrap();
+        let small = dir.path().join("small.png");
+        image::RgbaImage::from_pixel(64, 32, image::Rgba([9, 8, 7, 255]))
+            .save(&small)
+            .unwrap();
+        assert_eq!(decode(&small).unwrap().size, [64, 32]);
+        let tall = dir.path().join("tall.png");
+        image::RgbaImage::from_pixel(20, 5000, image::Rgba([4, 5, 6, 255]))
+            .save(&tall)
+            .unwrap();
+        let scaled = decode(&tall).unwrap();
+        assert_eq!(scaled.size[1], MAX_PREVIEW_SIDE as usize);
+        assert!(scaled.size[0] <= 20 && scaled.size[0] >= 15);
     }
     #[test]
     fn svg_renders_bounded_embedded_png_and_rejects_external_references() {

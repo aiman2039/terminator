@@ -1,3 +1,4 @@
+use alacritty_terminal::index::Line;
 use alacritty_terminal::index::Point as TerminalGridPoint;
 use alacritty_terminal::term::cell;
 use alacritty_terminal::term::TermMode;
@@ -7,7 +8,7 @@ use egui::Modifiers;
 use egui::MouseWheelUnit;
 use egui::Shape;
 use egui::Widget;
-use egui::{Align2, Painter, Pos2, Rect, Response, Stroke, Vec2};
+use egui::{Align2, Color32, FontFamily, FontId, Painter, Pos2, Rect, Response, Stroke, Vec2};
 use egui::{CornerRadius, Key};
 use egui::{Id, PointerButton};
 
@@ -263,130 +264,166 @@ impl<'a> TerminalView<'a> {
 
     fn show(self, state: &mut TerminalViewState, layout: &Response, painter: &Painter) {
         let content = self.backend.sync();
-        let layout_min = layout.rect.min;
-        let layout_max = layout.rect.max;
-        let cell_height = content.terminal_size.cell_height as f32;
-        let cell_width = content.terminal_size.cell_width as f32;
-        let global_bg = self.theme.get_color(Color::Named(NamedColor::Background));
-
-        let mut shapes = vec![Shape::Rect(RectShape::filled(
-            Rect::from_min_max(layout_min, layout_max),
-            CornerRadius::ZERO,
-            global_bg,
-        ))];
-
-        for indexed in content.grid.display_iter() {
-            let flags = indexed.cell.flags;
-            let is_wide_char_spacer = flags.contains(cell::Flags::WIDE_CHAR_SPACER);
-            if is_wide_char_spacer {
-                continue;
-            }
-
-            let is_app_cursor_mode = content.terminal_mode.contains(TermMode::APP_CURSOR);
-            let is_wide_char = flags.contains(cell::Flags::WIDE_CHAR);
-            let is_inverse = flags.contains(cell::Flags::INVERSE);
-            let is_dim = flags.intersects(cell::Flags::DIM | cell::Flags::DIM_BOLD);
-            let is_selected = content
-                .selectable_range
-                .is_some_and(|r| r.contains(indexed.point));
-            let is_hovered_hyperling = content.hovered_hyperlink.as_ref().is_some_and(|r| {
-                r.contains(&indexed.point) && r.contains(&state.current_mouse_position_on_grid)
-            });
-
-            let x = layout_min.x + (cell_width * indexed.point.column.0 as f32);
-            let line_num = indexed.point.line.0 + content.grid.display_offset() as i32;
-            let y = layout_min.y + (cell_height * line_num as f32);
-
-            let mut fg = self.theme.get_color(indexed.fg);
-            let mut bg = self.theme.get_color(indexed.bg);
-            let cell_width = if is_wide_char {
-                cell_width * 2.0
-            } else {
-                cell_width
-            };
-
-            if is_dim {
-                fg = fg.linear_multiply(0.7);
-            }
-
-            if is_inverse {
-                std::mem::swap(&mut fg, &mut bg);
-            }
-
-            if is_selected {
-                bg = layout.ctx.global_style().visuals.selection.bg_fill;
-            }
-
-            if global_bg != bg {
-                shapes.push(Shape::Rect(RectShape::filled(
-                    Rect::from_min_size(
-                        Pos2::new(x, y),
-                        // + 1.0 is to fill grid border
-                        Vec2::new(cell_width + 1., cell_height + 1.),
-                    ),
-                    CornerRadius::ZERO,
-                    bg,
-                )));
-            }
-
-            // Handle hovered hyperlink underline
-            if is_hovered_hyperling {
-                let underline_height = y + cell_height;
-                shapes.push(Shape::LineSegment {
-                    points: [
-                        Pos2::new(x, underline_height),
-                        Pos2::new(x + cell_width, underline_height),
-                    ],
-                    stroke: Stroke::new(cell_height * 0.15, fg),
-                });
-            }
-
-            // Handle cursor rendering
-            if content.grid.cursor.point == indexed.point {
-                let cursor_color = self.theme.get_color(content.cursor.fg);
-                shapes.push(Shape::Rect(RectShape::filled(
-                    Rect::from_min_size(Pos2::new(x, y), Vec2::new(cell_width, cell_height)),
-                    CornerRadius::default(),
-                    cursor_color,
-                )));
-            }
-
-            // Draw text content
-            if indexed.c != ' ' && indexed.c != '\t' {
-                if content.grid.cursor.point == indexed.point && is_app_cursor_mode {
-                    std::mem::swap(&mut fg, &mut bg);
-                }
-
-                let font = if flags.contains(cell::Flags::BOLD)
-                    && layout.ctx.fonts_mut(|f| {
-                        f.families()
-                            .contains(&egui::FontFamily::Name("Terminal Bold".into()))
-                    }) {
-                    egui::FontId::new(
-                        self.font.font_type().size,
-                        egui::FontFamily::Name("Terminal Bold".into()),
-                    )
-                } else {
-                    self.font.font_type()
-                };
-                shapes.push(painter.fonts_mut(|c| {
-                    Shape::text(
-                        c,
-                        Pos2 {
-                            x: x + (cell_width / 2.0),
-                            y,
-                        },
-                        Align2::CENTER_TOP,
-                        indexed.c,
-                        font,
-                        fg,
-                    )
-                }));
-            }
-        }
-
-        painter.extend(shapes);
+        painter.extend(paint_terminal(
+            &self.theme,
+            self.font.font_type(),
+            layout,
+            painter,
+            state,
+            content,
+        ));
     }
+}
+
+fn live_point(point: TerminalGridPoint, display_offset: usize) -> TerminalGridPoint {
+    TerminalGridPoint::new(Line(point.line.0 - display_offset as i32), point.column)
+}
+
+struct TextRun {
+    origin: Pos2,
+    end_x: f32,
+    y: f32,
+    fg: Color32,
+    font: FontId,
+    text: String,
+}
+
+fn paint_terminal(
+    theme: &TerminalTheme,
+    regular: FontId,
+    layout: &Response,
+    painter: &Painter,
+    state: &TerminalViewState,
+    content: &crate::backend::RenderableContent,
+) -> Vec<Shape> {
+    let layout_min = layout.rect.min;
+    let cell_height = content.terminal_size.cell_height as f32;
+    let cell_width = content.terminal_size.cell_width as f32;
+    let global_bg = theme.get_color(Color::Named(NamedColor::Background));
+    let selection_bg = layout.ctx.global_style().visuals.selection.bg_fill;
+    let bold = layout.ctx.fonts_mut(|fonts| {
+        fonts
+            .families()
+            .contains(&FontFamily::Name("Terminal Bold".into()))
+    });
+    let bold_font = FontId::new(regular.size, FontFamily::Name("Terminal Bold".into()));
+    let app_cursor = content.terminal_mode.contains(TermMode::APP_CURSOR);
+    let mut shapes = vec![Shape::Rect(RectShape::filled(
+        Rect::from_min_max(layout_min, layout.rect.max),
+        CornerRadius::ZERO,
+        global_bg,
+    ))];
+    let mut run = TextRun {
+        origin: Pos2::ZERO,
+        end_x: f32::NAN,
+        y: f32::NAN,
+        fg: Color32::TRANSPARENT,
+        font: regular.clone(),
+        text: String::new(),
+    };
+
+    for indexed in content.grid.display_iter() {
+        if indexed.cell.flags.contains(cell::Flags::WIDE_CHAR_SPACER) {
+            flush_text_run(painter, &mut shapes, &mut run);
+            continue;
+        }
+        let live = live_point(indexed.point, content.display_offset);
+        let selected = content
+            .selectable_range
+            .is_some_and(|range| range.contains(live));
+        let hovered = content.hovered_hyperlink.as_ref().is_some_and(|range| {
+            range.contains(&live) && range.contains(&state.current_mouse_position_on_grid)
+        });
+        let x = layout_min.x + (cell_width * indexed.point.column.0 as f32);
+        let y = layout_min.y
+            + (cell_height * (indexed.point.line.0 + content.grid.display_offset() as i32) as f32);
+        let wide = indexed.cell.flags.contains(cell::Flags::WIDE_CHAR);
+        let width = if wide { cell_width * 2.0 } else { cell_width };
+        let mut fg = theme.get_color(indexed.fg);
+        let mut bg = theme.get_color(indexed.bg);
+        if indexed
+            .cell
+            .flags
+            .intersects(cell::Flags::DIM | cell::Flags::DIM_BOLD)
+        {
+            fg = fg.linear_multiply(0.7);
+        }
+        if indexed.cell.flags.contains(cell::Flags::INVERSE) {
+            std::mem::swap(&mut fg, &mut bg);
+        }
+        if selected {
+            bg = selection_bg;
+        }
+        if global_bg != bg {
+            shapes.push(Shape::Rect(RectShape::filled(
+                Rect::from_min_size(Pos2::new(x, y), Vec2::new(width + 1., cell_height + 1.)),
+                CornerRadius::ZERO,
+                bg,
+            )));
+        }
+        if hovered {
+            shapes.push(Shape::LineSegment {
+                points: [
+                    Pos2::new(x, y + cell_height),
+                    Pos2::new(x + width, y + cell_height),
+                ],
+                stroke: Stroke::new(cell_height * 0.15, fg),
+            });
+        }
+        let on_cursor = content.grid.cursor.point == indexed.point;
+        if on_cursor {
+            shapes.push(Shape::Rect(RectShape::filled(
+                Rect::from_min_size(Pos2::new(x, y), Vec2::new(width, cell_height)),
+                CornerRadius::default(),
+                theme.get_color(content.cursor.fg),
+            )));
+        }
+        if indexed.c == ' ' || indexed.c == '\t' {
+            flush_text_run(painter, &mut shapes, &mut run);
+            continue;
+        }
+        if on_cursor && app_cursor {
+            fg = bg;
+        }
+        let font = if indexed.cell.flags.contains(cell::Flags::BOLD) && bold {
+            bold_font.clone()
+        } else {
+            regular.clone()
+        };
+        let invert_cursor = on_cursor && app_cursor;
+        if invert_cursor || wide || !text_run_continues(&run, x, y, fg, &font) {
+            flush_text_run(painter, &mut shapes, &mut run);
+            run.origin = Pos2::new(x, y);
+            run.end_x = x;
+            run.y = y;
+            run.fg = fg;
+            run.font = font;
+        }
+        run.text.push(indexed.c);
+        run.end_x += width;
+        if invert_cursor || wide {
+            flush_text_run(painter, &mut shapes, &mut run);
+        }
+    }
+    flush_text_run(painter, &mut shapes, &mut run);
+    shapes
+}
+
+fn text_run_continues(run: &TextRun, x: f32, y: f32, fg: Color32, font: &FontId) -> bool {
+    !run.text.is_empty() && run.y == y && run.end_x == x && run.fg == fg && run.font == *font
+}
+
+fn flush_text_run(painter: &Painter, shapes: &mut Vec<Shape>, run: &mut TextRun) {
+    if run.text.is_empty() {
+        return;
+    }
+    let font = run.font.clone();
+    let text = std::mem::take(&mut run.text);
+    let origin = run.origin;
+    let fg = run.fg;
+    shapes.push(
+        painter.fonts_mut(|fonts| Shape::text(fonts, origin, Align2::LEFT_TOP, text, font, fg)),
+    );
 }
 
 fn focus_terminal(layout: &Response) {
@@ -703,7 +740,7 @@ fn process_mouse_move(
         cursor_x,
         cursor_y,
         &terminal_content.terminal_size,
-        terminal_content.grid.display_offset(),
+        terminal_content.display_offset,
     );
 
     let mut actions = Vec::new();
@@ -732,7 +769,7 @@ fn refresh_pointer_cell(
         position.x - layout.rect.min.x,
         position.y - layout.rect.min.y,
         &content.terminal_size,
-        content.grid.display_offset(),
+        content.display_offset,
     );
 }
 
@@ -968,5 +1005,100 @@ mod pointer_tests {
     fn empty_cmd_c_does_not_clear_clipboard() {
         let action = copy_input_action(String::new(), Modifiers::NONE);
         assert!(matches!(action, InputAction::Ignore));
+    }
+}
+
+#[cfg(test)]
+mod paint_tests {
+    use super::*;
+    use crate::backend::{RenderableContent, TerminalSize};
+    use alacritty_terminal::grid::Grid;
+    use alacritty_terminal::index::{Column, Point};
+    use alacritty_terminal::term::cell::Cell;
+    use alacritty_terminal::vte::ansi::{Color, NamedColor};
+
+    fn content_with(text: &str, split_at: Option<usize>) -> RenderableContent {
+        let cols = text.chars().count();
+        let mut grid = Grid::<Cell>::new(1, cols.max(1), 0);
+        for (col, c) in text.chars().enumerate() {
+            let cell = &mut grid[Point::new(Line(0), Column(col))];
+            cell.c = c;
+            if split_at.is_some_and(|at| col >= at) {
+                cell.fg = Color::Named(NamedColor::Red);
+            }
+        }
+        let mut terminal_size = TerminalSize::default();
+        terminal_size.cell_width = 8;
+        terminal_size.cell_height = 16;
+        RenderableContent {
+            grid,
+            terminal_size,
+            ..Default::default()
+        }
+    }
+
+    fn paint(content: &RenderableContent) -> Vec<Shape> {
+        let ctx = egui::Context::default();
+        let mut collected = None;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 80.0))),
+                ..Default::default()
+            },
+            |ui| {
+                let (response, painter) =
+                    ui.allocate_painter(Vec2::new(320.0, 48.0), egui::Sense::hover());
+                collected = Some(paint_terminal(
+                    &TerminalTheme::default(),
+                    FontId::monospace(13.0),
+                    &response,
+                    &painter,
+                    &TerminalViewState::default(),
+                    content,
+                ));
+            },
+        );
+        output.textures_delta.clear();
+        collected.expect("paint")
+    }
+
+    fn text_galleys(shapes: &[Shape]) -> Vec<String> {
+        shapes
+            .iter()
+            .filter_map(|shape| match shape {
+                Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn live_point_maps_viewport_row_to_term_history() {
+        assert_eq!(
+            live_point(TerminalGridPoint::new(Line(0), Column(3)), 10),
+            TerminalGridPoint::new(Line(-10), Column(3))
+        );
+        assert_eq!(
+            live_point(TerminalGridPoint::new(Line(2), Column(0)), 0),
+            TerminalGridPoint::new(Line(2), Column(0))
+        );
+    }
+
+    #[test]
+    fn same_style_cells_paint_as_one_text_shape() {
+        let galleys = text_galleys(&paint(&content_with("hello", None)));
+        assert_eq!(galleys, ["hello"]);
+    }
+
+    #[test]
+    fn style_change_splits_text_runs() {
+        let galleys = text_galleys(&paint(&content_with("hello", Some(2))));
+        assert_eq!(galleys, ["he", "llo"]);
+    }
+
+    #[test]
+    fn spaces_split_text_runs() {
+        let galleys = text_galleys(&paint(&content_with("ab cd", None)));
+        assert_eq!(galleys, ["ab", "cd"]);
     }
 }

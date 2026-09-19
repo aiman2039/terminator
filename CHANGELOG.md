@@ -6,6 +6,9 @@
   floating popups. Each is a singleton: hide (workspace tab, new terminal,
   open file/session) keeps the instance; reopen shows the same view.
   Settings Cancel discards. Hiding Player does not stop audio.
+- Use less GUI RAM: snapshot only the visible terminal grid (keep 10k
+  scrollback in the live emulator), paint style runs instead of per-glyph
+  shapes, cap the font atlas at 4096, and downscale image previews to 4K.
 
 - Top-level tab right-click: close all tabs to the left/right, add a tab to
   the left/right. Close left/right reuses the existing per-tab keep-running,

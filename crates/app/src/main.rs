@@ -847,7 +847,7 @@ impl App {
                         let text: String = content.grid.display_iter().map(|cell| cell.c).collect();
                         let samples: Vec<_> = (1..=160).filter(|n| text.contains(&format!("TSAMPLE{n:03}"))).collect();
                         let updates: Vec<_> = (1..=100).filter(|n| text.contains(&format!("TUPDATE{n:03}"))).collect();
-                        (sid.clone(), serde_json::json!({"ui_pass":ctx.cumulative_pass_nr(), "window_occluded":ctx.input(|i| i.viewport().occluded), "offset":content.grid.display_offset(), "modes":content.terminal_mode.bits(), "focused":self.active_session.as_ref()==Some(sid), "samples":samples, "updates":updates, "rect":self.fixture_rect(ctx,&format!("terminal:{sid}"))}))
+                        (sid.clone(), serde_json::json!({"ui_pass":ctx.cumulative_pass_nr(), "window_occluded":ctx.input(|i| i.viewport().occluded), "offset":content.display_offset, "modes":content.terminal_mode.bits(), "focused":self.active_session.as_ref()==Some(sid), "samples":samples, "updates":updates, "rect":self.fixture_rect(ctx,&format!("terminal:{sid}"))}))
                     }).collect::<HashMap<_,_>>());
                     snapshot["editor_rect"] =
                         serde_json::to_value(self.fixture_rect(ctx, "editor-terminal"))?;
@@ -2972,9 +2972,12 @@ impl App {
     }
 }
 impl eframe::App for App {
-    #[cfg(feature = "test-support")]
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        appearance::cap_max_texture_side(input);
+        #[cfg(feature = "test-support")]
         self.diagnostics.input(ctx, input);
+        #[cfg(not(feature = "test-support"))]
+        let _ = ctx;
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -3570,6 +3573,20 @@ mod navigation_tests {
         assert!(!app.terminal_input_enabled("shell"));
         app.worktree_remove = None;
         assert!(app.terminal_input_enabled("shell"));
+    }
+
+    #[test]
+    fn raw_input_hook_caps_font_atlas_side() {
+        let (mut app, ctx, _dir) = fixture();
+        let mut input = egui::RawInput {
+            max_texture_side: Some(16_384),
+            ..Default::default()
+        };
+        eframe::App::raw_input_hook(&mut app, &ctx, &mut input);
+        assert_eq!(
+            input.max_texture_side,
+            Some(appearance::FONT_ATLAS_MAX_SIDE)
+        );
     }
 
     #[test]
