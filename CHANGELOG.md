@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Settings and Player open as the main pane between the sidebars, not as
+  floating popups. Each is a singleton: hide (workspace tab, new terminal,
+  open file/session) keeps the instance; reopen shows the same view.
+  Settings Cancel discards. Hiding Player does not stop audio.
+
 - Top-level tab right-click: close all tabs to the left/right, add a tab to
   the left/right. Close left/right reuses the existing per-tab keep-running,
   idle, and unsaved-editor prompts; Cancel stops the rest.
@@ -29,14 +34,14 @@
 
 - Open mp3/flac/ogg/wav/m4a/opus/aac in the chrome player next to the
   project-sidebar Agents bell. Playing shows title plus previous / play-pause /
-  next / playlist. The icon opens a single global Player window (like Settings,
-  not a tab). Opening it again does not spawn another window; leftover Player
-  tabs close. The full window is a Winamp-inspired stacked deck: LCD + transport,
-  visual EQ, playlist with ADD/REM/SEL/MISC/LIST. Shuffle and repeat persist.
-  Icecast/Shoutcast HTTP(S) radio shares the same engine (ADD url / Stations).
-  Named playlists are global. Opening a file appends to the selected playlist.
-  Audio stops when the GUI exits, not when the Player window closes. The player
-  is native egui.
+  next / playlist. The icon opens a single global Player view in the main pane
+  (like Settings, not a tab and not a popup). Opening it again shows the same
+  instance; leftover Player tabs close. The full view is a Winamp-inspired
+  stacked deck: LCD + transport, visual EQ, playlist with ADD/REM/SEL/MISC/LIST.
+  Shuffle and repeat persist. Icecast/Shoutcast HTTP(S) radio shares the same
+  engine (ADD url / Stations). Named playlists are global. Opening a file
+  appends to the selected playlist. Audio stops when the GUI exits, not when
+  the Player view hides. The player is native egui.
 
 - Explorer always uses default viewers (html → browser, images, markdown
   preview, audio). Git sidebar click on a changed file opens the diff.

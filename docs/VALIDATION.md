@@ -37,7 +37,7 @@
 ## Explorer defaults and chrome player (2026-09-16)
 
 - Explorer git-dirty HTML opens the Browser tab, not a diff. Git sidebar click opens a native diff and reuses the existing tab. Audio open plays without creating `Tab::Player`. Radio next wraps bundled stations. Closing a leftover Player tab does not stop playback.
-- Chrome player icon paints left of the project-sidebar Agents bell; the icon opens a global Player window, not a tab.
+- Chrome player icon paints left of the project-sidebar Agents bell; the icon opens a global Player view in the main pane, not a tab.
 - `cargo test --package terminator --all-features --offline --locked`: 268 passed, 1 ignored.
 - `cargo clippy --package terminator --all-targets --all-features --offline --locked -- -D warnings` passed.
 - Native `git-open` now expects a Diff tab; not re-run on a desktop in this change.

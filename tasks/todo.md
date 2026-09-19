@@ -1,76 +1,108 @@
-# Plan: Workspace tab context actions
+# Plan: Settings + Player as center-pane singletons
 
 SPEC.md absent — this file is spec until a human adds one.
 
-Top-level project tabs (header strip, not inner pane dock tabs) right-click currently: Rename, Close tab…. Add left/right close and insert.
+Settings and Player are floating `egui::Window` popups (`popups.window`). Open them instead as the **center pane** (between left/right sidebars). Not workspace tabs. Not popups. One instance each; hide/reopen keeps that instance.
 
 ## Summary
 
-Workspace tab context menu gains:
-
-1. Close all tabs to the left
-2. Close all tabs to the right
-3. Add tab to the left
-4. Add tab to the right
-
-Reuse existing close confirmation (idle / unsaved editor / keep-running). New tabs are the same as `+` (top-level terminal), inserted at the chosen index.
+- Gear / `open_settings` / palette / Fix installation → Settings fills `CentralPanel`.
+- Player icon / playlist / palette / audio open → Player fills `CentralPanel`.
+- Sidebars, header workspace tabs, status bar stay.
+- Dock/terminals are not painted while either view is showing (native webviews hide).
+- Opening one hides the other. Audio keeps playing.
+- Workspace tab click, `+`, `go_session`, file/diff/browser open → hide overlay, show dock. Instances stay.
+- Reopen shows the same Settings draft/section/search and the same Player UI (eq/playlist/radio). Cancel on Settings discards and ends the session.
+- Leftover `Tab::Player` still stripped. Playback still stops only on GUI exit.
 
 ## Flow
 
 ```
-Right-click workspace tab i
-  ├ Add left  → Create → Workspace::add_at(i)
-  ├ Add right → Create → Workspace::add_at(i+1)
-  ├ Close left  → queue tabs[0..i]
-  └ Close right → queue tabs[i+1..]
-        → existing close_workspace per tab
-        → Cancel aborts remaining queue
+CenterView: Workspace | Settings | Player
+                    (mutually exclusive; App owns both UIs)
+
+open_settings  → CenterView::Settings
+                 first show / after Cancel: clone drafts, clear search
+                 reopen while session live: no reinit
+open_player    → CenterView::Player  (seed samples once; strip Tab::Player)
+hide           → CenterView::Workspace  (keep instances)
+Settings Cancel → discard drafts, end settings session, Workspace
+Player hide/X  → Workspace; audio continues
+click workspace tab / + / go_session / open file → hide
+
+Settings ──open──► Player  (settings session kept)
+Player   ──open──► Settings
 ```
 
 ```
-T1 ─ T2 ─ T3
+T1 ─ T2 ─ T3 ─ T4
 ```
 
-- [x] T1 Insert: `add_at` + create left/right
-- [x] T2 Close queue: left/right through existing close path
-- [x] T3 Docs (CHANGELOG, REFERENCE). AGENTS.md: none
+- [x] T1 CenterView + hide-on-workspace
+- [x] T2 Settings fills center (singleton)
+- [x] T3 Player fills center (singleton)
+- [x] T4 Docs (CHANGELOG, REFERENCE, ARCHITECTURE). AGENTS.md: ask first
 
-## T1 Insert
+## T1 CenterView + hide-on-workspace
 
-`Workspace::add_at(index, id, pane)`; `add` becomes append. Clamp index.
+`enum CenterView { Workspace, Settings, Player }` (or keep `settings_open`/`player_open` exclusive: opening one clears the other).
 
-Thread insert index through `After::Workspace` / `Update::WorkspaceCreated` (append if `None`).
+`fn hide_center_overlay(&mut self)` → Workspace without tearing down drafts/player.
 
-Menu: **Add tab to the left** / **Add tab to the right**. Same create as `+`. Disable nothing (always valid).
+Call hide from: workspace tab click (even already-active), workspace `+`, `go_session`, file/diff/image/browser open, New terminal.
 
-Extract tab context menu from `workspace_bar` so complexity stays flat.
+`CentralPanel`: if Settings/Player, draw that UI and **skip** `DockArea`. Else current dock.
 
-## T2 Close queue
+`browser_covered` includes Player. Terminal input stays blocked.
 
-Menu: **Close all tabs to the left…** / **Close all tabs to the right…**. Disabled when that side is empty.
+Keep `settings-section:*`, `settings-cancel`, `player-window` test ids.
 
-Queue remaining tab IDs. Current tab still uses `close_workspace`. On success, pop next. Cancel / dialog dismiss clears the queue. Empty/dead tabs drain without a prompt (existing path).
+## T2 Settings center singleton
 
-Do not batch into one dialog — editor/idle/shell rules differ per tab.
+Stop `popups.window(ctx, "Settings")`. Draw existing settings chrome in the center (nav + section + Apply/Cancel). Fill available size (drop 760×580 popup clamp).
 
-## T3 Docs
+`open_settings`: if session not live, current init (drafts, search, hook status). If live, only `CenterView::Settings`.
 
-CHANGELOG unreleased. REFERENCE: top-tab right-click lists the four actions. VALIDATION: unit tests only; no native fixture unless asked.
+Cancel: revert, `settings_open = false`, session dead. Overlay X / workspace hide: keep draft.
+
+Palette Settings / `open_installation_settings` / Set up hooks: show Settings; init only if session dead. `Show session` uses hide.
+
+Live theme preview only while Settings is the center view.
+
+## T3 Player center singleton
+
+Stop `popups.window(ctx, "Player")`. `draw()` in center; playlist/radio take leftover height.
+
+Hide/X does not stop audio. Reopen same `self.player` + prefs. Opening Player hides Settings (session kept).
+
+Keep `dismiss_player_tabs` / `strip_player`. Chrome mini-controls unchanged.
+
+## T4 Docs
+
+CHANGELOG unreleased. REFERENCE + ARCHITECTURE: floating window → center pane singleton; hide ≠ stop audio; not a workspace tab.
+
+AGENTS.md (permission): Player/Settings paragraph — popup/window → main pane between sidebars; reopen same instance.
 
 ## Out
 
-- Inner pane (egui_dock) tab menus
-- Close others
-- Reorder-by-drag
-- AGENTS.md (no rule change)
+- Extra header tabs for Settings/Player (workspace strip stays project tabs)
+- OS child viewports
+- Stopping audio on hide
+- Restoring Player as `Tab::Player`
+- Palette / first-project / keep-running stay popups
 
 ## Accept
 
-- Right-click tab 2 of 3: add left → new tab at index 1; add right → index 3
-- Close left/right uses existing keep-running / editor / idle prompts; Cancel stops the rest
-- Empty side items disabled
-- `cargo fmt`, `cargo test -p terminator --locked`, clippy app crate
+- Open Settings: center fills; sidebars stay; no floating window; dock not painted
+- Open Player while Settings showing: Player center; Settings draft intact; reopen Settings restores it
+- Workspace tab click: dock back; reopen Player/Settings = same instance
+- Cancel Settings discards; hide via tab does not
+- Hide Player: audio continues
+- No `Tab::Player`; leftover tabs still stripped
+- Native fixtures still hit `settings-section:*` / `player-window`
+- `cargo fmt`, `cargo test -p terminator --locked --bin terminator`, clippy app crate
 
 ## Unresolved
 
-- Confirm target is the header workspace strip (assumed), not inner pane tabs
+- Same-icon while already showing: stay (assumed) vs toggle hide
+- Overlay X on Settings: hide keep draft (assumed) vs Cancel

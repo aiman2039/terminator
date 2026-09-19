@@ -267,15 +267,16 @@ next to the project-sidebar Agents bell (no PTY). While audio is on, the bar
 shows the title plus previous / play-pause / next / playlist. Files skip the
 selected global playlist (Default is created on first file). Radio skips bundled
 then custom stations. The sound-wave icon or playlist button opens a single global
-**Player** window (not a workspace tab). Opening it again does not spawn another
-window; leftover Player tabs are closed. First open seeds **Default** with bundled
-tone files (`pulse.wav`, `hum.wav`, `chime.wav`) if that playlist is empty.
+**Player** view in the main pane (not a popup and not a workspace tab). Opening it
+again shows the same instance; leftover Player tabs are closed. First open seeds
+**Default** with bundled tone files (`pulse.wav`, `hum.wav`, `chime.wav`) if that
+playlist is empty.
 Files can be seeked; live radio cannot. Shuffle and repeat persist.
 The Radio button switches the Player to the bundled station catalog
 (search and category filters). Users can add HTTP(S) stations. Live radio
 cannot seek. Palette → **Open player**.
 Open as text and Open externally still work. Playback stops when the GUI exits,
-not when the Player window closes.
+not when the Player view hides.
 
 Git sidebar click on a modified, untracked, or deleted file opens the diff.
 Explorer, palette, and **Open file** still use the default viewer even when the
