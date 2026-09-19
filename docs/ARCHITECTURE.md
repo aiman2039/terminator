@@ -418,7 +418,7 @@ Application source checks reject `spawn_blocking`, `block_in_place`, `tokio::fs`
 threaded Tokio DNS lookup, reqwest blocking clients, and SyncIoBridge. The resolved
 Tokio feature graph does not enable `fs`; reqwest multipart, blocking, and stream
 file adapters are disabled. Source checking does not establish transitive safety:
-reqwest 0.12.28/Hickory 0.25.2 initialization, CPAL 0.16.0, Rodio 0.21.1, rtrb
+reqwest 0.13.5/Hickory 0.26.3 initialization, CPAL 0.16.0, Rodio 0.21.1, rtrb
 0.3.5, and rfd 0.17 call paths were inspected separately. HTTP/DNS libraries own
 internal async tasks; CPAL owns audio-device callbacks, notify owns OS watcher
 threads, rfd owns native dialog dispatch, and terminal/windowing frameworks retain

@@ -43,6 +43,7 @@ allow = [
     "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
+    "MIT-0",
     "MPL-2.0",
     "OFL-1.1",
     "Ubuntu-font-1.0",

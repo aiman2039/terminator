@@ -30,9 +30,9 @@ wry = "0.57"
 rodio = "0.21"
 cpal = "0.16"
 spectrum-analyzer = "2"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "hickory-dns"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "hickory-dns"] }
 rtrb = "0.3"
-hickory-resolver = "0.25"
+hickory-resolver = "0.26"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "io-util", "process", "macros"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 futures-util = "0.3"

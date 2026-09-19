@@ -334,7 +334,7 @@ async fn run(
                 hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
             Ok(reqwest::Client::builder()
                 .pool_max_idle_per_host(0)
-                .dns_resolver(Arc::new(Resolver(resolver.build())))
+                .dns_resolver(Arc::new(Resolver(resolver.build()?)))
                 .connect_timeout(Duration::from_secs(8))
                 .redirect(reqwest::redirect::Policy::limited(8))
                 .build()?)

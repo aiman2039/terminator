@@ -2,10 +2,13 @@
 
 ## Quality checks
 
-Run `sh scripts/check.sh` for formatting, compiler checks (`lint`), build, and
-Clippy with warnings denied across all workspace targets and features. Run
-`sh scripts/check.sh test` for workspace tests. Individual checks accept `fmt`,
-`lint`, `build`, or `clippy`. Checks use the lockfile and do not rewrite files.
+Run `sh scripts/check.sh` for formatting, compiler checks (`lint`), build,
+Clippy with warnings denied, `cargo audit`, and `cargo deny` (bans, licenses,
+sources). Run `sh scripts/check.sh test` for workspace tests. Individual checks
+accept `fmt`, `lint`, `build`, `clippy`, `audit`, or `deny`. Checks use the
+lockfile and do not rewrite files. Pre-commit uses the same `all` path; install
+`cargo-audit` and `cargo-deny` (`cargo install cargo-audit cargo-deny --locked`).
+`cargo deny check advisories` is CI-only (same RustSec DB as `cargo audit`).
 
 [cargo-husky](https://github.com/rhysd/cargo-husky) installs the tracked
 `.cargo-husky/hooks/pre-commit` when its development dependency is first built
