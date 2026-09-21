@@ -226,16 +226,32 @@ impl Harness {
     pub fn state(&self) -> Result<Value> {
         Ok(self.rpc(json!("Snapshot"))?["State"].clone())
     }
+    #[track_caller]
     pub fn wait(&self, mut check: impl FnMut(&Value) -> bool, seconds: u64) -> Result<Value> {
-        let end = Instant::now() + Duration::from_secs(seconds);
+        let caller = std::panic::Location::caller();
+        let started = Instant::now();
+        let end = started + Duration::from_secs(seconds);
+        let mut warned = false;
         loop {
             let state = self.state()?;
             if check(&state) {
                 return Ok(state);
             }
+            let elapsed = started.elapsed();
+            if !warned && elapsed >= Duration::from_secs(2) {
+                eprintln!(
+                    "slow wait at {}:{} ({:.1}s of {seconds}s)",
+                    caller.file(),
+                    caller.line(),
+                    elapsed.as_secs_f32()
+                );
+                warned = true;
+            }
             ensure!(
                 Instant::now() < end,
-                "State assertion timed out ({})",
+                "State assertion timed out after {seconds}s at {}:{} ({})",
+                caller.file(),
+                caller.line(),
                 session_summary(&state)
             );
             thread::sleep(Duration::from_millis(30));

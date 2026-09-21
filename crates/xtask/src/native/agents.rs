@@ -11,6 +11,8 @@ pub fn run(o: &Options) -> Result<()> {
     // Keep the pending event through navigation so this fixture can test resolve updates.
     let mut settings = h.state()?["settings"].clone();
     settings["dismissal"] = json!("Manual");
+    // The top attention bar records `attention`. Side mode hides that bar.
+    settings["notifications_side"] = json!(false);
     h.rpc(json!({"Settings":settings}))?;
     let first = h.project("agent-project")?;
     let second = h.project("other-project")?;
