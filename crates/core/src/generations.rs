@@ -273,8 +273,7 @@ impl Catalog {
         )?;
         if frozen
             && let Some(pid) = pid
-            && unsafe { libc::kill(pid as i32, 0) } != 0
-            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+            && crate::signals::process_gone(pid)
         {
             self.0
                 .execute("UPDATE control SET frozen=0,freeze_pid=NULL WHERE id=1", [])?;
@@ -488,8 +487,7 @@ pub fn historical(owner: &Generation, active: Option<&str>) -> bool {
 }
 
 fn process_alive(pid: u32) -> bool {
-    let status = unsafe { libc::kill(pid as i32, 0) };
-    status == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    crate::signals::process_alive(pid)
 }
 
 fn owner_is_serving(root: &Paths, owner: &Generation) -> Result<bool> {
@@ -517,6 +515,7 @@ fn claim_dead_owner(owner: &Generation, pid: u32) -> Result<Option<std::fs::File
             fs::create_dir_all(&owner.runtime)?;
             let lock = fs::OpenOptions::new()
                 .create(true)
+                .truncate(false)
                 .write(true)
                 .mode(0o600)
                 .open(&path)?;
@@ -781,7 +780,7 @@ mod tests {
                 .lifecycle
                 .live()
         );
-        assert_eq!(unsafe { libc::kill(std::process::id() as i32, 0) }, 0);
+        assert!(process_alive(std::process::id()));
     }
 
     #[test]
@@ -1394,7 +1393,7 @@ mod tests {
             },
         );
         fs::remove_dir_all(&drained.runtime).unwrap();
-        assert_eq!(unsafe { libc::kill(std::process::id() as i32, 0) }, 0);
+        assert!(process_alive(std::process::id()));
         let registered = catalog
             .generations()
             .unwrap()

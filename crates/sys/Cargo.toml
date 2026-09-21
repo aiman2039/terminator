@@ -1,0 +1,17 @@
+[package]
+name = "terminator-sys"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Unsafe OS boundary for Terminator. Other crates forbid unsafe_code."
+
+[features]
+desktop = ["dep:core-foundation", "dep:core-graphics"]
+
+[dependencies]
+libc.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = { version = "0.10", optional = true }
+core-graphics = { version = "0.23", features = ["elcapitan"], optional = true }

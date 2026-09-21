@@ -5944,6 +5944,7 @@ dependencies = [
  "rmp-serde",
  "rodio",
  "rtrb",
+ "rustix 1.1.4",
  "semver",
  "serde",
  "serde_json",
@@ -5954,6 +5955,8 @@ dependencies = [
  "terminator-core",
  "terminator-integrations",
  "terminator-native-edit",
+ "terminator-sys",
+ "terminator-updater",
  "tokio",
  "tokio-util",
  "url",
@@ -5972,10 +5975,12 @@ dependencies = [
  "futures-util",
  "libc",
  "rusqlite",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "sysinfo",
  "tempfile",
+ "terminator-sys",
  "tokio",
  "tokio-util",
  "toml_edit 0.25.15+spec-1.1.0",
@@ -5990,8 +5995,8 @@ dependencies = [
  "anyhow",
  "base64 0.23.1",
  "cc",
+ "core-foundation 0.10.1",
  "fs2",
- "libc",
  "notify-rust",
  "portable-pty",
  "rusqlite",
@@ -6011,8 +6016,8 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "fs2",
- "libc",
  "open",
+ "rustix 1.1.4",
  "serde_json",
  "signal-hook",
  "sysinfo",
@@ -6039,6 +6044,26 @@ name = "terminator-native-edit"
 version = "0.44.0"
 dependencies = [
  "egui",
+]
+
+[[package]]
+name = "terminator-sys"
+version = "0.44.0"
+dependencies = [
+ "core-foundation 0.10.1",
+ "core-graphics",
+ "libc",
+]
+
+[[package]]
+name = "terminator-updater"
+version = "0.44.0"
+dependencies = [
+ "dispatch2",
+ "eframe",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -7939,13 +7964,14 @@ dependencies = [
  "core-graphics",
  "flate2",
  "image",
- "libc",
  "plist",
  "resvg",
+ "rustix 1.1.4",
  "serde_json",
  "tar",
  "tempfile",
  "terminator-core",
+ "terminator-sys",
  "tungstenite",
  "x11rb",
  "xshell",

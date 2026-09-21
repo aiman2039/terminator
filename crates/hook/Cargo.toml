@@ -11,7 +11,7 @@ terminator-integrations.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 base64.workspace = true
-libc.workspace = true
+rustix.workspace = true
 fs2 = "0.4"
 signal-hook = "0.4"
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }

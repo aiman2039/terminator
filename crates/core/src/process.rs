@@ -2,7 +2,7 @@
 use anyhow::{Result, bail, ensure};
 use std::{
     io::{Read, Write},
-    os::{fd::AsRawFd, unix::process::CommandExt},
+    os::{fd::AsFd, unix::process::CommandExt},
     process::{Command, Output, Stdio},
     time::{Duration, Instant},
 };
@@ -24,12 +24,11 @@ impl Default for CommandOptions {
         }
     }
 }
-fn nonblocking(fd: i32) -> Result<()> {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    ensure!(
-        flags >= 0 && unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } >= 0,
-        "Set nonblocking pipe failed"
-    );
+fn nonblocking(fd: impl AsFd) -> Result<()> {
+    let flags =
+        rustix::fs::fcntl_getfl(&fd).map_err(|_| anyhow::anyhow!("Set nonblocking pipe failed"))?;
+    rustix::fs::fcntl_setfl(&fd, flags | rustix::fs::OFlags::NONBLOCK)
+        .map_err(|_| anyhow::anyhow!("Set nonblocking pipe failed"))?;
     Ok(())
 }
 fn drain(pipe: &mut impl Read, bytes: &mut Vec<u8>, limit: usize) -> Result<bool> {
@@ -65,10 +64,10 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
         let mut out = child.stdout.take().unwrap();
         let mut err = child.stderr.take().unwrap();
         let mut input = child.stdin.take();
-        nonblocking(out.as_raw_fd())?;
-        nonblocking(err.as_raw_fd())?;
+        nonblocking(&out)?;
+        nonblocking(&err)?;
         if let Some(stdin) = &input {
-            nonblocking(stdin.as_raw_fd())?;
+            nonblocking(stdin)?;
         }
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -117,9 +116,7 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
         }
     })();
     if result.is_err() {
-        unsafe {
-            libc::kill(-(child.id() as i32), libc::SIGKILL);
-        }
+        let _ = crate::signals::signal_group(child.id(), crate::signals::ProcSignal::Kill);
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -128,22 +125,7 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
 
 /// Double-fork + setsid so the process is not a child of the GUI.
 pub fn spawn_session_leader(mut command: Command) -> Result<std::process::Child> {
-    use std::os::unix::process::CommandExt;
-    unsafe {
-        command.pre_exec(|| match libc::fork() {
-            -1 => Err(std::io::Error::last_os_error()),
-            0 => {
-                if libc::setsid() < 0 {
-                    Err(std::io::Error::last_os_error())
-                } else {
-                    Ok(())
-                }
-            }
-            _ => {
-                libc::_exit(0);
-            }
-        });
-    }
+    terminator_sys::double_fork_setsid(&mut command);
     Ok(command.spawn()?)
 }
 
@@ -213,11 +195,14 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         };
-        let sid = unsafe { libc::getsid(pid) };
-        assert_eq!(sid, pid);
-        unsafe {
-            libc::kill(pid, libc::SIGKILL);
-        }
+        let tracked = rustix::process::Pid::from_raw(pid).unwrap();
+        let sid = rustix::process::getsid(Some(tracked)).unwrap();
+        assert_eq!(sid.as_raw_pid(), pid);
+        crate::signals::signal_process(
+            u32::try_from(pid).unwrap(),
+            crate::signals::ProcSignal::Kill,
+        )
+        .unwrap();
     }
 
     #[test]

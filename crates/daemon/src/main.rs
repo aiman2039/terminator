@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 mod editor;
 mod helper;
 mod idle_close;
@@ -931,19 +932,14 @@ impl Shared {
                     if let Some(foreground) = rt.lock().unwrap().master.process_group_leader()
                         && foreground > 1
                         && foreground != pid as i32
+                        && let Ok(foreground) = u32::try_from(foreground)
                     {
-                        unsafe {
-                            libc::kill(-foreground, libc::SIGHUP);
-                        }
+                        let _ = signals::signal_group(foreground, signals::ProcSignal::Hangup);
                     }
                     // The child remains unreaped while live, preventing PID reuse here.
-                    let result = unsafe { libc::kill(-(pid as i32), libc::SIGHUP) };
-                    if result != 0 {
-                        bail!(
-                            "Could not signal session process group: {}",
-                            std::io::Error::last_os_error()
-                        );
-                    }
+                    signals::signal_group(pid, signals::ProcSignal::Hangup).map_err(|error| {
+                        anyhow::anyhow!("Could not signal session process group: {error}")
+                    })?;
                 }
                 rec.lifecycle = Lifecycle::Stopping;
                 s.revision += 1;

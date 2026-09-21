@@ -9,6 +9,8 @@ license.workspace = true
 terminator-core = { workspace = true, features = ["async-client"] }
 terminator-integrations.workspace = true
 terminator-native-edit = { path = "../native_edit" }
+terminator-sys.workspace = true
+terminator-updater.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -51,7 +53,7 @@ syntect = { version = "5", default-features = false, features = [
 ] }
 
 [features]
-test-support = ["dep:egui-winit", "egui-winit/test-support"]
+test-support = ["dep:egui-winit", "egui-winit/test-support", "terminator-updater/test-support"]
 
 [dependencies.image]
 version = "0.25"
@@ -60,6 +62,7 @@ features = ["png", "jpeg", "webp", "gif", "bmp", "ico", "tiff"]
 
 [dev-dependencies]
 base64.workspace = true
+rustix.workspace = true
 
 [dev-dependencies.cargo-husky]
 version = "1.5.0"

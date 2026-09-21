@@ -6,7 +6,7 @@ use std::{io, path::Path, time::Duration};
 #[cfg(test)]
 use std::{
     io::{Read, Write},
-    os::{fd::AsRawFd, unix::net::UnixStream},
+    os::unix::net::UnixStream,
     time::Instant,
 };
 
@@ -80,24 +80,22 @@ impl Read for Limited<'_> {
             let wait = remaining(self.deadline)?
                 .as_millis()
                 .clamp(1, i32::MAX as u128) as i32;
-            let mut descriptor = libc::pollfd {
-                fd: self.stream.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            let ready = unsafe { libc::poll(&mut descriptor, 1, wait) };
-            if ready > 0 {
-                break;
-            }
-            if ready == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "Neovim request deadline exceeded",
-                ));
-            }
-            let error = io::Error::last_os_error();
-            if error.kind() != io::ErrorKind::Interrupted {
-                return Err(error);
+            let timeout = rustix::event::Timespec::try_from(Duration::from_millis(wait as u64))
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            let mut descriptor = [rustix::event::PollFd::new(
+                &self.stream,
+                rustix::event::PollFlags::IN,
+            )];
+            match rustix::event::poll(&mut descriptor, Some(&timeout)) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "Neovim request deadline exceeded",
+                    ));
+                }
+                Ok(_) => break,
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(error) => return Err(error.into()),
             }
         }
         let limit = bytes.len().min(self.remaining);

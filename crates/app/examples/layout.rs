@@ -1,4 +1,5 @@
 //! Generate a deterministic one-, two-, or six-pane layout for isolated GUI smoke tests.
+#![forbid(unsafe_code)]
 use egui_dock::{DockState, NodeIndex};
 fn main() {
     let tabs = std::env::args()

@@ -1,4 +1,5 @@
 //! Versioned local protocol and persistent, renderer-independent models.
+#![forbid(unsafe_code)]
 pub mod appearance;
 #[cfg(feature = "async-client")]
 pub mod async_client;
@@ -11,6 +12,7 @@ pub mod generations;
 pub mod idle_close;
 pub mod metadata;
 pub mod recovery;
+pub mod signals;
 pub mod snapshot;
 pub mod ui_control;
 pub mod worktrees;
@@ -67,10 +69,7 @@ fn find_executable_in(program: &str, paths: &[PathBuf]) -> Option<PathBuf> {
 /// Check the current user's ability to execute a regular file, including ACLs.
 #[must_use]
 pub fn executable_available(path: &Path) -> bool {
-    use std::os::unix::ffi::OsStrExt;
-    path.is_file()
-        && std::ffi::CString::new(path.as_os_str().as_bytes())
-            .is_ok_and(|p| unsafe { libc::access(p.as_ptr(), libc::X_OK) == 0 })
+    path.is_file() && rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok()
 }
 pub fn default_shell() -> Result<PathBuf> {
     ["zsh", "bash", "sh"]

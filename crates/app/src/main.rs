@@ -1,10 +1,13 @@
+#![forbid(unsafe_code)]
 mod daemon_connection;
 mod daemon_upgrade;
 use daemon_connection::{can_restart_service, can_retire_daemon};
 mod exit;
 mod installation;
 mod installation_ui;
-mod updater;
+mod updater {
+    pub use terminator_updater::*;
+}
 mod workspace_ui;
 use workspace_ui::Viewer;
 mod dialogs_ui;
@@ -217,7 +220,6 @@ enum Update {
     LayoutsPrepared(u64, Vec<(String, serde_json::Value, String)>),
     LayoutSaved(String, String, Result<(), String>),
     RadioCatalog(std::sync::Arc<Vec<player::radio::Station>>),
-    PlayerSamples(Vec<PathBuf>),
     RestartFinished(String),
     ServiceStarted(Result<(), String>),
     WorktreeCreated(Box<State>, String, bool),
@@ -1134,7 +1136,6 @@ impl App {
                 }
 
                 Update::RadioCatalog(catalog) => self.player.radio_base = catalog,
-                Update::PlayerSamples(samples) => self.apply_player_samples(samples),
                 Update::InstallationRepaired(result) => {
                     self.repair_pending = false;
                     match result {
@@ -6724,17 +6725,8 @@ mod navigation_tests {
 
     #[test]
     fn opening_player_seeds_sample_tracks_once() {
-        let (mut app, ctx, _dir) = fixture();
+        let (mut app, _ctx, _dir) = fixture();
         app.open_player();
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while app.preferences.selected_tracks().is_empty() {
-            app.process_updates(&ctx);
-            assert!(
-                Instant::now() < deadline,
-                "Sample installation did not complete"
-            );
-            thread::sleep(Duration::from_millis(2));
-        }
         assert_eq!(app.preferences.selected_tracks().len(), 3);
         assert!(
             app.preferences

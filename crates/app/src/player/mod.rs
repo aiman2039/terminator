@@ -559,37 +559,13 @@ impl App {
             return;
         }
         self.preferences.ensure_default_playlist();
-        self.preferences.player_samples_seeded = true;
-        let data = self.paths.data.join("player-samples");
-        let service = self.services.clone();
-        let context = terminator_core::async_service::OperationContext::new(
-            "catalog",
-            "player-samples".into(),
-            terminator_core::async_service::Policy::OrderedMutation,
-        );
-        if self
-            .services
-            .handle()
-            .submit(
-                context,
-                terminator_core::async_service::CancellationToken::new(),
-                async move {
-                    let samples = service
-                        .client()
-                        .catalog
-                        .run(
-                            &terminator_core::async_service::CancellationToken::new(),
-                            move || Ok(install_samples(&data)),
-                        )
-                        .await?;
-                    Ok(vec![Update::PlayerSamples(samples)])
-                },
-            )
-            .is_err()
-        {
-            self.preferences.player_samples_seeded = false;
-            self.error = Some("Services are busy; reopen Player to install sample tracks".into());
+        let samples = install_samples(&self.paths.data.join("player-samples"));
+        if samples.is_empty() {
+            self.error = Some("Could not install sample tracks".into());
+            return;
         }
+        self.preferences.player_samples_seeded = true;
+        self.apply_player_samples(samples);
     }
     pub(super) fn apply_player_samples(&mut self, samples: Vec<PathBuf>) {
         if samples.is_empty() {

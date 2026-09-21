@@ -1,4 +1,5 @@
 //! Managed hook configuration. Installers only run on explicit user action.
+#![forbid(unsafe_code)]
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use std::{

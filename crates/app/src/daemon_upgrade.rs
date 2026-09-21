@@ -228,15 +228,7 @@ fn activate_candidate(paths: &Paths, executable: &Path, force: bool) -> Result<(
         .env("XDG_CONFIG_HOME", paths.data.join("fixture-config"))
         .env("XDG_STATE_HOME", paths.data.join("fixture-state"))
         .env("TERMINATOR_NO_NOTIFICATIONS", "1");
-    use std::os::unix::process::CommandExt;
-    unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    terminator_sys::detach_session(&mut command);
     let child = command.spawn()?;
     let pid = child.id();
     pending.child = Some(child);
@@ -569,7 +561,10 @@ mod tests {
                 Response::Text(_)
             ));
         }
-        assert_eq!(unsafe { libc::kill(job, 0) }, 0, "running job was lost");
+        assert!(
+            signals::process_alive(u32::try_from(job).unwrap()),
+            "running job was lost"
+        );
         assert_eq!(nvim(&paths, &editor, "getline(1)"), "UNSAVED-GENERATION-A");
         assert_eq!(nvim(&paths, &editor, "&modified"), "1");
         assert_eq!(fs::read_to_string(&file).unwrap(), "saved\n");
@@ -620,9 +615,7 @@ mod tests {
             Duration::from_secs(2),
         )
         .unwrap();
-        unsafe {
-            libc::kill(job, libc::SIGHUP);
-        }
+        signals::signal_process(u32::try_from(job).unwrap(), signals::ProcSignal::Hangup).unwrap();
         input(&paths, &a, b"printf 'STILL-INTERACTIVE-A\\n'\r");
         let Response::Text(history) = rpc(
             &paths,
@@ -643,7 +636,10 @@ mod tests {
             .find(|g| g.id == b.generation)
             .unwrap();
         let b_pid = b_owner.pid.unwrap() as i32;
-        assert_eq!(unsafe { libc::kill(b_pid, libc::SIGSTOP) }, 0);
+        assert!(
+            signals::signal_process(u32::try_from(b_pid).unwrap(), signals::ProcSignal::Stop)
+                .is_ok()
+        );
         let unavailable = state(&paths);
         assert!(
             unavailable
@@ -663,8 +659,14 @@ mod tests {
                 .lifecycle
                 .live()
         );
-        assert_eq!(unsafe { libc::kill(b_pid, libc::SIGCONT) }, 0);
-        assert_eq!(unsafe { libc::kill(b_pid, libc::SIGTERM) }, 0);
+        assert!(
+            signals::signal_process(u32::try_from(b_pid).unwrap(), signals::ProcSignal::Cont)
+                .is_ok()
+        );
+        assert!(
+            signals::signal_process(u32::try_from(b_pid).unwrap(), signals::ProcSignal::Term)
+                .is_ok()
+        );
         let deadline = Instant::now() + Duration::from_secs(8);
         while state(&paths)
             .sessions

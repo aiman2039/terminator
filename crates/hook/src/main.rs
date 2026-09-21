@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 mod browser;
 mod control;
 mod shutdown;
@@ -173,7 +174,7 @@ fn hook(args: &[String]) -> Result<()> {
 fn agent_parent() -> (String, Option<String>, Vec<u32>) {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let mut system = System::new();
-    let mut pid = Pid::from_u32(unsafe { libc::getppid() } as u32);
+    let mut pid = Pid::from_u32(std::os::unix::process::parent_id());
     let mut ancestors = Vec::new();
     let mut selected = None;
     for _ in 0..16 {
@@ -238,15 +239,13 @@ fn legacy_identity(pid: u32, text: &[u8]) -> Option<String> {
     (parts.len() == 5).then(|| format!("{pid}:{}", parts.join("-")))
 }
 fn dimensions() -> (u16, u16) {
-    let mut size = libc::winsize {
-        ws_row: 24,
-        ws_col: 80,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    unsafe {
-        libc::ioctl(0, libc::TIOCGWINSZ, &mut size);
-    }
+    let size =
+        rustix::termios::tcgetwinsize(std::io::stdin()).unwrap_or(rustix::termios::Winsize {
+            ws_row: 24,
+            ws_col: 80,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        });
     (size.ws_row.max(1), size.ws_col.max(1))
 }
 fn write_winsize(writer: &Mutex<impl Write>) -> Result<()> {
@@ -256,26 +255,29 @@ fn write_winsize(writer: &Mutex<impl Write>) -> Result<()> {
         &Request::Resize { rows, cols },
     )
 }
-struct Raw(libc::termios);
+struct Raw(rustix::termios::Termios);
 impl Drop for Raw {
     fn drop(&mut self) {
-        unsafe {
-            libc::tcsetattr(0, libc::TCSANOW, &self.0);
-        }
+        let _ = rustix::termios::tcsetattr(
+            std::io::stdin(),
+            rustix::termios::OptionalActions::Now,
+            &self.0,
+        );
     }
 }
 fn attach(session: &str, args: &[String]) -> Result<()> {
-    let mut previous = unsafe { std::mem::zeroed::<libc::termios>() };
-    let raw = if unsafe { libc::tcgetattr(0, &mut previous) } == 0 {
-        let mut mode = previous;
-        unsafe {
-            libc::cfmakeraw(&mut mode);
-            libc::tcsetattr(0, libc::TCSANOW, &mode);
-        }
-        Some(Raw(previous))
-    } else {
-        None
-    };
+    let raw = rustix::termios::tcgetattr(std::io::stdin())
+        .ok()
+        .map(|previous| {
+            let mut mode = previous.clone();
+            mode.make_raw();
+            let _ = rustix::termios::tcsetattr(
+                std::io::stdin(),
+                rustix::termios::OptionalActions::Now,
+                &mode,
+            );
+            Raw(previous)
+        });
     let paths = if args.len() >= 2 {
         Paths {
             data: args[0].clone().into(),

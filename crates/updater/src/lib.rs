@@ -2,6 +2,8 @@
 //! never consult the production feed. NSApplication's delegate remains winit's.
 //! The application menu always has Check for Updates…; Sparkle is not required
 //! for that item to exist.
+//!
+//! AppKit method swizzling keeps `unsafe` in this crate. Other Terminator crates forbid it.
 #[cfg(any(target_os = "macos", test))]
 mod schedule;
 
@@ -321,7 +323,12 @@ mod macos {
             }
             let check = ui.button("Check for Updates…");
             #[cfg(feature = "test-support")]
-            crate::diagnostics::record(ui.ctx(), "check-for-updates", check.rect);
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(
+                    egui::Id::new(("fixture-target", "check-for-updates")),
+                    check.rect,
+                );
+            });
             if check.clicked()
                 && let Some(delegate) = &self.delegate
             {

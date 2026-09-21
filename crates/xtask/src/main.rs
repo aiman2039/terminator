@@ -1,4 +1,5 @@
 //! Repository automation in Rust. No Python interpreter or downloaded test runner.
+#![forbid(unsafe_code)]
 mod async_boundary;
 mod browser_fixture;
 mod harness;
@@ -139,18 +140,17 @@ fn main() -> Result<()> {
     {
         // Native-input fixtures use a non-executing PTY sink, so desktop typing
         // can never become shell commands or appear in their captures.
-        unsafe {
-            let mut attributes = std::mem::zeroed();
-            anyhow::ensure!(
-                libc::tcgetattr(0, &raw mut attributes) == 0,
-                "Fixture sink requires a PTY"
-            );
-            attributes.c_lflag &= !(libc::ECHO | libc::ECHONL);
-            anyhow::ensure!(
-                libc::tcsetattr(0, libc::TCSANOW, &raw const attributes) == 0,
-                "Cannot disable fixture echo"
-            );
-        }
+        let mut attributes = rustix::termios::tcgetattr(std::io::stdin())
+            .map_err(|_| anyhow::anyhow!("Fixture sink requires a PTY"))?;
+        attributes
+            .local_modes
+            .remove(rustix::termios::LocalModes::ECHO | rustix::termios::LocalModes::ECHONL);
+        rustix::termios::tcsetattr(
+            std::io::stdin(),
+            rustix::termios::OptionalActions::Now,
+            &attributes,
+        )
+        .map_err(|_| anyhow::anyhow!("Cannot disable fixture echo"))?;
         std::io::copy(&mut std::io::stdin(), &mut std::io::sink())?;
         return Ok(());
     }

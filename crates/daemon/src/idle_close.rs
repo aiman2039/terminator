@@ -105,7 +105,12 @@ impl Shared {
                 let (status, reason) = match result {
                     Ok(None) => (Status::AlreadyEnded, "Session already ended".into()),
                     Ok(Some(pid)) => {
-                        if unsafe { libc::kill(-(pid as i32), libc::SIGHUP) } == 0 {
+                        if terminator_core::signals::signal_group(
+                            pid,
+                            terminator_core::signals::ProcSignal::Hangup,
+                        )
+                        .is_ok()
+                        {
                             if let Ok(runtime) = self.runtime(&session) {
                                 runtime.lock().unwrap().closing = true;
                             }

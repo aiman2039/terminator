@@ -195,7 +195,11 @@ fn legacy_crash_recovery(o: &Options) -> Result<()> {
     h.layout(&project, std::slice::from_ref(&original))?;
     let daemon = &mut h.daemon.as_mut().unwrap().0;
     ensure!(
-        unsafe { libc::kill(daemon.id() as i32, libc::SIGTERM) } == 0,
+        terminator_core::signals::signal_process(
+            daemon.id(),
+            terminator_core::signals::ProcSignal::Term,
+        )
+        .is_ok(),
         "Cannot stop fixture daemon"
     );
     wait_child(daemon, Duration::from_secs(5))?;

@@ -1,44 +1,18 @@
 use super::{Context, Duration, Path, Result, ensure, thread, wait};
 use core_foundation::{
-    base::{CFType, TCFType},
-    boolean::CFBoolean,
-    dictionary::CFDictionary,
-    number::CFNumber,
-    string::CFString,
+    base::CFType, boolean::CFBoolean, dictionary::CFDictionary, number::CFNumber,
 };
 use core_graphics::{
     event::{CGEvent, CGEventFlags, CGEventType, CGMouseButton},
     event_source::{CGEventSource, CGEventSourceStateID},
     geometry::CGPoint,
-    window,
 };
-#[link(name = "ApplicationServices", kind = "framework")]
-unsafe extern "C" {
-    fn CGPreflightPostEventAccess() -> bool;
-    fn AXUIElementCreateApplication(pid: i32) -> *const std::ffi::c_void;
-    fn AXUIElementCopyAttributeValue(
-        element: *const std::ffi::c_void,
-        attribute: core_foundation::string::CFStringRef,
-        value: *mut *const std::ffi::c_void,
-    ) -> i32;
-    fn AXUIElementSetAttributeValue(
-        element: *const std::ffi::c_void,
-        attribute: core_foundation::string::CFStringRef,
-        value: *const std::ffi::c_void,
-    ) -> i32;
-    fn AXUIElementPerformAction(
-        element: *const std::ffi::c_void,
-        action: core_foundation::string::CFStringRef,
-    ) -> i32;
-}
 pub struct Desktop {
     pid: u32,
     window_id: u32,
 }
 fn value(dictionary: &CFDictionary, name: &str) -> Option<CFType> {
-    let key = CFString::new(name);
-    let ptr = *dictionary.find(key.as_CFTypeRef())?;
-    Some(unsafe { CFType::wrap_under_get_rule(ptr) })
+    terminator_sys::dictionary_value(dictionary, name)
 }
 fn number(dictionary: &CFDictionary, name: &str) -> Option<f64> {
     value(dictionary, name)?.downcast::<CFNumber>()?.to_f64()
@@ -46,21 +20,16 @@ fn number(dictionary: &CFDictionary, name: &str) -> Option<f64> {
 impl Desktop {
     pub fn preflight() -> Result<()> {
         ensure!(
-            unsafe { CGPreflightPostEventAccess() },
+            terminator_sys::preflight_post_event_access(),
             "macOS Accessibility permission is required for this explicit native-input fixture; grant it to the terminal running cargo xtask, then rerun"
         );
         Ok(())
     }
     pub fn new(pid: u32, _output: &Path) -> Result<Self> {
         let mut desktop = Self { pid, window_id: 0 };
-        if let Some(windows) =
-            window::copy_window_info(window::kCGWindowListOptionAll, window::kCGNullWindowID)
-        {
-            for item in windows.iter() {
-                let object = unsafe { CFType::wrap_under_get_rule(*item) };
-                if let Some(dictionary) = object.downcast::<CFDictionary>()
-                    && number(&dictionary, "kCGWindowOwnerPID") == Some(f64::from(pid))
-                {
+        if let Some(windows) = terminator_sys::window_dictionaries() {
+            for dictionary in windows {
+                if number(&dictionary, "kCGWindowOwnerPID") == Some(f64::from(pid)) {
                     eprintln!(
                         "Mac fixture window: id={:?}, layer={:?}, visible={:?}, bounds={:?}",
                         number(&dictionary, "kCGWindowNumber"),
@@ -78,12 +47,9 @@ impl Desktop {
     }
     fn window(&self) -> Result<CFDictionary> {
         let windows =
-            window::copy_window_info(window::kCGWindowListOptionAll, window::kCGNullWindowID)
-                .context("Cannot read fixture window geometry")?;
-        for item in windows.iter() {
-            let object = unsafe { CFType::wrap_under_get_rule(*item) };
-            if let Some(dictionary) = object.downcast::<CFDictionary>()
-                && number(&dictionary, "kCGWindowOwnerPID") == Some(f64::from(self.pid))
+            terminator_sys::window_dictionaries().context("Cannot read fixture window geometry")?;
+        for dictionary in windows {
+            if number(&dictionary, "kCGWindowOwnerPID") == Some(f64::from(self.pid))
                 && number(&dictionary, "kCGWindowLayer").is_some_and(|n| n == 0.0 || n == 3.0)
                 && (self.window_id == 0
                     || number(&dictionary, "kCGWindowNumber") == Some(f64::from(self.window_id)))
@@ -163,48 +129,18 @@ impl Desktop {
         self.mouse(CGEventType::LeftMouseUp, end.0, end.1)
     }
     fn ax_window(&self) -> Result<CFType> {
-        unsafe {
-            let app = CFType::wrap_under_create_rule(AXUIElementCreateApplication(self.pid as i32));
-            let mut result = std::ptr::null();
-            ensure!(
-                AXUIElementCopyAttributeValue(
-                    app.as_CFTypeRef(),
-                    CFString::new("AXWindows").as_concrete_TypeRef(),
-                    &raw mut result
-                ) == 0,
-                "Cannot read fixture accessibility windows"
-            );
-            let windows = CFType::wrap_under_create_rule(result)
-                .downcast::<core_foundation::array::CFArray>()
-                .context("AX windows missing")?;
-            let window = *windows.get(0).context("No fixture AX window")?;
-            Ok(CFType::wrap_under_get_rule(window))
-        }
+        let pid = i32::try_from(self.pid).context("Fixture pid does not fit AX")?;
+        terminator_sys::ax_primary_window(pid).map_err(anyhow::Error::msg)
     }
     fn ax_attribute(element: &CFType, name: &str) -> Result<CFType> {
-        unsafe {
-            let mut result = std::ptr::null();
-            ensure!(
-                AXUIElementCopyAttributeValue(
-                    element.as_CFTypeRef(),
-                    CFString::new(name).as_concrete_TypeRef(),
-                    &raw mut result
-                ) == 0,
-                "Missing native window attribute {name}"
-            );
-            Ok(CFType::wrap_under_create_rule(result))
-        }
+        terminator_sys::ax_copy_attribute(element, name)
+            .map_err(|_| anyhow::anyhow!("Missing native window attribute {name}"))
     }
     fn press_window_button(&self, name: &str) -> Result<()> {
         let window = self.ax_window()?;
         let button = Self::ax_attribute(&window, name)?;
         ensure!(
-            unsafe {
-                AXUIElementPerformAction(
-                    button.as_CFTypeRef(),
-                    CFString::new("AXPress").as_concrete_TypeRef(),
-                )
-            } == 0,
+            terminator_sys::ax_perform(&button, "AXPress") == 0,
             "Native button action failed"
         );
         Ok(())
@@ -220,21 +156,11 @@ impl Desktop {
     pub fn restore(&self) -> Result<()> {
         let window = self.ax_window()?;
         ensure!(
-            unsafe {
-                AXUIElementSetAttributeValue(
-                    window.as_CFTypeRef(),
-                    CFString::new("AXMinimized").as_concrete_TypeRef(),
-                    CFBoolean::false_value().as_CFTypeRef(),
-                )
-            } == 0,
+            terminator_sys::ax_set_attribute(&window, "AXMinimized", &CFBoolean::false_value())
+                == 0,
             "Cannot restore fixture window"
         );
-        unsafe {
-            AXUIElementPerformAction(
-                window.as_CFTypeRef(),
-                CFString::new("AXRaise").as_concrete_TypeRef(),
-            );
-        }
+        let _ = terminator_sys::ax_perform(&window, "AXRaise");
         Ok(())
     }
     pub fn close(&mut self) -> Result<()> {

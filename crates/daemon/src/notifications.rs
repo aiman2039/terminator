@@ -102,18 +102,14 @@ pub fn send(
 pub fn idle() {
     let started = std::time::Instant::now();
     #[cfg(target_os = "macos")]
-    unsafe {
-        use std::ffi::c_void;
-        #[link(name = "CoreFoundation", kind = "framework")]
-        unsafe extern "C" {
-            static kCFRunLoopDefaultMode: *const c_void;
-            fn CFRunLoopRunInMode(
-                mode: *const c_void,
-                seconds: f64,
-                return_after_source_handled: bool,
-            ) -> i32;
-        }
-        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, true);
+    {
+        use core_foundation::{base::TCFType, runloop::CFRunLoop, string::CFString};
+        let mode = CFString::new("kCFRunLoopDefaultMode");
+        let _ = CFRunLoop::run_in_mode(
+            mode.as_concrete_TypeRef(),
+            std::time::Duration::from_millis(10),
+            true,
+        );
     }
     std::thread::sleep(std::time::Duration::from_millis(10).saturating_sub(started.elapsed()));
 }

@@ -158,7 +158,7 @@ async fn execute(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn()?;
-    let group = child.id().unwrap() as i32;
+    let group = child.id().unwrap();
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let input = child.stdin.take();
@@ -201,9 +201,7 @@ async fn execute(
         () = tokio::time::sleep(options.timeout) => Err(anyhow::anyhow!("Command timed out after {:?}", options.timeout)),
     };
     if result.is_err() {
-        unsafe {
-            libc::kill(-group, libc::SIGKILL);
-        }
+        let _ = crate::signals::signal_group(group, crate::signals::ProcSignal::Kill);
         let _ = child.start_kill();
         let _ = child.wait().await;
     }

@@ -1,4 +1,5 @@
 //! Build the pinned `CodeDiff` library locally; never download executables at runtime.
+#![forbid(unsafe_code)]
 use std::{env, fs, path::Path};
 fn collect(root: &Path, dir: &Path, entries: &mut Vec<(String, String)>) {
     let mut paths: Vec<_> = fs::read_dir(dir)

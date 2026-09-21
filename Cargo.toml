@@ -10,7 +10,10 @@ rust-version = "1.97.1"
 [workspace.dependencies]
 terminator-core = { path = "crates/core" }
 terminator-integrations = { path = "crates/integrations" }
+terminator-sys = { path = "crates/sys" }
+terminator-updater = { path = "crates/updater" }
 anyhow = "1"
+rustix = { version = "1.1.4", features = ["fs", "process", "termios", "event"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
