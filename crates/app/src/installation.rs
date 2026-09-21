@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
-use terminator_core::{Paths, executable_available, spawn_session_leader};
+use terminator_core::{Paths, crash::CrashNotice, executable_available, spawn_session_leader};
 
 pub fn is_helper_error(error: &str) -> bool {
     error.starts_with("Attachment helper unavailable:")
@@ -294,6 +294,10 @@ pub fn preflight() -> anyhow::Result<bool> {
         }
     }
     Ok(true)
+}
+
+pub(crate) fn show_crash_dialog(notice: &CrashNotice) {
+    let _ = show_message("Terminator crashed", &notice.dialog_body(), false);
 }
 
 #[cfg(target_os = "macos")]

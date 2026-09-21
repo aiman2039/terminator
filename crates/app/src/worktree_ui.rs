@@ -170,81 +170,88 @@ impl App {
         browse: &mut bool,
         cancel: &mut bool,
     ) {
-                ui.weak("Creates an isolated git checkout as a new project. You start agents in its terminal.");
-                ui.add_space(8.0);
-                let source_name = self
-                    .state
-                    .projects
-                    .iter()
-                    .find(|project| project.id == draft.source)
-                    .map(|project| project.name.clone())
-                    .unwrap_or_else(|| "Project".into());
-                settings_controls::settings_row(ui, "Source project", "Must already be a git checkout.", |ui| {
-                    ui.label(source_name);
-                });
-                settings_controls::settings_row(
-                    ui,
-                    "Start from",
-                    "HEAD, a branch, or another git revision.",
-                    |ui| {
-                        ui.horizontal(|ui| {
-                            for start in ["HEAD", "main", "master"] {
-                                if ui
-                                    .selectable_label(draft.start == start, start)
-                                    .clicked()
-                                {
-                                    draft.start = start.into();
-                                }
-                            }
-                        });
-                        ui.add(
-                            egui::TextEdit::singleline(&mut draft.start)
-                                .hint_text("revision")
-                                .desired_width(220.0),
-                        );
-                    },
-                );
-                settings_controls::settings_row(
-                    ui,
-                    "Branch name",
-                    "Created on the new checkout. Git rejects invalid names.",
-                    |ui| {
-                        ui.add(egui::TextEdit::singleline(&mut draft.branch).desired_width(260.0));
-                    },
-                );
-                settings_controls::settings_row(
-                    ui,
-                    "Destination",
-                    "Folder must not already exist.",
-                    |ui| {
-                        let mut dest = draft.dest.display().to_string();
-                        let response = ui.add(egui::TextEdit::singleline(&mut dest).desired_width(260.0));
-                        #[cfg(feature = "test-support")]
-                        diagnostics::record(ui.ctx(), "worktree-dest", response.rect);
-                        if response.changed() {
-                            draft.dest = PathBuf::from(dest);
-                        }
-                        if ui.button("Browse…").clicked() {
-                            *browse = true;
-                        }
-                    },
-                );
-                ui.checkbox(&mut draft.open_terminal, "Create a terminal in the new project");
-                ui.add_space(8.0);
+        ui.weak(
+            "Creates an isolated git checkout as a new project. You start agents in its terminal.",
+        );
+        ui.add_space(8.0);
+        let source_name = self
+            .state
+            .projects
+            .iter()
+            .find(|project| project.id == draft.source)
+            .map(|project| project.name.clone())
+            .unwrap_or_else(|| "Project".into());
+        settings_controls::settings_row(
+            ui,
+            "Source project",
+            "Must already be a git checkout.",
+            |ui| {
+                ui.label(source_name);
+            },
+        );
+        settings_controls::settings_row(
+            ui,
+            "Start from",
+            "HEAD, a branch, or another git revision.",
+            |ui| {
                 ui.horizontal(|ui| {
-                    let create = ui.add_enabled(
-                        !draft.branch.trim().is_empty() && !draft.start.trim().is_empty(),
-                        egui::Button::new("Create worktree"),
-                    );
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(ui.ctx(), "worktree-create", create.rect);
-                    if create.clicked() {
-                        *submit = true;
-                    }
-                    if ui.button("Cancel").clicked() {
-                        *cancel = true;
+                    for start in ["HEAD", "main", "master"] {
+                        if ui.selectable_label(draft.start == start, start).clicked() {
+                            draft.start = start.into();
+                        }
                     }
                 });
+                ui.add(
+                    egui::TextEdit::singleline(&mut draft.start)
+                        .hint_text("revision")
+                        .desired_width(220.0),
+                );
+            },
+        );
+        settings_controls::settings_row(
+            ui,
+            "Branch name",
+            "Created on the new checkout. Git rejects invalid names.",
+            |ui| {
+                ui.add(egui::TextEdit::singleline(&mut draft.branch).desired_width(260.0));
+            },
+        );
+        settings_controls::settings_row(
+            ui,
+            "Destination",
+            "Folder must not already exist.",
+            |ui| {
+                let mut dest = draft.dest.display().to_string();
+                let response = ui.add(egui::TextEdit::singleline(&mut dest).desired_width(260.0));
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "worktree-dest", response.rect);
+                if response.changed() {
+                    draft.dest = PathBuf::from(dest);
+                }
+                if ui.button("Browse…").clicked() {
+                    *browse = true;
+                }
+            },
+        );
+        ui.checkbox(
+            &mut draft.open_terminal,
+            "Create a terminal in the new project",
+        );
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let create = ui.add_enabled(
+                !draft.branch.trim().is_empty() && !draft.start.trim().is_empty(),
+                egui::Button::new("Create worktree"),
+            );
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "worktree-create", create.rect);
+            if create.clicked() {
+                *submit = true;
+            }
+            if ui.button("Cancel").clicked() {
+                *cancel = true;
+            }
+        });
     }
 
     fn submit_worktree(&mut self, draft: &WorktreeDraft) {

@@ -8,6 +8,10 @@ All application code lives in this Cargo workspace. The root `../plan.md` record
 - `terminator-integrations`: managed JSON/TOML/plugin installation, normalized lifecycle events, and resume templates. Upstream hooks differ; unsupported events are not inferred from silence.
 - `terminator`: `eframe`/`egui` native application with `egui_dock` layouts, `egui_term` terminals, asynchronous native `rfd` dialogs, filesystem/Git workers, and configurable editor/attention behavior.
 
+## Fatal panics
+
+Each binary installs a panic hook after data-directory init. A panic on the thread that called `install` writes `$data/crashes/{binary}-{timestamp}.log` (mode 0600, last 20 kept) with the message, location, thread, version, and a forced backtrace, then the process exits. The GUI also shows a native dialog with that path. The hook does not resume the process or recover poisoned locks. Panics on worker threads that are already `catch_unwind`'d stay `Failure::Panicked` and do not write dumps. Native aborts and segfaults are not caught. Closing the GUI still leaves daemon-owned PTYs running.
+
 ## Terminal boundary
 
 The daemon, not the GUI or its bridge processes, owns the real shells and editor PTYs. The GUI uses the existing Alacritty-backed `egui_term` widget. Its child is a small attachment bridge connected to the daemon; losing that bridge does not terminate the original shell. Left-drag always selects host text. Application mouse reporting is used for the wheel (nvim, full-screen agents). Empty Copy does not overwrite the clipboard.

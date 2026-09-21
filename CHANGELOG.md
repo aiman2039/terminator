@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Main-thread panics write a crash log under the data directory
+  (`crashes/`) and the GUI shows a dialog with that path before quitting.
+  Terminal sessions keep running in the daemon.
+
 - Settings and Player open as the main pane between the sidebars, not as
   floating popups. Each is a singleton: hide (workspace tab, new terminal,
   open file/session) keeps the instance; reopen shows the same view.

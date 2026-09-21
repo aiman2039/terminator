@@ -3527,6 +3527,12 @@ fn main() -> Result<()> {
     };
     let paths = generations::workspace_paths(&paths)?;
     paths.init()?;
+    crash::install(crash::CrashInstall {
+        binary: "terminator",
+        version: env!("CARGO_PKG_VERSION"),
+        data_dir: paths.data.clone(),
+        notify: Some(installation::show_crash_dialog),
+    });
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)

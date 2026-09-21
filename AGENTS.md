@@ -68,6 +68,8 @@ History currently contains terse subjects such as `nice`, `ok`, and `init`; no c
 
 Use `TERMINATOR_DATA_DIR` for isolated development. Never commit authentication files, credentials, runtime databases, or scrollback. Do not terminate live daemon sessions merely to reload code. Agent launching and Git mutations remain user-driven terminal operations. The `terminator-hook ctl worktree` commands are explicit Git operations; they must reject removal of dirty, locked, or live-session checkouts.
 
+Fatal panics: after data-dir init, each binary installs a panic hook. Main-thread panics write `$data/crashes/{binary}-{timestamp}.log` (0600, last 20) with message, location, thread, version, and backtrace. The GUI shows a native dialog with that path and exits. It does not resume. Recovered worker panics stay Failure::Panicked and do not write dumps. Segfaults/aborts are not caught.
+
 Appearance lives in `~/.config/terminator/config.toml`, honoring `XDG_CONFIG_HOME` and `TERMINATOR_CONFIG_DIR`; explicit data-directory installations keep it in their isolated data directory. Preserve comments and unrelated TOML keys when saving. SQLite holds functional/session state, `ui-preferences.json` holds navigation/sidebar preferences, and scrollback is stored separately.
 
 Hook installation is an explicit Settings action that preserves unrelated configuration and creates backups. Tests must use isolated hook fixtures rather than changing user agent configurations. Never infer agent lifecycle state from terminal text or automatically launch agents.

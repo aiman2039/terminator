@@ -9,8 +9,10 @@ review and regression exercise, not exhaustive fuzzing of dependencies or every
 possible corrupted docking-tree representation.
 
 Two input-triggered GUI panics were reproduced and fixed. No daemon runtime panic
-was reproduced. Assertions with the invariants below remain; no panic catching
-or poisoned-state recovery was added.
+was reproduced. Assertions with the invariants below remain; no poisoned-state
+recovery was added. Fatal panics on the installing (main) thread now write a
+crash log and, in the GUI, show a native dialog before exit; the process still
+dies. See [Fatal panics](ARCHITECTURE.md#fatal-panics).
 
 | Candidate / trigger | Invariant or handling | Thread and session impact |
 | --- | --- | --- |

@@ -6,6 +6,7 @@ pub mod async_client;
 pub mod async_process;
 #[cfg(feature = "async-client")]
 pub mod async_service;
+pub mod crash;
 pub mod generations;
 pub mod idle_close;
 pub mod metadata;
@@ -135,6 +136,9 @@ impl Paths {
     }
     pub fn history_dir(&self) -> PathBuf {
         self.data.join("history")
+    }
+    pub fn crash_dir(&self) -> PathBuf {
+        self.data.join("crashes")
     }
     pub fn editor_socket(&self, session: &str) -> PathBuf {
         self.runtime

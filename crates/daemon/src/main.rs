@@ -1250,6 +1250,12 @@ fn main() -> Result<()> {
         paths.runtime = p.into();
     }
     paths.init()?;
+    crash::install(crash::CrashInstall {
+        binary: "terminator-daemon",
+        version: env!("CARGO_PKG_VERSION"),
+        data_dir: paths.data.clone(),
+        notify: None,
+    });
     let catalog_paths = std::env::var_os("TERMINATOR_CATALOG_DATA").map(|data| Paths {
         data: data.into(),
         runtime: std::env::var_os("TERMINATOR_CATALOG_RUNTIME")

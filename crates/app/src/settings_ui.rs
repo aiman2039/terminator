@@ -229,8 +229,7 @@ impl App {
             .show(ctx, |ui| {
                 ui.label("You changed settings on this page. Save them before moving on?");
                 ui.horizontal(|ui| {
-                    let save_button =
-                        ui.add_enabled(valid, egui::Button::new("Save"));
+                    let save_button = ui.add_enabled(valid, egui::Button::new("Save"));
                     #[cfg(feature = "test-support")]
                     diagnostics::record(ui.ctx(), "settings-unsaved-save", save_button.rect);
                     if save_button.clicked() {
@@ -238,11 +237,7 @@ impl App {
                     }
                     let discard_button = ui.button("Discard changes");
                     #[cfg(feature = "test-support")]
-                    diagnostics::record(
-                        ui.ctx(),
-                        "settings-unsaved-discard",
-                        discard_button.rect,
-                    );
+                    diagnostics::record(ui.ctx(), "settings-unsaved-discard", discard_button.rect);
                     if discard_button.clicked() {
                         discard = true;
                     }

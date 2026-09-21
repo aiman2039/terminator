@@ -11,6 +11,16 @@ use std::{
 use terminator_core::*;
 fn main() -> Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.first().map(String::as_str) != Some("--health-check")
+        && let Ok(paths) = Paths::discover()
+    {
+        crash::install(crash::CrashInstall {
+            binary: "terminator-hook",
+            version: env!("CARGO_PKG_VERSION"),
+            data_dir: paths.data,
+            notify: None,
+        });
+    }
     match args.first().map(String::as_str) {
         Some("--health-check") => {
             println!("{}:{}", env!("CARGO_PKG_VERSION"), PROTOCOL_VERSION);
