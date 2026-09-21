@@ -3680,6 +3680,20 @@ mod navigation_tests {
         }
     }
 
+    fn poll_workspace_close_in_frame(app: &mut App, ctx: &egui::Context) {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.poll_workspace_close(ui.ctx()),
+        );
+        output.textures_delta.clear();
+    }
+
     #[test]
     fn worktree_completion_opens_only_the_requested_projects_terminal() {
         for open_terminal in [false, true] {
@@ -5344,6 +5358,78 @@ mod navigation_tests {
                 path: "/c.png".into(),
             },
         );
+        let ids = app.layouts["a"].ids();
+        app.begin_workspace_close_tabs("a", ids);
+        app.poll_workspace_close(&ctx);
+        assert!(app.close_workspace.is_none());
+        assert!(app.close_workspace_queue.is_empty());
+        assert_eq!(app.layouts["a"].tabs.len(), 1);
+        assert_eq!(app.layouts["a"].iter_all_tabs().count(), 0);
+    }
+
+    #[test]
+    fn close_all_live_tabs_wait_then_keep_running_advances() {
+        let (mut app, ctx, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add("t0".into(), Tab::Terminal("s0".into()));
+        workspace.add("t1".into(), Tab::Terminal("s1".into()));
+        workspace.add("t2".into(), Tab::Terminal("s2".into()));
+        app.state.sessions.extend([
+            session_fixture("s0", SessionKind::Shell),
+            session_fixture("s1", SessionKind::Shell),
+            session_fixture("s2", SessionKind::Shell),
+        ]);
+        let ids = app.layouts["a"].ids();
+        app.begin_workspace_close_tabs("a", ids);
+        poll_workspace_close_in_frame(&mut app, &ctx);
+        assert_eq!(app.close_workspace, Some(("a".into(), "t0".into())));
+        assert_eq!(app.close_workspace_queue, ["t1", "t2"]);
+        assert_eq!(app.layouts["a"].ids(), ["t0", "t1", "t2"]);
+        app.close_workspace_tab_now("a", "t0");
+        assert_eq!(app.close_workspace, Some(("a".into(), "t1".into())));
+        assert_eq!(app.close_workspace_queue, ["t2"]);
+        assert_eq!(app.layouts["a"].ids(), ["t1", "t2"]);
+    }
+
+    #[test]
+    fn close_all_drains_empty_tabs_until_a_live_session() {
+        let (mut app, ctx, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add(
+            "t0".into(),
+            Tab::Image {
+                path: "/a.png".into(),
+            },
+        );
+        workspace.add("t1".into(), Tab::Terminal("s1".into()));
+        workspace.add(
+            "t2".into(),
+            Tab::Image {
+                path: "/c.png".into(),
+            },
+        );
+        app.state
+            .sessions
+            .push(session_fixture("s1", SessionKind::Shell));
+        let ids = app.layouts["a"].ids();
+        app.begin_workspace_close_tabs("a", ids);
+        poll_workspace_close_in_frame(&mut app, &ctx);
+        assert_eq!(app.close_workspace, Some(("a".into(), "t1".into())));
+        assert_eq!(app.close_workspace_queue, ["t2"]);
+        assert_eq!(app.layouts["a"].ids(), ["t1", "t2"]);
+    }
+
+    #[test]
+    fn close_all_ended_sessions_leave_an_empty_workspace() {
+        let (mut app, ctx, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add("t0".into(), Tab::Terminal("s0".into()));
+        workspace.add("t1".into(), Tab::Terminal("s1".into()));
+        app.state.sessions.extend(["s0", "s1"].map(|id| {
+            let mut session = session_fixture(id, SessionKind::Shell);
+            session.lifecycle = Lifecycle::Ended;
+            session
+        }));
         let ids = app.layouts["a"].ids();
         app.begin_workspace_close_tabs("a", ids);
         app.poll_workspace_close(&ctx);
