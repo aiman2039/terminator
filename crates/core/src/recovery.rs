@@ -41,6 +41,7 @@ impl RestartInventory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Lifecycle, Session};
     fn state() -> State {
         let session: Session = serde_json::from_value(serde_json::json!({
             "id":"approved","project_id":"p","label":"shell","cwd":"/tmp",

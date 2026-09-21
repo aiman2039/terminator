@@ -162,7 +162,7 @@ impl App {
         }
     }
 
-    fn worktree_form(
+    pub(super) fn worktree_form(
         &self,
         ui: &mut egui::Ui,
         draft: &mut WorktreeDraft,
@@ -254,7 +254,7 @@ impl App {
         });
     }
 
-    fn submit_worktree(&mut self, draft: &WorktreeDraft) {
+    pub(super) fn submit_worktree(&mut self, draft: &WorktreeDraft) {
         let _ = self.jobs.send(Job::CreateWorktree(draft.clone()));
     }
 

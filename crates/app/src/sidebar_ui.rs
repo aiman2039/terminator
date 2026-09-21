@@ -210,11 +210,11 @@ impl App {
                 self.removed_projects_menu(ui);
                 self.project_sort_menu(ui);
                 if self.has_worktrees() {
-                    let worktree = appearance::sidebar_action(ui, "GitBranch", "New task worktree");
+                    let worktree = appearance::sidebar_action(ui, "GitBranch", "Worktrees…");
                     #[cfg(feature = "test-support")]
                     diagnostics::record(ui.ctx(), "worktree-add", worktree.rect);
                     if worktree.clicked() {
-                        self.open_worktree_wizard();
+                        self.worktree_open = true;
                     }
                 }
                 let add = appearance::sidebar_action(ui, "Plus", "Add local project");
@@ -722,13 +722,6 @@ impl App {
             || (self.preferences.visible && self.preferences.tool == SidebarTool::Agents)
     }
 
-    pub(super) fn side_attention_visible(&self) -> bool {
-        self.state.settings.notifications_side && !self.right_agents_inbox()
-    }
-
-    fn right_agents_inbox(&self) -> bool {
-        self.preferences.visible && self.preferences.tool == SidebarTool::Agents
-    }
     // Inline selection is not a modal and must not take terminal keyboard focus.
     pub(super) fn notice_detail_modal_open(&self) -> bool {
         self.detail.as_ref().is_some_and(|id| {
@@ -1022,11 +1015,6 @@ impl App {
             }
             return;
         }
-        let heading = ui.heading("Git");
-        let _ = match self.cwd() {
-            Some(cwd) => heading.on_hover_text(cwd.display().to_string()),
-            None => heading,
-        };
         if self.context_session().is_some_and(|s| !s.cwd_confirmed) {
             ui.label(RichText::new("Last known directory").small().weak());
         }

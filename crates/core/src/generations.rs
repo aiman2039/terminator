@@ -678,6 +678,9 @@ pub fn snapshot(paths: &Paths) -> Result<State> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        Envelope, Project, Session, SessionKind, now, read_frame, rpc, snapshot, write_frame,
+    };
 
     #[test]
     fn inherited_catalog_cannot_bind_a_different_data_directory() {

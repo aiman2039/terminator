@@ -409,6 +409,7 @@ pub fn read_only(request: &Request) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::write_frame;
     async fn fixture() -> (tempfile::TempDir, Client, tokio::net::UnixListener) {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::at(dir.path().into());

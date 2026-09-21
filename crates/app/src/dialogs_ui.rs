@@ -368,41 +368,6 @@ impl App {
                 Ok(())
             });
         }
-        if let Some(sid) = self.search_session.clone() {
-            let mut open = true;
-            self.popups
-                .window(ctx, "Search session history")
-                .open(&mut open)
-                .default_size([700.0, 500.0])
-                .show(ctx, |ui| {
-                    ui.text_edit_singleline(&mut self.search);
-                    let key = format!("history:{sid}");
-                    if !self.texts.contains_key(&key) && self.loading.insert(key.clone()) {
-                        let _ = self.jobs.send(Job::rpc(
-                            Request::History {
-                                session: sid.clone(),
-                            },
-                            After::Text(key.clone()),
-                        ));
-                    }
-                    if let Some(text) = self.texts.get(&key) {
-                        egui::ScrollArea::both().show(ui, |ui| {
-                            let needle = self.search.to_lowercase();
-                            for (line, text) in text
-                                .lines()
-                                .enumerate()
-                                .filter(|(_, l)| l.to_lowercase().contains(&needle))
-                                .take(2000)
-                            {
-                                ui.monospace(format!("{}  {}", line + 1, text));
-                            }
-                        });
-                    }
-                });
-            if !open {
-                self.search_session = None;
-            }
-        }
         self.worktree_remove_dialog(ctx);
         if let Some(target) = self.browse_target.take() {
             if self.picker_active {

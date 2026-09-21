@@ -79,6 +79,7 @@ impl App {
             && (self.close_workspace.is_none() || self.idle_close_pending.is_some())
             && self.rename_session.is_none()
             && !self.open_path
+            && !self.search_open
             && self.search_session.is_none()
     }
 
@@ -1663,6 +1664,7 @@ impl TabViewer for Viewer<'_> {
         if let Tab::Terminal(sid) = tab {
             if appearance::menu_item(ui, "Search scrollback", "Search", "").clicked() {
                 self.app.search_session = Some(sid.clone());
+                self.app.search_open = true;
                 self.app.texts.remove(&format!("history:{sid}"));
                 ui.close();
             }
@@ -2415,6 +2417,7 @@ impl Viewer<'_> {
             ui.separator();
             if appearance::menu_item(ui, "Search scrollback", "Search", "").clicked() {
                 self.app.search_session = Some(sid.clone());
+                self.app.search_open = true;
                 self.app.texts.remove(&format!("history:{sid}"));
                 ui.close();
             }

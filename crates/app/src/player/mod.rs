@@ -550,7 +550,7 @@ impl App {
         self.seed_sample_playlist();
         self.dismiss_player_tabs();
         self.player.radio_mode = self.preferences.player_radio_mode;
-        self.settings_open = false;
+        self.hide_center_overlay();
         self.player_open = true;
     }
 

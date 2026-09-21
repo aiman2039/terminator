@@ -565,6 +565,8 @@ struct App {
     editor_origins: HashMap<String, Vec<Tab>>,
     search: String,
     search_session: Option<String>,
+    search_open: bool,
+    worktree_open: bool,
     terminal_find: HashMap<String, TerminalFind>,
     history_filter: HashMap<String, String>,
     native_docs: HashMap<PathBuf, native_editor::NativeDoc>,
@@ -630,7 +632,11 @@ fn service_failure_update(
 
 impl App {
     fn command_dialog_open(&self) -> bool {
-        self.palette_open || self.worktree_draft.is_some() || self.worktree_remove.is_some()
+        self.palette_open
+            || self.search_open
+            || self.worktree_open
+            || self.worktree_draft.is_some()
+            || self.worktree_remove.is_some()
     }
     fn new(cc: &eframe::CreationContext<'_>, paths: Paths) -> Self {
         let mut app = Self::with_context(&cc.egui_ctx, paths.clone());
@@ -790,6 +796,8 @@ impl App {
             editor_origins: HashMap::new(),
             search: String::new(),
             search_session: None,
+            search_open: false,
+            worktree_open: false,
             terminal_find: HashMap::new(),
             history_filter: HashMap::new(),
             native_docs: HashMap::new(),
@@ -2416,8 +2424,13 @@ impl App {
         }
     }
     fn hide_center_overlay(&mut self) {
+        if self.settings_open && self.settings_dirty() {
+            self.settings_pending = Some(settings_ui::SettingsPending::Close);
+        }
         self.settings_open = false;
         self.player_open = false;
+        self.search_open = false;
+        self.worktree_open = false;
         self.shortcut_capture = None;
     }
 
@@ -2875,6 +2888,7 @@ impl App {
     }
 
     fn center_pane(&mut self, ui: &mut egui::Ui) {
+        self.settings_unsaved_dialog(ui.ctx());
         if self.settings_open {
             self.settings_center(ui);
             return;
@@ -2887,11 +2901,190 @@ impl App {
             self.palette_center(ui);
             return;
         }
+        if self.worktree_open {
+            self.worktree_management_center(ui);
+            return;
+        }
         if self.worktree_draft.is_some() {
             self.worktree_center(ui);
             return;
         }
+        if self.search_open {
+            self.search_history_center(ui);
+            return;
+        }
         self.workspace_center(ui);
+    }
+
+    fn search_history_center(&mut self, ui: &mut egui::Ui) {
+        let Some(sid) = self.search_session.clone() else {
+            self.search_open = false;
+            return;
+        };
+        ui.set_min_size(ui.available_size());
+        ui.horizontal(|ui| {
+            ui.strong("Search session history");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if appearance::sidebar_action(ui, "X", "Close").clicked() {
+                    self.search_open = false;
+                }
+            });
+        });
+        ui.add_space(6.0);
+        ui.add(
+            egui::TextEdit::singleline(&mut self.search)
+                .hint_text("Search scrollback…")
+                .desired_width(400.0),
+        );
+        ui.add_space(8.0);
+        let key = format!("history:{sid}");
+        if !self.texts.contains_key(&key) && self.loading.insert(key.clone()) {
+            let _ = self.jobs.send(Job::rpc(
+                Request::History {
+                    session: sid.clone(),
+                },
+                After::Text(key.clone()),
+            ));
+        }
+        egui::ScrollArea::both().show(ui, |ui| {
+            if let Some(text) = self.texts.get(&key) {
+                let needle = self.search.to_lowercase();
+                for (line, text) in text
+                    .lines()
+                    .enumerate()
+                    .filter(|(_, l)| l.to_lowercase().contains(&needle))
+                    .take(2000)
+                {
+                    ui.monospace(format!("{}  {}", line + 1, text));
+                }
+            } else {
+                ui.weak("Loading scrollback…");
+            }
+        });
+    }
+
+    fn worktree_management_center(&mut self, ui: &mut egui::Ui) {
+        ui.set_min_size(ui.available_size());
+        ui.horizontal(|ui| {
+            ui.strong("Worktrees");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if appearance::sidebar_action(ui, "X", "Close").clicked() {
+                    self.worktree_open = false;
+                }
+            });
+        });
+        ui.add_space(8.0);
+        let has_worktrees = self
+            .state
+            .worktrees
+            .iter()
+            .any(|w| !w.removed);
+        if !has_worktrees && self.worktree_draft.is_none() {
+            ui.weak("No worktrees yet.");
+            ui.add_space(8.0);
+            if ui.button("Create a worktree").clicked() {
+                self.open_worktree_wizard();
+            }
+            return;
+        }
+        if let Some(draft) = &self.worktree_draft {
+            let mut submit = false;
+            let mut browse = false;
+            let mut cancel = false;
+            let mut clone = draft.clone();
+            self.worktree_form(ui, &mut clone, &mut submit, &mut browse, &mut cancel);
+            if browse {
+                self.browse_target = Some(BrowseTarget::WorktreeDest);
+            }
+            if submit {
+                self.submit_worktree(&clone);
+            }
+            if submit || cancel {
+                self.worktree_draft = None;
+            } else {
+                self.worktree_draft = Some(clone);
+            }
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(4.0);
+        }
+        let _header_h = 28.0;
+        let footer_h = 44.0;
+        let list_h = (ui.available_height() - footer_h).max(80.0);
+        let worktrees: Vec<_> = self
+            .state
+            .worktrees
+            .iter()
+            .filter(|w| !w.removed)
+            .cloned()
+            .collect();
+        let selected = self.selected.clone();
+        egui::ScrollArea::vertical()
+            .max_height(list_h)
+            .show(ui, |ui| {
+                for worktree in &worktrees {
+                    let Some(project) = self
+                        .state
+                        .projects
+                        .iter()
+                        .find(|p| p.id == worktree.project_id)
+                    else {
+                        continue;
+                    };
+                    let live = self
+                        .state
+                        .sessions
+                        .iter()
+                        .filter(|s| s.project_id == project.id && s.lifecycle.live())
+                        .count();
+                    let is_selected = selected.as_ref() == Some(&project.id);
+                    let path = project.path.display().to_string();
+                    let name = project.name.clone();
+                    let project_id = project.id.clone();
+                    let response = appearance::project_row(
+                        ui,
+                        &name,
+                        "GitBranch",
+                        is_selected,
+                        self.theme.row_height(),
+                        &live.to_string(),
+                        appearance::color(&self.theme.secondary),
+                    )
+                    .on_hover_text(format!(
+                        "{}\n{}",
+                        path,
+                        worktree.path.display()
+                    ));
+                    if response.clicked() {
+                        self.select_project(project_id.clone());
+                        self.worktree_open = false;
+                    }
+                    let app = &mut *self;
+                    appearance::context_menu(&response, |ui| {
+                        if appearance::menu_item(ui, "Open", "FolderOpen", "").clicked() {
+                            app.select_project(project_id.clone());
+                            app.worktree_open = false;
+                            ui.close();
+                        }
+                        if appearance::menu_item(ui, "New terminal", "Terminal", "").clicked() {
+                            app.select_project(project_id.clone());
+                            app.create(None);
+                            app.worktree_open = false;
+                            ui.close();
+                        }
+                        if appearance::menu_item(ui, "Remove worktree…", "X", "").clicked() {
+                            app.confirm_remove_worktree(&project_id);
+                            ui.close();
+                        }
+                    });
+                }
+            });
+        ui.separator();
+        ui.horizontal(|ui| {
+            if self.worktree_draft.is_none() && ui.button("New worktree").clicked() {
+                self.open_worktree_wizard();
+            }
+        });
     }
 
     fn workspace_center(&mut self, ui: &mut egui::Ui) {
@@ -3757,6 +3950,47 @@ mod navigation_tests {
         assert!(!app.terminal_input_enabled("shell"));
         app.worktree_remove = None;
         assert!(app.terminal_input_enabled("shell"));
+        app.search_open = true;
+        assert!(!app.terminal_input_enabled("shell"));
+        app.search_open = false;
+        assert!(app.terminal_input_enabled("shell"));
+        app.worktree_open = true;
+        assert!(!app.terminal_input_enabled("shell"));
+        app.worktree_open = false;
+        assert!(app.terminal_input_enabled("shell"));
+    }
+
+    #[test]
+    fn hide_center_overlay_when_settings_dirty_sets_pending_close() {
+        let (mut app, _, _dir) = fixture();
+        app.open_settings();
+        app.settings_draft.shell = "/tmp/custom".into();
+        assert!(app.settings_dirty());
+        app.hide_center_overlay();
+        assert!(app.settings_pending.is_some());
+        assert!(!app.settings_open);
+    }
+
+    #[test]
+    fn open_settings_clears_search_and_worktree() {
+        let (mut app, _, _dir) = fixture();
+        app.search_open = true;
+        app.worktree_open = true;
+        app.open_settings();
+        assert!(!app.search_open);
+        assert!(!app.worktree_open);
+        assert!(app.settings_open);
+    }
+
+    #[test]
+    fn open_player_clears_search_and_worktree() {
+        let (mut app, _, _dir) = fixture();
+        app.search_open = true;
+        app.worktree_open = true;
+        app.open_player();
+        assert!(!app.search_open);
+        assert!(!app.worktree_open);
+        assert!(app.player_open);
     }
 
     #[test]

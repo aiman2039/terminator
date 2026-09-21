@@ -146,7 +146,7 @@ impl App {
         if !self.settings_session {
             self.begin_settings_session();
         }
-        self.player_open = false;
+        self.hide_center_overlay();
         self.settings_open = true;
     }
 
