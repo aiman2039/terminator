@@ -159,6 +159,22 @@ impl App {
         }
     }
 
+    /// Queue a pane close for a session with no daemon record.
+    ///
+    /// `paint_dock` checks the workspace out of `layouts`. `remove_tab`
+    /// only walks `layouts`, so a direct close from the pane body misses
+    /// the visible tab and it reappears on check-in.
+    pub(super) fn queue_unavailable_tab_close(&mut self, sid: &str) {
+        self.pending_unavailable_close.push(sid.to_owned());
+    }
+
+    pub(super) fn drain_pending_unavailable_close(&mut self) {
+        let pending = std::mem::take(&mut self.pending_unavailable_close);
+        for sid in &pending {
+            self.remove_tab(sid);
+        }
+    }
+
     pub(super) fn close_unavailable_tabs(&mut self) {
         let missing = self.unavailable_tabs();
         if missing.is_empty() {

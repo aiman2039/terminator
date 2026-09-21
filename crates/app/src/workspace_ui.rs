@@ -1705,7 +1705,7 @@ impl TabViewer for Viewer<'_> {
                         #[cfg(feature = "test-support")]
                         diagnostics::record(ui.ctx(), &format!("pane-close:{sid}"), close.rect);
                         if close.clicked() {
-                            self.app.remove_tab(sid);
+                            self.app.queue_unavailable_tab_close(sid);
                         }
                     });
                     return;

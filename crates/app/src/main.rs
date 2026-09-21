@@ -580,6 +580,7 @@ struct App {
     native_close_prompt: Option<PathBuf>,
     native_close_after_save: Option<PathBuf>,
     pending_native_close: Vec<PathBuf>,
+    pending_unavailable_close: Vec<String>,
     pending_quit_all: Option<bool>,
     open_path: bool,
     pick_audio: bool,
@@ -812,6 +813,7 @@ impl App {
             native_close_prompt: None,
             native_close_after_save: None,
             pending_native_close: Vec::new(),
+            pending_unavailable_close: Vec::new(),
             pending_quit_all: None,
             open_path: false,
             pick_audio: false,
@@ -3159,6 +3161,8 @@ impl App {
         self.apply_add_tab(&project, &mut dock);
         self.paint_session_focus(ui, &dock);
         self.layouts.insert(project, dock);
+        // Pane "Close tab" is queued while this workspace is checked out.
+        self.drain_pending_unavailable_close();
     }
 
     fn sync_active_session(&mut self, dock: &mut Workspace) {
@@ -4337,6 +4341,28 @@ mod navigation_tests {
         assert!(app.unavailable_tabs().is_empty());
         assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
         assert!(app.info.as_deref().unwrap().contains("Closed 1 tab"));
+    }
+
+    #[test]
+    fn unavailable_pane_close_waits_until_the_workspace_is_checked_in() {
+        let (mut app, _, _dir) = fixture();
+        app.connected = true;
+        app.insert("a", Tab::Terminal("ghost".into()), None);
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        let dock = app.layouts.remove("a").unwrap();
+        app.remove_tab("ghost");
+        app.layouts.insert("a".into(), dock);
+        assert!(app.layouts["a"].contains(&Tab::Terminal("ghost".into())));
+        let dock = app.layouts.remove("a").unwrap();
+        app.queue_unavailable_tab_close("ghost");
+        app.layouts.insert("a".into(), dock);
+        app.drain_pending_unavailable_close();
+        assert!(!app.layouts["a"].contains(&Tab::Terminal("ghost".into())));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
+        assert!(app.unavailable_tabs().is_empty());
     }
 
     #[test]
