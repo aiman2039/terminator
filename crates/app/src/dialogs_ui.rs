@@ -37,6 +37,7 @@ impl App {
 
     pub(super) fn modals(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         self.first_project_dialog(ctx);
+        self.native_close_modal(ctx);
         if self.restart_confirm {
             let live = self
                 .state
@@ -451,6 +452,14 @@ impl App {
             let Some((project, tab_id)) = self.close_workspace.clone() else {
                 return;
             };
+            // Native buffers die with the tab and bypass the dock close hook,
+            // so guard them before the session checks below.
+            let dirty = self.dirty_native_in_tab(&project, &tab_id);
+            if let Some(path) = dirty.first() {
+                self.native_close_prompt = Some(path.clone());
+                self.abort_workspace_close();
+                return;
+            }
             let live = self.live_workspace_sessions(&project, &tab_id);
             if live.is_empty() {
                 self.close_workspace_tab_now(&project, &tab_id);

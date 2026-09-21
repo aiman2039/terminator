@@ -44,7 +44,7 @@ impl Workspace {
             let mut workspace: Self =
                 serde_json::from_value(value).context("Invalid project tabs")?;
             ensure!(
-                matches!(workspace.version, 2..=6),
+                matches!(workspace.version, 2..=7),
                 "Unsupported project tab layout version"
             );
             if contains_browser(&workspace) {
@@ -176,6 +176,17 @@ impl Workspace {
     pub fn close(&mut self, id: &str) {
         let previous = self.active_index();
         self.tabs.retain(|tab| tab.id != id);
+        self.normalize(previous);
+    }
+
+    /// Drop top-level tabs left without panes and restore the non-empty
+    /// invariant the [`Deref`] impls rely on. Pane-level removers that
+    /// retain directly (native closes) must call this instead of retaining
+    /// inline, or the next dock access panics on `tabs[0]`.
+    pub(crate) fn drop_empty_tabs(&mut self) {
+        let previous = self.active_index();
+        self.tabs
+            .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
         self.normalize(previous);
     }
 
@@ -312,6 +323,26 @@ mod tests {
     }
 
     #[test]
+    fn emptying_every_pane_keeps_dock_access_usable() {
+        // Regression: `:qa` closing the last pane left `tabs` empty, and
+        // the next dock access panicked on `tabs[0]` in the Deref impls.
+        let pane = Tab::Terminal("qa-last-pane".to_string());
+        let mut workspace = Workspace::from_layout(DockState::new(vec![pane.clone()]));
+        let path = workspace.tabs[0]
+            .layout
+            .find_tab(&pane)
+            .expect("pane present");
+        workspace.tabs[0].layout.remove_tab(path);
+        workspace.drop_empty_tabs();
+        assert_eq!(workspace.tabs.len(), 1);
+        // Read access through Deref.
+        assert!(workspace.iter_all_tabs().next().is_none());
+        // Write access through DerefMut (the exact panic site).
+        workspace.add("qa-next".to_string(), Tab::Terminal("qa-next".to_string()));
+        assert!(workspace.contains(&Tab::Terminal("qa-next".to_string())));
+    }
+
+    #[test]
     fn missing_main_surface_is_rejected_before_pane_access() {
         let mut saved =
             terminator_core::sanitize_layout(serde_json::to_value(Workspace::empty()).unwrap());
@@ -334,7 +365,7 @@ mod tests {
                 .to_string()
                 .contains("focus")
         );
-        for version in [2, 3, 4, 5, 6] {
+        for version in [2, 3, 4, 5, 6, 7] {
             let mut saved = terminator_core::sanitize_layout(
                 serde_json::to_value(Workspace::from_layout(dock.clone())).unwrap(),
             );
@@ -377,6 +408,18 @@ mod tests {
         let saved = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
         let restored = Workspace::load(saved).unwrap();
         assert!(restored.contains(&Tab::Player));
+        workspace.add(
+            "native".into(),
+            Tab::NativeEditor {
+                path: "/notes/todo.md".into(),
+            },
+        );
+        assert_eq!(workspace.version, 7);
+        let saved = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
+        let restored = Workspace::load(saved).unwrap();
+        assert!(restored.contains(&Tab::NativeEditor {
+            path: "/notes/todo.md".into()
+        }));
     }
 
     #[test]
@@ -395,7 +438,7 @@ mod tests {
     fn unsupported_layout_version_is_rejected() {
         let mut saved =
             terminator_core::sanitize_layout(serde_json::to_value(Workspace::empty()).unwrap());
-        saved["version"] = serde_json::json!(7);
+        saved["version"] = serde_json::json!(8);
         assert!(
             Workspace::load(saved)
                 .unwrap_err()

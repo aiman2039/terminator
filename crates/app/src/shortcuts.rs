@@ -10,6 +10,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("next_pane", "Next pane"),
     ("open_settings", "Settings"),
     ("open_palette", "Command palette"),
+    ("find_in_terminal", "Find in terminal"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -366,6 +366,87 @@ impl TerminalBackend {
         self.last_content.selected_text.clone()
     }
 
+    /// One grid row as searchable text. `columns[c]` is the grid column of
+    /// the `c`-th char in `text`, so literal matches map back to cells.
+    /// Covers the live grid including retained scrollback; wrapped logical
+    /// lines stay split across rows (matches cannot span rows in v1).
+    pub fn search_rows(&self) -> Vec<SearchRow> {
+        use alacritty_terminal::term::cell::Flags;
+        let term = self.term.lock();
+        let grid = term.grid();
+        let mut rows = Vec::new();
+        for line in grid.topmost_line().0..=grid.bottommost_line().0 {
+            let line = Line(line);
+            let mut text = String::new();
+            let mut columns = Vec::new();
+            for col in 0..grid.columns() {
+                let cell = &grid[line][Column(col)];
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+                text.push(cell.c);
+                columns.push(col);
+                if let Some(extra) = cell.zerowidth() {
+                    for c in extra {
+                        text.push(*c);
+                        columns.push(col);
+                    }
+                }
+            }
+            let trimmed = text.trim_end().to_string();
+            columns.truncate(trimmed.chars().count());
+            rows.push(SearchRow {
+                line,
+                text: trimmed,
+                columns,
+            });
+        }
+        rows
+    }
+
+    /// Literal search over the live grid plus scrollback. Never sends input.
+    pub fn find(&self, query: &str, case_insensitive: bool) -> FindOutcome {
+        let rows = self.search_rows();
+        let refs: Vec<&str> = rows.iter().map(|row| row.text.as_str()).collect();
+        let mut matches = Vec::new();
+        for hit in crate::find::find_in_rows(&refs, query, case_insensitive) {
+            let row = &rows[hit.row];
+            let (Some(&start), Some(&end)) = (
+                row.columns.get(hit.chars.start),
+                row.columns.get(hit.chars.end.saturating_sub(1)),
+            ) else {
+                continue;
+            };
+            matches.push(FoundMatch {
+                line: row.line.0,
+                start_col: start,
+                end_col: end,
+            });
+        }
+        let truncated = matches.len() >= crate::find::MAX_MATCHES;
+        FindOutcome { matches, truncated }
+    }
+
+    /// Scroll the viewport so grid `line` is visible, with a two-line margin.
+    /// Local-only: unlike `scroll()`, this never writes to the PTY, so
+    /// full-screen applications are unaffected. No-op in alt-screen mode.
+    pub fn reveal_grid_line(&mut self, line: i32) {
+        let visible = self.size.num_lines.max(1) as i32;
+        let mut term = self.term.lock();
+        let current = term.grid().display_offset() as i32;
+        let top = -current;
+        if line >= top && line < top + visible {
+            return;
+        }
+        let topmost = term.grid().topmost_line().0;
+        let max_offset = -topmost;
+        let desired = (-(line - 2).max(topmost)).clamp(0, max_offset);
+        term.scroll_display(Scroll::Delta(desired - current));
+    }
+
     pub fn sync(&mut self) -> &RenderableContent {
         if !self.grid_dirty.swap(false, Ordering::Relaxed) {
             return self.last_content();
@@ -628,6 +709,31 @@ fn visible_regex_match_iter<'a>(
     RegexIter::new(start, end, Direction::Right, term, regex)
         .skip_while(move |rm| rm.end().line < viewport_start)
         .take_while(move |rm| rm.start().line <= viewport_end)
+}
+
+/// One grid row as searchable text. `columns[c]` is the grid column of the
+/// `c`-th char in `text`.
+#[derive(Clone, Debug)]
+pub struct SearchRow {
+    pub line: Line,
+    pub text: String,
+    pub columns: Vec<usize>,
+}
+
+/// One literal find hit in grid coordinates (single row).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FoundMatch {
+    pub line: i32,
+    pub start_col: usize,
+    pub end_col: usize,
+}
+
+/// Result of [`TerminalBackend::find`]. `truncated` is set when hits hit
+/// the [`crate::find::MAX_MATCHES`] cap.
+#[derive(Clone, Debug, Default)]
+pub struct FindOutcome {
+    pub matches: Vec<FoundMatch>,
+    pub truncated: bool,
 }
 
 pub struct RenderableContent {

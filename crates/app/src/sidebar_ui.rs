@@ -946,17 +946,17 @@ impl App {
     pub(super) fn sidebar(&mut self, ui: &mut egui::Ui) {
         if self.preferences.tool == SidebarTool::History {
             ui.heading("History");
-            ui.weak("Ended sessions from all projects");
+            ui.weak("Ended sessions with an agent resume command");
             let ended: Vec<_> = self
                 .state
                 .sessions
                 .iter()
-                .filter(|s| !s.lifecycle.live())
+                .filter(|s| !s.lifecycle.live() && self.state.session_has_resume(&s.id))
                 .cloned()
                 .collect();
             appearance::sidebar_scroll("global-history").show(ui, |ui| {
                 if ended.is_empty() {
-                    ui.weak("No ended sessions.");
+                    ui.weak("No resumable sessions.");
                 }
                 for project in self.state.projects.clone() {
                     let sessions: Vec<_> = ended

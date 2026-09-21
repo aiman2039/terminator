@@ -286,6 +286,15 @@ pub struct Agent {
     pub updated: u64,
     pub resume: Option<Resume>,
 }
+impl Agent {
+    /// A session is worth keeping in History only when an agent left a
+    /// provider resume command behind (e.g. `codex resume <id>`).
+    /// Plain shells and file editors have no such handle, so reopening
+    /// them restores nothing actionable.
+    pub fn resumable(&self) -> bool {
+        self.resume.is_some()
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Notification {
     pub id: String,
@@ -312,6 +321,8 @@ pub enum EditorMode {
     Embedded,
     Terminal,
     External,
+    /// GUI-owned buffer (`terminator-native-edit`); no PTY, no daemon editor.
+    Native,
 }
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -344,6 +355,7 @@ pub struct Settings {
     pub font_size: f32,
     pub editor_close_timeout_secs: u64,
     pub diff_split_default: bool,
+    pub native_vim: bool,
     pub keybindings: std::collections::BTreeMap<String, String>,
 }
 impl Default for Settings {
@@ -386,6 +398,7 @@ impl Default for Settings {
             font_size: 13.0,
             editor_close_timeout_secs: 1,
             diff_split_default: false,
+            native_vim: true,
             keybindings: [
                 ("new_terminal".into(), "command+T".into()),
                 ("open_file".into(), "command+O".into()),
@@ -394,6 +407,7 @@ impl Default for Settings {
                 ("next_pane".into(), "command+]".into()),
                 ("open_settings".into(), "command+,".into()),
                 ("open_palette".into(), "command+P".into()),
+                ("find_in_terminal".into(), "command+F".into()),
             ]
             .into(),
         }
@@ -476,6 +490,36 @@ pub struct State {
     pub degraded: Option<String>,
 }
 impl State {
+    /// True when at least one agent left a provider resume command for this
+    /// session (e.g. `codex resume <id>`).
+    pub fn session_has_resume(&self, session: &str) -> bool {
+        self.agents
+            .iter()
+            .any(|a| a.session_id == session && a.resumable())
+    }
+    /// Drop ended/interrupted sessions that have no resume handle, along with
+    /// their agent, notification, and terminal-notice records. Live sessions
+    /// are always kept. Returns the removed session ids so callers can also
+    /// delete their stored scrollback.
+    pub fn prune_non_resumable_ended(&mut self) -> Vec<String> {
+        let removed: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|s| !s.lifecycle.live() && !self.session_has_resume(&s.id))
+            .map(|s| s.id.clone())
+            .collect();
+        if removed.is_empty() {
+            return removed;
+        }
+        self.sessions.retain(|s| !removed.contains(&s.id));
+        self.agents.retain(|a| !removed.contains(&a.session_id));
+        self.notifications
+            .retain(|n| !removed.contains(&n.session_id));
+        self.terminal_notices
+            .retain(|n| !removed.contains(&n.session_id));
+        self.revision += 1;
+        removed
+    }
     /// Resolve from the already-loaded inventory; safe to use in GUI rendering.
     pub fn session_paths(&self, fallback: &Paths, session: &str) -> Paths {
         self.sessions
@@ -1260,6 +1304,94 @@ mod tests {
         let restored: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.editor_close_timeout_secs, 5);
         assert!(restored.diff_split_default);
+    }
+    fn ended_session(id: &str, lifecycle: Lifecycle) -> Session {
+        Session {
+            review: false,
+            id: id.into(),
+            project_id: "p".into(),
+            label: id.into(),
+            cwd: "/tmp".into(),
+            kind: SessionKind::Shell,
+            file: None,
+            lifecycle,
+            created: 0,
+            exit_code: None,
+            rows: 24,
+            cols: 80,
+            generation: "g".into(),
+            pid: None,
+            truncated: false,
+            cwd_confirmed: true,
+        }
+    }
+    fn agent_for(session: &str, resume: bool) -> Agent {
+        Agent {
+            invocation_id: format!("agent-{session}"),
+            session_id: session.into(),
+            kind: "codex".into(),
+            provider_session_id: resume.then(|| "provider-1".into()),
+            state: AgentState::Stopped,
+            sequence: None,
+            updated: 0,
+            resume: resume.then(|| Resume {
+                program: "codex".into(),
+                args: vec!["resume".into(), "provider-1".into()],
+            }),
+        }
+    }
+    #[test]
+    fn prune_keeps_only_live_or_resumable_ended_sessions() {
+        let mut s = State::default();
+        s.sessions
+            .push(ended_session("plain-ended", Lifecycle::Ended));
+        s.sessions
+            .push(ended_session("plain-interrupted", Lifecycle::Interrupted));
+        s.sessions
+            .push(ended_session("resumable-ended", Lifecycle::Ended));
+        s.sessions
+            .push(ended_session("agent-without-resume", Lifecycle::Ended));
+        let mut live = ended_session("live", Lifecycle::Running);
+        live.lifecycle = Lifecycle::Running;
+        s.sessions.push(live);
+        s.agents.push(agent_for("resumable-ended", true));
+        s.agents.push(agent_for("agent-without-resume", false));
+        s.notifications.push(Notification {
+            id: "n".into(),
+            session_id: "plain-ended".into(),
+            invocation_id: "x".into(),
+            request_id: None,
+            state: AgentState::Stopped,
+            summary: String::new(),
+            details: String::new(),
+            created: 0,
+            read: false,
+            dismissed: false,
+            resolved: false,
+            snoozed_until: 0,
+        });
+        assert!(s.session_has_resume("resumable-ended"));
+        assert!(!s.session_has_resume("plain-ended"));
+        assert!(!s.session_has_resume("agent-without-resume"));
+        let mut removed = s.prune_non_resumable_ended();
+        removed.sort();
+        assert_eq!(
+            removed,
+            vec![
+                "agent-without-resume".to_string(),
+                "plain-ended".to_string(),
+                "plain-interrupted".to_string()
+            ]
+        );
+        let kept: Vec<_> = s
+            .sessions
+            .iter()
+            .map(|session| session.id.clone())
+            .collect();
+        assert!(kept.contains(&"resumable-ended".to_string()));
+        assert!(kept.contains(&"live".to_string()));
+        assert!(s.notifications.is_empty());
+        assert!(s.agents.iter().all(|a| a.session_id != "plain-ended"));
     }
 }
 

@@ -14,6 +14,7 @@ use egui::{CornerRadius, Key};
 use egui::{Id, PointerButton};
 
 use crate::backend::BackendCommand;
+use crate::backend::FoundMatch;
 use crate::backend::TerminalBackend;
 use crate::backend::{LinkAction, MouseButton, SelectionType};
 use crate::bindings::Binding;
@@ -40,6 +41,14 @@ pub struct TerminalViewState {
     current_mouse_position_on_grid: TerminalGridPoint,
 }
 
+/// Match highlight overlay for [`TerminalView`]. Ranges use live grid
+/// coordinates (see [`crate::backend::FoundMatch`]).
+#[derive(Clone, Debug, Default)]
+pub struct FindPaint {
+    pub matches: Vec<FoundMatch>,
+    pub current: usize,
+}
+
 pub struct TerminalView<'a> {
     widget_id: Id,
     has_focus: bool,
@@ -49,6 +58,7 @@ pub struct TerminalView<'a> {
     theme: TerminalTheme,
     external_links: bool,
     bindings_layout: BindingsLayout,
+    find: Option<FindPaint>,
 }
 
 impl Widget for TerminalView<'_> {
@@ -86,7 +96,15 @@ impl<'a> TerminalView<'a> {
             theme: TerminalTheme::default(),
             external_links: false,
             bindings_layout: BindingsLayout::new(),
+            find: None,
         }
+    }
+
+    /// Overlay literal-find match highlights. The current match paints in the
+    /// selection color, other matches dimmed. Coordinates are live grid points.
+    pub fn find_highlight(mut self, find: Option<FindPaint>) -> Self {
+        self.find = find;
+        self
     }
 
     #[inline]
@@ -272,6 +290,7 @@ impl<'a> TerminalView<'a> {
             painter,
             state,
             content,
+            self.find.as_ref(),
         ));
     }
 }
@@ -297,6 +316,7 @@ fn paint_terminal(
     painter: &Painter,
     state: &TerminalViewState,
     content: &crate::backend::RenderableContent,
+    find: Option<&FindPaint>,
 ) -> Vec<Shape> {
     let layout_min = layout.rect.min;
     let cell_height = content.terminal_size.cell_height as f32;
@@ -327,6 +347,21 @@ fn paint_terminal(
         font: regular.clone(),
         text: String::new(),
         tracking,
+    };
+    // Group match ranges by grid line once per frame so per-cell lookup is cheap.
+    let find_map: std::collections::HashMap<i32, Vec<(usize, usize, bool)>> = match find {
+        Some(paint) => {
+            let mut map = std::collections::HashMap::new();
+            for (index, m) in paint.matches.iter().enumerate() {
+                map.entry(m.line).or_insert_with(Vec::new).push((
+                    m.start_col,
+                    m.end_col,
+                    index == paint.current,
+                ));
+            }
+            map
+        }
+        None => std::collections::HashMap::new(),
     };
 
     for indexed in content.grid.display_iter() {
@@ -360,6 +395,17 @@ fn paint_terminal(
         }
         if selected {
             bg = selection_bg;
+        }
+        if let Some(ranges) = find_map.get(&live.line.0) {
+            let col = live.column.0;
+            if ranges
+                .iter()
+                .any(|(s, e, cur)| *cur && col >= *s && col <= *e)
+            {
+                bg = selection_bg;
+            } else if ranges.iter().any(|(s, e, _)| col >= *s && col <= *e) {
+                bg = selection_bg.gamma_multiply(0.45);
+            }
         }
         if global_bg != bg {
             shapes.push(Shape::Rect(RectShape::filled(
@@ -1077,6 +1123,7 @@ mod paint_tests {
                     &painter,
                     &TerminalViewState::default(),
                     content,
+                    None,
                 ));
             },
         );

@@ -1,5 +1,47 @@
 # Validation evidence — 2026-09-08
 
+## In-terminal find + history filter + native-edit core (2026-09-20)
+
+- `Cmd/Ctrl+F` (`find_in_terminal`, rebindable) opens a find bar over the live
+  terminal: literal match, Aa case toggle, `n/m` count (`+` when capped at
+  1000), Enter/Shift+Enter, Esc. Search covers live grid plus retained
+  scrollback, never writes to the PTY, no-op in alt-screen mode. Saved-history
+  viewer gains a case-insensitive filter box plus back button.
+- New `terminator-native-edit` crate: char-indexed `Doc` buffer with
+  coalescing undo/redo, minimal vim engine (Normal/Insert/Visual/V-LINE/
+  Command, `hjkl w b e 0 $ ^ G gg` with counts, `d c y`/`dd yy cc x p u`,
+  `:w :q :q! :wq :x`, `cw`-as-`ce`), egui source view, Markdown block model.
+  Consumers program against `Buffer`/`ModalEngine` seams for the later
+  `ropey`/`hjkl` swap. Session plumbing (daemon text flow) is the explicit
+  next step; no protocol was changed.
+- Unit: widget `find::tests` (6), `terminal_find_tests` (2),
+  `history_filter_matches_case_insensitively`, native-edit (23: doc 7, vim
+  11, blocks 5). `cargo fmt --all --check` and workspace
+  `clippy --all-targets --all-features -- -D warnings` clean.
+- Pre-existing failures unchanged on the clean tree (sandbox sockets/timing):
+  core `generations` 6, app 13, hook `shutdown` 7. New suites: widget 45/45,
+  native-edit 23/23, daemon 22/22, integrations 9/9.
+
+## Native editor mode wiring (2026-09-20)
+
+- Settings → Editor mode gains Native editor (GUI-owned buffer, no PTY) with
+  a Vim keybindings toggle (`native_vim`, default on). File opens route to
+  `Tab::NativeEditor` (layout v7; 8+ rejected, old GUIs stay read-only).
+- Native tabs load/save on the fs pool (1 MiB, UTF-8, regular files), refuse
+  to overwrite disk changes unless forced, disable Reload while dirty,
+  follow the disk when clean, and block dirty close behind Save and
+  close / Discard / Cancel. `:w`/`:q`/`:q!` honored; dirty tabs show ●.
+- Unit: layout v7 round-trip, `terminal_find_tests` (2),
+  `history_filter_matches_case_insensitively`, native-edit 23/23.
+- Workspace `clippy -D warnings` is green except two spots outside this
+  change: pre-existing dead sidebar helpers (dead at HEAD) and a
+  collapsible-if in concurrent uncommitted daemon work.
+- Review pass fixed: `:` unreachable (egui `Key::Colon` bypassed the
+  name-based map), shifted digits arriving as counts (`$`→`4`), shared
+  scroll ID across native tabs, Space-as-`l`, plus close guards for the
+  data-level paths that bypass the dock hook (workspace close aborts with
+  prompt, quit holds behind the prompt, orphaned buffers pruned).
+
 ## Workspace tab context actions (2026-09-17)
 
 - Top-level tab menu: close all to the left/right (queued through existing
@@ -2461,3 +2503,126 @@ rows in a 400-point viewport and preserves total scroll height. The test passed;
 formatting, compile and whitespace checks passed. The running GUI has not been
 replaced: post-relaunch live latency is not yet measured. Capture:
 `target/validation/ui-latency-investigation/slow-debug-gui.txt`.
+
+## 2026-09-20: native vim-mode usability review (cursor, mode, undo, arrows, copy/paste)
+
+Complaints traced to focus ownership, not the vim engine (`u` undo and `:`
+ex commands were already correct at engine level): the file view never took
+focus on open, header Save/Reload clicks stranded focus on the buttons, and
+handled keys leaked to egui focus/menu handling. Fixed with a stable
+`source_focus_id` per file (autofocus when nothing holds focus, focus handed
+back after every header-button click), consumed handled keys (arrows stay in
+the file, Escape keeps editor focus), an I-beam hover cursor, a block cursor
+that redraws the covered cell legibly, and a colored `-- MODE --` badge in
+the pane header next to the existing status line. IntelliJ-style shortcuts
+now work in every mode including vim: Cmd/Ctrl+C copies the selection (else
+the cursor line), X cuts, A selects all, V pastes at the cursor, Z/Shift+Z
+undo/redo via new `VimEngine::{copy_text, cut, paste_text, select_all, undo,
+redo}` ops. `u` now delegates to the same `undo` path. Evidence:
+`terminator-native-edit --lib` 40/40 (11 new), app `native` filter 8/8,
+`cargo fmt --all --check` clean, workspace clippy clean. No daemon restart,
+no session touched.
+
+## 2026-09-21: native vim follow-ups (insert echo, footer, `/` search)
+
+Three reports fixed. (1) `i`/`o` typed themselves: the keypress that opened
+Insert mode arrived twice, once as a discrete vim key and once as a Text
+event. Handled discrete printable chars are now recorded and their single
+Text echo dropped (`echo_of_handled_key`; multi-char IME/paste input never
+counts as an echo). (2) No command footer: the unconstrained scroll area
+filled the pane and pushed the status line out of sight; the scroll height
+is now capped to reserve the footer, which shows `-- MODE --` plus a
+`command_prompt` (`:ex` or `/search`). (3) No vim search: `/pattern`+Enter
+jumps to the next literal case-sensitive match with wrap, `n`/`N` cycle,
+empty pattern repeats the last search, no match bells; jumps (and `G`/`gg`)
+raise a scroll request the view fulfills via `scroll_to_rect`, so the cursor
+row is revealed without fighting user scrolling. Evidence:
+`terminator-native-edit --lib` 46/46 (6 new), app `native` filter 8/8,
+`cargo fmt --all --check` clean, workspace clippy clean.
+
+## 2026-09-21: footer trim, `:q` probe, stale-text fix
+
+Footer now shows command content only (`:ex` / `/search` while typing);
+mode and cursor live solely in the pane header badge. A headless widget
+driver (synthetic Key+Text events through the real `show_source`) proves
+`:q`+Enter emits `Effect::Quit` and that the `i` echo no longer types,
+so the reported `:q` failure is not in the widget path — remaining
+suspects are a stale pre-fix build or the correct vim refusal on a dirty
+buffer (shows "No write since last change"). Also fixed: Text echoes in
+non-Insert modes are now discarded, so the `:`/`q` of a command line can
+never leak into a later Insert session. Evidence:
+`terminator-native-edit --lib` 48/48 (2 headless widget tests),
+`cargo fmt --all --check` clean, crate and workspace clippy clean.
+
+## 2026-09-21: ex write/quit matrix (`:w :q :wq :x :qa` + `!`)
+
+`:wq`/`:x` could never close: the write is async, so the Quit effect from
+the same command always saw a dirty buffer and refused (leaving a stale
+"No write since last change" error). Writes now close via the existing
+save-settled path (`WriteQuit`, deferred past the save). New effects
+`SaveForce` (`:w!`), `WriteQuit { force }` (`:wq`/`:x`/`:qw` + `!`),
+`QuitAll { force }` (`:qa`/`:qa!`, closes every native tab, dirty tabs
+block with a count unless forced). `:q` on a clean buffer was already
+correct through the widget (headless proof) and the close path reads
+correctly, so a remaining `:q` failure needs a distinguishing detail
+(dirty dot, error line, build age). Evidence:
+`terminator-native-edit --lib` 49/49, app `native` filter 8/8,
+workspace clippy clean, fmt clean.
+
+## 2026-09-21: `:q` resurrection bug — closes deferred past workspace check-in
+
+`:q` on a clean buffer fired Quit and ran the close, yet the tab sprang
+back on the next frame. Root cause: the workspace is removed from
+`layouts` while it renders, so `close_native_tab` (which searches
+`layouts`) found no tab, dropped only the buffer, and the next frame
+recreated the buffer under the surviving tab. Fix: in-render closes
+(`:q`/`:q!`, save-settled `:wq`, `:qa` resolution) defer through
+`pending_native_close`/`pending_quit_all`, drained after the workspace is
+checked back in; modal/quit flows keep synchronous direct closes.
+Proven with throwaway GUI fixtures (since removed): `:q`+Enter closes a
+clean tab, and `i`+type+Escape+`:wq`+Enter saves the edit to disk and
+closes. A `native-file` fixture target (test-gated) stays for future
+cases. Evidence: focused suites 49/49 + 8/8, workspace clippy clean,
+fmt clean.
+
+## 2026-09-21: `:q`/`:q!`/`:wq` GUI probes + `!` key passthrough
+
+Throwaway GUI fixtures (removed after) drove the real native view:
+`:q`+Enter on a clean tab closes it; `i`+type+Escape+`:wq`+Enter saves
+the edit to disk and closes; `:q`+Enter on a dirty tab refuses with the
+"No write since last change (add ! to override)" error and the tab stays
+open with the dirty dot; `:q!`+Enter on a dirty tab closes with the file
+untouched. The app stayed responsive across all multi-second runs (mode
+badge, footer prompt, and error line all updated live). Also fixed: keys
+reported by their symbol (`!` instead of shifted `1`) now resolve via
+`symbol_or_name`, so `:q!` is typeable on every backend. Kept: the
+test-gated `native-file` fixture target. Evidence: 50/50 + 8/8 focused
+suites, workspace clippy clean, fmt clean.
+
+## 2026-09-21: `:qa` scope report — no app-exit path, probes inconclusive
+
+`:qa` implementation only collects `Tab::NativeEditor` paths and only
+removes those tabs; it sends no viewport/exit commands, and app exit runs
+exclusively through window-close/updater paths, so there is no code path by
+which `:qa` closes terminals or quits the app. A GUI probe (two native
+tabs + `:qa`) could not complete: the fixture GUI repeatedly went silent
+with no capture, and the committed `file-close` fixture now also fails
+(explorer double-click opens no daemon editor) although it touches none of
+this work's code paths — the fixture environment itself is currently
+unreliable (no parallel-app edits since Sep 20 evening; no leaked fixture
+processes; disk fine). `:qa` needs a re-probe from a clean environment.
+Evidence: 50/50 + 8/8 focused suites, workspace clippy clean, fmt clean.
+
+## 2026-09-21: `:qa` panic — empty workspace broke the dock Deref invariant
+
+`:qa` emptying a workspace panicked at `workspace.rs:271`
+(`tabs[0]`, len 0). `Workspace` derefs to the active top-level tab and
+every pane remover (`close`, `strip_player`, `remove_session`) restores
+the non-empty invariant via `normalize` — except `close_native_tab`,
+which retained inline. Fix: new `Workspace::drop_empty_tabs`
+(retain + normalize), used by `close_native_tab`. Regression test
+`emptying_every_pane_keeps_dock_access_usable` replays the exact
+sequence and exercises both Deref impls; it fails on the old inline
+retain and passes with the fix. (No `unsafe` in this path — the panic
+was the safe fail-stop, not memory unsafety.) Evidence: workspace
+39/39, native-edit 50/50, workspace clippy clean, fmt clean.

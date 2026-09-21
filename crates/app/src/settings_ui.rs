@@ -628,8 +628,21 @@ impl App {
                             ("Embedded Neovim", EditorMode::Embedded),
                             ("Terminal editor", EditorMode::Terminal),
                             ("External editor", EditorMode::External),
+                            ("Native editor", EditorMode::Native),
                         ],
                     );
+                },
+            );
+        }
+        if self.field_visible("Vim keybindings", "vim modal native")
+            && self.settings_draft.editor_mode == EditorMode::Native
+        {
+            settings_controls::settings_row(
+                ui,
+                "Vim keybindings",
+                "Native editor starts in Normal mode with the minimal vim grammar.",
+                |ui| {
+                    ui.checkbox(&mut self.settings_draft.native_vim, "Enable vim mode");
                 },
             );
         }
@@ -652,7 +665,10 @@ impl App {
         }
         self.diff_close_settings(ui);
         if self.field_visible("Editor executable", "nvim neovim")
-            && self.settings_draft.editor_mode != EditorMode::External
+            && !matches!(
+                self.settings_draft.editor_mode,
+                EditorMode::External | EditorMode::Native
+            )
         {
             settings_controls::settings_row(
                 ui,

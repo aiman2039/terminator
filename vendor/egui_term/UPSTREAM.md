@@ -91,3 +91,16 @@ and alternate-scroll arrow translation. Ordinary `Scroll` retains mode-controlle
 alternate scrolling. The host disables terminal responses during blocking overlays
 and disabled editor-close states. See `docs/VALIDATION.md` for native versus live
 Codex verification boundaries.
+
+## In-terminal literal find (2026-09-20)
+
+New `find` module with a UI-free literal matcher (`find_in_rows`, char-offset
+hits, `MAX_MATCHES` cap) plus widget unit tests. `TerminalBackend::search_rows`
+extracts per-row text and grid columns across the live grid including retained
+scrollback (wide-char spacers skipped, trailing whitespace trimmed); `find`
+maps hits to `FoundMatch` grid coordinates; `reveal_grid_line` scrolls the
+viewport with a two-line margin via local `Scroll::Delta` only, so it never
+writes to the PTY and stays a no-op in alt-screen mode. `TerminalView::
+find_highlight` paints other matches dimmed and the current match in the
+selection color, with ranges grouped by line once per frame. Wrapped logical
+lines stay split across rows, so matches cannot span rows in v1.

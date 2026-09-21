@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 terminator-core = { workspace = true, features = ["async-client"] }
 terminator-integrations.workspace = true
+terminator-native-edit = { path = "../native_edit" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

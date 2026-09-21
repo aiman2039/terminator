@@ -21,6 +21,7 @@ mod image_preview;
 mod markdown;
 mod markdown_images;
 mod metadata_refresh;
+mod native_editor;
 mod nvim_rpc;
 mod player;
 mod refresh;
@@ -81,6 +82,9 @@ pub(crate) enum Tab {
     },
     Player,
     Terminal(String),
+    NativeEditor {
+        path: PathBuf,
+    },
     Diff {
         cwd: PathBuf,
         path: PathBuf,
@@ -106,6 +110,7 @@ impl Tab {
 
     fn layout_version(&self) -> u32 {
         match self {
+            Self::NativeEditor { .. } => 7,
             Self::Browser { .. } => 6,
             Self::Player => 5,
             Self::Image { .. } => 3,
@@ -226,6 +231,7 @@ enum Update {
     ),
     Metadata(u64, metadata::Metadata),
     OpenImage(String, PathBuf, After),
+    OpenNativeEditor(String, PathBuf, After),
     OpenBrowser(String, BrowserTarget, After),
     Image(PathBuf, u64, Result<egui::ColorImage, String>),
     TestPickerClosed,
@@ -401,6 +407,35 @@ struct PaneIndex {
     tabs: usize,
     focus: Option<egui_dock::NodeIndex>,
 }
+/// Live in-terminal find state for one session. Matches reference live grid
+/// coordinates and go stale as output streams; the view recomputes them on a
+/// throttle (see `terminal_view`).
+#[derive(Default)]
+pub struct TerminalFind {
+    pub query: String,
+    pub case_insensitive: bool,
+    pub outcome: egui_term::FindOutcome,
+    pub current: usize,
+    pub searched_query: String,
+    pub searched_case: bool,
+    pub last_search: Option<Instant>,
+}
+
+impl TerminalFind {
+    pub fn dirty(&self) -> bool {
+        self.query != self.searched_query || self.case_insensitive != self.searched_case
+    }
+
+    pub fn step(&mut self, delta: isize) {
+        let n = self.outcome.matches.len();
+        if n == 0 {
+            self.current = 0;
+            return;
+        }
+        self.current = (self.current as isize + delta).rem_euclid(n as isize) as usize;
+    }
+}
+
 struct App {
     file_activation: Option<FileActivation>,
     services: gui_services::Services,
@@ -521,6 +556,14 @@ struct App {
     editor_origins: HashMap<String, Vec<Tab>>,
     search: String,
     search_session: Option<String>,
+    terminal_find: HashMap<String, TerminalFind>,
+    history_filter: HashMap<String, String>,
+    native_docs: HashMap<PathBuf, native_editor::NativeDoc>,
+    native_pending_line: HashMap<PathBuf, usize>,
+    native_close_prompt: Option<PathBuf>,
+    native_close_after_save: Option<PathBuf>,
+    pending_native_close: Vec<PathBuf>,
+    pending_quit_all: Option<bool>,
     open_path: bool,
     pick_audio: bool,
     pick_audio_dir: bool,
@@ -737,6 +780,14 @@ impl App {
             editor_origins: HashMap::new(),
             search: String::new(),
             search_session: None,
+            terminal_find: HashMap::new(),
+            history_filter: HashMap::new(),
+            native_docs: HashMap::new(),
+            native_pending_line: HashMap::new(),
+            native_close_prompt: None,
+            native_close_after_save: None,
+            pending_native_close: Vec::new(),
+            pending_quit_all: None,
             open_path: false,
             pick_audio: false,
             pick_audio_dir: false,
@@ -1165,6 +1216,22 @@ impl App {
                 Update::OpenImage(project, path, after) => {
                     self.place_gui_tab(project, Tab::Image { path }, after);
                 }
+                Update::OpenNativeEditor(project, path, after) => {
+                    let existing = self.layouts.get(&project).and_then(|workspace| {
+                        workspace
+                            .tabs
+                            .iter()
+                            .flat_map(|group| group.layout.iter_all_tabs())
+                            .map(|(_, tab)| tab)
+                            .find(|tab| matches!(tab, Tab::NativeEditor { path: current } if *current == path))
+                            .cloned()
+                    });
+                    self.place_gui_tab(
+                        project,
+                        existing.unwrap_or(Tab::NativeEditor { path }),
+                        after,
+                    );
+                }
                 Update::OpenBrowser(project, target, after) => {
                     let existing = self.layouts.get(&project).and_then(|workspace| {
                         workspace.tabs.iter().flat_map(|group| group.layout.iter_all_tabs())
@@ -1318,6 +1385,10 @@ impl App {
                             self.open_audio(project, path, None);
                         } else if self.state.settings.editor_mode == EditorMode::External {
                             let _ = self.jobs.send(Job::External(path));
+                        } else if self.state.settings.editor_mode == EditorMode::Native
+                            && let Some(project) = &project
+                        {
+                            self.open_native(project, path, None, None);
                         } else if let Some(project) = project {
                             self.hide_center_overlay();
                             let after = self.editor_target(&project, None, None);
@@ -1723,9 +1794,11 @@ impl App {
                         .sessions
                         .iter()
                         .any(|s| &s.id == sid && s.lifecycle.live()),
-                    Tab::Diff { .. } | Tab::Image { .. } | Tab::Browser { .. } | Tab::Player => {
-                        true
-                    }
+                    Tab::Diff { .. }
+                    | Tab::Image { .. }
+                    | Tab::Browser { .. }
+                    | Tab::Player
+                    | Tab::NativeEditor { .. } => true,
                 };
                 let survives = old_group
                     .as_ref()
@@ -1982,6 +2055,7 @@ impl App {
         if let Some(workspace) = self.layouts.get_mut(project) {
             workspace.close(tab_id);
         }
+        self.prune_native_docs();
         self.advance_workspace_close(project);
     }
     fn advance_workspace_close(&mut self, project: &str) {
@@ -2135,6 +2209,12 @@ impl App {
         }
         if external || self.state.settings.editor_mode == EditorMode::External {
             let _ = self.jobs.send(Job::External(path));
+            return;
+        }
+        if self.state.settings.editor_mode == EditorMode::Native
+            && let Some(project) = self.selected.clone()
+        {
+            self.open_native(&project, path, line, split);
             return;
         }
         self.hide_center_overlay();
@@ -2467,6 +2547,13 @@ impl App {
                     || self.state.settings.editor_mode == EditorMode::External
                 {
                     let _ = self.jobs.send(Job::External(path.clone()));
+                } else if self.state.settings.editor_mode == EditorMode::Native {
+                    self.open_native(
+                        &session.project_id,
+                        path.clone(),
+                        *line,
+                        (action == FileAction::Split).then_some("right"),
+                    );
                 } else {
                     let origin = Tab::Terminal(session.id.clone());
                     let after = self.editor_target(
@@ -2857,7 +2944,13 @@ impl App {
             .map(|(_, tab)| tab.clone())
         {
             Some(Tab::Terminal(sid)) => self.active_session = Some(sid),
-            Some(Tab::Diff { .. } | Tab::Image { .. } | Tab::Browser { .. } | Tab::Player) => {
+            Some(
+                Tab::Diff { .. }
+                | Tab::Image { .. }
+                | Tab::Browser { .. }
+                | Tab::Player
+                | Tab::NativeEditor { .. },
+            ) => {
                 self.active_session = None;
             }
             None => {}
@@ -2918,7 +3011,9 @@ impl App {
                     .find(|s| &s.id == id)
                     .map(|s| s.cwd.clone()),
                 Tab::Diff { cwd, .. } => Some(cwd.clone()),
-                Tab::Image { path } => path.parent().map(PathBuf::from),
+                Tab::Image { path } | Tab::NativeEditor { path } => {
+                    path.parent().map(PathBuf::from)
+                }
                 Tab::Browser { target, .. } => {
                     target.file().and_then(Path::parent).map(PathBuf::from)
                 }
@@ -2991,7 +3086,17 @@ impl eframe::App for App {
             && !matches!(self.exit, exit::Exit::Ready)
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.begin_exit();
+            // Unsaved native buffers die with the process: hold quit behind
+            // the same prompt as dock closes instead of draining silently.
+            if let Some(path) = self
+                .native_docs
+                .iter()
+                .find_map(|(path, doc)| doc.dirty().then(|| path.clone()))
+            {
+                self.native_close_prompt = Some(path);
+            } else {
+                self.begin_exit();
+            }
         }
         self.advance_exit(ctx);
         if !self.exit.active() && self.last_heartbeat.elapsed() > Duration::from_secs(1) {
@@ -3053,6 +3158,14 @@ impl eframe::App for App {
                     self.palette_open = true;
                     self.palette_query.clear();
                     self.palette_index = 0;
+                }
+                "find_in_terminal" => {
+                    if let Some(sid) = self.active_session.clone() {
+                        self.terminal_find.entry(sid.clone()).or_default();
+                        ctx.memory_mut(|m| {
+                            m.request_focus(egui::Id::new(("terminal-find", sid)));
+                        });
+                    }
                 }
                 "next_pane" => {
                     if let Some(d) = self.selected.as_ref().and_then(|p| self.layouts.get_mut(p)) {
@@ -3217,20 +3330,16 @@ impl eframe::App for App {
                 });
             });
         self.project_width = projects_response.response.rect.width();
-        let response = egui::Panel::right("context")
-            .resizable(true)
-            .default_size(self.preferences.width)
-            .size_range(220.0..=480.0)
-            .show(ui, |ui| {
-                if self.side_attention_visible() {
-                    self.notifications(ui);
-                    ui.separator();
-                }
-                if self.preferences.visible {
+        if self.preferences.visible {
+            let response = egui::Panel::right("context")
+                .resizable(true)
+                .default_size(self.preferences.width)
+                .size_range(220.0..=480.0)
+                .show(ui, |ui| {
                     self.sidebar(ui);
-                }
-            });
-        self.preferences.width = response.response.rect.width().clamp(220.0, 480.0);
+                });
+            self.preferences.width = response.response.rect.width().clamp(220.0, 480.0);
+        }
         if self.preferences_writable
             && !self.preferences_pending
             && self.preferences != self.preferences_saved
@@ -3357,6 +3466,43 @@ mod daemon_compatibility_tests {
             assert!(!can_retire_daemon(&state));
             assert!(!can_restart_service(&state));
         }
+    }
+}
+#[cfg(test)]
+mod terminal_find_tests {
+    use super::*;
+    #[test]
+    fn stepping_wraps_around_matches() {
+        let mut find = TerminalFind {
+            outcome: egui_term::FindOutcome {
+                matches: vec![
+                    egui_term::FoundMatch {
+                        line: -3,
+                        start_col: 0,
+                        end_col: 2,
+                    },
+                    egui_term::FoundMatch {
+                        line: 0,
+                        start_col: 5,
+                        end_col: 7,
+                    },
+                ],
+                truncated: false,
+            },
+            ..TerminalFind::default()
+        };
+        find.step(1);
+        assert_eq!(find.current, 1);
+        find.step(1);
+        assert_eq!(find.current, 0);
+        find.step(-1);
+        assert_eq!(find.current, 1);
+    }
+    #[test]
+    fn stepping_without_matches_stays_at_zero() {
+        let mut find = TerminalFind::default();
+        find.step(1);
+        assert_eq!(find.current, 0);
     }
 }
 fn main() -> Result<()> {
@@ -4081,11 +4227,28 @@ mod navigation_tests {
         let mut ended = session_fixture("ended-other", SessionKind::Shell);
         ended.project_id = "b".into();
         ended.lifecycle = Lifecycle::Ended;
+        let mut resumable = session_fixture("ended-resumable", SessionKind::Shell);
+        resumable.project_id = "b".into();
+        resumable.lifecycle = Lifecycle::Ended;
         app.state.sessions = vec![
             session_fixture("live-shell", SessionKind::Shell),
             session_fixture("open-file", SessionKind::Editor),
             ended,
+            resumable,
         ];
+        app.state.agents = vec![Agent {
+            invocation_id: "agent-1".into(),
+            session_id: "ended-resumable".into(),
+            kind: "codex".into(),
+            provider_session_id: Some("provider-1".into()),
+            state: AgentState::Stopped,
+            sequence: None,
+            updated: 0,
+            resume: Some(Resume {
+                program: "codex".into(),
+                args: vec!["resume".into(), "provider-1".into()],
+            }),
+        }];
         app.preferences.expanded.insert("a".into(), true);
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.projects(ui));
         output.textures_delta.clear();
@@ -4099,8 +4262,9 @@ mod navigation_tests {
         app.preferences.all_projects = false;
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.sidebar(ui));
         output.textures_delta.clear();
-        assert!(target("session-row:ended-other").is_some());
-        assert_eq!(app.state.sessions.len(), 3);
+        assert!(target("session-row:ended-other").is_none());
+        assert!(target("session-row:ended-resumable").is_some());
+        assert_eq!(app.state.sessions.len(), 4);
     }
 
     #[test]
@@ -5791,23 +5955,8 @@ mod navigation_tests {
     }
 
     #[test]
-    fn side_attention_does_not_stack_on_the_agents_inbox() {
-        let (mut app, _, _dir) = fixture();
-        app.state.settings.notifications_side = true;
-        app.preferences.visible = true;
-        app.preferences.tool = SidebarTool::Git;
-        assert!(app.side_attention_visible());
-        app.preferences.tool = SidebarTool::Agents;
-        assert!(!app.side_attention_visible());
-        app.preferences.visible = false;
-        assert!(app.side_attention_visible());
-        app.state.settings.notifications_side = false;
-        assert!(!app.side_attention_visible());
-    }
-
-    #[test]
     #[cfg(feature = "test-support")]
-    fn agents_sidebar_does_not_paint_the_attention_bell() {
+    fn attention_bell_lives_on_the_left_sidebar_only() {
         let (mut app, ctx, _dir) = fixture();
         app.state.settings.notifications_side = true;
         app.preferences.visible = true;
@@ -5822,24 +5971,29 @@ mod navigation_tests {
         let target = |name: &str| {
             ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
         };
-        let paint = |app: &mut App, ctx: &egui::Context| {
+        // The right sidebar never paints the bell, even with waiting notices.
+        for tool in [
+            SidebarTool::History,
+            SidebarTool::Git,
+            SidebarTool::Explorer,
+            SidebarTool::Agents,
+        ] {
+            app.preferences.tool = tool;
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                if app.side_attention_visible() {
-                    app.notifications(ui);
-                }
                 if app.preferences.visible {
                     app.sidebar(ui);
                 }
             });
             output.textures_delta.clear();
-        };
-        app.preferences.tool = SidebarTool::Agents;
-        paint(&mut app, &ctx);
-        assert!(target("attention-bell").is_none());
+            assert!(target("attention-bell").is_none());
+        }
         assert!(target("agent-go:live-shell").is_some());
-        app.preferences.tool = SidebarTool::Git;
-        paint(&mut app, &ctx);
-        assert!(target("attention-bell").is_some());
+        // The left sidebar keeps the bell toggle.
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.agent_bar(ui);
+        });
+        output.textures_delta.clear();
+        assert!(target("left-agent-bar").is_some());
     }
 
     #[test]

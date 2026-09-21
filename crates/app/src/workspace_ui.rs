@@ -23,6 +23,18 @@ fn click_menu_item(ui: &mut egui::Ui, label: &str, icon: &str) -> bool {
     clicked
 }
 
+/// Case-insensitive substring filter for the saved-scrollback viewer.
+/// An empty query returns every line.
+pub fn filter_history_lines<'a>(text: &'a str, query: &str) -> Vec<&'a str> {
+    if query.is_empty() {
+        return text.lines().collect();
+    }
+    let needle = query.to_lowercase();
+    text.lines()
+        .filter(|line| line.to_lowercase().contains(&needle))
+        .collect()
+}
+
 fn click_enabled_menu_item(ui: &mut egui::Ui, enabled: bool, label: &str, icon: &str) -> bool {
     let clicked = ui
         .add_enabled_ui(enabled, |ui| appearance::menu_item(ui, label, icon, ""))
@@ -114,6 +126,10 @@ impl App {
                     .unwrap_or_else(Workspace::empty);
                 self.workspace_bar(ui, &project, &mut workspace);
                 self.layouts.insert(project, workspace);
+                // Deferred native closes (`:q`, `:wq`, `:qa` from the file
+                // view) run here: the workspace is checked back in, so the
+                // tabs resolve again.
+                self.drain_pending_native_close();
             } else {
                 header_drag_space(ui);
             }
@@ -302,6 +318,14 @@ impl App {
                                 Some(Tab::Browser { target, .. }) => {
                                     (target.title(), "FileCode", None)
                                 }
+                                Some(Tab::NativeEditor { path }) => (
+                                    path.file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                        .into_owned(),
+                                    "FileCode",
+                                    None,
+                                ),
                                 Some(Tab::Player) => ("Player".into(), "FileMusic", None),
                                 None => ("Workspace".into(), "Terminal", None),
                             };
@@ -610,6 +634,11 @@ impl App {
                         .map(|s| s.label.clone())
                         .unwrap_or_else(|| "Terminal".into()),
                     Tab::Diff { path, .. } | Tab::Image { path } => path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    Tab::NativeEditor { path } => path
                         .file_name()
                         .unwrap_or_default()
                         .to_string_lossy()
@@ -1536,6 +1565,16 @@ impl TabViewer for Viewer<'_> {
                 path.file_name().unwrap_or_default().to_string_lossy()
             )
             .into(),
+            Tab::NativeEditor { path } => format!(
+                "{}{}",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                if self.app.native_dirty(path) {
+                    " ●"
+                } else {
+                    ""
+                }
+            )
+            .into(),
         }
     }
     fn allowed_in_windows(&self, _: &mut Tab) -> bool {
@@ -1557,6 +1596,13 @@ impl TabViewer for Viewer<'_> {
                 return OnCloseResponse::Ignore;
             }
             self.app.backends.remove(sid);
+        }
+        if let Tab::NativeEditor { path } = tab {
+            if self.app.native_dirty(path) {
+                self.app.native_close_prompt = Some(path.clone());
+                return OnCloseResponse::Ignore;
+            }
+            self.app.native_docs.remove(path);
         }
         OnCloseResponse::Close
     }
@@ -1612,6 +1658,7 @@ impl TabViewer for Viewer<'_> {
                 ui.close();
             }
             Tab::Diff { .. } => self.app.diff_view(ui, tab),
+            Tab::NativeEditor { path } => self.app.native_editor_view(ui, path),
             Tab::Terminal(sid) => {
                 let Some(session) = self
                     .app
@@ -1735,8 +1782,32 @@ impl TabViewer for Viewer<'_> {
                             After::Text(key.clone()),
                         ));
                     }
+                    let sid_key = sid.clone();
+                    let query = self
+                        .app
+                        .history_filter
+                        .entry(sid_key.clone())
+                        .or_default()
+                        .clone();
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(
+                                self.app.history_filter.entry(sid_key.clone()).or_default(),
+                            )
+                            .id(egui::Id::new(("history-filter", sid_key)))
+                            .hint_text("Filter saved scrollback")
+                            .desired_width(220.0),
+                        );
+                        if ui.small_button("✕").on_hover_text("Back").clicked() {
+                            self.app.search_session = None;
+                            self.app.history_filter.remove(sid);
+                        }
+                    });
                     if let Some(text) = self.app.texts.get(&key) {
-                        let lines = text.lines().collect::<Vec<_>>();
+                        let lines = filter_history_lines(text, &query);
+                        if !query.is_empty() {
+                            ui.monospace(format!("{} matching lines", lines.len()));
+                        }
                         egui::ScrollArea::both().id_salt(key).show_rows(
                             ui,
                             18.0,
@@ -1903,6 +1974,129 @@ impl Viewer<'_> {
             }
         }
     }
+    fn find_paint_for(&self, sid: &str) -> Option<egui_term::FindPaint> {
+        let find = self.app.terminal_find.get(sid)?;
+        if find.query.is_empty() || find.outcome.matches.is_empty() {
+            return None;
+        }
+        Some(egui_term::FindPaint {
+            matches: find.outcome.matches.clone(),
+            current: find.current,
+        })
+    }
+
+    /// In-terminal find bar. Search runs GUI-side over the live grid plus
+    /// retained scrollback and never writes to the PTY.
+    fn terminal_find_bar(&mut self, ui: &mut egui::Ui, sid: &str) {
+        if !self.app.terminal_find.contains_key(sid) {
+            return;
+        }
+        let mut close = false;
+        let mut reveal: Option<i32> = None;
+        {
+            let Some(find) = self.app.terminal_find.get_mut(sid) else {
+                return;
+            };
+            let Some(backend) = self.app.backends.get_mut(sid) else {
+                return;
+            };
+            let id = egui::Id::new(("terminal-find", sid));
+            ui.horizontal(|ui| {
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut find.query)
+                        .id(id)
+                        .hint_text("Find in terminal")
+                        .desired_width(220.0),
+                );
+                if response.changed() {
+                    find.current = 0;
+                }
+                let case_label = if find.case_insensitive { "aa" } else { "Aa" };
+                if ui
+                    .small_button(case_label)
+                    .on_hover_text("Match case")
+                    .clicked()
+                {
+                    find.case_insensitive = !find.case_insensitive;
+                    find.current = 0;
+                }
+                let now = Instant::now();
+                let stale = find
+                    .last_search
+                    .is_none_or(|t| now.duration_since(t).as_millis() > 250);
+                if find.dirty() || (stale && !find.query.is_empty()) {
+                    let was_dirty = find.dirty();
+                    find.outcome = backend.find(&find.query, find.case_insensitive);
+                    find.searched_query = find.query.clone();
+                    find.searched_case = find.case_insensitive;
+                    find.last_search = Some(now);
+                    if was_dirty {
+                        find.current = 0;
+                    } else {
+                        find.current = find
+                            .current
+                            .min(find.outcome.matches.len().saturating_sub(1));
+                    }
+                    if let Some(hit) = find.outcome.matches.get(find.current) {
+                        reveal = Some(hit.line);
+                    }
+                }
+                let total = find.outcome.matches.len();
+                let label = if find.query.is_empty() {
+                    String::new()
+                } else if total == 0 {
+                    "No matches".to_string()
+                } else {
+                    let mut text = format!("{}/{}", find.current + 1, total);
+                    if find.outcome.truncated {
+                        text.push('+');
+                    }
+                    text
+                };
+                ui.monospace(label);
+                let shift = ui.input(|i| i.modifiers.shift);
+                if ui
+                    .small_button("↑")
+                    .on_hover_text("Previous (Shift+Enter)")
+                    .clicked()
+                    || (response.has_focus()
+                        && shift
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                {
+                    find.step(-1);
+                    reveal = find.outcome.matches.get(find.current).map(|hit| hit.line);
+                }
+                if ui.small_button("↓").on_hover_text("Next (Enter)").clicked()
+                    || (response.has_focus()
+                        && !shift
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                {
+                    find.step(1);
+                    reveal = find.outcome.matches.get(find.current).map(|hit| hit.line);
+                }
+                if ui.small_button("✕").on_hover_text("Close (Esc)").clicked() {
+                    close = true;
+                }
+                if response.has_focus()
+                    && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                {
+                    close = true;
+                }
+                if response.has_focus() {
+                    ui.ctx().request_repaint_after(Duration::from_millis(250));
+                }
+            });
+        }
+        if let Some(line) = reveal
+            && let Some(backend) = self.app.backends.get_mut(sid)
+        {
+            backend.reveal_grid_line(line);
+        }
+        if close {
+            self.app.terminal_find.remove(sid);
+        }
+    }
+
     fn terminal_view(&mut self, ui: &mut egui::Ui, session: &Session) {
         let sid = &session.id;
         self.app.visible_sessions.insert(sid.clone());
@@ -1965,6 +2159,7 @@ impl Viewer<'_> {
                 }
             }
         }
+        self.terminal_find_bar(ui, sid);
         let input_enabled = self.app.terminal_input_enabled(sid);
         let focused = input_enabled
             && self.app.active_session.as_ref() == Some(sid)
@@ -1981,6 +2176,7 @@ impl Viewer<'_> {
                 let _ = self.app.jobs.send(Job::PasteClipboard(sid.clone()));
             }
         }
+        let find_paint = self.find_paint_for(sid);
         let backend = self.app.backends.get_mut(sid).unwrap();
         let font = egui_term::TerminalFont::new(egui_term::FontSettings {
             font_type: egui::FontId::monospace(self.app.state.settings.font_size),
@@ -1996,7 +2192,8 @@ impl Viewer<'_> {
             )))
             .set_focus(focused)
             .set_font(font)
-            .set_size(ui.available_size());
+            .set_size(ui.available_size())
+            .find_highlight(find_paint);
         let response = ui.add_enabled(input_enabled, view);
         #[cfg(feature = "test-support")]
         {
@@ -2909,5 +3106,14 @@ mod tests {
         assert!(painted.iter().any(|(_, t)| t.contains("Left")));
         assert!(painted.iter().any(|(_, t)| t.contains("Right")));
         assert!(painted.iter().any(|(_, t)| t.contains("updated")));
+    }
+
+    #[test]
+    fn history_filter_matches_case_insensitively() {
+        let text = "cargo build ok\nFAILED to link\nwarning: unused\n";
+        assert_eq!(filter_history_lines(text, "").len(), 3);
+        assert_eq!(filter_history_lines(text, "failed"), vec!["FAILED to link"]);
+        assert_eq!(filter_history_lines(text, "CARGO"), vec!["cargo build ok"]);
+        assert!(filter_history_lines(text, "missing").is_empty());
     }
 }
