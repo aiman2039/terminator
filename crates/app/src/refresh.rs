@@ -30,21 +30,26 @@ fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Con
     let (events, event_rx) = mpsc::sync_channel(128);
     let overflow = Arc::new(AtomicBool::new(false));
     let callback_overflow = overflow.clone();
-    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        if event
-            .as_ref()
-            .is_ok_and(|event| matches!(event.kind, notify::EventKind::Access(_)))
-        {
-            return;
-        }
-        if event
-            .as_ref()
-            .is_ok_and(|event| event.paths.len() > MAX_DIRTY_PATHS)
-            || events.try_send(event).is_err()
-        {
-            callback_overflow.store(true, Ordering::Release);
-        }
-    })
+    // FSEvents stream restart blocks for seconds and misses the test deadline.
+    // This harness only checks coalescing and suspend; production uses FSEvents.
+    let mut watcher = notify::PollWatcher::new(
+        move |event: notify::Result<notify::Event>| {
+            if event
+                .as_ref()
+                .is_ok_and(|event| matches!(event.kind, notify::EventKind::Access(_)))
+            {
+                return;
+            }
+            if event
+                .as_ref()
+                .is_ok_and(|event| event.paths.len() > MAX_DIRTY_PATHS)
+                || events.try_send(event).is_err()
+            {
+                callback_overflow.store(true, Ordering::Release);
+            }
+        },
+        notify::Config::default().with_poll_interval(Duration::from_millis(50)),
+    )
     .ok();
     let mut watched = Vec::<PathBuf>::new();
     let mut active = None::<Request>;
