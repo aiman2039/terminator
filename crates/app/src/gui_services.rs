@@ -420,7 +420,7 @@ impl Services {
                     })
                     .await
                     .map_err(|e| format!("Save UI preferences: {e:#}"));
-                updates.push(Update::PreferencesSaved(result));
+                updates.push(Update::PreferencesSaved(Box::new(result)));
             }
             Job::SaveAppearance(theme, expected) => {
                 let paths = client.paths.clone();
@@ -708,6 +708,18 @@ impl Services {
                     Ok(vec![Update::RestartFinished(message)])
                 })?;
             }
+            Job::StartSessionService => {
+                let paths = client.paths.clone();
+                let result = self
+                    .0
+                    .platform
+                    .run(&cancel, move || {
+                        daemon_connection::ensure_running(&paths, &std::env::current_exe()?)
+                    })
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                updates.push(Update::ServiceStarted(result));
+            }
         }
         Ok(updates)
     }
@@ -758,9 +770,10 @@ fn rejection(job: &Job) -> Vec<Update> {
         Job::CloseIdle(target, _, ids) => {
             vec![Update::IdleClosed(target.clone(), ids.clone(), Err(busy()))]
         }
-        Job::Preferences(_) => vec![Update::PreferencesSaved(Err(busy()))],
+        Job::Preferences(_) => vec![Update::PreferencesSaved(Box::new(Err(busy())))],
         Job::RepairInstallation(..) => vec![Update::InstallationRepaired(Err(busy()))],
         Job::RestartSessionService(_) => vec![Update::RestartFinished(busy())],
+        Job::StartSessionService => vec![Update::ServiceStarted(Err(busy()))],
         Job::Diff(tab) => vec![Update::Diff(tab.key(), Err(busy()))],
         Job::ResolveTarget(key, _, _) => vec![Update::ResolvedTarget(key.clone(), None)],
         Job::ExitSave(id, _) => vec![Update::ExitSaved(*id, Err(busy()))],
@@ -1080,6 +1093,31 @@ mod tests {
                 |update| matches!(update, Update::Error(message) if message == "Services are closing")
             ),
             "mutations still report admission failure"
+        );
+    }
+
+    #[test]
+    fn rejected_service_start_reports_without_status_error() {
+        let directory = tempfile::Builder::new()
+            .prefix("busy-service-start-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let (updates, rx) = mpsc::channel();
+        let (service, _owner) = Services::new(
+            Paths::at(directory.path().into()),
+            egui::Context::default(),
+            updates,
+        )
+        .unwrap();
+        service.handle().close_admission();
+        while rx.try_recv().is_ok() {}
+        assert!(service.send(Job::StartSessionService).is_err());
+        let received: Vec<_> = rx.try_iter().collect();
+        assert!(
+            received
+                .iter()
+                .any(|update| matches!(update, Update::ServiceStarted(Err(_)))),
+            "rejected service start still reports completion"
         );
     }
 }

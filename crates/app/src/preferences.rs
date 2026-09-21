@@ -27,6 +27,25 @@ impl ProjectSort {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistorySort {
+    #[default]
+    LatestActivity,
+    NameAsc,
+    NameDesc,
+}
+
+impl HistorySort {
+    pub fn menu_label(self) -> &'static str {
+        match self {
+            Self::NameAsc => "Name A → Z",
+            Self::NameDesc => "Name Z → A",
+            Self::LatestActivity => "Latest activity",
+        }
+    }
+}
+
 pub struct VisibleProjects<'a> {
     pub projects: Vec<Project>,
     pub hidden: &'a HashSet<String>,
@@ -129,6 +148,126 @@ fn bump(times: &mut HashMap<String, u64>, project: &str, timestamp: u64) {
     *entry = (*entry).max(timestamp);
 }
 
+/// One project group in the global History sidebar with its sessions
+/// already filtered and sorted for display.
+pub struct HistoryGroup {
+    pub project: Project,
+    pub sessions: Vec<Session>,
+    pub activity: u64,
+}
+
+pub struct HistoryInput<'a> {
+    pub projects: Vec<Project>,
+    pub sessions: &'a [Session],
+    pub agents: &'a [Agent],
+    pub notifications: &'a [Notification],
+    pub terminal_notices: &'a [TerminalNotice],
+    pub sort: HistorySort,
+    pub filter: &'a str,
+}
+
+/// Sort History projects by last activity and sessions within each project
+/// by activity, with name sorts and a case-insensitive name filter.
+pub fn sort_history(input: HistoryInput<'_>) -> Vec<HistoryGroup> {
+    let HistoryInput {
+        projects,
+        sessions,
+        agents,
+        notifications,
+        terminal_notices,
+        sort,
+        filter,
+    } = input;
+    let query = filter.trim().to_lowercase();
+    let mut groups = Vec::new();
+    for project in projects {
+        let mut with_activity: Vec<(Session, u64)> = sessions
+            .iter()
+            .filter(|s| s.project_id == project.id)
+            .map(|s| {
+                let activity = history_session_activity(s, agents, notifications, terminal_notices);
+                (s.clone(), activity)
+            })
+            .collect();
+        if with_activity.is_empty() {
+            continue;
+        }
+        if !query.is_empty() {
+            let project_matches = project.name.to_lowercase().contains(&query);
+            with_activity
+                .retain(|(s, _)| project_matches || s.label.to_lowercase().contains(&query));
+            if with_activity.is_empty() {
+                continue;
+            }
+        }
+        match sort {
+            HistorySort::LatestActivity => with_activity.sort_by(|left, right| {
+                right
+                    .1
+                    .cmp(&left.1)
+                    .then_with(|| session_name_order(&left.0, &right.0))
+            }),
+            HistorySort::NameAsc => {
+                with_activity.sort_by(|left, right| session_name_order(&left.0, &right.0));
+            }
+            HistorySort::NameDesc => {
+                with_activity.sort_by(|left, right| session_name_order(&right.0, &left.0));
+            }
+        }
+        let activity = with_activity.iter().map(|(_, a)| *a).max().unwrap_or(0);
+        groups.push(HistoryGroup {
+            project,
+            sessions: with_activity.into_iter().map(|(s, _)| s).collect(),
+            activity,
+        });
+    }
+    match sort {
+        HistorySort::LatestActivity => groups.sort_by(|left, right| {
+            right
+                .activity
+                .cmp(&left.activity)
+                .then_with(|| name_order(&left.project, &right.project))
+        }),
+        HistorySort::NameAsc => {
+            groups.sort_by(|left, right| name_order(&left.project, &right.project))
+        }
+        HistorySort::NameDesc => {
+            groups.sort_by(|left, right| name_order(&right.project, &left.project));
+        }
+    }
+    groups
+}
+
+fn history_session_activity(
+    session: &Session,
+    agents: &[Agent],
+    notifications: &[Notification],
+    terminal_notices: &[TerminalNotice],
+) -> u64 {
+    let mut activity = session.created;
+    for agent in agents.iter().filter(|a| a.session_id == session.id) {
+        activity = activity.max(agent.updated);
+    }
+    for notice in notifications.iter().filter(|n| n.session_id == session.id) {
+        activity = activity.max(notice.created);
+    }
+    for notice in terminal_notices
+        .iter()
+        .filter(|n| n.session_id == session.id)
+    {
+        activity = activity.max(notice.created);
+    }
+    activity
+}
+
+fn session_name_order(left: &Session, right: &Session) -> Ordering {
+    left.label
+        .to_lowercase()
+        .cmp(&right.label.to_lowercase())
+        .then_with(|| left.label.cmp(&right.label))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SidebarTool {
     #[default]
@@ -172,6 +311,9 @@ pub struct UiPreferences {
     pub hidden_projects: HashSet<String>,
     pub project_sort: ProjectSort,
     pub project_activity: HashMap<String, u64>,
+    pub history_sort: HistorySort,
+    #[serde(default)]
+    pub history_filter: String,
     pub playlists: Vec<Playlist>,
     pub selected_playlist: String,
     #[serde(default, skip_serializing)]
@@ -204,6 +346,8 @@ impl Default for UiPreferences {
             hidden_projects: HashSet::new(),
             project_sort: ProjectSort::NameAsc,
             project_activity: HashMap::new(),
+            history_sort: HistorySort::LatestActivity,
+            history_filter: String::new(),
             playlists: Vec::new(),
             selected_playlist: String::new(),
             player_playlists: HashMap::new(),
@@ -431,6 +575,8 @@ mod tests {
         assert!(old.hidden_projects.is_empty());
         assert_eq!(old.project_sort, ProjectSort::NameAsc);
         assert!(old.project_activity.is_empty());
+        assert_eq!(old.history_sort, HistorySort::LatestActivity);
+        assert!(old.history_filter.is_empty());
     }
     #[test]
     fn restart_preserves_independent_expansion_sidebar_and_migration() {
@@ -451,6 +597,8 @@ mod tests {
         p.hidden_projects.insert("hidden-project".into());
         p.project_sort = ProjectSort::LatestActivity;
         p.project_activity.insert("a".into(), 42);
+        p.history_sort = HistorySort::NameDesc;
+        p.history_filter = "term".into();
         p.markdown_modes
             .insert("editor-a".into(), crate::markdown::Mode::Split);
         p.markdown_modes
@@ -620,5 +768,129 @@ mod tests {
             }),
             ["b", "a"]
         );
+    }
+
+    fn history_session(id: &str, project: &str, label: &str, created: u64) -> Session {
+        let mut s = session(id, project, created);
+        s.label = label.into();
+        s.lifecycle = terminator_core::Lifecycle::Ended;
+        s
+    }
+
+    fn history_agent(session: &str, updated: u64) -> Agent {
+        Agent {
+            invocation_id: format!("agent-{session}"),
+            session_id: session.into(),
+            kind: "custom".into(),
+            provider_session_id: None,
+            state: terminator_core::AgentState::Stopped,
+            sequence: None,
+            updated,
+            resume: None,
+        }
+    }
+
+    fn history_groups(
+        projects: Vec<Project>,
+        sessions: &[Session],
+        agents: &[Agent],
+        sort: HistorySort,
+        filter: &str,
+    ) -> Vec<(String, Vec<String>)> {
+        sort_history(HistoryInput {
+            projects,
+            sessions,
+            agents,
+            notifications: &[],
+            terminal_notices: &[],
+            sort,
+            filter,
+        })
+        .into_iter()
+        .map(|group| {
+            (
+                group.project.id,
+                group.sessions.into_iter().map(|s| s.id).collect(),
+            )
+        })
+        .collect()
+    }
+
+    #[test]
+    fn history_sorts_projects_by_last_activity_and_sessions_by_activity() {
+        let projects = vec![project("a", "alpha"), project("b", "beta")];
+        let sessions = vec![
+            history_session("a-old", "a", "Terminal 1", 10),
+            history_session("a-new", "a", "Terminal 4", 12),
+            history_session("b-only", "b", "Terminal 2", 11),
+        ];
+        let agents = vec![history_agent("a-old", 30), history_agent("b-only", 20)];
+        let groups = history_groups(
+            projects,
+            &sessions,
+            &agents,
+            HistorySort::LatestActivity,
+            "",
+        );
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].0, "a");
+        assert_eq!(groups[0].1, vec!["a-old".to_string(), "a-new".to_string()]);
+        assert_eq!(groups[1].0, "b");
+    }
+
+    #[test]
+    fn history_name_sort_orders_projects_and_sessions() {
+        let projects = vec![project("b", "beta"), project("a", "alpha")];
+        let sessions = vec![
+            history_session("s2", "a", "Terminal 4", 2),
+            history_session("s1", "a", "Terminal 1", 1),
+        ];
+        let groups = history_groups(projects.clone(), &sessions, &[], HistorySort::NameAsc, "");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, "a");
+        assert_eq!(groups[0].1, vec!["s1".to_string(), "s2".to_string()]);
+        let groups = history_groups(projects, &sessions, &[], HistorySort::NameDesc, "");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, "a");
+        assert_eq!(groups[0].1, vec!["s2".to_string(), "s1".to_string()]);
+        let projects = vec![project("b", "beta"), project("a", "alpha")];
+        let sessions = vec![
+            history_session("sa", "a", "Terminal 1", 1),
+            history_session("sb", "b", "Terminal 2", 1),
+        ];
+        let groups = history_groups(projects, &sessions, &[], HistorySort::NameDesc, "");
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].0, "b");
+        assert_eq!(groups[1].0, "a");
+    }
+
+    #[test]
+    fn history_filter_matches_session_and_project_names() {
+        let projects = vec![project("a", "alpha"), project("b", "beta")];
+        let sessions = vec![
+            history_session("s1", "a", "Terminal 1", 1),
+            history_session("s2", "a", "Terminal 4", 2),
+            history_session("s3", "b", "Terminal 2", 3),
+        ];
+        let groups = history_groups(
+            projects.clone(),
+            &sessions,
+            &[],
+            HistorySort::LatestActivity,
+            "terminal 4",
+        );
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, "a");
+        assert_eq!(groups[0].1, vec!["s2".to_string()]);
+        let groups = history_groups(
+            projects,
+            &sessions,
+            &[],
+            HistorySort::LatestActivity,
+            "BETA",
+        );
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, "b");
+        assert_eq!(groups[0].1, vec!["s3".to_string()]);
     }
 }

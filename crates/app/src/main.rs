@@ -39,7 +39,8 @@ mod popup;
 mod preferences;
 mod workspace;
 use preferences::{
-    ProjectSort, SidebarTool, UiPreferences, VisibleProjects, sort_visible_projects,
+    HistoryInput, HistorySort, ProjectSort, SidebarTool, UiPreferences, VisibleProjects,
+    sort_history, sort_visible_projects,
 };
 use terminator_core::appearance::{AppearanceConfig, AppearanceFile, config_path};
 use workspace::Workspace;
@@ -181,6 +182,7 @@ enum Job {
     CloseIdle(editor_close::Target, String, Vec<String>),
     RepairInstallation(String, exit::Checkpoint),
     RestartSessionService(recovery::RestartInventory),
+    StartSessionService,
     CreateWorktree(worktree_ui::WorktreeDraft),
     Control(Box<Request>, After),
     OpenProject(PathBuf, u64),
@@ -217,6 +219,7 @@ enum Update {
     RadioCatalog(std::sync::Arc<Vec<player::radio::Station>>),
     PlayerSamples(Vec<PathBuf>),
     RestartFinished(String),
+    ServiceStarted(Result<(), String>),
     WorktreeCreated(Box<State>, String, bool),
     IdleClosed(
         editor_close::Target,
@@ -252,7 +255,7 @@ enum Update {
     HookStatus(HashMap<String, bool>),
     EditorsClosed(editor_close::Target, Vec<String>, Result<(), String>),
     ResolvedTarget(String, Option<services::Target>),
-    PreferencesSaved(Result<UiPreferences, String>),
+    PreferencesSaved(Box<Result<UiPreferences, String>>),
     PickedFile {
         path: Option<PathBuf>,
         project: Option<String>,
@@ -454,6 +457,7 @@ struct App {
     installation_error: Option<String>,
     repair_pending: bool,
     restart_pending: bool,
+    service_start_pending: bool,
     restart_confirm: bool,
     automatic_repair_attempt: Option<String>,
     exit: exit::Exit,
@@ -688,6 +692,7 @@ impl App {
             installation_error: None,
             repair_pending: false,
             restart_pending: false,
+            service_start_pending: false,
             restart_confirm: false,
             automatic_repair_attempt: None,
             #[cfg(feature = "test-support")]
@@ -1177,7 +1182,7 @@ impl App {
                 }
                 Update::PreferencesSaved(result) => {
                     self.preferences_pending = false;
-                    match result {
+                    match *result {
                         Ok(prefs) => self.preferences_saved = prefs,
                         Err(error) => {
                             if self.exit.active() {
@@ -1583,6 +1588,17 @@ impl App {
                     } else {
                         format!("Session service restart failed: {message}")
                     });
+                }
+                Update::ServiceStarted(result) => {
+                    self.service_start_pending = false;
+                    match result {
+                        Ok(()) => {
+                            self.info = Some("Session service started. Reconnecting…".into());
+                        }
+                        Err(error) => {
+                            self.error = Some(format!("Could not start session service: {error}"));
+                        }
+                    }
                 }
                 Update::Error(e) => {
                     if installation::is_helper_error(&e) {
@@ -3440,6 +3456,9 @@ impl eframe::App for App {
                     }
                 ));
                 ui.separator();
+                // A count only: holding the tab list across the chain would
+                // borrow self while the banner bodies need `&mut self`.
+                let unavailable_tabs = self.unavailable_tabs().len();
                 if self.installation_problem() {
                     let repair = ui.small_button("Fix installation…");
                     #[cfg(feature = "test-support")]
@@ -3452,12 +3471,46 @@ impl eframe::App for App {
                         appearance::color(&self.theme.status_failed),
                         "Terminal helper needs repair. Existing sessions are preserved.",
                     );
+                } else if self.service_disconnected() {
+                    ui.horizontal_wrapped(|ui| {
+                        self.start_service_button(ui, true);
+                        ui.colored_label(
+                            appearance::color(&self.theme.status_failed),
+                            "Session service unreachable.",
+                        );
+                        if let Some(detail) = self
+                            .error
+                            .clone()
+                            .filter(|error| !daemon_connection::is_connection_error(error))
+                        {
+                            ui.colored_label(
+                                appearance::color(&self.theme.status_failed),
+                                detail,
+                            );
+                        } else {
+                            ui.weak("Start it to show and close sessions. Ended sessions remain in History.");
+                        }
+                    });
                 } else if let Some(error) = self.error.clone() {
                     ui.horizontal_wrapped(|ui| {
                         if ui.small_button("Dismiss").clicked() {
                             self.error = None;
                         }
                         ui.colored_label(appearance::color(&self.theme.status_failed), error);
+                    });
+                } else if unavailable_tabs > 0 {
+                    ui.horizontal_wrapped(|ui| {
+                        let close = ui.small_button("Close unavailable tabs");
+                        #[cfg(feature = "test-support")]
+                        diagnostics::record(ui.ctx(), "close-unavailable-tabs", close.rect);
+                        if close.clicked() {
+                            self.close_unavailable_tabs();
+                        }
+                        ui.weak(if unavailable_tabs == 1 {
+                            "1 tab has no session record. It was left behind by sessions that already ended.".into()
+                        } else {
+                            format!("{unavailable_tabs} tabs have no session record. They were left behind by sessions that already ended.")
+                        });
                     });
                 } else if let Some(message) = &self.state.degraded {
                     ui.colored_label(appearance::color(&self.theme.status_waiting), message);
@@ -4215,6 +4268,77 @@ mod navigation_tests {
     }
 
     #[test]
+    fn lost_service_is_detected_only_after_state_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        assert!(!app.service_disconnected());
+        app.state_loaded = true;
+        assert!(app.service_disconnected());
+        app.connected = true;
+        assert!(!app.service_disconnected());
+    }
+
+    #[test]
+    fn service_start_queues_one_launch_and_reports() {
+        let (mut app, ctx, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state_loaded = true;
+        app.connected = false;
+        app.begin_service_start();
+        app.begin_service_start();
+        assert!(app.service_start_pending);
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Job::StartSessionService
+        ));
+        assert!(requests.try_recv().is_err());
+        app.connected = true;
+        app.service_start_pending = false;
+        app.begin_service_start();
+        assert!(!app.service_start_pending);
+        assert!(requests.try_recv().is_err());
+        app.connected = false;
+        let (tx, rx) = mpsc::channel();
+        app.updates = rx;
+        tx.send(Update::ServiceStarted(Ok(()))).unwrap();
+        app.process_updates(&ctx);
+        assert!(!app.service_start_pending);
+        assert!(app.info.as_deref().unwrap().contains("Reconnecting"));
+        app.service_start_pending = true;
+        tx.send(Update::ServiceStarted(Err("gone".into()))).unwrap();
+        app.process_updates(&ctx);
+        assert!(!app.service_start_pending);
+        assert!(
+            app.error
+                .as_deref()
+                .unwrap()
+                .contains("Could not start session service")
+        );
+    }
+
+    #[test]
+    fn unavailable_tabs_are_pruned_without_touching_live_tabs() {
+        let (mut app, _, _dir) = fixture();
+        app.insert("a", Tab::Terminal("ghost".into()), None);
+        // A stale snapshot while disconnected must never report orphans.
+        app.connected = false;
+        assert!(app.unavailable_tabs().is_empty());
+        app.connected = true;
+        assert_eq!(app.unavailable_tabs(), vec!["ghost".to_string()]);
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        assert_eq!(app.unavailable_tabs(), vec!["ghost".to_string()]);
+        app.close_unavailable_tabs();
+        assert!(app.unavailable_tabs().is_empty());
+        assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
+        assert!(app.info.as_deref().unwrap().contains("Closed 1 tab"));
+    }
+
+    #[test]
     fn restart_is_hidden_for_newer_daemons_and_idle_services() {
         let (mut app, _, _dir) = fixture();
         let (jobs, requests) = mpsc::channel();
@@ -4532,6 +4656,9 @@ mod navigation_tests {
         output.textures_delta.clear();
         assert!(target("session-row:ended-other").is_none());
         assert!(target("session-row:ended-resumable").is_some());
+        assert!(target("history-filter").is_some());
+        assert!(target("history-sort").is_some());
+        assert!(target("history-toggle-all").is_some());
         assert_eq!(app.state.sessions.len(), 4);
     }
 

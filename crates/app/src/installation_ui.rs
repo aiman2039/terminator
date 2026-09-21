@@ -94,12 +94,92 @@ impl App {
         }
     }
 
+    /// The GUI has loaded daemon state before but the snapshot poller can no
+    /// longer reach the session service (reboot, crash, or a wiped runtime
+    /// directory). Session records and window-close persistence are stale
+    /// until the service is started again.
+    pub(super) fn service_disconnected(&self) -> bool {
+        self.state_loaded && !self.connected
+    }
+
+    /// Terminal tabs without a matching session record in the latest daemon
+    /// state. Only reported while connected so a stale snapshot never prunes
+    /// tabs whose sessions may still exist.
+    pub(super) fn unavailable_tabs(&self) -> Vec<String> {
+        if !self.connected {
+            return Vec::new();
+        }
+        let mut missing: Vec<String> = self
+            .layouts
+            .values()
+            .flat_map(|workspace| workspace.iter_all_tabs())
+            .filter_map(|(_, tab)| match tab {
+                Tab::Terminal(sid) => {
+                    (!self.state.sessions.iter().any(|s| s.id == *sid)).then(|| sid.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        missing.sort();
+        missing.dedup();
+        missing
+    }
+
+    pub(super) fn start_service_button(&mut self, ui: &mut egui::Ui, small: bool) {
+        if !self.service_disconnected() {
+            return;
+        }
+        let label = if self.service_start_pending {
+            "Starting…"
+        } else {
+            "Start session service"
+        };
+        let enabled = !self.service_start_pending && !self.exit.active();
+        let response = if small {
+            ui.add_enabled(enabled, egui::Button::new(label).small())
+        } else {
+            ui.add_enabled(enabled, egui::Button::new(label))
+        };
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "start-session-service", response.rect);
+        if response.clicked() {
+            self.begin_service_start();
+        }
+    }
+
+    pub(super) fn begin_service_start(&mut self) {
+        if self.service_start_pending || self.connected {
+            return;
+        }
+        match self.jobs.send(Job::StartSessionService) {
+            Ok(()) => self.service_start_pending = true,
+            Err(_) => {
+                self.error = Some("Service worker disconnected. Reopen Terminator to retry.".into())
+            }
+        }
+    }
+
+    pub(super) fn close_unavailable_tabs(&mut self) {
+        let missing = self.unavailable_tabs();
+        if missing.is_empty() {
+            return;
+        }
+        for sid in &missing {
+            self.remove_tab(sid);
+        }
+        self.info = Some(match missing.len() {
+            1 => "Closed 1 tab without a session record.".into(),
+            n => format!("Closed {n} tabs without a session record."),
+        });
+    }
+
     pub(super) fn installation_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading("Installation");
         if !self.connected {
             ui.label(
-                "Waiting for the session service. Repair will be available after it reconnects.",
+                "The session service is unreachable. Start it to show sessions and enable repair.",
             );
+            self.start_service_button(ui, false);
             return;
         }
         if !self.state.generations.is_empty() {

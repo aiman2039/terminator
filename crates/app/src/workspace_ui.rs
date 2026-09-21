@@ -1699,7 +1699,15 @@ impl TabViewer for Viewer<'_> {
                     .find(|s| s.id == *sid)
                     .cloned()
                 else {
-                    ui.weak("Session record unavailable");
+                    ui.horizontal(|ui| {
+                        ui.weak("Session record unavailable");
+                        let close = ui.small_button("Close tab");
+                        #[cfg(feature = "test-support")]
+                        diagnostics::record(ui.ctx(), &format!("pane-close:{sid}"), close.rect);
+                        if close.clicked() {
+                            self.app.remove_tab(sid);
+                        }
+                    });
                     return;
                 };
                 let pane = self

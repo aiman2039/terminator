@@ -153,6 +153,39 @@ impl App {
         let _ = menu;
     }
 
+    fn history_sort_menu(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().interact_size.y = 22.0;
+        ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
+        let current = self.preferences.history_sort;
+        let menu = appearance::menu_button(ui, "Sort", |ui| {
+            for (sort, icon, target) in [
+                (
+                    HistorySort::LatestActivity,
+                    "History",
+                    "history-sort-latest-activity",
+                ),
+                (HistorySort::NameAsc, "ArrowDown", "history-sort-name-asc"),
+                (HistorySort::NameDesc, "ArrowUp", "history-sort-name-desc"),
+            ] {
+                let check = if current == sort { "✓" } else { "" };
+                let response = appearance::menu_item(ui, sort.menu_label(), icon, check);
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), target, response.rect);
+                #[cfg(not(feature = "test-support"))]
+                let _ = target;
+                if response.clicked() {
+                    self.preferences.history_sort = sort;
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Sort History by latest activity or name");
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "history-sort", menu.rect);
+        let _ = menu;
+    }
+
     fn removed_projects_menu(&mut self, ui: &mut egui::Ui) {
         let hidden: Vec<_> = self
             .state
@@ -938,8 +971,6 @@ impl App {
     }
     pub(super) fn sidebar(&mut self, ui: &mut egui::Ui) {
         if self.preferences.tool == SidebarTool::History {
-            ui.heading("History");
-            ui.weak("Ended sessions with an agent resume command");
             let ended: Vec<_> = self
                 .state
                 .sessions
@@ -947,26 +978,78 @@ impl App {
                 .filter(|s| !s.lifecycle.live() && self.state.session_has_resume(&s.id))
                 .cloned()
                 .collect();
+            let groups = sort_history(HistoryInput {
+                projects: self.state.projects.clone(),
+                sessions: &ended,
+                agents: &self.state.agents,
+                notifications: &self.state.notifications,
+                terminal_notices: &self.state.terminal_notices,
+                sort: self.preferences.history_sort,
+                filter: &self.preferences.history_filter.clone(),
+            });
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let width = (ui.available_width() - 160.0).max(60.0);
+                let response = ui.add_sized(
+                    egui::vec2(width, 22.0),
+                    egui::TextEdit::singleline(&mut self.preferences.history_filter)
+                        .id(egui::Id::new("history-filter"))
+                        .hint_text("Filter by name"),
+                );
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "history-filter", response.rect);
+                #[cfg(not(feature = "test-support"))]
+                let _ = &response;
+                if !self.preferences.history_filter.is_empty()
+                    && ui.small_button("✕").on_hover_text("Clear filter").clicked()
+                {
+                    self.preferences.history_filter.clear();
+                }
+                let all_expanded = !groups.is_empty()
+                    && groups.iter().all(|group| {
+                        self.preferences
+                            .history_expanded
+                            .get(&group.project.id)
+                            .copied()
+                            .unwrap_or(true)
+                    });
+                let toggle = ui
+                    .add_enabled(
+                        !groups.is_empty(),
+                        egui::Button::new(if all_expanded {
+                            "Collapse all"
+                        } else {
+                            "Expand all"
+                        }),
+                    )
+                    .on_hover_text("Collapse or expand all History projects");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "history-toggle-all", toggle.rect);
+                if toggle.clicked() {
+                    for group in &groups {
+                        self.preferences
+                            .history_expanded
+                            .insert(group.project.id.clone(), !all_expanded);
+                    }
+                }
+                self.history_sort_menu(ui);
+            });
+            ui.add_space(4.0);
             appearance::sidebar_scroll("global-history").show(ui, |ui| {
                 if ended.is_empty() {
                     ui.weak("No resumable sessions.");
+                } else if groups.is_empty() {
+                    ui.weak("No matching sessions.");
                 }
-                for project in self.state.projects.clone() {
-                    let sessions: Vec<_> = ended
-                        .iter()
-                        .filter(|s| s.project_id == project.id)
-                        .collect();
-                    if sessions.is_empty() {
-                        continue;
-                    }
+                for group in groups {
                     let expanded = *self
                         .preferences
                         .history_expanded
-                        .entry(project.id.clone())
+                        .entry(group.project.id.clone())
                         .or_insert(true);
                     let header = appearance::row(
                         ui,
-                        &project.name,
+                        &group.project.name,
                         if expanded {
                             "ChevronDown"
                         } else {
@@ -974,24 +1057,24 @@ impl App {
                         },
                         false,
                         26.0,
-                        &sessions.len().to_string(),
+                        &group.sessions.len().to_string(),
                         appearance::color(&self.theme.text),
                     )
-                    .on_hover_text(project.path.display().to_string());
+                    .on_hover_text(group.project.path.display().to_string());
                     #[cfg(feature = "test-support")]
                     diagnostics::record(
                         ui.ctx(),
-                        &format!("history-project:{}", project.id),
+                        &format!("history-project:{}", group.project.id),
                         header.rect,
                     );
                     if header.clicked() {
                         self.preferences
                             .history_expanded
-                            .insert(project.id.clone(), !expanded);
+                            .insert(group.project.id.clone(), !expanded);
                     }
                     if expanded {
-                        ui.indent(("history-project", &project.id), |ui| {
-                            for session in sessions {
+                        ui.indent(("history-project", &group.project.id), |ui| {
+                            for session in &group.sessions {
                                 self.session_row(ui, session);
                             }
                         });
