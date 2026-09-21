@@ -165,7 +165,7 @@ dependencies = [
  "rustix 1.1.4",
  "rustix-openpty",
  "serde",
- "signal-hook 0.4.4",
+ "signal-hook",
  "unicode-width",
  "vte",
  "windows-sys 0.59.0",
@@ -292,7 +292,7 @@ dependencies = [
  "percent-encoding",
  "windows-sys 0.60.2",
  "wl-clipboard-rs",
- "x11rb 0.13.2",
+ "x11rb",
 ]
 
 [[package]]
@@ -5278,16 +5278,6 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "signal-hook"
-version = "0.3.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d881a16cf4426aa584979d30bd82cb33429027e42122b169753d6ef1085ed6e2"
-dependencies = [
- "libc",
- "signal-hook-registry",
-]
-
-[[package]]
-name = "signal-hook"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2a0c28ca5908dbdbcd52e6fdaa00358ab88637f8ab33e1f188dd510eb44b53d"
@@ -6024,7 +6014,7 @@ dependencies = [
  "libc",
  "open",
  "serde_json",
- "signal-hook 0.3.18",
+ "signal-hook",
  "sysinfo",
  "tempfile",
  "terminator-core",
@@ -7720,7 +7710,7 @@ dependencies = [
  "web-time",
  "windows-sys 0.52.0",
  "x11-dl",
- "x11rb 0.13.2",
+ "x11rb",
  "xkbcommon-dl",
 ]
 
@@ -7867,18 +7857,7 @@ dependencies = [
  "libloading",
  "once_cell",
  "rustix 1.1.4",
- "x11rb-protocol 0.13.2",
-]
-
-[[package]]
-name = "x11rb"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a8885a854a8bfdf87a301e53e41b17c5f8f33639903131338b997b1eb614f44"
-dependencies = [
- "gethostname",
- "rustix 1.1.4",
- "x11rb-protocol 0.14.0",
+ "x11rb-protocol",
 ]
 
 [[package]]
@@ -7886,12 +7865,6 @@ name = "x11rb-protocol"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
-
-[[package]]
-name = "x11rb-protocol"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acf4d1bc32aa46eec18caa634ec3cf4c05bfa151f12b93b510b15190f69a1ca8"
 
 [[package]]
 name = "xattr"
@@ -7974,7 +7947,7 @@ dependencies = [
  "tempfile",
  "terminator-core",
  "tungstenite",
- "x11rb 0.14.0",
+ "x11rb",
  "xshell",
 ]
 

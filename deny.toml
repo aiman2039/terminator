@@ -25,6 +25,52 @@ ignore = [
 multiple-versions = "warn"
 wildcards = "allow"
 deny = []
+# Transitive-only duplicates pinned by upstream majors; none are direct deps
+# we can unify. Revisit on eframe/egui, resvg, wry/gtk, or tungstenite upgrades.
+skip = [
+    # eframe 0.36 / winit stack: unify on egui-ecosystem upgrade.
+    { crate = "accesskit_consumer", reason = "0.36 unix vs 0.38 macos, both via egui-winit 0.36" },
+    { crate = "bitflags", reason = "v1 via core-graphics/winit, v2 elsewhere" },
+    { crate = "block2", reason = "0.5 via accesskit_macos vs 0.6 via glutin" },
+    { crate = "calloop", reason = "0.13 via winit vs 0.14 via smithay-clipboard" },
+    { crate = "calloop-wayland-source", reason = "0.3 via winit vs 0.4 via smithay-clipboard" },
+    { crate = "cfg_aliases", reason = "0.1 via portable-pty/nix vs 0.2 via glutin" },
+    { crate = "core-foundation", reason = "0.9 via core-graphics/winit vs 0.10 via reqwest stack" },
+    { crate = "foldhash", reason = "0.1 via hashbrown 0.15 vs 0.2 via hashbrown 0.16" },
+    { crate = "getrandom", reason = "0.3 via ahash/eframe vs 0.4 via rand 0.10" },
+    { crate = "hashbrown", reason = "0.15/0.16/0.17 via arboard/accesskit/indexmap" },
+    { crate = "linux-raw-sys", reason = "0.4 via rustix 0.38 vs 0.12 via rustix 1.x" },
+    { crate = "objc2", reason = "0.5 via accesskit_macos vs 0.6 via arboard" },
+    { crate = "objc2-app-kit", reason = "0.2 via accesskit_macos vs 0.3 via arboard" },
+    { crate = "objc2-foundation", reason = "0.2 via accesskit_macos vs 0.3 via arboard" },
+    { crate = "quick-xml", reason = "0.41 via smithay/winit vs 0.42 via plist/syntect" },
+    { crate = "rustix", reason = "0.38 via calloop 0.13 vs 1.x via async stack" },
+    { crate = "smithay-client-toolkit", reason = "0.19 via winit vs 0.20 via smithay-clipboard" },
+    # gtk 0.18 / wry 0.57 stack: unify if wry/gtk ever moves off gtk3.
+    { crate = "heck", reason = "0.4 via glib vs 0.5 via clap/egui_dock" },
+    { crate = "proc-macro-crate", reason = "v1/v2 via gtk/glib vs v3 via zbus" },
+    { crate = "serde_spanned", reason = "0.6 via toml 0.8 vs 1.x via toml 1.x" },
+    { crate = "syn", reason = "v1 via gtk proc-macros vs v2/v3 elsewhere" },
+    { crate = "thiserror", reason = "v1 via gtk/wry vs v2 direct" },
+    { crate = "thiserror-impl", reason = "v1 via gtk/wry vs v2 direct" },
+    { crate = "toml_datetime", reason = "0.6 via toml 0.8 vs 1.x via toml 1.x" },
+    { crate = "toml_edit", reason = "0.19/0.20 via gtk vs 0.22 via toml 0.8 vs 0.25 direct" },
+    { crate = "winnow", reason = "0.5/0.7 via gtk toml chain vs 1.x" },
+    # resvg 0.45 vs image 0.25: unify on resvg upgrade.
+    { crate = "float-cmp", reason = "0.9 via resvg/tiny-skia vs 0.10 via spectrum-analyzer" },
+    { crate = "gif", reason = "0.13 via resvg vs 0.14 via image" },
+    { crate = "kurbo", reason = "0.11 via resvg vs 0.13 via vello/epaint" },
+    { crate = "miniz_oxide", reason = "0.8 via png 0.17 vs 0.9 via flate2" },
+    { crate = "png", reason = "0.17 via resvg vs 0.18 via image" },
+    { crate = "zune-core", reason = "0.4 via resvg vs 0.5 via image" },
+    { crate = "zune-jpeg", reason = "0.4 via resvg vs 0.5 via image" },
+    # tungstenite 0.28 (rand 0.9) vs reqwest/hickory (rand 0.10): unify on tungstenite upgrade.
+    { crate = "cpufeatures", reason = "0.2 via tungstenite vs 0.3 via chacha20/rand 0.10" },
+    { crate = "rand", reason = "0.9 via tungstenite vs 0.10 via hickory" },
+    { crate = "rand_core", reason = "0.9 via tungstenite vs 0.10 via chacha20" },
+    # Third-party pins below our direct base64 0.23 (alacritty, hyper-util, usvg).
+    { crate = "base64", reason = "0.22 via alacritty/hyper-util/usvg vs 0.23 direct" },
+]
 
 [sources]
 unknown-registry = "deny"
