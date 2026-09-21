@@ -28,7 +28,7 @@ url = "2"
 uuid.workspace = true
 wry = "0.57"
 rodio = "0.21"
-cpal = "0.16"
+cpal = "0.17"
 spectrum-analyzer = "2"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "hickory-dns"] }
 rtrb = "0.3"
