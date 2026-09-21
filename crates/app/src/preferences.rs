@@ -260,6 +260,10 @@ fn history_session_activity(
     activity
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn session_name_order(left: &Session, right: &Session) -> Ordering {
     left.label
         .to_lowercase()
@@ -301,6 +305,9 @@ pub struct UiPreferences {
     pub history_expanded: HashMap<String, bool>,
     pub tool: SidebarTool,
     pub visible: bool,
+    /// Projects column. Missing files stay open; `bool`'s serde default is false.
+    #[serde(default = "default_true")]
+    pub left_visible: bool,
     pub left_agents: bool,
     pub width: f32,
     pub all_projects: bool,
@@ -336,6 +343,7 @@ impl Default for UiPreferences {
             history_expanded: HashMap::new(),
             tool: SidebarTool::Explorer,
             visible: true,
+            left_visible: true,
             left_agents: false,
             width: 285.0,
             all_projects: false,
@@ -569,6 +577,7 @@ mod tests {
         let old: UiPreferences =
             serde_json::from_str(r#"{"version":1,"typography_migrated":true}"#).unwrap();
         assert!(!old.attention_migrated);
+        assert!(old.left_visible);
         assert!(!old.left_agents);
         assert!(old.typography_migrated);
         assert!(old.markdown_modes.is_empty());

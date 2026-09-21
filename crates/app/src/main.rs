@@ -2465,6 +2465,175 @@ impl App {
         true
     }
 
+    fn shortcut_applies(&self, action: &str) -> bool {
+        match action {
+            "editor_save" | "compare_disk" => self.active_editor_id().is_some(),
+            _ => true,
+        }
+    }
+
+    fn active_editor_id(&self) -> Option<String> {
+        let sid = self.active_session.as_ref()?;
+        self.state.sessions.iter().find_map(|session| {
+            (session.id == *sid && session.kind == SessionKind::Editor && !session.review)
+                .then(|| session.id.clone())
+        })
+    }
+
+    fn shortcut_label(&self, action: &str) -> String {
+        shortcuts::pretty(&self.state.settings.keybindings, action)
+    }
+
+    fn run_shortcut(&mut self, ctx: &egui::Context, action: &str) {
+        match action {
+            "open_file" => self.open_path = true,
+            "new_terminal" => self.create(None),
+            "split_up" => self.create(Some("up")),
+            "split_down" => self.create(Some("down")),
+            "split_left" => self.create(Some("left")),
+            "split_right" => self.create(Some("right")),
+            "open_settings" => self.open_settings(),
+            "open_palette" => self.open_command_palette(),
+            "find_in_terminal" => self.find_in_active_terminal(ctx),
+            "next_pane" => self.focus_next_pane(),
+            "select_all" => self.select_all_active(),
+            "search_scrollback" => self.search_active_scrollback(),
+            "copy_working_directory" => self.copy_active_working_directory(ctx),
+            "rename_terminal" => self.rename_active_terminal(),
+            "close_session" => self.close_active_session(),
+            "clear_scrollback" => self.clear_active_scrollback(),
+            "editor_save" => self.save_active_editor(),
+            "compare_disk" => self.compare_active_editor(),
+            "toggle_left_sidebar" => self.toggle_left_sidebar(),
+            "toggle_right_sidebar" => self.toggle_right_sidebar(),
+            _ => {}
+        }
+    }
+
+    fn open_command_palette(&mut self) {
+        self.palette_open = true;
+        self.palette_query.clear();
+        self.palette_index = 0;
+    }
+
+    fn find_in_active_terminal(&mut self, ctx: &egui::Context) {
+        let Some(sid) = self.active_session.clone() else {
+            return;
+        };
+        self.terminal_find.entry(sid.clone()).or_default();
+        ctx.memory_mut(|memory| {
+            memory.request_focus(egui::Id::new(("terminal-find", sid)));
+        });
+    }
+
+    fn focus_next_pane(&mut self) {
+        let Some(dock) = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.layouts.get_mut(id))
+        else {
+            return;
+        };
+        let nodes = dock
+            .main_surface()
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.is_leaf())
+            .map(|(index, _)| NodeIndex(index))
+            .collect::<Vec<_>>();
+        if nodes.is_empty() {
+            return;
+        }
+        let current = dock.main_surface().focused_leaf();
+        let index = nodes
+            .iter()
+            .position(|node| Some(*node) == current)
+            .map(|index| (index + 1) % nodes.len())
+            .unwrap_or(0);
+        dock.main_surface_mut().set_focused_node(nodes[index]);
+    }
+
+    fn select_all_active(&mut self) {
+        let Some(sid) = self.active_session.clone() else {
+            return;
+        };
+        if let Some(backend) = self.backends.get_mut(&sid) {
+            backend.select_all();
+        }
+    }
+
+    fn search_active_scrollback(&mut self) {
+        let Some(sid) = self.active_session.clone() else {
+            return;
+        };
+        self.search_session = Some(sid.clone());
+        self.search_open = true;
+        self.texts.remove(&format!("history:{sid}"));
+    }
+
+    fn copy_active_working_directory(&self, ctx: &egui::Context) {
+        let cwd = self
+            .active_session
+            .as_ref()
+            .and_then(|sid| {
+                self.state
+                    .sessions
+                    .iter()
+                    .find(|session| &session.id == sid)
+            })
+            .map(|session| session.cwd.clone())
+            .or_else(|| self.cwd());
+        let Some(cwd) = cwd else {
+            return;
+        };
+        ctx.copy_text(cwd.display().to_string());
+    }
+
+    fn rename_active_terminal(&mut self) {
+        let Some(sid) = self.active_session.clone() else {
+            return;
+        };
+        self.begin_rename(&sid, RenameSurface::Pane);
+    }
+
+    fn close_active_session(&mut self) {
+        if let Some(sid) = self.active_session.clone() {
+            self.close_session = Some(sid);
+        }
+    }
+
+    fn clear_active_scrollback(&mut self) {
+        let Some(sid) = self.active_session.clone() else {
+            return;
+        };
+        self.send(Request::ClearHistory {
+            session: Some(sid.clone()),
+        });
+        self.texts.remove(&format!("history:{sid}"));
+    }
+
+    fn save_active_editor(&mut self) {
+        let Some(sid) = self.active_editor_id() else {
+            return;
+        };
+        self.send(Request::EditorSave { session: sid });
+    }
+
+    fn compare_active_editor(&mut self) {
+        let Some(sid) = self.active_editor_id() else {
+            return;
+        };
+        self.send(Request::EditorCompare { session: sid });
+    }
+
+    fn toggle_left_sidebar(&mut self) {
+        self.preferences.left_visible = !self.preferences.left_visible;
+    }
+
+    fn toggle_right_sidebar(&mut self) {
+        self.preferences.visible = !self.preferences.visible;
+    }
+
     fn go_session(&mut self, sid: &str) {
         self.hide_center_overlay();
         self.finish_rename(true);
@@ -3079,7 +3248,14 @@ impl App {
                             app.worktree_open = false;
                             ui.close();
                         }
-                        if appearance::menu_item(ui, "New terminal", "Terminal", "").clicked() {
+                        if appearance::menu_item(
+                            ui,
+                            "New terminal",
+                            "Terminal",
+                            &app.shortcut_label("new_terminal"),
+                        )
+                        .clicked()
+                        {
                             app.select_project(project_id.clone());
                             app.create(None);
                             app.worktree_open = false;
@@ -3365,54 +3541,14 @@ impl eframe::App for App {
         #[cfg(feature = "test-support")]
         self.diagnostics.frame(&ctx);
         for action in shortcuts::ACTIONS.iter().map(|(action, _)| *action) {
-            if !self.shortcut_allowed(action) {
+            if !self.shortcut_allowed(action) || !self.shortcut_applies(action) {
                 continue;
             }
             let key = shortcuts::binding(&self.state.settings.keybindings, action);
             if key.is_empty() || !shortcuts::consume(&ctx, &key) {
                 continue;
             }
-            match action {
-                "open_file" => self.open_path = true,
-                "new_terminal" => self.create(None),
-                "split_right" => self.create(Some("right")),
-                "split_down" => self.create(Some("down")),
-                "open_settings" => self.open_settings(),
-                "open_palette" => {
-                    self.palette_open = true;
-                    self.palette_query.clear();
-                    self.palette_index = 0;
-                }
-                "find_in_terminal" => {
-                    if let Some(sid) = self.active_session.clone() {
-                        self.terminal_find.entry(sid.clone()).or_default();
-                        ctx.memory_mut(|m| {
-                            m.request_focus(egui::Id::new(("terminal-find", sid)));
-                        });
-                    }
-                }
-                "next_pane" => {
-                    if let Some(d) = self.selected.as_ref().and_then(|p| self.layouts.get_mut(p)) {
-                        let nodes = d
-                            .main_surface()
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, n)| n.is_leaf())
-                            .map(|(i, _)| NodeIndex(i))
-                            .collect::<Vec<_>>();
-                        if !nodes.is_empty() {
-                            let current = d.main_surface().focused_leaf();
-                            let idx = nodes
-                                .iter()
-                                .position(|n| Some(*n) == current)
-                                .map(|i| (i + 1) % nodes.len())
-                                .unwrap_or(0);
-                            d.main_surface_mut().set_focused_node(nodes[idx]);
-                        }
-                    }
-                }
-                _ => {}
-            }
+            self.run_shortcut(&ctx, action);
         }
         if self.state_loaded {
             self.migrate_attention();
@@ -3575,22 +3711,24 @@ impl eframe::App for App {
                 }
             });
         });
-        let projects_response = egui::Panel::left("projects")
-            .resizable(true)
-            .default_size(225.0)
-            .size_range(170.0..=420.0)
-            .show(ui, |ui| {
-                self.agent_bar(ui);
-                ui.push_id("left-sidebar-content", |ui| {
-                    if self.preferences.left_agents {
-                        self.agents_view(ui);
-                    } else {
-                        appearance::sidebar_scroll("left-projects")
-                            .show(ui, |ui| self.projects(ui));
-                    }
+        if self.preferences.left_visible {
+            let projects_response = egui::Panel::left("projects")
+                .resizable(true)
+                .default_size(225.0)
+                .size_range(170.0..=420.0)
+                .show(ui, |ui| {
+                    self.agent_bar(ui);
+                    ui.push_id("left-sidebar-content", |ui| {
+                        if self.preferences.left_agents {
+                            self.agents_view(ui);
+                        } else {
+                            appearance::sidebar_scroll("left-projects")
+                                .show(ui, |ui| self.projects(ui));
+                        }
+                    });
                 });
-            });
-        self.project_width = projects_response.response.rect.width();
+            self.project_width = projects_response.response.rect.width();
+        }
         if self.preferences.visible {
             let response = egui::Panel::right("context")
                 .resizable(true)
@@ -3881,6 +4019,71 @@ mod layout_tests {
 #[cfg(test)]
 mod navigation_tests {
     use super::*;
+    #[test]
+    fn sidebar_and_menu_shortcuts_run_their_actions() {
+        let (mut app, ctx, _dir) = fixture();
+        assert!(app.preferences.left_visible);
+        assert!(app.preferences.visible);
+        app.run_shortcut(&ctx, "toggle_left_sidebar");
+        app.run_shortcut(&ctx, "toggle_right_sidebar");
+        assert!(!app.preferences.left_visible);
+        assert!(!app.preferences.visible);
+        app.state.sessions = vec![session_fixture("live", SessionKind::Shell)];
+        app.active_session = Some("live".into());
+        app.run_shortcut(&ctx, "search_scrollback");
+        assert!(app.search_open);
+        assert_eq!(app.search_session.as_deref(), Some("live"));
+        app.run_shortcut(&ctx, "rename_terminal");
+        assert_eq!(
+            app.rename_session.as_ref().map(|(id, _)| id.as_str()),
+            Some("live")
+        );
+        app.rename_session = None;
+        app.run_shortcut(&ctx, "close_session");
+        assert_eq!(app.close_session.as_deref(), Some("live"));
+        assert!(app.active_editor_id().is_none());
+        app.run_shortcut(&ctx, "editor_save");
+        assert_eq!(app.close_session.as_deref(), Some("live"));
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn header_paints_a_sidebar_toggle_on_each_side() {
+        let (mut app, ctx, _dir) = fixture();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 40.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.window_header(ui),
+        );
+        output.textures_delta.clear();
+        let rect = |name: &str| {
+            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+        };
+        let left = rect("toggle-left-sidebar").expect("left toggle");
+        let right = rect("toggle-right-sidebar").expect("right toggle");
+        assert!(left.right() < right.left());
+        assert!(left.width() > 0.0 && right.width() > 0.0);
+        app.preferences.left_visible = false;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 40.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.window_header(ui),
+        );
+        output.textures_delta.clear();
+        assert!(rect("toggle-left-sidebar").is_some());
+        assert!(rect("toggle-right-sidebar").is_some());
+    }
+
     fn fixture() -> (App, egui::Context, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();

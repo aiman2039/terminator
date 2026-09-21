@@ -5,12 +5,24 @@ use std::collections::{BTreeMap, HashMap};
 pub const ACTIONS: &[(&str, &str)] = &[
     ("new_terminal", "New terminal"),
     ("open_file", "Open file"),
-    ("split_right", "Split right"),
+    ("split_up", "Split up"),
     ("split_down", "Split down"),
+    ("split_left", "Split left"),
+    ("split_right", "Split right"),
     ("next_pane", "Next pane"),
+    ("select_all", "Select all"),
+    ("find_in_terminal", "Find in terminal"),
+    ("search_scrollback", "Search scrollback"),
+    ("copy_working_directory", "Copy working directory"),
+    ("rename_terminal", "Rename terminal"),
+    ("close_session", "Close session"),
+    ("clear_scrollback", "Clear saved scrollback"),
+    ("editor_save", "Save all"),
+    ("compare_disk", "Compare disk"),
+    ("toggle_left_sidebar", "Toggle left sidebar"),
+    ("toggle_right_sidebar", "Toggle right sidebar"),
     ("open_settings", "Settings"),
     ("open_palette", "Command palette"),
-    ("find_in_terminal", "Find in terminal"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,6 +150,10 @@ fn key_label(key: Key) -> &'static str {
         Key::Escape => "Esc",
         Key::Tab => "Tab",
         Key::Backspace => "Backspace",
+        Key::ArrowUp => "↑",
+        Key::ArrowDown => "↓",
+        Key::ArrowLeft => "←",
+        Key::ArrowRight => "→",
         other => other.symbol_or_name(),
     }
 }
@@ -338,6 +354,44 @@ mod tests {
         fill_defaults(&mut map);
         assert!(map.contains_key("open_palette"));
         assert_eq!(binding(&map, "open_file"), "command+O");
+    }
+
+    #[test]
+    fn every_menu_action_has_a_unique_default_chord() {
+        let defaults = terminator_core::Settings::default().keybindings;
+        for (action, _) in ACTIONS {
+            let value = defaults.get(*action).unwrap_or_else(|| panic!("{action}"));
+            assert!(parse(value).is_some(), "{action}={value}");
+        }
+        assert_eq!(invalid(&defaults), None);
+        // Stored `command` already means Ctrl+Shift on Linux, so an extra
+        // `shift` token must not be the only difference between two chords.
+        let mut seen = HashMap::<String, String>::new();
+        for (action, value) in &defaults {
+            let id = linux_chord_id(value);
+            if let Some(other) = seen.insert(id.clone(), action.clone()) {
+                panic!("{action} and {other} collapse to {id} on Linux");
+            }
+        }
+        assert_eq!(parse("command+alt+Up").unwrap().key, Key::ArrowUp);
+        assert_eq!(parse("command+shift+Left").unwrap().key, Key::ArrowLeft);
+        let shown = display("command+B");
+        assert!(shown.contains('B'), "{shown}");
+    }
+
+    fn linux_chord_id(value: &str) -> String {
+        let mut parts = value
+            .split('+')
+            .map(|part| part.trim().to_lowercase())
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>();
+        let key = parts.pop().unwrap_or_default();
+        if parts.iter().any(|part| part == "command") && !parts.iter().any(|part| part == "shift") {
+            parts.push("shift".into());
+        }
+        parts.sort();
+        parts.dedup();
+        format!("{}+{key}", parts.join("+"))
     }
 
     #[test]

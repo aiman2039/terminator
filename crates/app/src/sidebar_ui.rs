@@ -515,7 +515,14 @@ impl App {
                 ui.close();
             }
             if session.lifecycle.live() {
-                if appearance::menu_item(ui, "Close session…", "X", "").clicked() {
+                if appearance::menu_item(
+                    ui,
+                    "Close session…",
+                    "X",
+                    &self.shortcut_label("close_session"),
+                )
+                .clicked()
+                {
                     self.close_session = Some(session.id.clone());
                     ui.close();
                 }
@@ -593,7 +600,14 @@ impl App {
                 self.select_project(project.id.clone());
                 ui.close();
             }
-            if appearance::menu_item(ui, "New terminal", "Terminal", "").clicked() {
+            if appearance::menu_item(
+                ui,
+                "New terminal",
+                "Terminal",
+                &self.shortcut_label("new_terminal"),
+            )
+            .clicked()
+            {
                 self.select_project(project.id.clone());
                 self.create(None);
                 ui.close();
