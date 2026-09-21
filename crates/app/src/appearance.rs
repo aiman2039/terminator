@@ -191,6 +191,22 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
     ctx.set_theme(egui::Theme::Dark);
 }
 
+/// Framed sidebar glyph, matching the title-bar panel toggle.
+pub fn framed_icon(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
+    ui.add_sized(
+        [28.0, 28.0],
+        egui::Button::image(
+            egui::Image::new(crate::icons::source(icon))
+                .tint(ICON_COLOR)
+                .fit_to_exact_size(egui::vec2(14.0, 14.0)),
+        )
+        .corner_radius(egui::CornerRadius::same(7))
+        .fill(ui.visuals().widgets.inactive.weak_bg_fill)
+        .stroke(egui::Stroke::new(1.0, Color32::from_white_alpha(36))),
+    )
+    .on_hover_text(tip)
+}
+
 pub fn sidebar_action(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
     ui.add_sized(
         [22.0, 22.0],

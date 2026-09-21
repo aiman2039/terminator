@@ -282,6 +282,8 @@ pub fn file_icon(path: &std::path::Path) -> &'static str {
 pub fn source(name: &str) -> egui::ImageSource<'static> {
     match name {
         "RefreshCw" => egui::include_image!("../assets/icons/refresh-cw.svg"),
+        "PanelLeft" => egui::include_image!("../assets/icons/panel-left.svg"),
+        "PanelRight" => egui::include_image!("../assets/icons/panel-right.svg"),
         "PanelRightClose" => egui::include_image!("../assets/icons/panel-right-close.svg"),
         "PanelBottomClose" => egui::include_image!("../assets/icons/panel-bottom-close.svg"),
         "PanelLeftClose" => egui::include_image!("../assets/icons/panel-left-close.svg"),

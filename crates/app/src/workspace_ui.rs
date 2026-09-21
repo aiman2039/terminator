@@ -16,6 +16,16 @@ struct WorkspaceTabMenuSpec<'a> {
     count: usize,
 }
 
+fn split_action(direction: Option<&str>) -> &'static str {
+    match direction {
+        Some("up") => "split_up",
+        Some("down") => "split_down",
+        Some("left") => "split_left",
+        Some("right") => "split_right",
+        _ => "new_terminal",
+    }
+}
+
 fn click_menu_item(ui: &mut egui::Ui, label: &str, icon: &str) -> bool {
     let clicked = appearance::menu_item(ui, label, icon, "").clicked();
     if clicked {
@@ -83,9 +93,52 @@ impl App {
             && self.search_session.is_none()
     }
 
+    fn header_left_width(&self, total: f32) -> f32 {
+        let cap = (total - 300.0).max(80.0);
+        if self.preferences.left_visible {
+            self.project_width.min(cap)
+        } else if cfg!(target_os = "macos") {
+            200.0_f32.min(cap)
+        } else {
+            168.0_f32.min(cap)
+        }
+    }
+
+    fn sidebar_toggle(&mut self, ui: &mut egui::Ui, right: bool) {
+        let (action, icon, label) = if right {
+            ("toggle_right_sidebar", "PanelRight", "Toggle right sidebar")
+        } else {
+            ("toggle_left_sidebar", "PanelLeft", "Toggle sidebar")
+        };
+        let keys = self.shortcut_label(action);
+        let tip = if keys.is_empty() {
+            label.to_string()
+        } else {
+            format!("{label} ({keys})")
+        };
+        let response = appearance::framed_icon(ui, icon, &tip);
+        #[cfg(feature = "test-support")]
+        diagnostics::record(
+            ui.ctx(),
+            if right {
+                "toggle-right-sidebar"
+            } else {
+                "toggle-left-sidebar"
+            },
+            response.rect,
+        );
+        if response.clicked() {
+            if right {
+                self.toggle_right_sidebar();
+            } else {
+                self.toggle_left_sidebar();
+            }
+        }
+    }
+
     pub(super) fn window_header(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
-        let left = self.project_width.min(rect.width() - 300.0);
+        let left = self.header_left_width(rect.width());
         let right = self.preferences.width.min(rect.width() - left - 100.0);
         let left_rect =
             egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + left, rect.bottom()));
@@ -135,6 +188,7 @@ impl App {
                 if response.drag_started() {
                     begin_native_window_gesture(ui.ctx(), egui::ViewportCommand::StartDrag);
                 }
+                self.sidebar_toggle(ui, false);
                 header_drag_space(ui);
             },
         );
@@ -161,6 +215,10 @@ impl App {
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
             |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
+                let max = ui.max_rect();
+                let toggle_rect =
+                    egui::Rect::from_min_max(egui::pos2(max.right() - 32.0, max.top()), max.max);
+                ui.set_max_width((ui.available_width() - 36.0).max(0.0));
                 for (tool, label) in [
                     (SidebarTool::Explorer, "Explorer"),
                     (SidebarTool::Agents, "Agents"),
@@ -230,11 +288,15 @@ impl App {
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "palette", palette.rect);
                 if palette.clicked() {
-                    self.palette_open = true;
-                    self.palette_query.clear();
-                    self.palette_index = 0;
+                    self.open_command_palette();
                 }
                 header_drag_space(ui);
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(toggle_rect)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    |ui| self.sidebar_toggle(ui, true),
+                );
             },
         );
     }
@@ -623,13 +685,14 @@ impl App {
         }
     }
     fn new_terminal_menu(&mut self, ui: &mut egui::Ui, pane: Option<egui_dock::NodePath>) {
-        for (label, split, action) in [
-            ("New tab", None, "new_terminal"),
-            ("Split up", Some("up"), ""),
-            ("Split down", Some("down"), "split_down"),
-            ("Split left", Some("left"), ""),
-            ("Split right", Some("right"), "split_right"),
+        for (label, split) in [
+            ("New tab", None),
+            ("Split up", Some("up")),
+            ("Split down", Some("down")),
+            ("Split left", Some("left")),
+            ("Split right", Some("right")),
         ] {
+            let action = split_action(split);
             let icon = match split {
                 Some("up") => "PanelTopClose",
                 Some("down") => "PanelBottomClose",
@@ -637,7 +700,7 @@ impl App {
                 Some("right") => "PanelRightClose",
                 _ => "Plus",
             };
-            let shortcut = shortcuts::pretty(&self.state.settings.keybindings, action);
+            let shortcut = self.shortcut_label(action);
             if appearance::menu_item(ui, label, icon, &shortcut).clicked() {
                 if let Some(pane) = pane {
                     self.add_tab = Some((pane, split.map(str::to_owned)));
@@ -684,7 +747,8 @@ impl App {
         }
     }
     pub(super) fn rename_action(&mut self, ui: &mut egui::Ui, sid: &str, surface: RenameSurface) {
-        if appearance::menu_item(ui, "Rename terminal…", "Pencil", "").clicked() {
+        let shortcut = self.shortcut_label("rename_terminal");
+        if appearance::menu_item(ui, "Rename terminal…", "Pencil", &shortcut).clicked() {
             self.begin_rename(sid, surface);
             ui.close();
         }
@@ -1551,7 +1615,7 @@ impl TabViewer for Viewer<'_> {
                         Some("right") => "PanelRightClose",
                         _ => "Plus",
                     },
-                    "",
+                    &self.app.shortcut_label(split_action(direction)),
                 );
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), label, response.rect);
@@ -1662,13 +1726,27 @@ impl TabViewer for Viewer<'_> {
         self.app.new_terminal_menu(ui, Some(pane));
         ui.separator();
         if let Tab::Terminal(sid) = tab {
-            if appearance::menu_item(ui, "Search scrollback", "Search", "").clicked() {
+            if appearance::menu_item(
+                ui,
+                "Search scrollback",
+                "Search",
+                &self.app.shortcut_label("search_scrollback"),
+            )
+            .clicked()
+            {
                 self.app.search_session = Some(sid.clone());
                 self.app.search_open = true;
                 self.app.texts.remove(&format!("history:{sid}"));
                 ui.close();
             }
-            if appearance::menu_item(ui, "Clear saved scrollback", "Eraser", "").clicked() {
+            if appearance::menu_item(
+                ui,
+                "Clear saved scrollback",
+                "Eraser",
+                &self.app.shortcut_label("clear_scrollback"),
+            )
+            .clicked()
+            {
                 self.app.send(Request::ClearHistory {
                     session: Some(sid.clone()),
                 });
@@ -2389,7 +2467,14 @@ impl Viewer<'_> {
                     ui.close();
                 }
             });
-            if appearance::menu_item(ui, "Select all", "TextSelect", "").clicked() {
+            if appearance::menu_item(
+                ui,
+                "Select all",
+                "TextSelect",
+                &self.app.shortcut_label("select_all"),
+            )
+            .clicked()
+            {
                 if let Some(backend) = self.app.backends.get_mut(sid) {
                     backend.select_all();
                 }
@@ -2417,39 +2502,81 @@ impl Viewer<'_> {
                     self.app.terminal_action(ui.ctx(), session, &target, action);
                 }
             }
-            if appearance::menu_item(ui, "Open file path…", "File", "").clicked() {
+            if appearance::menu_item(
+                ui,
+                "Open file path…",
+                "File",
+                &self.app.shortcut_label("open_file"),
+            )
+            .clicked()
+            {
                 self.app.path_text = selected.clone();
                 self.app.open_path = true;
                 ui.close();
             }
             ui.separator();
-            if appearance::menu_item(ui, "Search scrollback", "Search", "").clicked() {
+            if appearance::menu_item(
+                ui,
+                "Search scrollback",
+                "Search",
+                &self.app.shortcut_label("search_scrollback"),
+            )
+            .clicked()
+            {
                 self.app.search_session = Some(sid.clone());
                 self.app.search_open = true;
                 self.app.texts.remove(&format!("history:{sid}"));
                 ui.close();
             }
             if session.kind == SessionKind::Editor && !session.review {
-                if appearance::menu_item(ui, "Save all", "Save", "⌘S").clicked() {
+                if appearance::menu_item(
+                    ui,
+                    "Save all",
+                    "Save",
+                    &self.app.shortcut_label("editor_save"),
+                )
+                .clicked()
+                {
                     self.app.send(Request::EditorSave {
                         session: sid.clone(),
                     });
                     ui.close();
                 }
-                if appearance::menu_item(ui, "Compare disk", "FileDiff", "").clicked() {
+                if appearance::menu_item(
+                    ui,
+                    "Compare disk",
+                    "FileDiff",
+                    &self.app.shortcut_label("compare_disk"),
+                )
+                .clicked()
+                {
                     self.app.send(Request::EditorCompare {
                         session: sid.clone(),
                     });
                     ui.close();
                 }
             }
-            if appearance::menu_item(ui, "Copy working directory", "Folder", "").clicked() {
+            if appearance::menu_item(
+                ui,
+                "Copy working directory",
+                "Folder",
+                &self.app.shortcut_label("copy_working_directory"),
+            )
+            .clicked()
+            {
                 ui.ctx().copy_text(session.cwd.display().to_string());
                 ui.close();
             }
             ui.separator();
             self.app.rename_action(ui, sid, RenameSurface::Pane);
-            if appearance::menu_item(ui, "Close session…", "X", "").clicked() {
+            if appearance::menu_item(
+                ui,
+                "Close session…",
+                "X",
+                &self.app.shortcut_label("close_session"),
+            )
+            .clicked()
+            {
                 self.app.close_session = Some(sid.clone());
                 ui.close();
             }
