@@ -111,8 +111,7 @@ pub fn run(debug: bool, timings: bool, output_dir: Option<PathBuf>) -> Result<()
     drop(build_timer);
     let _package_timer = StageTimer::new("Package");
     let binaries = std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root().join("target"))
+        .map_or_else(|| root().join("target"), PathBuf::from)
         .join(if debug { "debug" } else { "release" });
     let destination = output_dir.unwrap_or_else(|| root().join("target/package"));
     fs::create_dir_all(&destination)?;
@@ -249,7 +248,7 @@ pub struct AssembleInput<'a> {
     pub destination: &'a Path,
 }
 
-/// Native jobs build each daemon and its embedded CodeDiff together. Assembly
+/// Native jobs build each daemon and its embedded `CodeDiff` together. Assembly
 /// embeds Sparkle into that Apple Silicon app; it never rebuilds or lipos slices.
 pub fn assemble(input: AssembleInput<'_>) -> Result<()> {
     let AssembleInput {
@@ -463,7 +462,7 @@ pub fn dmg(app: &Path, destination: &Path) -> Result<()> {
         .arg(destination)
         .arg(source);
     terminator_core::run_command(create, terminator_core::CommandOptions {
-        timeout: std::time::Duration::from_secs(300),
+        timeout: std::time::Duration::from_mins(5),
         stdout_limit: 1024 * 1024,
         ..Default::default()
     }).context("DMG creation failed (requires create-dmg and a macOS desktop; install with brew install create-dmg)")?;
@@ -531,7 +530,7 @@ pub fn local_dmg(
         terminator_core::run_command(
             create,
             terminator_core::CommandOptions {
-                timeout: std::time::Duration::from_secs(300),
+                timeout: std::time::Duration::from_mins(5),
                 stdout_limit: 1024 * 1024,
                 ..Default::default()
             },

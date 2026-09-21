@@ -1,4 +1,4 @@
-use crate::harness::*;
+use crate::harness::{Harness, artifacts, bin, git, id, output, session, sessions};
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use serde_json::{Value, json};
@@ -284,7 +284,7 @@ pub fn load(duration: Duration, destination: Option<PathBuf>, conditional: bool)
         }
         fs::write(path, serde_json::to_vec_pretty(&report)?)?;
     }
-    println!("{}", report);
+    println!("{report}");
     Ok(())
 }
 

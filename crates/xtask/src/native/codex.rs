@@ -1,5 +1,8 @@
 //! Explicitly opt-in live provider fixture. Uses only newly generated public sample text.
-use super::*;
+use super::{
+    Context, Duration, Harness, Options, Path, Process, Result, Value, ensure, fs, id, json, root,
+    thread, wait_child,
+};
 use terminator_core::{Paths, ui_control};
 
 fn snapshot(h: &Harness, sid: &str) -> Result<Value> {
@@ -117,7 +120,7 @@ pub fn run(o: &Options) -> Result<()> {
         println!(
             "Live Codex {mode}: started in disposable directory under the already-trusted repository"
         );
-        let deadline = std::time::Instant::now() + Duration::from_secs(180);
+        let deadline = std::time::Instant::now() + Duration::from_mins(3);
         while !h.history(id(&session))?.contains("TSAMPLE160") {
             ensure!(
                 std::time::Instant::now() < deadline,
@@ -235,7 +238,7 @@ pub fn run(o: &Options) -> Result<()> {
         thread::sleep(Duration::from_millis(500));
         h.write(&mut input, "\r")?;
         println!("Live Codex {mode}: second prompt submitted separately from paste");
-        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+        let deadline = std::time::Instant::now() + Duration::from_mins(2);
         loop {
             let text = h.history(id(&session))?;
             if text.contains("TUPDATE001") || text.contains("TUPDATE100") {
@@ -281,7 +284,7 @@ pub fn run(o: &Options) -> Result<()> {
                 json!({"at_ms":0,"target":target,"scroll":-10.0,"wheel_unit":"line"}),
             )?;
         }
-        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+        let deadline = std::time::Instant::now() + Duration::from_mins(2);
         while !snapshot(&h, id(&session))?["updates"]
             .as_array()
             .is_some_and(|v| v.contains(&json!(100)))

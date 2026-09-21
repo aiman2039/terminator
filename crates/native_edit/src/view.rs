@@ -15,6 +15,7 @@ use egui::{Color32, FontId, Pos2, Rect, Sense, Vec2};
 /// Map an egui key to the engine key. Returns `None` for keys the caller
 /// should leave alone (notably anything with Command/Ctrl held, so global
 /// shortcuts keep working).
+#[must_use]
 pub fn egui_key(key: egui::Key, modifiers: egui::Modifiers) -> Option<VKey> {
     if modifiers.command || modifiers.ctrl {
         return None;
@@ -97,6 +98,7 @@ pub enum IdeAction {
 /// Resolve a Command/Ctrl-held key to an IDE action. Plain keys and the Vim
 /// engine's own keys return `None` and keep their existing routing.
 /// (`command` mirrors Ctrl on Linux/Windows, so only Alt is excluded.)
+#[must_use]
 pub fn ide_shortcut(key: egui::Key, modifiers: egui::Modifiers) -> Option<IdeAction> {
     if !(modifiers.command && !modifiers.alt) {
         return None;
@@ -115,6 +117,7 @@ pub fn ide_shortcut(key: egui::Key, modifiers: egui::Modifiers) -> Option<IdeAct
 /// Stable keyboard-focus identity for one source view. The painter response
 /// id is layout-derived, so panes use this to return focus to the file after
 /// header-button clicks instead of stranding keys on Save/Reload.
+#[must_use]
 pub fn source_focus_id(id: &str) -> egui::Id {
     egui::Id::new(("native-source-focus", id))
 }
@@ -147,6 +150,7 @@ pub fn command_prompt(engine: &impl ModalEngine) -> Option<String> {
 }
 
 /// Header badge text for the current vim mode.
+#[must_use]
 pub fn mode_name(mode: Mode) -> &'static str {
     match mode {
         Mode::Normal => "NORMAL",
@@ -158,6 +162,7 @@ pub fn mode_name(mode: Mode) -> &'static str {
 }
 
 /// Header badge color for the current vim mode (readable on dark/light).
+#[must_use]
 pub fn mode_color(mode: Mode) -> Color32 {
     match mode {
         Mode::Normal => Color32::LIGHT_BLUE,
@@ -172,7 +177,7 @@ pub struct SourceOptions {
     pub show_line_numbers: bool,
     pub show_status: bool,
     /// Take keyboard focus when nothing else holds it, so an opened file is
-    /// immediately typeable (IntelliJ focuses the editor on open).
+    /// immediately typeable (`IntelliJ` focuses the editor on open).
     pub autofocus: bool,
 }
 

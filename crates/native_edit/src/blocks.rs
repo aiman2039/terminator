@@ -29,6 +29,7 @@ pub struct Block {
 }
 
 impl Block {
+    #[must_use]
     pub fn contains(&self, line: usize) -> bool {
         line >= self.start_line && line <= self.end_line
     }
@@ -149,6 +150,7 @@ pub fn parse_blocks<B: Buffer>(doc: &B) -> Vec<Block> {
 }
 
 /// Find the block covering a grid line (e.g. from a rendered-pane click).
+#[must_use]
 pub fn block_at(blocks: &[Block], line: usize) -> Option<&Block> {
     blocks.iter().find(|block| block.contains(line))
 }

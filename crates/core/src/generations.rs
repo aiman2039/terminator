@@ -1,5 +1,9 @@
 //! Shared catalog and generation ownership. No operation here starts a session.
-use crate::*;
+use crate::{
+    AgentState, BTreeSet, Context, Deserialize, Duration, Lifecycle, OpenOptionsExt,
+    PROTOCOL_VERSION, Path, PathBuf, Paths, PermissionsExt, Read, Request, Response, Result,
+    Serialize, State, Write, atomic_write, bail, ensure, fs, id,
+};
 use fs2::FileExt;
 use rusqlite::{Connection, OpenFlags, params};
 
@@ -49,6 +53,7 @@ pub struct Generation {
 }
 
 impl Generation {
+    #[must_use]
     pub fn paths(&self) -> Paths {
         Paths {
             data: self.data.clone(),
@@ -75,6 +80,7 @@ pub fn workspace_paths(paths: &Paths) -> Result<Paths> {
     Ok(paths.clone())
 }
 
+#[must_use]
 pub fn exists(paths: &Paths) -> bool {
     catalog_version(paths).is_some_and(|version| version > 0)
 }
@@ -393,7 +399,7 @@ impl Catalog {
 }
 
 /// The caller holds the exclusive legacy lock. Original database and history are
-/// retained; a consistent SQLite backup precedes the older-binary version guard.
+/// retained; a consistent `SQLite` backup precedes the older-binary version guard.
 pub fn migrate_idle(paths: &Paths) -> Result<()> {
     migrate(paths, false)
 }
@@ -476,6 +482,7 @@ pub fn saved(paths: &Paths) -> Result<State> {
 
 /// Lock release plus an absent recorded process proves death. PID reuse is
 /// conservatively treated as unavailable rather than declaring ownership lost.
+#[must_use]
 pub fn historical(owner: &Generation, active: Option<&str>) -> bool {
     owner.status == Status::Retired && active != Some(owner.id.as_str())
 }

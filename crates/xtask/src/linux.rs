@@ -1,6 +1,9 @@
 //! Explicit disposable-container setup and desktop validation. This task refuses
 //! to install system packages on a host. Application packages contain no browser.
-use crate::{harness::*, integration, native};
+use crate::{
+    harness::{Process, artifacts, bin, output, root},
+    integration, native,
+};
 use anyhow::{Context, Result, ensure};
 use std::{
     fs,

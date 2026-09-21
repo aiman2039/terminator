@@ -1,6 +1,9 @@
 //! These tests operate only on the fixture GUI's PID. Platform permissions and
 //! a real window manager are required; absence is an explicit error, not a pass.
-use super::*;
+use super::{
+    Context, Duration, Harness, Options, Path, PathBuf, Process, Result, Value, ensure, fs, id,
+    json, sessions, thread, wait_child,
+};
 use terminator_core::{
     Paths,
     ui_control::{self, Request},

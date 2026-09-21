@@ -5,7 +5,9 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-use terminator_core::*;
+use terminator_core::{
+    AgentState, HookEvent, PROTOCOL_VERSION, Paths, Resume, atomic_write, id, now, quote,
+};
 pub const AGENTS: [&str; 5] = ["claude", "codex", "opencode", "muse", "grok"];
 const MARKER: &str = "terminator-managed:v1";
 pub fn config_path(home: &Path, kind: &str) -> Result<PathBuf> {
@@ -18,6 +20,7 @@ pub fn config_path(home: &Path, kind: &str) -> Result<PathBuf> {
         _ => bail!("Unknown built-in integration"),
     }))
 }
+#[must_use]
 pub fn installed(home: &Path, kind: &str) -> bool {
     config_path(home, kind)
         .ok()
@@ -243,7 +246,7 @@ fn codex_config(before: &str, command: &str, remove: bool) -> Result<String> {
 fn opencode_plugin(helper: &Path) -> String {
     let helper = json!(helper.to_string_lossy()).to_string();
     format!(
-        r#"// {MARKER}
+        r"// {MARKER}
 import {{ spawn }} from 'node:child_process';
 import {{ randomUUID }} from 'node:crypto';
 const TYPES = ['session.created','session.status','session.idle','session.error','session.deleted','permission.asked','permission.replied','permission.v2.asked','permission.v2.replied','question.asked','question.replied','question.rejected','question.v2.asked','question.v2.replied','question.v2.rejected'];
@@ -281,7 +284,7 @@ export default {{
     return () => c.abort();
   }},
 }};
-"#
+"
     )
 }
 
@@ -422,9 +425,7 @@ pub fn normalize(
     .map(str::to_owned);
     Ok(Some(HookEvent {
         protocol_version: PROTOCOL_VERSION,
-        event_id: first_str(payload, &["terminator_event"])
-            .map(str::to_owned)
-            .unwrap_or_else(id),
+        event_id: first_str(payload, &["terminator_event"]).map_or_else(id, str::to_owned),
         terminal_session_id: session.into(),
         agent_invocation_id: invocation,
         agent_kind: kind.into(),

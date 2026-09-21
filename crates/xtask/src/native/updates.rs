@@ -1,6 +1,9 @@
 //! Local bundle-replacement continuity fixture. This does not claim to exercise
 //! Sparkle's signature/notarization/authorization paths; see docs/UPDATES.md.
-use super::*;
+use super::{
+    Harness, Options, Path, PathBuf, Result, Value, bin, capture, ensure, fs, id, json, output,
+    save_prefs,
+};
 use terminator_core::{Paths, ui_control};
 
 fn snapshot(h: &Harness) -> Result<Value> {

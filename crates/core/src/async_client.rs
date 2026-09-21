@@ -1,7 +1,9 @@
 //! Async transport with the same owner routing and pre-execution redirects as CLI clients.
 use crate::{
+    Context, Duration, Envelope, MAX_FRAME, PROTOCOL_VERSION, PathBuf, Paths, Read, Request,
+    Response, Result, SnapshotHint, State, Write, archived_generation,
     async_service::{CancellationToken, NativePool},
-    *,
+    bail, ensure, generations, redirect_allowed, snapshot,
 };
 use futures_util::{StreamExt, stream};
 use tokio::{
@@ -26,6 +28,7 @@ pub struct Client {
     observations: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 impl Client {
+    #[must_use]
     pub fn new(paths: Paths, catalog: NativePool, cpu: NativePool) -> Self {
         Self {
             paths,
@@ -390,6 +393,7 @@ impl Client {
             .await
     }
 }
+#[must_use]
 pub fn read_only(request: &Request) -> bool {
     matches!(
         request,

@@ -1,5 +1,8 @@
 //! Native generation diagnostics, restart warning, cancellation and reattachment.
-use super::*;
+use super::{
+    Context, Duration, Harness, Options, Result, Value, capture, ensure, fs, id, json, output,
+    session, sessions, thread, wait_child,
+};
 use std::{process::Command, time::Instant};
 use terminator_core::{Paths, ui_control};
 

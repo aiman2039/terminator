@@ -114,6 +114,7 @@ impl Doc {
         doc
     }
 
+    #[must_use]
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -162,8 +163,7 @@ impl Doc {
 fn byte_idx(text: &str, char_idx: usize) -> usize {
     text.char_indices()
         .nth(char_idx)
-        .map(|(b, _)| b)
-        .unwrap_or(text.len())
+        .map_or(text.len(), |(b, _)| b)
 }
 
 fn byte_range(text: &str, start: usize, end: usize) -> std::ops::Range<usize> {
@@ -184,11 +184,10 @@ impl Buffer for Doc {
             return String::new();
         };
         let start_char = char_idx_of_byte(&self.text, start_byte);
-        let end_char = self
-            .line_starts
-            .get(line + 1)
-            .map(|b| char_idx_of_byte(&self.text, *b).saturating_sub(1))
-            .unwrap_or_else(|| self.text.chars().count());
+        let end_char = self.line_starts.get(line + 1).map_or_else(
+            || self.text.chars().count(),
+            |b| char_idx_of_byte(&self.text, *b).saturating_sub(1),
+        );
         self.text
             .chars()
             .skip(start_char)

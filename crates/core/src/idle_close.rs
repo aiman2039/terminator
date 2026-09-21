@@ -100,7 +100,7 @@ fn shell_waiting(pid: u32, _status: sysinfo::ProcessStatus) -> bool {
                 pid as i32,
                 libc::PROC_PIDTHREADINFO,
                 *thread,
-                (&mut info as *mut libc::proc_threadinfo).cast(),
+                (&raw mut info).cast(),
                 size,
             )
         };

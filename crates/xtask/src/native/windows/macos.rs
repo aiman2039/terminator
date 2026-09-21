@@ -1,4 +1,4 @@
-use super::*;
+use super::{Context, Duration, Path, Result, ensure, thread, wait};
 use core_foundation::{
     base::{CFType, TCFType},
     boolean::CFBoolean,
@@ -59,7 +59,7 @@ impl Desktop {
             for item in windows.iter() {
                 let object = unsafe { CFType::wrap_under_get_rule(*item) };
                 if let Some(dictionary) = object.downcast::<CFDictionary>()
-                    && number(&dictionary, "kCGWindowOwnerPID") == Some(pid as f64)
+                    && number(&dictionary, "kCGWindowOwnerPID") == Some(f64::from(pid))
                 {
                     eprintln!(
                         "Mac fixture window: id={:?}, layer={:?}, visible={:?}, bounds={:?}",
@@ -83,10 +83,10 @@ impl Desktop {
         for item in windows.iter() {
             let object = unsafe { CFType::wrap_under_get_rule(*item) };
             if let Some(dictionary) = object.downcast::<CFDictionary>()
-                && number(&dictionary, "kCGWindowOwnerPID") == Some(self.pid as f64)
+                && number(&dictionary, "kCGWindowOwnerPID") == Some(f64::from(self.pid))
                 && number(&dictionary, "kCGWindowLayer").is_some_and(|n| n == 0.0 || n == 3.0)
                 && (self.window_id == 0
-                    || number(&dictionary, "kCGWindowNumber") == Some(self.window_id as f64))
+                    || number(&dictionary, "kCGWindowNumber") == Some(f64::from(self.window_id)))
             {
                 if self.window_id == 0
                     && !value(&dictionary, "kCGWindowIsOnscreen")
@@ -122,15 +122,15 @@ impl Desktop {
     }
     fn mouse(&self, kind: CGEventType, x: f64, y: f64) -> Result<()> {
         let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-            .map_err(|_| anyhow::anyhow!("Create event source"))?;
+            .map_err(|()| anyhow::anyhow!("Create event source"))?;
         let event = CGEvent::new_mouse_event(source, kind, CGPoint::new(x, y), CGMouseButton::Left)
-            .map_err(|_| anyhow::anyhow!("Create mouse event"))?;
+            .map_err(|()| anyhow::anyhow!("Create mouse event"))?;
         event.set_integer_value_field(core_graphics::event::EventField::MOUSE_EVENT_CLICK_STATE, 1);
         event.set_integer_value_field(
             core_graphics::event::EventField::MOUSE_EVENT_WINDOW_UNDER_MOUSE_POINTER,
-            self.window_id as i64,
+            i64::from(self.window_id),
         );
-        event.set_integer_value_field(core_graphics::event::EventField::MOUSE_EVENT_WINDOW_UNDER_MOUSE_POINTER_THAT_CAN_HANDLE_THIS_EVENT,self.window_id as i64);
+        event.set_integer_value_field(core_graphics::event::EventField::MOUSE_EVENT_WINDOW_UNDER_MOUSE_POINTER_THAT_CAN_HANDLE_THIS_EVENT,i64::from(self.window_id));
         if matches!(kind, CGEventType::LeftMouseDown) {
             let r = self.geometry()?;
             ensure!(
@@ -156,8 +156,8 @@ impl Desktop {
         for i in 1..=10 {
             self.mouse(
                 CGEventType::LeftMouseDragged,
-                start.0 + (end.0 - start.0) * i as f64 / 10.0,
-                start.1 + (end.1 - start.1) * i as f64 / 10.0,
+                start.0 + (end.0 - start.0) * f64::from(i) / 10.0,
+                start.1 + (end.1 - start.1) * f64::from(i) / 10.0,
             )?;
         }
         self.mouse(CGEventType::LeftMouseUp, end.0, end.1)
@@ -170,7 +170,7 @@ impl Desktop {
                 AXUIElementCopyAttributeValue(
                     app.as_CFTypeRef(),
                     CFString::new("AXWindows").as_concrete_TypeRef(),
-                    &mut result
+                    &raw mut result
                 ) == 0,
                 "Cannot read fixture accessibility windows"
             );
@@ -188,7 +188,7 @@ impl Desktop {
                 AXUIElementCopyAttributeValue(
                     element.as_CFTypeRef(),
                     CFString::new(name).as_concrete_TypeRef(),
-                    &mut result
+                    &raw mut result
                 ) == 0,
                 "Missing native window attribute {name}"
             );
@@ -243,9 +243,9 @@ impl Desktop {
     fn key(&self, key: u16, flags: CGEventFlags, text: Option<&str>) -> Result<()> {
         for down in [true, false] {
             let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-                .map_err(|_| anyhow::anyhow!("Create event source"))?;
+                .map_err(|()| anyhow::anyhow!("Create event source"))?;
             let event = CGEvent::new_keyboard_event(source, key, down)
-                .map_err(|_| anyhow::anyhow!("Create key event"))?;
+                .map_err(|()| anyhow::anyhow!("Create key event"))?;
             event.set_flags(flags);
             if down && let Some(text) = text {
                 event.set_string(text);

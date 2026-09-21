@@ -27,8 +27,7 @@ pub fn bin() -> PathBuf {
     }
 
     std::env::var_os("CARGO_TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root().join("target"))
+        .map_or_else(|| root().join("target"), PathBuf::from)
         .join("debug")
 }
 pub fn artifacts() -> PathBuf {
@@ -136,13 +135,11 @@ impl Harness {
         let executable = if name == "terminator" {
             self.env
                 .get("TERMINATOR_FIXTURE_GUI")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| bin().join(name))
+                .map_or_else(|| bin().join(name), PathBuf::from)
         } else if name == "terminator-daemon" {
             self.env
                 .get("TERMINATOR_FIXTURE_DAEMON")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| bin().join(name))
+                .map_or_else(|| bin().join(name), PathBuf::from)
         } else {
             bin().join(name)
         };

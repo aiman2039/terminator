@@ -44,6 +44,7 @@ pub struct OperationContext {
     pub admitted: Instant,
 }
 impl OperationContext {
+    #[must_use]
     pub fn new(subsystem: &'static str, resource: String, policy: Policy) -> Self {
         Self {
             id: OperationId(0),
@@ -198,6 +199,7 @@ impl<T: Send + 'static> Handle<T> {
         }
         Ok(id)
     }
+    #[must_use]
     pub fn diagnostics(&self) -> Diagnostics {
         let c = &self.0.counters;
         Diagnostics {
@@ -261,6 +263,7 @@ impl<T: Send + 'static> Supervisor<T> {
     pub fn try_recv(&mut self) -> Option<Completion<T>> {
         self.results.try_recv().ok()
     }
+    #[must_use]
     pub fn has_results(&self) -> bool {
         !self.results.is_empty()
     }
@@ -375,16 +378,16 @@ async fn supervise<T: Send + 'static>(
                 let result = AssertUnwindSafe(async {
                     // Mutations own their deadlines: transport errors after write are uncertain,
                     // and native writes must remain tracked until the library returns.
-                    if job.context.policy != Policy::ReplaceableRead {
-                        job.future.await.map_err(Failure::from_error)
-                    } else {
+                    if job.context.policy == Policy::ReplaceableRead {
                         let deadline = job.context.deadline;
                         tokio::select! {
                             biased;
-                            _ = job.cancellation.cancelled() => Err(Failure::Cancelled),
-                            _ = async { match deadline { Some(d) => tokio::time::sleep_until(d.into()).await, None => std::future::pending().await } } => Err(Failure::Timeout),
+                            () = job.cancellation.cancelled() => Err(Failure::Cancelled),
+                            () = async { match deadline { Some(d) => tokio::time::sleep_until(d.into()).await, None => std::future::pending().await } } => Err(Failure::Timeout),
                             result = job.future => result.map_err(Failure::from_error),
                         }
+                    } else {
+                        job.future.await.map_err(Failure::from_error)
                     }
                 }).catch_unwind().await.unwrap_or(Err(Failure::Panicked));
                 (job.context, result, job.read_epoch)
@@ -394,7 +397,7 @@ async fn supervise<T: Send + 'static>(
             break;
         }
         tokio::select! {
-            _ = shared.stop.cancelled(), if !stopping => {
+            () = shared.stop.cancelled(), if !stopping => {
                 stopping = true;
                 requests.close();
                 for (context, cancellation) in &active {
@@ -424,7 +427,7 @@ async fn supervise<T: Send + 'static>(
                     deliver(context, result, &shared, &complete, &wake).await;
                 }
             }
-            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            () = tokio::time::sleep(Duration::from_millis(10)) => {}
         }
     }
 }
@@ -507,9 +510,11 @@ impl NativePool {
             }
         })?
     }
+    #[must_use]
     pub fn occupancy(&self) -> usize {
         self.owner.running.load(Ordering::Acquire)
     }
+    #[must_use]
     pub fn queued(&self) -> usize {
         self.sender.max_capacity() - self.sender.capacity()
     }

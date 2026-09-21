@@ -1,5 +1,5 @@
 //! Public sample workspaces only; no provider launch, user configuration or private messages.
-use super::*;
+use super::{Harness, Options, PathBuf, Result, fs, id, json, plain, prefs, save_prefs};
 
 pub fn run(o: &Options) -> Result<()> {
     let mut h = Harness::new()?;

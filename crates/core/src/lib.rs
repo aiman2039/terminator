@@ -31,12 +31,14 @@ use std::{
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const NVIM_REVIEW_CAPABILITY: &str = "nvim-review-v1";
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
+#[must_use]
 pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
 }
+#[must_use]
 pub fn id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -63,6 +65,7 @@ fn find_executable_in(program: &str, paths: &[PathBuf]) -> Option<PathBuf> {
     })
 }
 /// Check the current user's ability to execute a regular file, including ACLs.
+#[must_use]
 pub fn executable_available(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
     path.is_file()
@@ -75,6 +78,7 @@ pub fn default_shell() -> Result<PathBuf> {
         .find_map(find_executable)
         .context("No zsh, bash, or sh executable found")
 }
+#[must_use]
 pub fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
@@ -105,6 +109,7 @@ impl Paths {
             runtime: PathBuf::from(format!("/tmp/terminator-{:x}", h.finish())),
         })
     }
+    #[must_use]
     pub fn at(data: PathBuf) -> Self {
         Self {
             runtime: data.join("run"),
@@ -128,18 +133,23 @@ impl Paths {
         );
         Ok(())
     }
+    #[must_use]
     pub fn socket(&self) -> PathBuf {
         self.runtime.join("daemon.sock")
     }
+    #[must_use]
     pub fn auth(&self) -> PathBuf {
         self.runtime.join("auth")
     }
+    #[must_use]
     pub fn history_dir(&self) -> PathBuf {
         self.data.join("history")
     }
+    #[must_use]
     pub fn crash_dir(&self) -> PathBuf {
         self.data.join("crashes")
     }
+    #[must_use]
     pub fn editor_socket(&self, session: &str) -> PathBuf {
         self.runtime
             .join(format!("{}.nvim", &session[..8.min(session.len())]))
@@ -179,6 +189,7 @@ pub enum Lifecycle {
     Interrupted,
 }
 impl Lifecycle {
+    #[must_use]
     pub fn live(&self) -> bool {
         matches!(self, Self::Running | Self::Stopping)
     }
@@ -230,12 +241,14 @@ pub enum AgentState {
     Stopped,
 }
 impl AgentState {
+    #[must_use]
     pub fn actionable(self) -> bool {
         matches!(
             self,
             Self::WaitingInput | Self::WaitingPermission | Self::Completed | Self::Failed
         )
     }
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Unknown => "Unknown",
@@ -271,6 +284,7 @@ pub struct Resume {
     pub args: Vec<String>,
 }
 impl Resume {
+    #[must_use]
     pub fn display(&self) -> String {
         std::iter::once(&self.program)
             .chain(self.args.iter())
@@ -295,6 +309,7 @@ impl Agent {
     /// provider resume command behind (e.g. `codex resume <id>`).
     /// Plain shells and file editors have no such handle, so reopening
     /// them restores nothing actionable.
+    #[must_use]
     pub fn resumable(&self) -> bool {
         self.resume.is_some()
     }
@@ -496,6 +511,7 @@ pub struct State {
 impl State {
     /// True when at least one agent left a provider resume command for this
     /// session (e.g. `codex resume <id>`).
+    #[must_use]
     pub fn session_has_resume(&self, session: &str) -> bool {
         self.agents
             .iter()
@@ -525,13 +541,13 @@ impl State {
         removed
     }
     /// Resolve from the already-loaded inventory; safe to use in GUI rendering.
+    #[must_use]
     pub fn session_paths(&self, fallback: &Paths, session: &str) -> Paths {
         self.sessions
             .iter()
             .find(|s| s.id == session)
             .and_then(|s| self.generations.iter().find(|g| g.owner.id == s.generation))
-            .map(|g| g.owner.paths())
-            .unwrap_or_else(|| fallback.clone())
+            .map_or_else(|| fallback.clone(), |g| g.owner.paths())
     }
     /// Terminal messages are untrusted UI notices, never agent lifecycle events.
     pub fn terminal_notice(
@@ -905,9 +921,8 @@ impl Response {
             bail!("Request rejected before execution; use active generation {generation}")
         } else if let Self::Error(e) = self {
             bail!("{e}")
-        } else {
-            Ok(self)
         }
+        Ok(self)
     }
 }
 pub fn write_frame<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<()> {
@@ -1073,6 +1088,7 @@ pub struct SnapshotHint {
     pub owner_revisions: Vec<(String, u64, Option<String>, generations::Status)>,
 }
 impl State {
+    #[must_use]
     pub fn snapshot_hint(&self) -> SnapshotHint {
         SnapshotHint {
             generation: self.generation.clone(),
@@ -1108,6 +1124,7 @@ pub fn conditional_snapshot(paths: &Paths, hint: Option<SnapshotHint>) -> Result
 
 /// Docking libraries use infinite rectangles before their first layout pass. JSON
 /// encodes those as null; replace only coordinate placeholders, never optional IDs.
+#[must_use]
 pub fn sanitize_layout(mut value: serde_json::Value) -> serde_json::Value {
     fn walk(value: &mut serde_json::Value) {
         match value {
@@ -1122,7 +1139,7 @@ pub fn sanitize_layout(mut value: serde_json::Value) -> serde_json::Value {
             }
             serde_json::Value::Array(items) => {
                 for item in items {
-                    walk(item)
+                    walk(item);
                 }
             }
             _ => {}

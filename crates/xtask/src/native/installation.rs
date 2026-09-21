@@ -1,5 +1,8 @@
 //! Exercise recovery in the native GUI, using only a disposable daemon.
-use super::*;
+use super::{
+    Duration, Harness, Options, PathBuf, Process, Result, Value, bin, capture, ensure, fs, id,
+    json, reviews, save_prefs, session, sessions, thread, wait_child,
+};
 use terminator_core::{Paths, ui_control};
 
 fn gui(h: &Harness) -> Result<Value> {

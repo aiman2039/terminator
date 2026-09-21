@@ -1,6 +1,6 @@
 //! Minimal vim-modal engine over [`crate::doc::Buffer`].
 //!
-//! Scope (the Minimal tier): Normal / Insert / Visual / VisualLine / Command
+//! Scope (the Minimal tier): Normal / Insert / Visual / `VisualLine` / Command
 //! modes; motions `hjkl w b e 0 $ ^ G gg` with counts; operators `d c y`
 //! (plus `dd yy cc x p u`); `:w :q :q! :wq :x`. Anything richer (text
 //! objects beyond `iw`/`aw`, macros, `hjkl` crate adoption) builds on the
@@ -133,6 +133,7 @@ fn apply_set_str(opts: &mut VimrcOptions, option: &str) -> bool {
 /// Parse a vimrc buffer: apply the supported `set` options, silently ignore
 /// everything else (mappings, plugins, comments, unknown options). A vimrc
 /// must never fail to load because of something we do not implement.
+#[must_use]
 pub fn parse_vimrc(content: &str) -> VimrcOptions {
     let mut opts = VimrcOptions::default();
     for raw in content.lines() {
@@ -159,6 +160,7 @@ pub fn parse_vimrc(content: &str) -> VimrcOptions {
 }
 
 impl VimEngine {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -723,13 +725,13 @@ impl VimEngine {
             Key::Char('l') | Key::Right => {
                 self.apply_motion(doc, 'l', count);
             }
-            Key::Char('w') | Key::Char('W') => {
+            Key::Char('w' | 'W') => {
                 self.apply_motion(doc, 'w', count);
             }
-            Key::Char('b') | Key::Char('B') => {
+            Key::Char('b' | 'B') => {
                 self.apply_motion(doc, 'b', count);
             }
-            Key::Char('e') | Key::Char('E') => {
+            Key::Char('e' | 'E') => {
                 self.apply_motion(doc, 'e', count);
             }
             Key::Char('0') => {
@@ -1179,8 +1181,8 @@ impl VimEngine {
             Key::Char('j') | Key::Down => self.move_j(doc, count),
             Key::Char('k') | Key::Up => self.move_k(doc, count),
             Key::Char('l') | Key::Right => self.move_l(doc, count),
-            Key::Char('w') | Key::Char('W') | Key::Char('b') | Key::Char('B') => {
-                let kind = if matches!(key, Key::Char('w') | Key::Char('W')) {
+            Key::Char('w' | 'W' | 'b' | 'B') => {
+                let kind = if matches!(key, Key::Char('w' | 'W')) {
                     'w'
                 } else {
                     'b'
@@ -1189,7 +1191,7 @@ impl VimEngine {
                 self.goto(doc, target.line, target.col, true);
                 self.count.clear();
             }
-            Key::Char('e') | Key::Char('E') => {
+            Key::Char('e' | 'E') => {
                 let (target, _) = self.motion_target(doc, 'e', count);
                 self.goto(doc, target.line, target.col, true);
                 self.count.clear();
@@ -1207,7 +1209,7 @@ impl VimEngine {
                 self.yank_selection(doc, linewise);
                 self.enter_normal(doc);
             }
-            Key::Char('d') | Key::Char('x') => {
+            Key::Char('d' | 'x') => {
                 self.delete_selection(doc, linewise);
                 self.enter_normal(doc);
             }

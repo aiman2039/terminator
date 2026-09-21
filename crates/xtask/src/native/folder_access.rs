@@ -1,5 +1,5 @@
 //! Unix access revocation in a disposable project. This is not a TCC policy test.
-use super::*;
+use super::{Duration, Harness, Options, PathBuf, Result, capture, ensure, fs, json, thread};
 use std::os::unix::fs::PermissionsExt;
 
 struct RestoreAccess(PathBuf);

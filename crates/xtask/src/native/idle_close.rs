@@ -1,4 +1,6 @@
-use super::*;
+use super::{
+    Duration, Harness, Options, Result, ensure, fs, id, json, plain, session, session_ids, thread,
+};
 
 pub fn run(o: &Options) -> Result<()> {
     let Some(shell) = terminator_core::find_executable("zsh") else {

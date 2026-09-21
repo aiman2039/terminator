@@ -1,5 +1,5 @@
 //! Live CDP proof against a fresh headless browser profile and a local HTTP page.
-use crate::harness::*;
+use crate::harness::{Process, artifacts, bin, output};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
@@ -49,7 +49,7 @@ fn page() -> Result<(Server, u16)> {
                     );
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(20))
+                    thread::sleep(Duration::from_millis(20));
                 }
                 Err(_) => break,
             }

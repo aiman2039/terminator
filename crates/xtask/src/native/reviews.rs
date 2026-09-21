@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Context, Duration, Harness, Options, Path, PathBuf, Result, Value, ensure, fs, git, id, json,
+    output, plain, save_prefs, session, session_ids, sessions, thread,
+};
 use std::{
     io,
     net::Shutdown,
@@ -251,7 +254,7 @@ pub(super) fn proxy(root: &Path) -> Result<Proxy> {
                     });
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(20))
+                    thread::sleep(Duration::from_millis(20));
                 }
                 Err(_) => break,
             }

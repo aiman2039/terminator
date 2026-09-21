@@ -23,12 +23,12 @@ pub struct ListeningPort {
     pub port: u16,
 }
 impl ListeningPort {
+    #[must_use]
     pub fn url(&self) -> String {
         let host = self
             .address
             .rsplit_once(':')
-            .map(|(s, _)| s)
-            .unwrap_or("127.0.0.1");
+            .map_or("127.0.0.1", |(s, _)| s);
         let host = if matches!(host, "*" | "0.0.0.0" | "[::]" | "::") {
             "127.0.0.1"
         } else {
@@ -122,7 +122,7 @@ pub fn listening_ports(identity: (u32, u64)) -> Result<Vec<ListeningPort>> {
     let owned = owned_processes(identity)?;
     let pids = owned
         .iter()
-        .map(|p| p.to_string())
+        .map(std::string::ToString::to_string)
         .collect::<Vec<_>>()
         .join(",");
     let mut c = Command::new(find_executable("lsof").context("lsof is not installed")?);
@@ -216,8 +216,8 @@ impl Default for Cache {
         Self {
             cwd: None,
             data: Metadata::default(),
-            git_at: Instant::now() - Duration::from_secs(60),
-            pr_at: Instant::now() - Duration::from_secs(60),
+            git_at: Instant::now().checked_sub(Duration::from_mins(1)).unwrap(),
+            pr_at: Instant::now().checked_sub(Duration::from_mins(1)).unwrap(),
             pr_enabled: false,
         }
     }
@@ -252,12 +252,12 @@ impl Cache {
                 .as_ref()
                 .is_some_and(|p| p.join(".git").is_file());
             if self.data.branch != previous {
-                self.pr_at = Instant::now() - Duration::from_secs(60);
+                self.pr_at = Instant::now().checked_sub(Duration::from_mins(1)).unwrap();
             }
         }
         if include_pr
             && self.data.root.is_some()
-            && (changed || !self.pr_enabled || self.pr_at.elapsed() >= Duration::from_secs(60))
+            && (changed || !self.pr_enabled || self.pr_at.elapsed() >= Duration::from_mins(1))
         {
             self.pr_at = Instant::now();
             match pull_request(cwd) {
@@ -326,12 +326,12 @@ impl Cache {
                 .await
                 .unwrap_or(false);
             if self.data.branch != previous {
-                self.pr_at = Instant::now() - Duration::from_secs(60);
+                self.pr_at = Instant::now().checked_sub(Duration::from_mins(1)).unwrap();
             }
         }
         if include_pr
             && self.data.root.is_some()
-            && (changed || !self.pr_enabled || self.pr_at.elapsed() >= Duration::from_secs(60))
+            && (changed || !self.pr_enabled || self.pr_at.elapsed() >= Duration::from_mins(1))
         {
             self.pr_at = Instant::now();
             match pull_request_async(processes, cwd).await {

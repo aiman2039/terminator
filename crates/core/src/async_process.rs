@@ -73,7 +73,7 @@ impl Processes {
                     break;
                 }
                 tokio::select! {
-                    _ = shutdown.cancelled(), if !closed => {
+                    () = shutdown.cancelled(), if !closed => {
                         incoming.close();
                         closed = true;
                         pending.clear();
@@ -93,6 +93,7 @@ impl Processes {
         };
         (Self { requests, children }, actor)
     }
+    #[must_use]
     pub fn children(&self) -> usize {
         self.children.load(Ordering::Acquire)
     }
@@ -196,8 +197,8 @@ async fn execute(
     };
     let result: Result<Output> = tokio::select! {
         result = transfer => result,
-        _ = cancel.cancelled() => Err(Failure::Cancelled.into()),
-        _ = tokio::time::sleep(options.timeout) => Err(anyhow::anyhow!("Command timed out after {:?}", options.timeout)),
+        () = cancel.cancelled() => Err(Failure::Cancelled.into()),
+        () = tokio::time::sleep(options.timeout) => Err(anyhow::anyhow!("Command timed out after {:?}", options.timeout)),
     };
     if result.is_err() {
         unsafe {
@@ -211,6 +212,7 @@ async fn execute(
 
 /// Filesystem-only repository identity; call on a native filesystem worker.
 /// Linked checkouts share their canonical common Git directory.
+#[must_use]
 pub fn git_key(cwd: &std::path::Path) -> String {
     use std::{io::Read, os::unix::fs::OpenOptionsExt};
     let read = |path: &std::path::Path| -> Option<String> {

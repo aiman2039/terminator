@@ -1,4 +1,7 @@
-use crate::harness::*;
+use crate::harness::{
+    Harness, Process, artifacts, bin, git, id, output, root, session, session_ids, sessions,
+    wait_child,
+};
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{

@@ -1,5 +1,5 @@
 //! The inventory approved by the user, carried unchanged to detached recovery.
-use crate::{State, *};
+use crate::{BTreeSet, Deserialize, Result, Serialize, State, ensure};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RestartInventory {
@@ -8,6 +8,7 @@ pub struct RestartInventory {
 }
 
 impl RestartInventory {
+    #[must_use]
     pub fn capture(state: &State) -> Self {
         Self {
             generation: state.generation.clone(),

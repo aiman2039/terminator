@@ -1,4 +1,4 @@
-use super::*;
+use super::{Harness, Options, Result, Value, capture, ensure, id, json, prefs, save_prefs};
 use terminator_core::{Paths, ui_control};
 
 fn gui(h: &Harness) -> Result<Value> {

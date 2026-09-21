@@ -1,5 +1,5 @@
 //! Review regressions use fresh daemons, PTYs and temporary files only.
-use crate::harness::*;
+use crate::harness::{Harness, bin, id, session, sessions, wait_child};
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 use std::{

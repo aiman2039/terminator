@@ -108,12 +108,15 @@ impl AppearanceConfig {
         );
         Ok(())
     }
+    #[must_use]
     pub fn compact(&self) -> bool {
         matches!(self.density, Density::Compact)
     }
+    #[must_use]
     pub fn row_height(&self) -> f32 {
         if self.compact() { 24.0 } else { 28.0 }
     }
+    #[must_use]
     pub fn high_contrast() -> Self {
         Self {
             window: "#0A0A0C".into(),
@@ -137,6 +140,7 @@ impl AppearanceConfig {
             ..Default::default()
         }
     }
+    #[must_use]
     pub fn colors_match(&self, other: &Self) -> bool {
         self.window == other.window
             && self.surface == other.surface
@@ -163,7 +167,7 @@ impl AppearanceConfig {
                 "#{:02X}{:02X}{:02X}",
                 r / 3,
                 g / 3,
-                ((b as u16 * 2) / 5) as u8
+                ((u16::from(b) * 2) / 5) as u8
             );
         }
         self.accent = accent;

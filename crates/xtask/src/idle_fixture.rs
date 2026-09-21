@@ -1,5 +1,5 @@
 //! Real PTYs: idle shells, children, all-target preflight, and agents.
-use crate::harness::*;
+use crate::harness::{Harness, id, session};
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 use std::{fs, thread, time::Duration};

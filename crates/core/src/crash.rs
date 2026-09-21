@@ -73,6 +73,7 @@ pub fn install(
 }
 
 impl CrashNotice {
+    #[must_use]
     pub fn dialog_body(&self) -> String {
         let summary = &self.summary;
         if self.path.as_os_str().is_empty() {
@@ -150,19 +151,18 @@ impl Report {
                 .name()
                 .unwrap_or("unnamed")
                 .to_owned(),
-            location: info
-                .location()
-                .map(|location| {
+            location: info.location().map_or_else(
+                || "unknown".into(),
+                |location| {
                     let file = location.file();
                     let line = location.line();
                     let column = location.column();
                     format!("{file}:{line}:{column}")
-                })
-                .unwrap_or_else(|| "unknown".into()),
+                },
+            ),
             summary: info
                 .payload_as_str()
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| "unknown panic payload".into()),
+                .map_or_else(|| "unknown panic payload".into(), ToOwned::to_owned),
             backtrace: format!("{}", Backtrace::force_capture()),
         }
     }

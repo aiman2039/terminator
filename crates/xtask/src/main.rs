@@ -130,7 +130,11 @@ enum Task {
 fn main() -> Result<()> {
     if std::env::args_os()
         .next()
-        .and_then(|p| PathBuf::from(p).file_name().map(|s| s.to_owned()))
+        .and_then(|p| {
+            PathBuf::from(p)
+                .file_name()
+                .map(std::borrow::ToOwned::to_owned)
+        })
         .is_some_and(|s| s == "terminator-test-shell")
     {
         // Native-input fixtures use a non-executing PTY sink, so desktop typing
@@ -138,12 +142,12 @@ fn main() -> Result<()> {
         unsafe {
             let mut attributes = std::mem::zeroed();
             anyhow::ensure!(
-                libc::tcgetattr(0, &mut attributes) == 0,
+                libc::tcgetattr(0, &raw mut attributes) == 0,
                 "Fixture sink requires a PTY"
             );
             attributes.c_lflag &= !(libc::ECHO | libc::ECHONL);
             anyhow::ensure!(
-                libc::tcsetattr(0, libc::TCSANOW, &attributes) == 0,
+                libc::tcsetattr(0, libc::TCSANOW, &raw const attributes) == 0,
                 "Cannot disable fixture echo"
             );
         }
@@ -153,7 +157,11 @@ fn main() -> Result<()> {
 
     if std::env::args_os()
         .next()
-        .and_then(|p| PathBuf::from(p).file_name().map(|s| s.to_owned()))
+        .and_then(|p| {
+            PathBuf::from(p)
+                .file_name()
+                .map(std::borrow::ToOwned::to_owned)
+        })
         .is_some_and(|name| name == "git" || name == "ps" || name == "gh")
     {
         return integration::git_shim();
