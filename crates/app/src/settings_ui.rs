@@ -10,6 +10,12 @@ struct SettingsFrame {
     grant_folder: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SettingsPending {
+    Section(SettingsSection),
+    Close,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SettingsSection {
     Appearance,
@@ -147,7 +153,111 @@ impl App {
     pub(super) fn end_settings_session(&mut self) {
         self.settings_open = false;
         self.settings_session = false;
+        self.settings_pending = None;
         self.shortcut_capture = None;
+    }
+
+    pub(super) fn settings_dirty(&self) -> bool {
+        self.settings_session
+            && (self.settings_draft != self.state.settings
+                || self.theme_draft != self.theme_committed)
+    }
+
+    pub(super) fn request_settings_section(&mut self, section: SettingsSection) {
+        if section == self.settings_section || !self.settings_dirty() {
+            self.settings_section = section;
+            return;
+        }
+        self.settings_pending = Some(SettingsPending::Section(section));
+    }
+
+    pub(super) fn request_settings_close(&mut self) {
+        if !self.settings_dirty() {
+            self.end_settings_session();
+            return;
+        }
+        self.settings_pending = Some(SettingsPending::Close);
+    }
+
+    fn apply_settings(&mut self) {
+        let _ = self.jobs.send(Job::SaveAppearance(
+            Box::new(self.theme_draft.clone()),
+            self.theme_source.clone(),
+        ));
+        self.send(Request::Settings(self.settings_draft.clone()));
+    }
+
+    fn revert_settings_draft(&mut self) {
+        self.settings_draft = self.state.settings.clone();
+        shortcuts::fill_defaults(&mut self.settings_draft.keybindings);
+        self.editor_preset = external_editor::selected(&self.settings_draft);
+        self.theme_draft = self.theme_committed.clone();
+        self.theme_conflict = false;
+        self.shortcut_capture = None;
+    }
+
+    pub(super) fn resolve_settings_pending(&mut self, save: bool) {
+        let Some(pending) = self.settings_pending.take() else {
+            return;
+        };
+        if save {
+            if self.settings_validation().is_err() {
+                self.settings_pending = Some(pending);
+                return;
+            }
+            self.apply_settings();
+        } else {
+            self.revert_settings_draft();
+        }
+        match pending {
+            SettingsPending::Section(section) => self.settings_section = section,
+            SettingsPending::Close => self.end_settings_session(),
+        }
+    }
+
+    pub(super) fn settings_unsaved_dialog(&mut self, ctx: &egui::Context) {
+        if self.settings_pending.is_none() {
+            return;
+        }
+        let mut save = false;
+        let mut discard = false;
+        let mut cancel = false;
+        let valid = self.settings_validation().is_ok();
+        self.popups
+            .window(ctx, "Unsaved settings")
+            .collapsible(false)
+            .show(ctx, |ui| {
+                ui.label("You changed settings on this page. Save them before moving on?");
+                ui.horizontal(|ui| {
+                    let save_button =
+                        ui.add_enabled(valid, egui::Button::new("Save"));
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(ui.ctx(), "settings-unsaved-save", save_button.rect);
+                    if save_button.clicked() {
+                        save = true;
+                    }
+                    let discard_button = ui.button("Discard changes");
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(
+                        ui.ctx(),
+                        "settings-unsaved-discard",
+                        discard_button.rect,
+                    );
+                    if discard_button.clicked() {
+                        discard = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if save {
+            self.resolve_settings_pending(true);
+        } else if discard {
+            self.resolve_settings_pending(false);
+        } else if cancel {
+            self.settings_pending = None;
+        }
     }
 
     pub(super) fn settings_center(&mut self, ui: &mut egui::Ui) {
@@ -231,7 +341,7 @@ impl App {
                     row.rect,
                 );
                 if row.clicked() {
-                    self.settings_section = section;
+                    self.request_settings_section(section);
                 }
             }
         });
@@ -304,16 +414,11 @@ impl App {
             self.browse_target = Some(target);
         }
         if apply {
-            let _ = self.jobs.send(Job::SaveAppearance(
-                Box::new(self.theme_draft.clone()),
-                self.theme_source.clone(),
-            ));
-            self.send(Request::Settings(self.settings_draft.clone()));
+            self.apply_settings();
+            self.settings_pending = None;
         }
-        if cancel {
-            self.end_settings_session();
-        } else if hide {
-            self.hide_center_overlay();
+        if cancel || hide {
+            self.request_settings_close();
         }
     }
 

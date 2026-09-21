@@ -524,6 +524,7 @@ struct App {
     add_project: bool,
     settings_open: bool,
     settings_session: bool,
+    settings_pending: Option<settings_ui::SettingsPending>,
     player_open: bool,
     editor_preset: usize,
     test_editor: bool,
@@ -748,6 +749,7 @@ impl App {
             add_project: false,
             settings_open: false,
             settings_session: false,
+            settings_pending: None,
             player_open: false,
             editor_preset: external_editor::CUSTOM,
             test_editor: false,
@@ -2871,6 +2873,14 @@ impl App {
         }
         if self.player_open {
             self.player_center(ui);
+            return;
+        }
+        if self.palette_open {
+            self.palette_center(ui);
+            return;
+        }
+        if self.worktree_draft.is_some() {
+            self.worktree_center(ui);
             return;
         }
         self.workspace_center(ui);

@@ -131,20 +131,45 @@ impl App {
         });
     }
 
-    pub(super) fn worktree_wizard(&mut self, ctx: &egui::Context) {
+    pub(super) fn worktree_center(&mut self, ui: &mut egui::Ui) {
         let Some(mut draft) = self.worktree_draft.clone() else {
             return;
         };
-        let mut open = true;
         let mut submit = false;
         let mut browse = false;
         let mut cancel = false;
-        self.popups
-            .window(ctx, "New task worktree")
-            .open(&mut open)
-            .collapsible(false)
-            .default_size([520.0, 340.0])
-            .show(ctx, |ui| {
+        ui.set_min_size(ui.available_size());
+        ui.horizontal(|ui| {
+            ui.strong("New task worktree");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if appearance::sidebar_action(ui, "X", "Close").clicked() {
+                    cancel = true;
+                }
+            });
+        });
+        ui.add_space(8.0);
+        self.worktree_form(ui, &mut draft, &mut submit, &mut browse, &mut cancel);
+        if browse {
+            self.browse_target = Some(BrowseTarget::WorktreeDest);
+        }
+        if submit {
+            self.submit_worktree(&draft);
+        }
+        if submit || cancel {
+            self.worktree_draft = None;
+        } else {
+            self.worktree_draft = Some(draft);
+        }
+    }
+
+    fn worktree_form(
+        &self,
+        ui: &mut egui::Ui,
+        draft: &mut WorktreeDraft,
+        submit: &mut bool,
+        browse: &mut bool,
+        cancel: &mut bool,
+    ) {
                 ui.weak("Creates an isolated git checkout as a new project. You start agents in its terminal.");
                 ui.add_space(8.0);
                 let source_name = self
@@ -200,7 +225,7 @@ impl App {
                             draft.dest = PathBuf::from(dest);
                         }
                         if ui.button("Browse…").clicked() {
-                            browse = true;
+                            *browse = true;
                         }
                     },
                 );
@@ -214,28 +239,12 @@ impl App {
                     #[cfg(feature = "test-support")]
                     diagnostics::record(ui.ctx(), "worktree-create", create.rect);
                     if create.clicked() {
-                        submit = true;
+                        *submit = true;
                     }
                     if ui.button("Cancel").clicked() {
-                        cancel = true;
+                        *cancel = true;
                     }
                 });
-            });
-        if browse {
-            self.browse_target = Some(BrowseTarget::WorktreeDest);
-        }
-        if submit {
-            self.submit_worktree(&draft);
-            open = false;
-        }
-        if cancel {
-            open = false;
-        }
-        if open {
-            self.worktree_draft = Some(draft);
-        } else {
-            self.worktree_draft = None;
-        }
     }
 
     fn submit_worktree(&mut self, draft: &WorktreeDraft) {

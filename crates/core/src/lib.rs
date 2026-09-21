@@ -331,7 +331,7 @@ pub enum ReviewMode {
     Native,
     Neovim,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
     pub events: BTreeSet<AgentState>,

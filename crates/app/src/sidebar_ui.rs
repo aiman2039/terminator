@@ -1034,7 +1034,6 @@ impl App {
         if self.watch_fallback {
             ui.weak("Filesystem watch unavailable; refreshing every 3 seconds");
         }
-        ui.label(RichText::new("GIT STATUS").text_style(egui::TextStyle::Name("Section".into())));
         if let Some(context) = self.context.clone() {
             if context.root.is_none() {
                 ui.weak("Not a Git repository");

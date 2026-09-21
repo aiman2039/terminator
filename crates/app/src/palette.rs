@@ -94,83 +94,84 @@ impl App {
             .collect()
     }
 
-    pub(super) fn palette(&mut self, ctx: &egui::Context) {
-        let mut open = true;
-        self.popups
-            .window(ctx, "Command palette")
-            .open(&mut open)
-            .collapsible(false)
-            .default_size([520.0, 360.0])
-            .show(ctx, |ui| {
-                ui.label("Jump to a project, session, file, or setting.");
-                let search = ui.add(
-                    egui::TextEdit::singleline(&mut self.palette_query)
-                        .hint_text("Filter…")
-                        .desired_width(f32::INFINITY),
-                );
-                #[cfg(feature = "test-support")]
-                diagnostics::record(ui.ctx(), "palette-search", search.rect);
-                if search.changed() {
-                    self.palette_index = 0;
-                }
-                search.request_focus();
-                let items = self.filtered_palette();
-                if items.is_empty() {
-                    ui.weak("No matching commands.");
-                    return;
-                }
-                self.palette_index = self.palette_index.min(items.len() - 1);
-                if ui.input(|input| input.key_pressed(egui::Key::ArrowDown)) {
-                    self.palette_index = (self.palette_index + 1) % items.len();
-                }
-                if ui.input(|input| input.key_pressed(egui::Key::ArrowUp)) {
-                    self.palette_index = (self.palette_index + items.len() - 1) % items.len();
-                }
-                let mut chosen = None;
-                egui::ScrollArea::vertical()
-                    .max_height(280.0)
-                    .show(ui, |ui| {
-                        for (index, item) in items.iter().enumerate() {
-                            let selected = index == self.palette_index;
-                            let response = ui.selectable_label(selected, item.label());
-                            #[cfg(feature = "test-support")]
-                            diagnostics::record(
-                                ui.ctx(),
-                                &format!("palette-item:{}", item.label()),
-                                response.rect,
-                            );
-                            if response.clicked() {
-                                chosen = Some(index);
-                            }
-                        }
-                    });
-                if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-                    chosen = Some(self.palette_index);
-                }
-                if let Some(index) = chosen
-                    && let Some(item) = items.get(index).cloned()
-                {
-                    self.run_palette(item);
+    pub(super) fn palette_center(&mut self, ui: &mut egui::Ui) {
+        ui.set_min_size(ui.available_size());
+        ui.horizontal(|ui| {
+            ui.strong("Command palette");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if appearance::sidebar_action(ui, "X", "Close").clicked() {
+                    self.close_palette();
                 }
             });
-        self.palette_open &= open;
-        if !self.palette_open {
-            self.palette_query.clear();
+        });
+        ui.add_space(8.0);
+        ui.label("Jump to a project, session, file, or setting.");
+        let search = ui.add(
+            egui::TextEdit::singleline(&mut self.palette_query)
+                .hint_text("Filter…")
+                .desired_width(f32::INFINITY),
+        );
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "palette-search", search.rect);
+        if search.changed() {
             self.palette_index = 0;
+        }
+        search.request_focus();
+        let items = self.filtered_palette();
+        if items.is_empty() {
+            ui.weak("No matching commands.");
+            return;
+        }
+        self.palette_index = self.palette_index.min(items.len() - 1);
+        if ui.input(|input| input.key_pressed(egui::Key::ArrowDown)) {
+            self.palette_index = (self.palette_index + 1) % items.len();
+        }
+        if ui.input(|input| input.key_pressed(egui::Key::ArrowUp)) {
+            self.palette_index = (self.palette_index + items.len() - 1) % items.len();
+        }
+        let mut chosen = None;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                for (index, item) in items.iter().enumerate() {
+                    let selected = index == self.palette_index;
+                    let response = ui.selectable_label(selected, item.label());
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(
+                        ui.ctx(),
+                        &format!("palette-item:{}", item.label()),
+                        response.rect,
+                    );
+                    if response.clicked() {
+                        chosen = Some(index);
+                    }
+                }
+            });
+        if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+            chosen = Some(self.palette_index);
+        }
+        if let Some(index) = chosen
+            && let Some(item) = items.get(index).cloned()
+        {
+            self.run_palette(item);
         }
     }
 
-    fn run_palette(&mut self, item: PaletteItem) {
+    fn close_palette(&mut self) {
         self.palette_open = false;
         self.palette_query.clear();
         self.palette_index = 0;
+    }
+
+    fn run_palette(&mut self, item: PaletteItem) {
+        self.close_palette();
         match item {
             PaletteItem::Project(id, _) => self.select_project(id),
             PaletteItem::Session(id, _) => self.go_session(&id),
             PaletteItem::File(path) => self.open_file(path, None, None, false),
             PaletteItem::Settings(section) => {
                 self.open_settings();
-                self.settings_section = section;
+                self.request_settings_section(section);
             }
             PaletteItem::AddProject => self.add_project = true,
             PaletteItem::NewTerminal => self.create(None),

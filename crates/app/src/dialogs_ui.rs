@@ -403,12 +403,6 @@ impl App {
                 self.search_session = None;
             }
         }
-        if self.palette_open {
-            self.palette(ctx);
-        }
-        if self.worktree_draft.is_some() {
-            self.worktree_wizard(ctx);
-        }
         self.worktree_remove_dialog(ctx);
         if let Some(target) = self.browse_target.take() {
             if self.picker_active {
