@@ -542,10 +542,7 @@ impl Shared {
                     let _ = tx.try_send(Response::End);
                 }
             }
-            // Sessions without an agent resume command (plain shells,
-            // file editors) are not worth keeping: reopening them
-            // restores nothing actionable.
-            let removed = {
+            {
                 let mut s = shared.state.lock().unwrap();
                 if let Some(rec) = s.sessions.iter_mut().find(|r| r.id == sid) {
                     rec.lifecycle = Lifecycle::Ended;
@@ -558,12 +555,8 @@ impl Shared {
                     }
                 }
                 s.revision += 1;
-                s.prune_non_resumable_ended()
-            };
-            let _ = shared.persist();
-            for id in &removed {
-                let _ = shared.history_clear(Some(id.clone()), true);
             }
+            let _ = shared.persist();
             shared.sessions.lock().unwrap().remove(&sid);
             drop(review_files);
         });
@@ -1296,17 +1289,6 @@ fn main() -> Result<()> {
     atomic_write(&paths.auth(), auth.as_bytes())?;
     let (mut store, mut state) = storage::Store::open(&paths)?;
     state.recover();
-    // Migrate existing stores: drop historical sessions without an agent
-    // resume command so old plain shells/editors stop filling History.
-    let removed = state.prune_non_resumable_ended();
-    if !removed.is_empty()
-        && let Ok(mut history) = storage::History::new(paths.clone())
-    {
-        for id in &removed {
-            let _ = history.clear(Some(id), true);
-        }
-        let _ = history.flush();
-    }
     if let Some(root) = &catalog_paths {
         let owner = std::env::var("TERMINATOR_GENERATION")?;
         ensure!(

@@ -110,7 +110,7 @@ pub fn run() -> Result<()> {
     h.rpc(json!({"SaveLayout":{"project":id(&a),"layout":layout}}))?;
     h.write(
         &mut stream,
-        "stty -icanon -echo; printf 'BLOCKING_WRITE_READY\\n'; sleep 30\n",
+        "stty -icanon -echo; printf 'BLOCKING_WRITE_READY\\n'; exec sleep 30\n",
     )?;
     h.wait(
         |_| {

@@ -45,6 +45,24 @@ pub fn session<'a>(state: &'a Value, sid: &str) -> &'a Value {
         .find(|s| id(s) == sid)
         .expect("session exists")
 }
+fn session_summary(state: &Value) -> String {
+    let Some(list) = state["sessions"].as_array() else {
+        return "no session inventory".into();
+    };
+    if list.is_empty() {
+        return "no sessions".into();
+    }
+    list.iter()
+        .map(|session| {
+            format!(
+                "{}:{}",
+                session["id"].as_str().unwrap_or("?"),
+                session["lifecycle"].as_str().unwrap_or("unknown")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 pub fn session_ids(value: &Value) -> Vec<String> {
     match value {
         Value::Object(map) if map.get("version").is_some() && map.contains_key("tabs") => {
@@ -215,7 +233,11 @@ impl Harness {
             if check(&state) {
                 return Ok(state);
             }
-            ensure!(Instant::now() < end, "State assertion timed out");
+            ensure!(
+                Instant::now() < end,
+                "State assertion timed out ({})",
+                session_summary(&state)
+            );
             thread::sleep(Duration::from_millis(30));
         }
     }

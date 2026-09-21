@@ -174,6 +174,7 @@ impl<'a> TerminalView<'a> {
         }
         let modifiers = layout.ctx.input(|i| i.modifiers);
         let events = layout.ctx.input(|i| i.events.clone());
+        let ctrl_text = ctrl_text_mask(&events, modifiers);
         for event in events {
             if !input_event_applies(&event, layout, state.is_dragged, wheel_target) {
                 continue;
@@ -190,15 +191,15 @@ impl<'a> TerminalView<'a> {
             }
             let mut input_actions = vec![];
 
+            let is_key = matches!(event, egui::Event::Key { .. });
             match event {
                 egui::Event::Text(_)
                 | egui::Event::Key { .. }
                 | egui::Event::Copy
-                | egui::Event::Paste(_) => input_actions.push(process_keyboard_event(
-                    event,
-                    self.backend,
-                    &self.bindings_layout,
-                    modifiers,
+                | egui::Event::Paste(_) => input_actions.push(skip_repeated_ctrl_letter(
+                    process_keyboard_event(event, self.backend, &self.bindings_layout, modifiers),
+                    is_key,
+                    ctrl_text,
                 )),
                 egui::Event::MouseWheel {
                     unit,
@@ -598,6 +599,11 @@ fn process_text_event(
     backend: &TerminalBackend,
     bindings_layout: &BindingsLayout,
 ) -> InputAction {
+    // A Ctrl+letter Text event is the control character. Ignoring it because a
+    // binding exists drops Ctrl+E when the Key event was stamped without Control.
+    if let Some(bytes) = ctrl_letter_bytes(text, modifiers) {
+        return InputAction::BackendCall(BackendCommand::Write(bytes));
+    }
     if let Some(key) = Key::from_name(text) {
         if bindings_layout.get_action(
             InputKind::KeyCode(key),
@@ -839,6 +845,104 @@ fn refresh_pointer_cell(
         &content.terminal_size,
         content.display_offset,
     );
+}
+
+fn ctrl_letters_apply(modifiers: Modifiers) -> bool {
+    modifiers.ctrl && !modifiers.alt && !modifiers.mac_cmd
+}
+
+/// Bit `0` is Ctrl+A, bit `4` is Ctrl+E. Letters and the C0 bytes both count.
+fn control_bit(text: &str) -> Option<u8> {
+    let mut chars = text.chars();
+    let c = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    if c.is_ascii_alphabetic() {
+        return Some(c.to_ascii_lowercase() as u8 - b'a');
+    }
+    let code = u32::from(c);
+    if (1..=26).contains(&code) {
+        Some(code as u8 - 1)
+    } else {
+        None
+    }
+}
+
+fn ctrl_letter_bytes(text: &str, modifiers: Modifiers) -> Option<Vec<u8>> {
+    if !ctrl_letters_apply(modifiers) {
+        return None;
+    }
+    let c = text.chars().next()?;
+    if !c.is_ascii_alphabetic() {
+        return None;
+    }
+    control_bit(text).map(|bit| vec![bit + 1])
+}
+
+fn ctrl_text_mask(events: &[egui::Event], modifiers: Modifiers) -> u32 {
+    if !ctrl_letters_apply(modifiers) {
+        return 0;
+    }
+    let mut mask = 0u32;
+    for event in events {
+        if let egui::Event::Text(text) = event {
+            if let Some(bit) = control_bit(text) {
+                mask |= 1 << bit;
+            }
+        }
+    }
+    mask
+}
+
+fn skip_repeated_ctrl_letter(action: InputAction, is_key: bool, ctrl_text: u32) -> InputAction {
+    if !is_key {
+        return action;
+    }
+    let repeated = match &action {
+        InputAction::BackendCall(BackendCommand::Write(bytes)) => match bytes.as_slice() {
+            [byte] if (1..=26).contains(byte) => ctrl_text & (1 << (byte - 1)) != 0,
+            _ => false,
+        },
+        _ => false,
+    };
+    if repeated {
+        InputAction::Ignore
+    } else {
+        action
+    }
+}
+
+#[cfg(test)]
+mod ctrl_letter_tests {
+    use super::{ctrl_letter_bytes, ctrl_text_mask, skip_repeated_ctrl_letter, InputAction};
+    use crate::backend::BackendCommand;
+    use egui::Modifiers;
+
+    #[test]
+    fn control_e_text_is_enq() {
+        assert_eq!(ctrl_letter_bytes("e", Modifiers::CTRL), Some(vec![0x05]));
+        assert_eq!(ctrl_letter_bytes("E", Modifiers::CTRL), Some(vec![0x05]));
+        assert_eq!(ctrl_letter_bytes("a", Modifiers::CTRL), Some(vec![0x01]));
+        assert_eq!(ctrl_letter_bytes("e", Modifiers::NONE), None);
+        assert_eq!(ctrl_letter_bytes("\u{5}", Modifiers::CTRL), None);
+    }
+
+    #[test]
+    fn key_enq_is_not_repeated_when_text_already_carries_e() {
+        let events = [egui::Event::Text("e".into())];
+        let mask = ctrl_text_mask(&events, Modifiers::CTRL);
+        let action = InputAction::BackendCall(BackendCommand::Write(vec![0x05]));
+        assert!(matches!(
+            skip_repeated_ctrl_letter(action, true, mask),
+            InputAction::Ignore
+        ));
+        let only_key = InputAction::BackendCall(BackendCommand::Write(vec![0x05]));
+        assert!(matches!(
+            skip_repeated_ctrl_letter(only_key, true, 0),
+            InputAction::BackendCall(BackendCommand::Write(bytes)) if bytes.as_slice() == [0x05]
+        ));
+    }
 }
 
 fn input_event_applies(

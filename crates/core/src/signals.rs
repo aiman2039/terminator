@@ -85,4 +85,27 @@ mod tests {
     fn current_process_is_alive() {
         assert!(process_alive(std::process::id()));
     }
+
+    #[test]
+    fn hangup_ends_a_spawned_process_group() {
+        use std::os::unix::process::CommandExt;
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", "sleep 30"]);
+        command.process_group(0);
+        let mut child = command.spawn().unwrap();
+        let pid = child.id();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        signal_group(pid, ProcSignal::Hangup).unwrap();
+        let started = std::time::Instant::now();
+        loop {
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(2),
+                "process group did not exit after SIGHUP"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
 }

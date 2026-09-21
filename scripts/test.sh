@@ -14,6 +14,8 @@ run() {
 }
 
 run cargo test --workspace --all-features --locked
+# cargo test does not refresh target/debug binaries. xtask launches those.
+run cargo build --locked --bin terminator-daemon --bin terminator-hook
 run cargo xtask integration
 run cargo xtask idle-close
 

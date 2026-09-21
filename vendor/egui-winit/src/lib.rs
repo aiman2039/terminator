@@ -31,6 +31,7 @@ use raw_window_handle::HasDisplayHandle;
 
 use dropped_file::NativeFile;
 
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::{
     dpi::{PhysicalPosition, PhysicalSize},
     event::ElementState,
@@ -1016,15 +1017,18 @@ impl State {
         // emit events as if the corresponding keys from the Latin layout were pressed. In this case, clipboard shortcuts
         // are mapped to the physical keys that normally contain C, X, V, etc.
         // See also: https://github.com/emilk/egui/issues/3653
-        if let Some(active_key) = logical_key.or(physical_key) {
+        let modifiers = if let Some(active_key) = logical_key.or(physical_key) {
+            let produced = pressed.then(|| event.text_with_all_modifiers()).flatten();
+            let (active_key, modifiers) =
+                apply_control_character(active_key, self.modifiers, produced);
             if pressed {
-                if is_cut_command(self.modifiers, active_key) {
+                if is_cut_command(modifiers, active_key) {
                     self.egui_input.events.push(egui::Event::Cut);
                     return;
-                } else if is_copy_command(self.modifiers, active_key) {
+                } else if is_copy_command(modifiers, active_key) {
                     self.egui_input.events.push(egui::Event::Copy);
                     return;
-                } else if is_paste_command(self.modifiers, active_key) {
+                } else if is_paste_command(modifiers, active_key) {
                     // Preserve image-only paste intent for the embedding app.
                     // Text widgets treat an empty paste as a no-op.
                     let contents = self.clipboard.get().unwrap_or_default();
@@ -1040,9 +1044,12 @@ impl State {
                 physical_key,
                 pressed,
                 repeat: false, // egui will fill this in for us!
-                modifiers: self.modifiers,
+                modifiers,
             });
-        }
+            modifiers
+        } else {
+            self.modifiers
+        };
 
         if let Some(text) = text
             .as_ref()
@@ -1056,8 +1063,7 @@ impl State {
                 // We need to ignore these characters that are side-effects of commands.
                 // Also make sure the key is pressed (not released). On Linux, text might
                 // contain some data even when the key is released.
-                let is_cmd =
-                    self.modifiers.ctrl || self.modifiers.command || self.modifiers.mac_cmd;
+                let is_cmd = modifiers.ctrl || modifiers.command || modifiers.mac_cmd;
                 if pressed && !is_cmd {
                     self.egui_input
                         .events
@@ -1409,6 +1415,36 @@ fn open_url_in_browser(_url: &str) {
     {
         log::warn!("Cannot open url - feature \"links\" not enabled.");
     }
+}
+
+/// Ctrl+A–Z produce C0 bytes (`Ctrl+E` is ENQ, `\u{5}`). Map that byte back to
+/// the letter and mark Control held. egui's modifier snapshot can miss Control
+/// on the key event even when AppKit already folded it into the character.
+fn apply_control_character(
+    key: egui::Key,
+    mut modifiers: egui::Modifiers,
+    produced: Option<&str>,
+) -> (egui::Key, egui::Modifiers) {
+    let Some(letter) = produced.and_then(key_for_control_character) else {
+        return (key, modifiers);
+    };
+    modifiers.ctrl = true;
+    (letter, modifiers)
+}
+
+fn key_for_control_character(text: &str) -> Option<egui::Key> {
+    let mut chars = text.chars();
+    let c = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    let code = u32::from(c);
+    if !(1..=26).contains(&code) {
+        return None;
+    }
+    let letter = char::from(b'a' + (code as u8 - 1));
+    let mut name = [0; 4];
+    egui::Key::from_name(letter.encode_utf8(&mut name))
 }
 
 /// Winit sends special keys (backspace, delete, F1, …) as characters.
@@ -2316,5 +2352,27 @@ pub fn short_window_event_description(event: &winit::event::WindowEvent) -> &'st
         WindowEvent::ThemeChanged { .. } => "WindowEvent::ThemeChanged",
         WindowEvent::Occluded { .. } => "WindowEvent::Occluded",
         WindowEvent::PanGesture { .. } => "WindowEvent::PanGesture",
+    }
+}
+
+#[cfg(test)]
+mod control_character_tests {
+    use super::{apply_control_character, key_for_control_character};
+
+    #[test]
+    fn control_e_is_the_e_key() {
+        assert_eq!(key_for_control_character("\u{5}"), Some(egui::Key::E));
+        assert_eq!(key_for_control_character("\u{1}"), Some(egui::Key::A));
+        assert_eq!(key_for_control_character("e"), None);
+        assert_eq!(key_for_control_character("\u{5}e"), None);
+    }
+
+    #[test]
+    fn control_character_sets_ctrl_and_replaces_a_wrong_logical_key() {
+        let (key, modifiers) =
+            apply_control_character(egui::Key::End, egui::Modifiers::NONE, Some("\u{5}"));
+        assert_eq!(key, egui::Key::E);
+        assert!(modifiers.ctrl);
+        assert!(!modifiers.mac_cmd);
     }
 }

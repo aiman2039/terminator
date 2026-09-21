@@ -2,6 +2,14 @@ Vendored egui-winit 0.36.1 from https://github.com/emilk/egui at
 4c1f2fae95475a40e524884ebb298bcb1714b08e (crates/egui-winit).
 MIT and Apache-2.0 licenses retained. Cargo.toml is the published crate manifest.
 
+## Ctrl+E control character (2026-09-21)
+
+AppKit delivers Ctrl+E as ENQ (`\u{5}`) in `text_with_all_modifiers`. If egui's
+modifier snapshot does not yet have Control, the key event is a plain `E` and
+the printable `"e"` is what remains. Map that C0 byte back to the letter and
+set Control on the key event so the terminal binding sends `0x05`. Command
+chords are unchanged (`text_with_all_modifiers` is not a C0 byte).
+
 ## Image-only paste intent (2026-09-14)
 
 The keyboard paste branch now emits `egui::Event::Paste("")` when the OS

@@ -67,6 +67,14 @@ empty clipboard (Linux Ctrl+C still interrupts when there is no selection).
 selection updates the cached range and copy string in place. Widget sense is
 `click_and_drag` so the pointer stays captured.
 
+## Ctrl+E text is ENQ (2026-09-21)
+
+A Ctrl+letter `Event::Text` (`"e"` while Control is held) is written as the C0
+byte. It used to be ignored whenever a binding existed, which dropped Ctrl+E
+when the Key event had been stamped without Control. The Key event is skipped
+when that Text event is also in the frame, so the byte is written once.
+Ctrl+A stays `0x01`. Command chords are unchanged.
+
 ## Unbound Command/Ctrl chords (2026-09-16)
 
 Keys with no static binding are no longer dropped while Ctrl or Command is
