@@ -487,27 +487,63 @@ pub fn historical(owner: &Generation, active: Option<&str>) -> bool {
     owner.status == Status::Retired && active != Some(owner.id.as_str())
 }
 
+fn process_alive(pid: u32) -> bool {
+    let status = unsafe { libc::kill(pid as i32, 0) };
+    status == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
+fn owner_is_serving(root: &Paths, owner: &Generation) -> Result<bool> {
+    Ok(
+        Catalog::open(root)?.active()?.as_deref() == Some(owner.id.as_str())
+            && std::os::unix::net::UnixStream::connect(owner.paths().socket()).is_ok(),
+    )
+}
+
+/// `None` means the owner is still live. A missing runtime is death: a reused PID
+/// must not keep that generation's sessions attached.
+fn claim_dead_owner(owner: &Generation, pid: u32) -> Result<Option<std::fs::File>> {
+    let path = owner.runtime.join("daemon.lock");
+    match fs::OpenOptions::new().write(true).open(&path) {
+        Ok(lock) => {
+            if lock.try_lock_exclusive().is_err() || process_alive(pid) {
+                return Ok(None);
+            }
+            Ok(Some(lock))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if owner.status == Status::Prepared || owner_socket_open(owner) {
+                return Ok(None);
+            }
+            fs::create_dir_all(&owner.runtime)?;
+            let lock = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .mode(0o600)
+                .open(&path)?;
+            if lock.try_lock_exclusive().is_err() {
+                return Ok(None);
+            }
+            Ok(Some(lock))
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn owner_socket_open(owner: &Generation) -> bool {
+    std::os::unix::net::UnixStream::connect(owner.paths().socket()).is_ok()
+}
+
 pub fn recover_exited(root: &Paths, owner: &Generation) -> Result<bool> {
     let Some(pid) = owner.pid else {
         return Ok(false);
     };
     let _coordination = coordinate(root)?;
-    if Catalog::open(root)?.active()?.as_deref() == Some(owner.id.as_str())
-        && std::os::unix::net::UnixStream::connect(owner.paths().socket()).is_ok()
-    {
+    if owner_is_serving(root, owner)? {
         return Ok(false);
     }
-    let lock = fs::OpenOptions::new()
-        .write(true)
-        .open(owner.runtime.join("daemon.lock"))?;
-    if lock.try_lock_exclusive().is_err() {
+    let Some(_lock) = claim_dead_owner(owner, pid)? else {
         return Ok(false);
-    }
-    if unsafe { libc::kill(pid as i32, 0) } == 0
-        || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-    {
-        return Ok(false);
-    }
+    };
     let mut state = saved(&owner.paths())?;
     for session in &mut state.sessions {
         if session.lifecycle.live() {
@@ -1339,5 +1375,56 @@ mod tests {
             Status::Active
         );
         assert!(saved(&a.paths()).unwrap().sessions[0].lifecycle.live());
+    }
+
+    #[test]
+    fn missing_runtime_interrupts_draining_sessions_despite_pid_reuse() {
+        let (_dir, paths, mut catalog) = fixture();
+        let drained = owner(&paths, &catalog);
+        let active = owner(&paths, &catalog);
+        catalog.set_pid(&drained.id, std::process::id()).unwrap();
+        catalog.activate(&drained.id).unwrap();
+        catalog.activate(&active.id).unwrap();
+        save(
+            &drained,
+            &State {
+                generation: drained.id.clone(),
+                sessions: vec![session(&drained.id, Lifecycle::Running)],
+                ..Default::default()
+            },
+        );
+        fs::remove_dir_all(&drained.runtime).unwrap();
+        assert_eq!(unsafe { libc::kill(std::process::id() as i32, 0) }, 0);
+        let registered = catalog
+            .generations()
+            .unwrap()
+            .into_iter()
+            .find(|generation| generation.id == drained.id)
+            .unwrap();
+        assert!(recover_exited(&paths, &registered).unwrap());
+        let recovered = saved(&registered.paths()).unwrap();
+        assert_eq!(recovered.sessions[0].lifecycle, Lifecycle::Interrupted);
+        assert!(recovered.sessions[0].pid.is_none());
+        assert_eq!(
+            Catalog::open(&paths)
+                .unwrap()
+                .generations()
+                .unwrap()
+                .into_iter()
+                .find(|generation| generation.id == drained.id)
+                .unwrap()
+                .status,
+            Status::Retired
+        );
+        assert!(
+            Catalog::open(&paths)
+                .unwrap()
+                .generations()
+                .unwrap()
+                .into_iter()
+                .any(|generation| {
+                    generation.id == active.id && generation.status == Status::Active
+                })
+        );
     }
 }
