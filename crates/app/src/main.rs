@@ -2974,11 +2974,7 @@ impl App {
             });
         });
         ui.add_space(8.0);
-        let has_worktrees = self
-            .state
-            .worktrees
-            .iter()
-            .any(|w| !w.removed);
+        let has_worktrees = self.state.worktrees.iter().any(|w| !w.removed);
         if !has_worktrees && self.worktree_draft.is_none() {
             ui.weak("No worktrees yet.");
             ui.add_space(8.0);
