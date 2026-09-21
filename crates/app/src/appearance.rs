@@ -335,10 +335,11 @@ pub fn menu_item(ui: &mut egui::Ui, label: &str, icon: &str, shortcut: &str) -> 
     crate::diagnostics::record(ui.ctx(), label, response.rect);
     response
 }
-pub fn target_header(ui: &mut egui::Ui, target: &str) {
-    wrapping_path(
+pub fn target_header(ui: &mut egui::Ui, label: &str, tooltip: &str) {
+    wrapping_path_tooltip(
         ui,
-        target,
+        label,
+        tooltip,
         FontId::proportional(11.0),
         ui.visuals().weak_text_color(),
     );
@@ -349,6 +350,16 @@ pub fn target_header(ui: &mut egui::Ui, target: &str) {
 pub fn wrapping_path(
     ui: &mut egui::Ui,
     path: &str,
+    font: FontId,
+    color: Color32,
+) -> egui::Response {
+    wrapping_path_tooltip(ui, path, path, font, color)
+}
+
+fn wrapping_path_tooltip(
+    ui: &mut egui::Ui,
+    path: &str,
+    tooltip: &str,
     font: FontId,
     color: Color32,
 ) -> egui::Response {
@@ -367,7 +378,7 @@ pub fn wrapping_path(
     ui.painter()
         .with_clip_rect(rect)
         .galley(rect.min, galley, color);
-    response.on_hover_text(path)
+    response.on_hover_text(tooltip)
 }
 
 pub struct WrappingPathRow<R> {

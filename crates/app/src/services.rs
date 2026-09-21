@@ -349,12 +349,38 @@ pub enum Target {
 }
 impl Target {
     pub fn display(&self) -> String {
+        self.render(|path| path.display().to_string())
+    }
+
+    pub fn compact(&self) -> String {
+        self.render(compact_path)
+    }
+
+    fn render(&self, path_text: impl Fn(&Path) -> String) -> String {
         match self {
-            Self::File(p, Some(line), Some(column)) => format!("{}:{line}:{column}", p.display()),
-            Self::File(p, Some(line), None) => format!("{}:{line}", p.display()),
-            Self::File(p, None, _) => p.display().to_string(),
+            Self::File(path, Some(line), Some(column)) => {
+                format!("{}:{line}:{column}", path_text(path))
+            }
+            Self::File(path, Some(line), None) => format!("{}:{line}", path_text(path)),
+            Self::File(path, None, _) => path_text(path),
             Self::Url(url) => url.clone(),
         }
+    }
+}
+
+/// `$HOME/foo` → `~/foo` for labels. Copy and open still use the real path.
+pub fn compact_path(path: &Path) -> String {
+    compact_path_under(path, std::env::var_os("HOME").as_deref().map(Path::new))
+}
+
+pub(crate) fn compact_path_under(path: &Path, home: Option<&Path>) -> String {
+    let Some(home) = home.filter(|home| !home.as_os_str().is_empty()) else {
+        return path.display().to_string();
+    };
+    match path.strip_prefix(home) {
+        Ok(relative) if relative.as_os_str().is_empty() => "~".into(),
+        Ok(relative) => format!("~/{}", relative.display()),
+        Err(_) => path.display().to_string(),
     }
 }
 pub fn resolve_target(text: &str, cwd: &Path) -> Result<Target> {
@@ -801,5 +827,47 @@ mod tests {
         }
         let error = directory_result(dir.path(), false).unwrap_err();
         assert!(error.message.contains("1,000-entry display limit"));
+    }
+
+    #[test]
+    fn compact_path_replaces_home_prefix_with_tilde() {
+        let home = Path::new("/Users/me");
+        assert_eq!(
+            compact_path_under(&home.join("docs/PANIC_AUDIT.md"), Some(home)),
+            "~/docs/PANIC_AUDIT.md"
+        );
+        assert_eq!(compact_path_under(home, Some(home)), "~");
+        assert_eq!(
+            compact_path_under(Path::new("/tmp/terminator-paste.png"), Some(home)),
+            "/tmp/terminator-paste.png"
+        );
+        assert_eq!(
+            compact_path_under(Path::new("/Users/me-other/docs/a.md"), Some(home)),
+            "/Users/me-other/docs/a.md"
+        );
+        assert_eq!(
+            compact_path_under(Path::new("/Users/me/docs/a.md"), None),
+            "/Users/me/docs/a.md"
+        );
+        assert_eq!(
+            compact_path_under(Path::new("/Users/me/docs/a.md"), Some(Path::new(""))),
+            "/Users/me/docs/a.md"
+        );
+    }
+
+    #[test]
+    fn target_compact_shortens_home_and_keeps_the_full_path_for_copy() {
+        let home = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+        let path = home.join("docs/a.md");
+        let target = Target::File(path.clone(), Some(12), Some(3));
+        assert_eq!(target.compact(), "~/docs/a.md:12:3");
+        assert_eq!(target.display(), format!("{}:12:3", path.display()));
+        assert!(!Target::File(path, Some(12), None).display().contains('~'));
+        let url = Target::Url("https://example.com/a".into());
+        assert_eq!(url.compact(), url.display());
+        assert_eq!(
+            Target::File(PathBuf::from("/tmp/terminator-paste.png"), None, None).compact(),
+            "/tmp/terminator-paste.png"
+        );
     }
 }

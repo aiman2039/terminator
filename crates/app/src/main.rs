@@ -70,6 +70,14 @@ use std::{
 };
 use terminator_core::*;
 
+#[derive(Clone, Debug)]
+struct HoverPopup {
+    session: String,
+    key: String,
+    target: services::Target,
+    rect: egui::Rect,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub(crate) enum Tab {
     Image {
@@ -578,7 +586,7 @@ struct App {
     watch_fallback: bool,
     targets: HashMap<String, Option<services::Target>>,
     hover: Option<(String, Instant)>,
-    hover_popup: Option<(String, services::Target, egui::Rect)>,
+    hover_popup: Option<HoverPopup>,
     pending_target_action: Option<(String, Session)>,
     last_heartbeat: Instant,
     last_focus: Option<String>,
@@ -5299,6 +5307,50 @@ mod navigation_tests {
         assert!(app.close_workspace.is_none());
         assert!(app.close_workspace_queue.is_empty());
         assert!(app.layouts["a"].tabs.iter().any(|tab| tab.id == "t1"));
+    }
+
+    #[test]
+    fn close_all_tabs_queues_every_tab() {
+        let (mut app, _, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add("t0".into(), Tab::Terminal("s0".into()));
+        workspace.add("t1".into(), Tab::Terminal("s1".into()));
+        workspace.add("t2".into(), Tab::Terminal("s2".into()));
+        let ids = app.layouts["a"].ids();
+        app.begin_workspace_close_tabs("a", ids);
+        assert_eq!(app.close_workspace, Some(("a".into(), "t0".into())));
+        assert_eq!(app.close_workspace_queue, ["t1", "t2"]);
+    }
+
+    #[test]
+    fn close_all_empty_tabs_leaves_an_empty_workspace() {
+        let (mut app, ctx, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add(
+            "t0".into(),
+            Tab::Image {
+                path: "/a.png".into(),
+            },
+        );
+        workspace.add(
+            "t1".into(),
+            Tab::Image {
+                path: "/b.png".into(),
+            },
+        );
+        workspace.add(
+            "t2".into(),
+            Tab::Image {
+                path: "/c.png".into(),
+            },
+        );
+        let ids = app.layouts["a"].ids();
+        app.begin_workspace_close_tabs("a", ids);
+        app.poll_workspace_close(&ctx);
+        assert!(app.close_workspace.is_none());
+        assert!(app.close_workspace_queue.is_empty());
+        assert_eq!(app.layouts["a"].tabs.len(), 1);
+        assert_eq!(app.layouts["a"].iter_all_tabs().count(), 0);
     }
 
     #[test]

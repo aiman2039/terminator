@@ -2,7 +2,7 @@
 use crate::{
     AgentState, BTreeSet, Context, Deserialize, Duration, Lifecycle, OpenOptionsExt,
     PROTOCOL_VERSION, Path, PathBuf, Paths, PermissionsExt, Read, Request, Response, Result,
-    Serialize, State, Write, atomic_write, bail, ensure, fs, id,
+    Serialize, State, atomic_write, bail, ensure, fs, id,
 };
 use fs2::FileExt;
 use rusqlite::{Connection, OpenFlags, params};

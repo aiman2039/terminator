@@ -3,6 +3,7 @@ use super::*;
 
 struct WorkspaceTabMenu {
     close: bool,
+    close_all: bool,
     close_left: bool,
     close_right: bool,
     add_left: bool,
@@ -21,6 +22,25 @@ fn click_menu_item(ui: &mut egui::Ui, label: &str, icon: &str) -> bool {
         ui.close();
     }
     clicked
+}
+
+const HOVER_POPUP_DELAY: Duration = Duration::from_millis(400);
+
+fn should_replace_hover_popup(
+    hover: &mut Option<(String, Instant)>,
+    key: &str,
+    popup_key: Option<&str>,
+    delay: Duration,
+) -> bool {
+    let switched = hover.as_ref().is_none_or(|(old, _)| old != key);
+    if switched {
+        *hover = Some((key.to_owned(), Instant::now()));
+    }
+    let ready = hover
+        .as_ref()
+        .is_some_and(|(_, since)| since.elapsed() >= delay);
+    let other_popup = popup_key.is_some_and(|shown| shown != key);
+    ready || other_popup
 }
 
 /// Case-insensitive substring filter for the saved-scrollback viewer.
@@ -225,6 +245,7 @@ impl App {
     ) {
         let mut switch = None;
         let mut close = None;
+        let mut close_all = false;
         let mut close_left = None;
         let mut close_right = None;
         let mut add_at = None;
@@ -475,6 +496,9 @@ impl App {
                                 if action.close {
                                     close = Some(group.id.clone());
                                 }
+                                if action.close_all {
+                                    close_all = true;
+                                }
                                 if action.close_left {
                                     close_left = Some(group.id.clone());
                                 }
@@ -556,6 +580,9 @@ impl App {
         if let Some(id) = close {
             self.begin_workspace_close_tabs(project, vec![id]);
         }
+        if close_all {
+            self.begin_workspace_close_tabs(project, workspace.ids());
+        }
         if let Some(id) = close_left {
             self.begin_workspace_close_tabs(project, workspace.ids_before(&id));
         }
@@ -578,6 +605,7 @@ impl App {
         }
         let close = click_menu_item(ui, "Close tab…", "X");
         ui.separator();
+        let close_all = click_enabled_menu_item(ui, count > 1, "Close all tabs…", "X");
         let close_left = click_enabled_menu_item(ui, index > 0, "Close all tabs to the left…", "X");
         let close_right =
             click_enabled_menu_item(ui, index + 1 < count, "Close all tabs to the right…", "X");
@@ -586,6 +614,7 @@ impl App {
         let add_right = click_menu_item(ui, "Add tab to the right", "Plus");
         WorkspaceTabMenu {
             close,
+            close_all,
             close_left,
             close_right,
             add_left,
@@ -739,7 +768,7 @@ impl App {
         let mut reload = false;
         let mut fit = false;
         let mut actual = false;
-        appearance::wrapping_path_row(ui, &path.display().to_string(), |ui| {
+        appearance::wrapping_path_row(ui, &services::compact_path(path), |ui| {
             reload = ui.button("Reload").clicked();
             as_text = ui.button("Open as text").clicked();
             if ui.button("Open externally").clicked() {
@@ -881,7 +910,7 @@ impl App {
         let is_md = crate::markdown::supported(path);
         let key = tab.key();
         ui.horizontal(|ui| {
-            ui.weak(path.display().to_string());
+            ui.weak(services::compact_path(path));
             ui.weak(if *staged {
                 "HEAD → Index"
             } else {
@@ -2270,23 +2299,25 @@ impl Viewer<'_> {
                     );
                 }
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                if self.app.hover.as_ref().is_none_or(|(old, _)| old != &key) {
-                    self.app.hover = Some((key.clone(), Instant::now()));
-                }
-                if self
-                    .app
-                    .hover
-                    .as_ref()
-                    .is_some_and(|(_, since)| since.elapsed() >= Duration::from_millis(400))
-                    && self.app.hover_popup.is_none()
-                {
+                let popup_key = self.app.hover_popup.as_ref().map(|popup| popup.key.clone());
+                if should_replace_hover_popup(
+                    &mut self.app.hover,
+                    &key,
+                    popup_key.as_deref(),
+                    HOVER_POPUP_DELAY,
+                ) {
                     let rect = target
                         .rects
                         .first()
                         .copied()
                         .unwrap_or(egui::Rect::ZERO)
                         .translate(response.rect.min.to_vec2());
-                    self.app.hover_popup = Some((sid.clone(), resolved.clone(), rect));
+                    self.app.hover_popup = Some(HoverPopup {
+                        session: sid.clone(),
+                        key: key.clone(),
+                        target: resolved.clone(),
+                        rect,
+                    });
                 }
                 ui.ctx().request_repaint_after(Duration::from_millis(50));
             }
@@ -2371,7 +2402,7 @@ impl Viewer<'_> {
                 .data(|d| d.get_temp::<String>(menu_key))
                 .unwrap_or_default();
             if let Some(Some(target)) = self.app.targets.get(&key).cloned() {
-                appearance::target_header(ui, &target.display());
+                appearance::target_header(ui, &target.compact(), &target.display());
                 if let Some(action) = file_actions::menu(ui, file_actions::target_menu(&target)) {
                     self.app.terminal_action(ui.ctx(), session, &target, action);
                 }
@@ -2412,21 +2443,27 @@ impl Viewer<'_> {
                 ui.close();
             }
         });
-        if let Some((owner, target, anchor)) = self.app.hover_popup.clone()
-            && owner == *sid
+        if let Some(popup) = self.app.hover_popup.clone()
+            && popup.session == *sid
         {
             let mut open = true;
             egui::Popup::from_response(&response)
-                .id(egui::Id::new(("terminal-hover", sid.as_str())))
-                .anchor(anchor)
+                .id(egui::Id::new((
+                    "terminal-hover",
+                    sid.as_str(),
+                    popup.key.as_str(),
+                )))
+                .anchor(popup.rect)
                 .open_bool(&mut open)
                 .style(appearance::menu_style)
                 .show(|ui| {
                     ui.set_max_width(440.0);
-                    appearance::target_header(ui, &target.display());
-                    if let Some(action) = file_actions::menu(ui, file_actions::target_menu(&target))
+                    appearance::target_header(ui, &popup.target.compact(), &popup.target.display());
+                    if let Some(action) =
+                        file_actions::menu(ui, file_actions::target_menu(&popup.target))
                     {
-                        self.app.terminal_action(ui.ctx(), session, &target, action);
+                        self.app
+                            .terminal_action(ui.ctx(), session, &popup.target, action);
                     }
                 });
             if !open {
@@ -3115,5 +3152,42 @@ mod tests {
         assert_eq!(filter_history_lines(text, "failed"), vec!["FAILED to link"]);
         assert_eq!(filter_history_lines(text, "CARGO"), vec!["cargo build ok"]);
         assert!(filter_history_lines(text, "missing").is_empty());
+    }
+
+    #[test]
+    fn hover_popup_waits_before_the_first_open() {
+        let mut hover = None;
+        assert!(!should_replace_hover_popup(
+            &mut hover,
+            "a",
+            None,
+            HOVER_POPUP_DELAY
+        ));
+        assert_eq!(hover.as_ref().map(|(key, _)| key.as_str()), Some("a"));
+        hover.as_mut().unwrap().1 -= HOVER_POPUP_DELAY;
+        assert!(should_replace_hover_popup(
+            &mut hover,
+            "a",
+            None,
+            HOVER_POPUP_DELAY
+        ));
+    }
+
+    #[test]
+    fn hover_popup_switches_when_the_target_changes() {
+        let mut hover = Some(("a".into(), Instant::now()));
+        assert!(should_replace_hover_popup(
+            &mut hover,
+            "b",
+            Some("a"),
+            HOVER_POPUP_DELAY
+        ));
+        assert_eq!(hover.as_ref().map(|(key, _)| key.as_str()), Some("b"));
+        assert!(!should_replace_hover_popup(
+            &mut hover,
+            "b",
+            Some("b"),
+            HOVER_POPUP_DELAY
+        ));
     }
 }

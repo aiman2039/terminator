@@ -158,17 +158,15 @@ impl Workspace {
         self.main_surface_mut()
             .set_focused_node(egui_dock::NodeIndex::root());
     }
+    pub fn ids(&self) -> Vec<String> {
+        self.tabs.iter().map(|tab| tab.id.clone()).collect()
+    }
     pub fn ids_before(&self, id: &str) -> Vec<String> {
-        self.tabs
-            .iter()
-            .map(|tab| tab.id.clone())
-            .take_while(|tab| tab != id)
-            .collect()
+        self.ids().into_iter().take_while(|tab| tab != id).collect()
     }
     pub fn ids_after(&self, id: &str) -> Vec<String> {
-        self.tabs
-            .iter()
-            .map(|tab| tab.id.clone())
+        self.ids()
+            .into_iter()
             .skip_while(|tab| tab != id)
             .skip(1)
             .collect()
@@ -548,6 +546,7 @@ mod tests {
             ["a", "b", "c"]
         );
         assert_eq!(workspace.active, "b");
+        assert_eq!(workspace.ids(), vec!["a", "b", "c"]);
         assert_eq!(workspace.ids_before("b"), vec!["a"]);
         assert_eq!(workspace.ids_after("b"), vec!["c"]);
         workspace.add_at(99, "d".into(), Tab::Terminal("d".into()));
