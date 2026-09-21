@@ -14,7 +14,7 @@ serde_json.workspace = true
 base64.workspace = true
 portable-pty = "0.9"
 vt100 = "0.16"
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 fs2 = "0.4"
 notify-rust = "4"
 tempfile = "3"
