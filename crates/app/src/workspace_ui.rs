@@ -1,5 +1,20 @@
 //! Workspace and terminal rendering.
 use super::*;
+use egui_term::TerminalBackend;
+
+/// Last non-blank grid rows of a live terminal for the drag ghost, oldest
+/// first. Bounded so the floating preview stays small.
+fn snapshot_rows(backend: &TerminalBackend) -> Vec<String> {
+    let kept: Vec<String> = backend
+        .search_rows()
+        .into_iter()
+        .map(|row| row.text.trim_end().replace('\t', "  "))
+        .map(|line| line.chars().take(64).collect::<String>())
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    let start = kept.len().saturating_sub(8);
+    kept.into_iter().skip(start).collect()
+}
 
 struct WorkspaceTabMenu {
     close: bool,
@@ -35,6 +50,126 @@ fn click_menu_item(ui: &mut egui::Ui, label: &str, icon: &str) -> bool {
 }
 
 const HOVER_POPUP_DELAY: Duration = Duration::from_millis(400);
+const HEADER_SLOT: f32 = 36.0;
+const HEADER_GAP: f32 = 4.0;
+const HEADER_MENU_SLOT: f32 = 32.0;
+const HEADER_TOGGLE_RESERVE: f32 = 36.0;
+
+#[derive(Clone, Copy)]
+enum HeaderAction {
+    Tool(SidebarTool),
+    Settings,
+    Palette,
+}
+
+const HEADER_ACTIONS: [HeaderAction; 6] = [
+    HeaderAction::Tool(SidebarTool::Explorer),
+    HeaderAction::Tool(SidebarTool::Agents),
+    HeaderAction::Tool(SidebarTool::Git),
+    HeaderAction::Tool(SidebarTool::History),
+    HeaderAction::Settings,
+    HeaderAction::Palette,
+];
+
+struct HeaderActionView {
+    label: &'static str,
+    icon: &'static str,
+    target: &'static str,
+}
+
+struct HeaderToolBounds {
+    budget: f32,
+    toggle: egui::Rect,
+}
+
+struct HeaderIconButton<'a> {
+    icon: &'a str,
+    tip: &'a str,
+    width: f32,
+}
+
+fn header_row_width(buttons: usize, menu: bool) -> f32 {
+    let mut width = buttons as f32 * HEADER_SLOT;
+    if buttons > 1 {
+        width += (buttons - 1) as f32 * HEADER_GAP;
+    }
+    if menu {
+        if buttons > 0 {
+            width += HEADER_GAP;
+        }
+        width += HEADER_MENU_SLOT;
+    }
+    width
+}
+
+/// How many leading header actions fit. The rest go behind the overflow menu.
+fn header_visible_count(budget: f32, count: usize) -> usize {
+    if header_row_width(count, false) <= budget {
+        return count;
+    }
+    let mut visible = 0;
+    while visible < count && header_row_width(visible + 1, true) <= budget {
+        visible += 1;
+    }
+    visible
+}
+
+fn header_action_view(action: HeaderAction) -> HeaderActionView {
+    match action {
+        HeaderAction::Tool(SidebarTool::Explorer) => HeaderActionView {
+            label: "Explorer",
+            icon: "Files",
+            target: "tool-Explorer",
+        },
+        HeaderAction::Tool(SidebarTool::Agents) => HeaderActionView {
+            label: "Agents",
+            icon: "PanelsTopLeft",
+            target: "tool-Agents",
+        },
+        HeaderAction::Tool(SidebarTool::Git) => HeaderActionView {
+            label: "Git",
+            icon: "GitBranch",
+            target: "tool-Git",
+        },
+        HeaderAction::Tool(SidebarTool::History) => HeaderActionView {
+            label: "History",
+            icon: "History",
+            target: "tool-History",
+        },
+        HeaderAction::Settings => HeaderActionView {
+            label: "Settings",
+            icon: "Settings",
+            target: "settings",
+        },
+        HeaderAction::Palette => HeaderActionView {
+            label: "Command palette",
+            icon: "Search",
+            target: "palette",
+        },
+    }
+}
+
+fn header_tool_bounds(ui: &egui::Ui) -> HeaderToolBounds {
+    let max = ui.max_rect();
+    HeaderToolBounds {
+        budget: (ui.available_width() - HEADER_TOGGLE_RESERVE).max(0.0),
+        toggle: egui::Rect::from_min_max(egui::pos2(max.right() - 32.0, max.top()), max.max),
+    }
+}
+
+fn header_icon_button(ui: &mut egui::Ui, button: HeaderIconButton<'_>) -> egui::Response {
+    let HeaderIconButton { icon, tip, width } = button;
+    ui.add_sized(
+        [width, 32.0],
+        egui::Button::image(
+            egui::Image::new(icons::source(icon))
+                .tint(appearance::ICON_COLOR)
+                .fit_to_exact_size(egui::vec2(16.0, 16.0)),
+        )
+        .frame(false),
+    )
+    .on_hover_text(tip)
+}
 
 fn should_replace_hover_popup(
     hover: &mut Option<(String, Instant)>,
@@ -213,92 +348,140 @@ impl App {
             egui::UiBuilder::new()
                 .max_rect(tools_rect.shrink2(egui::vec2(8.0, 4.0)))
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
-            |ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                let max = ui.max_rect();
-                let toggle_rect =
-                    egui::Rect::from_min_max(egui::pos2(max.right() - 32.0, max.top()), max.max);
-                ui.set_max_width((ui.available_width() - 36.0).max(0.0));
-                for (tool, label) in [
-                    (SidebarTool::Explorer, "Explorer"),
-                    (SidebarTool::Agents, "Agents"),
-                    (SidebarTool::Git, "Git"),
-                    (SidebarTool::History, "History"),
-                ] {
-                    let response = appearance::tool_button(
-                        ui,
-                        tool,
-                        label,
-                        self.preferences.visible && self.preferences.tool == tool,
-                    );
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(ui.ctx(), &format!("tool-{label}"), response.rect);
-                    let response = if tool == SidebarTool::Explorer {
-                        response.on_hover_text(self.explorer_tooltip())
-                    } else {
-                        response
-                    };
-                    if response.clicked() {
-                        self.preferences.toggle(tool);
-                    }
-                }
-                let settings_tip = {
-                    let keys = shortcuts::pretty(&self.state.settings.keybindings, "open_settings");
-                    if keys.is_empty() {
-                        "Settings".into()
-                    } else {
-                        format!("Settings ({keys})")
-                    }
-                };
-                let settings = ui
-                    .add_sized(
-                        [36.0, 32.0],
-                        egui::Button::image(
-                            egui::Image::new(icons::source("Settings"))
-                                .tint(appearance::ICON_COLOR)
-                                .fit_to_exact_size(egui::vec2(16.0, 16.0)),
-                        )
-                        .frame(false),
-                    )
-                    .on_hover_text(settings_tip);
-                #[cfg(feature = "test-support")]
-                diagnostics::record(ui.ctx(), "settings", settings.rect);
-                if settings.clicked() {
-                    self.open_settings();
-                }
-                let palette = ui
-                    .add_sized(
-                        [36.0, 32.0],
-                        egui::Button::image(
-                            egui::Image::new(icons::source("Search"))
-                                .tint(appearance::ICON_COLOR)
-                                .fit_to_exact_size(egui::vec2(16.0, 16.0)),
-                        )
-                        .frame(false),
-                    )
-                    .on_hover_text({
-                        let keys =
-                            shortcuts::pretty(&self.state.settings.keybindings, "open_palette");
-                        if keys.is_empty() {
-                            "Command palette".into()
-                        } else {
-                            format!("Command palette ({keys})")
-                        }
-                    });
-                #[cfg(feature = "test-support")]
-                diagnostics::record(ui.ctx(), "palette", palette.rect);
-                if palette.clicked() {
-                    self.open_command_palette();
-                }
-                header_drag_space(ui);
-                ui.scope_builder(
-                    egui::UiBuilder::new()
-                        .max_rect(toggle_rect)
-                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                    |ui| self.sidebar_toggle(ui, true),
-                );
+            |ui| self.header_tools(ui),
+        );
+    }
+
+    fn header_tools(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().item_spacing.x = HEADER_GAP;
+        let HeaderToolBounds { budget, toggle } = header_tool_bounds(ui);
+        ui.set_max_width(budget);
+        let visible = header_visible_count(budget, HEADER_ACTIONS.len());
+        self.paint_visible_header_actions(ui, visible);
+        self.paint_header_overflow(ui, visible);
+        header_drag_space(ui);
+        self.paint_header_toggle(ui, toggle);
+    }
+
+    fn paint_visible_header_actions(&mut self, ui: &mut egui::Ui, visible: usize) {
+        for action in HEADER_ACTIONS.iter().take(visible).copied() {
+            self.paint_header_action(ui, action);
+        }
+    }
+
+    fn paint_header_overflow(&mut self, ui: &mut egui::Ui, visible: usize) {
+        if visible >= HEADER_ACTIONS.len() {
+            return;
+        }
+        let hidden = &HEADER_ACTIONS[visible..];
+        let response = header_icon_button(
+            ui,
+            HeaderIconButton {
+                icon: "Menu",
+                tip: "More",
+                width: HEADER_MENU_SLOT,
             },
         );
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "header-overflow", response.rect);
+        egui::Popup::menu(&response)
+            .style(appearance::menu_style)
+            .show(|ui| {
+                for action in hidden {
+                    if self.header_menu_choice(ui, *action) {
+                        ui.close();
+                    }
+                }
+            });
+    }
+
+    fn paint_header_toggle(&mut self, ui: &mut egui::Ui, toggle: egui::Rect) {
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(toggle)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            |ui| self.sidebar_toggle(ui, true),
+        );
+    }
+
+    fn paint_header_action(&mut self, ui: &mut egui::Ui, action: HeaderAction) {
+        let view = header_action_view(action);
+        let response = match action {
+            HeaderAction::Tool(tool) => self.header_tool_button(ui, tool, &view),
+            HeaderAction::Settings | HeaderAction::Palette => header_icon_button(
+                ui,
+                HeaderIconButton {
+                    icon: view.icon,
+                    tip: &self.header_tip(action),
+                    width: HEADER_SLOT,
+                },
+            ),
+        };
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), view.target, response.rect);
+        if response.clicked() {
+            self.run_header_action(action);
+        }
+    }
+
+    fn header_tool_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        tool: SidebarTool,
+        view: &HeaderActionView,
+    ) -> egui::Response {
+        let response =
+            appearance::tool_button(ui, tool, view.label, self.header_tool_selected(tool));
+        if tool == SidebarTool::Explorer {
+            response.on_hover_text(self.explorer_tooltip())
+        } else {
+            response
+        }
+    }
+
+    fn header_menu_choice(&mut self, ui: &mut egui::Ui, action: HeaderAction) -> bool {
+        let view = header_action_view(action);
+        let mark = self.header_menu_mark(action);
+        let response = appearance::menu_item(ui, view.label, view.icon, &mark);
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), view.target, response.rect);
+        if response.clicked() {
+            self.run_header_action(action);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn header_tip(&self, action: HeaderAction) -> String {
+        let label = header_action_view(action).label;
+        let keys = self.header_menu_mark(action);
+        if keys.is_empty() {
+            label.to_string()
+        } else {
+            format!("{label} ({keys})")
+        }
+    }
+
+    fn header_menu_mark(&self, action: HeaderAction) -> String {
+        match action {
+            HeaderAction::Tool(tool) if self.header_tool_selected(tool) => "✓".into(),
+            HeaderAction::Settings => self.shortcut_label("open_settings"),
+            HeaderAction::Palette => self.shortcut_label("open_palette"),
+            HeaderAction::Tool(_) => String::new(),
+        }
+    }
+
+    fn header_tool_selected(&self, tool: SidebarTool) -> bool {
+        self.preferences.visible && self.preferences.tool == tool
+    }
+
+    fn run_header_action(&mut self, action: HeaderAction) {
+        match action {
+            HeaderAction::Tool(tool) => self.preferences.toggle(tool),
+            HeaderAction::Settings => self.open_settings(),
+            HeaderAction::Palette => self.open_command_palette(),
+        }
     }
     pub(super) fn workspace_bar(
         &mut self,
@@ -352,6 +535,18 @@ impl App {
                     }
                 });
             }
+            let mut strip_rects: Vec<(String, egui::Rect)> =
+                Vec::with_capacity(workspace.tabs.len());
+            // Top-level tabs never move; they are drop targets while a
+            // terminal pane is dragged. Only match a drag from this project.
+            let drag_same_project = self.pane_drag.as_ref().is_some_and(|pane| match pane {
+                Tab::Terminal(sid) => self
+                    .state
+                    .sessions
+                    .iter()
+                    .any(|s| &s.id == sid && s.project_id == project),
+                _ => false,
+            });
             let mut scroll = egui::ScrollArea::horizontal()
                 .id_salt(("workspace-tabs", project))
                 .max_width(width)
@@ -416,6 +611,39 @@ impl App {
                             let active = workspace.active == group.id;
                             let (rect, response) = ui
                                 .allocate_exact_size(egui::vec2(220.0, 32.0), egui::Sense::click());
+                            strip_rects.push((group.id.clone(), rect));
+                            // Destination preview: hovering a strip tab while
+                            // dragging a terminal shows that tab's splits so
+                            // the drop can target a specific leaf. Switching
+                            // back over the origin tab restores it.
+                            let hovering_tab = drag_same_project
+                                && ui.input(|i| i.pointer.any_down())
+                                && ui
+                                    .input(|i| i.pointer.interact_pos())
+                                    .is_some_and(|pos| rect.contains(pos));
+                            if hovering_tab {
+                                if self
+                                    .drop_preview_origin
+                                    .as_ref()
+                                    .is_some_and(|(p, g)| p == project && g == &group.id)
+                                {
+                                    self.drop_preview_origin = None;
+                                } else if self.drop_preview_origin.is_none()
+                                    && workspace.active != group.id
+                                {
+                                    self.drop_preview_origin =
+                                        Some((project.to_owned(), workspace.active.clone()));
+                                }
+                                workspace.active = group.id.clone();
+                                ui.painter().rect_stroke(
+                                    rect,
+                                    0,
+                                    egui::Stroke::new(2.0, appearance::color(&self.theme.accent)),
+                                    egui::StrokeKind::Inside,
+                                );
+                                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+                                ui.ctx().request_repaint();
+                            }
                             if active && reveal {
                                 response.scroll_to_me(Some(egui::Align::Center));
                             }
@@ -523,6 +751,7 @@ impl App {
                             }
                             if response.clicked()
                                 && !editing
+                                && self.pane_drag.is_none()
                                 && !close_rect.contains(
                                     response.interact_pointer_pos().unwrap_or(egui::Pos2::ZERO),
                                 )
@@ -612,16 +841,56 @@ impl App {
                     ui.ctx().request_repaint();
                 }
             }
-            let response = ui
+            let plus_response = ui
                 .add_sized(
                     [30.0, 30.0],
                     egui::Button::new(RichText::new("+").size(18.0)).frame(false),
                 )
                 .on_hover_text("New top-level terminal tab");
             #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "workspace-plus", response.rect);
-            if response.clicked() {
+            diagnostics::record(ui.ctx(), "workspace-plus", plus_response.rect);
+            let plus_rect = plus_response.rect;
+            if plus_response.clicked() && self.pane_drag.is_none() {
                 self.create(None);
+            }
+            // Dropping a dragged terminal pane onto a strip tab moves it
+            // into that tab (its focused split; the tab content was already
+            // previewed on hover); dropping onto "+" opens it in a fresh
+            // top-level tab. Top-level tabs themselves never move.
+            let released = ui.input(|i| i.pointer.any_released());
+            if let Some(pane) = self.pane_drag.clone()
+                && drag_same_project
+                && released
+                && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+            {
+                if let Some((group_id, _)) = strip_rects.iter().find(|(_, rect)| rect.contains(pos))
+                {
+                    let group_id = group_id.clone();
+                    if workspace.move_pane_to_group(&pane, &group_id) {
+                        if let Tab::Terminal(sid) = &pane {
+                            self.active_session = Some(sid.clone());
+                            self.focus_tab = Some(pane.clone());
+                        }
+                        self.pane_index = None;
+                        switch = None;
+                    }
+                    self.drop_preview_origin = None;
+                    self.end_pane_drag();
+                } else if plus_rect.contains(pos) {
+                    if workspace.move_pane_to_new_group(&pane).is_some() {
+                        if let Tab::Terminal(sid) = &pane {
+                            self.active_session = Some(sid.clone());
+                            self.focus_tab = Some(pane.clone());
+                        }
+                        self.pane_index = None;
+                        switch = None;
+                    }
+                    self.drop_preview_origin = None;
+                    self.end_pane_drag();
+                }
+            }
+            if self.pane_drag.is_some() {
+                ui.ctx().request_repaint();
             }
             header_drag_space(ui);
         });
@@ -655,6 +924,97 @@ impl App {
         if let Some(index) = add_at {
             self.create_workspace_tab(Some(index));
         }
+    }
+
+    /// Short label for a dragged tab ghost.
+    fn drag_title(&self, tab: &Tab) -> String {
+        match tab {
+            Tab::Terminal(sid) => self
+                .state
+                .sessions
+                .iter()
+                .find(|s| &s.id == sid)
+                .map(|s| s.label.clone())
+                .unwrap_or_else(|| "Terminal".into()),
+            Tab::Diff { path, .. } | Tab::Image { path } => path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            Tab::NativeEditor { path } => path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            Tab::Browser { target, .. } => target.title(),
+            Tab::Player => "Player".into(),
+        }
+    }
+
+    /// Semi-transparent floating preview following the cursor while a
+    /// terminal pane is dragged: its title plus a snapshot of its last grid
+    /// rows. Painted on the tooltip layer so it floats above splits and
+    /// sidebars without intercepting input.
+    pub(super) fn paint_drag_ghost(&self, ui: &mut egui::Ui) {
+        let Some(pane) = &self.pane_drag else {
+            return;
+        };
+        if !ui.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        let Some(pos) = ui.input(|i| i.pointer.hover_pos().or(i.pointer.latest_pos())) else {
+            return;
+        };
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            egui::Order::Tooltip,
+            egui::Id::new("drag-ghost"),
+        ));
+        let mut job = egui::text::LayoutJob::simple(
+            self.drag_title(pane),
+            egui::FontId::proportional(13.0),
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 235),
+            320.0,
+        );
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        if !self.pane_drag_snapshot.is_empty() {
+            job.wrap.max_rows = 1 + self.pane_drag_snapshot.len().min(8);
+            job.append(
+                &format!("\n{}", self.pane_drag_snapshot.join("\n")),
+                0.0,
+                egui::TextFormat {
+                    font_id: egui::FontId::monospace(11.0),
+                    color: egui::Color32::from_rgba_unmultiplied(220, 220, 228, 200),
+                    ..Default::default()
+                },
+            );
+        }
+        let galley = painter.layout_job(job);
+        let padding = egui::vec2(12.0, 7.0);
+        let size = galley.size() + padding * 2.0;
+        let screen = ui.ctx().content_rect();
+        let mut min = pos + egui::vec2(16.0, 20.0);
+        min.x = min.x.clamp(
+            screen.min.x + 4.0,
+            (screen.max.x - size.x - 4.0).max(screen.min.x),
+        );
+        min.y = min.y.clamp(
+            screen.min.y + 4.0,
+            (screen.max.y - size.y - 4.0).max(screen.min.y),
+        );
+        let rect = egui::Rect::from_min_size(min, size);
+        painter.rect_filled(
+            rect,
+            6.0,
+            egui::Color32::from_rgba_unmultiplied(24, 24, 28, 205),
+        );
+        painter.rect_stroke(
+            rect,
+            6.0,
+            egui::Stroke::new(1.5, appearance::color(&self.theme.accent)),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(rect.min + padding, galley, egui::Color32::WHITE);
     }
 
     fn workspace_tab_menu(
@@ -1830,6 +2190,28 @@ impl TabViewer for Viewer<'_> {
                 if let Some(close) = &close {
                     diagnostics::record(ui.ctx(), &format!("editor-close:{sid}"), close.rect);
                     diagnostics::record(ui.ctx(), &format!("pane-close:{sid}"), close.rect);
+                }
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), &format!("pane-drag:{sid}"), response.rect);
+                // Caption drag starts a pane move. The drop lands on another
+                // split leaf (rearrange) or a workspace strip tab (move
+                // across top-level tabs); clicks still focus as before.
+                if response.drag_started() && !editing && !closing {
+                    self.app.pane_drag = Some(Tab::Terminal(sid.clone()));
+                    // Snapshot once: the ghost reuses it every frame instead
+                    // of re-reading the live grid while it scrolls.
+                    self.app.pane_drag_snapshot = self
+                        .app
+                        .backends
+                        .get(sid)
+                        .map(snapshot_rows)
+                        .unwrap_or_default();
+                }
+                if self.app.pane_drag.as_ref() == Some(&Tab::Terminal(sid.clone()))
+                    && response.hovered()
+                    && ui.input(|i| i.pointer.any_down())
+                {
+                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
                 }
                 if closing {
                     self.app.close_session = Some(sid.clone());
@@ -3327,5 +3709,17 @@ mod tests {
             Some("b"),
             HOVER_POPUP_DELAY
         ));
+    }
+
+    #[test]
+    fn header_overflow_count_hides_only_what_does_not_fit() {
+        let count = HEADER_ACTIONS.len();
+        let full = header_row_width(count, false);
+        assert_eq!(header_visible_count(full, count), count);
+        assert_eq!(header_visible_count(full - 1.0, count), 5);
+        let three = header_row_width(3, true);
+        assert_eq!(header_visible_count(three, count), 3);
+        assert_eq!(header_visible_count(three - 1.0, count), 2);
+        assert_eq!(header_visible_count(0.0, count), 0);
     }
 }

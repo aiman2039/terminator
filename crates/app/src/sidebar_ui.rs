@@ -74,52 +74,66 @@ impl App {
         });
     }
     pub(super) fn agent_bar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            self.player_toggle_button(ui);
-            let waiting = self.waiting_notice_count();
-            let unread = self
-                .state
-                .notifications
-                .iter()
-                .filter(|notice| !notice.read && notice_pending(notice, now()))
-                .count();
-            let badge = match (waiting, unread) {
-                (0, 0) => String::new(),
-                (0, unread) => format!("{unread} unread"),
-                (waiting, 0) => format!("{waiting} waiting"),
-                (waiting, unread) => format!("{waiting} waiting · {unread} unread"),
-            };
-            #[cfg(feature = "test-support")]
-            ui.ctx()
-                .data_mut(|data| data.insert_temp(egui::Id::new("agent-bar-badge"), badge.clone()));
-            let response = appearance::row(
-                ui,
-                "",
-                "Bell",
-                self.preferences.left_agents,
-                28.0,
-                &badge,
-                appearance::color(if waiting > 0 {
-                    &self.theme.status_waiting
-                } else {
-                    &self.theme.text
-                }),
-            )
-            .on_hover_text(
-                "Pending agent notifications. Click to switch between Agents and Projects.",
-            );
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Agents")
-            });
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "left-agent-bar", response.rect);
-            if response.clicked() {
-                self.preferences.left_agents = !self.preferences.left_agents;
-            }
-        });
-        self.player_live_controls(ui);
-        ui.separator();
+        let spacing = ui.spacing().item_spacing.y;
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), 28.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                self.player_activity_row(ui);
+            },
+        );
+        if self.player_chrome_expanded() {
+            ui.spacing_mut().item_spacing.y = 4.0;
+            self.player_live_controls(ui);
+        }
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.add(egui::Separator::default().spacing(4.0));
+        ui.spacing_mut().item_spacing.y = spacing;
     }
+
+    fn player_activity_row(&mut self, ui: &mut egui::Ui) {
+        self.player_toggle_button(ui);
+        let waiting = self.waiting_notice_count();
+        let unread = self
+            .state
+            .notifications
+            .iter()
+            .filter(|notice| !notice.read && notice_pending(notice, now()))
+            .count();
+        let badge = match (waiting, unread) {
+            (0, 0) => String::new(),
+            (0, unread) => format!("{unread} unread"),
+            (waiting, 0) => format!("{waiting} waiting"),
+            (waiting, unread) => format!("{waiting} waiting · {unread} unread"),
+        };
+        #[cfg(feature = "test-support")]
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(egui::Id::new("agent-bar-badge"), badge.clone()));
+        let response = appearance::row(
+            ui,
+            "",
+            "Bell",
+            self.preferences.left_agents,
+            28.0,
+            &badge,
+            appearance::color(if waiting > 0 {
+                &self.theme.status_waiting
+            } else {
+                &self.theme.text
+            }),
+        )
+        .on_hover_text("Pending agent notifications. Click to switch between Agents and Projects.");
+        response
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Agents"));
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "left-agent-bar", response.rect);
+        if response.clicked() {
+            self.preferences.left_agents = !self.preferences.left_agents;
+        }
+    }
+
     fn project_sort_menu(&mut self, ui: &mut egui::Ui) {
         ui.spacing_mut().interact_size.y = 22.0;
         ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);

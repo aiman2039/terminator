@@ -82,6 +82,49 @@ struct HoverPopup {
     rect: egui::Rect,
 }
 
+/// Drop zone within a hovered split leaf while a terminal is dragged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PaneDropZone {
+    /// The middle: swap single panes or join the leaf.
+    Center,
+    /// An edge band: open the dragged pane in a new split beside the leaf.
+    Above,
+    Below,
+    Left,
+    Right,
+}
+impl PaneDropZone {
+    fn split(self) -> Option<egui_dock::Split> {
+        match self {
+            Self::Center => None,
+            Self::Above => Some(egui_dock::Split::Above),
+            Self::Below => Some(egui_dock::Split::Below),
+            Self::Left => Some(egui_dock::Split::Left),
+            Self::Right => Some(egui_dock::Split::Right),
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Center => "Place terminal here",
+            Self::Above => "Split above",
+            Self::Below => "Split below",
+            Self::Left => "Split left",
+            Self::Right => "Split right",
+        }
+    }
+    /// The part of the leaf the dragged pane will occupy.
+    fn landing(self, rect: egui::Rect) -> egui::Rect {
+        let center = rect.center();
+        match self {
+            Self::Center => rect,
+            Self::Above => egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), center.y)),
+            Self::Below => egui::Rect::from_min_max(egui::pos2(rect.left(), center.y), rect.max),
+            Self::Left => egui::Rect::from_min_max(rect.min, egui::pos2(center.x, rect.bottom())),
+            Self::Right => egui::Rect::from_min_max(egui::pos2(center.x, rect.top()), rect.max),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub(crate) enum Tab {
     Image {
@@ -518,6 +561,17 @@ struct App {
 
     pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
     pane_index: Option<PaneIndex>,
+    /// Terminal pane currently dragged by its caption header. Dropped onto
+    /// another split leaf (rearrange) or a workspace strip tab (move across
+    /// top-level tabs) within the same project. Top-level tabs themselves
+    /// never move; only terminals do.
+    pane_drag: Option<Tab>,
+    /// Last text snapshot of the dragged terminal, taken when its drag
+    /// starts and shown in the floating ghost.
+    pane_drag_snapshot: Vec<String>,
+    /// Group previewed while a pane drag hovers its strip tab, as
+    /// (project, origin group) so a cancelled drag can switch back.
+    drop_preview_origin: Option<(String, String)>,
     focus_tab: Option<Tab>,
     terminal_context: HashMap<String, String>,
     texts: HashMap<String, String>,
@@ -751,6 +805,9 @@ impl App {
 
             pane_tabs: HashMap::new(),
             pane_index: None,
+            pane_drag: None,
+            pane_drag_snapshot: Vec::new(),
+            drop_preview_origin: None,
             focus_tab: None,
             terminal_context: HashMap::new(),
             texts: HashMap::new(),
@@ -3337,6 +3394,13 @@ impl App {
         self.apply_add_tab(&project, &mut dock);
         self.paint_session_focus(ui, &dock);
         self.layouts.insert(project, dock);
+        self.paint_drag_ghost(ui);
+        // A drag released over an empty workspace has no dock drop handler;
+        // never leave the payload stuck.
+        if self.pane_drag.is_some() && ui.input(|i| i.pointer.any_released()) {
+            self.drop_preview_origin = None;
+            self.end_pane_drag();
+        }
         // Pane "Close tab" is queued while this workspace is checked out.
         self.drain_pending_unavailable_close();
     }
@@ -3388,6 +3452,195 @@ impl App {
             .show_leaf_close_all_buttons(false)
             .show_leaf_collapse_buttons(false)
             .show_inside(ui, &mut Viewer { app: self });
+        self.finish_pane_drop(ui, dock);
+    }
+
+    /// Clear a finished or cancelled pane drag, including its ghost snapshot.
+    fn end_pane_drag(&mut self) {
+        self.pane_drag = None;
+        self.pane_drag_snapshot.clear();
+    }
+
+    /// Drop zone within a hovered split leaf: the middle swaps or joins,
+    /// while a band near an edge opens the dragged pane in a new split
+    /// beside that leaf.
+    fn pane_drop_zone(rect: egui::Rect, pos: egui::Pos2) -> PaneDropZone {
+        let band = (rect.width().min(rect.height()) * 0.25).clamp(20.0, 96.0);
+        let top = pos.y - rect.top();
+        let bottom = rect.bottom() - pos.y;
+        let left = pos.x - rect.left();
+        let right = rect.right() - pos.x;
+        if top <= band && top <= bottom && top <= left && top <= right {
+            PaneDropZone::Above
+        } else if bottom <= band && bottom <= top && bottom <= left && bottom <= right {
+            PaneDropZone::Below
+        } else if left <= band && left <= top && left <= bottom && left <= right {
+            PaneDropZone::Left
+        } else if right <= band && right <= top && right <= bottom && right <= left {
+            PaneDropZone::Right
+        } else {
+            PaneDropZone::Center
+        }
+    }
+
+    /// Complete a caption-initiated pane drag. Releasing over a split leaf of
+    /// the previewed top-level tab lands the pane there (single panes swap,
+    /// otherwise the dragged pane joins the leaf, including across tabs);
+    /// releasing elsewhere cancels and switches back to the origin tab. The
+    /// workspace strip runs earlier in the frame and consumes releases over
+    /// its own tabs.
+    fn finish_pane_drop(&mut self, ui: &mut egui::Ui, dock: &mut Workspace) {
+        let Some(pane) = self.pane_drag.clone() else {
+            return;
+        };
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.revert_drop_preview(dock);
+            self.end_pane_drag();
+            return;
+        }
+        let dragging = ui.input(|i| i.pointer.any_down());
+        let released = ui.input(|i| i.pointer.any_released());
+        if !dragging && !released {
+            return;
+        }
+        let pos = ui.input(|i| i.pointer.interact_pos());
+        let Some(pos) = pos else {
+            if released {
+                self.revert_drop_preview(dock);
+                self.end_pane_drag();
+            }
+            return;
+        };
+        let target = dock
+            .iter_leaves()
+            .find(|(_, leaf)| leaf.rect.contains(pos))
+            .map(|(path, leaf)| (path, leaf.rect));
+        let zone = target.map(|(_, rect)| Self::pane_drop_zone(rect, pos));
+        if dragging && !released {
+            self.paint_landing_preview(ui, dock, &pane, target.map(|(path, _)| path), zone);
+            ui.ctx().request_repaint();
+            return;
+        }
+        if released {
+            if let Some((path, _)) = target {
+                let group = dock.active.clone();
+                let moved = match zone {
+                    Some(PaneDropZone::Center) | None => {
+                        if dock.find_tab(&pane).is_some() {
+                            // Same group: `move_pane_to_leaf` also focuses a
+                            // drop back onto the pane's own leaf.
+                            dock.move_pane_to_leaf(&pane, path)
+                        } else {
+                            dock.move_pane_to_group_leaf(&pane, &group, path)
+                        }
+                    }
+                    Some(edge) => {
+                        // `move_pane_to_split` focuses a lone pane dropped on
+                        // an edge of its own leaf instead of splitting it.
+                        let split = edge.split().expect("edge zone has a split");
+                        dock.move_pane_to_split(&pane, &group, path, split)
+                    }
+                };
+                if moved {
+                    if let Tab::Terminal(sid) = &pane {
+                        self.active_session = Some(sid.clone());
+                        self.focus_tab = Some(pane.clone());
+                    }
+                    self.pane_index = None;
+                    self.drop_preview_origin = None;
+                } else {
+                    self.revert_drop_preview(dock);
+                }
+            } else {
+                self.revert_drop_preview(dock);
+            }
+            // A release the strip did not consume ends the drag here; the
+            // post-dock checkout in `workspace_project` clears leftovers.
+            self.end_pane_drag();
+        }
+    }
+
+    /// Switch back to the tab a cancelled drag started from. Previewing never
+    /// moves panes, so the origin group always still exists.
+    fn revert_drop_preview(&mut self, dock: &mut Workspace) {
+        if let Some((_, origin)) = self.drop_preview_origin.take()
+            && dock.tabs.iter().any(|tab| tab.id == origin)
+        {
+            dock.active = origin;
+        }
+    }
+
+    /// Landing preview for the hovered split leaf: a translucent accent wash
+    /// over exactly where the dragged pane will land (the whole leaf, or the
+    /// edge half a split drop would open), with a divider on the future
+    /// split boundary. A center drop between two single panes exchanges
+    /// them, so the source leaf is outlined as well.
+    fn paint_landing_preview(
+        &self,
+        ui: &mut egui::Ui,
+        dock: &Workspace,
+        pane: &Tab,
+        target: Option<egui_dock::NodePath>,
+        zone: Option<PaneDropZone>,
+    ) {
+        let (Some(path), Some(zone)) = (target, zone) else {
+            return;
+        };
+        let Ok(leaf) = dock.leaf(path) else {
+            return;
+        };
+        let accent = appearance::color(&self.theme.accent);
+        let wash = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 36);
+        let landing = zone.landing(leaf.rect);
+        ui.painter().rect_filled(landing, 2, wash);
+        ui.painter().rect_stroke(
+            landing,
+            2,
+            egui::Stroke::new(1.5, accent),
+            egui::StrokeKind::Inside,
+        );
+        if zone != PaneDropZone::Center {
+            // Divider where the new split boundary will appear.
+            let divider = match zone {
+                PaneDropZone::Above => [landing.left_bottom(), landing.right_bottom()],
+                PaneDropZone::Below => [landing.left_top(), landing.right_top()],
+                PaneDropZone::Left => [landing.right_top(), landing.right_bottom()],
+                PaneDropZone::Right => [landing.left_top(), landing.left_bottom()],
+                PaneDropZone::Center => return,
+            };
+            ui.painter()
+                .line_segment(divider, egui::Stroke::new(2.0, accent));
+        }
+        // A center swap keeps every split in place and only exchanges two
+        // panes: outline the other side and say so.
+        let source = dock.find_tab(pane).map(|path| path.node_path());
+        let mut swapping = false;
+        if zone == PaneDropZone::Center
+            && let Some(node) = source
+            && node != path
+            && let (Ok(from), Ok(to)) = (dock.leaf(node), dock.leaf(path))
+            && from.tabs.len() == 1
+            && to.tabs.len() == 1
+        {
+            swapping = true;
+            ui.painter().rect_stroke(
+                from.rect,
+                2,
+                egui::Stroke::new(1.5, accent),
+                egui::StrokeKind::Inside,
+            );
+        }
+        ui.painter().text(
+            landing.min + egui::vec2(8.0, 6.0),
+            egui::Align2::LEFT_TOP,
+            if swapping {
+                "Swap terminals"
+            } else {
+                zone.label()
+            },
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 220),
+        );
     }
 
     fn apply_focus_tab(&mut self, dock: &mut Workspace) {
@@ -4086,6 +4339,107 @@ mod navigation_tests {
         output.textures_delta.clear();
         assert!(rect("toggle-left-sidebar").is_some());
         assert!(rect("toggle-right-sidebar").is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn narrow_header_puts_search_behind_the_overflow_menu() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.width = 285.0;
+        paint_header(&mut app, &ctx, &[]);
+        let rect = header_target(&ctx);
+        assert!(rect("palette").is_none(), "search must leave the bar");
+        assert!(rect("settings").is_some());
+        let overflow = rect("header-overflow").expect("overflow menu");
+        let pos = overflow.center();
+        paint_header(&mut app, &ctx, &[egui::Event::PointerMoved(pos)]);
+        paint_header(
+            &mut app,
+            &ctx,
+            &[egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            }],
+        );
+        paint_header(
+            &mut app,
+            &ctx,
+            &[egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+        // The opening frame is a sizing pass. Read the item after the menu settles.
+        paint_header(&mut app, &ctx, &[]);
+        let search = rect("palette").expect("search in the menu");
+        assert!(!app.palette_open);
+        let pos = search.center();
+        paint_header(&mut app, &ctx, &[egui::Event::PointerMoved(pos)]);
+        paint_header(
+            &mut app,
+            &ctx,
+            &[egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            }],
+        );
+        paint_header(
+            &mut app,
+            &ctx,
+            &[egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+        assert!(app.palette_open);
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn wide_header_shows_search_without_an_overflow_menu() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.width = 480.0;
+        paint_header(&mut app, &ctx, &[]);
+        let rect = header_target(&ctx);
+        assert!(rect("palette").is_some());
+        assert!(rect("header-overflow").is_none());
+    }
+
+    #[cfg(feature = "test-support")]
+    fn header_target(ctx: &egui::Context) -> impl Fn(&str) -> Option<egui::Rect> + '_ {
+        |name| ctx.data(|data| data.get_temp(egui::Id::new(("fixture-target", name))))
+    }
+
+    #[cfg(feature = "test-support")]
+    fn paint_header(app: &mut App, ctx: &egui::Context, events: &[egui::Event]) {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 480.0),
+                )),
+                events: events.to_vec(),
+                ..Default::default()
+            },
+            |ui| {
+                let rect = egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(ui.available_width(), 40.0),
+                );
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    app.window_header(ui);
+                });
+            },
+        );
+        output.textures_delta.clear();
     }
 
     fn fixture() -> (App, egui::Context, tempfile::TempDir) {
@@ -6518,6 +6872,463 @@ mod navigation_tests {
                 .contains_key(&Tab::Terminal("other".into()).key())
         );
     }
+    /// Drive one headless frame of the strip plus the dock in real panel
+    /// order (strip first, dock after) with synthetic pointer events.
+    /// Needs test-support for the geometry records.
+    #[cfg(feature = "test-support")]
+    fn combined_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 600.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                let mut dock = app.layouts.remove("a").unwrap_or_else(Workspace::empty);
+                app.workspace_bar(ui, "a", &mut dock);
+                app.paint_dock(ui, "a", &mut dock);
+                app.layouts.insert("a".into(), dock);
+            },
+        );
+        output.textures_delta.clear();
+    }
+    #[cfg(feature = "test-support")]
+    fn frame_center(app: &App, ctx: &egui::Context, name: &str) -> egui::Pos2 {
+        let rect = app
+            .fixture_rect(ctx, name)
+            .unwrap_or_else(|| panic!("missing geometry for {name}"));
+        egui::pos2(rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0)
+    }
+    #[cfg(feature = "test-support")]
+    fn frame_press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+    #[cfg(feature = "test-support")]
+    fn frame_glide(
+        app: &mut App,
+        ctx: &egui::Context,
+        from: egui::Pos2,
+        to: egui::Pos2,
+        steps: usize,
+    ) {
+        for step in 1..=steps {
+            let k = step as f32 / steps as f32;
+            combined_frame(
+                app,
+                ctx,
+                vec![egui::Event::PointerMoved(egui::pos2(
+                    from.x + (to.x - from.x) * k,
+                    from.y + (to.y - from.y) * k,
+                ))],
+            );
+        }
+    }
+    #[test]
+    fn drag_ghost_paints_without_changing_state() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("one", SessionKind::Shell));
+        app.pane_drag = Some(Tab::Terminal("one".into()));
+        let pos = egui::pos2(500.0, 300.0);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 600.0),
+                )),
+                events: vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::default(),
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                app.paint_drag_ghost(ui);
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(app.pane_drag, Some(Tab::Terminal("one".into())));
+    }
+    /// Hovering another strip tab mid-drag previews its splits; dropping on
+    /// one of its leaves lands the terminal precisely there.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_drag_preview_switches_tab_and_drops_into_its_leaf() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two", "three"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("three".into())],
+        );
+        let group_a = workspace.tabs[0].id.clone();
+        workspace.active = group_a.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("one".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let start = frame_center(&app, &ctx, "pane-drag:one");
+        let dest = frame_center(&app, &ctx, "workspace-tab:two");
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        frame_glide(&mut app, &ctx, start, dest, 4);
+        // The destination tab content is previewed while hovering its strip
+        // tab, remembering the origin tab.
+        assert_eq!(app.layouts["a"].active, "tB");
+        assert_eq!(
+            app.drop_preview_origin,
+            Some(("a".to_owned(), group_a.clone()))
+        );
+        let leaf_caption = frame_center(&app, &ctx, "pane-drag:three");
+        // Aim at the middle of the previewed split: its caption sits in the
+        // top edge band, which would split instead of swapping.
+        let leaf = egui::pos2(leaf_caption.x, 320.0);
+        frame_glide(&mut app, &ctx, dest, leaf, 3);
+        combined_frame(&mut app, &ctx, vec![frame_press(leaf, false)]);
+        assert!(app.pane_drag.is_none());
+        assert!(app.drop_preview_origin.is_none());
+        let dock = app.layouts.get("a").unwrap();
+        // Single panes swap: both tabs survive with everything visible.
+        assert_eq!(dock.tabs.len(), 2);
+        assert_eq!(dock.active, "tB");
+        // "one" landed in the targeted previewed leaf.
+        let landed = dock
+            .find_tab(&Tab::Terminal("one".into()))
+            .unwrap()
+            .node_path();
+        assert!(
+            dock.leaf(landed).unwrap().rect.contains(leaf),
+            "drop missed the targeted leaf"
+        );
+        // "three" swapped back into the origin tab.
+        let origin = dock
+            .tabs
+            .iter()
+            .find(|tab| tab.id != "tB")
+            .expect("origin tab survives the swap");
+        assert!(
+            origin
+                .layout
+                .find_tab(&Tab::Terminal("three".into()))
+                .is_some()
+        );
+    }
+    /// Dropping a pane near the edge of another split opens it in a new
+    /// split beside that leaf instead of swapping.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_drag_edge_drop_opens_a_split() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["left", "right"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("left".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("right".into())],
+        );
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("left".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let start = frame_center(&app, &ctx, "pane-drag:left");
+        let right = app
+            .fixture_rect(&ctx, "pane-drag:right")
+            .expect("caption geometry");
+        // Near the right edge of the right split, vertically centered on
+        // its caption so the top band cannot win the zone.
+        let edge = egui::pos2(right[0] + right[2] - 4.0, right[1] + right[3] / 2.0);
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        frame_glide(&mut app, &ctx, start, edge, 4);
+        assert_eq!(
+            app.pane_drag,
+            Some(Tab::Terminal("left".into())),
+            "caption drag did not start"
+        );
+        combined_frame(&mut app, &ctx, vec![frame_press(edge, false)]);
+        assert!(app.pane_drag.is_none());
+        // One more frame so leaf rectangles reflect the new split.
+        combined_frame(&mut app, &ctx, vec![]);
+        let dock = app.layouts.get("a").unwrap();
+        assert_eq!(dock.iter_leaves().count(), 2);
+        let left_rect = dock
+            .find_tab(&Tab::Terminal("left".into()))
+            .map(|path| dock.leaf(path.node_path()).unwrap().rect)
+            .unwrap();
+        let right_rect = dock
+            .find_tab(&Tab::Terminal("right".into()))
+            .map(|path| dock.leaf(path.node_path()).unwrap().rect)
+            .unwrap();
+        assert!(
+            left_rect.center().x > right_rect.center().x,
+            "edge drop did not split right"
+        );
+        assert_eq!(dock.active_pane(), Some(&Tab::Terminal("left".into())));
+    }
+    /// Cancelling a pane drag (Esc) after previewing another tab switches
+    /// back to the origin tab without moving anything.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_drag_cancel_restores_origin_tab() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        let group_a = workspace.tabs[0].id.clone();
+        workspace.active = group_a.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let start = frame_center(&app, &ctx, "pane-drag:one");
+        let dest = frame_center(&app, &ctx, "workspace-tab:two");
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(dest)]);
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(dest)]);
+        assert_eq!(app.layouts["a"].active, "tB");
+        combined_frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+        assert!(app.pane_drag.is_none());
+        assert!(app.drop_preview_origin.is_none());
+        let dock = app.layouts.get("a").unwrap();
+        assert_eq!(dock.active, group_a);
+        assert_eq!(dock.tabs.len(), 2);
+        assert!(dock.contains(&Tab::Terminal("one".into())));
+    }
+    /// Dragging a terminal caption onto another split leaf rearranges the
+    /// active tab (single panes swap). Runs headless with synthetic pointer
+    /// events; needs test-support for the caption geometry records.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_caption_drag_swaps_split_terminals() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("left", SessionKind::Shell));
+        app.state
+            .sessions
+            .push(session_fixture("right", SessionKind::Shell));
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("left".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("right".into())],
+        );
+        let left_home = workspace
+            .find_tab(&Tab::Terminal("left".into()))
+            .unwrap()
+            .node_path();
+        let right_home = workspace
+            .find_tab(&Tab::Terminal("right".into()))
+            .unwrap()
+            .node_path();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("left".into());
+        fn dock_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut dock = app.layouts.remove("a").unwrap_or_else(Workspace::empty);
+                    app.paint_dock(ui, "a", &mut dock);
+                    app.layouts.insert("a".into(), dock);
+                },
+            );
+            output.textures_delta.clear();
+        }
+        fn center(rect: [f32; 4]) -> egui::Pos2 {
+            egui::pos2(rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0)
+        }
+        let press = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        dock_frame(&mut app, &ctx, vec![]);
+        let start = center(
+            app.fixture_rect(&ctx, "pane-drag:left")
+                .expect("left caption geometry"),
+        );
+        let end = center(
+            app.fixture_rect(&ctx, "pane-drag:right")
+                .expect("right caption geometry"),
+        );
+        // Aim at the middle of the right split: the caption sits in the top
+        // edge band, which would split instead of swapping.
+        let middle = egui::pos2(end.x, 300.0);
+        dock_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        dock_frame(&mut app, &ctx, vec![press(start, true)]);
+        assert!(app.pane_drag.is_none());
+        for step in 1..=4 {
+            let k = step as f32 / 4.0;
+            dock_frame(
+                &mut app,
+                &ctx,
+                vec![egui::Event::PointerMoved(egui::pos2(
+                    start.x + (middle.x - start.x) * k,
+                    start.y + (middle.y - start.y) * k,
+                ))],
+            );
+        }
+        assert_eq!(
+            app.pane_drag,
+            Some(Tab::Terminal("left".into())),
+            "caption drag did not start"
+        );
+        dock_frame(&mut app, &ctx, vec![press(middle, false)]);
+        assert!(app.pane_drag.is_none());
+        // A middle drop swaps the two single panes in place: same leaves,
+        // exchanged terminals.
+        let dock = app.layouts.get("a").unwrap();
+        assert_eq!(
+            dock.find_tab(&Tab::Terminal("left".into()))
+                .unwrap()
+                .node_path(),
+            right_home,
+            "middle drop did not swap into the right split"
+        );
+        assert_eq!(
+            dock.find_tab(&Tab::Terminal("right".into()))
+                .unwrap()
+                .node_path(),
+            left_home,
+            "middle drop did not swap into the left split"
+        );
+    }
+    /// Dragging a terminal caption onto another workspace strip tab moves it
+    /// across top-level tabs. Needs test-support for geometry records.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_caption_drop_on_strip_tab_moves_across_groups() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("one", SessionKind::Shell));
+        app.state
+            .sessions
+            .push(session_fixture("two", SessionKind::Shell));
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        let group_a = workspace.tabs[0].id.clone();
+        workspace.active = group_a.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("one".into());
+        fn combined_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    // Same order as the real panels: strip first, dock after.
+                    let mut dock = app.layouts.remove("a").unwrap_or_else(Workspace::empty);
+                    app.workspace_bar(ui, "a", &mut dock);
+                    app.paint_dock(ui, "a", &mut dock);
+                    app.layouts.insert("a".into(), dock);
+                },
+            );
+            output.textures_delta.clear();
+        }
+        fn center(rect: [f32; 4]) -> egui::Pos2 {
+            egui::pos2(rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0)
+        }
+        let press = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        combined_frame(&mut app, &ctx, vec![]);
+        let start = center(
+            app.fixture_rect(&ctx, "pane-drag:one")
+                .expect("caption geometry"),
+        );
+        let dest = center(
+            app.fixture_rect(&ctx, "workspace-tab:two")
+                .expect("strip tab geometry"),
+        );
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![press(start, true)]);
+        for step in 1..=4 {
+            let k = step as f32 / 4.0;
+            combined_frame(
+                &mut app,
+                &ctx,
+                vec![egui::Event::PointerMoved(egui::pos2(
+                    start.x + (dest.x - start.x) * k,
+                    start.y + (dest.y - start.y) * k,
+                ))],
+            );
+        }
+        assert_eq!(
+            app.pane_drag,
+            Some(Tab::Terminal("one".into())),
+            "caption drag did not start"
+        );
+        combined_frame(&mut app, &ctx, vec![press(dest, false)]);
+        assert!(app.pane_drag.is_none());
+        let dock = app.layouts.get("a").unwrap();
+        // Both sides held one terminal: they swap instead of hiding one.
+        assert_eq!(dock.tabs.len(), 2, "swap must keep both tabs");
+        assert_eq!(dock.active, "tB");
+        assert!(dock.contains(&Tab::Terminal("one".into())));
+        assert!(dock.contains(&Tab::Terminal("two".into())));
+    }
     #[test]
     fn attention_migration_retries_without_ack_and_preserves_later_choices() {
         let (mut app, ctx, dir) = fixture();
@@ -6754,6 +7565,11 @@ mod navigation_tests {
             chrome.min.x < bell.min.x,
             "player icon must sit left of the project bell, chrome={chrome:?} bell={bell:?}"
         );
+        assert!(
+            (chrome.center().y - bell.center().y).abs() < 1.0,
+            "player and activity icons should share a vertical center, chrome={chrome:?} bell={bell:?}"
+        );
+        assert!(chrome.height() <= 28.0 && bell.height() <= 28.0);
     }
 
     fn generation_health(

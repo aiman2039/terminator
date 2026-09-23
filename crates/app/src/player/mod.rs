@@ -18,6 +18,14 @@ pub(super) fn audio_from_dir(root: &Path) -> Vec<PathBuf> {
     playlist::collect_audio(root, playlist::AUDIO_WALK_CAP)
 }
 
+struct PlayerIconButton<'a> {
+    name: &'a str,
+    tip: &'a str,
+    lit: bool,
+    size: f32,
+    glyph: f32,
+}
+
 const SAMPLE_TRACKS: &[(&str, &[u8])] = &[
     ("pulse.wav", include_bytes!("../../assets/audio/pulse.wav")),
     ("hum.wav", include_bytes!("../../assets/audio/hum.wav")),
@@ -590,17 +598,25 @@ impl App {
         ui::center(self, ui);
     }
 
+    pub(super) fn player_chrome_expanded(&self) -> bool {
+        self.player_active() && !self.preferences.player_chrome_collapsed
+    }
+
     pub(super) fn player_toggle_button(&mut self, ui: &mut egui::Ui) {
         ui.ctx().request_repaint_after(Duration::from_millis(200));
-        let icon = Self::player_icon_button(
+        let icon = Self::paint_player_icon(
             ui,
-            "AudioLines",
-            if self.preferences.player_chrome_collapsed && self.player_active() {
-                "Show player"
-            } else {
-                "Player"
+            PlayerIconButton {
+                name: "AudioLines",
+                tip: if self.preferences.player_chrome_collapsed && self.player_active() {
+                    "Show player"
+                } else {
+                    "Player"
+                },
+                lit: self.player_active(),
+                size: 28.0,
+                glyph: 16.0,
             },
-            self.player_active(),
         );
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "player-chrome", icon.rect);
@@ -614,7 +630,7 @@ impl App {
     }
 
     pub(super) fn player_live_controls(&mut self, ui: &mut egui::Ui) {
-        if !self.player_active() || self.preferences.player_chrome_collapsed {
+        if !self.player_chrome_expanded() {
             return;
         }
         ui.vertical(|ui| {
@@ -698,8 +714,28 @@ impl App {
     }
 
     fn player_icon_button(ui: &mut egui::Ui, name: &str, tip: &str, lit: bool) -> egui::Response {
+        Self::paint_player_icon(
+            ui,
+            PlayerIconButton {
+                name,
+                tip,
+                lit,
+                size: 32.0,
+                glyph: 18.0,
+            },
+        )
+    }
+
+    fn paint_player_icon(ui: &mut egui::Ui, button: PlayerIconButton<'_>) -> egui::Response {
+        let PlayerIconButton {
+            name,
+            tip,
+            lit,
+            size,
+            glyph,
+        } = button;
         let response = ui
-            .allocate_response(egui::vec2(32.0, 32.0), egui::Sense::click())
+            .allocate_response(egui::vec2(size, size), egui::Sense::click())
             .on_hover_text(tip);
         if lit {
             ui.painter()
@@ -715,7 +751,7 @@ impl App {
         };
         egui::Image::new(icons::source(name)).tint(tint).paint_at(
             ui,
-            egui::Rect::from_center_size(response.rect.center(), egui::vec2(18.0, 18.0)),
+            egui::Rect::from_center_size(response.rect.center(), egui::vec2(glyph, glyph)),
         );
         response
     }

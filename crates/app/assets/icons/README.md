@@ -26,3 +26,6 @@ and `circle-question-mark` (unknown).
 `list-music.svg`, `square.svg`, `shuffle.svg`, `repeat.svg`, and `radio.svg` come from
 Lucide 0.577.0 with the same license and white-stroke adaptation, for the chrome
 player.
+
+`menu.svg` comes from Lucide 0.577.0 with the same license and white-stroke
+adaptation, for the header overflow menu.

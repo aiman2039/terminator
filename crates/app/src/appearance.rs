@@ -191,20 +191,22 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
     ctx.set_theme(egui::Theme::Dark);
 }
 
-/// Framed sidebar glyph, matching the title-bar panel toggle.
+/// Title-bar sidebar glyph. Resting state has no frame; hover fills only.
 pub fn framed_icon(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
-    ui.add_sized(
-        [28.0, 28.0],
-        egui::Button::image(
-            egui::Image::new(crate::icons::source(icon))
-                .tint(ICON_COLOR)
-                .fit_to_exact_size(egui::vec2(14.0, 14.0)),
-        )
-        .corner_radius(egui::CornerRadius::same(7))
-        .fill(ui.visuals().widgets.inactive.weak_bg_fill)
-        .stroke(egui::Stroke::new(1.0, Color32::from_white_alpha(36))),
-    )
-    .on_hover_text(tip)
+    let response = ui
+        .allocate_response(egui::vec2(28.0, 28.0), egui::Sense::click())
+        .on_hover_text(tip);
+    if response.hovered() {
+        ui.painter()
+            .rect_filled(response.rect, 7.0, ui.visuals().widgets.hovered.bg_fill);
+    }
+    egui::Image::new(crate::icons::source(icon))
+        .tint(ICON_COLOR)
+        .paint_at(
+            ui,
+            egui::Rect::from_center_size(response.rect.center(), egui::vec2(14.0, 14.0)),
+        );
+    response
 }
 
 pub fn sidebar_action(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
@@ -599,9 +601,13 @@ pub fn markdown_header(
         .min((rect.width() - fixed - 162.0 * scale).max(0.0));
     let title_rect = egui::Rect::from_min_size(rect.min, egui::vec2(title_width, rect.height()));
     let title_response = ui
-        .interact(title_rect, row.id.with("title"), egui::Sense::click())
+        .interact(
+            title_rect,
+            row.id.with("title"),
+            egui::Sense::click_and_drag(),
+        )
         .on_hover_text(title)
-        .on_hover_cursor(egui::CursorIcon::PointingHand);
+        .on_hover_cursor(egui::CursorIcon::Grab);
     if !editing {
         header_text(
             ui,
@@ -815,8 +821,12 @@ pub fn pane_caption(
     active: bool,
     closeable: bool,
 ) -> (egui::Response, Option<egui::Response>) {
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 18.0), egui::Sense::click());
+    // Click-and-drag so terminal panes can be dragged between splits and
+    // top-level tabs; plain clicks still select/focus as before.
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), 18.0),
+        egui::Sense::click_and_drag(),
+    );
     let tint = if active {
         ui.visuals().selection.stroke.color
     } else {
@@ -877,7 +887,7 @@ pub fn pane_caption(
     });
     (
         response
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_cursor(egui::CursorIcon::Grab)
             .on_hover_text(title),
         close,
     )

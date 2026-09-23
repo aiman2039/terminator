@@ -177,6 +177,271 @@ impl Workspace {
         self.normalize(previous);
     }
 
+    fn group_with_pane(&self, pane: &Tab) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|group| group.layout.find_tab(pane).is_some())
+    }
+
+    fn refresh_primary(&mut self, group: usize, removed: &Tab) {
+        let stale = self.tabs[group].primary.as_ref() == Some(removed);
+        if stale {
+            let next = self.tabs[group]
+                .layout
+                .iter_all_tabs()
+                .next()
+                .map(|(_, pane)| pane.clone());
+            self.tabs[group].primary = next;
+        }
+    }
+
+    /// Move a pane between top-level tabs of the same project, landing on
+    /// the destination's focused split. Single panes exchange places so both
+    /// stay visible; otherwise the pane joins the leaf. The destination group
+    /// becomes active with the moved pane focused. Returns false when the
+    /// pane or destination is missing, or when both already match.
+    pub fn move_pane_to_group(&mut self, pane: &Tab, dest_group: &str) -> bool {
+        let Some(dst) = self.tabs.iter().position(|tab| tab.id == dest_group) else {
+            return false;
+        };
+        let path = self.tabs[dst]
+            .layout
+            .main_surface()
+            .focused_leaf()
+            .map(|node| egui_dock::NodePath {
+                surface: egui_dock::SurfaceIndex::main(),
+                node,
+            })
+            .or_else(|| {
+                self.tabs[dst]
+                    .layout
+                    .iter_leaves()
+                    .next()
+                    .map(|(path, _)| path)
+            });
+        let Some(path) = path else {
+            return false;
+        };
+        self.move_pane_to_group_leaf(pane, dest_group, path)
+    }
+
+    /// Move a pane within the active top-level tab. Dropping onto its own
+    /// leaf focuses it; dropping single-pane leaves onto each other swaps
+    /// their positions so split layouts visibly rearrange; otherwise the
+    /// pane appends to the destination leaf.
+    pub fn move_pane_to_leaf(&mut self, pane: &Tab, dest: egui_dock::NodePath) -> bool {
+        let active = self.active_index();
+        let Some(src) = self.tabs[active].layout.find_tab(pane) else {
+            return false;
+        };
+        if self.tabs[active].layout.leaf(dest).is_err() {
+            return false;
+        }
+        if src.node_path() == dest {
+            let layout = &mut self.tabs[active].layout;
+            let _ = layout.set_active_tab(src);
+            layout.set_focused_node_and_surface(dest);
+            return true;
+        }
+        let (src_len, dst_len) = match (
+            self.tabs[active].layout.leaf(src.node_path()),
+            self.tabs[active].layout.leaf(dest),
+        ) {
+            (Ok(src_leaf), Ok(dst_leaf)) => (src_leaf.tabs.len(), dst_leaf.tabs.len()),
+            _ => return false,
+        };
+        if src_len == 1 && dst_len == 1 {
+            let layout = &mut self.tabs[active].layout;
+            let src_node = src.node_path();
+            let other = layout
+                .leaf(dest)
+                .ok()
+                .and_then(|leaf| leaf.tabs.first().cloned());
+            let Some(other) = other else {
+                return false;
+            };
+            if other == *pane {
+                return true;
+            }
+            if let Ok(leaf) = layout.leaf_mut(src_node) {
+                leaf.tabs[0] = other;
+            }
+            if let Ok(leaf) = layout.leaf_mut(dest) {
+                leaf.tabs[0] = pane.clone();
+            }
+            let _ = layout.set_active_tab(layout.find_tab(pane).unwrap_or(src));
+            layout.set_focused_node_and_surface(dest);
+            return true;
+        }
+        {
+            let layout = &mut self.tabs[active].layout;
+            layout.move_tab(src, (dest, egui_dock::TabInsert::Append));
+            if let Some(path) = layout.find_tab(pane) {
+                let _ = layout.set_active_tab(path);
+                layout.set_focused_node_and_surface(path.node_path());
+            }
+        }
+        true
+    }
+
+    /// Move a pane into a specific split leaf of another top-level tab,
+    /// which becomes active with the moved pane focused. When both leaves
+    /// hold a single pane the two exchange places so nothing disappears
+    /// behind a hidden tab stack; otherwise the pane joins the leaf and
+    /// emptied source groups are dropped. Within the same group this behaves
+    /// like [`Self::move_pane_to_leaf`]. Returns false when the pane,
+    /// destination group, or destination leaf is missing.
+    pub fn move_pane_to_group_leaf(
+        &mut self,
+        pane: &Tab,
+        dest_group: &str,
+        dest: egui_dock::NodePath,
+    ) -> bool {
+        let Some(src) = self.group_with_pane(pane) else {
+            return false;
+        };
+        let Some(dst) = self.tabs.iter().position(|tab| tab.id == dest_group) else {
+            return false;
+        };
+        if src == dst {
+            return self.move_pane_to_leaf(pane, dest);
+        }
+        let Ok(dst_leaf) = self.tabs[dst].layout.leaf(dest) else {
+            return false;
+        };
+        let Some(src_path) = self.tabs[src].layout.find_tab(pane) else {
+            return false;
+        };
+        let Ok(src_leaf) = self.tabs[src].layout.leaf(src_path.node_path()) else {
+            return false;
+        };
+        if src_leaf.tabs.len() == 1 && dst_leaf.tabs.len() == 1 {
+            // Exchange single panes across groups: no structure changes, so
+            // both terminals stay exactly where the user can see them.
+            let other = dst_leaf.tabs[0].clone();
+            if other == *pane {
+                return true;
+            }
+            if let Ok(leaf) = self.tabs[src].layout.leaf_mut(src_path.node_path()) {
+                leaf.tabs[0] = other;
+            }
+            if let Ok(leaf) = self.tabs[dst].layout.leaf_mut(dest) {
+                leaf.tabs[0] = pane.clone();
+            }
+            if let Some(path) = self.tabs[dst].layout.find_tab(pane) {
+                let _ = self.tabs[dst].layout.set_active_tab(path);
+                self.tabs[dst]
+                    .layout
+                    .set_focused_node_and_surface(path.node_path());
+            }
+            self.active = dest_group.to_owned();
+            return true;
+        }
+        let removed = self.tabs[src].layout.remove_tab(src_path);
+        debug_assert!(removed.is_some());
+        self.refresh_primary(src, pane);
+        if let Ok(leaf) = self.tabs[dst].layout.leaf_mut(dest) {
+            leaf.append_tab(pane.clone());
+        }
+        if let Some(path) = self.tabs[dst].layout.find_tab(pane) {
+            let _ = self.tabs[dst].layout.set_active_tab(path);
+            self.tabs[dst]
+                .layout
+                .set_focused_node_and_surface(path.node_path());
+        }
+        self.version = self.version.max(pane.layout_version());
+        self.active = dest_group.to_owned();
+        let previous = self.active_index();
+        self.tabs
+            .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
+        self.normalize(previous);
+        true
+    }
+
+    /// Drop a pane onto an edge of a split leaf, opening it in a new split
+    /// beside that leaf (above, below, left, or right). Works within one tab
+    /// and across tabs; the destination group becomes active with the moved
+    /// pane focused. Dropping a lone pane onto an edge of its own leaf is a
+    /// no-op beyond focusing it: one terminal cannot fill two splits.
+    /// Returns false when the pane, destination group, or leaf is missing.
+    pub fn move_pane_to_split(
+        &mut self,
+        pane: &Tab,
+        dest_group: &str,
+        dest: egui_dock::NodePath,
+        split: egui_dock::Split,
+    ) -> bool {
+        let Some(src) = self.group_with_pane(pane) else {
+            return false;
+        };
+        let Some(dst) = self.tabs.iter().position(|tab| tab.id == dest_group) else {
+            return false;
+        };
+        if self.tabs[dst].layout.leaf(dest).is_err() {
+            return false;
+        }
+        if src == dst {
+            let Some(src_path) = self.tabs[src].layout.find_tab(pane) else {
+                return false;
+            };
+            self.tabs[src]
+                .layout
+                .move_tab(src_path, (dest, egui_dock::TabInsert::Split(split)));
+            if let Some(path) = self.tabs[src].layout.find_tab(pane) {
+                let _ = self.tabs[src].layout.set_active_tab(path);
+                self.tabs[src]
+                    .layout
+                    .set_focused_node_and_surface(path.node_path());
+            }
+            return true;
+        }
+        let Some(src_path) = self.tabs[src].layout.find_tab(pane) else {
+            return false;
+        };
+        let removed = self.tabs[src].layout.remove_tab(src_path);
+        debug_assert!(removed.is_some());
+        self.refresh_primary(src, pane);
+        {
+            let tree = self.tabs[dst].layout.main_surface_mut();
+            match split {
+                egui_dock::Split::Above => tree.split_above(dest.node, 0.5, vec![pane.clone()]),
+                egui_dock::Split::Below => tree.split_below(dest.node, 0.5, vec![pane.clone()]),
+                egui_dock::Split::Left => tree.split_left(dest.node, 0.5, vec![pane.clone()]),
+                egui_dock::Split::Right => tree.split_right(dest.node, 0.5, vec![pane.clone()]),
+            };
+        }
+        if let Some(path) = self.tabs[dst].layout.find_tab(pane) {
+            let _ = self.tabs[dst].layout.set_active_tab(path);
+            self.tabs[dst]
+                .layout
+                .set_focused_node_and_surface(path.node_path());
+        }
+        self.version = self.version.max(pane.layout_version());
+        self.active = dest_group.to_owned();
+        let previous = self.active_index();
+        self.tabs
+            .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
+        self.normalize(previous);
+        true
+    }
+
+    /// Move a pane out of its group into a fresh top-level tab, which
+    /// becomes active. Returns the new group id, or None when missing.
+    pub fn move_pane_to_new_group(&mut self, pane: &Tab) -> Option<String> {
+        let src = self.group_with_pane(pane)?;
+        let path = self.tabs[src].layout.find_tab(pane)?;
+        self.tabs[src].layout.remove_tab(path);
+        self.refresh_primary(src, pane);
+        let id = terminator_core::id();
+        self.version = self.version.max(pane.layout_version());
+        let previous = self.active_index();
+        self.tabs
+            .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
+        self.normalize(previous);
+        self.add_at(self.tabs.len(), id.clone(), pane.clone());
+        Some(id)
+    }
+
     /// Drop top-level tabs left without panes and restore the non-empty
     /// invariant the [`Deref`] impls rely on. Pane-level removers that
     /// retain directly (native closes) must call this instead of retaining
@@ -567,5 +832,230 @@ mod tests {
         workspace.close(&original);
         assert_eq!(workspace.tabs.len(), 1);
         assert_eq!(workspace.iter_all_tabs().count(), 0);
+    }
+
+    #[test]
+    fn move_pane_to_group_leaf_swaps_single_panes_across_tabs() {
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("second".into(), Tab::Terminal("two".into()));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("three".into())],
+        );
+        // Workspace Deref addresses the active ("second") group; its leaves
+        // are the drop targets.
+        let leaves: Vec<egui_dock::NodePath> =
+            workspace.iter_leaves().map(|(path, _)| path).collect();
+        assert_eq!(leaves.len(), 2);
+        let target = workspace
+            .find_tab(&Tab::Terminal("three".into()))
+            .unwrap()
+            .node_path();
+        // Both leaves hold a single pane, so the terminals exchange places
+        // and both tabs survive with everything visible.
+        assert!(workspace.move_pane_to_group_leaf(&Tab::Terminal("one".into()), "second", target));
+        assert_eq!(workspace.active, "second");
+        assert_eq!(workspace.tabs.len(), 2);
+        let landed = workspace
+            .find_tab(&Tab::Terminal("one".into()))
+            .unwrap()
+            .node_path();
+        assert_eq!(landed, target);
+        assert_eq!(workspace.active_pane(), Some(&Tab::Terminal("one".into())));
+        let first_group = workspace
+            .tabs
+            .iter()
+            .find(|tab| tab.id != workspace.active)
+            .expect("source tab survives the swap");
+        let swapped_home = first_group
+            .layout
+            .find_tab(&Tab::Terminal("three".into()))
+            .expect("swapped pane stays in the source tab");
+        assert_ne!(swapped_home.node_path(), target);
+        assert!(!workspace.move_pane_to_group_leaf(
+            &Tab::Terminal("ghost".into()),
+            "second",
+            target
+        ));
+        assert!(!workspace.move_pane_to_group_leaf(
+            &Tab::Terminal("two".into()),
+            "missing",
+            target
+        ));
+    }
+
+    #[test]
+    fn move_pane_to_group_leaf_joins_stacked_leaves_and_drops_emptied_tabs() {
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        // Destination leaf already stacks two panes: the move joins it and
+        // the emptied source tab is dropped.
+        workspace.add("second".into(), Tab::Terminal("two".into()));
+        workspace.tabs[1].layout = DockState::new(vec![
+            Tab::Terminal("two".into()),
+            Tab::Terminal("three".into()),
+        ]);
+        workspace.tabs[1].primary = Some(Tab::Terminal("two".into()));
+        let target = workspace.tabs[1]
+            .layout
+            .find_tab(&Tab::Terminal("two".into()))
+            .unwrap()
+            .node_path();
+        assert!(workspace.move_pane_to_group_leaf(&Tab::Terminal("one".into()), "second", target));
+        assert_eq!(workspace.tabs.len(), 1);
+        assert_eq!(workspace.active, "second");
+        let leaf = workspace.leaf(target).unwrap();
+        assert_eq!(leaf.tabs.len(), 3);
+        assert_eq!(workspace.active_pane(), Some(&Tab::Terminal("one".into())));
+    }
+
+    #[test]
+    fn move_pane_to_split_opens_an_edge_split() {
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("left".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("right".into())],
+        );
+        let target = workspace
+            .find_tab(&Tab::Terminal("right".into()))
+            .unwrap()
+            .node_path();
+        let group = workspace.active.clone();
+        assert!(workspace.move_pane_to_split(
+            &Tab::Terminal("left".into()),
+            group.as_str(),
+            target,
+            egui_dock::Split::Right,
+        ));
+        // The emptied source leaf collapses: right splits into right+left
+        // in separate leaves with the moved pane focused. (Leaf rectangles
+        // only exist after rendering; geometric order is covered by the
+        // headless UI drop test below.)
+        assert_eq!(workspace.iter_leaves().count(), 2);
+        let left_home = workspace
+            .find_tab(&Tab::Terminal("left".into()))
+            .unwrap()
+            .node_path();
+        let right_home = workspace
+            .find_tab(&Tab::Terminal("right".into()))
+            .unwrap()
+            .node_path();
+        assert_ne!(left_home, right_home);
+        assert_eq!(workspace.active_pane(), Some(&Tab::Terminal("left".into())));
+    }
+
+    #[test]
+    fn move_pane_to_split_across_tabs_drops_the_emptied_tab() {
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("second".into(), Tab::Terminal("two".into()));
+        let target = workspace
+            .find_tab(&Tab::Terminal("two".into()))
+            .unwrap()
+            .node_path();
+        assert!(workspace.move_pane_to_split(
+            &Tab::Terminal("one".into()),
+            "second",
+            target,
+            egui_dock::Split::Below,
+        ));
+        assert_eq!(workspace.tabs.len(), 1);
+        assert_eq!(workspace.active, "second");
+        assert_eq!(workspace.iter_leaves().count(), 2);
+        assert!(workspace.contains(&Tab::Terminal("one".into())));
+        assert!(!workspace.move_pane_to_split(
+            &Tab::Terminal("ghost".into()),
+            "second",
+            target,
+            egui_dock::Split::Below,
+        ));
+    }
+
+    #[test]
+    fn move_pane_to_group_swaps_single_terminals_and_activates_destination() {
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        let first = workspace.active.clone();
+        workspace.add("second".into(), Tab::Terminal("two".into()));
+        // Both sides hold one terminal: they exchange places so both tabs
+        // survive with everything visible.
+        assert!(workspace.move_pane_to_group(&Tab::Terminal("one".into()), "second"));
+        assert_eq!(workspace.active, "second");
+        assert_eq!(workspace.tabs.len(), 2);
+        assert!(workspace.contains(&Tab::Terminal("one".into())));
+        assert!(workspace.contains(&Tab::Terminal("two".into())));
+        assert_eq!(workspace.active_pane(), Some(&Tab::Terminal("one".into())));
+        let origin = workspace
+            .tabs
+            .iter()
+            .find(|tab| tab.id == first)
+            .expect("origin tab survives the swap");
+        assert!(
+            origin
+                .layout
+                .find_tab(&Tab::Terminal("two".into()))
+                .is_some()
+        );
+        assert!(!workspace.move_pane_to_group(&Tab::Terminal("ghost".into()), "second"));
+        assert!(!workspace.move_pane_to_group(&Tab::Terminal("one".into()), "missing"));
+    }
+
+    #[test]
+    fn move_pane_to_leaf_swaps_single_pane_splits() {
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("left".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("right".into())],
+        );
+        let leaves: Vec<egui_dock::NodePath> =
+            workspace.iter_leaves().map(|(path, _)| path).collect();
+        assert_eq!(leaves.len(), 2);
+        let src = workspace
+            .find_tab(&Tab::Terminal("left".into()))
+            .unwrap()
+            .node_path();
+        let dst = leaves.iter().copied().find(|path| *path != src).unwrap();
+        assert!(workspace.move_pane_to_leaf(&Tab::Terminal("left".into()), dst));
+        assert_eq!(workspace.iter_all_tabs().count(), 2);
+        // Positions swapped: "left" now lives where "right" was.
+        let now = workspace
+            .find_tab(&Tab::Terminal("left".into()))
+            .unwrap()
+            .node_path();
+        assert_eq!(now, dst);
+        let other = workspace
+            .find_tab(&Tab::Terminal("right".into()))
+            .unwrap()
+            .node_path();
+        assert_eq!(other, src);
+    }
+
+    #[test]
+    fn move_pane_to_new_group_creates_top_level_tab() {
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("two".into())],
+        );
+        let id = workspace
+            .move_pane_to_new_group(&Tab::Terminal("two".into()))
+            .expect("new group");
+        assert_eq!(workspace.tabs.len(), 2);
+        assert_eq!(workspace.active, id);
+        assert!(workspace.contains(&Tab::Terminal("one".into())));
+        assert!(workspace.contains(&Tab::Terminal("two".into())));
+        assert!(
+            workspace
+                .move_pane_to_new_group(&Tab::Terminal("ghost".into()))
+                .is_none()
+        );
     }
 }

@@ -302,6 +302,7 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         "Split" => egui::include_image!("../assets/icons/split.svg"),
         "X" => egui::include_image!("../assets/icons/x.svg"),
         "Search" => egui::include_image!("../assets/icons/search.svg"),
+        "Menu" => egui::include_image!("../assets/icons/menu.svg"),
         "Settings" => egui::include_image!("../assets/icons/settings.svg"),
         "Settings2" => egui::include_image!("../assets/icons/settings-2.svg"),
         "GitBranch" => egui::include_image!("../assets/icons/git-branch.svg"),
