@@ -74,6 +74,8 @@ const HEADER_ACTIONS: [HeaderAction; 6] = [
 struct HeaderActionView {
     label: &'static str,
     icon: &'static str,
+    /// Fixture geometry name, only recorded with test-support.
+    #[cfg(feature = "test-support")]
     target: &'static str,
 }
 
@@ -119,31 +121,37 @@ fn header_action_view(action: HeaderAction) -> HeaderActionView {
         HeaderAction::Tool(SidebarTool::Explorer) => HeaderActionView {
             label: "Explorer",
             icon: "Files",
+            #[cfg(feature = "test-support")]
             target: "tool-Explorer",
         },
         HeaderAction::Tool(SidebarTool::Agents) => HeaderActionView {
             label: "Agents",
             icon: "PanelsTopLeft",
+            #[cfg(feature = "test-support")]
             target: "tool-Agents",
         },
         HeaderAction::Tool(SidebarTool::Git) => HeaderActionView {
             label: "Git",
             icon: "GitBranch",
+            #[cfg(feature = "test-support")]
             target: "tool-Git",
         },
         HeaderAction::Tool(SidebarTool::History) => HeaderActionView {
             label: "History",
             icon: "History",
+            #[cfg(feature = "test-support")]
             target: "tool-History",
         },
         HeaderAction::Settings => HeaderActionView {
             label: "Settings",
             icon: "Settings",
+            #[cfg(feature = "test-support")]
             target: "settings",
         },
         HeaderAction::Palette => HeaderActionView {
             label: "Command palette",
             icon: "Search",
+            #[cfg(feature = "test-support")]
             target: "palette",
         },
     }
@@ -272,6 +280,37 @@ impl App {
     }
 
     pub(super) fn window_header(&mut self, ui: &mut egui::Ui) {
+        if cfg!(target_os = "macos") {
+            // AppKit claims press-and-move gestures in the transparent
+            // titlebar band for window dragging, which would race
+            // tab-reorder drags started on the strip. Keep traffic lights,
+            // project, and tools in that band and paint the tab strip in a
+            // second row that egui fully owns.
+            let rect = ui.max_rect();
+            let divider = rect.top() + 40.0;
+            ui.scope_builder(
+                egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(
+                    rect.min,
+                    egui::pos2(rect.right(), divider),
+                )),
+                |ui| self.window_header_row(ui, false),
+            );
+            ui.scope_builder(
+                egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(
+                    egui::pos2(rect.left(), divider),
+                    rect.max,
+                )),
+                |ui| self.window_header_tabs(ui),
+            );
+            return;
+        }
+        self.window_header_row(ui, true);
+    }
+
+    /// Top header row: traffic lights, project label, and tools. Holds the
+    /// tab strip too, except on macOS where the strip lives in
+    /// [`Self::window_header_tabs`] below the native drag band.
+    fn window_header_row(&mut self, ui: &mut egui::Ui, with_tabs: bool) {
         let rect = ui.max_rect();
         let left = self.header_left_width(rect.width());
         let right = self.preferences.width.min(rect.width() - left - 100.0);
@@ -329,17 +368,8 @@ impl App {
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
             ui.set_clip_rect(tabs_rect);
-            if let Some(project) = self.selected.clone() {
-                let mut workspace = self
-                    .layouts
-                    .remove(&project)
-                    .unwrap_or_else(Workspace::empty);
-                self.workspace_bar(ui, &project, &mut workspace);
-                self.layouts.insert(project, workspace);
-                // Deferred native closes (`:q`, `:wq`, `:qa` from the file
-                // view) run here: the workspace is checked back in, so the
-                // tabs resolve again.
-                self.drain_pending_native_close();
+            if with_tabs {
+                self.window_header_tabs(ui);
             } else {
                 header_drag_space(ui);
             }
@@ -350,6 +380,26 @@ impl App {
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
             |ui| self.header_tools(ui),
         );
+    }
+
+    /// Full-width tab strip below the native drag band (macOS only), where
+    /// egui owns every gesture so tabs can be dragged to reorder.
+    fn window_header_tabs(&mut self, ui: &mut egui::Ui) {
+        ui.set_clip_rect(ui.max_rect());
+        if let Some(project) = self.selected.clone() {
+            let mut workspace = self
+                .layouts
+                .remove(&project)
+                .unwrap_or_else(Workspace::empty);
+            self.workspace_bar(ui, &project, &mut workspace);
+            self.layouts.insert(project, workspace);
+            // Deferred native closes (`:q`, `:wq`, `:qa` from the file
+            // view) run here: the workspace is checked back in, so the
+            // tabs resolve again.
+            self.drain_pending_native_close();
+        } else {
+            header_drag_space(ui);
+        }
     }
 
     fn header_tools(&mut self, ui: &mut egui::Ui) {
@@ -537,8 +587,9 @@ impl App {
             }
             let mut strip_rects: Vec<(String, egui::Rect)> =
                 Vec::with_capacity(workspace.tabs.len());
-            // Top-level tabs never move; they are drop targets while a
-            // terminal pane is dragged. Only match a drag from this project.
+            // Strip tabs are drop targets while a terminal pane is dragged,
+            // and drag handles for reordering the tabs themselves. Only
+            // match drags from this project.
             let drag_same_project = self.pane_drag.as_ref().is_some_and(|pane| match pane {
                 Tab::Terminal(sid) => self
                     .state
@@ -609,9 +660,19 @@ impl App {
                                 None => ("Workspace".into(), "Terminal", None),
                             };
                             let active = workspace.active == group.id;
-                            let (rect, response) = ui
-                                .allocate_exact_size(egui::vec2(220.0, 32.0), egui::Sense::click());
+                            let (rect, response) = ui.allocate_exact_size(
+                                egui::vec2(220.0, 32.0),
+                                egui::Sense::click_and_drag(),
+                            );
                             strip_rects.push((group.id.clone(), rect));
+                            // Dragging a strip tab reorders the top-level
+                            // tabs; pane drags keep their own payload.
+                            if response.drag_started()
+                                && self.pane_drag.is_none()
+                                && self.tab_drag.is_none()
+                            {
+                                self.tab_drag = Some(group.id.clone());
+                            }
                             // Destination preview: hovering a strip tab while
                             // dragging a terminal shows that tab's splits so
                             // the drop can target a specific leaf. Switching
@@ -752,6 +813,7 @@ impl App {
                             if response.clicked()
                                 && !editing
                                 && self.pane_drag.is_none()
+                                && self.tab_drag.is_none()
                                 && !close_rect.contains(
                                     response.interact_pointer_pos().unwrap_or(egui::Pos2::ZERO),
                                 )
@@ -760,6 +822,7 @@ impl App {
                             }
                             if response.double_clicked()
                                 && !editing
+                                && self.tab_drag.is_none()
                                 && let Some(sid) = &sid
                             {
                                 self.begin_rename(sid, RenameSurface::Workspace);
@@ -855,17 +918,17 @@ impl App {
             }
             // Dropping a dragged terminal pane onto a strip tab moves it
             // into that tab (its focused split; the tab content was already
-            // previewed on hover); dropping onto "+" opens it in a fresh
-            // top-level tab. Top-level tabs themselves never move.
+            // previewed on hover); dropping into a gap between tabs, onto
+            // "+", or onto empty strip background opens it in a fresh
+            // top-level tab at that slot. Dropping a dragged strip tab
+            // reorders it to the insertion slot instead.
             let released = ui.input(|i| i.pointer.any_released());
             if let Some(pane) = self.pane_drag.clone()
                 && drag_same_project
                 && released
                 && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
             {
-                if let Some((group_id, _)) = strip_rects.iter().find(|(_, rect)| rect.contains(pos))
-                {
-                    let group_id = group_id.clone();
+                if let Some(group_id) = Self::strip_interior_tab(&strip_rects, pos) {
                     if workspace.move_pane_to_group(&pane, &group_id) {
                         if let Tab::Terminal(sid) = &pane {
                             self.active_session = Some(sid.clone());
@@ -876,17 +939,113 @@ impl App {
                     }
                     self.drop_preview_origin = None;
                     self.end_pane_drag();
-                } else if plus_rect.contains(pos) {
-                    if workspace.move_pane_to_new_group(&pane).is_some() {
-                        if let Tab::Terminal(sid) = &pane {
-                            self.active_session = Some(sid.clone());
-                            self.focus_tab = Some(pane.clone());
+                } else {
+                    let index = if plus_rect.contains(pos) {
+                        Some(strip_rects.len())
+                    } else {
+                        Self::strip_insertion_at(&strip_rect, &strip_rects, pos)
+                    };
+                    if let Some(index) = index {
+                        if workspace.move_pane_to_new_group_at(&pane, index).is_some() {
+                            if let Tab::Terminal(sid) = &pane {
+                                self.active_session = Some(sid.clone());
+                                self.focus_tab = Some(pane.clone());
+                            }
+                            self.pane_index = None;
+                            switch = None;
                         }
-                        self.pane_index = None;
+                        self.drop_preview_origin = None;
+                        self.end_pane_drag();
+                    }
+                }
+            }
+            // A released tab drag the strip did not consume was dropped
+            // outside of it: cancel without moving anything.
+            if self.tab_drag.is_some() && released {
+                if let (Some(dragged), Some(pos)) = (
+                    self.tab_drag.clone(),
+                    ui.input(|i| i.pointer.interact_pos()),
+                ) && workspace.tabs.iter().any(|tab| tab.id == dragged)
+                {
+                    let index = if plus_rect.contains(pos) {
+                        Some(strip_rects.len())
+                    } else {
+                        Self::strip_insertion_at(&strip_rect, &strip_rects, pos)
+                    };
+                    if let Some(index) = index
+                        && workspace.reorder_group(&dragged, index)
+                    {
+                        workspace.active = dragged;
                         switch = None;
                     }
-                    self.drop_preview_origin = None;
-                    self.end_pane_drag();
+                }
+                self.tab_drag = None;
+            }
+            if self.tab_drag.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.tab_drag = None;
+            }
+            // The dock paints the previewed tab's focused leaf at real size
+            // while a pane hovers a strip tab interior; hovering a gap,
+            // "+", or empty strip background shows the tab ghost instead
+            // of the pane snapshot ghost. Both mirror the drop routing.
+            let strip_pos = (!released && ui.input(|i| i.pointer.any_down()))
+                .then(|| ui.input(|i| i.pointer.interact_pos()))
+                .flatten();
+            self.strip_tab_hover = drag_same_project
+                && strip_pos
+                    .is_some_and(|pos| Self::strip_interior_tab(&strip_rects, pos).is_some());
+            self.strip_new_tab_hover = drag_same_project
+                && strip_pos.is_some_and(|pos| {
+                    Self::strip_interior_tab(&strip_rects, pos).is_none()
+                        && (plus_rect.contains(pos)
+                            || Self::strip_insertion_at(&strip_rect, &strip_rects, pos).is_some())
+                });
+            // Insertion preview: hovering a strip gap, "+", or empty strip
+            // background while dragging a pane paints the slot where the
+            // fresh top-level tab will land; dragging a strip tab paints
+            // the slot it will reorder into. Mirrors the pane drop wash.
+            if !released
+                && ui.input(|i| i.pointer.any_down())
+                && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
+            {
+                let accent = appearance::color(&self.theme.accent);
+                let pane_gap = drag_same_project
+                    && self.pane_drag.is_some()
+                    && Self::strip_interior_tab(&strip_rects, pos).is_none();
+                let tab_member = self
+                    .tab_drag
+                    .clone()
+                    .is_some_and(|dragged| workspace.tabs.iter().any(|tab| tab.id == dragged));
+                if pane_gap || tab_member {
+                    let index = if plus_rect.contains(pos) {
+                        Some(strip_rects.len())
+                    } else {
+                        Self::strip_insertion_at(&strip_rect, &strip_rects, pos)
+                    };
+                    if let Some(index) = index {
+                        if plus_rect.contains(pos) {
+                            ui.painter().rect_stroke(
+                                plus_rect,
+                                4,
+                                egui::Stroke::new(2.0, accent),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+                        Self::paint_strip_insertion(ui, &strip_rect, &strip_rects, index, accent);
+                        if let Some(dragged) = self.tab_drag.clone()
+                            && let Some((_, rect)) =
+                                strip_rects.iter().find(|(id, _)| id == &dragged)
+                        {
+                            ui.painter().rect_stroke(
+                                *rect,
+                                0,
+                                egui::Stroke::new(2.0, accent),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+                        ui.ctx().request_repaint();
+                    }
                 }
             }
             if self.pane_drag.is_some() {
@@ -926,6 +1085,64 @@ impl App {
         }
     }
 
+    /// Insertion slot for a strip pointer: how many tab centers sit left
+    /// of it. None when the pointer leaves the strip band vertically.
+    fn strip_insertion_at(
+        strip: &egui::Rect,
+        tabs: &[(String, egui::Rect)],
+        pos: egui::Pos2,
+    ) -> Option<usize> {
+        if !(strip.top()..=strip.bottom()).contains(&pos.y) {
+            return None;
+        }
+        Some(
+            tabs.iter()
+                .filter(|(_, rect)| rect.center().x < pos.x)
+                .count(),
+        )
+    }
+
+    /// Strip tab whose interior holds the pointer. Bands near either edge
+    /// count as gaps so panes can be dropped between tabs for a positional
+    /// new tab instead of landing inside the neighbor.
+    fn strip_interior_tab(tabs: &[(String, egui::Rect)], pos: egui::Pos2) -> Option<String> {
+        const EDGE: f32 = 12.0;
+        tabs.iter()
+            .find(|(_, rect)| {
+                rect.contains(pos) && pos.x - rect.left() > EDGE && rect.right() - pos.x > EDGE
+            })
+            .map(|(id, _)| id.clone())
+    }
+
+    /// Accent insertion bar marking where a strip drop will land: the gap
+    /// before the first tab, between two tabs, or after the last one.
+    fn paint_strip_insertion(
+        ui: &mut egui::Ui,
+        strip: &egui::Rect,
+        tabs: &[(String, egui::Rect)],
+        index: usize,
+        accent: egui::Color32,
+    ) {
+        let x = if tabs.is_empty() {
+            strip.left() + 2.0
+        } else if index == 0 {
+            tabs[0].1.left()
+        } else if index >= tabs.len() {
+            tabs[tabs.len() - 1].1.right()
+        } else {
+            (tabs[index - 1].1.right() + tabs[index].1.left()) * 0.5
+        };
+        ui.painter().line_segment(
+            [
+                egui::pos2(x, strip.top() + 4.0),
+                egui::pos2(x, strip.bottom() - 4.0),
+            ],
+            egui::Stroke::new(2.5, accent),
+        );
+        ui.painter()
+            .circle_filled(egui::pos2(x, strip.top() + 4.0), 3.5, accent);
+    }
+
     /// Short label for a dragged tab ghost.
     fn drag_title(&self, tab: &Tab) -> String {
         match tab {
@@ -959,6 +1176,11 @@ impl App {
         let Some(pane) = &self.pane_drag else {
             return;
         };
+        // The tab ghost owns the pointer over strip new-tab zones so the
+        // two never stack.
+        if self.strip_new_tab_hover {
+            return;
+        }
         if !ui.input(|i| i.pointer.any_down()) {
             return;
         }
@@ -1015,6 +1237,89 @@ impl App {
             egui::StrokeKind::Inside,
         );
         painter.galley(rect.min + padding, galley, egui::Color32::WHITE);
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "pane-ghost", rect);
+    }
+
+    /// Tab-sized ghost following the cursor while a strip tab is dragged to
+    /// reorder: the dragged tab's title at real tab size. Painted on the
+    /// tooltip layer like the pane ghost, without intercepting input.
+    pub(super) fn paint_tab_ghost(&self, ui: &mut egui::Ui) {
+        // Tab reorder drags always show the tab ghost; pane drags show it
+        // over strip new-tab zones, where the outcome is a fresh tab.
+        if self.tab_drag.is_none() && !(self.pane_drag.is_some() && self.strip_new_tab_hover) {
+            return;
+        }
+        if !ui.input(|i| i.pointer.any_down()) {
+            return;
+        };
+        let Some(pos) = ui.input(|i| i.pointer.hover_pos().or(i.pointer.latest_pos())) else {
+            return;
+        };
+        let title = if let Some(dragged) = &self.tab_drag {
+            let mut title = "Tab".to_owned();
+            for workspace in self.layouts.values() {
+                if let Some(group) = workspace.tabs.iter().find(|tab| &tab.id == dragged) {
+                    let pane = group
+                        .primary
+                        .as_ref()
+                        .filter(|tab| group.layout.find_tab(tab).is_some())
+                        .or_else(|| group.layout.iter_all_tabs().next().map(|(_, tab)| tab));
+                    if let Some(pane) = pane {
+                        title = self.drag_title(pane);
+                    }
+                    break;
+                }
+            }
+            title
+        } else if let Some(pane) = &self.pane_drag {
+            self.drag_title(pane)
+        } else {
+            return;
+        };
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(
+            egui::Order::Tooltip,
+            egui::Id::new("tab-ghost"),
+        ));
+        let mut job = egui::text::LayoutJob::simple(
+            title,
+            egui::FontId::proportional(13.0),
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 235),
+            220.0 - 20.0,
+        );
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        let galley = painter.layout_job(job);
+        let size = egui::vec2(220.0, 32.0);
+        let screen = ui.ctx().content_rect();
+        let mut min = pos - egui::vec2(110.0, 16.0);
+        min.x = min.x.clamp(
+            screen.min.x + 4.0,
+            (screen.max.x - size.x - 4.0).max(screen.min.x),
+        );
+        min.y = min.y.clamp(
+            screen.min.y + 4.0,
+            (screen.max.y - size.y - 4.0).max(screen.min.y),
+        );
+        let rect = egui::Rect::from_min_size(min, size);
+        painter.rect_filled(
+            rect,
+            4.0,
+            egui::Color32::from_rgba_unmultiplied(24, 24, 28, 205),
+        );
+        painter.rect_stroke(
+            rect,
+            4.0,
+            egui::Stroke::new(1.5, appearance::color(&self.theme.accent)),
+            egui::StrokeKind::Inside,
+        );
+        painter.galley(
+            egui::pos2(rect.left() + 10.0, rect.center().y - galley.size().y * 0.5),
+            galley,
+            egui::Color32::WHITE,
+        );
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "tab-ghost", rect);
     }
 
     fn workspace_tab_menu(

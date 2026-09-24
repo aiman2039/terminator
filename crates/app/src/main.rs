@@ -562,16 +562,28 @@ struct App {
     pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
     pane_index: Option<PaneIndex>,
     /// Terminal pane currently dragged by its caption header. Dropped onto
-    /// another split leaf (rearrange) or a workspace strip tab (move across
-    /// top-level tabs) within the same project. Top-level tabs themselves
-    /// never move; only terminals do.
+    /// another split leaf (rearrange), a workspace strip tab (move across
+    /// top-level tabs), or a strip gap (new tab at that slot) within the
+    /// same project.
     pane_drag: Option<Tab>,
+    /// Top-level tab currently dragged by its strip tab. Dropping it over
+    /// the strip reorders it to the insertion slot; releasing elsewhere
+    /// cancels. Only one of `pane_drag` and `tab_drag` is active at a time.
+    tab_drag: Option<String>,
     /// Last text snapshot of the dragged terminal, taken when its drag
     /// starts and shown in the floating ghost.
     pane_drag_snapshot: Vec<String>,
     /// Group previewed while a pane drag hovers its strip tab, as
     /// (project, origin group) so a cancelled drag can switch back.
     drop_preview_origin: Option<(String, String)>,
+    /// A pane drag hovers the interior of a strip tab this frame. The dock
+    /// paints the previewed tab's focused leaf at real size so the
+    /// move-into outcome is visible, not just the strip outline.
+    strip_tab_hover: bool,
+    /// A pane drag hovers a strip gap, "+", or empty strip background this
+    /// frame, where a release opens a fresh top-level tab. The tab ghost
+    /// (not the pane snapshot ghost) follows the pointer there.
+    strip_new_tab_hover: bool,
     focus_tab: Option<Tab>,
     terminal_context: HashMap<String, String>,
     texts: HashMap<String, String>,
@@ -806,6 +818,9 @@ impl App {
             pane_tabs: HashMap::new(),
             pane_index: None,
             pane_drag: None,
+            tab_drag: None,
+            strip_tab_hover: false,
+            strip_new_tab_hover: false,
             pane_drag_snapshot: Vec::new(),
             drop_preview_origin: None,
             focus_tab: None,
@@ -3395,6 +3410,7 @@ impl App {
         self.paint_session_focus(ui, &dock);
         self.layouts.insert(project, dock);
         self.paint_drag_ghost(ui);
+        self.paint_tab_ghost(ui);
         // A drag released over an empty workspace has no dock drop handler;
         // never leave the payload stuck.
         if self.pane_drag.is_some() && ui.input(|i| i.pointer.any_released()) {
@@ -3459,6 +3475,8 @@ impl App {
     fn end_pane_drag(&mut self) {
         self.pane_drag = None;
         self.pane_drag_snapshot.clear();
+        self.strip_tab_hover = false;
+        self.strip_new_tab_hover = false;
     }
 
     /// Drop zone within a hovered split leaf: the middle swaps or joins,
@@ -3518,6 +3536,36 @@ impl App {
         let zone = target.map(|(_, rect)| Self::pane_drop_zone(rect, pos));
         if dragging && !released {
             self.paint_landing_preview(ui, dock, &pane, target.map(|(path, _)| path), zone);
+            // Hovering a strip tab interior previews the move-into outcome
+            // at real size: wash the previewed tab's focused leaf, where a
+            // release would land the pane.
+            if target.is_none() && self.strip_tab_hover {
+                let path = dock
+                    .main_surface()
+                    .focused_leaf()
+                    .map(|node| egui_dock::NodePath {
+                        surface: egui_dock::SurfaceIndex::main(),
+                        node,
+                    });
+                let landed = path.filter(|path| {
+                    dock.leaf(*path)
+                        .map(|leaf| leaf.rect.width() > 1.0 && leaf.rect.height() > 1.0)
+                        .unwrap_or(false)
+                });
+                if let Some(path) = landed {
+                    #[cfg(feature = "test-support")]
+                    if let Ok(leaf) = dock.leaf(path) {
+                        diagnostics::record(ui.ctx(), "strip-drop-wash", leaf.rect);
+                    }
+                    self.paint_landing_preview(
+                        ui,
+                        dock,
+                        &pane,
+                        Some(path),
+                        Some(PaneDropZone::Center),
+                    );
+                }
+            }
             ui.ctx().request_repaint();
             return;
         }
@@ -3810,8 +3858,15 @@ impl eframe::App for App {
         if self.state_loaded {
             self.migrate_attention();
         }
+        // macOS stacks a second header row for the tab strip below the
+        // native titlebar drag band so tab drags never race window moves.
+        let header_height = if cfg!(target_os = "macos") {
+            76.0
+        } else {
+            40.0
+        };
         egui::Panel::top("window-header")
-            .exact_size(40.0)
+            .exact_size(header_height)
             .frame(egui::Frame::NONE.fill(appearance::color(&self.theme.surface)))
             .show(ui, |ui| self.window_header(ui));
         if !self.state.settings.notifications_side {
@@ -4339,6 +4394,38 @@ mod navigation_tests {
         output.textures_delta.clear();
         assert!(rect("toggle-left-sidebar").is_some());
         assert!(rect("toggle-right-sidebar").is_some());
+    }
+
+    /// On macOS the tab strip must sit below AppKit's transparent-titlebar
+    /// drag band (~28pt), or press-and-move gestures on tabs move the whole
+    /// window instead of reordering tabs.
+    #[test]
+    #[cfg(all(feature = "test-support", target_os = "macos"))]
+    fn macos_tab_strip_sits_below_the_native_drag_band() {
+        let (mut app, ctx, _dir) = fixture();
+        let workspace = Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 76.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.window_header(ui),
+        );
+        output.textures_delta.clear();
+        let strip = ctx
+            .data(|data| {
+                data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", "workspace-strip")))
+            })
+            .expect("strip geometry");
+        assert!(
+            strip.top() >= 28.0,
+            "tab strip must clear the native drag band, got {strip:?}"
+        );
     }
 
     #[test]
@@ -7134,6 +7221,275 @@ mod navigation_tests {
         assert_eq!(dock.active, group_a);
         assert_eq!(dock.tabs.len(), 2);
         assert!(dock.contains(&Tab::Terminal("one".into())));
+    }
+    /// Dropping a dragged pane into a gap between strip tabs opens it in a
+    /// fresh top-level tab at that slot instead of appending at the end.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_drag_gap_drop_creates_tab_at_slot() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two", "three"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("three".into())],
+        );
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        let group_a = workspace.tabs[0].id.clone();
+        workspace.active = group_a.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("one".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let tab_a = app
+            .fixture_rect(&ctx, "workspace-tab:one")
+            .expect("tab geometry");
+        let tab_b = app
+            .fixture_rect(&ctx, "workspace-tab:two")
+            .expect("tab geometry");
+        let (left, right) = if tab_a[0] < tab_b[0] {
+            (tab_a, tab_b)
+        } else {
+            (tab_b, tab_a)
+        };
+        let gap = egui::pos2(
+            (left[0] + left[2] + right[0]) / 2.0,
+            left[1] + left[3] / 2.0,
+        );
+        let start = frame_center(&app, &ctx, "pane-drag:one");
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        frame_glide(&mut app, &ctx, start, gap, 4);
+        combined_frame(&mut app, &ctx, vec![frame_press(gap, false)]);
+        assert!(app.pane_drag.is_none());
+        assert!(app.drop_preview_origin.is_none());
+        let dock = app.layouts.get("a").unwrap();
+        assert_eq!(dock.tabs.len(), 3);
+        assert!(
+            dock.tabs[0]
+                .layout
+                .find_tab(&Tab::Terminal("three".into()))
+                .is_some()
+        );
+        assert!(
+            dock.tabs[1]
+                .layout
+                .find_tab(&Tab::Terminal("one".into()))
+                .is_some()
+        );
+        assert!(
+            dock.tabs[2]
+                .layout
+                .find_tab(&Tab::Terminal("two".into()))
+                .is_some()
+        );
+        assert_eq!(dock.active, dock.tabs[1].id);
+    }
+    /// Dragging a strip tab reorders the top-level tabs to the drop slot.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn strip_tab_drag_reorders_top_level_tabs() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        let group_a = workspace.tabs[0].id.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("two".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let start = frame_center(&app, &ctx, "workspace-tab:two");
+        let first = app
+            .fixture_rect(&ctx, "workspace-tab:one")
+            .expect("tab geometry");
+        // Inside the first tab's left edge band: a gap for insertion math
+        // while still on the strip for the drop.
+        let dest = egui::pos2(first[0] + 5.0, first[1] + first[3] / 2.0);
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        frame_glide(&mut app, &ctx, start, dest, 4);
+        assert_eq!(app.tab_drag, Some("tB".to_owned()));
+        combined_frame(&mut app, &ctx, vec![frame_press(dest, false)]);
+        assert!(app.tab_drag.is_none());
+        let dock = app.layouts.get("a").unwrap();
+        assert_eq!(dock.ids(), vec!["tB".to_owned(), group_a.clone()]);
+        assert_eq!(dock.active, "tB");
+    }
+    /// Hovering a strip tab mid pane-drag washes the previewed tab's
+    /// focused leaf at real size, showing where a release would land.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_drag_strip_hover_washes_the_landing_leaf() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two", "three"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("three".into())],
+        );
+        let group_a = workspace.tabs[0].id.clone();
+        workspace.active = group_a.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("one".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let start = frame_center(&app, &ctx, "pane-drag:one");
+        let dest = frame_center(&app, &ctx, "workspace-tab:two");
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        frame_glide(&mut app, &ctx, start, dest, 4);
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(dest)]);
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(dest)]);
+        // Still dragging: the destination tab is previewed, nothing moved.
+        assert_eq!(app.pane_drag, Some(Tab::Terminal("one".into())));
+        assert_eq!(app.layouts["a"].active, "tB");
+        let wash = app
+            .fixture_rect(&ctx, "strip-drop-wash")
+            .expect("landing wash");
+        assert!(
+            wash[2] > 200.0 && wash[3] > 100.0,
+            "wash must cover the landing leaf at real size, got {wash:?}"
+        );
+    }
+    /// A tab reorder drag paints a tab-sized ghost that tracks the pointer.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn tab_drag_ghost_follows_the_pointer() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.tab_drag = Some("tB".to_owned());
+        let pos = egui::pos2(500.0, 300.0);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 600.0),
+                )),
+                events: vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::default(),
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                app.paint_tab_ghost(ui);
+            },
+        );
+        output.textures_delta.clear();
+        let ghost = app.fixture_rect(&ctx, "tab-ghost").expect("tab ghost");
+        assert_eq!(ghost[2], 220.0);
+        assert_eq!(ghost[3], 32.0);
+        assert!(
+            (ghost[0] - (pos.x - 110.0)).abs() < 2.0 && (ghost[1] - (pos.y - 16.0)).abs() < 2.0,
+            "ghost must track the pointer, got {ghost:?}"
+        );
+        assert_eq!(app.tab_drag, Some("tB".to_owned()));
+    }
+    /// A pane dragged over a strip gap shows the tab-sized ghost (the
+    /// new-tab outcome), never stacked with the pane snapshot ghost.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_drag_strip_gap_shows_tab_ghost() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two", "three"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("three".into())],
+        );
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        let group_a = workspace.tabs[0].id.clone();
+        workspace.active = group_a.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("one".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let tab_a = app
+            .fixture_rect(&ctx, "workspace-tab:one")
+            .expect("tab geometry");
+        let tab_b = app
+            .fixture_rect(&ctx, "workspace-tab:two")
+            .expect("tab geometry");
+        let (left, right) = if tab_a[0] < tab_b[0] {
+            (tab_a, tab_b)
+        } else {
+            (tab_b, tab_a)
+        };
+        let gap = egui::pos2(
+            (left[0] + left[2] + right[0]) / 2.0,
+            left[1] + left[3] / 2.0,
+        );
+        let start = frame_center(&app, &ctx, "pane-drag:one");
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        frame_glide(&mut app, &ctx, start, gap, 4);
+        assert!(!app.strip_tab_hover);
+        assert!(app.strip_new_tab_hover);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 600.0),
+                )),
+                events: vec![egui::Event::PointerMoved(gap)],
+                ..Default::default()
+            },
+            |ui| {
+                app.paint_drag_ghost(ui);
+                app.paint_tab_ghost(ui);
+            },
+        );
+        output.textures_delta.clear();
+        let ghost = app.fixture_rect(&ctx, "tab-ghost").expect("tab ghost");
+        assert_eq!(ghost[2], 220.0);
+        assert_eq!(ghost[3], 32.0);
+        assert!(
+            (ghost[0] - (gap.x - 110.0)).abs() < 2.0,
+            "tab ghost must track the pointer, got {ghost:?}"
+        );
+        assert!(
+            app.fixture_rect(&ctx, "pane-ghost").is_none(),
+            "pane ghost must yield to the tab ghost over the strip"
+        );
+        assert_eq!(app.pane_drag, Some(Tab::Terminal("one".into())));
     }
     /// Dragging a terminal caption onto another split leaf rearranges the
     /// active tab (single panes swap). Runs headless with synthetic pointer

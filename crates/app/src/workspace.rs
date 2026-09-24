@@ -425,10 +425,14 @@ impl Workspace {
         true
     }
 
-    /// Move a pane out of its group into a fresh top-level tab, which
-    /// becomes active. Returns the new group id, or None when missing.
-    pub fn move_pane_to_new_group(&mut self, pane: &Tab) -> Option<String> {
+    /// Move a pane out of its group into a fresh top-level tab at `index`,
+    /// which becomes active. Dropping a pane between two strip tabs lands
+    /// the new tab exactly there; an emptied source group is dropped first,
+    /// shifting later slots down by one. Returns the new group id, or None
+    /// when missing.
+    pub fn move_pane_to_new_group_at(&mut self, pane: &Tab, index: usize) -> Option<String> {
         let src = self.group_with_pane(pane)?;
+        let src_id = self.tabs[src].id.clone();
         let path = self.tabs[src].layout.find_tab(pane)?;
         self.tabs[src].layout.remove_tab(path);
         self.refresh_primary(src, pane);
@@ -438,8 +442,29 @@ impl Workspace {
         self.tabs
             .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
         self.normalize(previous);
-        self.add_at(self.tabs.len(), id.clone(), pane.clone());
+        let mut index = index;
+        if !self.tabs.iter().any(|tab| tab.id == src_id) && src < index {
+            index = index.saturating_sub(1);
+        }
+        let index = index.min(self.tabs.len());
+        self.add_at(index, id.clone(), pane.clone());
         Some(id)
+    }
+
+    /// Reorder a top-level tab, moving it to `index`. The active tab id is
+    /// untouched, so focus follows the tab, not the slot. Returns false
+    /// when the group is missing.
+    pub fn reorder_group(&mut self, group_id: &str, index: usize) -> bool {
+        let Some(from) = self.tabs.iter().position(|tab| tab.id == group_id) else {
+            return false;
+        };
+        let index = index.min(self.tabs.len().saturating_sub(1));
+        if from == index {
+            return true;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(index, tab);
+        true
     }
 
     /// Drop top-level tabs left without panes and restore the non-empty
@@ -1037,7 +1062,7 @@ mod tests {
     }
 
     #[test]
-    fn move_pane_to_new_group_creates_top_level_tab() {
+    fn move_pane_to_new_group_at_end_creates_top_level_tab() {
         let mut workspace =
             Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
         workspace.main_surface_mut().split_right(
@@ -1046,7 +1071,7 @@ mod tests {
             vec![Tab::Terminal("two".into())],
         );
         let id = workspace
-            .move_pane_to_new_group(&Tab::Terminal("two".into()))
+            .move_pane_to_new_group_at(&Tab::Terminal("two".into()), workspace.tabs.len())
             .expect("new group");
         assert_eq!(workspace.tabs.len(), 2);
         assert_eq!(workspace.active, id);
@@ -1054,8 +1079,123 @@ mod tests {
         assert!(workspace.contains(&Tab::Terminal("two".into())));
         assert!(
             workspace
-                .move_pane_to_new_group(&Tab::Terminal("ghost".into()))
+                .move_pane_to_new_group_at(&Tab::Terminal("ghost".into()), 0)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn move_pane_to_new_group_at_lands_between_tabs() {
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        // Dropping "two" at the front removes its group; the new tab
+        // lands first with "one" behind it.
+        let id = workspace
+            .move_pane_to_new_group_at(&Tab::Terminal("two".into()), 0)
+            .expect("new group");
+        assert_eq!(workspace.tabs.len(), 2);
+        assert_eq!(workspace.active, id);
+        assert!(
+            workspace.tabs[0]
+                .layout
+                .find_tab(&Tab::Terminal("two".into()))
+                .is_some()
+        );
+        assert!(
+            workspace.tabs[1]
+                .layout
+                .find_tab(&Tab::Terminal("one".into()))
+                .is_some()
+        );
+        assert!(
+            workspace
+                .move_pane_to_new_group_at(&Tab::Terminal("ghost".into()), 0)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn move_pane_to_new_group_at_keeps_trailing_slot_when_source_empties() {
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        // Dropping "one" past the end removes its group; the trailing slot
+        // shifts down so the new tab still lands last.
+        let id = workspace
+            .move_pane_to_new_group_at(&Tab::Terminal("one".into()), 2)
+            .expect("new group");
+        assert_eq!(workspace.tabs.len(), 2);
+        assert!(
+            workspace.tabs[0]
+                .layout
+                .find_tab(&Tab::Terminal("two".into()))
+                .is_some()
+        );
+        assert!(
+            workspace.tabs[1]
+                .layout
+                .find_tab(&Tab::Terminal("one".into()))
+                .is_some()
+        );
+        assert_eq!(workspace.active, id);
+    }
+
+    #[test]
+    fn move_pane_to_new_group_at_keeps_source_slot_when_source_survives() {
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("three".into())],
+        );
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        // "three" leaves its group behind, so no slot shifts: the new tab
+        // lands at the end and the source group keeps its panes.
+        workspace
+            .move_pane_to_new_group_at(&Tab::Terminal("three".into()), 3)
+            .expect("new group");
+        assert_eq!(workspace.tabs.len(), 3);
+        assert!(
+            workspace.tabs[0]
+                .layout
+                .find_tab(&Tab::Terminal("one".into()))
+                .is_some()
+        );
+        assert!(
+            workspace.tabs[1]
+                .layout
+                .find_tab(&Tab::Terminal("two".into()))
+                .is_some()
+        );
+        assert!(
+            workspace.tabs[2]
+                .layout
+                .find_tab(&Tab::Terminal("three".into()))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn reorder_group_moves_top_level_tabs() {
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        let first = workspace.tabs[0].id.clone();
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        workspace.add("tC".into(), Tab::Terminal("three".into()));
+        assert!(workspace.reorder_group("tC", 0));
+        assert_eq!(
+            workspace.ids(),
+            vec!["tC".to_owned(), first.clone(), "tB".to_owned()]
+        );
+        // Focus follows the tab, not the slot.
+        assert_eq!(workspace.active, "tC");
+        assert!(workspace.reorder_group(&first, 2));
+        assert_eq!(
+            workspace.ids(),
+            vec!["tC".to_owned(), "tB".to_owned(), first.clone()]
+        );
+        assert!(!workspace.reorder_group("ghost", 0));
     }
 }
