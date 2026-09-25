@@ -112,3 +112,13 @@ writes to the PTY and stays a no-op in alt-screen mode. `TerminalView::
 find_highlight` paints other matches dimmed and the current match in the
 selection color, with ranges grouped by line once per frame. Wrapped logical
 lines stay split across rows, so matches cannot span rows in v1.
+
+## Alternate-scroll respects application cursor keys (2026-09-25)
+
+Wheel scrolling on the alternate screen with alternate-scroll enabled always
+emitted SS3 (`ESC O A/B`), even when the application had not set DECCKM
+application-cursor mode and expected CSI (`ESC [ A/B`) — the same distinction
+the keyboard arrow bindings already make. Those wheels were ignored by such
+agents, so scrolling felt dead. The byte encoding moved into `scroll_key_bytes`,
+which follows `APP_CURSOR` like the bindings do. Unit tests cover CSI without
+application cursor, SS3 with it, both directions, and zero delta.

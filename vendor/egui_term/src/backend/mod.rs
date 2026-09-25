@@ -658,25 +658,19 @@ impl TerminalBackend {
     }
 
     fn scroll(&mut self, terminal: &mut Term<EventProxy>, delta_value: i32) {
-        if delta_value != 0 {
-            let scroll = Scroll::Delta(delta_value);
-            if terminal
-                .mode()
-                .contains(TermMode::ALTERNATE_SCROLL | TermMode::ALT_SCREEN)
-            {
-                let line_cmd = if delta_value > 0 { b'A' } else { b'B' };
-                let mut content = vec![];
-
-                for _ in 0..delta_value.abs() {
-                    content.push(0x1b);
-                    content.push(b'O');
-                    content.push(line_cmd);
-                }
-
-                self.notifier.notify(content);
-            } else {
-                terminal.grid_mut().scroll_display(scroll);
-            }
+        if delta_value == 0 {
+            return;
+        }
+        if terminal
+            .mode()
+            .contains(TermMode::ALTERNATE_SCROLL | TermMode::ALT_SCREEN)
+        {
+            self.notifier
+                .notify(scroll_key_bytes(delta_value, terminal.mode()));
+        } else {
+            terminal
+                .grid_mut()
+                .scroll_display(Scroll::Delta(delta_value));
         }
     }
 
@@ -690,6 +684,50 @@ impl TerminalBackend {
     ) -> Option<Match> {
         let x = visible_regex_match_iter(terminal, regex).find(|rm| rm.contains(&point));
         x
+    }
+}
+
+/// Wheel-generated cursor keys for alternate-scroll mode. Honors DECCKM
+/// application-cursor state exactly like the keyboard arrow bindings: CSI
+/// (`ESC [ A/B`) normally, SS3 (`ESC O A/B`) with `APP_CURSOR` set.
+fn scroll_key_bytes(delta_value: i32, mode: &TermMode) -> Vec<u8> {
+    let line_cmd = if delta_value > 0 { b'A' } else { b'B' };
+    let middle = if mode.contains(TermMode::APP_CURSOR) {
+        b'O'
+    } else {
+        b'['
+    };
+    let mut content = Vec::with_capacity(delta_value.abs() as usize * 3);
+    for _ in 0..delta_value.abs() {
+        content.push(0x1b);
+        content.push(middle);
+        content.push(line_cmd);
+    }
+    content
+}
+
+#[cfg(test)]
+mod scroll_key_tests {
+    use super::*;
+
+    #[test]
+    fn wheel_uses_csi_without_application_cursor() {
+        let mode = TermMode::ALTERNATE_SCROLL | TermMode::ALT_SCREEN;
+        assert_eq!(scroll_key_bytes(2, &mode), b"\x1b[A\x1b[A");
+        assert_eq!(scroll_key_bytes(-1, &mode), b"\x1b[B");
+    }
+
+    #[test]
+    fn wheel_uses_ss3_with_application_cursor() {
+        let mode = TermMode::ALTERNATE_SCROLL | TermMode::ALT_SCREEN | TermMode::APP_CURSOR;
+        assert_eq!(scroll_key_bytes(1, &mode), b"\x1bOA");
+        assert_eq!(scroll_key_bytes(-3, &mode), b"\x1bOB\x1bOB\x1bOB");
+    }
+
+    #[test]
+    fn zero_delta_sends_nothing() {
+        assert!(scroll_key_bytes(0, &TermMode::empty()).is_empty());
+        assert!(scroll_key_bytes(0, &TermMode::APP_CURSOR).is_empty());
     }
 }
 
