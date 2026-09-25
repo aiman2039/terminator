@@ -545,8 +545,15 @@ struct App {
     active_session: Option<String>,
     /// Focused tabs `sync_active_session` last saw. Sync only follows focus
     /// *moves* in either dock so clicking the other dock is never clobbered.
+    /// Strip moves are recorded while the strip is hidden and applied only
+    /// while it is on screen, so revealing it does not replay a stale move.
+    /// A move in both docks on the same call is a project switch: the main
+    /// pane wins, and the strip focus is only recorded.
     last_main_focus: Option<Tab>,
     last_strip_focus: Option<Tab>,
+    /// Set when focus lands on an image, browser, diff, player, or editor.
+    /// Closing the active terminal clears it so recovery can run.
+    non_terminal_selected: bool,
     images: HashMap<PathBuf, image_preview::Preview>,
     browser_host: browser_host::BrowserHost,
     visible_browsers: Vec<browser_host::VisibleBrowser>,
@@ -817,6 +824,7 @@ impl App {
             active_session: None,
             last_main_focus: None,
             last_strip_focus: None,
+            non_terminal_selected: false,
             images: HashMap::new(),
             browser_host: browser_host::BrowserHost::new(),
             visible_browsers: Vec::new(),
@@ -2770,10 +2778,8 @@ impl App {
     fn toggle_ide_mode(&mut self) {
         self.preferences.ide_mode = !self.preferences.ide_mode;
         if self.preferences.ide_mode {
-            // IDE mode pins both sidebars on; widths and tool selection
-            // are preserved so leaving IDE mode restores the prior chrome.
-            self.preferences.left_visible = true;
-            self.preferences.visible = true;
+            // Sidebars paint from `visible || ide_mode`. Leave the saved
+            // flags alone so leaving IDE mode restores the prior chrome.
             self.preferences.ide_terminal_collapsed = false;
         } else {
             self.resync_active_from_dock();
@@ -2832,12 +2838,17 @@ impl App {
         })
     }
 
+    /// The bottom strip is on screen. Hidden docks stay in preferences and
+    /// must not take keyboard focus.
+    fn ide_strip_visible(&self) -> bool {
+        self.preferences.ide_mode && !self.preferences.ide_terminal_collapsed
+    }
+
     /// True when keyboard focus belongs to a strip terminal: IDE mode with a
     /// visible strip and a live strip session active. Pane-relative actions
     /// (splits) follow this; workspace-level "new tab" stays in the main dock.
     fn strip_focused(&self) -> bool {
-        self.preferences.ide_mode
-            && !self.preferences.ide_terminal_collapsed
+        self.ide_strip_visible()
             && self.active_session.as_deref().is_some_and(|sid| {
                 self.state
                     .sessions
@@ -2983,12 +2994,15 @@ impl App {
     /// live selection while the strip is visible, else the dock's focused
     /// terminal. Runs after [`Self::sync_active_session`], which only follows
     /// dock focus changes so a strip click is never clobbered.
+    ///
+    /// A focused image, browser, diff, player, or editor is a real selection.
+    /// That `None` must stay `None`. Closing the terminal that was focused
+    /// afterwards still heals.
     fn restore_cleared_focus(&mut self, dock: &Workspace) {
-        if self.active_session.is_some() {
+        if self.active_session.is_some() || self.non_terminal_selected {
             return;
         }
-        if self.preferences.ide_mode
-            && !self.preferences.ide_terminal_collapsed
+        if self.ide_strip_visible()
             && let Some(project) = self.selected.clone()
             && let Some(next) = self.strip_first_live(&project)
         {
@@ -3137,6 +3151,9 @@ impl App {
         self.drop_strip_session(sid);
         if self.active_session.as_deref() == Some(sid) {
             self.active_session = None;
+            // The closed terminal was the selection. A main pane remembered
+            // from earlier must not block recovery.
+            self.non_terminal_selected = false;
         }
     }
     fn terminal_action(
@@ -3775,26 +3792,29 @@ impl App {
         self.drain_pending_unavailable_close();
     }
 
+    fn follow_focus_tab(&mut self, tab: Option<Tab>) {
+        match tab {
+            Some(Tab::Terminal(sid)) => {
+                self.active_session = Some(sid);
+                self.non_terminal_selected = false;
+            }
+            Some(_) => {
+                self.active_session = None;
+                self.non_terminal_selected = true;
+            }
+            None => {}
+        }
+    }
+
     fn sync_active_session(&mut self, dock: &mut Workspace) {
         let focused = dock
             .main_surface_mut()
             .find_active_focused()
             .map(|(_, tab)| tab.clone());
-        if focused != self.last_main_focus {
+        let main_moved = focused != self.last_main_focus;
+        if main_moved {
             self.last_main_focus = focused.clone();
-            match focused {
-                Some(Tab::Terminal(sid)) => self.active_session = Some(sid),
-                Some(
-                    Tab::Diff { .. }
-                    | Tab::Image { .. }
-                    | Tab::Browser { .. }
-                    | Tab::Player
-                    | Tab::NativeEditor { .. },
-                ) => {
-                    self.active_session = None;
-                }
-                None => {}
-            }
+            self.follow_focus_tab(focused);
         }
         let strip_focused = self
             .selected
@@ -3810,13 +3830,12 @@ impl App {
                     .and_then(|leaf| leaf.tabs.get(leaf.active.0))
                     .cloned()
             });
-        if strip_focused != self.last_strip_focus {
-            self.last_strip_focus = strip_focused.clone();
-            match strip_focused {
-                Some(Tab::Terminal(sid)) => self.active_session = Some(sid),
-                Some(_) => self.active_session = None,
-                None => {}
-            }
+        let strip_moved = strip_focused != self.last_strip_focus;
+        self.last_strip_focus = strip_focused.clone();
+        // Both docks move together when the project changes. Keep the main
+        // pane; a later strip-only move can still take focus.
+        if strip_moved && !main_moved && self.ide_strip_visible() {
+            self.follow_focus_tab(strip_focused);
         }
     }
 
@@ -4865,7 +4884,7 @@ mod navigation_tests {
     }
 
     #[test]
-    fn toggle_ide_mode_pins_sidebars_and_preserves_widths() {
+    fn toggle_ide_mode_keeps_sidebar_visibility_and_widths() {
         let (mut app, ctx, _dir) = fixture();
         app.preferences.left_visible = false;
         app.preferences.visible = false;
@@ -4874,13 +4893,15 @@ mod navigation_tests {
         assert!(!app.preferences.ide_mode);
         app.run_shortcut(&ctx, "toggle_ide_mode");
         assert!(app.preferences.ide_mode);
-        assert!(app.preferences.left_visible);
-        assert!(app.preferences.visible);
+        assert!(!app.preferences.left_visible);
+        assert!(!app.preferences.visible);
         assert_eq!(app.preferences.width, 300.0);
         assert_eq!(app.preferences.tool, SidebarTool::Git);
         assert!(!app.preferences.ide_terminal_collapsed);
         app.run_shortcut(&ctx, "toggle_ide_mode");
         assert!(!app.preferences.ide_mode);
+        assert!(!app.preferences.left_visible);
+        assert!(!app.preferences.visible);
     }
 
     #[test]
@@ -5018,30 +5039,210 @@ mod navigation_tests {
         let _ = dock.set_active_tab(path);
         app.sync_active_session(&mut dock);
         assert_eq!(app.active_session.as_deref(), Some("u"));
-        // Strip focus moves take over the same way.
+        // A hidden strip records focus and must not take the visible session.
         app.selected = Some("a".into());
-        app.preferences.ide_strip_docks.0.insert(
-            "a".into(),
-            egui_dock::DockState::new(vec![Tab::Terminal("s".into())]),
-        );
+        let mut strip =
+            egui_dock::DockState::new(vec![Tab::Terminal("s".into()), Tab::Terminal("s2".into())]);
+        let spath = strip.find_tab(&Tab::Terminal("s".into())).unwrap();
+        strip.set_focused_node_and_surface(spath.node_path());
+        app.preferences.ide_strip_docks.0.insert("a".into(), strip);
         app.sync_active_session(&mut dock);
         assert_eq!(app.active_session.as_deref(), Some("u"));
-        let spath = app
+        // Revealing the strip does not replay the focus recorded while hidden.
+        app.preferences.ide_mode = true;
+        app.sync_active_session(&mut dock);
+        assert_eq!(app.active_session.as_deref(), Some("u"));
+        // A later move while the strip is on screen takes over.
+        let s2 = app
             .preferences
             .ide_strip_docks
             .0
             .get("a")
             .unwrap()
-            .find_tab(&Tab::Terminal("s".into()))
+            .find_tab(&Tab::Terminal("s2".into()))
             .unwrap();
-        app.preferences
+        let _ = app
+            .preferences
             .ide_strip_docks
             .0
             .get_mut("a")
             .unwrap()
-            .set_focused_node_and_surface(spath.node_path());
+            .set_active_tab(s2);
         app.sync_active_session(&mut dock);
-        assert_eq!(app.active_session.as_deref(), Some("s"));
+        assert_eq!(app.active_session.as_deref(), Some("s2"));
+    }
+
+    #[test]
+    fn hidden_strip_keeps_the_visible_terminal_across_projects() {
+        let (mut app, _ctx, _dir) = fixture();
+        let mut dock_a = Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+            "main-a".into(),
+        )]));
+        let main_a = dock_a.find_tab(&Tab::Terminal("main-a".into())).unwrap();
+        dock_a.set_focused_node_and_surface(main_a.node_path());
+        app.selected = Some("a".into());
+        let mut strip_a = egui_dock::DockState::new(vec![Tab::Terminal("strip-a".into())]);
+        let path = strip_a.find_tab(&Tab::Terminal("strip-a".into())).unwrap();
+        strip_a.set_focused_node_and_surface(path.node_path());
+        app.preferences
+            .ide_strip_docks
+            .0
+            .insert("a".into(), strip_a);
+        app.sync_active_session(&mut dock_a);
+        assert_eq!(app.active_session.as_deref(), Some("main-a"));
+
+        app.selected = Some("b".into());
+        let mut dock_b = Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+            "main-b".into(),
+        )]));
+        let main_b = dock_b.find_tab(&Tab::Terminal("main-b".into())).unwrap();
+        dock_b.set_focused_node_and_surface(main_b.node_path());
+        let mut strip_b = egui_dock::DockState::new(vec![Tab::Terminal("strip-b".into())]);
+        let path = strip_b.find_tab(&Tab::Terminal("strip-b".into())).unwrap();
+        strip_b.set_focused_node_and_surface(path.node_path());
+        app.preferences
+            .ide_strip_docks
+            .0
+            .insert("b".into(), strip_b);
+        app.preferences.ide_terminal_collapsed = true;
+        app.preferences.ide_mode = true;
+        app.sync_active_session(&mut dock_b);
+        assert_eq!(app.active_session.as_deref(), Some("main-b"));
+    }
+
+    #[test]
+    fn visible_strip_keeps_the_main_terminal_across_projects() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.preferences.ide_mode = true;
+        let mut dock_a = Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+            "main-a".into(),
+        )]));
+        let main_a = dock_a.find_tab(&Tab::Terminal("main-a".into())).unwrap();
+        dock_a.set_focused_node_and_surface(main_a.node_path());
+        app.selected = Some("a".into());
+        let mut strip_a = egui_dock::DockState::new(vec![Tab::Terminal("strip-a".into())]);
+        let path = strip_a.find_tab(&Tab::Terminal("strip-a".into())).unwrap();
+        strip_a.set_focused_node_and_surface(path.node_path());
+        app.preferences
+            .ide_strip_docks
+            .0
+            .insert("a".into(), strip_a);
+        app.sync_active_session(&mut dock_a);
+        assert_eq!(app.active_session.as_deref(), Some("main-a"));
+
+        app.selected = Some("b".into());
+        let mut dock_b = Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+            "main-b".into(),
+        )]));
+        let main_b = dock_b.find_tab(&Tab::Terminal("main-b".into())).unwrap();
+        dock_b.set_focused_node_and_surface(main_b.node_path());
+        let mut strip_b = egui_dock::DockState::new(vec![
+            Tab::Terminal("strip-b".into()),
+            Tab::Terminal("strip-b2".into()),
+        ]);
+        let path = strip_b.find_tab(&Tab::Terminal("strip-b".into())).unwrap();
+        strip_b.set_focused_node_and_surface(path.node_path());
+        app.preferences
+            .ide_strip_docks
+            .0
+            .insert("b".into(), strip_b);
+        app.sync_active_session(&mut dock_b);
+        assert_eq!(app.active_session.as_deref(), Some("main-b"));
+
+        let next = app
+            .preferences
+            .ide_strip_docks
+            .0
+            .get("b")
+            .unwrap()
+            .find_tab(&Tab::Terminal("strip-b2".into()))
+            .unwrap();
+        let _ = app
+            .preferences
+            .ide_strip_docks
+            .0
+            .get_mut("b")
+            .unwrap()
+            .set_active_tab(next);
+        app.sync_active_session(&mut dock_b);
+        assert_eq!(app.active_session.as_deref(), Some("strip-b2"));
+    }
+
+    #[test]
+    fn closing_a_strip_terminal_recovers_past_a_remembered_image() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        app.state.sessions = vec![
+            session_fixture("s1", SessionKind::Shell),
+            session_fixture("s2", SessionKind::Shell),
+        ];
+        let image = Tab::Image {
+            path: "/tmp/a.png".into(),
+        };
+        let mut dock = Workspace::from_layout(egui_dock::DockState::new(vec![image.clone()]));
+        let path = dock.find_tab(&image).unwrap();
+        dock.set_focused_node_and_surface(path.node_path());
+        let mut strip =
+            egui_dock::DockState::new(vec![Tab::Terminal("s1".into()), Tab::Terminal("s2".into())]);
+        let focused = strip.find_tab(&Tab::Terminal("s2".into())).unwrap();
+        strip.set_focused_node_and_surface(focused.node_path());
+        let _ = strip.set_active_tab(focused);
+        app.preferences.ide_strip_docks.0.insert("a".into(), strip);
+        app.sync_active_session(&mut dock);
+        assert_eq!(app.active_session, None);
+
+        // The strip terminal is the selection. The image stays the main pane.
+        app.active_session = Some("s1".into());
+        app.remove_tab("s1");
+        app.sync_active_session(&mut dock);
+        app.restore_cleared_focus(&dock);
+        assert_eq!(app.active_session.as_deref(), Some("s2"));
+    }
+
+    #[test]
+    fn selecting_a_non_terminal_stays_unselected() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        app.state.sessions = vec![session_fixture("strip", SessionKind::Shell)];
+        let mut strip = egui_dock::DockState::new(vec![Tab::Terminal("strip".into())]);
+        let path = strip.find_tab(&Tab::Terminal("strip".into())).unwrap();
+        strip.set_focused_node_and_surface(path.node_path());
+        app.preferences.ide_strip_docks.0.insert("a".into(), strip);
+        // The strip is already focused, so selecting a pane is not a strip move.
+        let mut primer = Workspace::empty();
+        app.sync_active_session(&mut primer);
+        let panes = [
+            Tab::Image {
+                path: "/tmp/a.png".into(),
+            },
+            Tab::Browser {
+                id: "b".into(),
+                target: BrowserTarget::Url("https://example.com".into()),
+            },
+            Tab::Diff {
+                cwd: "/tmp".into(),
+                path: "/tmp/a.rs".into(),
+                staged: false,
+            },
+            Tab::Player,
+            Tab::NativeEditor {
+                path: "/tmp/a.rs".into(),
+            },
+        ];
+        for pane in panes {
+            let mut dock = Workspace::from_layout(egui_dock::DockState::new(vec![pane.clone()]));
+            let path = dock.find_tab(&pane).unwrap();
+            dock.set_focused_node_and_surface(path.node_path());
+            app.active_session = Some("strip".into());
+            app.sync_active_session(&mut dock);
+            assert_eq!(app.active_session, None, "{pane:?}");
+            app.restore_cleared_focus(&dock);
+            assert_eq!(app.active_session, None, "{pane:?}");
+            app.restore_cleared_focus(&dock);
+            assert_eq!(app.active_session, None, "{pane:?}");
+        }
     }
 
     #[test]

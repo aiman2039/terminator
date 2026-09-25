@@ -296,14 +296,91 @@ pub struct Playlist {
     pub tracks: Vec<PathBuf>,
 }
 
-/// IDE strip dock layouts per project. `DockState` has no `PartialEq`, so
-/// equality (which gates preference saves) compares serialized form.
+/// IDE strip dock layouts per project. `DockState` has no `PartialEq`.
+/// Equality, which gates preference saves, compares tabs, splits, fractions,
+/// and focus. Runtime geometry (`rect`, `viewport`, `scroll`, window placement)
+/// is ignored so a resize does not serialize every project dock on the GUI thread.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct StripDocks(pub HashMap<String, egui_dock::DockState<crate::Tab>>);
 
 impl PartialEq for StripDocks {
     fn eq(&self, other: &Self) -> bool {
-        serde_json::to_value(&self.0).ok() == serde_json::to_value(&other.0).ok()
+        strip_docks_equal(&self.0, &other.0)
+    }
+}
+
+fn strip_docks_equal(
+    left: &HashMap<String, egui_dock::DockState<crate::Tab>>,
+    right: &HashMap<String, egui_dock::DockState<crate::Tab>>,
+) -> bool {
+    left.len() == right.len()
+        && left.iter().all(|(project, dock)| {
+            right
+                .get(project)
+                .is_some_and(|other| strip_dock_equal(dock, other))
+        })
+}
+
+fn strip_dock_equal(
+    left: &egui_dock::DockState<crate::Tab>,
+    right: &egui_dock::DockState<crate::Tab>,
+) -> bool {
+    if left.focused_leaf() != right.focused_leaf() {
+        return false;
+    }
+    let mut left_surfaces = left.iter_surfaces();
+    let mut right_surfaces = right.iter_surfaces();
+    loop {
+        match (left_surfaces.next(), right_surfaces.next()) {
+            (None, None) => return true,
+            (Some(left), Some(right)) if strip_surface_equal(left, right) => {}
+            _ => return false,
+        }
+    }
+}
+
+fn strip_surface_equal(
+    left: &egui_dock::Surface<crate::Tab>,
+    right: &egui_dock::Surface<crate::Tab>,
+) -> bool {
+    match (left.node_tree(), right.node_tree()) {
+        (None, None) => true,
+        (Some(left), Some(right)) => strip_tree_equal(left, right),
+        _ => false,
+    }
+}
+
+fn strip_tree_equal(
+    left: &egui_dock::Tree<crate::Tab>,
+    right: &egui_dock::Tree<crate::Tab>,
+) -> bool {
+    left.focused_leaf() == right.focused_leaf()
+        && left.len() == right.len()
+        && left
+            .iter()
+            .zip(right.iter())
+            .all(|(left, right)| strip_node_equal(left, right))
+}
+
+fn strip_node_equal(
+    left: &egui_dock::Node<crate::Tab>,
+    right: &egui_dock::Node<crate::Tab>,
+) -> bool {
+    match (left, right) {
+        (egui_dock::Node::Empty, egui_dock::Node::Empty) => true,
+        (egui_dock::Node::Leaf(left), egui_dock::Node::Leaf(right)) => {
+            left.tabs == right.tabs
+                && left.active == right.active
+                && left.collapsed == right.collapsed
+                && left.tab_bar_hidden == right.tab_bar_hidden
+        }
+        (egui_dock::Node::Vertical(left), egui_dock::Node::Vertical(right))
+        | (egui_dock::Node::Horizontal(left), egui_dock::Node::Horizontal(right)) => {
+            left.fraction == right.fraction
+                && left.fully_collapsed == right.fully_collapsed
+                && left.collapsed_leaf_count == right.collapsed_leaf_count
+        }
+        _ => false,
     }
 }
 
@@ -355,7 +432,7 @@ pub struct UiPreferences {
     /// IDE strip dock layouts per project (shell terminals). GUI-local view
     /// state; validated on load, invalid docks dropped. Kept last so the
     /// derived `PartialEq` (which gates saves) short-circuits on cheap
-    /// fields first.
+    /// fields first. The dock compare itself is structural: see [`StripDocks`].
     #[serde(default)]
     pub ide_strip_docks: StripDocks,
 }
@@ -634,6 +711,48 @@ mod tests {
         .unwrap();
         let loaded = UiPreferences::load(dir.path()).unwrap();
         assert!(loaded.ide_strip_docks.0.is_empty());
+    }
+
+    #[test]
+    fn strip_dock_equality_ignores_runtime_geometry() {
+        let dock = egui_dock::DockState::new(vec![crate::Tab::Terminal("x".into())]);
+        let mut resized = dock.clone();
+        let leaf = resized
+            .main_surface_mut()
+            .iter_mut()
+            .next()
+            .unwrap()
+            .get_leaf_mut()
+            .unwrap();
+        leaf.set_rect(egui_dock::egui::Rect::from_min_size(
+            egui_dock::egui::Pos2::ZERO,
+            egui_dock::egui::vec2(40.0, 20.0),
+        ));
+        leaf.viewport = egui_dock::egui::Rect::from_min_size(
+            egui_dock::egui::Pos2::new(1.0, 2.0),
+            egui_dock::egui::vec2(30.0, 10.0),
+        );
+        leaf.scroll = 15.0;
+        let mut left = UiPreferences::default();
+        left.ide_strip_docks.0.insert("a".into(), dock.clone());
+        let mut right = left.clone();
+        right.ide_strip_docks.0.insert("a".into(), resized);
+        assert_eq!(left, right);
+
+        let mut focused = dock.clone();
+        let path = focused.find_tab(&crate::Tab::Terminal("x".into())).unwrap();
+        focused.set_focused_node_and_surface(path.node_path());
+        right.ide_strip_docks.0.insert("a".into(), focused);
+        assert_ne!(left, right);
+
+        let mut split = dock.clone();
+        split.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.25,
+            vec![crate::Tab::Terminal("y".into())],
+        );
+        right.ide_strip_docks.0.insert("a".into(), split);
+        assert_ne!(left, right);
     }
 
     #[test]
