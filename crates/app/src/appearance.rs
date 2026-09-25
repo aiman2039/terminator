@@ -885,10 +885,13 @@ pub fn pane_caption(
             );
         response
     });
+    let response = response.on_hover_cursor(egui::CursorIcon::Grab);
     (
-        response
-            .on_hover_cursor(egui::CursorIcon::Grab)
-            .on_hover_text(title),
+        if title.is_empty() {
+            response
+        } else {
+            response.on_hover_text(title)
+        },
         close,
     )
 }

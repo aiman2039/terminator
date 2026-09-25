@@ -1,7 +1,8 @@
 //! Sparkle is loaded only from a configured app bundle. Development launches
 //! never consult the production feed. NSApplication's delegate remains winit's.
 //! The application menu always has Check for Updates…; Sparkle is not required
-//! for that item to exist.
+//! for that item to exist. The macOS menu-bar status item lives in this crate
+//! too, because the app crate forbids unsafe.
 //!
 //! AppKit method swizzling keeps `unsafe` in this crate. Other Terminator crates forbid it.
 #[cfg(any(target_os = "macos", test))]
@@ -463,6 +464,11 @@ mod macos {
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
+#[cfg(target_os = "macos")]
+mod status_item;
+#[cfg(target_os = "macos")]
+pub use status_item::{sync_status_item, take_status_click};
+
 #[cfg(not(target_os = "macos"))]
 mod other {
     use eframe::egui;
@@ -503,6 +509,14 @@ mod other {
 }
 #[cfg(not(target_os = "macos"))]
 pub use other::*;
+
+#[cfg(not(target_os = "macos"))]
+pub fn sync_status_item(_png: &[u8], _width_pt: f32, _height_pt: f32) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn take_status_click() -> bool {
+    false
+}
 
 #[cfg(test)]
 mod tests {

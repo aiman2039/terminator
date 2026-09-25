@@ -52,6 +52,7 @@ mod clipboard;
 mod diagnostics;
 mod diff;
 mod gui_services;
+mod menu_bar;
 mod native_jobs;
 mod services;
 use anyhow::{Context, Result};
@@ -511,6 +512,9 @@ struct App {
     exit: exit::Exit,
     exit_attempt: u64,
     updater: updater::Updater,
+    /// Last waiting count painted on the macOS menu-bar icon.
+    #[cfg(all(not(test), target_os = "macos"))]
+    status_waiting_shown: Option<usize>,
     #[cfg(feature = "test-support")]
     diagnostics: diagnostics::Diagnostics,
     paths: Paths,
@@ -775,6 +779,8 @@ impl App {
             exit: Default::default(),
             exit_attempt: 0,
             updater: updater::Updater::new(ctx),
+            #[cfg(all(not(test), target_os = "macos"))]
+            status_waiting_shown: None,
             installation_error: None,
             repair_pending: false,
             restart_pending: false,
@@ -4621,11 +4627,37 @@ impl eframe::App for App {
         self.reconcile_gui_resources();
         self.sync_browsers(frame);
         self.popups.end_frame();
+        self.sync_menu_bar(&ctx);
         appearance::click_cursor(&ctx);
         #[cfg(feature = "test-support")]
         self.diagnostics.capture(&ctx);
         ctx.request_repaint_after(Duration::from_secs(1));
     }
+}
+
+impl App {
+    #[cfg(all(not(test), target_os = "macos"))]
+    fn sync_menu_bar(&mut self, ctx: &egui::Context) {
+        if updater::take_status_click() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            if self.waiting_notice_count() > 0 {
+                self.preferences.tool = SidebarTool::Agents;
+                self.preferences.visible = true;
+            }
+        }
+        let waiting = self.waiting_notice_count();
+        if self.status_waiting_shown == Some(waiting) {
+            return;
+        }
+        self.status_waiting_shown = Some(waiting);
+        let icon = menu_bar::status_icon(waiting);
+        updater::sync_status_item(&icon.png, icon.width_pt, icon.height_pt);
+    }
+
+    #[cfg(not(all(not(test), target_os = "macos")))]
+    fn sync_menu_bar(&mut self, _ctx: &egui::Context) {}
 }
 #[cfg(test)]
 mod daemon_compatibility_tests {
@@ -8213,13 +8245,85 @@ mod navigation_tests {
         );
         output.textures_delta.clear();
         let ghost = app.fixture_rect(&ctx, "tab-ghost").expect("tab ghost");
-        assert_eq!(ghost[2], 220.0);
+        assert!(
+            ghost[2] < 180.0 && ghost[2] > 60.0,
+            "short tab ghost must hug the title, got {ghost:?}"
+        );
         assert_eq!(ghost[3], 32.0);
         assert!(
-            (ghost[0] - (pos.x - 110.0)).abs() < 2.0 && (ghost[1] - (pos.y - 16.0)).abs() < 2.0,
+            (ghost[0] - (pos.x - ghost[2] / 2.0)).abs() < 2.0
+                && (ghost[1] - (pos.y - 16.0)).abs() < 2.0,
             "ghost must track the pointer, got {ghost:?}"
         );
         assert_eq!(app.tab_drag, Some("tB".to_owned()));
+    }
+    /// Short titles stay narrow, long titles grow, and the active tab's
+    /// accent underline is painted inside the tab rather than on its edge.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn workspace_tabs_hug_their_labels_and_underline_inside() {
+        let (mut app, ctx, _dir) = fixture();
+        let mut short = session_fixture("one", SessionKind::Shell);
+        short.label = "one".into();
+        let mut long = session_fixture("two", SessionKind::Shell);
+        long.label = "codex supervisor".into();
+        app.state.sessions.push(short);
+        app.state.sessions.push(long);
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        workspace.active = workspace.tabs[0].id.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let one = app
+            .fixture_rect(&ctx, "workspace-tab:one")
+            .expect("short tab");
+        let long = app
+            .fixture_rect(&ctx, "workspace-tab:codex supervisor")
+            .expect("long tab");
+        assert!(
+            one[2] < long[2] && one[2] < 160.0 && long[2] < 220.0,
+            "tabs must hug the label, got one={one:?} long={long:?}"
+        );
+        let underline = app
+            .fixture_rect(&ctx, "workspace-tab-underline:one")
+            .expect("active underline");
+        let tab_bottom = one[1] + one[3];
+        assert!(
+            underline[1] > one[1]
+                && underline[1] + underline[3] < tab_bottom
+                && underline[0] >= one[0]
+                && underline[0] + underline[2] <= one[0] + one[2] + 0.5,
+            "underline must sit inside the tab, tab={one:?} bar={underline:?}"
+        );
+        assert!(
+            app.fixture_rect(&ctx, "pane-caption:one").is_none(),
+            "a lone pane must not repeat the workspace tab title"
+        );
+    }
+    /// Split panes keep a caption so each one can be named and dragged.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn split_panes_keep_their_captions() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["left", "right"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("left".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("right".into())],
+        );
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        assert!(app.fixture_rect(&ctx, "pane-caption:left").is_some());
+        assert!(app.fixture_rect(&ctx, "pane-caption:right").is_some());
     }
     /// A pane dragged over a strip gap shows the tab-sized ghost (the
     /// new-tab outcome), never stacked with the pane snapshot ghost.
@@ -8283,10 +8387,13 @@ mod navigation_tests {
         );
         output.textures_delta.clear();
         let ghost = app.fixture_rect(&ctx, "tab-ghost").expect("tab ghost");
-        assert_eq!(ghost[2], 220.0);
+        assert!(
+            ghost[2] < 180.0 && ghost[2] > 60.0,
+            "short tab ghost must hug the title, got {ghost:?}"
+        );
         assert_eq!(ghost[3], 32.0);
         assert!(
-            (ghost[0] - (gap.x - 110.0)).abs() < 2.0,
+            (ghost[0] - (gap.x - ghost[2] / 2.0)).abs() < 2.0,
             "tab ghost must track the pointer, got {ghost:?}"
         );
         assert!(

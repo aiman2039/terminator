@@ -4,6 +4,29 @@ use egui_term::TerminalBackend;
 
 /// Last non-blank grid rows of a live terminal for the drag ghost, oldest
 /// first. Bounded so the floating preview stays small.
+/// Longest label before a workspace tab ellipsizes. Chrome around it is fixed.
+const TAB_TEXT_MAX: f32 = 160.0;
+
+/// Width of a workspace tab for a measured label. Hugs the text instead of
+/// a fixed 220px slot, and always reserves the close icon.
+pub(super) fn workspace_tab_width(text_width: f32) -> f32 {
+    let text = text_width.clamp(8.0, TAB_TEXT_MAX);
+    // 30px to the label, then 4px, a 16px close icon, and 8px of padding.
+    30.0 + text + 4.0 + 16.0 + 8.0
+}
+
+fn tab_label_width(ui: &egui::Ui, label: &str) -> f32 {
+    let mut text = egui::text::LayoutJob::simple(
+        label.to_owned(),
+        egui::FontId::proportional(13.0),
+        egui::Color32::WHITE,
+        TAB_TEXT_MAX,
+    );
+    text.wrap.max_rows = 1;
+    text.wrap.break_anywhere = true;
+    ui.painter().layout_job(text).size().x
+}
+
 fn snapshot_rows(backend: &TerminalBackend) -> Vec<String> {
     let kept: Vec<String> = backend
         .search_rows()
@@ -14,6 +37,22 @@ fn snapshot_rows(backend: &TerminalBackend) -> Vec<String> {
         .collect();
     let start = kept.len().saturating_sub(8);
     kept.into_iter().skip(start).collect()
+}
+
+#[cfg(test)]
+mod tab_width_tests {
+    use super::workspace_tab_width;
+
+    #[test]
+    fn tab_width_tracks_the_label_and_stays_under_the_old_slot() {
+        let short = workspace_tab_width(8.0);
+        let longer = workspace_tab_width(120.0);
+        let capped = workspace_tab_width(400.0);
+        assert!(short < longer);
+        assert!(longer < 220.0);
+        assert_eq!(capped, workspace_tab_width(160.0));
+        assert!(capped < 220.0);
+    }
 }
 
 struct WorkspaceTabMenu {
@@ -546,6 +585,51 @@ impl App {
             HeaderAction::Palette => self.open_command_palette(),
         }
     }
+    fn tab_face(&self, primary: Option<&Tab>) -> (String, &'static str, Option<String>) {
+        match primary {
+            Some(Tab::Terminal(sid)) => self
+                .state
+                .sessions
+                .iter()
+                .find(|s| &s.id == sid)
+                .map(|s| {
+                    (
+                        s.label.clone(),
+                        if s.kind == SessionKind::Editor {
+                            "FileCode"
+                        } else {
+                            "Terminal"
+                        },
+                        Some(sid.clone()),
+                    )
+                })
+                .unwrap_or(("Terminal".into(), "Terminal", None)),
+            Some(Tab::Diff { path, .. }) | Some(Tab::Image { path }) => (
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                if matches!(primary, Some(Tab::Image { .. })) {
+                    "FileImage"
+                } else {
+                    "FileDiff"
+                },
+                None,
+            ),
+            Some(Tab::Browser { target, .. }) => (target.title(), "FileCode", None),
+            Some(Tab::NativeEditor { path }) => (
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                "FileCode",
+                None,
+            ),
+            Some(Tab::Player) => ("Player".into(), "FileMusic", None),
+            None => ("Workspace".into(), "Terminal", None),
+        }
+    }
+
     pub(super) fn workspace_bar(
         &mut self,
         ui: &mut egui::Ui,
@@ -570,8 +654,23 @@ impl App {
         ui.painter()
             .rect_filled(strip_rect, 0, appearance::color(&self.theme.surface));
         ui.horizontal(|ui| {
+            let tab_widths: Vec<f32> = workspace
+                .tabs
+                .iter()
+                .map(|group| {
+                    let primary = group
+                        .primary
+                        .as_ref()
+                        .filter(|tab| group.layout.find_tab(tab).is_some())
+                        .or_else(|| group.layout.iter_all_tabs().next().map(|(_, tab)| tab));
+                    let (label, _, _) = self.tab_face(primary);
+                    workspace_tab_width(tab_label_width(ui, &label))
+                })
+                .collect();
+            let content_width =
+                tab_widths.iter().sum::<f32>() + tab_widths.len().saturating_sub(1) as f32;
             let width = (ui.available_width() - 38.0).max(40.0);
-            let overflow = workspace.tabs.len() as f32 * 221.0 > width;
+            let overflow = content_width > width;
             let width = (width - if overflow { 58.0 } else { 0.0 }).max(1.0);
             let scroll_id = ui.make_persistent_id(egui::IdSalt::new(("workspace-tabs", project)));
             let offset =
@@ -628,53 +727,10 @@ impl App {
                                 .or_else(|| {
                                     group.layout.iter_all_tabs().next().map(|(_, tab)| tab)
                                 });
-                            let (label, icon, sid) = match primary {
-                                Some(Tab::Terminal(sid)) => self
-                                    .state
-                                    .sessions
-                                    .iter()
-                                    .find(|s| &s.id == sid)
-                                    .map(|s| {
-                                        (
-                                            s.label.clone(),
-                                            if s.kind == SessionKind::Editor {
-                                                "FileCode"
-                                            } else {
-                                                "Terminal"
-                                            },
-                                            Some(sid.clone()),
-                                        )
-                                    })
-                                    .unwrap_or(("Terminal".into(), "Terminal", None)),
-                                Some(Tab::Diff { path, .. }) | Some(Tab::Image { path }) => (
-                                    path.file_name()
-                                        .unwrap_or_default()
-                                        .to_string_lossy()
-                                        .into_owned(),
-                                    if matches!(primary, Some(Tab::Image { .. })) {
-                                        "FileImage"
-                                    } else {
-                                        "FileDiff"
-                                    },
-                                    None,
-                                ),
-                                Some(Tab::Browser { target, .. }) => {
-                                    (target.title(), "FileCode", None)
-                                }
-                                Some(Tab::NativeEditor { path }) => (
-                                    path.file_name()
-                                        .unwrap_or_default()
-                                        .to_string_lossy()
-                                        .into_owned(),
-                                    "FileCode",
-                                    None,
-                                ),
-                                Some(Tab::Player) => ("Player".into(), "FileMusic", None),
-                                None => ("Workspace".into(), "Terminal", None),
-                            };
+                            let (label, icon, sid) = self.tab_face(primary);
                             let active = workspace.active == group.id;
                             let (rect, response) = ui.allocate_exact_size(
-                                egui::vec2(220.0, 32.0),
+                                egui::vec2(tab_widths[index], 32.0),
                                 egui::Sense::click_and_drag(),
                             );
                             strip_rects.push((group.id.clone(), rect));
@@ -741,19 +797,9 @@ impl App {
                                 egui::pos2(rect.left() + 16.0, rect.center().y),
                                 egui::vec2(16.0, 16.0),
                             );
-                            if icon == "Terminal" {
-                                ui.painter().rect_filled(icon_rect, 2, egui::Color32::BLACK);
-                            }
                             egui::Image::new(icons::source(icon))
                                 .tint(appearance::ICON_COLOR)
-                                .paint_at(
-                                    ui,
-                                    if icon == "Terminal" {
-                                        icon_rect.shrink(1.0)
-                                    } else {
-                                        icon_rect
-                                    },
-                                );
+                                .paint_at(ui, icon_rect);
                             let editing = sid
                                 .as_ref()
                                 .is_some_and(|sid| self.renaming(sid, RenameSurface::Workspace));
@@ -789,12 +835,22 @@ impl App {
                                 );
                             }
                             if active {
-                                ui.painter().line_segment(
-                                    [rect.left_bottom(), rect.right_bottom()],
-                                    egui::Stroke::new(
-                                        2.0,
-                                        appearance::color(&self.theme.secondary),
-                                    ),
+                                // Inset from the bottom edge. A stroke centered
+                                // on rect.bottom() is clipped away by the strip.
+                                let underline = egui::Rect::from_min_max(
+                                    egui::pos2(rect.left() + 8.0, rect.bottom() - 3.0),
+                                    egui::pos2(rect.right() - 8.0, rect.bottom() - 1.0),
+                                );
+                                ui.painter().rect_filled(
+                                    underline,
+                                    1.0,
+                                    appearance::color(&self.theme.accent),
+                                );
+                                #[cfg(feature = "test-support")]
+                                diagnostics::record(
+                                    ui.ctx(),
+                                    &format!("workspace-tab-underline:{label}"),
+                                    underline,
                                 );
                             }
                             let close_rect = egui::Rect::from_center_size(
@@ -1298,14 +1354,14 @@ impl App {
             title,
             egui::FontId::proportional(13.0),
             egui::Color32::from_rgba_unmultiplied(255, 255, 255, 235),
-            220.0 - 20.0,
+            TAB_TEXT_MAX,
         );
         job.wrap.max_rows = 1;
         job.wrap.break_anywhere = true;
         let galley = painter.layout_job(job);
-        let size = egui::vec2(220.0, 32.0);
+        let size = egui::vec2(workspace_tab_width(galley.size().x), 32.0);
         let screen = ui.ctx().content_rect();
-        let mut min = pos - egui::vec2(110.0, 16.0);
+        let mut min = pos - egui::vec2(size.x * 0.5, size.y * 0.5);
         min.x = min.x.clamp(
             screen.min.x + 4.0,
             (screen.max.x - size.x - 4.0).max(screen.min.x),
@@ -2518,16 +2574,31 @@ impl TabViewer for Viewer<'_> {
                         .copied();
                     ui.spacing_mut().item_spacing.y = 2.0;
                     let is_markdown = markdown::available(&session);
+                    // A lone pane's name is already the workspace tab. Keep the
+                    // drag and close row, but don't paint the title again.
+                    let lone = self
+                        .app
+                        .pane_index
+                        .as_ref()
+                        .is_some_and(|index| index.tabs == 1);
                     let (response, close) = if is_markdown {
                         self.markdown_header(ui, &session, editing)
                     } else {
                         appearance::pane_caption(
                             ui,
-                            if editing { "" } else { &session.label },
+                            if editing || lone { "" } else { &session.label },
                             self.app.active_session.as_ref() == Some(sid),
                             true,
                         )
                     };
+                    #[cfg(feature = "test-support")]
+                    if !is_markdown && !lone && !editing {
+                        diagnostics::record(
+                            ui.ctx(),
+                            &format!("pane-caption:{}", session.label),
+                            response.rect,
+                        );
+                    }
                     if editing {
                         self.app.inline_rename(
                             ui,
