@@ -58,17 +58,19 @@ const HEADER_TOGGLE_RESERVE: f32 = 36.0;
 #[derive(Clone, Copy)]
 enum HeaderAction {
     Tool(SidebarTool),
+    IdeMode,
     Settings,
     Palette,
 }
 
-const HEADER_ACTIONS: [HeaderAction; 6] = [
+const HEADER_ACTIONS: [HeaderAction; 7] = [
     HeaderAction::Tool(SidebarTool::Explorer),
     HeaderAction::Tool(SidebarTool::Agents),
     HeaderAction::Tool(SidebarTool::Git),
     HeaderAction::Tool(SidebarTool::History),
     HeaderAction::Settings,
     HeaderAction::Palette,
+    HeaderAction::IdeMode,
 ];
 
 struct HeaderActionView {
@@ -141,6 +143,12 @@ fn header_action_view(action: HeaderAction) -> HeaderActionView {
             icon: "History",
             #[cfg(feature = "test-support")]
             target: "tool-History",
+        },
+        HeaderAction::IdeMode => HeaderActionView {
+            label: "IDE mode",
+            icon: "Columns2",
+            #[cfg(feature = "test-support")]
+            target: "tool-ide-mode",
         },
         HeaderAction::Settings => HeaderActionView {
             label: "Settings",
@@ -458,14 +466,16 @@ impl App {
         let view = header_action_view(action);
         let response = match action {
             HeaderAction::Tool(tool) => self.header_tool_button(ui, tool, &view),
-            HeaderAction::Settings | HeaderAction::Palette => header_icon_button(
-                ui,
-                HeaderIconButton {
-                    icon: view.icon,
-                    tip: &self.header_tip(action),
-                    width: HEADER_SLOT,
-                },
-            ),
+            HeaderAction::IdeMode | HeaderAction::Settings | HeaderAction::Palette => {
+                header_icon_button(
+                    ui,
+                    HeaderIconButton {
+                        icon: view.icon,
+                        tip: &self.header_tip(action),
+                        width: HEADER_SLOT,
+                    },
+                )
+            }
         };
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), view.target, response.rect);
@@ -516,8 +526,10 @@ impl App {
     fn header_menu_mark(&self, action: HeaderAction) -> String {
         match action {
             HeaderAction::Tool(tool) if self.header_tool_selected(tool) => "✓".into(),
+            HeaderAction::IdeMode if self.preferences.ide_mode => "✓".into(),
             HeaderAction::Settings => self.shortcut_label("open_settings"),
             HeaderAction::Palette => self.shortcut_label("open_palette"),
+            HeaderAction::IdeMode => self.shortcut_label("toggle_ide_mode"),
             HeaderAction::Tool(_) => String::new(),
         }
     }
@@ -529,6 +541,7 @@ impl App {
     fn run_header_action(&mut self, action: HeaderAction) {
         match action {
             HeaderAction::Tool(tool) => self.preferences.toggle(tool),
+            HeaderAction::IdeMode => self.toggle_ide_mode(),
             HeaderAction::Settings => self.open_settings(),
             HeaderAction::Palette => self.open_command_palette(),
         }
@@ -2901,7 +2914,7 @@ impl Viewer<'_> {
         }
     }
 
-    fn terminal_view(&mut self, ui: &mut egui::Ui, session: &Session) {
+    pub(super) fn terminal_view(&mut self, ui: &mut egui::Ui, session: &Session) {
         let sid = &session.id;
         self.app.visible_sessions.insert(sid.clone());
         if !self.app.backends.contains_key(sid) {
@@ -2965,7 +2978,9 @@ impl Viewer<'_> {
         }
         self.terminal_find_bar(ui, sid);
         let input_enabled = self.app.terminal_input_enabled(sid);
+        let find_open = self.app.terminal_find.contains_key(sid);
         let focused = input_enabled
+            && !find_open
             && self.app.active_session.as_ref() == Some(sid)
             && self
                 .app
@@ -4021,7 +4036,7 @@ mod tests {
         let count = HEADER_ACTIONS.len();
         let full = header_row_width(count, false);
         assert_eq!(header_visible_count(full, count), count);
-        assert_eq!(header_visible_count(full - 1.0, count), 5);
+        assert_eq!(header_visible_count(full - 1.0, count), count - 1);
         let three = header_row_width(3, true);
         assert_eq!(header_visible_count(three, count), 3);
         assert_eq!(header_visible_count(three - 1.0, count), 2);

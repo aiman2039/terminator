@@ -73,6 +73,41 @@ impl App {
             let _ = popup;
         });
     }
+    /// IDE status-bar mirror of the left agent bell: always visible in IDE
+    /// mode so waiting/unread counts survive collapsed sidebars. Clicking
+    /// reveals the Agents inbox in the right sidebar.
+    pub(super) fn notification_status_badge(&mut self, ui: &mut egui::Ui) {
+        let waiting = self.waiting_notice_count();
+        let unread = self
+            .state
+            .notifications
+            .iter()
+            .filter(|notice| !notice.read && notice_pending(notice, now()))
+            .count();
+        let label = match (waiting, unread) {
+            (0, 0) => String::new(),
+            (0, unread) => format!("{unread} unread"),
+            (waiting, 0) => format!("{waiting} waiting"),
+            (waiting, unread) => format!("{waiting} waiting · {unread} unread"),
+        };
+        let response = ui
+            .add(
+                egui::Button::image_and_text(
+                    egui::Image::new(icons::source("Bell"))
+                        .fit_to_exact_size(egui::vec2(14.0, 14.0)),
+                    label,
+                )
+                .frame(false),
+            )
+            .on_hover_text("Pending agent notifications. Click to open the Agents inbox.");
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "status-attention-bell", response.rect);
+        if response.clicked() {
+            self.preferences.tool = SidebarTool::Agents;
+            self.preferences.visible = true;
+        }
+    }
+
     pub(super) fn agent_bar(&mut self, ui: &mut egui::Ui) {
         let spacing = ui.spacing().item_spacing.y;
         ui.spacing_mut().item_spacing.y = 0.0;

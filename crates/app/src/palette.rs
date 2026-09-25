@@ -11,6 +11,7 @@ pub(crate) enum PaletteItem {
     NewTerminal,
     NewWorktree,
     OpenPlayer,
+    ToggleIdeMode,
 }
 
 impl PaletteItem {
@@ -27,6 +28,7 @@ impl PaletteItem {
             Self::NewTerminal => "New terminal".into(),
             Self::NewWorktree => "New task worktree".into(),
             Self::OpenPlayer => "Open player".into(),
+            Self::ToggleIdeMode => "Toggle IDE mode".into(),
         }
     }
 }
@@ -37,6 +39,7 @@ impl App {
             PaletteItem::AddProject,
             PaletteItem::NewTerminal,
             PaletteItem::OpenPlayer,
+            PaletteItem::ToggleIdeMode,
         ];
         if self
             .state
@@ -177,6 +180,7 @@ impl App {
             PaletteItem::NewTerminal => self.create(None),
             PaletteItem::NewWorktree => self.open_worktree_wizard(),
             PaletteItem::OpenPlayer => self.open_player(),
+            PaletteItem::ToggleIdeMode => self.toggle_ide_mode(),
         }
     }
 }
@@ -216,6 +220,7 @@ mod tests {
     #[test]
     fn palette_labels_are_stable() {
         assert_eq!(PaletteItem::AddProject.label(), "Add project");
+        assert_eq!(PaletteItem::ToggleIdeMode.label(), "Toggle IDE mode");
         assert_eq!(
             PaletteItem::Settings(SettingsSection::Terminal).label(),
             "Settings  Terminal & Editor"

@@ -1,5 +1,26 @@
 # Validation evidence — 2026-09-08
 
+## IDE mode toggle (2026-09-24)
+
+- `toggle_ide_mode` (`command+E`, header IDE switch, palette) flips
+  `UiPreferences::ide_mode`, pins both sidebars visible without touching
+  saved widths/tool, and shows a resizable bottom terminal strip bound to
+  the active live shell (first live shell fallback, placeholder otherwise).
+  Status bar gains a compact player row (icon, position stamp, play/pause,
+  next; hidden unless audio is active) and a persistent notification bell
+  that opens the Agents inbox. No new daemon requests, no layout migration.
+- Unit: `ide_mode_defaults_off_and_round_trips`,
+  `toggle_ide_mode_pins_sidebars_and_preserves_widths`,
+  `ide_terminal_session_prefers_the_active_shell`,
+  `ide_terminal_strip_renders_without_sessions`,
+  `ide_status_badge_renders_without_sidebars`, palette label assert;
+  existing `every_menu_action_has_a_unique_default_chord` covers the new
+  chord. `cargo fmt --all --check` and workspace
+  `clippy --all-targets --all-features -- -D warnings` clean.
+- Pre-existing failures unchanged on the clean tree (sandbox
+  `Operation not permitted` on sockets/processes; verified via stash):
+  app 12, core 9, hook `shutdown` 13 across binaries.
+
 ## In-terminal find + history filter + native-edit core (2026-09-20)
 
 - `Cmd/Ctrl+F` (`find_in_terminal`, rebindable) opens a find bar over the live

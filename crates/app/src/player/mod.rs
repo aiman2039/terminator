@@ -629,6 +629,58 @@ impl App {
         }
     }
 
+    /// Compact IDE status-bar row: icon (opens the Player view),
+    /// now-playing stamp, and play/pause + next. Rendered only while audio
+    /// is active so a fresh install shows no dead controls.
+    pub(super) fn player_status_row(&mut self, ui: &mut egui::Ui) {
+        if !self.player_active() {
+            return;
+        }
+        self.player_toggle_button(ui);
+        let (title, position, duration) = match &self.player.status {
+            Status::Playing {
+                title,
+                position,
+                duration,
+                ..
+            }
+            | Status::Paused {
+                title,
+                position,
+                duration,
+                ..
+            } => (title.as_str(), *position, *duration),
+            Status::Loading { title }
+            | Status::Buffering { title }
+            | Status::Reconnecting { title, .. } => (title.as_str(), Duration::ZERO, None),
+            Status::Error(error) => (error.as_str(), Duration::ZERO, None),
+            Status::Stopped => ("Player", Duration::ZERO, None),
+        };
+        let total = duration.map(format_clock).unwrap_or_else(|| "--:--".into());
+        ui.weak(
+            egui::RichText::new(format_clock(position))
+                .monospace()
+                .size(12.0),
+        );
+        ui.add(egui::Label::new(title).truncate())
+            .on_hover_text(format!("{title} / {total}"));
+        let playing = self.player.playing();
+        let (icon, tip) = if playing {
+            ("Pause", "Pause")
+        } else {
+            ("Play", "Play")
+        };
+        let toggle = Self::player_tool_button(ui, icon, tip);
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "status-player", toggle.rect);
+        if toggle.clicked() {
+            self.player_play_pause();
+        }
+        if Self::player_tool_button(ui, "SkipForward", "Next").clicked() {
+            self.player_skip(1);
+        }
+    }
+
     pub(super) fn player_live_controls(&mut self, ui: &mut egui::Ui) {
         if !self.player_chrome_expanded() {
             return;

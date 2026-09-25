@@ -21,6 +21,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("compare_disk", "Compare disk"),
     ("toggle_left_sidebar", "Toggle left sidebar"),
     ("toggle_right_sidebar", "Toggle right sidebar"),
+    ("toggle_ide_mode", "Toggle IDE mode"),
     ("open_settings", "Settings"),
     ("open_palette", "Command palette"),
 ];

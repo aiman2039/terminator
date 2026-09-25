@@ -436,6 +436,7 @@ impl Default for Settings {
                 ("compare_disk".into(), "command+shift+Y".into()),
                 ("toggle_left_sidebar".into(), "command+B".into()),
                 ("toggle_right_sidebar".into(), "command+L".into()),
+                ("toggle_ide_mode".into(), "command+E".into()),
                 ("open_settings".into(), "command+,".into()),
                 ("open_palette".into(), "command+P".into()),
             ]

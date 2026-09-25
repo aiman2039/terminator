@@ -305,6 +305,13 @@ pub struct UiPreferences {
     pub history_expanded: HashMap<String, bool>,
     pub tool: SidebarTool,
     pub visible: bool,
+    /// IDE layout preset: fixed explorer/terminal zones instead of the
+    /// free-floating dock. Pure view state; never migrates saved layouts.
+    #[serde(default)]
+    pub ide_mode: bool,
+    /// Bottom IDE terminal strip collapsed (IDE mode only).
+    #[serde(default)]
+    pub ide_terminal_collapsed: bool,
     /// Projects column. Missing files stay open; `bool`'s serde default is false.
     #[serde(default = "default_true")]
     pub left_visible: bool,
@@ -343,6 +350,8 @@ impl Default for UiPreferences {
             history_expanded: HashMap::new(),
             tool: SidebarTool::Explorer,
             visible: true,
+            ide_mode: false,
+            ide_terminal_collapsed: false,
             left_visible: true,
             left_agents: false,
             width: 285.0,
@@ -553,6 +562,20 @@ mod tests {
         let raw = fs::read_to_string(dir.path().join("ui-preferences.json")).unwrap();
         assert!(!raw.contains("player_playlists"));
         assert!(raw.contains("Default"));
+    }
+
+    #[test]
+    fn ide_mode_defaults_off_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefs = UiPreferences::load(dir.path()).unwrap();
+        assert!(!prefs.ide_mode);
+        assert!(!prefs.ide_terminal_collapsed);
+        let mut prefs = prefs;
+        prefs.ide_mode = true;
+        prefs.save(dir.path()).unwrap();
+        let raw = fs::read_to_string(dir.path().join("ui-preferences.json")).unwrap();
+        assert!(raw.contains("ide_mode"));
+        assert!(UiPreferences::load(dir.path()).unwrap().ide_mode);
     }
 
     #[test]

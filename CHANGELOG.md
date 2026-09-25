@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- IDE mode toggle (header switch, `command+E`, command palette): pins both
+  sidebars on, adds a bottom terminal strip bound to the active shell
+  session, and mirrors the player transport plus the agent notification
+  bell in the status bar. Pure GUI view state in `ui-preferences.json`;
+  sessions, saved layouts, and older daemons are untouched.
+
 - Main-thread panics write a crash log under the data directory
   (`crashes/`) and the GUI shows a dialog with that path before quitting.
   Terminal sessions keep running in the daemon.

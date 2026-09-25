@@ -2534,7 +2534,7 @@ impl App {
             return false;
         }
         if self.settings_open || self.player_open {
-            return matches!(action, "open_settings" | "open_palette");
+            return matches!(action, "open_settings" | "open_palette" | "toggle_ide_mode");
         }
         true
     }
@@ -2580,6 +2580,7 @@ impl App {
             "compare_disk" => self.compare_active_editor(),
             "toggle_left_sidebar" => self.toggle_left_sidebar(),
             "toggle_right_sidebar" => self.toggle_right_sidebar(),
+            "toggle_ide_mode" => self.toggle_ide_mode(),
             _ => {}
         }
     }
@@ -2706,6 +2707,60 @@ impl App {
 
     fn toggle_right_sidebar(&mut self) {
         self.preferences.visible = !self.preferences.visible;
+    }
+
+    fn toggle_ide_mode(&mut self) {
+        self.preferences.ide_mode = !self.preferences.ide_mode;
+        if self.preferences.ide_mode {
+            // IDE mode pins both sidebars on; widths and tool selection
+            // are preserved so leaving IDE mode restores the prior chrome.
+            self.preferences.left_visible = true;
+            self.preferences.visible = true;
+            self.preferences.ide_terminal_collapsed = false;
+        }
+    }
+
+    /// Session shown in the IDE bottom terminal strip: the active shell
+    /// session, else the first live shell of the selected project.
+    fn ide_terminal_session(&self) -> Option<Session> {
+        let project = self.selected.as_ref()?;
+        let live_shell = |session: &&Session| {
+            &session.project_id == project
+                && session.kind == SessionKind::Shell
+                && session.lifecycle.live()
+        };
+        self.active_session
+            .as_ref()
+            .and_then(|sid| self.state.sessions.iter().find(|s| &s.id == sid))
+            .filter(|session| live_shell(session))
+            .or_else(|| self.state.sessions.iter().find(|s| live_shell(s)))
+            .cloned()
+    }
+
+    fn ide_terminal_strip(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.strong("Terminal");
+            if let Some(session) = self.ide_terminal_session() {
+                ui.weak(session.label.clone());
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if appearance::sidebar_action(ui, "PanelBottomClose", "Hide terminal strip")
+                    .clicked()
+                {
+                    self.preferences.ide_terminal_collapsed = true;
+                }
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "ide-terminal-strip", ui.min_rect());
+            });
+        });
+        if let Some(session) = self.ide_terminal_session() {
+            Viewer { app: self }.terminal_view(ui, &session);
+        } else {
+            ui.weak("No live shell session. Open a terminal to dock one here.");
+            if ui.button("Open terminal").clicked() {
+                self.create(None);
+            }
+        }
     }
 
     fn go_session(&mut self, sid: &str) {
@@ -3872,6 +3927,15 @@ impl eframe::App for App {
         if !self.state.settings.notifications_side {
             egui::Panel::top("attention").show(ui, |ui| self.notifications(ui));
         }
+        if self.preferences.ide_mode && !self.preferences.ide_terminal_collapsed {
+            egui::Panel::bottom("ide-terminal")
+                .resizable(true)
+                .default_size(220.0)
+                .size_range(80.0..=600.0)
+                .show(ui, |ui| {
+                    self.ide_terminal_strip(ui);
+                });
+        }
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.colored_label(
@@ -4021,9 +4085,22 @@ impl eframe::App for App {
                         }
                     }
                 }
+                if self.preferences.ide_mode {
+                    ui.separator();
+                    self.player_status_row(ui);
+                    self.notification_status_badge(ui);
+                    if self.preferences.ide_terminal_collapsed
+                        && ui
+                            .small_button("Terminal")
+                            .on_hover_text("Show IDE terminal strip")
+                            .clicked()
+                    {
+                        self.preferences.ide_terminal_collapsed = false;
+                    }
+                }
             });
         });
-        if self.preferences.left_visible {
+        if self.preferences.left_visible || self.preferences.ide_mode {
             let projects_response = egui::Panel::left("projects")
                 .resizable(true)
                 .default_size(225.0)
@@ -4041,7 +4118,7 @@ impl eframe::App for App {
                 });
             self.project_width = projects_response.response.rect.width();
         }
-        if self.preferences.visible {
+        if self.preferences.visible || self.preferences.ide_mode {
             let response = egui::Panel::right("context")
                 .resizable(true)
                 .default_size(self.preferences.width)
@@ -4356,6 +4433,104 @@ mod navigation_tests {
         assert!(app.active_editor_id().is_none());
         app.run_shortcut(&ctx, "editor_save");
         assert_eq!(app.close_session.as_deref(), Some("live"));
+    }
+
+    #[test]
+    fn toggle_ide_mode_pins_sidebars_and_preserves_widths() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.left_visible = false;
+        app.preferences.visible = false;
+        app.preferences.width = 300.0;
+        app.preferences.tool = SidebarTool::Git;
+        assert!(!app.preferences.ide_mode);
+        app.run_shortcut(&ctx, "toggle_ide_mode");
+        assert!(app.preferences.ide_mode);
+        assert!(app.preferences.left_visible);
+        assert!(app.preferences.visible);
+        assert_eq!(app.preferences.width, 300.0);
+        assert_eq!(app.preferences.tool, SidebarTool::Git);
+        assert!(!app.preferences.ide_terminal_collapsed);
+        app.run_shortcut(&ctx, "toggle_ide_mode");
+        assert!(!app.preferences.ide_mode);
+    }
+
+    #[test]
+    fn ide_terminal_session_prefers_the_active_shell() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        assert!(app.ide_terminal_session().is_none());
+        let mut dead = session_fixture("dead", SessionKind::Shell);
+        dead.lifecycle = Lifecycle::Ended;
+        let mut foreign = session_fixture("foreign", SessionKind::Shell);
+        foreign.project_id = "b".into();
+        app.state.sessions = vec![
+            dead,
+            session_fixture("ed", SessionKind::Editor),
+            foreign,
+            session_fixture("first", SessionKind::Shell),
+            session_fixture("second", SessionKind::Shell),
+        ];
+        assert_eq!(
+            app.ide_terminal_session().map(|s| s.id),
+            Some("first".into())
+        );
+        app.active_session = Some("second".into());
+        assert_eq!(
+            app.ide_terminal_session().map(|s| s.id),
+            Some("second".into())
+        );
+        app.active_session = Some("ed".into());
+        assert_eq!(
+            app.ide_terminal_session().map(|s| s.id),
+            Some("first".into())
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn ide_terminal_strip_renders_without_sessions() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 300.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.ide_terminal_strip(ui),
+        );
+        output.textures_delta.clear();
+        assert!(agent_target(&ctx, "ide-terminal-strip").is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn ide_status_badge_renders_without_sidebars() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.ide_mode = true;
+        app.preferences.left_visible = false;
+        app.preferences.visible = false;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        app.state.notifications = vec![notice_fixture(
+            "wait",
+            "live-shell",
+            AgentState::WaitingPermission,
+            now(),
+        )];
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 60.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.notification_status_badge(ui),
+        );
+        output.textures_delta.clear();
+        assert!(agent_target(&ctx, "status-attention-bell").is_some());
     }
 
     #[test]
