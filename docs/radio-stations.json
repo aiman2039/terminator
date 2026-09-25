@@ -32,14 +32,14 @@
   "recommended_for_bundled": [
     {
       "name": "SomaFM Groove Salad",
-      "url": "https://ice1.somafm.com/groovesalad-128-mp3",
+      "url": "https://ice6.somafm.com/groovesalad-128-mp3",
       "country": "US",
       "language": "en",
       "category": "ambient"
     },
     {
       "name": "SomaFM Drone Zone",
-      "url": "https://ice1.somafm.com/dronezone-128-mp3",
+      "url": "https://ice5.somafm.com/dronezone-128-mp3",
       "country": "US",
       "language": "en",
       "category": "ambient"
@@ -53,7 +53,7 @@
     },
     {
       "name": "SomaFM Indie Pop Rocks",
-      "url": "https://ice1.somafm.com/indiepop-128-mp3",
+      "url": "https://ice6.somafm.com/indiepop-128-mp3",
       "country": "US",
       "language": "en",
       "category": "indie"
@@ -319,77 +319,77 @@
     },
     {
       "name": "SomaFM Beat Blender",
-      "url": "https://ice1.somafm.com/beatblender-128-mp3",
+      "url": "https://ice6.somafm.com/beatblender-128-mp3",
       "country": "US",
       "language": "en",
       "category": "electronic"
     },
     {
       "name": "SomaFM Deep Space One",
-      "url": "https://ice1.somafm.com/deepspaceone-128-mp3",
+      "url": "https://ice5.somafm.com/deepspaceone-128-mp3",
       "country": "US",
       "language": "en",
       "category": "ambient"
     },
     {
       "name": "SomaFM DEF CON Radio",
-      "url": "https://ice1.somafm.com/defcon-128-mp3",
+      "url": "https://ice6.somafm.com/defcon-128-mp3",
       "country": "US",
       "language": "en",
       "category": "electronic"
     },
     {
       "name": "SomaFM Folk Forward",
-      "url": "https://ice1.somafm.com/folkfwd-128-mp3",
+      "url": "https://ice5.somafm.com/folkfwd-128-mp3",
       "country": "US",
       "language": "en",
       "category": "folk"
     },
     {
       "name": "SomaFM Lush",
-      "url": "https://ice1.somafm.com/lush-128-mp3",
+      "url": "https://ice6.somafm.com/lush-128-mp3",
       "country": "US",
       "language": "en",
       "category": "electronic"
     },
     {
       "name": "SomaFM Secret Agent",
-      "url": "https://ice1.somafm.com/secretagent-128-mp3",
+      "url": "https://ice6.somafm.com/secretagent-128-mp3",
       "country": "US",
       "language": "en",
       "category": "lounge"
     },
     {
       "name": "SomaFM Left Coast 70s",
-      "url": "https://ice1.somafm.com/seventies-128-mp3",
+      "url": "https://ice6.somafm.com/seventies-128-mp3",
       "country": "US",
       "language": "en",
       "category": "70s"
     },
     {
       "name": "SomaFM Sonic Universe",
-      "url": "https://ice1.somafm.com/sonicuniverse-128-mp3",
+      "url": "https://ice6.somafm.com/sonicuniverse-128-mp3",
       "country": "US",
       "language": "en",
       "category": "jazz"
     },
     {
       "name": "SomaFM Space Station Soma",
-      "url": "https://ice1.somafm.com/spacestation-128-mp3",
+      "url": "https://ice6.somafm.com/spacestation-128-mp3",
       "country": "US",
       "language": "en",
       "category": "electronic"
     },
     {
       "name": "SomaFM Underground 80s",
-      "url": "https://ice1.somafm.com/u80s-128-mp3",
+      "url": "https://ice6.somafm.com/u80s-128-mp3",
       "country": "US",
       "language": "en",
       "category": "80s"
     },
     {
       "name": "SomaFM Heavyweight Reggae",
-      "url": "https://ice1.somafm.com/reggae-128-mp3",
+      "url": "https://ice6.somafm.com/reggae-128-mp3",
       "country": "US",
       "language": "en",
       "category": "reggae"
@@ -9837,7 +9837,7 @@
       "stations": [
         {
           "name": "SomaFM Groove Salad",
-          "url": "https://ice1.somafm.com/groovesalad-128-mp3",
+          "url": "https://ice6.somafm.com/groovesalad-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -9856,7 +9856,7 @@
         },
         {
           "name": "SomaFM Drone Zone",
-          "url": "https://ice1.somafm.com/dronezone-128-mp3",
+          "url": "https://ice5.somafm.com/dronezone-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -9894,7 +9894,7 @@
         },
         {
           "name": "SomaFM Indie Pop Rocks",
-          "url": "https://ice1.somafm.com/indiepop-128-mp3",
+          "url": "https://ice6.somafm.com/indiepop-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10122,7 +10122,7 @@
         },
         {
           "name": "SomaFM Seven Inch Soul",
-          "url": "https://ice1.somafm.com/7soul-128-mp3",
+          "url": "https://ice6.somafm.com/7soul-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10141,7 +10141,7 @@
         },
         {
           "name": "SomaFM Beat Blender",
-          "url": "https://ice1.somafm.com/beatblender-128-mp3",
+          "url": "https://ice6.somafm.com/beatblender-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10160,7 +10160,7 @@
         },
         {
           "name": "SomaFM Boot Liquor",
-          "url": "https://ice1.somafm.com/bootliquor-128-mp3",
+          "url": "https://ice6.somafm.com/bootliquor-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10179,7 +10179,7 @@
         },
         {
           "name": "SomaFM Black Rock FM",
-          "url": "https://ice1.somafm.com/brfm-128-mp3",
+          "url": "https://ice6.somafm.com/brfm-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10198,7 +10198,7 @@
         },
         {
           "name": "SomaFM cliqhop idm",
-          "url": "https://ice1.somafm.com/cliqhop-128-mp3",
+          "url": "https://ice6.somafm.com/cliqhop-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10217,7 +10217,7 @@
         },
         {
           "name": "SomaFM Covers",
-          "url": "https://ice1.somafm.com/covers-128-mp3",
+          "url": "https://ice6.somafm.com/covers-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10236,7 +10236,7 @@
         },
         {
           "name": "SomaFM Deep Space One",
-          "url": "https://ice1.somafm.com/deepspaceone-128-mp3",
+          "url": "https://ice5.somafm.com/deepspaceone-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10255,7 +10255,7 @@
         },
         {
           "name": "SomaFM DEF CON Radio",
-          "url": "https://ice1.somafm.com/defcon-128-mp3",
+          "url": "https://ice6.somafm.com/defcon-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10274,7 +10274,7 @@
         },
         {
           "name": "SomaFM Digitalis",
-          "url": "https://ice1.somafm.com/digitalis-128-mp3",
+          "url": "https://ice6.somafm.com/digitalis-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10293,7 +10293,7 @@
         },
         {
           "name": "SomaFM Doomed",
-          "url": "https://ice1.somafm.com/doomed-128-mp3",
+          "url": "https://ice6.somafm.com/doomed-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10312,7 +10312,7 @@
         },
         {
           "name": "SomaFM Drone Zone 2",
-          "url": "https://ice1.somafm.com/dz2-128-mp3",
+          "url": "https://ice6.somafm.com/dz2-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10331,7 +10331,7 @@
         },
         {
           "name": "SomaFM Dub Step Beyond",
-          "url": "https://ice1.somafm.com/dubstep-128-mp3",
+          "url": "https://ice6.somafm.com/dubstep-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10350,7 +10350,7 @@
         },
         {
           "name": "SomaFM Fluid",
-          "url": "https://ice1.somafm.com/fluid-128-mp3",
+          "url": "https://ice6.somafm.com/fluid-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10369,7 +10369,7 @@
         },
         {
           "name": "SomaFM Folk Forward",
-          "url": "https://ice1.somafm.com/folkfwd-128-mp3",
+          "url": "https://ice5.somafm.com/folkfwd-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10388,7 +10388,7 @@
         },
         {
           "name": "SomaFM Groove Salad 2",
-          "url": "https://ice1.somafm.com/groovesalad2-128-mp3",
+          "url": "https://ice6.somafm.com/groovesalad2-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10407,7 +10407,7 @@
         },
         {
           "name": "SomaFM Groove Salad Classic",
-          "url": "https://ice1.somafm.com/gsclassic-128-mp3",
+          "url": "https://ice6.somafm.com/gsclassic-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10426,7 +10426,7 @@
         },
         {
           "name": "SomaFM Illinois Street Lounge",
-          "url": "https://ice1.somafm.com/illstreet-128-mp3",
+          "url": "https://ice6.somafm.com/illstreet-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10445,7 +10445,7 @@
         },
         {
           "name": "SomaFM SomaFM Live",
-          "url": "https://ice1.somafm.com/live-128-mp3",
+          "url": "https://ice6.somafm.com/live-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10464,7 +10464,7 @@
         },
         {
           "name": "SomaFM Lush",
-          "url": "https://ice1.somafm.com/lush-128-mp3",
+          "url": "https://ice6.somafm.com/lush-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10483,7 +10483,7 @@
         },
         {
           "name": "SomaFM Mission Control",
-          "url": "https://ice1.somafm.com/missioncontrol-128-mp3",
+          "url": "https://ice6.somafm.com/missioncontrol-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10502,7 +10502,7 @@
         },
         {
           "name": "SomaFM PopTron",
-          "url": "https://ice1.somafm.com/poptron-128-mp3",
+          "url": "https://ice6.somafm.com/poptron-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10521,7 +10521,7 @@
         },
         {
           "name": "SomaFM Secret Agent",
-          "url": "https://ice1.somafm.com/secretagent-128-mp3",
+          "url": "https://ice6.somafm.com/secretagent-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10540,7 +10540,7 @@
         },
         {
           "name": "SomaFM Left Coast 70s",
-          "url": "https://ice1.somafm.com/seventies-128-mp3",
+          "url": "https://ice6.somafm.com/seventies-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10559,7 +10559,7 @@
         },
         {
           "name": "SomaFM SF 10-33",
-          "url": "https://ice1.somafm.com/sf1033-128-mp3",
+          "url": "https://ice6.somafm.com/sf1033-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10578,7 +10578,7 @@
         },
         {
           "name": "SomaFM Sonic Universe",
-          "url": "https://ice1.somafm.com/sonicuniverse-128-mp3",
+          "url": "https://ice6.somafm.com/sonicuniverse-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10597,7 +10597,7 @@
         },
         {
           "name": "SomaFM Space Station Soma",
-          "url": "https://ice1.somafm.com/spacestation-128-mp3",
+          "url": "https://ice6.somafm.com/spacestation-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10616,7 +10616,7 @@
         },
         {
           "name": "SomaFM Suburbs of Goa",
-          "url": "https://ice1.somafm.com/suburbsofgoa-128-mp3",
+          "url": "https://ice6.somafm.com/suburbsofgoa-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10635,7 +10635,7 @@
         },
         {
           "name": "SomaFM The Trip",
-          "url": "https://ice1.somafm.com/thetrip-128-mp3",
+          "url": "https://ice6.somafm.com/thetrip-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10654,7 +10654,7 @@
         },
         {
           "name": "SomaFM ThistleRadio",
-          "url": "https://ice1.somafm.com/thistle-128-mp3",
+          "url": "https://ice6.somafm.com/thistle-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10673,7 +10673,7 @@
         },
         {
           "name": "SomaFM Underground 80s",
-          "url": "https://ice1.somafm.com/u80s-128-mp3",
+          "url": "https://ice6.somafm.com/u80s-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10692,7 +10692,7 @@
         },
         {
           "name": "SomaFM Metal Detector",
-          "url": "https://ice1.somafm.com/metal-128-mp3",
+          "url": "https://ice6.somafm.com/metal-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10711,7 +10711,7 @@
         },
         {
           "name": "SomaFM Heavyweight Reggae",
-          "url": "https://ice1.somafm.com/reggae-128-mp3",
+          "url": "https://ice6.somafm.com/reggae-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10730,7 +10730,7 @@
         },
         {
           "name": "SomaFM SF Police Scanner",
-          "url": "https://ice1.somafm.com/scanner-128-mp3",
+          "url": "https://ice6.somafm.com/scanner-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10749,7 +10749,7 @@
         },
         {
           "name": "SomaFM Vaporwaves",
-          "url": "https://ice1.somafm.com/vaporwaves-128-mp3",
+          "url": "https://ice6.somafm.com/vaporwaves-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10768,7 +10768,7 @@
         },
         {
           "name": "SomaFM SomaFM Specials",
-          "url": "https://ice1.somafm.com/specials-128-mp3",
+          "url": "https://ice6.somafm.com/specials-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10787,7 +10787,7 @@
         },
         {
           "name": "SomaFM n5MD Radio",
-          "url": "https://ice1.somafm.com/n5md-128-mp3",
+          "url": "https://ice6.somafm.com/n5md-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10806,7 +10806,7 @@
         },
         {
           "name": "SomaFM Synphaera Radio",
-          "url": "https://ice1.somafm.com/synphaera-128-mp3",
+          "url": "https://ice6.somafm.com/synphaera-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10825,7 +10825,7 @@
         },
         {
           "name": "SomaFM The Dark Zone",
-          "url": "https://ice1.somafm.com/darkzone-128-mp3",
+          "url": "https://ice6.somafm.com/darkzone-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10844,7 +10844,7 @@
         },
         {
           "name": "SomaFM SF in SF",
-          "url": "https://ice1.somafm.com/sfinsf-128-mp3",
+          "url": "https://ice6.somafm.com/sfinsf-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10863,7 +10863,7 @@
         },
         {
           "name": "SomaFM Tiki Time",
-          "url": "https://ice1.somafm.com/tikitime-128-mp3",
+          "url": "https://ice6.somafm.com/tikitime-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10882,7 +10882,7 @@
         },
         {
           "name": "SomaFM Bossa Beyond",
-          "url": "https://ice1.somafm.com/bossa-128-mp3",
+          "url": "https://ice6.somafm.com/bossa-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10901,7 +10901,7 @@
         },
         {
           "name": "SomaFM The In-Sound",
-          "url": "https://ice1.somafm.com/insound-128-mp3",
+          "url": "https://ice6.somafm.com/insound-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
@@ -10920,7 +10920,7 @@
         },
         {
           "name": "SomaFM Chillits Radio",
-          "url": "https://ice1.somafm.com/chillits-128-mp3",
+          "url": "https://ice6.somafm.com/chillits-128-mp3",
           "country": "US",
           "country_name": "United States",
           "language": "en",
