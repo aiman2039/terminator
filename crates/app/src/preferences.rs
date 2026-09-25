@@ -296,6 +296,17 @@ pub struct Playlist {
     pub tracks: Vec<PathBuf>,
 }
 
+/// IDE strip dock layouts per project. `DockState` has no `PartialEq`, so
+/// equality (which gates preference saves) compares serialized form.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct StripDocks(pub HashMap<String, egui_dock::DockState<crate::Tab>>);
+
+impl PartialEq for StripDocks {
+    fn eq(&self, other: &Self) -> bool {
+        serde_json::to_value(&self.0).ok() == serde_json::to_value(&other.0).ok()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPreferences {
@@ -306,8 +317,9 @@ pub struct UiPreferences {
     pub tool: SidebarTool,
     pub visible: bool,
     /// IDE layout preset: fixed explorer/terminal zones instead of the
-    /// free-floating dock. Pure view state; never migrates saved layouts.
-    #[serde(default)]
+    /// free-floating dock. Session-only view state: never persisted or
+    /// migrated, so the app always opens in dock mode.
+    #[serde(skip)]
     pub ide_mode: bool,
     /// Bottom IDE terminal strip collapsed (IDE mode only).
     #[serde(default)]
@@ -340,6 +352,12 @@ pub struct UiPreferences {
     pub player_chrome_collapsed: bool,
     pub player_radio_mode: bool,
     pub radio_stations: Vec<RadioStation>,
+    /// IDE strip dock layouts per project (shell terminals). GUI-local view
+    /// state; validated on load, invalid docks dropped. Kept last so the
+    /// derived `PartialEq` (which gates saves) short-circuits on cheap
+    /// fields first.
+    #[serde(default)]
+    pub ide_strip_docks: StripDocks,
 }
 impl Default for UiPreferences {
     fn default() -> Self {
@@ -376,6 +394,7 @@ impl Default for UiPreferences {
             player_chrome_collapsed: false,
             player_radio_mode: false,
             radio_stations: Vec::new(),
+            ide_strip_docks: StripDocks::default(),
         }
     }
 }
@@ -389,7 +408,14 @@ impl UiPreferences {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(e) => return Err(e.into()),
         };
-        let mut prefs: Self = serde_json::from_slice(&bytes).context("Invalid UI preferences")?;
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&bytes).context("Invalid UI preferences")?;
+        if let Some(docks) = value.get_mut("ide_strip_docks") {
+            // Fresh dock rects are infinite (`Rect::NOTHING`) and serialize
+            // as null; restore them like saved main-dock layouts do.
+            *docks = terminator_core::sanitize_layout(docks.take());
+        }
+        let mut prefs: Self = serde_json::from_value(value).context("Invalid UI preferences")?;
         anyhow::ensure!(prefs.version == 1, "Unsupported UI preference version");
         prefs.width = if prefs.width.is_finite() {
             prefs.width.clamp(220.0, 480.0)
@@ -402,6 +428,10 @@ impl UiPreferences {
             0.8
         };
         prefs.migrate_playlists();
+        prefs
+            .ide_strip_docks
+            .0
+            .retain(|_, dock| crate::workspace::validate_layout(dock).is_ok());
         Ok(prefs)
     }
 
@@ -565,7 +595,49 @@ mod tests {
     }
 
     #[test]
-    fn ide_mode_defaults_off_and_round_trips() {
+    fn strip_docks_round_trip_and_default_empty() {
+        let prefs = UiPreferences::default();
+        assert!(prefs.ide_strip_docks.0.is_empty());
+        let dir = tempfile::tempdir().unwrap();
+        let mut prefs = UiPreferences::default();
+        prefs.ide_strip_docks.0.insert(
+            "a".into(),
+            egui_dock::DockState::new(vec![crate::Tab::Terminal("x".into())]),
+        );
+        prefs.save(dir.path()).unwrap();
+        let loaded = UiPreferences::load(dir.path()).unwrap();
+        // Tab structure survives; viewport rects are runtime data that
+        // sanitization resets (infinite fresh rects cannot round-trip JSON).
+        let dock = loaded
+            .ide_strip_docks
+            .0
+            .get("a")
+            .expect("strip dock survives");
+        assert!(dock.find_tab(&crate::Tab::Terminal("x".into())).is_some());
+    }
+
+    #[test]
+    fn invalid_strip_docks_are_dropped_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut prefs = UiPreferences::default();
+        prefs.ide_strip_docks.0.insert(
+            "a".into(),
+            egui_dock::DockState::new(vec![crate::Tab::Terminal("x".into())]),
+        );
+        let mut value = serde_json::to_value(&prefs).unwrap();
+        value["ide_strip_docks"]["a"]["surfaces"][0]["Main"]["focused_node"] =
+            serde_json::json!(999);
+        fs::write(
+            dir.path().join("ui-preferences.json"),
+            serde_json::to_vec(&value).unwrap(),
+        )
+        .unwrap();
+        let loaded = UiPreferences::load(dir.path()).unwrap();
+        assert!(loaded.ide_strip_docks.0.is_empty());
+    }
+
+    #[test]
+    fn ide_mode_starts_off_and_is_not_persisted() {
         let dir = tempfile::tempdir().unwrap();
         let prefs = UiPreferences::load(dir.path()).unwrap();
         assert!(!prefs.ide_mode);
@@ -574,8 +646,15 @@ mod tests {
         prefs.ide_mode = true;
         prefs.save(dir.path()).unwrap();
         let raw = fs::read_to_string(dir.path().join("ui-preferences.json")).unwrap();
-        assert!(raw.contains("ide_mode"));
-        assert!(UiPreferences::load(dir.path()).unwrap().ide_mode);
+        assert!(!raw.contains("ide_mode"));
+        assert!(!UiPreferences::load(dir.path()).unwrap().ide_mode);
+        // Stale files written before still open with IDE mode off.
+        fs::write(
+            dir.path().join("ui-preferences.json"),
+            r#"{"version":1,"ide_mode":true}"#,
+        )
+        .unwrap();
+        assert!(!UiPreferences::load(dir.path()).unwrap().ide_mode);
     }
 
     #[test]

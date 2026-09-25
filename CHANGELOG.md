@@ -6,7 +6,15 @@
   sidebars on, adds a bottom terminal strip bound to the active shell
   session, and mirrors the player transport plus the agent notification
   bell in the status bar. Pure GUI view state in `ui-preferences.json`;
-  sessions, saved layouts, and older daemons are untouched.
+  sessions, saved layouts, and older daemons are untouched. IDE mode is
+  session-only and always opens off; the bottom strip is a full terminal
+  dock (tabs, splits, drag-reorder) sharing the main dock's viewer, with
+  its own per-project layout persisted GUI-locally. Splits follow the
+  focused dock; editors and new workspace tabs stay in the main dock.
+  Strip sessions never appear as main-dock tabs, so each terminal renders
+  exactly once (previously both views drove the same PTY and doubled
+  input). Navigation (sidebar, palette, agents) reveals strip sessions in
+  the strip.
 
 - Main-thread panics write a crash log under the data directory
   (`crashes/`) and the GUI shows a dialog with that path before quitting.

@@ -1,5 +1,48 @@
 # Validation evidence — 2026-09-08
 
+## Crash exiting the last strip terminal (2026-09-25)
+
+- Crash log (`/tmp/terminator-ux/crashes/terminator-1790312992.log`)
+  pinned `index out of bounds: the len is 0 but the index is 0` at
+  `main.rs:3801` in `sync_active_session`. Root cause: removing the last
+  tab empties the dock tree while `focused_node` goes stale, and the strip
+  focus read indexed it blindly (`surface[node]`). Fix: checked
+  `Tree::leaf(node)` reads in both the sync strip path and
+  `Workspace::active_pane` (same latent hazard on main docks; the
+  `find_active_focused` path was already safe).
+- Unit: `sync_survives_an_emptied_strip_dock` (reproduced the exact panic
+  location/message before the fix), `active_pane_is_none_for_an_emptied_dock`.
+  Full app suite: 335 passed, 12 failed — the documented pre-existing
+  sandbox socket/process failures, none in touched areas.
+
+## IDE strip is a full terminal dock (2026-09-25)
+
+- Splits from the strip landed in the main dock because creation anchored
+  on the main dock only. Final design, per review: the strip hosts a
+  second `DockArea` (own per-project `DockState` in `ui-preferences.json`,
+  validated on load, null rects sanitized like main layouts) through the
+  same `Viewer` with native tab bars, so tabs/splits/drag/menus behave
+  identically to the main dock. Distinct area ids prevent cross-dock tab
+  drags. Routing: splits follow the focused dock (`After::StripAt`),
+  editors and new workspace tabs stay main; `go_session` reveals strip
+  sessions in the strip; `remove_tab` prunes both docks. Focus: one global
+  `active_session`, `sync_active_session` follows focus moves in both
+  docks, `restore_cleared_focus` heals clears, toggle-off/collapse resync
+  from the main dock. `ide_mode` stays session-only.
+- Unit: `strip_docks_round_trip_and_default_empty`,
+  `invalid_strip_docks_are_dropped_on_load`,
+  `strip_creation_lands_in_the_strip_not_the_dock`,
+  `strip_split_creation_splits_the_strip_leaf`,
+  `splits_follow_the_focused_dock` (red before, green after),
+  `go_session_reveals_strip_sessions_in_the_strip`,
+  `sync_follows_dock_focus_moves_but_keeps_strip_clicks`,
+  `cleared_focus_returns_to_the_strip_then_the_dock`,
+  `toggle_off_resyncs_strip_owned_focus_from_the_dock`,
+  `remove_tab_drops_strip_membership`. `cargo fmt --all --check` and
+  workspace `clippy --all-targets --all-features` clean. Full app suite:
+  333 passed, 12 failed — the documented pre-existing sandbox
+  socket/process failures, none in touched areas.
+
 ## IDE mode toggle (2026-09-24)
 
 - `toggle_ide_mode` (`command+E`, header IDE switch, palette) flips

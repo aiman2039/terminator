@@ -101,7 +101,9 @@ impl Workspace {
     pub fn active_pane(&self) -> Option<&Tab> {
         self.main_surface()
             .focused_leaf()
-            .and_then(|node| self.main_surface()[node].get_leaf())
+            // Checked: an emptied tree keeps stale focus, and blind indexing
+            // would panic.
+            .and_then(|node| self.main_surface().leaf(node).ok())
             .and_then(|leaf| leaf.tabs.get(leaf.active.0))
             .or_else(|| self.iter_all_tabs().next().map(|(_, tab)| tab))
     }
@@ -536,7 +538,7 @@ fn contains_browser(workspace: &Workspace) -> bool {
     })
 }
 
-fn validate_layout(layout: &DockState<Tab>) -> Result<()> {
+pub(crate) fn validate_layout(layout: &DockState<Tab>) -> Result<()> {
     ensure!(
         matches!(
             layout.get_surface(egui_dock::SurfaceIndex::main()),
@@ -779,6 +781,16 @@ mod tests {
             _ => {}
         }
     }
+    #[test]
+    fn active_pane_is_none_for_an_emptied_dock() {
+        let mut dock = DockState::new(vec![Tab::Terminal("shell".into())]);
+        let path = dock.find_tab(&Tab::Terminal("shell".into())).unwrap();
+        dock.set_focused_node_and_surface(path.node_path());
+        dock.remove_tab(path);
+        let workspace = Workspace::from_layout(dock);
+        assert!(workspace.active_pane().is_none());
+    }
+
     #[test]
     fn legacy_splits_migrate_without_losing_sessions() {
         let mut dock = DockState::new(vec![Tab::Terminal("shell".into())]);

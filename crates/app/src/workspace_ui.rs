@@ -1362,7 +1362,12 @@ impl App {
             add_right,
         }
     }
-    fn new_terminal_menu(&mut self, ui: &mut egui::Ui, pane: Option<egui_dock::NodePath>) {
+    fn new_terminal_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        pane: Option<egui_dock::NodePath>,
+        strip: bool,
+    ) {
         for (label, split) in [
             ("New tab", None),
             ("Split up", Some("up")),
@@ -1380,7 +1385,13 @@ impl App {
             };
             let shortcut = self.shortcut_label(action);
             if appearance::menu_item(ui, label, icon, &shortcut).clicked() {
-                if let Some(pane) = pane {
+                if strip {
+                    if let Some(pane) = pane {
+                        self.add_strip_tab = Some((pane, split.map(str::to_owned)));
+                    } else {
+                        self.create_strip_split(split);
+                    }
+                } else if let Some(pane) = pane {
                     self.add_tab = Some((pane, split.map(str::to_owned)));
                 } else {
                     self.create(split);
@@ -1388,11 +1399,14 @@ impl App {
                 ui.close();
             }
         }
-        if let Some(tabs) = pane
-            .and_then(|pane| self.pane_tabs.get(&pane))
-            .cloned()
-            .filter(|tabs| tabs.len() > 1)
-        {
+        let tabs_in_pane = pane.and_then(|pane| {
+            if strip {
+                self.strip_pane_tabs.get(&pane).cloned()
+            } else {
+                self.pane_tabs.get(&pane).cloned()
+            }
+        });
+        if let Some(tabs) = tabs_in_pane.filter(|tabs| tabs.len() > 1) {
             ui.separator();
             ui.weak("Tabs in this pane");
             for tab in tabs {
@@ -1418,7 +1432,11 @@ impl App {
                     Tab::Player => "Player".into(),
                 };
                 if appearance::menu_item(ui, &label, "Terminal", "").clicked() {
-                    self.focus_tab = Some(tab);
+                    if strip {
+                        self.focus_strip_tab = Some(tab);
+                    } else {
+                        self.focus_tab = Some(tab);
+                    }
                     ui.close();
                 }
             }
@@ -2252,14 +2270,23 @@ fn tint(color: Color32, alpha: u8) -> Color32 {
 
 pub(super) struct Viewer<'a> {
     pub(super) app: &'a mut App,
+    /// True when rendering the IDE strip dock instead of the main dock.
+    /// Creation queues, pane maps, and focus targets switch docks; the
+    /// strip shows native tab bars (the main dock titles panes with
+    /// captions because its tabs live in the workspace strip).
+    pub(super) strip: bool,
 }
 impl TabViewer for Viewer<'_> {
     fn on_add(&mut self, path: egui_dock::NodePath) {
-        self.app.add_tab = Some((path, None));
+        if self.strip {
+            self.app.add_strip_tab = Some((path, None));
+        } else {
+            self.app.add_tab = Some((path, None));
+        }
     }
     type Tab = Tab;
     fn show_tab_bar(&self, _path: egui_dock::NodePath) -> bool {
-        false
+        self.strip
     }
     fn trailing_controls_width(&self) -> f32 {
         28.0
@@ -2298,7 +2325,11 @@ impl TabViewer for Viewer<'_> {
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), label, response.rect);
                 if response.clicked() {
-                    self.app.add_tab = Some((path, direction.map(str::to_owned)));
+                    if self.strip {
+                        self.app.add_strip_tab = Some((path, direction.map(str::to_owned)));
+                    } else {
+                        self.app.add_tab = Some((path, direction.map(str::to_owned)));
+                    }
                     ui.close();
                 }
             }
@@ -2401,7 +2432,7 @@ impl TabViewer for Viewer<'_> {
             self.app.rename_action(ui, sid, RenameSurface::Pane);
             ui.separator();
         }
-        self.app.new_terminal_menu(ui, Some(pane));
+        self.app.new_terminal_menu(ui, Some(pane), self.strip);
         ui.separator();
         if let Tab::Terminal(sid) = tab {
             if appearance::menu_item(
@@ -2466,86 +2497,100 @@ impl TabViewer for Viewer<'_> {
                     });
                     return;
                 };
-                let pane = self
-                    .app
-                    .pane_by_tab
-                    .get(&Tab::Terminal(sid.clone()).key())
-                    .copied();
-                ui.spacing_mut().item_spacing.y = 2.0;
                 let editing = self.app.renaming(sid, RenameSurface::Pane);
-                let is_markdown = markdown::available(&session);
-                let (response, close) = if is_markdown {
-                    self.markdown_header(ui, &session, editing)
-                } else {
-                    appearance::pane_caption(
-                        ui,
-                        if editing { "" } else { &session.label },
-                        self.app.active_session.as_ref() == Some(sid),
-                        true,
-                    )
-                };
-                if editing {
-                    self.app.inline_rename(
-                        ui,
-                        sid,
-                        RenameSurface::Pane,
-                        egui::Rect::from_min_max(
-                            response.rect.min + egui::vec2(8.0, 1.0),
-                            response.rect.max
-                                - egui::vec2(
-                                    if close.is_some() && !is_markdown {
-                                        28.0
-                                    } else {
-                                        8.0
-                                    },
-                                    1.0,
-                                ),
-                        ),
-                    );
-                }
-                let closing = close.as_ref().is_some_and(|response| response.clicked());
-                #[cfg(feature = "test-support")]
-                if let Some(close) = &close {
-                    diagnostics::record(ui.ctx(), &format!("editor-close:{sid}"), close.rect);
-                    diagnostics::record(ui.ctx(), &format!("pane-close:{sid}"), close.rect);
-                }
-                #[cfg(feature = "test-support")]
-                diagnostics::record(ui.ctx(), &format!("pane-drag:{sid}"), response.rect);
-                // Caption drag starts a pane move. The drop lands on another
-                // split leaf (rearrange) or a workspace strip tab (move
-                // across top-level tabs); clicks still focus as before.
-                if response.drag_started() && !editing && !closing {
-                    self.app.pane_drag = Some(Tab::Terminal(sid.clone()));
-                    // Snapshot once: the ghost reuses it every frame instead
-                    // of re-reading the live grid while it scrolls.
-                    self.app.pane_drag_snapshot = self
-                        .app
-                        .backends
-                        .get(sid)
-                        .map(snapshot_rows)
-                        .unwrap_or_default();
-                }
-                if self.app.pane_drag.as_ref() == Some(&Tab::Terminal(sid.clone()))
-                    && response.hovered()
-                    && ui.input(|i| i.pointer.any_down())
-                {
-                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
-                }
-                if closing {
-                    self.app.close_session = Some(sid.clone());
-                }
-                if response.clicked() && !closing && !editing {
-                    self.app.active_session = Some(sid.clone());
-                    self.app.focus_tab = Some(Tab::Terminal(sid.clone()));
-                }
-                if response.double_clicked() && !closing && !editing {
-                    self.app.begin_rename(sid, RenameSurface::Pane);
-                }
-                appearance::context_menu(&response, |ui| {
-                    if let Some(pane) = pane {
-                        self.context_menu(ui, &mut Tab::Terminal(sid.clone()), pane);
+                if self.strip {
+                    // Native tab bars title strip panes, so there is no
+                    // caption chrome (close, drag, and menus all live on the
+                    // tab). Only an in-progress rename needs a row of its own.
+                    if editing {
+                        let slot = ui.allocate_response(
+                            egui::vec2(ui.available_width(), 26.0),
+                            egui::Sense::hover(),
+                        );
+                        self.app
+                            .inline_rename(ui, sid, RenameSurface::Pane, slot.rect);
                     }
-                });
+                } else {
+                    let pane = self
+                        .app
+                        .pane_by_tab
+                        .get(&Tab::Terminal(sid.clone()).key())
+                        .copied();
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    let is_markdown = markdown::available(&session);
+                    let (response, close) = if is_markdown {
+                        self.markdown_header(ui, &session, editing)
+                    } else {
+                        appearance::pane_caption(
+                            ui,
+                            if editing { "" } else { &session.label },
+                            self.app.active_session.as_ref() == Some(sid),
+                            true,
+                        )
+                    };
+                    if editing {
+                        self.app.inline_rename(
+                            ui,
+                            sid,
+                            RenameSurface::Pane,
+                            egui::Rect::from_min_max(
+                                response.rect.min + egui::vec2(8.0, 1.0),
+                                response.rect.max
+                                    - egui::vec2(
+                                        if close.is_some() && !is_markdown {
+                                            28.0
+                                        } else {
+                                            8.0
+                                        },
+                                        1.0,
+                                    ),
+                            ),
+                        );
+                    }
+                    let closing = close.as_ref().is_some_and(|response| response.clicked());
+                    #[cfg(feature = "test-support")]
+                    if let Some(close) = &close {
+                        diagnostics::record(ui.ctx(), &format!("editor-close:{sid}"), close.rect);
+                        diagnostics::record(ui.ctx(), &format!("pane-close:{sid}"), close.rect);
+                    }
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(ui.ctx(), &format!("pane-drag:{sid}"), response.rect);
+                    // Caption drag starts a pane move. The drop lands on another
+                    // split leaf (rearrange) or a workspace strip tab (move
+                    // across top-level tabs); clicks still focus as before.
+                    if response.drag_started() && !editing && !closing {
+                        self.app.pane_drag = Some(Tab::Terminal(sid.clone()));
+                        // Snapshot once: the ghost reuses it every frame instead
+                        // of re-reading the live grid while it scrolls.
+                        self.app.pane_drag_snapshot = self
+                            .app
+                            .backends
+                            .get(sid)
+                            .map(snapshot_rows)
+                            .unwrap_or_default();
+                    }
+                    if self.app.pane_drag.as_ref() == Some(&Tab::Terminal(sid.clone()))
+                        && response.hovered()
+                        && ui.input(|i| i.pointer.any_down())
+                    {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+                    }
+                    if closing {
+                        self.app.close_session = Some(sid.clone());
+                    }
+                    if response.clicked() && !closing && !editing {
+                        self.app.active_session = Some(sid.clone());
+                        self.app.focus_tab = Some(Tab::Terminal(sid.clone()));
+                    }
+                    if response.double_clicked() && !closing && !editing {
+                        self.app.begin_rename(sid, RenameSurface::Pane);
+                    }
+                    appearance::context_menu(&response, |ui| {
+                        if let Some(pane) = pane {
+                            self.context_menu(ui, &mut Tab::Terminal(sid.clone()), pane);
+                        }
+                    });
+                }
                 if !session.lifecycle.live() {
                     self.app.backends.remove(sid);
                     ui.colored_label(
@@ -2584,7 +2629,11 @@ impl TabViewer for Viewer<'_> {
                                 column: None,
                                 editor: false,
                             },
-                            After::Create(None),
+                            if self.strip {
+                                After::Strip
+                            } else {
+                                After::Create(None)
+                            },
                         ));
                     }
                     if session.truncated {
@@ -3187,12 +3236,13 @@ impl Viewer<'_> {
                 ui.close();
             }
             ui.separator();
-            let pane = self
-                .app
-                .pane_by_tab
-                .get(&Tab::Terminal(sid.clone()).key())
-                .copied();
-            self.app.new_terminal_menu(ui, pane);
+            let key = Tab::Terminal(sid.clone()).key();
+            let pane = if self.strip {
+                self.app.strip_pane_by_tab.get(&key).copied()
+            } else {
+                self.app.pane_by_tab.get(&key).copied()
+            };
+            self.app.new_terminal_menu(ui, pane, self.strip);
             ui.separator();
             let key = ui
                 .ctx()

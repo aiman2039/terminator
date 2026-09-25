@@ -380,6 +380,12 @@ impl Services {
                         After::Workspace(id, anchors) => {
                             updates.push(Update::WorkspaceCreated(session, id, anchors))
                         }
+                        After::Strip => {
+                            updates.push(Update::StripCreated(session, None, Vec::new()))
+                        }
+                        After::StripAt(anchors, split) => {
+                            updates.push(Update::StripCreated(session, split, anchors))
+                        }
                         _ => {}
                     }
                 }

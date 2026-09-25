@@ -113,6 +113,13 @@ impl App {
             .layouts
             .values()
             .flat_map(|workspace| workspace.iter_all_tabs())
+            .chain(
+                self.preferences
+                    .ide_strip_docks
+                    .0
+                    .values()
+                    .flat_map(|dock| dock.iter_all_tabs()),
+            )
             .filter_map(|(_, tab)| match tab {
                 Tab::Terminal(sid) => {
                     (!self.state.sessions.iter().any(|s| s.id == *sid)).then(|| sid.clone())
