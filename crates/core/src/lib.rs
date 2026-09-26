@@ -9,6 +9,7 @@ pub mod async_process;
 pub mod async_service;
 pub mod crash;
 pub mod generations;
+pub mod git;
 pub mod idle_close;
 pub mod metadata;
 pub mod recovery;

@@ -207,18 +207,21 @@ pub async fn load(
     path: std::path::PathBuf,
     cancel: &terminator_core::async_service::CancellationToken,
 ) -> Result<ColorImage> {
+    load_pools(service.fs(), service.cpu(), path, cancel).await
+}
+
+pub async fn load_pools(
+    fs: &terminator_core::async_service::NativePool,
+    cpu: &terminator_core::async_service::NativePool,
+    path: std::path::PathBuf,
+    cancel: &terminator_core::async_service::CancellationToken,
+) -> Result<ColorImage> {
     let svg = path
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("svg"));
     let operation = cancel.clone();
-    let bytes = service
-        .fs()
-        .run(cancel, move || read(&path, &operation))
-        .await?;
-    service
-        .cpu()
-        .run(cancel, move || decode_bytes(bytes, svg))
-        .await
+    let bytes = fs.run(cancel, move || read(&path, &operation)).await?;
+    cpu.run(cancel, move || decode_bytes(bytes, svg)).await
 }
 
 #[cfg(test)]

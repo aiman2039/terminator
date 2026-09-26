@@ -1,0 +1,9763 @@
+#![forbid(unsafe_code)]
+pub mod daemon_connection;
+mod daemon_upgrade;
+use daemon_connection::{can_restart_service, can_retire_daemon};
+mod exit;
+pub mod installation;
+mod installation_ui;
+mod updater {
+    pub use terminator_updater::*;
+}
+mod workspace_ui;
+use workspace_ui::Viewer;
+mod dialogs_ui;
+mod sidebar_ui;
+use sidebar_ui::{AttentionAction, AttentionCard, attention_card};
+mod appearance;
+mod browser;
+mod browser_host;
+mod external_editor;
+mod file_actions;
+pub(crate) use browser::{BrowserTarget, rewrite_html_tabs};
+mod icons;
+mod image_preview;
+mod markdown;
+mod markdown_images;
+mod metadata_refresh;
+mod native_editor;
+mod nvim_rpc;
+mod player;
+mod refresh;
+mod settings_ui;
+use settings_ui::{BrowseTarget, SettingsSection};
+mod palette;
+mod settings_controls;
+mod shortcuts;
+mod ui_control;
+mod worktree_ui;
+use file_actions::FileAction;
+mod close_idle;
+mod editor_close;
+mod popup;
+mod preferences;
+mod workspace;
+use preferences::{SidebarTool, UiPreferences};
+use terminator_core::appearance::{AppearanceConfig, AppearanceFile};
+use workspace::Workspace;
+mod clipboard;
+#[cfg(feature = "test-support")]
+mod diagnostics;
+mod diff;
+mod gui_services;
+mod menu_bar;
+mod native_jobs;
+mod services;
+use anyhow::{Context, Result};
+use eframe::egui::{self, Color32, RichText};
+#[cfg(test)]
+use egui_dock::DockState;
+use egui_dock::tab_viewer::OnCloseResponse;
+use egui_dock::{DockArea, NodeIndex, TabViewer};
+use egui_term::{PtyEvent, TerminalBackend, TerminalView};
+use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::thread;
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+    sync::mpsc::{self, Receiver, Sender},
+    time::{Duration, Instant},
+};
+use terminator_core::*;
+
+#[derive(Clone, Debug)]
+struct HoverPopup {
+    session: String,
+    key: String,
+    target: services::Target,
+    rect: egui::Rect,
+}
+
+/// Drop zone within a hovered split leaf while a terminal is dragged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PaneDropZone {
+    /// The middle: swap single panes or join the leaf.
+    Center,
+    /// An edge band: open the dragged pane in a new split beside the leaf.
+    Above,
+    Below,
+    Left,
+    Right,
+}
+impl PaneDropZone {
+    fn split(self) -> Option<egui_dock::Split> {
+        match self {
+            Self::Center => None,
+            Self::Above => Some(egui_dock::Split::Above),
+            Self::Below => Some(egui_dock::Split::Below),
+            Self::Left => Some(egui_dock::Split::Left),
+            Self::Right => Some(egui_dock::Split::Right),
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Center => "Place terminal here",
+            Self::Above => "Split above",
+            Self::Below => "Split below",
+            Self::Left => "Split left",
+            Self::Right => "Split right",
+        }
+    }
+    /// The part of the leaf the dragged pane will occupy.
+    fn landing(self, rect: egui::Rect) -> egui::Rect {
+        let center = rect.center();
+        match self {
+            Self::Center => rect,
+            Self::Above => egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), center.y)),
+            Self::Below => egui::Rect::from_min_max(egui::pos2(rect.left(), center.y), rect.max),
+            Self::Left => egui::Rect::from_min_max(rect.min, egui::pos2(center.x, rect.bottom())),
+            Self::Right => egui::Rect::from_min_max(egui::pos2(center.x, rect.top()), rect.max),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub(crate) enum Tab {
+    Image {
+        path: PathBuf,
+    },
+    Browser {
+        #[serde(default)]
+        id: String,
+        target: BrowserTarget,
+    },
+    Player,
+    Terminal(String),
+    NativeEditor {
+        path: PathBuf,
+    },
+    Diff {
+        cwd: PathBuf,
+        path: PathBuf,
+        staged: bool,
+    },
+}
+impl Tab {
+    fn key(&self) -> String {
+        if let Self::Browser { id, .. } = self
+            && !id.is_empty()
+        {
+            return id.clone();
+        }
+        serde_json::to_string(self).unwrap_or_default()
+    }
+
+    pub(crate) fn browser_file(path: PathBuf) -> Self {
+        Self::Browser {
+            id: String::new(),
+            target: BrowserTarget::File(path),
+        }
+    }
+
+    fn layout_version(&self) -> u32 {
+        match self {
+            Self::NativeEditor { .. } => 7,
+            Self::Browser { .. } => 6,
+            Self::Player => 5,
+            Self::Image { .. } => 3,
+            Self::Diff { .. } | Self::Terminal(_) => 2,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum RenameSurface {
+    Workspace,
+    Pane,
+    Sidebar,
+}
+struct FileActivation {
+    project: Option<String>,
+    path: PathBuf,
+    staged: Option<bool>,
+    action: FileAction,
+    at: Instant,
+}
+struct SpawnDiff {
+    cwd: PathBuf,
+    path: PathBuf,
+    staged: bool,
+    native: bool,
+}
+
+#[derive(Clone)]
+enum After {
+    None,
+    Create(Option<String>),
+    CreateAt(Vec<Tab>, Option<String>),
+    Workspace(String, Vec<Tab>),
+    Strip,
+    StripAt(Vec<Tab>, Option<String>),
+    Text(String),
+}
+enum Job {
+    PrepareLayouts(u64, Vec<(String, Workspace)>),
+    SaveLayout(String, serde_json::Value, String),
+    CloseIdle(editor_close::Target, String, Vec<String>),
+    RepairInstallation(String, exit::Checkpoint),
+    RestartSessionService(recovery::RestartInventory),
+    StartSessionService,
+    CreateWorktree(worktree_ui::WorktreeDraft),
+    Control(Box<Request>, After),
+    OpenProject(PathBuf, u64),
+    Preferences(UiPreferences),
+    MigrateTypography,
+    MigrateAttention,
+    ExitDrain(u64, u64),
+    ExitSave(u64, exit::Checkpoint),
+    SaveAppearance(Box<AppearanceConfig>, String),
+    HookStatus,
+    CloseEditors(
+        editor_close::Target,
+        Vec<String>,
+        editor_close::Mode,
+        Duration,
+    ),
+    ResolveTarget(String, String, PathBuf),
+    Browser(String),
+    PasteClipboard(String),
+
+    Diff(Tab),
+    Install(String, bool),
+    External(PathBuf),
+    TestExternal(PathBuf, String, Vec<String>),
+}
+impl Job {
+    fn rpc(request: Request, after: After) -> Self {
+        Self::Control(Box::new(request), after)
+    }
+}
+enum Update {
+    LayoutsPrepared(u64, Vec<(String, serde_json::Value, String)>),
+    LayoutSaved(String, String, Result<(), String>),
+    RadioCatalog(std::sync::Arc<Vec<player::radio::Station>>),
+    RestartFinished(String),
+    ServiceStarted(Result<(), String>),
+    WorktreeCreated(Box<State>, String, bool),
+    IdleClosed(
+        editor_close::Target,
+        Vec<String>,
+        Result<Vec<terminator_core::idle_close::Outcome>, String>,
+    ),
+    InstallationRepaired(Result<Box<State>, String>),
+    ExitDrained(u64, u64),
+    ExitSaved(u64, Result<(), String>),
+    #[cfg(test)]
+    UiRequest(
+        terminator_core::ui_control::Request,
+        mpsc::SyncSender<Result<serde_json::Value, String>>,
+        Instant,
+    ),
+    AsyncUiRequest(
+        terminator_core::ui_control::Request,
+        tokio::sync::oneshot::Sender<Result<serde_json::Value, String>>,
+        Instant,
+    ),
+    Metadata(u64, metadata::Metadata),
+    OpenImage(String, PathBuf, After),
+    OpenNativeEditor(String, PathBuf, After),
+    OpenBrowser(String, BrowserTarget, After),
+    Image(PathBuf, u64, Result<egui::ColorImage, String>),
+    TestPickerClosed,
+    PickedProject(Option<PathBuf>, u64),
+    OpenedProject(Box<State>, String, u64),
+    TypographyMigrated,
+    AttentionMigrated(Result<(), String>),
+    Activation(String),
+    Appearance(Box<AppearanceFile>),
+    HookStatus(HashMap<String, bool>),
+    EditorsClosed(editor_close::Target, Vec<String>, Result<(), String>),
+    ResolvedTarget(String, Option<services::Target>),
+    PreferencesSaved(Box<Result<UiPreferences, String>>),
+    PickedFile {
+        path: Option<PathBuf>,
+        project: Option<String>,
+        cwd: PathBuf,
+    },
+    PickedAudio(Vec<PathBuf>),
+    PickedPath {
+        path: Option<PathBuf>,
+        target: BrowseTarget,
+    },
+    State(Box<State>),
+    Created(Session, Option<String>, Option<Vec<Tab>>),
+    WorkspaceCreated(Session, String, Vec<Tab>),
+    StripCreated(Session, Option<String>, Vec<Tab>),
+    Text(String, String),
+    Diff(String, Result<diff::DiffDocument, String>),
+    Refresh(
+        u64,
+        services::ContextData,
+        Vec<(
+            PathBuf,
+            Result<Vec<terminator_git::Entry>, services::DirectoryError>,
+        )>,
+        bool,
+    ),
+    ClipboardPaste(String, String),
+    Error(String),
+    Info(String),
+}
+fn begin_native_window_gesture(ctx: &egui::Context, command: egui::ViewportCommand) {
+    ctx.send_viewport_cmd(command);
+    // The window manager grabs pointer input and may consume mouse-up. Clear
+    // egui's drag state at the handoff so the next control/edge can be pressed.
+    ctx.stop_dragging();
+    ctx.input_mut(|input| input.pointer = Default::default());
+}
+fn window_resize_edges(ui: &mut egui::Ui) {
+    use egui::{CursorIcon as C, ResizeDirection as D};
+    if ui.input(|i| {
+        i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false)
+    }) {
+        return;
+    }
+    let r = ui.ctx().content_rect();
+    let edge = 4.0;
+    let corner = 8.0;
+    let regions = [
+        (
+            egui::Rect::from_min_max(r.min, r.min + egui::vec2(corner, corner)),
+            D::NorthWest,
+            C::ResizeNwSe,
+        ),
+        (
+            egui::Rect::from_min_max(
+                r.right_top() - egui::vec2(corner, 0.0),
+                r.right_top() + egui::vec2(0.0, corner),
+            ),
+            D::NorthEast,
+            C::ResizeNeSw,
+        ),
+        (
+            egui::Rect::from_min_max(
+                r.left_bottom() - egui::vec2(0.0, corner),
+                r.left_bottom() + egui::vec2(corner, 0.0),
+            ),
+            D::SouthWest,
+            C::ResizeNeSw,
+        ),
+        (
+            egui::Rect::from_min_max(r.max - egui::vec2(corner, corner), r.max),
+            D::SouthEast,
+            C::ResizeNwSe,
+        ),
+        (
+            egui::Rect::from_min_max(
+                r.min + egui::vec2(corner, 0.0),
+                r.right_top() + egui::vec2(-corner, edge),
+            ),
+            D::North,
+            C::ResizeVertical,
+        ),
+        (
+            egui::Rect::from_min_max(
+                r.left_bottom() + egui::vec2(corner, -edge),
+                r.max - egui::vec2(corner, 0.0),
+            ),
+            D::South,
+            C::ResizeVertical,
+        ),
+        (
+            egui::Rect::from_min_max(
+                r.min + egui::vec2(0.0, corner),
+                r.left_bottom() + egui::vec2(edge, -corner),
+            ),
+            D::West,
+            C::ResizeHorizontal,
+        ),
+        (
+            egui::Rect::from_min_max(
+                r.right_top() + egui::vec2(-edge, corner),
+                r.max - egui::vec2(0.0, corner),
+            ),
+            D::East,
+            C::ResizeHorizontal,
+        ),
+    ];
+    // Panels own their full rectangles. Put only the narrow resize hit regions
+    // above them, so the status bar cannot swallow edge drags.
+    for (index, (rect, direction, cursor)) in regions.into_iter().enumerate() {
+        egui::Area::new(egui::Id::new(("window-resize", index)))
+            .order(egui::Order::Foreground)
+            .fixed_pos(rect.min)
+            .movable(false)
+            .constrain(false)
+            .show(ui.ctx(), |ui| {
+                let (_, response) = ui.allocate_exact_size(rect.size(), egui::Sense::drag());
+                let response = response.on_hover_cursor(cursor);
+                #[cfg(feature = "test-support")]
+                {
+                    diagnostics::record(ui.ctx(), &format!("window-resize-{index}"), response.rect);
+                    if std::env::var_os("TERMINATOR_TEST_NATIVE_INPUT").is_some()
+                        && response.hovered()
+                        && ui.input(|i| i.pointer.any_down())
+                    {
+                        eprintln!(
+                            "Fixture resize input {index}: started={} dragged={}",
+                            response.drag_started(),
+                            response.dragged()
+                        );
+                    }
+                }
+                if response.drag_started() {
+                    begin_native_window_gesture(
+                        ui.ctx(),
+                        egui::ViewportCommand::BeginResize(direction),
+                    );
+                }
+            });
+    }
+}
+fn header_drag_space(ui: &mut egui::Ui) {
+    let response = ui.allocate_response(
+        egui::vec2(ui.available_width().max(0.0), 30.0),
+        egui::Sense::drag(),
+    );
+    #[cfg(feature = "test-support")]
+    diagnostics::record(ui.ctx(), "header-drag", response.rect);
+    if response.drag_started() {
+        begin_native_window_gesture(ui.ctx(), egui::ViewportCommand::StartDrag);
+    }
+}
+/// Cheap fingerprint of the checked-out dock backing `pane_by_tab`/`pane_tabs`.
+// Tab keys cost a JSON serialization each, so the maps are only rebuilt when
+// this changes instead of every frame. Same-count cross-pane moves slip
+// through and heal on the next structural change; readers only use the maps
+// while the dock is checked out of `layouts`.
+#[derive(Clone, PartialEq, Eq)]
+struct PaneIndex {
+    project: String,
+    group: String,
+    tabs: usize,
+    focus: Option<egui_dock::NodeIndex>,
+}
+/// Live in-terminal find state for one session. Matches reference live grid
+/// coordinates and go stale as output streams; the view recomputes them on a
+/// throttle (see `terminal_view`).
+#[derive(Default)]
+pub struct TerminalFind {
+    pub query: String,
+    pub case_insensitive: bool,
+    pub outcome: egui_term::FindOutcome,
+    pub current: usize,
+    pub searched_query: String,
+    pub searched_case: bool,
+    pub last_search: Option<Instant>,
+}
+
+impl TerminalFind {
+    pub fn dirty(&self) -> bool {
+        self.query != self.searched_query || self.case_insensitive != self.searched_case
+    }
+
+    pub fn step(&mut self, delta: isize) {
+        let n = self.outcome.matches.len();
+        if n == 0 {
+            self.current = 0;
+            return;
+        }
+        self.current = (self.current as isize + delta).rem_euclid(n as isize) as usize;
+    }
+}
+
+pub struct App {
+    file_activation: Option<FileActivation>,
+    services: gui_services::Services,
+    service_owner: gui_services::Owner,
+    service_completion: Option<async_service::Completion<Vec<Update>>>,
+    service_ready: std::collections::VecDeque<Update>,
+    ui_service_peak_ms: f64,
+    installation_error: Option<String>,
+    repair_pending: bool,
+    restart_pending: bool,
+    service_start_pending: bool,
+    restart_confirm: bool,
+    automatic_repair_attempt: Option<String>,
+    exit: exit::Exit,
+    exit_attempt: u64,
+    updater: updater::Updater,
+    /// Last waiting count painted on the macOS menu-bar icon.
+    #[cfg(all(not(test), target_os = "macos"))]
+    status_waiting_shown: Option<usize>,
+    #[cfg(feature = "test-support")]
+    diagnostics: diagnostics::Diagnostics,
+    paths: Paths,
+    preferences: UiPreferences,
+    preferences_saved: UiPreferences,
+    preferences_writable: bool,
+    preferences_pending: bool,
+    project_width: f32,
+    migration_requested: bool,
+    attention_requested: Option<Instant>,
+    attention_pending: bool,
+    selection_generation: u64,
+    state: State,
+    state_loaded: bool,
+    idle_close_pending: Option<editor_close::Target>,
+    idle_close_snapshot: Vec<Tab>,
+    idle_close_fallback: Option<editor_close::Target>,
+    layouts: HashMap<String, Workspace>,
+    layout_readonly: HashSet<String>,
+    close_workspace: Option<(String, String)>,
+    close_workspace_queue: Vec<String>,
+    workspace_insert: HashMap<String, usize>,
+    workspace_visible: Option<(String, String)>,
+    layout_saved: HashMap<String, String>,
+    layout_pending: HashMap<String, String>,
+    layout_generation: u64,
+    selected: Option<String>,
+    active_session: Option<String>,
+    /// Focused tabs `sync_active_session` last saw. Sync only follows focus
+    /// *moves* in either dock so clicking the other dock is never clobbered.
+    /// Strip moves are recorded while the strip is hidden and applied only
+    /// while it is on screen, so revealing it does not replay a stale move.
+    /// A move in both docks on the same call is a project switch: the main
+    /// pane wins, and the strip focus is only recorded.
+    last_main_focus: Option<Tab>,
+    last_strip_focus: Option<Tab>,
+    /// Set when focus lands on an image, browser, diff, player, or editor.
+    /// Closing the active terminal clears it so recovery can run.
+    non_terminal_selected: bool,
+    images: HashMap<PathBuf, image_preview::Preview>,
+    browser_host: browser_host::BrowserHost,
+    visible_browsers: Vec<browser_host::VisibleBrowser>,
+    browser_urls: HashMap<String, String>,
+    browser_submit: Option<(String, BrowserTarget)>,
+    player: player::Controller,
+    markdown: markdown::Previews,
+    visible_images: HashSet<PathBuf>,
+    image_generation: u64,
+    image_jobs: gui_services::ImageJobs,
+    backends: HashMap<String, TerminalBackend>,
+    visible_sessions: HashSet<String>,
+    backend_ids: HashMap<u64, String>,
+    next_backend: u64,
+    pty_tx: Sender<(u64, PtyEvent)>,
+    pty_rx: Receiver<(u64, PtyEvent)>,
+    jobs: exit::JobQueue,
+    updates: Receiver<Update>,
+    update_tx: Sender<Update>,
+    picker_active: bool,
+    add_tab: Option<(egui_dock::NodePath, Option<String>)>,
+    /// Queued strip-dock tab creation (the strip's `on_add`/menu counterpart
+    /// to [`Self::add_tab`]); consumed right after the strip renders.
+    add_strip_tab: Option<(egui_dock::NodePath, Option<String>)>,
+    /// Strip-dock tab to focus after the strip renders.
+    focus_strip_tab: Option<Tab>,
+    /// Strip-dock pane lookup, rebuilt every strip render (the main-dock
+    /// maps only ever cover the main dock; paths are meaningless across
+    /// docks).
+    strip_pane_by_tab: HashMap<String, egui_dock::NodePath>,
+    strip_pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
+    pane_by_tab: HashMap<String, egui_dock::NodePath>,
+
+    pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
+    pane_index: Option<PaneIndex>,
+    /// Terminal pane currently dragged by its caption header. Dropped onto
+    /// another split leaf (rearrange), a workspace strip tab (move across
+    /// top-level tabs), or a strip gap (new tab at that slot) within the
+    /// same project.
+    pane_drag: Option<Tab>,
+    /// Top-level tab currently dragged by its strip tab. Dropping it over
+    /// the strip reorders it to the insertion slot; releasing elsewhere
+    /// cancels. Only one of `pane_drag` and `tab_drag` is active at a time.
+    tab_drag: Option<String>,
+    /// Last text snapshot of the dragged terminal, taken when its drag
+    /// starts and shown in the floating ghost.
+    pane_drag_snapshot: Vec<String>,
+    /// Group previewed while a pane drag hovers its strip tab, as
+    /// (project, origin group) so a cancelled drag can switch back.
+    drop_preview_origin: Option<(String, String)>,
+    /// A pane drag hovers the interior of a strip tab this frame. The dock
+    /// paints the previewed tab's focused leaf at real size so the
+    /// move-into outcome is visible, not just the strip outline.
+    strip_tab_hover: bool,
+    /// A pane drag hovers a strip gap, "+", or empty strip background this
+    /// frame, where a release opens a fresh top-level tab. The tab ghost
+    /// (not the pane snapshot ghost) follows the pointer there.
+    strip_new_tab_hover: bool,
+    focus_tab: Option<Tab>,
+    terminal_context: HashMap<String, String>,
+    texts: HashMap<String, String>,
+    diffs: HashMap<String, Result<std::sync::Arc<diff::DiffDocument>, String>>,
+    diff_split: HashSet<String>,
+    diff_preview: HashSet<String>,
+    loading: HashSet<String>,
+    dirs: HashMap<PathBuf, Vec<terminator_git::Entry>>,
+    directory_errors: HashMap<PathBuf, services::DirectoryError>,
+    context: Option<services::ContextData>,
+    metadata: Option<metadata::Metadata>,
+    metadata_jobs: tokio::sync::watch::Sender<Option<metadata_refresh::Request>>,
+    metadata_request: Option<metadata_refresh::Request>,
+    metadata_generation: u64,
+    context_path: Option<PathBuf>,
+    error: Option<String>,
+    info: Option<String>,
+    add_project: bool,
+    settings_open: bool,
+    settings_session: bool,
+    settings_pending: Option<settings_ui::SettingsPending>,
+    player_open: bool,
+    editor_preset: usize,
+    test_editor: bool,
+    settings_draft: Settings,
+    settings_section: SettingsSection,
+    settings_search: String,
+    custom_shell: bool,
+    custom_editor: bool,
+    shortcut_capture: Option<String>,
+    browse_target: Option<BrowseTarget>,
+    palette_open: bool,
+    palette_query: String,
+    palette_index: usize,
+    worktree_draft: Option<worktree_ui::WorktreeDraft>,
+    worktree_remove: Option<String>,
+    theme: AppearanceConfig,
+    theme_committed: AppearanceConfig,
+    theme_draft: AppearanceConfig,
+    theme_source: String,
+    theme_conflict: bool,
+    hook_status: HashMap<String, bool>,
+    detail: Option<String>,
+    close_session: Option<String>,
+    popups: popup::Popups,
+    editor_close_sessions: HashSet<String>,
+    editor_close_prompts: Vec<(editor_close::Target, Vec<String>, String)>,
+    rename_session: Option<(String, String)>,
+    rename_focus: bool,
+    rename_surface: RenameSurface,
+    editor_origins: HashMap<String, Vec<Tab>>,
+    search: String,
+    search_session: Option<String>,
+    search_open: bool,
+    worktree_open: bool,
+    terminal_find: HashMap<String, TerminalFind>,
+    history_filter: HashMap<String, String>,
+    native_docs: HashMap<PathBuf, native_editor::NativeDoc>,
+    native_pending_line: HashMap<PathBuf, usize>,
+    native_close_prompt: Option<PathBuf>,
+    native_close_after_save: Option<PathBuf>,
+    pending_native_close: Vec<PathBuf>,
+    pending_unavailable_close: Vec<String>,
+    pending_quit_all: Option<bool>,
+    open_path: bool,
+    pick_audio: bool,
+    pick_audio_dir: bool,
+    path_text: String,
+    last_save: Instant,
+    refresh: tokio::sync::watch::Sender<Option<refresh::Request>>,
+    refresh_request: Option<refresh::Request>,
+    refresh_generation: u64,
+    visible_dirs: Vec<PathBuf>,
+    expanded_dirs: HashSet<PathBuf>,
+    watch_fallback: bool,
+    targets: HashMap<String, Option<services::Target>>,
+    hover: Option<(String, Instant)>,
+    hover_popup: Option<HoverPopup>,
+    pending_target_action: Option<(String, Session)>,
+    last_heartbeat: Instant,
+    last_focus: Option<String>,
+    highlight_session: Option<String>,
+    highlight_since: Instant,
+    connected: bool,
+    control_server: Option<ui_control::Server>,
+}
+
+fn observation_is_stale(current: &State, incoming: &State) -> bool {
+    incoming.client_observation != 0
+        && current.client_observation > incoming.client_observation
+        && incoming.catalog_revision <= current.catalog_revision
+        && (incoming.generation != current.generation || incoming.revision <= current.revision)
+}
+
+fn inventory_is_stale(current: &State, incoming: &State) -> bool {
+    incoming.catalog_revision < current.catalog_revision
+        || (incoming.generation == current.generation && incoming.revision < current.revision)
+}
+
+fn service_failure_update(
+    context: &async_service::OperationContext,
+    error: &async_service::Failure,
+) -> Option<Update> {
+    match context.subsystem {
+        "diff" => Some(Update::Diff(
+            context.resource.clone(),
+            Err(error.to_string()),
+        )),
+        "files" => Some(Update::ResolvedTarget(context.resource.clone(), None)),
+        "images" => Some(Update::Image(
+            PathBuf::from(&context.resource),
+            context.generation,
+            Err(error.to_string()),
+        )),
+        "audio-spectrum" => None,
+        _ => Some(Update::Error(error.to_string())),
+    }
+}
+
+impl App {
+    fn command_dialog_open(&self) -> bool {
+        self.palette_open
+            || self.search_open
+            || self.worktree_open
+            || self.worktree_draft.is_some()
+            || self.worktree_remove.is_some()
+    }
+    pub fn new(cc: &eframe::CreationContext<'_>, paths: Paths) -> Self {
+        let mut app = Self::with_context(&cc.egui_ctx, paths.clone());
+        match ui_control::spawn(paths, app.services.clone()) {
+            Ok(server) => app.control_server = Some(server),
+            Err(error) => app.error = Some(format!("GUI control server: {error:#}")),
+        }
+        #[cfg(feature = "test-support")]
+        if std::env::var_os("TERMINATOR_TEST_RESPONSIVENESS").is_some()
+            && let Some(socket) = std::env::var_os("TERMINATOR_TEST_STALL_NVIM")
+            && let Err(error) = app.services.fixture_stalls(socket.into())
+        {
+            app.error = Some(format!("Fixture stalls: {error:#}"));
+        }
+        app
+    }
+    fn with_context(ctx: &egui::Context, paths: Paths) -> Self {
+        appearance::install(ctx);
+        let loaded = UiPreferences::load(&paths.data);
+        let preferences_writable = loaded.is_ok();
+        let preference_error = loaded
+            .as_ref()
+            .err()
+            .map(|e| format!("UI preferences: {e:#}"));
+        let upgrade_error = fs::read_to_string(paths.data.join("service-upgrade-error.txt")).ok();
+        let preferences = loaded.unwrap_or_default();
+        let (tx, updates) = mpsc::channel();
+        let (services, service_owner) =
+            gui_services::Services::new(paths.clone(), ctx.clone(), tx.clone())
+                .expect("start GUI services");
+        let markdown = markdown::Previews::with_services(ctx, services.clone());
+        let jobs = exit::JobQueue::supervised(services.clone());
+        let refresh = refresh::spawn_async(services.clone());
+        let metadata_jobs = metadata_refresh::spawn(services.clone());
+        let update_tx = tx.clone();
+        let image_jobs = gui_services::ImageJobs(services.clone());
+        let _ = jobs.send(Job::HookStatus);
+        let (pty_tx, pty_rx) = mpsc::channel();
+        Self {
+            file_activation: None,
+            services: services.clone(),
+            service_owner,
+            service_completion: None,
+            service_ready: Default::default(),
+            ui_service_peak_ms: 0.0,
+            exit: Default::default(),
+            exit_attempt: 0,
+            updater: updater::Updater::new(ctx),
+            #[cfg(all(not(test), target_os = "macos"))]
+            status_waiting_shown: None,
+            installation_error: None,
+            repair_pending: false,
+            restart_pending: false,
+            service_start_pending: false,
+            restart_confirm: false,
+            automatic_repair_attempt: None,
+            #[cfg(feature = "test-support")]
+            diagnostics: Default::default(),
+            preferences_saved: preferences.clone(),
+            preferences,
+            preferences_writable,
+            preferences_pending: false,
+            project_width: 225.0,
+            migration_requested: false,
+            attention_requested: None,
+            attention_pending: false,
+            selection_generation: 0,
+            paths,
+            state: State::default(),
+            state_loaded: false,
+            idle_close_pending: None,
+            idle_close_snapshot: Vec::new(),
+            idle_close_fallback: None,
+            layouts: HashMap::new(),
+            layout_readonly: HashSet::new(),
+            close_workspace: None,
+            close_workspace_queue: Vec::new(),
+            workspace_insert: HashMap::new(),
+            workspace_visible: None,
+            layout_saved: HashMap::new(),
+            layout_pending: HashMap::new(),
+            layout_generation: 0,
+            selected: None,
+            active_session: None,
+            last_main_focus: None,
+            last_strip_focus: None,
+            non_terminal_selected: false,
+            images: HashMap::new(),
+            browser_host: browser_host::BrowserHost::new(),
+            visible_browsers: Vec::new(),
+            browser_urls: HashMap::new(),
+            browser_submit: None,
+            player: player::Controller::new(services),
+            markdown,
+            visible_images: HashSet::new(),
+            image_generation: 0,
+            image_jobs,
+            backends: HashMap::new(),
+            visible_sessions: HashSet::new(),
+            backend_ids: HashMap::new(),
+            next_backend: 0,
+            pty_tx,
+            pty_rx,
+            jobs,
+            updates,
+            update_tx,
+            picker_active: false,
+            add_tab: None,
+            add_strip_tab: None,
+            focus_strip_tab: None,
+            strip_pane_by_tab: HashMap::new(),
+            strip_pane_tabs: HashMap::new(),
+            pane_by_tab: HashMap::new(),
+
+            pane_tabs: HashMap::new(),
+            pane_index: None,
+            pane_drag: None,
+            tab_drag: None,
+            strip_tab_hover: false,
+            strip_new_tab_hover: false,
+            pane_drag_snapshot: Vec::new(),
+            drop_preview_origin: None,
+            focus_tab: None,
+            terminal_context: HashMap::new(),
+            texts: HashMap::new(),
+            diffs: HashMap::new(),
+            diff_split: HashSet::new(),
+            diff_preview: HashSet::new(),
+            loading: HashSet::new(),
+            dirs: HashMap::new(),
+            directory_errors: HashMap::new(),
+            context: None,
+            metadata: None,
+            metadata_jobs,
+            metadata_request: None,
+            metadata_generation: 0,
+            context_path: None,
+            error: preference_error.or(upgrade_error),
+            info: None,
+            add_project: false,
+            settings_open: false,
+            settings_session: false,
+            settings_pending: None,
+            player_open: false,
+            editor_preset: external_editor::CUSTOM,
+            test_editor: false,
+            settings_draft: Settings::default(),
+            settings_section: SettingsSection::Appearance,
+            settings_search: String::new(),
+            custom_shell: false,
+            custom_editor: false,
+            shortcut_capture: None,
+            browse_target: None,
+            palette_open: false,
+            palette_query: String::new(),
+            palette_index: 0,
+            worktree_draft: None,
+            worktree_remove: None,
+            theme: AppearanceConfig::default(),
+            theme_committed: AppearanceConfig::default(),
+            theme_draft: AppearanceConfig::default(),
+            theme_source: String::new(),
+            theme_conflict: false,
+            hook_status: HashMap::new(),
+            detail: None,
+            close_session: None,
+            popups: popup::Popups::default(),
+            editor_close_sessions: HashSet::new(),
+            editor_close_prompts: Vec::new(),
+            rename_session: None,
+            rename_focus: false,
+            rename_surface: RenameSurface::Sidebar,
+            editor_origins: HashMap::new(),
+            search: String::new(),
+            search_session: None,
+            search_open: false,
+            worktree_open: false,
+            terminal_find: HashMap::new(),
+            history_filter: HashMap::new(),
+            native_docs: HashMap::new(),
+            native_pending_line: HashMap::new(),
+            native_close_prompt: None,
+            native_close_after_save: None,
+            pending_native_close: Vec::new(),
+            pending_unavailable_close: Vec::new(),
+            pending_quit_all: None,
+            open_path: false,
+            pick_audio: false,
+            pick_audio_dir: false,
+            path_text: String::new(),
+            last_save: Instant::now(),
+            refresh,
+            refresh_request: None,
+            refresh_generation: 0,
+            visible_dirs: Vec::new(),
+            expanded_dirs: HashSet::new(),
+            watch_fallback: false,
+            targets: HashMap::new(),
+            hover: None,
+            hover_popup: None,
+            pending_target_action: None,
+            last_heartbeat: Instant::now(),
+            last_focus: None,
+            highlight_session: None,
+            highlight_since: Instant::now(),
+            connected: false,
+            control_server: None,
+        }
+    }
+    fn fixture_rect(&self, ctx: &egui::Context, name: &str) -> Option<[f32; 4]> {
+        ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+            .map(|r| [r.min.x, r.min.y, r.width(), r.height()])
+    }
+    fn ui_request(
+        &mut self,
+        ctx: &egui::Context,
+        request: terminator_core::ui_control::Request,
+    ) -> Result<serde_json::Value> {
+        use terminator_core::ui_control::Request as Ui;
+        request.validate()?;
+        anyhow::ensure!(!self.exit.active(), "Terminator is saving before closing");
+        let gui_ppp = ctx.pixels_per_point();
+        match request {
+            #[cfg(not(feature = "test-support"))]
+            Ui::FixturePlayer { .. } => anyhow::bail!("Player fixture control is disabled"),
+            #[cfg(feature = "test-support")]
+            Ui::FixturePlayer { action, url } => {
+                anyhow::ensure!(
+                    std::env::var_os("TERMINATOR_TEST_RESPONSIVENESS").is_some(),
+                    "Player fixture control is disabled"
+                );
+                match action.as_str() {
+                    "play" => self.player.fixture_play(
+                        self.selected.as_deref().unwrap_or("fixture"),
+                        url.context("Missing fixture URL")?,
+                    ),
+                    "pause" => self.player.pause(),
+                    "resume" => self.player.resume(),
+                    "stop" => self.player.stop(),
+                    _ => anyhow::bail!("Invalid player fixture action"),
+                }
+            }
+
+            Ui::Ping => {
+                return Ok(
+                    serde_json::json!({"capabilities":[terminator_core::ui_control::CAPABILITY]}),
+                );
+            }
+            Ui::Snapshot => {
+                #[allow(unused_mut)]
+                let mut snapshot = serde_json::json!({"selected_project":self.selected,"active_session":self.active_session,"workspaces":self.layouts,
+                    "controls":{
+                        "header-drag":self.fixture_rect(ctx,"header-drag"),
+                        "project-add":self.fixture_rect(ctx,"project-add"),
+                        "resize-se":self.fixture_rect(ctx,"window-resize-3")
+                    },
+                    "window":ctx.input(|i|serde_json::json!({"inner":i.viewport().inner_rect.map(|r|[r.min.x,r.min.y,r.width(),r.height()]),"outer":i.viewport().outer_rect.map(|r|[r.min.x,r.min.y,r.width(),r.height()]),"maximized":i.viewport().maximized,"minimized":i.viewport().minimized,"gui_ppp":gui_ppp,"native_ppp":i.viewport().native_pixels_per_point}))});
+                snapshot["services"] = self.services.diagnostics();
+                snapshot["services"]["ui_processing_peak_ms"] =
+                    serde_json::json!(self.ui_service_peak_ms);
+                #[cfg(feature = "test-support")]
+                {
+                    snapshot["updater_available"] = serde_json::json!(self.updater.available());
+                    snapshot["update_menu"] = serde_json::json!(self.updater.menu_installed());
+                    snapshot["installation"] = serde_json::json!({
+                        "connected":self.connected,
+                        "problem":self.installation_problem(),
+                        "repair_pending":self.repair_pending,
+                        "restart_pending":self.restart_pending,
+                        "restart_confirm":self.restart_confirm,
+                        "can_repair":self.connected && can_retire_daemon(&self.state),
+                        "can_restart":self.connected && can_restart_service(&self.state),
+                        "settings_visible":self.settings_open && self.settings_section == SettingsSection::Updates,
+                        "generation":self.state.generation,
+                        "generations":self.state.generations,
+                        "live_count":self.state.sessions.iter().filter(|s| s.lifecycle.live()).count(),
+                        "error":self.error,
+                    });
+                    snapshot["attention"] = serde_json::json!(ctx.data(|data| {
+                        data.get_temp::<(usize, bool)>(egui::Id::new("attention-state"))
+                    }));
+                    snapshot["left_agents"] = serde_json::json!(self.preferences.left_agents);
+                    snapshot["agent_bar_badge"] = serde_json::json!(ctx.data(|data| {
+                        data.get_temp::<String>(egui::Id::new("agent-bar-badge"))
+                    }));
+                    snapshot["markdown"] = self.markdown.diagnostics();
+                    snapshot["markdown_modes"] =
+                        serde_json::to_value(&self.preferences.markdown_modes)?;
+                    snapshot["visible_terminals"] = serde_json::to_value(&self.visible_sessions)?;
+                    snapshot["fixture_actions_completed"] =
+                        serde_json::json!(self.diagnostics.actions_completed());
+                    snapshot["terminal_scroll"] = serde_json::json!(self.backends.iter().map(|(sid, backend)| {
+                        let content = backend.last_content();
+                        let text: String = content.grid.display_iter().map(|cell| cell.c).collect();
+                        let samples: Vec<_> = (1..=160).filter(|n| text.contains(&format!("TSAMPLE{n:03}"))).collect();
+                        let updates: Vec<_> = (1..=100).filter(|n| text.contains(&format!("TUPDATE{n:03}"))).collect();
+                        (sid.clone(), serde_json::json!({"ui_pass":ctx.cumulative_pass_nr(), "window_occluded":ctx.input(|i| i.viewport().occluded), "offset":content.display_offset, "modes":content.terminal_mode.bits(), "focused":self.active_session.as_ref()==Some(sid), "samples":samples, "updates":updates, "rect":self.fixture_rect(ctx,&format!("terminal:{sid}"))}))
+                    }).collect::<HashMap<_,_>>());
+                    snapshot["editor_rect"] =
+                        serde_json::to_value(self.fixture_rect(ctx, "editor-terminal"))?;
+                    snapshot["sidebar_projects"] = serde_json::json!(
+                        self.visible_projects()
+                            .iter()
+                            .map(|p| &p.id)
+                            .collect::<Vec<_>>()
+                    );
+                    snapshot["project_sort"] = serde_json::to_value(self.preferences.project_sort)?;
+                    snapshot["player"] = serde_json::json!({
+                        "chrome":self.fixture_rect(ctx,"player-chrome"),
+                        "project":self.player.project,
+                        "engine":self.player.fixture_diagnostics(),
+                    });
+                    snapshot["markdown_header"] = serde_json::json!({
+                        "title":self.fixture_rect(ctx,"markdown-title"),
+                        "edit":self.fixture_rect(ctx,"markdown-mode:Edit"),
+                        "preview":self.fixture_rect(ctx,"markdown-mode:Preview"),
+                        "split":self.fixture_rect(ctx,"markdown-mode:Split"),
+                        "refresh":self.fixture_rect(ctx,"markdown-refresh")
+                    });
+                }
+                return Ok(snapshot);
+            }
+            Ui::Focus { session } => {
+                anyhow::ensure!(
+                    self.state.sessions.iter().any(|s| s.id == session),
+                    "Unknown session"
+                );
+                self.go_session(&session);
+            }
+            Ui::ShowSession {
+                session,
+                anchor,
+                split,
+            } => {
+                let record = self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == session && s.lifecycle.live())
+                    .context("Unknown live session")?
+                    .clone();
+                anyhow::ensure!(
+                    !self.layout_readonly.contains(&record.project_id),
+                    "Project has an unsupported layout version"
+                );
+                let tab = Tab::Terminal(session.clone());
+                if self
+                    .layouts
+                    .get(&record.project_id)
+                    .is_some_and(|d| d.contains(&tab))
+                {
+                    self.go_session(&session);
+                    return Ok(serde_json::json!({"accepted":true,"existing":true}));
+                }
+                if let Some(anchor) = anchor {
+                    anyhow::ensure!(
+                        self.state
+                            .sessions
+                            .iter()
+                            .any(|s| s.id == anchor && s.project_id == record.project_id),
+                        "Anchor belongs to a different project"
+                    );
+                    let dock = self
+                        .layouts
+                        .get_mut(&record.project_id)
+                        .context("Missing project layout")?;
+                    let anchor = Tab::Terminal(anchor);
+                    anyhow::ensure!(
+                        dock.activate_containing(&anchor),
+                        "Anchor is not in a visible workspace"
+                    );
+                    let path = dock.find_tab(&anchor).context("Missing anchor pane")?;
+                    dock.set_focused_node_and_surface(path.node_path());
+                    self.insert(&record.project_id, tab, split.as_deref());
+                } else {
+                    self.layouts
+                        .entry(record.project_id.clone())
+                        .or_insert_with(Workspace::empty)
+                        .add(id(), tab);
+                }
+                self.select_project(record.project_id);
+                self.active_session = Some(session);
+            }
+            Ui::OpenFile {
+                project,
+                path,
+                as_text,
+            } => {
+                anyhow::ensure!(
+                    self.state.projects.iter().any(|p| p.id == project),
+                    "Unknown project"
+                );
+                anyhow::ensure!(
+                    !self.layout_readonly.contains(&project),
+                    "Project has an unsupported layout version"
+                );
+                self.select_project(project);
+                self.open_file_mode(path, None, None, false, as_text);
+            }
+            Ui::OpenBrowser { url } => {
+                let _ = self.jobs.send(Job::Browser(metadata::http_url(&url)?));
+            }
+            Ui::Window { action } => ctx.send_viewport_cmd(match action.as_str() {
+                "minimize" => egui::ViewportCommand::Minimized(true),
+                "maximize" => egui::ViewportCommand::Maximized(true),
+                "restore" => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    egui::ViewportCommand::Maximized(false)
+                }
+                "close" => egui::ViewportCommand::Close,
+                _ => egui::ViewportCommand::Focus,
+            }),
+        }
+        self.save_layouts();
+        ctx.request_repaint();
+        Ok(serde_json::json!({"accepted":true}))
+    }
+    fn send(&self, request: Request) {
+        let _ = self.jobs.send(Job::rpc(request, After::None));
+    }
+    fn process_updates(&mut self, ctx: &egui::Context) {
+        let processing_started = Instant::now();
+        let mut budget = native_jobs::ResultBudget::new();
+        loop {
+            if !budget.next() {
+                ctx.request_repaint();
+                break;
+            }
+            if self.service_ready.is_empty() {
+                self.service_completion.take();
+                if let Some(mut completion) = self.service_owner.supervisor.try_recv() {
+                    match completion.result.take().unwrap() {
+                        Ok(updates) => self.service_ready.extend(updates),
+                        Err(async_service::Failure::Cancelled) => {
+                            let key = &completion.context.resource;
+                            if matches!(completion.context.subsystem, "diff" | "files") {
+                                self.loading.remove(key);
+                            }
+                            if completion.context.subsystem == "images"
+                                && let Some(preview) = self.images.values_mut().find(|preview| {
+                                    preview.generation == completion.context.generation
+                                })
+                            {
+                                preview.loading = false;
+                                preview.cancellation = None;
+                            }
+                        }
+                        Err(error) => {
+                            if let Some(update) =
+                                service_failure_update(&completion.context, &error)
+                            {
+                                if let Update::ResolvedTarget(key, _) = &update {
+                                    self.loading.remove(key);
+                                }
+                                self.service_ready.push_back(update);
+                            }
+                        }
+                    }
+                    self.service_completion = Some(completion);
+                    ctx.request_repaint();
+                }
+            }
+            let update = if let Some(state) = self
+                .service_owner
+                .snapshot
+                .try_lock()
+                .ok()
+                .and_then(|mut state| state.take())
+            {
+                Update::State(state)
+            } else if let Some(update) = self.service_ready.pop_front() {
+                update
+            } else if let Ok(update) = self.service_owner.events.try_recv() {
+                update
+            } else if let Ok(update) = self.updates.try_recv() {
+                update
+            } else {
+                break;
+            };
+            match update {
+                Update::LayoutsPrepared(generation, layouts) => {
+                    if generation == self.layout_generation && !self.exit.active() {
+                        for (project, value, text) in layouts {
+                            if self.can_persist_layout(&project)
+                                && self.layout_saved.get(&project) != Some(&text)
+                                && self.layout_pending.get(&project) != Some(&text)
+                                && self
+                                    .jobs
+                                    .send(Job::SaveLayout(project.clone(), value, text.clone()))
+                                    .is_ok()
+                            {
+                                self.layout_pending.insert(project, text);
+                            }
+                        }
+                    }
+                }
+                Update::LayoutSaved(project, text, result) => {
+                    if self.layout_pending.get(&project) == Some(&text) {
+                        self.layout_pending.remove(&project);
+                    }
+                    match result {
+                        Ok(()) => {
+                            self.layout_saved.insert(project, text);
+                        }
+                        Err(error) => self.layout_save_failed(error),
+                    }
+                }
+
+                Update::RadioCatalog(catalog) => self.player.radio_base = catalog,
+                Update::InstallationRepaired(result) => {
+                    self.repair_pending = false;
+                    match result {
+                        Ok(state) => {
+                            self.apply_state(*state);
+                            self.installation_error = None;
+                            self.error = None;
+                            self.info =
+                                Some("Installation repaired. New terminals can be opened.".into());
+                        }
+                        Err(error) => {
+                            self.error = Some(format!("Could not repair installation: {error}"))
+                        }
+                    }
+                }
+                Update::ExitDrained(id, serial) => {
+                    if let exit::Exit::Draining(started, current) = self.exit
+                        && current == id
+                    {
+                        if serial != self.jobs.serial() {
+                            let _ = self.jobs.send(Job::ExitDrain(id, self.jobs.serial()));
+                            continue;
+                        }
+                        match self.exit_checkpoint() {
+                            Ok(checkpoint) => {
+                                self.exit = exit::Exit::Saving(started, id);
+                                if self.jobs.send(Job::ExitSave(id, checkpoint)).is_err() {
+                                    self.cancel_exit("Worker disconnected".into());
+                                }
+                            }
+                            Err(e) => self.cancel_exit(format!("{e:#}")),
+                        }
+                    }
+                }
+                Update::ExitSaved(id, result) => {
+                    if matches!(self.exit, exit::Exit::Saving(_, current) if current == id) {
+                        match result {
+                            Ok(()) => {
+                                self.exit = exit::Exit::Ready;
+                                updater::complete_termination(ctx);
+                            }
+                            Err(e) => self.cancel_exit(e),
+                        }
+                    }
+                }
+                Update::PreferencesSaved(result) => {
+                    self.preferences_pending = false;
+                    match *result {
+                        Ok(prefs) => self.preferences_saved = prefs,
+                        Err(error) => {
+                            if self.exit.active() {
+                                self.cancel_exit(error);
+                            } else {
+                                self.error = Some(error);
+                            }
+                        }
+                    }
+                }
+                Update::ResolvedTarget(key, target) => {
+                    self.loading.remove(&key);
+                    if self.targets.len() > 256 {
+                        self.targets.clear();
+                    }
+                    if let Some((pending, session)) = self.pending_target_action.take() {
+                        if pending == key {
+                            if let Some(target) = &target {
+                                self.terminal_action(ctx, &session, target, FileAction::Open);
+                            } else {
+                                self.error = Some("Target no longer exists".into());
+                            }
+                        } else {
+                            self.pending_target_action = Some((pending, session));
+                        }
+                    }
+                    self.targets.insert(key, target);
+                }
+                Update::EditorsClosed(target, ids, result) => {
+                    self.editors_closed(target, ids, result);
+                }
+                #[cfg(test)]
+                Update::UiRequest(request, reply, deadline) => {
+                    let result = if Instant::now() >= deadline {
+                        Err("GUI request expired before processing; no action was performed".into())
+                    } else {
+                        self.ui_request(ctx, request).map_err(|e| format!("{e:#}"))
+                    };
+                    let _ = reply.send(result);
+                }
+                Update::AsyncUiRequest(request, reply, deadline) => {
+                    let result = if Instant::now() >= deadline {
+                        Err("GUI request expired before processing; no action was performed".into())
+                    } else {
+                        self.ui_request(ctx, request).map_err(|e| format!("{e:#}"))
+                    };
+                    let _ = reply.send(result);
+                }
+                Update::Metadata(generation, data) => {
+                    if generation == self.metadata_generation {
+                        self.metadata = Some(data);
+                    }
+                }
+                Update::OpenImage(project, path, after) => {
+                    self.place_gui_tab(project, Tab::Image { path }, after);
+                }
+                Update::OpenNativeEditor(project, path, after) => {
+                    let existing = self.layouts.get(&project).and_then(|workspace| {
+                        workspace
+                            .tabs
+                            .iter()
+                            .flat_map(|group| group.layout.iter_all_tabs())
+                            .map(|(_, tab)| tab)
+                            .find(|tab| matches!(tab, Tab::NativeEditor { path: current } if *current == path))
+                            .cloned()
+                    });
+                    self.place_gui_tab(
+                        project,
+                        existing.unwrap_or(Tab::NativeEditor { path }),
+                        after,
+                    );
+                }
+                Update::OpenBrowser(project, target, after) => {
+                    let existing = self.layouts.get(&project).and_then(|workspace| {
+                        workspace.tabs.iter().flat_map(|group| group.layout.iter_all_tabs())
+                            .map(|(_, tab)| tab)
+                            .find(|tab| matches!(tab, Tab::Browser { target: current, .. } if *current == target))
+                            .cloned()
+                    });
+                    self.place_gui_tab(
+                        project,
+                        existing.unwrap_or_else(|| Tab::Browser { id: id(), target }),
+                        after,
+                    );
+                }
+                Update::Image(path, generation, result) => {
+                    let used: usize = self
+                        .images
+                        .values()
+                        .filter_map(|p| p.texture.as_ref())
+                        .map(|t| t.size()[0] * t.size()[1] * 4)
+                        .sum();
+                    if let Some(preview) = self
+                        .images
+                        .get_mut(&path)
+                        .filter(|p| p.generation == generation)
+                    {
+                        preview.loading = false;
+                        let previous_bytes = preview
+                            .texture
+                            .as_ref()
+                            .map_or(0, |t| t.size()[0] * t.size()[1] * 4);
+                        match result {
+                            Ok(image)
+                                if used.saturating_sub(previous_bytes) + image.pixels.len() * 4
+                                    <= 128 * 1024 * 1024 =>
+                            {
+                                preview.texture = Some(ctx.load_texture(
+                                    format!("preview:{}:{generation}", path.display()),
+                                    image,
+                                    egui::TextureOptions::LINEAR,
+                                ));
+                            }
+                            Ok(_) => {
+                                preview.error = Some(
+                                    "Preview memory limit reached; close another image and retry."
+                                        .into(),
+                                )
+                            }
+                            Err(error) => preview.error = Some(error),
+                        }
+                    }
+                }
+                Update::TestPickerClosed => self.picker_active = false,
+                Update::HookStatus(status) => self.hook_status = status,
+                Update::Appearance(file) => {
+                    let dirty = self.settings_session && self.theme_draft != self.theme_committed;
+                    self.theme_conflict = dirty && file.config != self.theme_draft;
+                    self.theme_committed = file.config.clone();
+                    self.theme_source = file.source;
+                    if !self.theme_conflict {
+                        self.theme_draft = file.config.clone();
+                        self.theme = file.config;
+                        appearance::apply(ctx, &self.theme);
+                    }
+                }
+                Update::Activation(notice) => {
+                    self.detail = Some(notice);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                Update::AttentionMigrated(result) => {
+                    self.attention_pending = false;
+                    match result {
+                        Ok(()) => self.preferences.attention_migrated = true,
+                        Err(error) => {
+                            self.error = Some(format!("Attention settings migration: {error}"))
+                        }
+                    }
+                }
+                Update::TypographyMigrated => {
+                    self.preferences.typography_migrated = true;
+                }
+                Update::IdleClosed(target, ids, result) => self.idle_closed(target, ids, result),
+                Update::OpenedProject(state, project, generation) => {
+                    self.preferences.setup_completed = true;
+                    self.refresh_request = None;
+                    self.apply_state(*state);
+                    if generation == self.selection_generation {
+                        self.reveal_project(project);
+                    } else if let Some(project) = self.selected.clone() {
+                        // Undo older AddProject selection side effects on the daemon.
+                        self.send(Request::SelectProject { project });
+                    }
+                }
+                Update::PickedProject(path, generation) => {
+                    #[cfg(feature = "test-support")]
+                    if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
+                        eprintln!("Fixture native project picker selected={}", path.is_some());
+                    }
+                    self.picker_active = false;
+                    if let Some(path) = path
+                        && generation == self.selection_generation
+                    {
+                        let _ = self.jobs.send(Job::OpenProject(path, generation));
+                    }
+                }
+                Update::PickedPath { path, target } => {
+                    self.picker_active = false;
+                    if let Some(path) = path {
+                        let text = path.display().to_string();
+                        match target {
+                            BrowseTarget::Shell => self.settings_draft.shell = text,
+                            BrowseTarget::Editor => self.settings_draft.editor_program = text,
+                            BrowseTarget::External => {
+                                self.settings_draft.external_editor = text;
+                                self.editor_preset = external_editor::CUSTOM;
+                            }
+                            BrowseTarget::WorktreeDest => {
+                                if let Some(draft) = &mut self.worktree_draft {
+                                    let leaf = draft
+                                        .dest
+                                        .file_name()
+                                        .map(PathBuf::from)
+                                        .unwrap_or_else(|| PathBuf::from("terminator-task"));
+                                    draft.dest = path.join(leaf);
+                                }
+                            }
+                        }
+                    }
+                }
+                Update::PickedAudio(paths) => {
+                    self.picker_active = false;
+                    self.add_audio_files(paths);
+                }
+                Update::PickedFile { path, project, cwd } => {
+                    #[cfg(feature = "test-support")]
+                    if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
+                        eprintln!("Fixture native file picker selected={}", path.is_some());
+                    }
+                    self.picker_active = false;
+                    if let Some(path) = path {
+                        if image_preview::supported(&path)
+                            && let Some(project) = &project
+                        {
+                            self.open_image(project, path, None);
+                        } else if crate::browser::supported_file(&path)
+                            && let Some(project) = &project
+                        {
+                            self.open_html(project, path, None);
+                        } else if player::supported(&path)
+                            && let Some(project) = &project
+                        {
+                            self.open_audio(project, path, None);
+                        } else if self.state.settings.editor_mode == EditorMode::External {
+                            let _ = self.jobs.send(Job::External(path));
+                        } else if self.state.settings.editor_mode == EditorMode::Native
+                            && let Some(project) = &project
+                        {
+                            self.open_native(project, path, None, None);
+                        } else if let Some(project) = project {
+                            self.hide_center_overlay();
+                            let after = self.editor_target(&project, None, None);
+                            let _ = self.jobs.send(Job::rpc(
+                                Request::Create {
+                                    project,
+                                    cwd: Some(cwd),
+                                    file: Some(path),
+                                    line: None,
+                                    column: None,
+                                    editor: true,
+                                },
+                                after,
+                            ));
+                        }
+                    }
+                }
+                Update::State(state) => {
+                    self.apply_state(*state);
+                }
+                Update::WorkspaceCreated(session, id, anchors) => {
+                    let project = session.project_id.clone();
+                    if self.selected.as_ref() == Some(&project) {
+                        self.finish_rename(true);
+                    }
+                    if session.kind == SessionKind::Editor {
+                        self.editor_origins.insert(session.id.clone(), anchors);
+                    }
+                    let index = self.workspace_insert.remove(&id).unwrap_or(usize::MAX);
+                    self.layouts
+                        .entry(project.clone())
+                        .or_insert_with(Workspace::empty)
+                        .add_at(index, id, Tab::Terminal(session.id.clone()));
+                    if self.selected.as_ref() == Some(&project) {
+                        self.active_session = Some(session.id.clone());
+                    }
+                    if !self.state.sessions.iter().any(|s| s.id == session.id) {
+                        self.state.sessions.push(session);
+                    }
+                }
+                Update::Created(session, split, target) => {
+                    let previous_workspace = self
+                        .layouts
+                        .get(&session.project_id)
+                        .map(|workspace| workspace.active.clone());
+                    #[cfg(feature = "test-support")]
+                    if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
+                        eprintln!("Fixture created {:?}, split {:?}", session.kind, split);
+                    }
+                    if session.kind == SessionKind::Editor {
+                        let anchors = target.clone().unwrap_or_default();
+                        self.editor_origins.insert(session.id.clone(), anchors);
+                    }
+                    if let Some(target) = target
+                        && let Some(dock) = self.layouts.get_mut(&session.project_id)
+                    {
+                        if let Some(tab) = target.iter().find(|tab| dock.contains(tab)) {
+                            dock.activate_containing(tab);
+                        }
+                        if let Some(path) = target.iter().find_map(|tab| dock.find_tab(tab)) {
+                            dock.set_focused_node_and_surface(path.node_path());
+                        }
+                    }
+                    let same_workspace = previous_workspace.as_ref()
+                        == self
+                            .layouts
+                            .get(&session.project_id)
+                            .map(|workspace| &workspace.active);
+                    if same_workspace && self.selected.as_ref() == Some(&session.project_id) {
+                        self.active_session = Some(session.id.clone());
+                    }
+                    if !self.state.sessions.iter().any(|s| s.id == session.id) {
+                        self.state.sessions.push(session.clone());
+                    }
+                    self.insert(
+                        &session.project_id,
+                        Tab::Terminal(session.id),
+                        split.as_deref(),
+                    );
+                    if !same_workspace
+                        && let Some(previous) = previous_workspace
+                        && let Some(workspace) = self.layouts.get_mut(&session.project_id)
+                        && workspace.tabs.iter().any(|tab| tab.id == previous)
+                    {
+                        workspace.active = previous;
+                    }
+                }
+                Update::StripCreated(session, split, anchors) => {
+                    if !self.state.sessions.iter().any(|s| s.id == session.id) {
+                        self.state.sessions.push(session.clone());
+                    }
+                    if let Some(dock) = self
+                        .preferences
+                        .ide_strip_docks
+                        .0
+                        .get_mut(&session.project_id)
+                        && let Some(path) = anchors.iter().find_map(|tab| dock.find_tab(tab))
+                    {
+                        dock.set_focused_node_and_surface(path.node_path());
+                    }
+                    self.insert_strip(
+                        &session.project_id,
+                        Tab::Terminal(session.id.clone()),
+                        split.as_deref(),
+                    );
+                    if self.selected.as_ref() == Some(&session.project_id)
+                        && self.preferences.ide_mode
+                        && !self.preferences.ide_terminal_collapsed
+                    {
+                        self.active_session = Some(session.id.clone());
+                    }
+                }
+                Update::Text(key, text) => {
+                    self.loading.remove(&key);
+                    self.texts.insert(key, text);
+                }
+                Update::Diff(key, result) => {
+                    self.loading.remove(&key);
+                    match result {
+                        Ok(document) => {
+                            self.diffs.insert(key, Ok(std::sync::Arc::new(document)));
+                        }
+                        Err(error) if self.diffs.get(&key).is_some_and(Result::is_ok) => {
+                            self.error = Some(format!(
+                                "Diff refresh failed; showing the previous view: {error}"
+                            ));
+                        }
+                        Err(error) => {
+                            self.diffs.insert(key, Err(error));
+                        }
+                    }
+                }
+                Update::Refresh(generation, context, directories, fallback) => {
+                    if generation == self.refresh_generation
+                        && self
+                            .refresh_request
+                            .as_ref()
+                            .is_some_and(|r| r.cwd == context.cwd)
+                    {
+                        let context = match self.context.take() {
+                            Some(mut previous)
+                                if previous.cwd == context.cwd
+                                    && previous.root.is_some()
+                                    && (context.root.is_none() || context.error.is_some()) =>
+                            {
+                                previous.error = context.error.or_else(|| Some("Repository unavailable; showing the last successful status".into()));
+                                previous
+                            }
+                            _ => context,
+                        };
+                        self.context = Some(context);
+                        self.watch_fallback = fallback;
+                        for (path, entries) in directories {
+                            match entries {
+                                Ok(entries) => {
+                                    #[cfg(feature = "test-support")]
+                                    if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
+                                        eprintln!(
+                                            "Directory refresh succeeded: entries={}",
+                                            entries.len()
+                                        );
+                                    }
+                                    self.directory_errors.remove(&path);
+                                    self.dirs.insert(path, entries);
+                                }
+                                Err(error) => {
+                                    #[cfg(feature = "test-support")]
+                                    if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
+                                        eprintln!(
+                                            "Directory refresh failed: kind={:?} cached_entries={}",
+                                            error.kind,
+                                            self.dirs.get(&path).map_or(0, Vec::len)
+                                        );
+                                    }
+                                    self.directory_errors.insert(path, error);
+                                }
+                            }
+                        }
+                    }
+                }
+                Update::ClipboardPaste(session, text) => {
+                    // Resolve by captured identity, never by current focus.
+                    if let Some(backend) = self.backends.get_mut(&session) {
+                        backend
+                            .process_command(egui_term::BackendCommand::Write(text.into_bytes()));
+                    }
+                }
+                Update::WorktreeCreated(state, project, open_terminal) => {
+                    self.apply_state(*state);
+                    self.reveal_project(project);
+                    if open_terminal {
+                        self.create(None);
+                    }
+                }
+                Update::RestartFinished(message) => {
+                    self.restart_pending = false;
+                    self.error = Some(if message.is_empty() {
+                        "Session service restart did not complete. See restart.log in the data directory for details, then retry.".into()
+                    } else {
+                        format!("Session service restart failed: {message}")
+                    });
+                }
+                Update::ServiceStarted(result) => {
+                    self.service_start_pending = false;
+                    match result {
+                        Ok(()) => {
+                            self.info = Some("Session service started. Reconnecting…".into());
+                        }
+                        Err(error) => {
+                            self.error = Some(format!("Could not start session service: {error}"));
+                        }
+                    }
+                }
+                Update::Error(e) => {
+                    if installation::is_helper_error(&e) {
+                        self.installation_error = Some(e.clone());
+                    }
+                    if self.exit.active() {
+                        self.cancel_exit(e.clone());
+                    }
+                    #[cfg(feature = "test-support")]
+                    if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
+                        eprintln!("Fixture error {e}");
+                    }
+                    if daemon_connection::is_connection_error(&e) {
+                        self.connected = false;
+                    }
+                    self.error = Some(e);
+                }
+                Update::Info(i) => self.info = Some(i),
+            }
+        }
+        let mut budget = native_jobs::ResultBudget::new();
+        loop {
+            if !budget.next() {
+                ctx.request_repaint();
+                break;
+            }
+            let Ok((id, event)) = self.pty_rx.try_recv() else {
+                break;
+            };
+            if let PtyEvent::ClipboardStore(_, ref text) = event {
+                ctx.copy_text(text.clone());
+            }
+            if let PtyEvent::Exit = event
+                && let Some(session) = self.backend_ids.remove(&id)
+                && self.backends.get(&session).is_some_and(|b| b.id() == id)
+            {
+                self.backends.remove(&session);
+            }
+        }
+        self.ui_service_peak_ms = self
+            .ui_service_peak_ms
+            .max(processing_started.elapsed().as_secs_f64() * 1000.0);
+    }
+    fn apply_state(&mut self, mut state: State) {
+        if observation_is_stale(&self.state, &state) {
+            return;
+        }
+        // Failed owners can only supply an older on-disk snapshot. Keep their
+        // last observed records while publishing the new unavailability status.
+        let unavailable: HashSet<_> = state
+            .generations
+            .iter()
+            .filter(|incoming| {
+                incoming.error.is_some()
+                    && self.state.generations.iter().any(|current| {
+                        current.owner.id == incoming.owner.id
+                            && current.revision > incoming.revision
+                    })
+            })
+            .map(|health| health.owner.id.clone())
+            .collect();
+        if !unavailable.is_empty() {
+            let sessions: HashSet<_> = state
+                .sessions
+                .iter()
+                .chain(&self.state.sessions)
+                .filter(|session| unavailable.contains(&session.generation))
+                .map(|session| session.id.clone())
+                .collect();
+            state
+                .sessions
+                .retain(|session| !unavailable.contains(&session.generation));
+            state.sessions.extend(
+                self.state
+                    .sessions
+                    .iter()
+                    .filter(|session| unavailable.contains(&session.generation))
+                    .cloned(),
+            );
+            state
+                .agents
+                .retain(|agent| !sessions.contains(&agent.session_id));
+            state.agents.extend(
+                self.state
+                    .agents
+                    .iter()
+                    .filter(|agent| sessions.contains(&agent.session_id))
+                    .cloned(),
+            );
+            state
+                .notifications
+                .retain(|notice| !sessions.contains(&notice.session_id));
+            state.notifications.extend(
+                self.state
+                    .notifications
+                    .iter()
+                    .filter(|notice| sessions.contains(&notice.session_id))
+                    .cloned(),
+            );
+            state
+                .terminal_notices
+                .retain(|notice| !sessions.contains(&notice.session_id));
+            state.terminal_notices.extend(
+                self.state
+                    .terminal_notices
+                    .iter()
+                    .filter(|notice| sessions.contains(&notice.session_id))
+                    .cloned(),
+            );
+            for incoming in &mut state.generations {
+                if unavailable.contains(&incoming.owner.id)
+                    && let Some(current) = self
+                        .state
+                        .generations
+                        .iter()
+                        .find(|current| current.owner.id == incoming.owner.id)
+                {
+                    incoming.revision = current.revision;
+                    incoming.live_sessions = current.live_sessions;
+                    incoming.capabilities.clone_from(&current.capabilities);
+                    incoming.helper.clone_from(&current.helper);
+                }
+            }
+            if state.generation == self.state.generation && unavailable.contains(&state.generation)
+            {
+                state.revision = self.state.revision;
+                state.capabilities.clone_from(&self.state.capabilities);
+                state.attachment_helper_available = self.state.attachment_helper_available;
+                state
+                    .attachment_helper_executable
+                    .clone_from(&self.state.attachment_helper_executable);
+            }
+        }
+        // An async poll may have begun before a creation/mutation acknowledgment.
+        // Never replace a newer owner/catalog observation with that older result.
+        // A stale historical owner must not drop an active owner's session exit.
+        if self.state_loaded && inventory_is_stale(&self.state, &state) {
+            return;
+        }
+        if self
+            .error
+            .as_deref()
+            .is_some_and(daemon_connection::is_connection_error)
+        {
+            self.error = None;
+        }
+        if state.generation != self.state.generation
+            || state.attachment_helper_available == Some(true)
+        {
+            self.installation_error = None;
+            if self
+                .error
+                .as_deref()
+                .is_some_and(installation::is_helper_error)
+            {
+                self.error = None;
+            }
+        }
+        self.connected = true;
+        let initial = !self.state_loaded;
+        self.state_loaded = true;
+        let ended_sessions: Vec<_> = state
+            .sessions
+            .iter()
+            .filter(|session| {
+                session.lifecycle == Lifecycle::Ended
+                    && (initial
+                        || self
+                            .state
+                            .sessions
+                            .iter()
+                            .any(|old| old.id == session.id && old.lifecycle.live()))
+            })
+            .cloned()
+            .collect();
+        for p in &state.projects {
+            if !self.layouts.contains_key(&p.id) {
+                let dock = match Workspace::load(p.layout.clone()) {
+                    Ok(workspace) => workspace,
+                    Err(error) => {
+                        self.error = Some(format!(
+                            "{}: {error:#}. Layout will not be overwritten.",
+                            p.name
+                        ));
+                        self.layout_readonly.insert(p.id.clone());
+                        Workspace::empty()
+                    }
+                };
+                self.layout_saved.insert(p.id.clone(), p.layout.to_string());
+                self.layouts.insert(p.id.clone(), dock);
+            }
+        }
+        self.reconcile_project_inventory(&state.projects);
+        for ended in ended_sessions {
+            if self
+                .rename_session
+                .as_ref()
+                .is_some_and(|(sid, _)| sid == &ended.id)
+            {
+                self.rename_session = None;
+            }
+
+            #[cfg(feature = "test-support")]
+            if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
+                eprintln!("Fixture ended {:?}", ended.kind);
+            }
+            let was_active = self.active_session.as_ref() == Some(&ended.id);
+            let old_group = self
+                .layouts
+                .get(&ended.project_id)
+                .and_then(|workspace| {
+                    workspace.tabs.iter().find(|tab| {
+                        tab.layout
+                            .find_tab(&Tab::Terminal(ended.id.clone()))
+                            .is_some()
+                    })
+                })
+                .map(|tab| tab.id.clone());
+            let anchors = self.editor_origins.remove(&ended.id).unwrap_or_default();
+            self.remove_tab(&ended.id);
+            if was_active
+                && self.selected.as_ref() == Some(&ended.project_id)
+                && let Some(dock) = self.layouts.get_mut(&ended.project_id)
+            {
+                let live_tab = |tab: &Tab| match tab {
+                    Tab::Terminal(sid) => state
+                        .sessions
+                        .iter()
+                        .any(|s| &s.id == sid && s.lifecycle.live()),
+                    Tab::Diff { .. }
+                    | Tab::Image { .. }
+                    | Tab::Browser { .. }
+                    | Tab::Player
+                    | Tab::NativeEditor { .. } => true,
+                };
+                let survives = old_group
+                    .as_ref()
+                    .is_some_and(|id| dock.tabs.iter().any(|tab| &tab.id == id));
+                if survives {
+                    dock.active = old_group.unwrap();
+                } else if let Some(tab) = anchors
+                    .iter()
+                    .find(|tab| live_tab(tab) && dock.contains(tab))
+                {
+                    dock.activate_containing(tab);
+                }
+                let target = if survives {
+                    anchors
+                        .iter()
+                        .filter(|tab| live_tab(tab))
+                        .find_map(|tab| dock.find_tab(tab))
+                } else {
+                    None
+                }
+                .or_else(|| {
+                    dock.active_pane()
+                        .filter(|tab| live_tab(tab))
+                        .and_then(|tab| dock.find_tab(tab))
+                })
+                .or_else(|| {
+                    dock.iter_all_tabs()
+                        .find(|(_, tab)| live_tab(tab))
+                        .map(|(path, _)| path)
+                });
+                if let Some(path) = target {
+                    let _ = dock.set_active_tab(path);
+                    dock.set_focused_node_and_surface(path.node_path());
+                    self.active_session = dock
+                        .leaf(path.node_path())
+                        .ok()
+                        .and_then(|leaf| leaf.tabs.get(leaf.active.0))
+                        .and_then(|tab| match tab {
+                            Tab::Terminal(sid) => Some(sid.clone()),
+                            _ => None,
+                        });
+                }
+            }
+        }
+        if self.selected.is_none() {
+            self.selected = state
+                .selected_project
+                .clone()
+                .filter(|id| {
+                    !self.preferences.hidden_projects.contains(id)
+                        && state.projects.iter().any(|project| &project.id == id)
+                })
+                .or_else(|| {
+                    state
+                        .projects
+                        .iter()
+                        .find(|p| !self.preferences.hidden_projects.contains(&p.id))
+                        .map(|p| p.id.clone())
+                });
+        }
+        shortcuts::fill_defaults(&mut state.settings.keybindings);
+        self.preferences.markdown_modes.retain(|sid, _| {
+            state
+                .sessions
+                .iter()
+                .any(|s| &s.id == sid && markdown::available(s))
+        });
+        self.state = state;
+        self.migrate_attention();
+
+        if self.preferences_writable
+            && !self.preferences.typography_migrated
+            && !self.migration_requested
+        {
+            self.migration_requested = true;
+            let _ = self.jobs.send(Job::MigrateTypography);
+        }
+    }
+    fn migrate_attention(&mut self) {
+        if self.preferences_writable
+            && !self.preferences.attention_migrated
+            && !self.attention_pending
+            && self
+                .attention_requested
+                .is_none_or(|at| at.elapsed() >= Duration::from_secs(5))
+        {
+            self.attention_requested = Some(Instant::now());
+            self.attention_pending = self.jobs.send(Job::MigrateAttention).is_ok();
+        }
+    }
+    fn select_project(&mut self, project: String) {
+        self.apply_project_selection(project, false);
+    }
+    fn reveal_project(&mut self, project: String) {
+        self.apply_project_selection(project, true);
+    }
+    fn apply_project_selection(&mut self, project: String, force_activity: bool) {
+        let restored = self.preferences.hidden_projects.remove(&project);
+        if restored || force_activity {
+            self.touch_project_activity(&project);
+        }
+        if self.selected.as_ref() != Some(&project) {
+            self.finish_rename(true);
+        }
+        self.selection_generation = self.selection_generation.wrapping_add(1);
+        self.selected = Some(project.clone());
+        self.active_session = self
+            .layouts
+            .get_mut(&project)
+            .and_then(|d| d.main_surface_mut().find_active_focused())
+            .and_then(|(_, tab)| match tab {
+                Tab::Terminal(id) => Some(id.clone()),
+                _ => None,
+            });
+        self.send(Request::SelectProject { project });
+    }
+    fn touch_project_activity(&mut self, project: &str) {
+        self.preferences
+            .project_activity
+            .insert(project.to_string(), now());
+    }
+    fn hide_project(&mut self, project: &str) {
+        if !self.state.projects.iter().any(|p| p.id == project) {
+            return;
+        }
+        self.preferences.hidden_projects.insert(project.into());
+        // Also invalidate an outstanding folder-picker result, including when
+        // a background project was removed through its context menu.
+        self.selection_generation = self.selection_generation.wrapping_add(1);
+        if self.selected.as_deref() == Some(project) {
+            self.finish_rename(true);
+            self.selected = None;
+            self.active_session = None;
+            if let Some(next) = self.visible_projects().into_iter().next().map(|p| p.id) {
+                self.select_project(next);
+            }
+        }
+        self.info = Some("Project removed from the sidebar. Add the folder again to restore it; its files and sessions are kept.".into());
+    }
+    fn insert(&mut self, project: &str, tab: Tab, split: Option<&str>) {
+        let dock = self
+            .layouts
+            .entry(project.into())
+            .or_insert_with(Workspace::empty);
+        dock.version = dock.version.max(tab.layout_version());
+        if let Some(path) = dock.find_tab(&tab) {
+            let _ = dock.set_active_tab(path);
+            dock.set_focused_node_and_surface(path.node_path());
+            return;
+        }
+        if let Some(direction) = split {
+            let tree = dock.main_surface_mut();
+            if !tree.is_empty() {
+                let node = tree.focused_leaf().unwrap_or(NodeIndex::root());
+                let result = match direction {
+                    "left" => tree.split_left(node, 0.5, vec![tab]),
+                    "up" => tree.split_above(node, 0.5, vec![tab]),
+                    "down" => tree.split_below(node, 0.5, vec![tab]),
+                    _ => tree.split_right(node, 0.5, vec![tab]),
+                };
+                tree.set_focused_node(result[1]);
+                return;
+            }
+        }
+        dock.push_to_focused_leaf(tab);
+    }
+    fn selected_project(&self) -> Option<&Project> {
+        self.state
+            .projects
+            .iter()
+            .find(|p| Some(&p.id) == self.selected.as_ref())
+    }
+    fn context_session(&self) -> Option<&Session> {
+        self.state
+            .sessions
+            .iter()
+            .find(|s| {
+                Some(&s.id) == self.active_session.as_ref()
+                    && s.kind == SessionKind::Shell
+                    && Some(&s.project_id) == self.selected.as_ref()
+            })
+            .or_else(|| {
+                self.selected
+                    .as_ref()
+                    .and_then(|p| self.terminal_context.get(p))
+                    .and_then(|id| self.state.sessions.iter().find(|s| &s.id == id))
+            })
+    }
+    fn cwd(&self) -> Option<PathBuf> {
+        self.context_session()
+            .map(|s| s.cwd.clone())
+            .or_else(|| self.selected_project().map(|p| p.path.clone()))
+    }
+    fn dialog_directory(&self) -> PathBuf {
+        self.cwd()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| "/".into())
+    }
+    fn create(&mut self, split: Option<&str>) {
+        self.hide_center_overlay();
+        if split.is_some() && self.strip_focused() {
+            self.create_strip_split(split);
+            return;
+        }
+        if split.is_none() {
+            self.create_workspace_tab(None);
+            return;
+        }
+        if let Some(project) = &self.selected {
+            let _ = self.jobs.send(Job::rpc(
+                Request::Create {
+                    project: project.clone(),
+                    cwd: self.cwd(),
+                    file: None,
+                    line: None,
+                    column: None,
+                    editor: false,
+                },
+                self.editor_target(project, None, split),
+            ));
+        }
+    }
+    fn create_workspace_tab(&mut self, index: Option<usize>) {
+        self.hide_center_overlay();
+        let Some(project) = self.selected.clone() else {
+            return;
+        };
+        let tab_id = id();
+        if let Some(index) = index {
+            self.workspace_insert.insert(tab_id.clone(), index);
+        }
+        let _ = self.jobs.send(Job::rpc(
+            Request::Create {
+                project,
+                cwd: self.cwd(),
+                file: None,
+                line: None,
+                column: None,
+                editor: false,
+            },
+            After::Workspace(tab_id, Vec::new()),
+        ));
+    }
+    fn begin_workspace_close_tabs(&mut self, project: &str, ids: Vec<String>) {
+        self.rename_session = None;
+        let mut ids = ids.into_iter();
+        let Some(first) = ids.next() else {
+            return;
+        };
+        self.close_workspace_queue = ids.collect();
+        self.close_workspace = Some((project.to_owned(), first));
+    }
+    fn abort_workspace_close(&mut self) {
+        self.close_workspace = None;
+        self.close_workspace_queue.clear();
+    }
+    fn close_workspace_tab_now(&mut self, project: &str, tab_id: &str) {
+        if let Some(workspace) = self.layouts.get_mut(project) {
+            workspace.close(tab_id);
+        }
+        self.prune_native_docs();
+        self.advance_workspace_close(project);
+    }
+    fn advance_workspace_close(&mut self, project: &str) {
+        let existing: HashSet<String> = self
+            .layouts
+            .get(project)
+            .map(|workspace| workspace.tabs.iter().map(|tab| tab.id.clone()).collect())
+            .unwrap_or_default();
+        self.close_workspace_queue
+            .retain(|id| existing.contains(id));
+        let next =
+            (!self.close_workspace_queue.is_empty()).then(|| self.close_workspace_queue.remove(0));
+        self.close_workspace = next.map(|id| (project.to_owned(), id));
+    }
+    fn refresh_pane_maps(&mut self, project: &str, dock: &Workspace) {
+        let tabs = dock.iter_all_tabs().count();
+        let focus = dock.main_surface().focused_leaf();
+        let fresh = self.pane_index.as_ref().is_none_or(|cached| {
+            cached.project != project
+                || cached.group != dock.active
+                || cached.tabs != tabs
+                || cached.focus != focus
+        });
+        if fresh {
+            self.pane_index = Some(PaneIndex {
+                project: project.to_owned(),
+                group: dock.active.clone(),
+                tabs,
+                focus,
+            });
+            self.pane_by_tab = dock
+                .iter_all_tabs()
+                .map(|(path, tab)| (tab.key(), path.node_path()))
+                .collect();
+            self.pane_tabs = self
+                .pane_by_tab
+                .values()
+                .map(|path| {
+                    (
+                        *path,
+                        dock.leaf(*path)
+                            .map(|leaf| leaf.tabs.clone())
+                            .unwrap_or_default(),
+                    )
+                })
+                .collect();
+        }
+    }
+    fn editor_target(&self, project: &str, origin: Option<&Tab>, split: Option<&str>) -> After {
+        let mut anchors = Vec::new();
+
+        if let Some(dock) = self.layouts.get(project) {
+            let path = origin
+                .and_then(|tab| dock.find_tab(tab).map(|path| path.node_path()))
+                .or_else(|| {
+                    dock.main_surface()
+                        .focused_leaf()
+                        .map(|node| egui_dock::NodePath {
+                            surface: egui_dock::SurfaceIndex::main(),
+                            node,
+                        })
+                });
+            if let Some(path) = path
+                && let Ok(leaf) = dock.leaf(path)
+            {
+                if let Some(tab) = leaf.tabs.get(leaf.active.0) {
+                    anchors.push(tab.clone());
+                }
+                anchors.extend(
+                    leaf.tabs
+                        .iter()
+                        .filter(|tab| !anchors.contains(tab))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+            }
+        } else if self.selected.as_deref() == Some(project)
+            && let Some(origin) = origin
+            && let Some(path) = self.pane_by_tab.get(&origin.key())
+        {
+            anchors.push(origin.clone());
+            anchors.extend(
+                self.pane_tabs
+                    .get(path)
+                    .into_iter()
+                    .flatten()
+                    .filter(|tab| *tab != origin)
+                    .cloned(),
+            );
+        }
+        if let Some(split) = split {
+            After::CreateAt(anchors, Some(split.into()))
+        } else {
+            After::Workspace(id(), anchors)
+        }
+    }
+    fn begin_rename(&mut self, sid: &str, surface: RenameSurface) {
+        if let Some(session) = self.state.sessions.iter().find(|s| s.id == sid) {
+            self.rename_session = Some((sid.into(), session.label.clone()));
+            self.rename_focus = true;
+            self.rename_surface = surface;
+        }
+    }
+    fn finish_rename(&mut self, save: bool) {
+        if let Some((sid, title)) = self.rename_session.take()
+            && save
+            && !title.trim().is_empty()
+            && title.trim().len() <= 256
+        {
+            self.send(Request::Rename {
+                session: sid,
+                label: title.trim().into(),
+            });
+        }
+    }
+    fn renaming(&self, sid: &str, surface: RenameSurface) -> bool {
+        self.rename_surface == surface
+            && self
+                .rename_session
+                .as_ref()
+                .is_some_and(|(target, _)| target == sid)
+    }
+    fn open_file(&mut self, path: PathBuf, line: Option<u32>, split: Option<&str>, external: bool) {
+        self.open_file_mode(path, line, split, external, false);
+    }
+    fn open_file_mode(
+        &mut self,
+        path: PathBuf,
+        line: Option<u32>,
+        split: Option<&str>,
+        external: bool,
+        text: bool,
+    ) {
+        if !external && !text && image_preview::supported(&path) {
+            if let Some(project) = self.selected.clone() {
+                self.open_image(&project, path, split);
+            }
+            return;
+        }
+        if !external && !text && crate::browser::supported_file(&path) {
+            if let Some(project) = self.selected.clone() {
+                self.open_html(&project, path, split);
+            }
+            return;
+        }
+        if !external && !text && player::supported(&path) {
+            if let Some(project) = self.selected.clone() {
+                self.open_audio(&project, path, split);
+            }
+            return;
+        }
+        if external || self.state.settings.editor_mode == EditorMode::External {
+            let _ = self.jobs.send(Job::External(path));
+            return;
+        }
+        if self.state.settings.editor_mode == EditorMode::Native
+            && let Some(project) = self.selected.clone()
+        {
+            self.open_native(&project, path, line, split);
+            return;
+        }
+        self.hide_center_overlay();
+        if let Some(project) = &self.selected {
+            let _ = self.jobs.send(Job::rpc(
+                Request::Create {
+                    project: project.clone(),
+                    cwd: self.cwd(),
+                    file: Some(path),
+                    line,
+                    column: None,
+                    editor: true,
+                },
+                self.editor_target(project, None, split),
+            ));
+        }
+    }
+    fn open_image(&mut self, project: &str, path: PathBuf, split: Option<&str>) {
+        self.hide_center_overlay();
+        let origin = self
+            .active_session
+            .as_ref()
+            .map(|sid| Tab::Terminal(sid.clone()));
+        let after = self.editor_target(project, origin.as_ref(), split);
+        let _ = self.update_tx.send(Update::OpenImage(
+            project.into(),
+            std::path::absolute(&path).unwrap_or(path),
+            after,
+        ));
+    }
+    fn open_html(&mut self, project: &str, path: PathBuf, split: Option<&str>) {
+        self.hide_center_overlay();
+        let origin = self
+            .active_session
+            .as_ref()
+            .map(|sid| Tab::Terminal(sid.clone()));
+        let after = self.editor_target(project, origin.as_ref(), split);
+        let Tab::Browser { target, .. } =
+            Tab::browser_file(std::path::absolute(&path).unwrap_or(path))
+        else {
+            return;
+        };
+        let _ = self
+            .update_tx
+            .send(Update::OpenBrowser(project.into(), target, after));
+    }
+    fn browser_covered(&self) -> bool {
+        self.settings_open
+            || self.player_open
+            || self.command_dialog_open()
+            || self.picker_active
+            || self.close_session.is_some()
+            || self.close_workspace.is_some()
+            || self.notice_detail_modal_open()
+            || self.open_path
+            || self.add_project
+            || self.rename_session.is_some()
+    }
+
+    fn sync_browsers(&mut self, frame: &eframe::Frame) {
+        self.browser_host.sync(browser_host::SyncInput {
+            frame,
+            visible: &self.visible_browsers,
+            occluded: self.browser_covered(),
+            data_dir: &self.paths.data,
+        });
+        for (key, url) in self.browser_host.take_opens() {
+            let project = self
+                .layouts
+                .iter()
+                .find(|(_, workspace)| {
+                    workspace.tabs.iter().any(|group| {
+                        group
+                            .layout
+                            .iter_all_tabs()
+                            .any(|(_, tab)| tab.key() == key)
+                    })
+                })
+                .map(|(project, _)| project.clone());
+            if let Some(project) = project {
+                let _ = self.open_browser_url(&project, &url, None);
+            }
+        }
+    }
+
+    fn open_browser_url(&mut self, project: &str, url: &str, split: Option<&str>) -> Result<()> {
+        self.hide_center_overlay();
+        let origin = self
+            .active_session
+            .as_ref()
+            .map(|sid| Tab::Terminal(sid.clone()));
+        let after = self.editor_target(project, origin.as_ref(), split);
+        self.update_tx
+            .send(Update::OpenBrowser(
+                project.into(),
+                BrowserTarget::from_http_url(url)?,
+                after,
+            ))
+            .map_err(|_| anyhow::anyhow!("Browser open queue closed"))?;
+        Ok(())
+    }
+    fn place_gui_tab(&mut self, project: String, tab: Tab, after: After) {
+        match after {
+            After::CreateAt(anchors, direction) => {
+                let previous = self.layouts.get(&project).map(|d| d.active.clone());
+                if let Some(dock) = self.layouts.get_mut(&project) {
+                    if let Some(anchor) = anchors.iter().find(|t| dock.contains(t)) {
+                        dock.activate_containing(anchor);
+                    }
+                    if let Some(path) = anchors.iter().find_map(|t| dock.find_tab(t)) {
+                        dock.set_focused_node_and_surface(path.node_path());
+                    }
+                }
+                let same = previous.as_ref() == self.layouts.get(&project).map(|d| &d.active);
+                self.insert(&project, tab, direction.as_deref());
+                if !same
+                    && let Some(previous) = previous
+                    && let Some(dock) = self.layouts.get_mut(&project)
+                {
+                    dock.active = previous;
+                }
+                if same && self.selected.as_deref() == Some(&project) {
+                    self.active_session = None;
+                }
+            }
+            _ => {
+                self.layouts
+                    .entry(project.clone())
+                    .or_insert_with(Workspace::empty)
+                    .add(id(), tab);
+                if self.selected.as_deref() == Some(&project) {
+                    self.active_session = None;
+                }
+            }
+        }
+    }
+    fn apply_browser_submit(&mut self) {
+        if let Some((key, target)) = self.browser_submit.take() {
+            if self.browser_host.navigate(&key, &target) {
+                return;
+            }
+            // No mounted view (e.g. unsupported platform): persist the requested target.
+            self.apply_browser_navigation(&key, target);
+        }
+    }
+
+    fn apply_browser_navigation(&mut self, key: &str, target: BrowserTarget) {
+        for workspace in self.layouts.values_mut() {
+            for group in &mut workspace.tabs {
+                for tab in group
+                    .primary
+                    .iter_mut()
+                    .chain(group.layout.iter_all_tabs_mut().map(|(_, tab)| tab))
+                {
+                    if tab.key() == key
+                        && let Tab::Browser {
+                            target: current, ..
+                        } = tab
+                    {
+                        *current = target.clone();
+                    }
+                }
+            }
+        }
+        self.browser_urls.insert(
+            key.into(),
+            crate::browser::href(&target).unwrap_or_default(),
+        );
+        self.browser_host.committed(key, target);
+    }
+
+    fn reconcile_gui_resources(&mut self) {
+        let mut browsers = HashSet::new();
+        for workspace in self.layouts.values() {
+            for group in &workspace.tabs {
+                for (_, tab) in group.layout.iter_all_tabs() {
+                    if let Tab::Browser { .. } = tab {
+                        browsers.insert(tab.key());
+                    }
+                }
+            }
+        }
+        self.browser_host.retain(&browsers);
+        self.browser_urls.retain(|key, _| browsers.contains(key));
+        self.visible_browsers
+            .retain(|pane| browsers.contains(&pane.key));
+        for workspace in self.layouts.values_mut() {
+            workspace.strip_player();
+        }
+    }
+    fn hide_center_overlay(&mut self) {
+        if self.settings_open && self.settings_dirty() {
+            self.settings_pending = Some(settings_ui::SettingsPending::Close);
+        }
+        self.settings_open = false;
+        self.player_open = false;
+        self.search_open = false;
+        self.worktree_open = false;
+        self.shortcut_capture = None;
+    }
+
+    fn shortcut_allowed(&self, action: &str) -> bool {
+        if self.command_dialog_open()
+            || self.shortcut_capture.is_some()
+            || self.rename_session.is_some()
+            || self.picker_active
+        {
+            return false;
+        }
+        if self.settings_open || self.player_open {
+            return matches!(action, "open_settings" | "open_palette" | "toggle_ide_mode");
+        }
+        true
+    }
+
+    fn shortcut_applies(&self, action: &str) -> bool {
+        match action {
+            "editor_save" | "compare_disk" => self.active_editor_id().is_some(),
+            _ => true,
+        }
+    }
+
+    fn active_editor_id(&self) -> Option<String> {
+        let sid = self.active_session.as_ref()?;
+        self.state.sessions.iter().find_map(|session| {
+            (session.id == *sid && session.kind == SessionKind::Editor && !session.review)
+                .then(|| session.id.clone())
+        })
+    }
+
+    fn shortcut_label(&self, action: &str) -> String {
+        shortcuts::pretty(&self.state.settings.keybindings, action)
+    }
+
+    fn run_shortcut(&mut self, ctx: &egui::Context, action: &str) {
+        match action {
+            "open_file" => self.open_path = true,
+            "new_terminal" => self.create(None),
+            "split_up" => self.create(Some("up")),
+            "split_down" => self.create(Some("down")),
+            "split_left" => self.create(Some("left")),
+            "split_right" => self.create(Some("right")),
+            "open_settings" => self.open_settings(),
+            "open_palette" => self.open_command_palette(),
+            "find_in_terminal" => self.find_in_active_terminal(ctx),
+            "next_pane" => self.focus_next_pane(),
+            "select_all" => self.select_all_active(),
+            "search_scrollback" => self.search_active_scrollback(),
+            "copy_working_directory" => self.copy_active_working_directory(ctx),
+            "rename_terminal" => self.rename_active_terminal(),
+            "close_session" => self.close_active_session(),
+            "clear_scrollback" => self.clear_active_scrollback(),
+            "editor_save" => self.save_active_editor(),
+            "compare_disk" => self.compare_active_editor(),
+            "toggle_left_sidebar" => self.toggle_left_sidebar(),
+            "toggle_right_sidebar" => self.toggle_right_sidebar(),
+            "toggle_ide_mode" => self.toggle_ide_mode(),
+            _ => {}
+        }
+    }
+
+    fn open_command_palette(&mut self) {
+        self.palette_open = true;
+        self.palette_query.clear();
+        self.palette_index = 0;
+    }
+
+    fn find_in_active_terminal(&mut self, ctx: &egui::Context) {
+        let Some(sid) = self.active_session.clone() else {
+            return;
+        };
+        self.terminal_find.entry(sid.clone()).or_default();
+        ctx.memory_mut(|memory| {
+            memory.request_focus(egui::Id::new(("terminal-find", sid)));
+        });
+    }
+
+    fn focus_next_pane(&mut self) {
+        let Some(dock) = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.layouts.get_mut(id))
+        else {
+            return;
+        };
+        let nodes = dock
+            .main_surface()
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| node.is_leaf())
+            .map(|(index, _)| NodeIndex(index))
+            .collect::<Vec<_>>();
+        if nodes.is_empty() {
+            return;
+        }
+        let current = dock.main_surface().focused_leaf();
+        let index = nodes
+            .iter()
+            .position(|node| Some(*node) == current)
+            .map(|index| (index + 1) % nodes.len())
+            .unwrap_or(0);
+        dock.main_surface_mut().set_focused_node(nodes[index]);
+    }
+
+    fn select_all_active(&mut self) {
+        let Some(sid) = self.active_session.clone() else {
+            return;
+        };
+        if let Some(backend) = self.backends.get_mut(&sid) {
+            backend.select_all();
+        }
+    }
+
+    fn search_active_scrollback(&mut self) {
+        let Some(sid) = self.active_session.clone() else {
+            return;
+        };
+        self.search_session = Some(sid.clone());
+        self.search_open = true;
+        self.texts.remove(&format!("history:{sid}"));
+    }
+
+    fn copy_active_working_directory(&self, ctx: &egui::Context) {
+        let cwd = self
+            .active_session
+            .as_ref()
+            .and_then(|sid| {
+                self.state
+                    .sessions
+                    .iter()
+                    .find(|session| &session.id == sid)
+            })
+            .map(|session| session.cwd.clone())
+            .or_else(|| self.cwd());
+        let Some(cwd) = cwd else {
+            return;
+        };
+        ctx.copy_text(cwd.display().to_string());
+    }
+
+    fn rename_active_terminal(&mut self) {
+        let Some(sid) = self.active_session.clone() else {
+            return;
+        };
+        self.begin_rename(&sid, RenameSurface::Pane);
+    }
+
+    fn close_active_session(&mut self) {
+        if let Some(sid) = self.active_session.clone() {
+            self.close_session = Some(sid);
+        }
+    }
+
+    fn clear_active_scrollback(&mut self) {
+        let Some(sid) = self.active_session.clone() else {
+            return;
+        };
+        self.send(Request::ClearHistory {
+            session: Some(sid.clone()),
+        });
+        self.texts.remove(&format!("history:{sid}"));
+    }
+
+    fn save_active_editor(&mut self) {
+        let Some(sid) = self.active_editor_id() else {
+            return;
+        };
+        self.send(Request::EditorSave { session: sid });
+    }
+
+    fn compare_active_editor(&mut self) {
+        let Some(sid) = self.active_editor_id() else {
+            return;
+        };
+        self.send(Request::EditorCompare { session: sid });
+    }
+
+    fn toggle_left_sidebar(&mut self) {
+        self.preferences.left_visible = !self.preferences.left_visible;
+    }
+
+    fn toggle_right_sidebar(&mut self) {
+        self.preferences.visible = !self.preferences.visible;
+    }
+
+    fn toggle_ide_mode(&mut self) {
+        self.preferences.ide_mode = !self.preferences.ide_mode;
+        if self.preferences.ide_mode {
+            // Sidebars paint from `visible || ide_mode`. Leave the saved
+            // flags alone so leaving IDE mode restores the prior chrome.
+            self.preferences.ide_terminal_collapsed = false;
+        } else {
+            self.resync_active_from_dock();
+        }
+    }
+
+    /// Strip-dock membership: a session lives in exactly one dock, so this
+    /// doubles as the "not in the main dock" check.
+    fn is_strip_session(&self, project: &str, sid: &str) -> bool {
+        let pane = Tab::Terminal(sid.into());
+        self.preferences
+            .ide_strip_docks
+            .0
+            .get(project)
+            .is_some_and(|dock| dock.find_tab(&pane).is_some())
+    }
+
+    /// Drop `sid` from every strip dock (close, terminate, session end).
+    fn drop_strip_session(&mut self, sid: &str) {
+        let pane = Tab::Terminal(sid.into());
+        for dock in self.preferences.ide_strip_docks.0.values_mut() {
+            while let Some(path) = dock.find_tab(&pane) {
+                dock.remove_tab(path);
+            }
+        }
+    }
+
+    /// Focus a strip tab: activate it in the strip dock, make it the active
+    /// session, tell the daemon.
+    fn activate_strip_session(&mut self, project: &str, sid: &str) {
+        let pane = Tab::Terminal(sid.into());
+        if let Some(dock) = self.preferences.ide_strip_docks.0.get_mut(project)
+            && let Some(path) = dock.find_tab(&pane)
+        {
+            let _ = dock.set_active_tab(path);
+            dock.set_focused_node_and_surface(path.node_path());
+        }
+        self.active_session = Some(sid.into());
+        self.send(Request::Focus {
+            session: sid.into(),
+        });
+    }
+
+    /// First live shell tab in the strip dock, for focus healing.
+    fn strip_first_live(&self, project: &str) -> Option<String> {
+        let dock = self.preferences.ide_strip_docks.0.get(project)?;
+        dock.iter_all_tabs().find_map(|(_, tab)| match tab {
+            Tab::Terminal(sid)
+                if self.state.sessions.iter().any(|s| {
+                    &s.id == sid && s.kind == SessionKind::Shell && s.lifecycle.live()
+                }) =>
+            {
+                Some(sid.clone())
+            }
+            _ => None,
+        })
+    }
+
+    /// The bottom strip is on screen. Hidden docks stay in preferences and
+    /// must not take keyboard focus.
+    fn ide_strip_visible(&self) -> bool {
+        self.preferences.ide_mode && !self.preferences.ide_terminal_collapsed
+    }
+
+    /// True when keyboard focus belongs to a strip terminal: IDE mode with a
+    /// visible strip and a live strip session active. Pane-relative actions
+    /// (splits) follow this; workspace-level "new tab" stays in the main dock.
+    fn strip_focused(&self) -> bool {
+        self.ide_strip_visible()
+            && self.active_session.as_deref().is_some_and(|sid| {
+                self.state
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == sid)
+                    .is_some_and(|s| {
+                        s.lifecycle.live() && self.is_strip_session(&s.project_id, sid)
+                    })
+            })
+    }
+
+    /// Insert a tab into the strip dock, splitting the focused leaf when asked.
+    /// Mirrors [`Self::insert`], which serves the main dock.
+    fn insert_strip(&mut self, project: &str, tab: Tab, split: Option<&str>) {
+        let dock = self
+            .preferences
+            .ide_strip_docks
+            .0
+            .entry(project.into())
+            .or_insert_with(|| egui_dock::DockState::new(vec![]));
+        if let Some(path) = dock.find_tab(&tab) {
+            let _ = dock.set_active_tab(path);
+            dock.set_focused_node_and_surface(path.node_path());
+            return;
+        }
+        if let Some(direction) = split {
+            let tree = dock.main_surface_mut();
+            if !tree.is_empty() {
+                let node = tree.focused_leaf().unwrap_or(NodeIndex::root());
+                let result = match direction {
+                    "left" => tree.split_left(node, 0.5, vec![tab]),
+                    "up" => tree.split_above(node, 0.5, vec![tab]),
+                    "down" => tree.split_below(node, 0.5, vec![tab]),
+                    _ => tree.split_right(node, 0.5, vec![tab]),
+                };
+                tree.set_focused_node(result[1]);
+                return;
+            }
+        }
+        dock.push_to_focused_leaf(tab);
+    }
+
+    /// Strip-dock counterpart of [`Self::editor_target`]: anchor a creation on
+    /// the origin pane's leaf, else the strip's focused leaf.
+    fn strip_target(&self, project: &str, origin: Option<&Tab>, split: Option<&str>) -> After {
+        let mut anchors = Vec::new();
+        if let Some(dock) = self.preferences.ide_strip_docks.0.get(project) {
+            let path = origin
+                .and_then(|tab| dock.find_tab(tab).map(|path| path.node_path()))
+                .or_else(|| {
+                    dock.main_surface()
+                        .focused_leaf()
+                        .map(|node| egui_dock::NodePath {
+                            surface: egui_dock::SurfaceIndex::main(),
+                            node,
+                        })
+                });
+            if let Some(path) = path
+                && let Ok(leaf) = dock.leaf(path)
+            {
+                if let Some(tab) = leaf.tabs.get(leaf.active.0) {
+                    anchors.push(tab.clone());
+                }
+                anchors.extend(
+                    leaf.tabs
+                        .iter()
+                        .filter(|tab| !anchors.contains(tab))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+        match split {
+            Some(split) => After::StripAt(anchors, Some(split.into())),
+            None => After::Strip,
+        }
+    }
+
+    /// Open a shell in the strip dock, splitting the focused strip leaf when asked.
+    fn create_strip_split(&mut self, split: Option<&str>) {
+        self.hide_center_overlay();
+        if let Some(project) = self.selected.clone() {
+            let after = self.strip_target(&project, None, split);
+            let _ = self.jobs.send(Job::rpc(
+                Request::Create {
+                    project,
+                    cwd: self.cwd(),
+                    file: None,
+                    line: None,
+                    column: None,
+                    editor: false,
+                },
+                after,
+            ));
+        }
+    }
+
+    /// Open a shell owned by the IDE strip (never inserted as a dock tab).
+    fn create_strip(&mut self) {
+        self.hide_center_overlay();
+        if let Some(project) = self.selected.clone() {
+            let _ = self.jobs.send(Job::rpc(
+                Request::Create {
+                    project,
+                    cwd: self.cwd(),
+                    file: None,
+                    line: None,
+                    column: None,
+                    editor: false,
+                },
+                After::Strip,
+            ));
+        }
+    }
+
+    /// Re-derive the active session from the dock. Leaving IDE mode or hiding
+    /// the strip orphans a strip-owned `active_session`; dock focus keeps
+    /// working only if it points at a visible terminal again.
+    fn resync_active_from_dock(&mut self) {
+        let keep = match self
+            .active_session
+            .as_deref()
+            .and_then(|sid| self.state.sessions.iter().find(|s| s.id == sid))
+        {
+            Some(s) => !(s.lifecycle.live() && self.is_strip_session(&s.project_id, &s.id)),
+            None => self.active_session.is_none(),
+        };
+        if keep {
+            return;
+        }
+        self.active_session = self
+            .selected
+            .as_ref()
+            .and_then(|project| self.layouts.get(project))
+            .and_then(|dock| dock.active_pane())
+            .and_then(|tab| match tab {
+                Tab::Terminal(sid) => Some(sid.clone()),
+                _ => None,
+            });
+    }
+
+    /// Heal an `active_session` cleared by a tab close: prefer the strip's
+    /// live selection while the strip is visible, else the dock's focused
+    /// terminal. Runs after [`Self::sync_active_session`], which only follows
+    /// dock focus changes so a strip click is never clobbered.
+    ///
+    /// A focused image, browser, diff, player, or editor is a real selection.
+    /// That `None` must stay `None`. Closing the terminal that was focused
+    /// afterwards still heals.
+    fn restore_cleared_focus(&mut self, dock: &Workspace) {
+        if self.active_session.is_some() || self.non_terminal_selected {
+            return;
+        }
+        if self.ide_strip_visible()
+            && let Some(project) = self.selected.clone()
+            && let Some(next) = self.strip_first_live(&project)
+        {
+            self.activate_strip_session(&project, &next);
+            return;
+        }
+        if let Some(Tab::Terminal(sid)) = dock.active_pane() {
+            self.active_session = Some(sid.clone());
+        }
+    }
+
+    fn ide_terminal_strip(&mut self, ui: &mut egui::Ui) {
+        let Some(project) = self.selected.clone() else {
+            ui.weak("Select a project to use the terminal strip.");
+            return;
+        };
+        ui.horizontal(|ui| {
+            ui.strong("Terminal");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if appearance::sidebar_action(ui, "PanelBottomClose", "Hide terminal strip")
+                    .clicked()
+                {
+                    self.preferences.ide_terminal_collapsed = true;
+                    self.resync_active_from_dock();
+                }
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "ide-terminal-strip", ui.min_rect());
+            });
+        });
+        let mut strip = self
+            .preferences
+            .ide_strip_docks
+            .0
+            .remove(&project)
+            .unwrap_or_else(|| egui_dock::DockState::new(vec![]));
+        if strip.iter_all_tabs().next().is_none() {
+            ui.weak("No terminal open. Start one to dock it here.");
+            if ui.button("Open terminal").clicked() {
+                self.create_strip();
+            }
+        } else {
+            let style = self.dock_style(ui);
+            self.refresh_strip_pane_maps(&strip);
+            DockArea::new(&mut strip)
+                // Distinct area id: drag state is keyed by it, so tabs can
+                // never move between the strip and the main dock.
+                .id(egui::Id::new("ide-strip-dock"))
+                .style(style)
+                .show_add_buttons(true)
+                .show_leaf_close_all_buttons(false)
+                .show_leaf_collapse_buttons(false)
+                .show_inside(
+                    ui,
+                    &mut Viewer {
+                        app: self,
+                        strip: true,
+                    },
+                );
+            self.apply_add_strip_tab(&project, &mut strip);
+            self.apply_focus_strip_tab(&mut strip);
+        }
+        self.preferences.ide_strip_docks.0.insert(project, strip);
+    }
+
+    fn go_session(&mut self, sid: &str) {
+        self.hide_center_overlay();
+        self.finish_rename(true);
+        if let Some(s) = self.state.sessions.iter().find(|s| s.id == sid).cloned() {
+            if s.lifecycle.live() && self.is_strip_session(&s.project_id, sid) {
+                self.select_project(s.project_id.clone());
+                self.preferences.ide_mode = true;
+                self.preferences.ide_terminal_collapsed = false;
+                self.activate_strip_session(&s.project_id, &s.id);
+                return;
+            }
+            self.select_project(s.project_id.clone());
+            let pane = Tab::Terminal(sid.into());
+            let workspace = self
+                .layouts
+                .entry(s.project_id.clone())
+                .or_insert_with(Workspace::empty);
+            if !workspace.activate_containing(&pane) {
+                workspace.add(id(), pane.clone());
+            }
+            self.insert(&s.project_id, pane, None);
+            self.active_session = Some(s.id.clone());
+            self.send(Request::SelectProject {
+                project: s.project_id,
+            });
+            self.send(Request::Focus { session: s.id });
+        }
+    }
+    fn has_project(&self, project: &str) -> bool {
+        self.state.projects.iter().any(|p| p.id == project)
+    }
+    fn can_persist_layout(&self, project: &str) -> bool {
+        !self.layout_readonly.contains(project) && self.has_project(project)
+    }
+    fn persistable_layouts(&self) -> Vec<(String, Workspace)> {
+        self.layouts
+            .iter()
+            .filter(|(project, _)| self.can_persist_layout(project))
+            .map(|(project, layout)| (project.clone(), layout.clone()))
+            .collect()
+    }
+    fn reconcile_project_inventory(&mut self, projects: &[Project]) {
+        let known: HashSet<&str> = projects.iter().map(|project| project.id.as_str()).collect();
+        self.layouts.retain(|id, _| known.contains(id.as_str()));
+        self.layout_saved
+            .retain(|id, _| known.contains(id.as_str()));
+        self.layout_pending
+            .retain(|id, _| known.contains(id.as_str()));
+        self.layout_readonly
+            .retain(|id| known.contains(id.as_str()));
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|id| !known.contains(id.as_str()))
+        {
+            self.selected = None;
+            self.active_session = None;
+        }
+    }
+    fn layout_save_failed(&mut self, error: String) {
+        if error.contains("Unknown project") {
+            return;
+        }
+        if self.exit.active() {
+            self.cancel_exit(error);
+        } else {
+            self.error = Some(error);
+        }
+    }
+    fn save_layouts(&mut self) {
+        let layouts = self.persistable_layouts();
+        self.layout_generation = self.layout_generation.wrapping_add(1);
+        let _ = self
+            .jobs
+            .send(Job::PrepareLayouts(self.layout_generation, layouts));
+    }
+    fn remove_tab(&mut self, sid: &str) {
+        for workspace in self.layouts.values_mut() {
+            workspace.remove_session(sid);
+        }
+        self.backends.remove(sid);
+        self.drop_strip_session(sid);
+        if self.active_session.as_deref() == Some(sid) {
+            self.active_session = None;
+            // The closed terminal was the selection. A main pane remembered
+            // from earlier must not block recovery.
+            self.non_terminal_selected = false;
+        }
+    }
+    fn terminal_action(
+        &mut self,
+        ctx: &egui::Context,
+        session: &Session,
+        target: &services::Target,
+        action: FileAction,
+    ) {
+        if action == FileAction::Copy {
+            ctx.copy_text(target.display());
+            return;
+        }
+        match target {
+            services::Target::Url(url) => {
+                let _ = self.jobs.send(Job::Browser(url.clone()));
+            }
+            services::Target::File(path, line, column) => {
+                if action == FileAction::Browser {
+                    self.open_in_browser(path);
+                    return;
+                }
+                if image_preview::supported(path)
+                    && matches!(action, FileAction::Open | FileAction::Split)
+                {
+                    self.open_image(
+                        &session.project_id,
+                        path.clone(),
+                        (action == FileAction::Split).then_some("right"),
+                    );
+                    return;
+                }
+                if crate::browser::supported_file(path)
+                    && matches!(action, FileAction::Open | FileAction::Split)
+                {
+                    self.open_html(
+                        &session.project_id,
+                        path.clone(),
+                        (action == FileAction::Split).then_some("right"),
+                    );
+                    return;
+                }
+                if action == FileAction::External
+                    || self.state.settings.editor_mode == EditorMode::External
+                {
+                    let _ = self.jobs.send(Job::External(path.clone()));
+                } else if self.state.settings.editor_mode == EditorMode::Native {
+                    self.open_native(
+                        &session.project_id,
+                        path.clone(),
+                        *line,
+                        (action == FileAction::Split).then_some("right"),
+                    );
+                } else {
+                    let origin = Tab::Terminal(session.id.clone());
+                    let after = self.editor_target(
+                        &session.project_id,
+                        Some(&origin),
+                        (action == FileAction::Split).then_some("right"),
+                    );
+                    let _ = self.jobs.send(Job::rpc(
+                        Request::Create {
+                            project: session.project_id.clone(),
+                            cwd: Some(session.cwd.clone()),
+                            file: Some(path.clone()),
+                            line: *line,
+                            column: *column,
+                            editor: true,
+                        },
+                        after,
+                    ));
+                }
+            }
+        }
+    }
+    fn file_action(
+        &mut self,
+        ui: &egui::Ui,
+        action: FileAction,
+        path: &std::path::Path,
+        line: Option<u32>,
+    ) {
+        match action {
+            FileAction::Open => self.open_file(path.into(), line, None, false),
+            FileAction::Text => self.open_file_mode(path.into(), line, None, false, true),
+            FileAction::Split => self.open_file(path.into(), line, Some("right"), false),
+            FileAction::External => self.open_file(path.into(), line, None, true),
+            FileAction::Copy => ui.ctx().copy_text(path.display().to_string()),
+            FileAction::StagedDiff | FileAction::WorkingDiff => {
+                if let Some(root) = self.git_root() {
+                    let available = self
+                        .state
+                        .capabilities
+                        .iter()
+                        .any(|c| c == NVIM_REVIEW_CAPABILITY);
+                    self.spawn_diff(SpawnDiff {
+                        cwd: root,
+                        path: path.into(),
+                        staged: action == FileAction::StagedDiff,
+                        native: !available,
+                    });
+                    if !available {
+                        self.info = Some("Using native diff: the running session service does not support Neovim reviews. Update the service after finishing your live sessions.".into());
+                    }
+                }
+            }
+            FileAction::NativeStagedDiff | FileAction::NativeWorkingDiff => {
+                if let Some(root) = self.git_root() {
+                    self.spawn_diff(SpawnDiff {
+                        cwd: root,
+                        path: path.into(),
+                        staged: action == FileAction::NativeStagedDiff,
+                        native: true,
+                    });
+                }
+            }
+            FileAction::Browser => self.open_in_browser(path),
+        }
+    }
+    fn open_in_browser(&mut self, path: &Path) {
+        let Some(url) = file_actions::file_url(path, &self.dialog_directory()) else {
+            return;
+        };
+        let _ = self.jobs.send(Job::Browser(url));
+    }
+    fn perform_git_outcome(&mut self, ui: &egui::Ui, outcome: sidebar_ui::GitPanelOutcome) {
+        if outcome.refresh {
+            self.refresh_request = None;
+        }
+        for clicked in outcome.clicked {
+            self.activate_file_action(ui, &clicked.path, clicked.action);
+        }
+        for picked in outcome.menu {
+            self.file_action(ui, picked.action, &picked.path, None);
+        }
+    }
+    /// Performs a row-click action, collapsing rapid repeats the way a
+    /// double-click does. Menu picks bypass this and go to `file_action`.
+    fn activate_file_action(&mut self, ui: &egui::Ui, path: &Path, action: FileAction) {
+        let staged = match action {
+            FileAction::StagedDiff | FileAction::NativeStagedDiff => Some(true),
+            FileAction::WorkingDiff | FileAction::NativeWorkingDiff => Some(false),
+            _ => None,
+        };
+        let interval = Duration::from_secs_f64(
+            ui.ctx()
+                .options(|options| options.input_options.max_double_click_delay),
+        );
+        if !self.note_file_activation(path.to_path_buf(), staged, action, interval) {
+            return;
+        }
+        if matches!(
+            action,
+            FileAction::StagedDiff
+                | FileAction::WorkingDiff
+                | FileAction::NativeStagedDiff
+                | FileAction::NativeWorkingDiff
+        ) {
+            self.hide_center_overlay();
+        }
+        self.file_action(ui, action, path, None);
+    }
+    /// Records a click activation; returns false when it repeats the previous
+    /// one within the double-click interval.
+    fn note_file_activation(
+        &mut self,
+        path: PathBuf,
+        staged: Option<bool>,
+        action: FileAction,
+        interval: Duration,
+    ) -> bool {
+        if self.file_activation.as_ref().is_some_and(|last| {
+            last.project == self.selected
+                && last.path == path
+                && last.staged == staged
+                && last.action == action
+                && last.at.elapsed() < interval
+        }) {
+            return false;
+        }
+        self.file_activation = Some(FileActivation {
+            project: self.selected.clone(),
+            path,
+            staged,
+            action,
+            at: Instant::now(),
+        });
+        true
+    }
+    fn spawn_diff(
+        &mut self,
+        SpawnDiff {
+            cwd,
+            path,
+            staged,
+            native,
+        }: SpawnDiff,
+    ) {
+        let Some(project) = self.selected.clone() else {
+            return;
+        };
+        if native {
+            let tab = Tab::Diff { cwd, path, staged };
+            if let Some(workspace) = self.layouts.get_mut(&project)
+                && workspace.activate_containing(&tab)
+            {
+                self.active_session = None;
+                return;
+            }
+            self.layouts
+                .entry(project)
+                .or_insert_with(Workspace::empty)
+                .add(id(), tab.clone());
+            self.active_session = None;
+            self.diffs.remove(&tab.key());
+            self.diff_preview.remove(&tab.key());
+            self.loading.insert(tab.key());
+            if self.state.settings.diff_split_default {
+                self.diff_split.insert(tab.key());
+            } else {
+                self.diff_split.remove(&tab.key());
+            }
+            self.error = None;
+            if self.neovim_review_unavailable() {
+                self.info = Some("Using built-in diff. Neovim review needs the updated daemon; restart it after finishing your live sessions.".into());
+            }
+            let _ = self.jobs.send(Job::Diff(tab));
+            return;
+        }
+        let _ = self.jobs.send(Job::rpc(
+            Request::CreateReview {
+                project,
+                cwd,
+                path,
+                staged,
+            },
+            After::Workspace(id(), vec![]),
+        ));
+    }
+    fn neovim_review_unavailable(&self) -> bool {
+        self.state.settings.review_mode == ReviewMode::Neovim
+            && !self
+                .state
+                .capabilities
+                .iter()
+                .any(|c| c == NVIM_REVIEW_CAPABILITY)
+    }
+    fn git_root(&self) -> Option<PathBuf> {
+        self.context.as_ref().and_then(|c| c.root.clone())
+    }
+    fn editors_only(&self, ids: &[String]) -> bool {
+        !ids.is_empty()
+            && !self.state.agents.iter().any(|agent| {
+                ids.contains(&agent.session_id)
+                    && !matches!(
+                        agent.state,
+                        AgentState::Completed | AgentState::Failed | AgentState::Stopped
+                    )
+            })
+            && ids.iter().all(|id| {
+                self.state
+                    .sessions
+                    .iter()
+                    .any(|s| &s.id == id && s.kind == SessionKind::Editor)
+            })
+    }
+    fn editor_close_busy(&self, ids: &[String]) -> bool {
+        ids.iter().any(|id| self.editor_close_sessions.contains(id))
+    }
+
+    fn editor_close_prompted(&self, ids: &[String]) -> bool {
+        self.editor_close_prompts
+            .iter()
+            .any(|(_, prompted, _)| prompted.iter().any(|id| ids.contains(id)))
+    }
+
+    fn skip_editor_close_request(&self, ids: &[String]) -> bool {
+        self.editor_close_busy(ids) || self.editor_close_prompted(ids)
+    }
+
+    fn unsaved_close_prompt(
+        &self,
+        sid: &str,
+    ) -> Option<(editor_close::Target, Vec<String>, String)> {
+        self.editor_close_prompts
+            .iter()
+            .find(|(_, ids, _)| ids.iter().any(|id| id == sid))
+            .cloned()
+    }
+
+    fn upsert_unsaved_close(
+        &mut self,
+        target: editor_close::Target,
+        ids: Vec<String>,
+        error: String,
+    ) {
+        if let Some(prompt) = self
+            .editor_close_prompts
+            .iter_mut()
+            .find(|(_, prompted, _)| prompted == &ids || prompted.iter().any(|id| ids.contains(id)))
+        {
+            *prompt = (target, ids, error);
+            return;
+        }
+        self.editor_close_prompts.push((target, ids, error));
+    }
+
+    fn apply_unsaved_close_choice(
+        &mut self,
+        choice: appearance::UnsavedCloseChoice,
+        target: editor_close::Target,
+        ids: Vec<String>,
+    ) {
+        match choice {
+            appearance::UnsavedCloseChoice::Cancel => {
+                self.editor_close_prompts
+                    .retain(|(_, prompted, _)| prompted != &ids);
+                if matches!(target, editor_close::Target::Workspace(..)) {
+                    self.abort_workspace_close();
+                }
+            }
+            appearance::UnsavedCloseChoice::Save => {
+                self.close_editors(target, ids, editor_close::Mode::Save);
+            }
+            appearance::UnsavedCloseChoice::Discard => {
+                self.close_editors(target, ids, editor_close::Mode::Discard);
+            }
+        }
+    }
+
+    fn editors_closed(
+        &mut self,
+        target: editor_close::Target,
+        ids: Vec<String>,
+        result: Result<(), String>,
+    ) {
+        for id in &ids {
+            self.editor_close_sessions.remove(id);
+        }
+        match result {
+            Ok(()) => {
+                self.editor_close_prompts
+                    .retain(|(_, prompted, _)| !prompted.iter().any(|id| ids.contains(id)));
+                match target {
+                    editor_close::Target::Workspace(project, id) => {
+                        self.close_workspace_tab_now(&project, &id);
+                    }
+                    editor_close::Target::Pane(sid) => self.remove_tab(&sid),
+                }
+            }
+            Err(error) => self.upsert_unsaved_close(target, ids, error),
+        }
+    }
+
+    fn close_editors(
+        &mut self,
+        target: editor_close::Target,
+        ids: Vec<String>,
+        mode: editor_close::Mode,
+    ) {
+        if self.editor_close_busy(&ids) {
+            return;
+        }
+        self.editor_close_sessions.extend(ids.iter().cloned());
+        let timeout = Duration::from_secs(self.state.settings.editor_close_timeout_secs);
+        let _ = self
+            .jobs
+            .send(Job::CloseEditors(target, ids, mode, timeout));
+    }
+
+    fn center_pane(&mut self, ui: &mut egui::Ui) {
+        self.settings_unsaved_dialog(ui.ctx());
+        if self.settings_open {
+            self.settings_center(ui);
+            return;
+        }
+        if self.player_open {
+            self.player_center(ui);
+            return;
+        }
+        if self.palette_open {
+            self.palette_center(ui);
+            return;
+        }
+        if self.worktree_open {
+            self.worktree_management_center(ui);
+            return;
+        }
+        if self.worktree_draft.is_some() {
+            self.worktree_center(ui);
+            return;
+        }
+        if self.search_open {
+            self.search_history_center(ui);
+            return;
+        }
+        self.workspace_center(ui);
+    }
+
+    fn search_history_center(&mut self, ui: &mut egui::Ui) {
+        let Some(sid) = self.search_session.clone() else {
+            self.search_open = false;
+            return;
+        };
+        ui.set_min_size(ui.available_size());
+        ui.horizontal(|ui| {
+            ui.strong("Search session history");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if appearance::sidebar_action(ui, "X", "Close").clicked() {
+                    self.search_open = false;
+                }
+            });
+        });
+        ui.add_space(6.0);
+        ui.add(
+            egui::TextEdit::singleline(&mut self.search)
+                .hint_text("Search scrollback…")
+                .desired_width(400.0),
+        );
+        ui.add_space(8.0);
+        let key = format!("history:{sid}");
+        if !self.texts.contains_key(&key) && self.loading.insert(key.clone()) {
+            let _ = self.jobs.send(Job::rpc(
+                Request::History {
+                    session: sid.clone(),
+                },
+                After::Text(key.clone()),
+            ));
+        }
+        egui::ScrollArea::both().show(ui, |ui| {
+            if let Some(text) = self.texts.get(&key) {
+                let needle = self.search.to_lowercase();
+                for (line, text) in text
+                    .lines()
+                    .enumerate()
+                    .filter(|(_, l)| l.to_lowercase().contains(&needle))
+                    .take(2000)
+                {
+                    ui.monospace(format!("{}  {}", line + 1, text));
+                }
+            } else {
+                ui.weak("Loading scrollback…");
+            }
+        });
+    }
+
+    fn worktree_management_center(&mut self, ui: &mut egui::Ui) {
+        ui.set_min_size(ui.available_size());
+        ui.horizontal(|ui| {
+            ui.strong("Worktrees");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if appearance::sidebar_action(ui, "X", "Close").clicked() {
+                    self.worktree_open = false;
+                }
+            });
+        });
+        ui.add_space(8.0);
+        let has_worktrees = self.state.worktrees.iter().any(|w| !w.removed);
+        if !has_worktrees && self.worktree_draft.is_none() {
+            ui.weak("No worktrees yet.");
+            ui.add_space(8.0);
+            if ui.button("Create a worktree").clicked() {
+                self.open_worktree_wizard();
+            }
+            return;
+        }
+        if let Some(draft) = &self.worktree_draft {
+            let mut submit = false;
+            let mut browse = false;
+            let mut cancel = false;
+            let mut clone = draft.clone();
+            self.worktree_form(ui, &mut clone, &mut submit, &mut browse, &mut cancel);
+            if browse {
+                self.browse_target = Some(BrowseTarget::WorktreeDest);
+            }
+            if submit {
+                self.submit_worktree(&clone);
+            }
+            if submit || cancel {
+                self.worktree_draft = None;
+            } else {
+                self.worktree_draft = Some(clone);
+            }
+            ui.add_space(12.0);
+            ui.separator();
+            ui.add_space(4.0);
+        }
+        let _header_h = 28.0;
+        let footer_h = 44.0;
+        let list_h = (ui.available_height() - footer_h).max(80.0);
+        let worktrees: Vec<_> = self
+            .state
+            .worktrees
+            .iter()
+            .filter(|w| !w.removed)
+            .cloned()
+            .collect();
+        let selected = self.selected.clone();
+        egui::ScrollArea::vertical()
+            .max_height(list_h)
+            .show(ui, |ui| {
+                for worktree in &worktrees {
+                    let Some(project) = self
+                        .state
+                        .projects
+                        .iter()
+                        .find(|p| p.id == worktree.project_id)
+                    else {
+                        continue;
+                    };
+                    let live = self
+                        .state
+                        .sessions
+                        .iter()
+                        .filter(|s| s.project_id == project.id && s.lifecycle.live())
+                        .count();
+                    let is_selected = selected.as_ref() == Some(&project.id);
+                    let path = project.path.display().to_string();
+                    let name = project.name.clone();
+                    let project_id = project.id.clone();
+                    let response = appearance::project_row(
+                        ui,
+                        &name,
+                        "GitBranch",
+                        is_selected,
+                        self.theme.row_height(),
+                        &live.to_string(),
+                        appearance::color(&self.theme.secondary),
+                    )
+                    .on_hover_text(format!(
+                        "{}\n{}",
+                        path,
+                        worktree.path.display()
+                    ));
+                    if response.clicked() {
+                        self.select_project(project_id.clone());
+                        self.worktree_open = false;
+                    }
+                    let app = &mut *self;
+                    appearance::context_menu(&response, |ui| {
+                        if appearance::menu_item(ui, "Open", "FolderOpen", "").clicked() {
+                            app.select_project(project_id.clone());
+                            app.worktree_open = false;
+                            ui.close();
+                        }
+                        if appearance::menu_item(
+                            ui,
+                            "New terminal",
+                            "Terminal",
+                            &app.shortcut_label("new_terminal"),
+                        )
+                        .clicked()
+                        {
+                            app.select_project(project_id.clone());
+                            app.create(None);
+                            app.worktree_open = false;
+                            ui.close();
+                        }
+                        if appearance::menu_item(ui, "Remove worktree…", "X", "").clicked() {
+                            app.confirm_remove_worktree(&project_id);
+                            ui.close();
+                        }
+                    });
+                }
+            });
+        ui.separator();
+        ui.horizontal(|ui| {
+            if self.worktree_draft.is_none() && ui.button("New worktree").clicked() {
+                self.open_worktree_wizard();
+            }
+        });
+    }
+
+    fn workspace_center(&mut self, ui: &mut egui::Ui) {
+        let Some(project) = self.selected.clone() else {
+            self.workspace_empty(ui);
+            return;
+        };
+        self.workspace_project(ui, project);
+    }
+
+    fn workspace_empty(&mut self, ui: &mut egui::Ui) {
+        let empty = self.state.projects.is_empty();
+        let setup = cfg!(target_os = "macos")
+            && self
+                .preferences
+                .needs_setup(self.state_loaded, self.state.projects.len());
+        ui.centered_and_justified(|ui| {
+            ui.vertical_centered(|ui| {
+                ui.heading(if empty {
+                    "A home for your terminals."
+                } else {
+                    "No project selected."
+                });
+                ui.label(if empty {
+                    "Persistent sessions. Project layouts. Agents within reach."
+                } else {
+                    "Restore a project from Removed, or add a folder."
+                });
+                if setup {
+                    return;
+                }
+                ui.add_space(12.0);
+                if ui
+                    .button(if empty {
+                        "Add your first project"
+                    } else {
+                        "Add project"
+                    })
+                    .clicked()
+                {
+                    self.add_project = true;
+                }
+            });
+        });
+    }
+
+    fn workspace_project(&mut self, ui: &mut egui::Ui, project: String) {
+        let mut dock = self
+            .layouts
+            .remove(&project)
+            .unwrap_or_else(Workspace::empty);
+        self.sync_active_session(&mut dock);
+        self.restore_cleared_focus(&dock);
+        if dock.iter_all_tabs().next().is_none() {
+            self.workspace_blank(ui);
+        } else {
+            self.paint_dock(ui, &project, &mut dock);
+        }
+        self.apply_focus_tab(&mut dock);
+        self.apply_add_tab(&project, &mut dock);
+        self.paint_session_focus(ui, &dock);
+        self.layouts.insert(project, dock);
+        self.paint_drag_ghost(ui);
+        self.paint_tab_ghost(ui);
+        // A drag released over an empty workspace has no dock drop handler;
+        // never leave the payload stuck.
+        if self.pane_drag.is_some() && ui.input(|i| i.pointer.any_released()) {
+            self.drop_preview_origin = None;
+            self.end_pane_drag();
+        }
+        // Pane "Close tab" is queued while this workspace is checked out.
+        self.drain_pending_unavailable_close();
+    }
+
+    fn follow_focus_tab(&mut self, tab: Option<Tab>) {
+        match tab {
+            Some(Tab::Terminal(sid)) => {
+                self.active_session = Some(sid);
+                self.non_terminal_selected = false;
+            }
+            Some(_) => {
+                self.active_session = None;
+                self.non_terminal_selected = true;
+            }
+            None => {}
+        }
+    }
+
+    fn sync_active_session(&mut self, dock: &mut Workspace) {
+        let focused = dock
+            .main_surface_mut()
+            .find_active_focused()
+            .map(|(_, tab)| tab.clone());
+        let main_moved = focused != self.last_main_focus;
+        if main_moved {
+            self.last_main_focus = focused.clone();
+            self.follow_focus_tab(focused);
+        }
+        let strip_focused = self
+            .selected
+            .as_ref()
+            .and_then(|project| self.preferences.ide_strip_docks.0.get(project))
+            .and_then(|strip| {
+                let surface = strip.main_surface();
+                surface
+                    .focused_leaf()
+                    // Checked: removing the last tab empties the tree while
+                    // focus goes stale, and blind indexing would panic.
+                    .and_then(|node| surface.leaf(node).ok())
+                    .and_then(|leaf| leaf.tabs.get(leaf.active.0))
+                    .cloned()
+            });
+        let strip_moved = strip_focused != self.last_strip_focus;
+        self.last_strip_focus = strip_focused.clone();
+        // Both docks move together when the project changes. Keep the main
+        // pane; a later strip-only move can still take focus.
+        if strip_moved && !main_moved && self.ide_strip_visible() {
+            self.follow_focus_tab(strip_focused);
+        }
+    }
+
+    fn workspace_blank(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(ui.available_height() * 0.3);
+            ui.heading("Your workspace, ready.");
+            ui.label("Open a terminal. Run the tools you already use.");
+            ui.add_space(12.0);
+            if ui.button("Open terminal").clicked() {
+                self.create(None);
+            }
+        });
+    }
+
+    fn dock_style(&self, ui: &egui::Ui) -> egui_dock::Style {
+        let mut style = egui_dock::Style::from_egui(ui.style());
+        style.tab_bar.height = 32.0;
+        style.buttons.add_tab_align = egui_dock::style::TabAddAlign::Left;
+        style.separator.width = self.theme.pane_divider_width;
+        style.separator.color_idle = appearance::color(&self.theme.window);
+        style.main_surface_border_rounding = egui::CornerRadius::same(2);
+        style.tab.tab_body.corner_radius = egui::CornerRadius::same(2);
+        style
+    }
+
+    fn paint_dock(&mut self, ui: &mut egui::Ui, project: &str, dock: &mut Workspace) {
+        let style = self.dock_style(ui);
+        self.refresh_pane_maps(project, dock);
+        DockArea::new(dock)
+            .style(style)
+            .show_add_buttons(true)
+            .show_leaf_close_all_buttons(false)
+            .show_leaf_collapse_buttons(false)
+            .show_inside(
+                ui,
+                &mut Viewer {
+                    app: self,
+                    strip: false,
+                },
+            );
+        self.finish_pane_drop(ui, dock);
+    }
+
+    /// Strip-dock pane lookup, rebuilt every strip render (small dock; no cache).
+    fn refresh_strip_pane_maps(&mut self, dock: &egui_dock::DockState<Tab>) {
+        self.strip_pane_by_tab = dock
+            .iter_all_tabs()
+            .map(|(path, tab)| (tab.key(), path.node_path()))
+            .collect();
+        self.strip_pane_tabs = self
+            .strip_pane_by_tab
+            .values()
+            .map(|path| {
+                (
+                    *path,
+                    dock.leaf(*path)
+                        .map(|leaf| leaf.tabs.clone())
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+    }
+
+    fn apply_focus_strip_tab(&mut self, dock: &mut egui_dock::DockState<Tab>) {
+        if let Some(tab) = self.focus_strip_tab.take()
+            && let Some(path) = dock.find_tab(&tab)
+        {
+            let _ = dock.set_active_tab(path);
+            dock.set_focused_node_and_surface(path.node_path());
+        }
+    }
+
+    fn apply_add_strip_tab(&mut self, project: &str, dock: &mut egui_dock::DockState<Tab>) {
+        let Some((path, split)) = self.add_strip_tab.take() else {
+            return;
+        };
+        let cwd = dock
+            .leaf(path)
+            .ok()
+            .and_then(|leaf| leaf.tabs.get(leaf.active.0))
+            .and_then(|tab| match tab {
+                Tab::Terminal(id) => self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .map(|s| s.cwd.clone()),
+                _ => None,
+            })
+            .or_else(|| self.selected_project().map(|p| p.path.clone()));
+        let _ = self.jobs.send(Job::rpc(
+            Request::Create {
+                project: project.to_owned(),
+                cwd,
+                file: None,
+                line: None,
+                column: None,
+                editor: false,
+            },
+            match split {
+                None => After::Strip,
+                Some(split) => After::StripAt(
+                    dock.leaf(path)
+                        .map(|leaf| leaf.tabs.clone())
+                        .unwrap_or_default(),
+                    Some(split),
+                ),
+            },
+        ));
+    }
+
+    /// Clear a finished or cancelled pane drag, including its ghost snapshot.
+    fn end_pane_drag(&mut self) {
+        self.pane_drag = None;
+        self.pane_drag_snapshot.clear();
+        self.strip_tab_hover = false;
+        self.strip_new_tab_hover = false;
+    }
+
+    /// Drop zone within a hovered split leaf: the middle swaps or joins,
+    /// while a band near an edge opens the dragged pane in a new split
+    /// beside that leaf.
+    fn pane_drop_zone(rect: egui::Rect, pos: egui::Pos2) -> PaneDropZone {
+        let band = (rect.width().min(rect.height()) * 0.25).clamp(20.0, 96.0);
+        let top = pos.y - rect.top();
+        let bottom = rect.bottom() - pos.y;
+        let left = pos.x - rect.left();
+        let right = rect.right() - pos.x;
+        if top <= band && top <= bottom && top <= left && top <= right {
+            PaneDropZone::Above
+        } else if bottom <= band && bottom <= top && bottom <= left && bottom <= right {
+            PaneDropZone::Below
+        } else if left <= band && left <= top && left <= bottom && left <= right {
+            PaneDropZone::Left
+        } else if right <= band && right <= top && right <= bottom && right <= left {
+            PaneDropZone::Right
+        } else {
+            PaneDropZone::Center
+        }
+    }
+
+    /// Complete a caption-initiated pane drag. Releasing over a split leaf of
+    /// the previewed top-level tab lands the pane there (single panes swap,
+    /// otherwise the dragged pane joins the leaf, including across tabs);
+    /// releasing elsewhere cancels and switches back to the origin tab. The
+    /// workspace strip runs earlier in the frame and consumes releases over
+    /// its own tabs.
+    fn finish_pane_drop(&mut self, ui: &mut egui::Ui, dock: &mut Workspace) {
+        let Some(pane) = self.pane_drag.clone() else {
+            return;
+        };
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.revert_drop_preview(dock);
+            self.end_pane_drag();
+            return;
+        }
+        let dragging = ui.input(|i| i.pointer.any_down());
+        let released = ui.input(|i| i.pointer.any_released());
+        if !dragging && !released {
+            return;
+        }
+        let pos = ui.input(|i| i.pointer.interact_pos());
+        let Some(pos) = pos else {
+            if released {
+                self.revert_drop_preview(dock);
+                self.end_pane_drag();
+            }
+            return;
+        };
+        let target = dock
+            .iter_leaves()
+            .find(|(_, leaf)| leaf.rect.contains(pos))
+            .map(|(path, leaf)| (path, leaf.rect));
+        let zone = target.map(|(_, rect)| Self::pane_drop_zone(rect, pos));
+        if dragging && !released {
+            self.paint_landing_preview(ui, dock, &pane, target.map(|(path, _)| path), zone);
+            // Hovering a strip tab interior previews the move-into outcome
+            // at real size: wash the previewed tab's focused leaf, where a
+            // release would land the pane.
+            if target.is_none() && self.strip_tab_hover {
+                let path = dock
+                    .main_surface()
+                    .focused_leaf()
+                    .map(|node| egui_dock::NodePath {
+                        surface: egui_dock::SurfaceIndex::main(),
+                        node,
+                    });
+                let landed = path.filter(|path| {
+                    dock.leaf(*path)
+                        .map(|leaf| leaf.rect.width() > 1.0 && leaf.rect.height() > 1.0)
+                        .unwrap_or(false)
+                });
+                if let Some(path) = landed {
+                    #[cfg(feature = "test-support")]
+                    if let Ok(leaf) = dock.leaf(path) {
+                        diagnostics::record(ui.ctx(), "strip-drop-wash", leaf.rect);
+                    }
+                    self.paint_landing_preview(
+                        ui,
+                        dock,
+                        &pane,
+                        Some(path),
+                        Some(PaneDropZone::Center),
+                    );
+                }
+            }
+            ui.ctx().request_repaint();
+            return;
+        }
+        if released {
+            if let Some((path, _)) = target {
+                let group = dock.active.clone();
+                let moved = match zone {
+                    Some(PaneDropZone::Center) | None => {
+                        if dock.find_tab(&pane).is_some() {
+                            // Same group: `move_pane_to_leaf` also focuses a
+                            // drop back onto the pane's own leaf.
+                            dock.move_pane_to_leaf(&pane, path)
+                        } else {
+                            dock.move_pane_to_group_leaf(&pane, &group, path)
+                        }
+                    }
+                    Some(edge) => {
+                        // `move_pane_to_split` focuses a lone pane dropped on
+                        // an edge of its own leaf instead of splitting it.
+                        let split = edge.split().expect("edge zone has a split");
+                        dock.move_pane_to_split(&pane, &group, path, split)
+                    }
+                };
+                if moved {
+                    if let Tab::Terminal(sid) = &pane {
+                        self.active_session = Some(sid.clone());
+                        self.focus_tab = Some(pane.clone());
+                    }
+                    self.pane_index = None;
+                    self.drop_preview_origin = None;
+                } else {
+                    self.revert_drop_preview(dock);
+                }
+            } else {
+                self.revert_drop_preview(dock);
+            }
+            // A release the strip did not consume ends the drag here; the
+            // post-dock checkout in `workspace_project` clears leftovers.
+            self.end_pane_drag();
+        }
+    }
+
+    /// Switch back to the tab a cancelled drag started from. Previewing never
+    /// moves panes, so the origin group always still exists.
+    fn revert_drop_preview(&mut self, dock: &mut Workspace) {
+        if let Some((_, origin)) = self.drop_preview_origin.take()
+            && dock.tabs.iter().any(|tab| tab.id == origin)
+        {
+            dock.active = origin;
+        }
+    }
+
+    /// Landing preview for the hovered split leaf: a translucent accent wash
+    /// over exactly where the dragged pane will land (the whole leaf, or the
+    /// edge half a split drop would open), with a divider on the future
+    /// split boundary. A center drop between two single panes exchanges
+    /// them, so the source leaf is outlined as well.
+    fn paint_landing_preview(
+        &self,
+        ui: &mut egui::Ui,
+        dock: &Workspace,
+        pane: &Tab,
+        target: Option<egui_dock::NodePath>,
+        zone: Option<PaneDropZone>,
+    ) {
+        let (Some(path), Some(zone)) = (target, zone) else {
+            return;
+        };
+        let Ok(leaf) = dock.leaf(path) else {
+            return;
+        };
+        let accent = appearance::color(&self.theme.accent);
+        let wash = egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 36);
+        let landing = zone.landing(leaf.rect);
+        ui.painter().rect_filled(landing, 2, wash);
+        ui.painter().rect_stroke(
+            landing,
+            2,
+            egui::Stroke::new(1.5, accent),
+            egui::StrokeKind::Inside,
+        );
+        if zone != PaneDropZone::Center {
+            // Divider where the new split boundary will appear.
+            let divider = match zone {
+                PaneDropZone::Above => [landing.left_bottom(), landing.right_bottom()],
+                PaneDropZone::Below => [landing.left_top(), landing.right_top()],
+                PaneDropZone::Left => [landing.right_top(), landing.right_bottom()],
+                PaneDropZone::Right => [landing.left_top(), landing.left_bottom()],
+                PaneDropZone::Center => return,
+            };
+            ui.painter()
+                .line_segment(divider, egui::Stroke::new(2.0, accent));
+        }
+        // A center swap keeps every split in place and only exchanges two
+        // panes: outline the other side and say so.
+        let source = dock.find_tab(pane).map(|path| path.node_path());
+        let mut swapping = false;
+        if zone == PaneDropZone::Center
+            && let Some(node) = source
+            && node != path
+            && let (Ok(from), Ok(to)) = (dock.leaf(node), dock.leaf(path))
+            && from.tabs.len() == 1
+            && to.tabs.len() == 1
+        {
+            swapping = true;
+            ui.painter().rect_stroke(
+                from.rect,
+                2,
+                egui::Stroke::new(1.5, accent),
+                egui::StrokeKind::Inside,
+            );
+        }
+        ui.painter().text(
+            landing.min + egui::vec2(8.0, 6.0),
+            egui::Align2::LEFT_TOP,
+            if swapping {
+                "Swap terminals"
+            } else {
+                zone.label()
+            },
+            egui::FontId::proportional(12.0),
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 220),
+        );
+    }
+
+    fn apply_focus_tab(&mut self, dock: &mut Workspace) {
+        if let Some(tab) = self.focus_tab.take()
+            && let Some(path) = dock.find_tab(&tab)
+        {
+            let _ = dock.set_active_tab(path);
+            dock.set_focused_node_and_surface(path.node_path());
+        }
+    }
+
+    fn apply_add_tab(&mut self, project: &str, dock: &mut Workspace) {
+        let Some((path, split)) = self.add_tab.take() else {
+            return;
+        };
+        let cwd = dock
+            .leaf(path)
+            .ok()
+            .and_then(|leaf| leaf.tabs.get(leaf.active.0))
+            .and_then(|tab| match tab {
+                Tab::Terminal(id) => self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .map(|s| s.cwd.clone()),
+                Tab::Diff { cwd, .. } => Some(cwd.clone()),
+                Tab::Image { path } | Tab::NativeEditor { path } => {
+                    path.parent().map(PathBuf::from)
+                }
+                Tab::Browser { target, .. } => {
+                    target.file().and_then(Path::parent).map(PathBuf::from)
+                }
+                Tab::Player => None,
+            })
+            .or_else(|| self.selected_project().map(|p| p.path.clone()));
+        let _ = self.jobs.send(Job::rpc(
+            Request::Create {
+                project: project.to_owned(),
+                cwd,
+                file: None,
+                line: None,
+                column: None,
+                editor: false,
+            },
+            if split.is_none() {
+                After::Workspace(id(), vec![])
+            } else {
+                After::CreateAt(
+                    dock.leaf(path)
+                        .map(|leaf| leaf.tabs.clone())
+                        .unwrap_or_default(),
+                    split,
+                )
+            },
+        ));
+    }
+
+    fn paint_session_focus(&mut self, ui: &mut egui::Ui, dock: &Workspace) {
+        if self.highlight_session != self.active_session {
+            self.highlight_session = self.active_session.clone();
+            self.highlight_since = Instant::now();
+        }
+        if let Some(sid) = &self.active_session
+            && let Some(path) = dock.find_tab(&Tab::Terminal(sid.clone()))
+            && let Ok(leaf) = dock.leaf(path.node_path())
+        {
+            ui.painter().rect_stroke(
+                leaf.rect.shrink(1.0),
+                2,
+                appearance::focus_stroke(
+                    appearance::color(&self.theme.accent),
+                    self.highlight_since.elapsed(),
+                ),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if self.highlight_since.elapsed() < Duration::from_millis(1200) {
+            ui.ctx().request_repaint_after(Duration::from_millis(16));
+        }
+    }
+}
+impl eframe::App for App {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
+        appearance::cap_max_texture_side(input);
+        #[cfg(feature = "test-support")]
+        self.diagnostics.input(ctx, input);
+        #[cfg(not(feature = "test-support"))]
+        let _ = ctx;
+    }
+
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // eframe calls logic even while hidden/minimized; ui is rendering-only.
+        // IPC and exit checkpoints must not depend on a visible window.
+        self.process_updates(ctx);
+        if updater::termination_cancelled() {
+            self.native_installation_cancelled();
+        }
+        if (updater::termination_requested() || ctx.input(|i| i.viewport().close_requested()))
+            && !matches!(self.exit, exit::Exit::Ready)
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            // Unsaved native buffers die with the process: hold quit behind
+            // the same prompt as dock closes instead of draining silently.
+            if let Some(path) = self
+                .native_docs
+                .iter()
+                .find_map(|(path, doc)| doc.dirty().then(|| path.clone()))
+            {
+                self.native_close_prompt = Some(path);
+            } else {
+                self.begin_exit();
+            }
+        }
+        self.advance_exit(ctx);
+        if !self.exit.active() && self.last_heartbeat.elapsed() > Duration::from_secs(1) {
+            self.send(Request::Heartbeat {
+                focused: ctx.input(|i| {
+                    i.viewport().focused.unwrap_or(false)
+                        && !i.viewport().minimized.unwrap_or(false)
+                }),
+            });
+            self.last_heartbeat = Instant::now();
+            self.maybe_upgrade_idle_daemon();
+        }
+        if !self.exit.active() {
+            for (key, target) in self.browser_host.take_navigations() {
+                self.apply_browser_navigation(&key, target);
+            }
+            self.reconcile_gui_resources();
+            self.poll_player();
+            if self.player.needs_poll() {
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
+            self.updater.poll();
+        }
+        ctx.request_repaint_after(Duration::from_secs(1));
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.popups.begin_frame(&ctx);
+        if self.exit.active() {
+            self.browser_host.hide_all();
+            ui.centered_and_justified(|ui| {
+                ui.label("Saving workspace before closing…");
+            });
+            return;
+        }
+        self.visible_dirs.clear();
+        self.visible_sessions.clear();
+        self.visible_images.clear();
+        self.visible_browsers.clear();
+        self.markdown.begin_frame();
+        #[cfg(feature = "test-support")]
+        self.diagnostics.frame(&ctx);
+        for action in shortcuts::ACTIONS.iter().map(|(action, _)| *action) {
+            if !self.shortcut_allowed(action) || !self.shortcut_applies(action) {
+                continue;
+            }
+            let key = shortcuts::binding(&self.state.settings.keybindings, action);
+            if key.is_empty() || !shortcuts::consume(&ctx, &key) {
+                continue;
+            }
+            self.run_shortcut(&ctx, action);
+        }
+        if self.state_loaded {
+            self.migrate_attention();
+        }
+        // Single drag-band row. The tab strip is a second top panel
+        // shown after the sidebars, so it spans only the center and the
+        // sidebars run full height. Both rows sit below the native
+        // titlebar band, so tab drags never race window moves.
+        egui::Panel::top("window-header")
+            .exact_size(40.0)
+            .frame(egui::Frame::NONE.fill(appearance::color(&self.theme.surface)))
+            .show(ui, |ui| self.window_header(ui));
+        if !self.state.settings.notifications_side {
+            egui::Panel::top("attention").show(ui, |ui| self.notifications(ui));
+        }
+        if self.preferences.ide_mode && !self.preferences.ide_terminal_collapsed {
+            egui::Panel::bottom("ide-terminal")
+                .resizable(true)
+                .default_size(220.0)
+                .size_range(80.0..=600.0)
+                .show(ui, |ui| {
+                    self.ide_terminal_strip(ui);
+                });
+        }
+        egui::Panel::bottom("status").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.colored_label(
+                    appearance::color(if self.connected {
+                        &self.theme.status_running
+                    } else {
+                        &self.theme.status_waiting
+                    }),
+                    if self.connected {
+                        "● Connected"
+                    } else {
+                        "○ Connecting"
+                    },
+                )
+                .on_hover_text(format!(
+                    "GUI {}\nDaemon {}\nDaemon executable: {}\nAttachment helper: {}",
+                    env!("CARGO_PKG_VERSION"),
+                    self.state
+                        .daemon_version
+                        .as_deref()
+                        .unwrap_or("unknown (older daemon)"),
+                    self.state
+                        .daemon_executable
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "not reported by this daemon".into()),
+                    match self.state.attachment_helper_available {
+                        Some(true) => "available",
+                        Some(false) => "unavailable",
+                        None => "not reported by this daemon",
+                    }
+                ));
+                ui.separator();
+                // A count only: holding the tab list across the chain would
+                // borrow self while the banner bodies need `&mut self`.
+                let unavailable_tabs = self.unavailable_tabs().len();
+                if self.installation_problem() {
+                    let repair = ui.small_button("Fix installation…");
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(ui.ctx(), "fix-installation", repair.rect);
+                    if repair.clicked() {
+                        self.open_installation_settings();
+                    }
+                    self.restart_session_button(ui, true);
+                    ui.colored_label(
+                        appearance::color(&self.theme.status_failed),
+                        "Terminal helper needs repair. Existing sessions are preserved.",
+                    );
+                } else if self.service_disconnected() {
+                    ui.horizontal_wrapped(|ui| {
+                        self.start_service_button(ui, true);
+                        ui.colored_label(
+                            appearance::color(&self.theme.status_failed),
+                            "Session service unreachable.",
+                        );
+                        if let Some(detail) = self
+                            .error
+                            .clone()
+                            .filter(|error| !daemon_connection::is_connection_error(error))
+                        {
+                            ui.colored_label(
+                                appearance::color(&self.theme.status_failed),
+                                detail,
+                            );
+                        } else {
+                            ui.weak("Start it to show and close sessions. Ended sessions remain in History.");
+                        }
+                    });
+                } else if let Some(error) = self.error.clone() {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.small_button("Dismiss").clicked() {
+                            self.error = None;
+                        }
+                        ui.colored_label(appearance::color(&self.theme.status_failed), error);
+                    });
+                } else if unavailable_tabs > 0 {
+                    ui.horizontal_wrapped(|ui| {
+                        let close = ui.small_button("Close unavailable tabs");
+                        #[cfg(feature = "test-support")]
+                        diagnostics::record(ui.ctx(), "close-unavailable-tabs", close.rect);
+                        if close.clicked() {
+                            self.close_unavailable_tabs();
+                        }
+                        ui.weak(if unavailable_tabs == 1 {
+                            "1 tab has no session record. It was left behind by sessions that already ended.".into()
+                        } else {
+                            format!("{unavailable_tabs} tabs have no session record. They were left behind by sessions that already ended.")
+                        });
+                    });
+                } else if let Some(message) = &self.state.degraded {
+                    ui.colored_label(appearance::color(&self.theme.status_waiting), message);
+                } else if self.state_loaded
+                    && (self.state.daemon_version.as_deref() != Some(env!("CARGO_PKG_VERSION"))
+                        || !self
+                            .state
+                            .capabilities
+                            .iter()
+                            .any(|c| c == STABLE_HELPER_CAPABILITY))
+                {
+                    if ui.small_button("Review installation…").clicked() {
+                        self.open_installation_settings();
+                    }
+                    self.restart_session_button(ui, true);
+                    ui.weak("App and session service use different installations.");
+                } else if let Some(info) = self.info.clone() {
+                    ui.horizontal(|ui| {
+                        if ui.small_button("×").clicked() {
+                            self.info = None;
+                        }
+                        ui.label(info);
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.weak(format!(
+                            "{} sessions running",
+                            self.state
+                                .sessions
+                                .iter()
+                                .filter(|s| s.lifecycle.live())
+                                .count()
+                        ));
+                    });
+                }
+                if let Some(metadata) = self.metadata.clone() {
+                    if let Some(branch) = metadata.branch {
+                        ui.weak(if metadata.worktree {
+                            format!("Worktree · {branch}")
+                        } else {
+                            branch
+                        });
+                    }
+                    if let Some(pr) = metadata.pull_request
+                        && ui
+                            .link(format!("PR #{}", pr.number))
+                            .on_hover_text(pr.title)
+                            .clicked()
+                    {
+                        let _ = self.jobs.send(Job::Browser(pr.url));
+                    }
+                    for port in metadata.ports.iter().take(3) {
+                        if ui
+                            .link(format!(":{}", port.port))
+                            .on_hover_text(&port.address)
+                            .clicked()
+                        {
+                            let _ = self.jobs.send(Job::Browser(port.url()));
+                        }
+                    }
+                }
+                if self.preferences.ide_mode {
+                    ui.separator();
+                    self.player_status_row(ui);
+                    self.notification_status_badge(ui);
+                    if self.preferences.ide_terminal_collapsed
+                        && ui
+                            .small_button("Terminal")
+                            .on_hover_text("Show IDE terminal strip")
+                            .clicked()
+                    {
+                        self.preferences.ide_terminal_collapsed = false;
+                    }
+                }
+            });
+        });
+        if self.preferences.left_visible || self.preferences.ide_mode {
+            let projects_response = egui::Panel::left("projects")
+                .resizable(true)
+                .default_size(225.0)
+                .size_range(170.0..=420.0)
+                .show(ui, |ui| {
+                    self.agent_bar(ui);
+                    ui.push_id("left-sidebar-content", |ui| {
+                        if self.preferences.left_agents {
+                            self.agents_view(ui);
+                        } else {
+                            appearance::sidebar_scroll("left-projects")
+                                .show(ui, |ui| self.projects(ui));
+                        }
+                    });
+                });
+            self.project_width = projects_response.response.rect.width();
+        }
+        if self.preferences.visible || self.preferences.ide_mode {
+            let response = egui::Panel::right("context")
+                .resizable(true)
+                .default_size(self.preferences.width)
+                .size_range(220.0..=480.0)
+                .show(ui, |ui| {
+                    self.sidebar(ui);
+                });
+            self.preferences.width = response.response.rect.width().clamp(220.0, 480.0);
+        }
+        // Center-only: shown after the sidebars so the strip sits beside
+        // them instead of pushing them down.
+        egui::Panel::top("workspace-tabs")
+            .exact_size(36.0)
+            .frame(egui::Frame::NONE.fill(appearance::color(&self.theme.surface)))
+            .show(ui, |ui| self.window_header_tabs(ui));
+        if self.preferences_writable
+            && !self.preferences_pending
+            && self.preferences != self.preferences_saved
+        {
+            let _ = self.jobs.send(Job::Preferences(self.preferences.clone()));
+            self.preferences_pending = true;
+        }
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::NONE
+                    .fill(appearance::color(&self.theme.window))
+                    .inner_margin(2),
+            )
+            .show(ui, |ui| self.center_pane(ui));
+        self.preview_appearance(&ctx);
+        self.images
+            .retain(|path, _| self.visible_images.contains(path));
+        self.markdown.end_frame(&ctx);
+        self.backends
+            .retain(|sid, _| self.visible_sessions.contains(sid));
+        if let Some(session) =
+            self.state.sessions.iter().find(|s| {
+                Some(&s.id) == self.active_session.as_ref() && s.kind == SessionKind::Shell
+            })
+        {
+            self.terminal_context
+                .insert(session.project_id.clone(), session.id.clone());
+        }
+        if self.active_session != self.last_focus {
+            if let Some(session) = &self.active_session {
+                self.send(Request::Focus {
+                    session: session.clone(),
+                });
+            }
+            self.last_focus = self.active_session.clone();
+        }
+        let next_metadata = self.cwd().map(|cwd| metadata_refresh::Request {
+            cwd,
+            identity: self
+                .context_session()
+                .and_then(|s| s.pid.map(|pid| (pid, s.created))),
+            include_pr: self.state.settings.pr_metadata,
+            generation: self.metadata_generation,
+        });
+        if next_metadata != self.metadata_request {
+            self.metadata_generation = self.metadata_generation.wrapping_add(1);
+            self.metadata = None;
+            self.metadata_request = next_metadata.map(|mut r| {
+                r.generation = self.metadata_generation;
+                r
+            });
+            let _ = self.metadata_jobs.send(self.metadata_request.clone());
+        }
+        self.visible_dirs.sort();
+        self.visible_dirs.dedup();
+        let wants_files = self.preferences.visible
+            && matches!(
+                self.preferences.tool,
+                SidebarTool::Explorer | SidebarTool::Git
+            );
+        let next = self
+            .cwd()
+            .filter(|_| wants_files)
+            .map(|cwd| refresh::Request {
+                cwd,
+                generation: self.refresh_generation,
+                directories: self.visible_dirs.clone(),
+            });
+        if next != self.refresh_request {
+            self.refresh_generation += 1;
+            let next = next.map(|mut r| {
+                r.generation = self.refresh_generation;
+                r
+            });
+            let cwd = next.as_ref().map(|r| r.cwd.clone());
+            if self.context_path != cwd {
+                self.context = None;
+                self.dirs.clear();
+                self.directory_errors.clear();
+            }
+            self.context_path = cwd;
+            self.refresh_request = next.clone();
+            let _ = self.refresh.send(next);
+        }
+        if self.last_save.elapsed() > Duration::from_secs(1) {
+            self.save_layouts();
+            self.last_save = Instant::now();
+        }
+        if cfg!(target_os = "linux") {
+            window_resize_edges(ui);
+        }
+        self.modals(&ctx, frame);
+        self.apply_browser_submit();
+        self.reconcile_gui_resources();
+        self.sync_browsers(frame);
+        self.popups.end_frame();
+        self.sync_menu_bar(&ctx);
+        appearance::click_cursor(&ctx);
+        #[cfg(feature = "test-support")]
+        self.diagnostics.capture(&ctx);
+        ctx.request_repaint_after(Duration::from_secs(1));
+    }
+}
+
+impl App {
+    /// Bring the window forward from the menu-bar status item.
+    fn focus_window_from_menu(ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+    fn open_agents_inbox(&mut self) {
+        self.preferences.tool = SidebarTool::Agents;
+        self.preferences.visible = true;
+    }
+    /// A status-menu pick: the inbox Go button plus opening the inbox
+    /// behind it. A stale id just opens the inbox.
+    fn focus_status_notice(&mut self, ctx: &egui::Context, id: &str) {
+        Self::focus_window_from_menu(ctx);
+        self.open_agents_inbox();
+        if let Some(session) = self
+            .state
+            .notifications
+            .iter()
+            .find(|notice| notice.id == id)
+            .map(|notice| notice.session_id.clone())
+        {
+            self.go_session(&session);
+        }
+        self.detail = None;
+    }
+    #[cfg(all(not(test), target_os = "macos"))]
+    fn sync_menu_bar(&mut self, ctx: &egui::Context) {
+        if updater::take_status_click() {
+            Self::focus_window_from_menu(ctx);
+            if self.waiting_notice_count() > 0 {
+                self.open_agents_inbox();
+            }
+        }
+        updater::sync_status_menu(&self.status_menu_items());
+        if let Some(id) = updater::take_status_selection() {
+            self.focus_status_notice(ctx, &id);
+        }
+        let waiting = self.waiting_notice_count();
+        if self.status_waiting_shown == Some(waiting) {
+            return;
+        }
+        self.status_waiting_shown = Some(waiting);
+        let icon = menu_bar::status_icon(waiting);
+        updater::sync_status_item(&icon.png, icon.width_pt, icon.height_pt);
+    }
+
+    #[cfg(not(all(not(test), target_os = "macos")))]
+    fn sync_menu_bar(&mut self, _ctx: &egui::Context) {}
+}
+#[cfg(test)]
+mod terminal_find_tests {
+    use super::*;
+    #[test]
+    fn stepping_wraps_around_matches() {
+        let mut find = TerminalFind {
+            outcome: egui_term::FindOutcome {
+                matches: vec![
+                    egui_term::FoundMatch {
+                        line: -3,
+                        start_col: 0,
+                        end_col: 2,
+                    },
+                    egui_term::FoundMatch {
+                        line: 0,
+                        start_col: 5,
+                        end_col: 7,
+                    },
+                ],
+                truncated: false,
+            },
+            ..TerminalFind::default()
+        };
+        find.step(1);
+        assert_eq!(find.current, 1);
+        find.step(1);
+        assert_eq!(find.current, 0);
+        find.step(-1);
+        assert_eq!(find.current, 1);
+    }
+    #[test]
+    fn stepping_without_matches_stays_at_zero() {
+        let mut find = TerminalFind::default();
+        find.step(1);
+        assert_eq!(find.current, 0);
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    #[test]
+    fn unrendered_layout_roundtrips_all_tabs() {
+        let mut dock = DockState::new(vec![Tab::Terminal("first".into())]);
+        dock.main_surface_mut().split_right(
+            NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("second".into())],
+        );
+        let json = sanitize_layout(serde_json::to_value(&dock).unwrap());
+        let restored: DockState<Tab> = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.iter_all_tabs().count(), 2);
+        assert!(restored.find_tab(&Tab::Terminal("second".into())).is_some());
+    }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    use super::*;
+    use crate::preferences::ProjectSort;
+    #[test]
+    fn sidebar_and_menu_shortcuts_run_their_actions() {
+        let (mut app, ctx, _dir) = fixture();
+        assert!(app.preferences.left_visible);
+        assert!(app.preferences.visible);
+        app.run_shortcut(&ctx, "toggle_left_sidebar");
+        app.run_shortcut(&ctx, "toggle_right_sidebar");
+        assert!(!app.preferences.left_visible);
+        assert!(!app.preferences.visible);
+        app.state.sessions = vec![session_fixture("live", SessionKind::Shell)];
+        app.active_session = Some("live".into());
+        app.run_shortcut(&ctx, "search_scrollback");
+        assert!(app.search_open);
+        assert_eq!(app.search_session.as_deref(), Some("live"));
+        app.run_shortcut(&ctx, "rename_terminal");
+        assert_eq!(
+            app.rename_session.as_ref().map(|(id, _)| id.as_str()),
+            Some("live")
+        );
+        app.rename_session = None;
+        app.run_shortcut(&ctx, "close_session");
+        assert_eq!(app.close_session.as_deref(), Some("live"));
+        assert!(app.active_editor_id().is_none());
+        app.run_shortcut(&ctx, "editor_save");
+        assert_eq!(app.close_session.as_deref(), Some("live"));
+    }
+
+    #[test]
+    fn toggle_ide_mode_keeps_sidebar_visibility_and_widths() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.left_visible = false;
+        app.preferences.visible = false;
+        app.preferences.width = 300.0;
+        app.preferences.tool = SidebarTool::Git;
+        assert!(!app.preferences.ide_mode);
+        app.run_shortcut(&ctx, "toggle_ide_mode");
+        assert!(app.preferences.ide_mode);
+        assert!(!app.preferences.left_visible);
+        assert!(!app.preferences.visible);
+        assert_eq!(app.preferences.width, 300.0);
+        assert_eq!(app.preferences.tool, SidebarTool::Git);
+        assert!(!app.preferences.ide_terminal_collapsed);
+        app.run_shortcut(&ctx, "toggle_ide_mode");
+        assert!(!app.preferences.ide_mode);
+        assert!(!app.preferences.left_visible);
+        assert!(!app.preferences.visible);
+    }
+
+    #[test]
+    fn strip_creation_lands_in_the_strip_not_the_dock() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        let (updates, rx) = mpsc::channel();
+        app.updates = rx;
+        updates
+            .send(Update::StripCreated(
+                session_fixture("new-strip", SessionKind::Shell),
+                None,
+                Vec::new(),
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(
+            app.preferences
+                .ide_strip_docks
+                .0
+                .get("a")
+                .is_some_and(|dock| dock.find_tab(&Tab::Terminal("new-strip".into())).is_some())
+        );
+        assert_eq!(app.active_session.as_deref(), Some("new-strip"));
+        assert!(app.state.sessions.iter().any(|s| s.id == "new-strip"));
+        assert!(
+            !app.layouts
+                .get("a")
+                .is_some_and(|dock| dock.contains(&Tab::Terminal("new-strip".into())))
+        );
+    }
+
+    #[test]
+    fn strip_split_creation_splits_the_strip_leaf() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        app.state.sessions = vec![
+            session_fixture("one", SessionKind::Shell),
+            session_fixture("two", SessionKind::Shell),
+        ];
+        app.preferences.ide_strip_docks.0.insert(
+            "a".into(),
+            egui_dock::DockState::new(vec![Tab::Terminal("one".into())]),
+        );
+        let (updates, rx) = mpsc::channel();
+        app.updates = rx;
+        updates
+            .send(Update::StripCreated(
+                session_fixture("two", SessionKind::Shell),
+                Some("right".into()),
+                vec![Tab::Terminal("one".into())],
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        let dock = app.preferences.ide_strip_docks.0.get("a").unwrap();
+        assert_eq!(dock.iter_leaves().count(), 2);
+        assert!(dock.find_tab(&Tab::Terminal("two".into())).is_some());
+        assert!(
+            !app.layouts
+                .get("a")
+                .is_some_and(|dock| dock.contains(&Tab::Terminal("two".into())))
+        );
+    }
+
+    #[test]
+    fn splits_follow_the_focused_dock() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        app.state.sessions = vec![
+            session_fixture("strip", SessionKind::Shell),
+            session_fixture("main", SessionKind::Shell),
+        ];
+        app.preferences.ide_strip_docks.0.insert(
+            "a".into(),
+            egui_dock::DockState::new(vec![Tab::Terminal("strip".into())]),
+        );
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.active_session = Some("strip".into());
+        app.run_shortcut(&ctx, "split_right");
+        let Job::Control(_, After::StripAt(_, split)) = requests.try_recv().unwrap() else {
+            panic!("Strip-focused splits stay in the strip");
+        };
+        assert_eq!(split.as_deref(), Some("right"));
+        app.active_session = Some("main".into());
+        app.run_shortcut(&ctx, "split_right");
+        let Job::Control(_, After::CreateAt(_, split)) = requests.try_recv().unwrap() else {
+            panic!("Main-focused splits stay in the main dock");
+        };
+        assert_eq!(split.as_deref(), Some("right"));
+    }
+
+    #[test]
+    fn go_session_reveals_strip_sessions_in_the_strip() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.state.sessions = vec![session_fixture("strip", SessionKind::Shell)];
+        app.preferences.ide_strip_docks.0.insert(
+            "a".into(),
+            egui_dock::DockState::new(vec![Tab::Terminal("strip".into())]),
+        );
+        assert!(!app.preferences.ide_mode);
+        app.go_session("strip");
+        assert!(app.preferences.ide_mode);
+        assert!(!app.preferences.ide_terminal_collapsed);
+        assert_eq!(app.active_session.as_deref(), Some("strip"));
+        assert!(
+            !app.layouts
+                .get("a")
+                .is_some_and(|dock| dock.contains(&Tab::Terminal("strip".into())))
+        );
+    }
+
+    #[test]
+    fn sync_follows_dock_focus_moves_but_keeps_strip_clicks() {
+        let (mut app, _ctx, _dir) = fixture();
+        let mut dock = Workspace::from_layout(egui_dock::DockState::new(vec![
+            Tab::Terminal("t".into()),
+            Tab::Terminal("u".into()),
+        ]));
+        let first = dock.find_tab(&Tab::Terminal("t".into())).unwrap();
+        dock.set_focused_node_and_surface(first.node_path());
+        app.sync_active_session(&mut dock);
+        assert_eq!(app.active_session.as_deref(), Some("t"));
+        // A strip click selects a session with no dock tab; unchanged dock
+        // focus must keep it instead of clobbering it back to the dock.
+        app.active_session = Some("strip".into());
+        app.sync_active_session(&mut dock);
+        assert_eq!(app.active_session.as_deref(), Some("strip"));
+        // Moving dock focus to another tab takes over again.
+        let path = dock.find_tab(&Tab::Terminal("u".into())).unwrap();
+        let _ = dock.set_active_tab(path);
+        app.sync_active_session(&mut dock);
+        assert_eq!(app.active_session.as_deref(), Some("u"));
+        // A hidden strip records focus and must not take the visible session.
+        app.selected = Some("a".into());
+        let mut strip =
+            egui_dock::DockState::new(vec![Tab::Terminal("s".into()), Tab::Terminal("s2".into())]);
+        let spath = strip.find_tab(&Tab::Terminal("s".into())).unwrap();
+        strip.set_focused_node_and_surface(spath.node_path());
+        app.preferences.ide_strip_docks.0.insert("a".into(), strip);
+        app.sync_active_session(&mut dock);
+        assert_eq!(app.active_session.as_deref(), Some("u"));
+        // Revealing the strip does not replay the focus recorded while hidden.
+        app.preferences.ide_mode = true;
+        app.sync_active_session(&mut dock);
+        assert_eq!(app.active_session.as_deref(), Some("u"));
+        // A later move while the strip is on screen takes over.
+        let s2 = app
+            .preferences
+            .ide_strip_docks
+            .0
+            .get("a")
+            .unwrap()
+            .find_tab(&Tab::Terminal("s2".into()))
+            .unwrap();
+        let _ = app
+            .preferences
+            .ide_strip_docks
+            .0
+            .get_mut("a")
+            .unwrap()
+            .set_active_tab(s2);
+        app.sync_active_session(&mut dock);
+        assert_eq!(app.active_session.as_deref(), Some("s2"));
+    }
+
+    #[test]
+    fn hidden_strip_keeps_the_visible_terminal_across_projects() {
+        let (mut app, _ctx, _dir) = fixture();
+        let mut dock_a = Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+            "main-a".into(),
+        )]));
+        let main_a = dock_a.find_tab(&Tab::Terminal("main-a".into())).unwrap();
+        dock_a.set_focused_node_and_surface(main_a.node_path());
+        app.selected = Some("a".into());
+        let mut strip_a = egui_dock::DockState::new(vec![Tab::Terminal("strip-a".into())]);
+        let path = strip_a.find_tab(&Tab::Terminal("strip-a".into())).unwrap();
+        strip_a.set_focused_node_and_surface(path.node_path());
+        app.preferences
+            .ide_strip_docks
+            .0
+            .insert("a".into(), strip_a);
+        app.sync_active_session(&mut dock_a);
+        assert_eq!(app.active_session.as_deref(), Some("main-a"));
+
+        app.selected = Some("b".into());
+        let mut dock_b = Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+            "main-b".into(),
+        )]));
+        let main_b = dock_b.find_tab(&Tab::Terminal("main-b".into())).unwrap();
+        dock_b.set_focused_node_and_surface(main_b.node_path());
+        let mut strip_b = egui_dock::DockState::new(vec![Tab::Terminal("strip-b".into())]);
+        let path = strip_b.find_tab(&Tab::Terminal("strip-b".into())).unwrap();
+        strip_b.set_focused_node_and_surface(path.node_path());
+        app.preferences
+            .ide_strip_docks
+            .0
+            .insert("b".into(), strip_b);
+        app.preferences.ide_terminal_collapsed = true;
+        app.preferences.ide_mode = true;
+        app.sync_active_session(&mut dock_b);
+        assert_eq!(app.active_session.as_deref(), Some("main-b"));
+    }
+
+    #[test]
+    fn visible_strip_keeps_the_main_terminal_across_projects() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.preferences.ide_mode = true;
+        let mut dock_a = Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+            "main-a".into(),
+        )]));
+        let main_a = dock_a.find_tab(&Tab::Terminal("main-a".into())).unwrap();
+        dock_a.set_focused_node_and_surface(main_a.node_path());
+        app.selected = Some("a".into());
+        let mut strip_a = egui_dock::DockState::new(vec![Tab::Terminal("strip-a".into())]);
+        let path = strip_a.find_tab(&Tab::Terminal("strip-a".into())).unwrap();
+        strip_a.set_focused_node_and_surface(path.node_path());
+        app.preferences
+            .ide_strip_docks
+            .0
+            .insert("a".into(), strip_a);
+        app.sync_active_session(&mut dock_a);
+        assert_eq!(app.active_session.as_deref(), Some("main-a"));
+
+        app.selected = Some("b".into());
+        let mut dock_b = Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+            "main-b".into(),
+        )]));
+        let main_b = dock_b.find_tab(&Tab::Terminal("main-b".into())).unwrap();
+        dock_b.set_focused_node_and_surface(main_b.node_path());
+        let mut strip_b = egui_dock::DockState::new(vec![
+            Tab::Terminal("strip-b".into()),
+            Tab::Terminal("strip-b2".into()),
+        ]);
+        let path = strip_b.find_tab(&Tab::Terminal("strip-b".into())).unwrap();
+        strip_b.set_focused_node_and_surface(path.node_path());
+        app.preferences
+            .ide_strip_docks
+            .0
+            .insert("b".into(), strip_b);
+        app.sync_active_session(&mut dock_b);
+        assert_eq!(app.active_session.as_deref(), Some("main-b"));
+
+        let next = app
+            .preferences
+            .ide_strip_docks
+            .0
+            .get("b")
+            .unwrap()
+            .find_tab(&Tab::Terminal("strip-b2".into()))
+            .unwrap();
+        let _ = app
+            .preferences
+            .ide_strip_docks
+            .0
+            .get_mut("b")
+            .unwrap()
+            .set_active_tab(next);
+        app.sync_active_session(&mut dock_b);
+        assert_eq!(app.active_session.as_deref(), Some("strip-b2"));
+    }
+
+    #[test]
+    fn closing_a_strip_terminal_recovers_past_a_remembered_image() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        app.state.sessions = vec![
+            session_fixture("s1", SessionKind::Shell),
+            session_fixture("s2", SessionKind::Shell),
+        ];
+        let image = Tab::Image {
+            path: "/tmp/a.png".into(),
+        };
+        let mut dock = Workspace::from_layout(egui_dock::DockState::new(vec![image.clone()]));
+        let path = dock.find_tab(&image).unwrap();
+        dock.set_focused_node_and_surface(path.node_path());
+        let mut strip =
+            egui_dock::DockState::new(vec![Tab::Terminal("s1".into()), Tab::Terminal("s2".into())]);
+        let focused = strip.find_tab(&Tab::Terminal("s2".into())).unwrap();
+        strip.set_focused_node_and_surface(focused.node_path());
+        let _ = strip.set_active_tab(focused);
+        app.preferences.ide_strip_docks.0.insert("a".into(), strip);
+        app.sync_active_session(&mut dock);
+        assert_eq!(app.active_session, None);
+
+        // The strip terminal is the selection. The image stays the main pane.
+        app.active_session = Some("s1".into());
+        app.remove_tab("s1");
+        app.sync_active_session(&mut dock);
+        app.restore_cleared_focus(&dock);
+        assert_eq!(app.active_session.as_deref(), Some("s2"));
+    }
+
+    #[test]
+    fn selecting_a_non_terminal_stays_unselected() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        app.state.sessions = vec![session_fixture("strip", SessionKind::Shell)];
+        let mut strip = egui_dock::DockState::new(vec![Tab::Terminal("strip".into())]);
+        let path = strip.find_tab(&Tab::Terminal("strip".into())).unwrap();
+        strip.set_focused_node_and_surface(path.node_path());
+        app.preferences.ide_strip_docks.0.insert("a".into(), strip);
+        // The strip is already focused, so selecting a pane is not a strip move.
+        let mut primer = Workspace::empty();
+        app.sync_active_session(&mut primer);
+        let panes = [
+            Tab::Image {
+                path: "/tmp/a.png".into(),
+            },
+            Tab::Browser {
+                id: "b".into(),
+                target: BrowserTarget::Url("https://example.com".into()),
+            },
+            Tab::Diff {
+                cwd: "/tmp".into(),
+                path: "/tmp/a.rs".into(),
+                staged: false,
+            },
+            Tab::Player,
+            Tab::NativeEditor {
+                path: "/tmp/a.rs".into(),
+            },
+        ];
+        for pane in panes {
+            let mut dock = Workspace::from_layout(egui_dock::DockState::new(vec![pane.clone()]));
+            let path = dock.find_tab(&pane).unwrap();
+            dock.set_focused_node_and_surface(path.node_path());
+            app.active_session = Some("strip".into());
+            app.sync_active_session(&mut dock);
+            assert_eq!(app.active_session, None, "{pane:?}");
+            app.restore_cleared_focus(&dock);
+            assert_eq!(app.active_session, None, "{pane:?}");
+            app.restore_cleared_focus(&dock);
+            assert_eq!(app.active_session, None, "{pane:?}");
+        }
+    }
+
+    #[test]
+    fn sync_survives_an_emptied_strip_dock() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        // Exiting the last strip terminal empties the tree while focus goes stale.
+        let mut strip = egui_dock::DockState::new(vec![Tab::Terminal("s".into())]);
+        let path = strip.find_tab(&Tab::Terminal("s".into())).unwrap();
+        strip.set_focused_node_and_surface(path.node_path());
+        strip.remove_tab(path);
+        app.preferences.ide_strip_docks.0.insert("a".into(), strip);
+        app.active_session = Some("elsewhere".into());
+        let mut dock = Workspace::empty();
+        app.sync_active_session(&mut dock);
+        assert_eq!(app.active_session.as_deref(), Some("elsewhere"));
+    }
+
+    #[test]
+    fn cleared_focus_returns_to_the_strip_then_the_dock() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.state.sessions = vec![
+            session_fixture("dock", SessionKind::Shell),
+            session_fixture("strip", SessionKind::Shell),
+        ];
+        app.preferences.ide_mode = true;
+        app.preferences.ide_strip_docks.0.insert(
+            "a".into(),
+            egui_dock::DockState::new(vec![Tab::Terminal("strip".into())]),
+        );
+        let dock = Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+            "dock".into(),
+        )]));
+        app.active_session = None;
+        app.restore_cleared_focus(&dock);
+        assert_eq!(app.active_session.as_deref(), Some("strip"));
+        // No live strip tabs: fall back to the dock's focused terminal.
+        app.preferences
+            .ide_strip_docks
+            .0
+            .insert("a".into(), egui_dock::DockState::new(vec![]));
+        app.active_session = None;
+        app.restore_cleared_focus(&dock);
+        assert_eq!(app.active_session.as_deref(), Some("dock"));
+    }
+
+    #[test]
+    fn toggle_off_resyncs_strip_owned_focus_from_the_dock() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.state.sessions = vec![
+            session_fixture("dock", SessionKind::Shell),
+            session_fixture("strip", SessionKind::Shell),
+        ];
+        app.preferences.ide_strip_docks.0.insert(
+            "a".into(),
+            egui_dock::DockState::new(vec![Tab::Terminal("strip".into())]),
+        );
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+                "dock".into(),
+            )])),
+        );
+        app.preferences.ide_mode = true;
+        app.active_session = Some("strip".into());
+        app.run_shortcut(&ctx, "toggle_ide_mode");
+        assert!(!app.preferences.ide_mode);
+        assert_eq!(app.active_session.as_deref(), Some("dock"));
+        // Dock-owned focus is untouched by the toggle.
+        app.preferences.ide_mode = true;
+        app.active_session = Some("dock".into());
+        app.run_shortcut(&ctx, "toggle_ide_mode");
+        assert_eq!(app.active_session.as_deref(), Some("dock"));
+    }
+
+    #[test]
+    fn remove_tab_drops_strip_membership() {
+        let (mut app, _ctx, _dir) = fixture();
+        for (project, tabs) in [
+            (
+                "a",
+                vec![Tab::Terminal("x".into()), Tab::Terminal("y".into())],
+            ),
+            ("b", vec![Tab::Terminal("x".into())]),
+        ] {
+            app.preferences
+                .ide_strip_docks
+                .0
+                .insert(project.into(), egui_dock::DockState::new(tabs));
+        }
+        app.remove_tab("x");
+        let has = |project: &str, sid: &str| {
+            app.preferences
+                .ide_strip_docks
+                .0
+                .get(project)
+                .is_some_and(|dock| dock.find_tab(&Tab::Terminal(sid.into())).is_some())
+        };
+        assert!(!has("a", "x"));
+        assert!(has("a", "y"));
+        assert!(!has("b", "x"));
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn ide_terminal_strip_renders_without_sessions() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 300.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.ide_terminal_strip(ui),
+        );
+        output.textures_delta.clear();
+        assert!(agent_target(&ctx, "ide-terminal-strip").is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn ide_status_badge_renders_without_sidebars() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.ide_mode = true;
+        app.preferences.left_visible = false;
+        app.preferences.visible = false;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        app.state.notifications = vec![notice_fixture(
+            "wait",
+            "live-shell",
+            AgentState::WaitingPermission,
+            now(),
+        )];
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 60.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.notification_status_badge(ui),
+        );
+        output.textures_delta.clear();
+        assert!(agent_target(&ctx, "status-attention-bell").is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn header_paints_a_sidebar_toggle_on_each_side() {
+        let (mut app, ctx, _dir) = fixture();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 40.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.window_header(ui),
+        );
+        output.textures_delta.clear();
+        let rect = |name: &str| {
+            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+        };
+        let left = rect("toggle-left-sidebar").expect("left toggle");
+        let right = rect("toggle-right-sidebar").expect("right toggle");
+        assert!(left.right() < right.left());
+        assert!(left.width() > 0.0 && right.width() > 0.0);
+        app.preferences.left_visible = false;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 40.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.window_header(ui),
+        );
+        output.textures_delta.clear();
+        assert!(rect("toggle-left-sidebar").is_some());
+        assert!(rect("toggle-right-sidebar").is_some());
+    }
+
+    /// The tab strip must sit below the 40px drag band (or press-and-move
+    /// gestures on tabs move the whole window instead of reordering tabs)
+    /// and beside the sidebars, which run full height underneath the band.
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn tab_strip_sits_below_the_drag_band_and_beside_full_height_sidebars() {
+        let (mut app, ctx, _dir) = fixture();
+        let workspace = Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                // Same order as the real panels: drag band, sidebars,
+                // then the center-only tab strip.
+                egui::Panel::top("window-header")
+                    .exact_size(40.0)
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| app.window_header(ui));
+                assert!(
+                    header_target(&ctx)("workspace-strip").is_none(),
+                    "the drag band must not paint the tab strip"
+                );
+                egui::Panel::left("projects")
+                    .exact_size(225.0)
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| {
+                        ui.label("sidebar");
+                    });
+                egui::Panel::top("workspace-tabs")
+                    .exact_size(36.0)
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| app.window_header_tabs(ui));
+            },
+        );
+        output.textures_delta.clear();
+        let strip = header_target(&ctx)("workspace-strip").expect("strip geometry");
+        assert!(
+            strip.top() >= 40.0,
+            "tab strip must clear the native drag band, got {strip:?}"
+        );
+        assert!(
+            strip.left() >= 225.0,
+            "tab strip must sit beside the full-height sidebar, got {strip:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn narrow_header_puts_search_behind_the_overflow_menu() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.width = 285.0;
+        paint_header(&mut app, &ctx, &[]);
+        let rect = header_target(&ctx);
+        assert!(rect("palette").is_none(), "search must leave the bar");
+        assert!(rect("settings").is_some());
+        let overflow = rect("header-overflow").expect("overflow menu");
+        let pos = overflow.center();
+        paint_header(&mut app, &ctx, &[egui::Event::PointerMoved(pos)]);
+        paint_header(
+            &mut app,
+            &ctx,
+            &[egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            }],
+        );
+        paint_header(
+            &mut app,
+            &ctx,
+            &[egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+        // The opening frame is a sizing pass. Read the item after the menu settles.
+        paint_header(&mut app, &ctx, &[]);
+        let search = rect("palette").expect("search in the menu");
+        assert!(!app.palette_open);
+        let pos = search.center();
+        paint_header(&mut app, &ctx, &[egui::Event::PointerMoved(pos)]);
+        paint_header(
+            &mut app,
+            &ctx,
+            &[egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            }],
+        );
+        paint_header(
+            &mut app,
+            &ctx,
+            &[egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+        assert!(app.palette_open);
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn wide_header_shows_search_without_an_overflow_menu() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.width = 480.0;
+        paint_header(&mut app, &ctx, &[]);
+        let rect = header_target(&ctx);
+        assert!(rect("palette").is_some());
+        assert!(rect("header-overflow").is_none());
+    }
+
+    #[cfg(feature = "test-support")]
+    fn header_target(ctx: &egui::Context) -> impl Fn(&str) -> Option<egui::Rect> + '_ {
+        |name| ctx.data(|data| data.get_temp(egui::Id::new(("fixture-target", name))))
+    }
+
+    #[cfg(feature = "test-support")]
+    fn paint_header(app: &mut App, ctx: &egui::Context, events: &[egui::Event]) {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 480.0),
+                )),
+                events: events.to_vec(),
+                ..Default::default()
+            },
+            |ui| {
+                let rect = egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(ui.available_width(), 40.0),
+                );
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    app.window_header(ui);
+                });
+            },
+        );
+        output.textures_delta.clear();
+    }
+
+    fn fixture() -> (App, egui::Context, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        app.preferences_writable = false;
+        let state = State {
+            projects: ["a", "b"]
+                .into_iter()
+                .map(|id| Project {
+                    id: id.into(),
+                    name: id.into(),
+                    path: PathBuf::from(format!("/{id}")),
+                    layout: serde_json::Value::Null,
+                })
+                .collect(),
+            selected_project: Some("a".into()),
+            ..Default::default()
+        };
+        app.apply_state(state);
+        (app, ctx, dir)
+    }
+    fn session_fixture(sid: &str, kind: SessionKind) -> Session {
+        Session {
+            review: false,
+            id: sid.into(),
+            project_id: "a".into(),
+            label: sid.into(),
+            cwd: "/a".into(),
+            kind,
+            file: None,
+            lifecycle: Lifecycle::Running,
+            created: 0,
+            exit_code: None,
+            rows: 24,
+            cols: 80,
+            generation: "fixture".into(),
+            pid: Some(42),
+            truncated: false,
+            cwd_confirmed: true,
+        }
+    }
+
+    fn poll_workspace_close_in_frame(app: &mut App, ctx: &egui::Context) {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.poll_workspace_close(ui.ctx()),
+        );
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn worktree_completion_opens_only_the_requested_projects_terminal() {
+        for open_terminal in [false, true] {
+            let (mut app, ctx, _dir) = fixture();
+            let (jobs, requests) = mpsc::channel();
+            app.jobs = jobs.into();
+            let (updates, rx) = mpsc::channel();
+            app.updates = rx;
+            updates
+                .send(Update::WorktreeCreated(
+                    Box::new(app.state.clone()),
+                    "b".into(),
+                    open_terminal,
+                ))
+                .unwrap();
+            app.process_updates(&ctx);
+            assert_eq!(app.selected.as_deref(), Some("b"));
+            let creates: Vec<_> = requests
+                .try_iter()
+                .filter_map(|job| match job {
+                    Job::Control(request, _) => match *request {
+                        Request::Create { project, .. } => Some(project),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                creates,
+                if open_terminal {
+                    vec!["b".to_string()]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn command_dialogs_suspend_terminal_input_until_dismissed() {
+        let (mut app, _, _dir) = fixture();
+        assert!(app.terminal_input_enabled("shell"));
+        app.palette_open = true;
+        assert!(!app.terminal_input_enabled("shell"));
+        app.palette_open = false;
+        assert!(app.terminal_input_enabled("shell"));
+        app.player_open = true;
+        assert!(!app.terminal_input_enabled("shell"));
+        app.player_open = false;
+        assert!(app.terminal_input_enabled("shell"));
+        app.worktree_draft = Some(worktree_ui::WorktreeDraft {
+            source: "a".into(),
+            start: "HEAD".into(),
+            branch: "task".into(),
+            dest: "/tmp/task".into(),
+            open_terminal: true,
+        });
+        assert!(!app.terminal_input_enabled("shell"));
+        app.worktree_draft = None;
+        app.worktree_remove = Some("a".into());
+        assert!(!app.terminal_input_enabled("shell"));
+        app.worktree_remove = None;
+        assert!(app.terminal_input_enabled("shell"));
+        app.search_open = true;
+        assert!(!app.terminal_input_enabled("shell"));
+        app.search_open = false;
+        assert!(app.terminal_input_enabled("shell"));
+        app.worktree_open = true;
+        assert!(!app.terminal_input_enabled("shell"));
+        app.worktree_open = false;
+        assert!(app.terminal_input_enabled("shell"));
+    }
+
+    #[test]
+    fn hide_center_overlay_when_settings_dirty_sets_pending_close() {
+        let (mut app, _, _dir) = fixture();
+        app.open_settings();
+        app.settings_draft.shell = "/tmp/custom".into();
+        assert!(app.settings_dirty());
+        app.hide_center_overlay();
+        assert!(app.settings_pending.is_some());
+        assert!(!app.settings_open);
+    }
+
+    #[test]
+    fn open_settings_clears_search_and_worktree() {
+        let (mut app, _, _dir) = fixture();
+        app.search_open = true;
+        app.worktree_open = true;
+        app.open_settings();
+        assert!(!app.search_open);
+        assert!(!app.worktree_open);
+        assert!(app.settings_open);
+    }
+
+    #[test]
+    fn open_player_clears_search_and_worktree() {
+        let (mut app, _, _dir) = fixture();
+        app.search_open = true;
+        app.worktree_open = true;
+        app.open_player();
+        assert!(!app.search_open);
+        assert!(!app.worktree_open);
+        assert!(app.player_open);
+    }
+
+    #[test]
+    fn raw_input_hook_caps_font_atlas_side() {
+        let (mut app, ctx, _dir) = fixture();
+        let mut input = egui::RawInput {
+            max_texture_side: Some(16_384),
+            ..Default::default()
+        };
+        eframe::App::raw_input_hook(&mut app, &ctx, &mut input);
+        assert_eq!(
+            input.max_texture_side,
+            Some(appearance::FONT_ATLAS_MAX_SIDE)
+        );
+    }
+
+    #[test]
+    fn idle_legacy_or_broken_daemon_is_retired_but_live_sessions_are_preserved() {
+        let mut state = State {
+            daemon_version: Some(env!("CARGO_PKG_VERSION").into()),
+            capabilities: vec![SHUTDOWN_IF_IDLE_CAPABILITY.into()],
+            ..State::default()
+        };
+        for health in [None, Some(false)] {
+            state.attachment_helper_available = health;
+            assert!(can_retire_daemon(&state));
+            assert!(!can_restart_service(&state));
+            state
+                .sessions
+                .push(session_fixture("live", SessionKind::Shell));
+            assert!(!can_retire_daemon(&state));
+            assert!(can_restart_service(&state));
+            state.sessions.clear();
+        }
+        state.attachment_helper_available = Some(true);
+        // Even a healthy sibling helper must migrate to a pinned copy when idle.
+        assert!(can_retire_daemon(&state));
+        state.capabilities.push(STABLE_HELPER_CAPABILITY.into());
+        assert!(
+            can_retire_daemon(&state),
+            "An idle legacy service must migrate to generation ownership"
+        );
+        state.capabilities.push(generations::CAPABILITY.into());
+        assert!(!can_retire_daemon(&state));
+        state.attachment_helper_available = Some(false);
+        state.capabilities.clear();
+        assert!(!can_retire_daemon(&state));
+        state.capabilities.push(SHUTDOWN_IF_IDLE_CAPABILITY.into());
+        state.daemon_version = Some("999.0.0".into());
+        assert!(!can_retire_daemon(&state));
+    }
+
+    #[test]
+    fn legacy_helper_error_opens_recovery_and_survives_unreported_health() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state.generation = "old-daemon".into();
+        app.update_tx
+            .send(Update::Error(
+                "Attachment helper unavailable: /AppTranslocation/old/terminator-hook".into(),
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(app.installation_problem());
+        app.error = None; // Dismissing a general error must not hide recovery.
+        app.apply_state(app.state.clone());
+        assert!(app.installation_problem());
+        app.open_installation_settings();
+        assert!(app.settings_open);
+        assert_eq!(app.settings_section, SettingsSection::Updates);
+        let mut repaired = app.state.clone();
+        repaired.generation = "new-daemon".into();
+        repaired.attachment_helper_available = Some(true);
+        app.apply_state(repaired);
+        assert!(!app.installation_problem());
+    }
+
+    #[test]
+    fn reconnect_clears_transport_errors_but_preserves_failed_operations() {
+        let (mut app, ctx, _dir) = fixture();
+        for message in [
+            "Reconnecting: Session daemon unavailable",
+            "Session daemon unavailable: No such file or directory (os error 2)",
+        ] {
+            app.update_tx.send(Update::Error(message.into())).unwrap();
+            app.process_updates(&ctx);
+            assert!(!app.connected);
+            app.update_tx
+                .send(Update::State(Box::new(app.state.clone())))
+                .unwrap();
+            app.process_updates(&ctx);
+            assert!(app.connected);
+            assert!(app.error.is_none());
+        }
+        for message in [
+            "Settings rejected",
+            "Could not save workspace before repair",
+        ] {
+            app.update_tx.send(Update::Error(message.into())).unwrap();
+            app.process_updates(&ctx);
+            app.apply_state(app.state.clone());
+            assert_eq!(app.error.as_deref(), Some(message));
+        }
+    }
+
+    #[test]
+    fn hover_and_spectrum_failures_do_not_use_the_status_banner() {
+        let files = async_service::OperationContext::new(
+            "files",
+            "hover".into(),
+            async_service::Policy::ReplaceableRead,
+        );
+        assert!(matches!(
+            service_failure_update(&files, &async_service::Failure::Overloaded),
+            Some(Update::ResolvedTarget(key, None)) if key == "hover"
+        ));
+        let spectrum = async_service::OperationContext::new(
+            "audio-spectrum",
+            "player".into(),
+            async_service::Policy::ReplaceableRead,
+        );
+        assert!(service_failure_update(&spectrum, &async_service::Failure::Overloaded).is_none());
+        let mutation = async_service::OperationContext::new(
+            "daemon",
+            "workspace".into(),
+            async_service::Policy::OrderedMutation,
+        );
+        assert!(matches!(
+            service_failure_update(&mutation, &async_service::Failure::Overloaded),
+            Some(Update::Error(message)) if message == "Services are busy; retry the action"
+        ));
+    }
+
+    #[test]
+    fn expired_gui_request_cannot_change_the_workspace_after_timeout() {
+        let (mut app, ctx, _dir) = fixture();
+        let (reply, result) = mpsc::sync_channel(1);
+        app.update_tx
+            .send(Update::UiRequest(
+                terminator_core::ui_control::Request::OpenFile {
+                    project: "b".into(),
+                    path: "/b/late.txt".into(),
+                    as_text: true,
+                },
+                reply,
+                Instant::now() - Duration::from_secs(1),
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(result.recv().unwrap().unwrap_err().contains("expired"));
+        assert_eq!(app.selected.as_deref(), Some("a"));
+        assert!(!app.open_path);
+    }
+
+    #[test]
+    fn repair_never_queues_shutdown_with_live_or_unsupported_sessions() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state.daemon_version = Some(env!("CARGO_PKG_VERSION").into());
+        app.state.capabilities = vec![SHUTDOWN_IF_IDLE_CAPABILITY.into()];
+        app.state
+            .sessions
+            .push(session_fixture("unsaved-editor", SessionKind::Editor));
+        app.begin_installation_repair();
+        assert!(requests.try_recv().is_err());
+        app.state.sessions.clear();
+        app.state.capabilities.clear();
+        app.begin_installation_repair();
+        assert!(requests.try_recv().is_err());
+        app.state
+            .capabilities
+            .push(SHUTDOWN_IF_IDLE_CAPABILITY.into());
+        app.begin_installation_repair();
+        app.begin_installation_repair();
+        assert!(app.repair_pending);
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Job::RepairInstallation(_, _)
+        ));
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn automatic_upgrade_waits_for_idle_and_does_not_retry_failed_generation() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state.daemon_version = Some("0.0.1".into());
+        app.state.capabilities = vec![SHUTDOWN_IF_IDLE_CAPABILITY.into()];
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.maybe_upgrade_idle_daemon();
+        assert!(requests.try_recv().is_err());
+        assert!(app.automatic_repair_attempt.is_none());
+        app.state.sessions.clear();
+        app.exit = exit::Exit::Waiting(Instant::now());
+        app.maybe_upgrade_idle_daemon();
+        assert!(requests.try_recv().is_err());
+        app.exit = exit::Exit::Idle;
+        app.maybe_upgrade_idle_daemon();
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Job::RepairInstallation(_, _)
+        ));
+        app.repair_pending = false;
+        app.maybe_upgrade_idle_daemon();
+        assert!(requests.try_recv().is_err());
+        app.begin_installation_repair();
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Job::RepairInstallation(_, _)
+        ));
+    }
+
+    #[test]
+    fn finished_restart_helper_restores_retry() {
+        let (mut app, ctx, _dir) = fixture();
+        let (tx, rx) = mpsc::channel();
+        app.updates = rx;
+        app.restart_pending = true;
+        tx.send(Update::RestartFinished(String::new())).unwrap();
+        app.process_updates(&ctx);
+        assert!(!app.restart_pending);
+        assert!(app.error.as_deref().unwrap().contains("restart.log"));
+    }
+
+    #[test]
+    fn lost_service_is_detected_only_after_state_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        assert!(!app.service_disconnected());
+        app.state_loaded = true;
+        assert!(app.service_disconnected());
+        app.connected = true;
+        assert!(!app.service_disconnected());
+    }
+
+    #[test]
+    fn service_start_queues_one_launch_and_reports() {
+        let (mut app, ctx, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state_loaded = true;
+        app.connected = false;
+        app.begin_service_start();
+        app.begin_service_start();
+        assert!(app.service_start_pending);
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Job::StartSessionService
+        ));
+        assert!(requests.try_recv().is_err());
+        app.connected = true;
+        app.service_start_pending = false;
+        app.begin_service_start();
+        assert!(!app.service_start_pending);
+        assert!(requests.try_recv().is_err());
+        app.connected = false;
+        let (tx, rx) = mpsc::channel();
+        app.updates = rx;
+        tx.send(Update::ServiceStarted(Ok(()))).unwrap();
+        app.process_updates(&ctx);
+        assert!(!app.service_start_pending);
+        assert!(app.info.as_deref().unwrap().contains("Reconnecting"));
+        app.service_start_pending = true;
+        tx.send(Update::ServiceStarted(Err("gone".into()))).unwrap();
+        app.process_updates(&ctx);
+        assert!(!app.service_start_pending);
+        assert!(
+            app.error
+                .as_deref()
+                .unwrap()
+                .contains("Could not start session service")
+        );
+    }
+
+    #[test]
+    fn unavailable_tabs_are_pruned_without_touching_live_tabs() {
+        let (mut app, _, _dir) = fixture();
+        app.insert("a", Tab::Terminal("ghost".into()), None);
+        // A stale snapshot while disconnected must never report orphans.
+        app.connected = false;
+        assert!(app.unavailable_tabs().is_empty());
+        app.connected = true;
+        assert_eq!(app.unavailable_tabs(), vec!["ghost".to_string()]);
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        assert_eq!(app.unavailable_tabs(), vec!["ghost".to_string()]);
+        app.close_unavailable_tabs();
+        assert!(app.unavailable_tabs().is_empty());
+        assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
+        assert!(app.info.as_deref().unwrap().contains("Closed 1 tab"));
+    }
+
+    #[test]
+    fn unavailable_pane_close_waits_until_the_workspace_is_checked_in() {
+        let (mut app, _, _dir) = fixture();
+        app.connected = true;
+        app.insert("a", Tab::Terminal("ghost".into()), None);
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        let dock = app.layouts.remove("a").unwrap();
+        app.remove_tab("ghost");
+        app.layouts.insert("a".into(), dock);
+        assert!(app.layouts["a"].contains(&Tab::Terminal("ghost".into())));
+        let dock = app.layouts.remove("a").unwrap();
+        app.queue_unavailable_tab_close("ghost");
+        app.layouts.insert("a".into(), dock);
+        app.drain_pending_unavailable_close();
+        assert!(!app.layouts["a"].contains(&Tab::Terminal("ghost".into())));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
+        assert!(app.unavailable_tabs().is_empty());
+    }
+
+    #[test]
+    fn restart_is_hidden_for_newer_daemons_and_idle_services() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state.daemon_version = Some("999.0.0".into());
+        app.state.capabilities = vec![SHUTDOWN_IF_IDLE_CAPABILITY.into()];
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.begin_session_restart();
+        assert!(requests.try_recv().is_err());
+        app.state.daemon_version = Some("0.0.1".into());
+        app.state.sessions.clear();
+        app.begin_session_restart();
+        assert!(requests.try_recv().is_err());
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.begin_session_restart();
+        app.begin_session_restart();
+        assert!(app.restart_pending);
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Job::RestartSessionService(_)
+        ));
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn restart_confirm_cancel_does_not_spawn() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state.daemon_version = Some("0.0.1".into());
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.restart_confirm = true;
+        app.restart_confirm = false;
+        assert!(requests.try_recv().is_err());
+        assert!(!app.restart_pending);
+    }
+
+    #[test]
+    fn restart_job_keeps_the_inventory_at_confirmation() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state.generation = "confirmed-owner".into();
+        app.state.daemon_version = Some("0.0.1".into());
+        app.state.capabilities = vec![SHUTDOWN_IF_IDLE_CAPABILITY.into()];
+        app.state
+            .sessions
+            .push(session_fixture("approved", SessionKind::Shell));
+        app.begin_session_restart();
+        app.state
+            .sessions
+            .push(session_fixture("late", SessionKind::Shell));
+        let Job::RestartSessionService(inventory) = requests.try_recv().unwrap() else {
+            panic!("restart job");
+        };
+        assert_eq!(inventory.generation, "confirmed-owner");
+        assert_eq!(inventory.sessions, ["approved".into()].into());
+        assert!(inventory.validate(&app.state).is_err());
+    }
+
+    fn visible_ids(app: &App) -> Vec<String> {
+        app.visible_projects()
+            .into_iter()
+            .map(|project| project.id)
+            .collect()
+    }
+
+    #[test]
+    fn project_sidebar_sorts_by_name_and_latest_activity() {
+        let (mut app, _, _) = fixture();
+        app.state.projects[0].name = "zeta".into();
+        app.state.projects[1].name = "alpha".into();
+        assert_eq!(visible_ids(&app), ["b", "a"]);
+        app.preferences.project_sort = ProjectSort::NameDesc;
+        assert_eq!(visible_ids(&app), ["a", "b"]);
+        app.preferences.project_sort = ProjectSort::LatestActivity;
+        app.preferences.project_activity.insert("a".into(), 1);
+        app.preferences.project_activity.insert("b".into(), 2);
+        assert_eq!(visible_ids(&app), ["b", "a"]);
+        app.select_project("a".into());
+        assert_eq!(visible_ids(&app), ["b", "a"]);
+        assert_eq!(app.preferences.project_activity["a"], 1);
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.go_session("shell");
+        assert_eq!(visible_ids(&app), ["b", "a"]);
+        assert_eq!(app.preferences.project_activity["a"], 1);
+    }
+
+    #[test]
+    fn restoring_a_hidden_project_ranks_it_by_latest_activity() {
+        let (mut app, _, _) = fixture();
+        app.preferences.project_sort = ProjectSort::LatestActivity;
+        app.preferences.project_activity.insert("a".into(), 1);
+        app.preferences.project_activity.insert("b".into(), 2);
+        app.hide_project("a");
+        assert_eq!(visible_ids(&app), ["b"]);
+        assert_eq!(app.preferences.project_activity["b"], 2);
+        app.select_project("a".into());
+        assert_eq!(visible_ids(&app), ["a", "b"]);
+        assert!(app.preferences.project_activity["a"] >= 2);
+        assert_eq!(app.preferences.project_activity["b"], 2);
+    }
+
+    #[test]
+    fn opening_or_creating_a_project_ranks_it_by_latest_activity() {
+        let (mut app, ctx, _) = fixture();
+        app.preferences.project_sort = ProjectSort::LatestActivity;
+        app.preferences.project_activity.insert("a".into(), 1);
+        app.preferences.project_activity.insert("b".into(), 2);
+        app.update_tx
+            .send(Update::OpenedProject(
+                Box::new(app.state.clone()),
+                "a".into(),
+                app.selection_generation,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(visible_ids(&app), ["a", "b"]);
+        assert!(app.preferences.project_activity["a"] >= 2);
+        app.preferences.project_activity.insert("a".into(), 1);
+        app.update_tx
+            .send(Update::WorktreeCreated(
+                Box::new(app.state.clone()),
+                "a".into(),
+                false,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(visible_ids(&app), ["a", "b"]);
+        assert!(app.preferences.project_activity["a"] >= 2);
+    }
+
+    #[test]
+    fn hiding_the_selected_project_selects_the_next_sorted_project() {
+        let (mut app, _, _) = fixture();
+        app.state.projects.push(Project {
+            id: "c".into(),
+            name: "alpha".into(),
+            path: "/c".into(),
+            layout: serde_json::Value::Null,
+        });
+        app.state.projects[0].name = "zeta".into();
+        app.state.projects[1].name = "mu".into();
+        app.selected = Some("a".into());
+        app.hide_project("a");
+        assert_eq!(app.selected.as_deref(), Some("c"));
+        assert_eq!(visible_ids(&app), ["c", "b"]);
+    }
+
+    #[test]
+    fn removing_projects_only_hides_sidebar_entries_and_survives_snapshots() {
+        let (mut app, ctx, dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        let layouts = serde_json::to_value(&app.layouts).unwrap();
+        let sessions = serde_json::to_value(&app.state.sessions).unwrap();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.hide_project("a");
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        assert!(app.preferences.hidden_projects.contains("a"));
+        assert!(requests.try_iter().all(|job| matches!(job, Job::Control(request, _) if matches!(*request, Request::SelectProject { .. }))));
+        app.hide_project("b");
+        assert!(app.selected.is_none());
+        app.apply_state(app.state.clone());
+        assert!(app.selected.is_none());
+        assert_eq!(serde_json::to_value(&app.layouts).unwrap(), layouts);
+        assert_eq!(serde_json::to_value(&app.state.sessions).unwrap(), sessions);
+        assert_eq!(app.state.projects.len(), 2);
+        app.preferences.save(dir.path()).unwrap();
+        assert_eq!(
+            UiPreferences::load(dir.path())
+                .unwrap()
+                .hidden_projects
+                .len(),
+            2
+        );
+        // Adding the same folder again restores its existing ID and layout.
+        app.update_tx
+            .send(Update::OpenedProject(
+                Box::new(app.state.clone()),
+                "a".into(),
+                app.selection_generation,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(app.selected.as_deref(), Some("a"));
+        assert!(!app.preferences.hidden_projects.contains("a"));
+        assert_eq!(serde_json::to_value(&app.layouts).unwrap(), layouts);
+        assert_eq!(serde_json::to_value(&app.state.sessions).unwrap(), sessions);
+    }
+
+    #[test]
+    fn a_delayed_folder_open_does_not_restore_a_project_removed_afterward() {
+        let (mut app, ctx, _dir) = fixture();
+        let generation = app.selection_generation;
+        app.hide_project("a");
+        app.update_tx
+            .send(Update::OpenedProject(
+                Box::new(app.state.clone()),
+                "a".into(),
+                generation,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(app.preferences.hidden_projects.contains("a"));
+        assert_eq!(app.selected.as_deref(), Some("b"));
+    }
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn expanded_project_terminals_stay_indented_at_all_sidebar_sizes() {
+        for width in [180.0, 280.0, 420.0] {
+            for scale in [1.0, 2.0] {
+                let (mut app, ctx, _dir) = fixture();
+                ctx.set_pixels_per_point(scale);
+                let first = session_fixture("first-shell", SessionKind::Shell);
+                let mut second = session_fixture("second-shell", SessionKind::Shell);
+                second.project_id = "b".into();
+                app.state.sessions = vec![first, second];
+                for project in ["a", "b"] {
+                    app.preferences.expanded.insert(project.into(), true);
+                }
+                for selected in ["a", "b"] {
+                    app.selected = Some(selected.into());
+                    // Include the first frame and settled layout frames.
+                    for _ in 0..3 {
+                        let mut expected_indent = 0.0;
+                        let mut output = ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, 800.0),
+                                )),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                expected_indent = ui.spacing().indent;
+                                app.projects(ui);
+                            },
+                        );
+                        output.textures_delta.clear();
+                        let target = |name: &str| {
+                            ctx.data(|data| {
+                                data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name)))
+                            })
+                            .unwrap()
+                        };
+                        for (project, session) in [("a", "first-shell"), ("b", "second-shell")] {
+                            let parent = target(&format!("project-row:{project}"));
+                            let child = target(&format!("session-row:{session}"));
+                            let indent = child.left() - parent.left();
+                            assert!(
+                                indent >= expected_indent - 0.1,
+                                "width={width}, scale={scale}, project={project}: indent={indent}"
+                            );
+                            assert!(child.top() >= parent.bottom());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn project_list_excludes_editors_and_global_history_includes_other_projects() {
+        let (mut app, ctx, _dir) = fixture();
+        let mut ended = session_fixture("ended-other", SessionKind::Shell);
+        ended.project_id = "b".into();
+        ended.lifecycle = Lifecycle::Ended;
+        let mut resumable = session_fixture("ended-resumable", SessionKind::Shell);
+        resumable.project_id = "b".into();
+        resumable.lifecycle = Lifecycle::Ended;
+        app.state.sessions = vec![
+            session_fixture("live-shell", SessionKind::Shell),
+            session_fixture("open-file", SessionKind::Editor),
+            ended,
+            resumable,
+        ];
+        app.state.agents = vec![Agent {
+            invocation_id: "agent-1".into(),
+            session_id: "ended-resumable".into(),
+            kind: "codex".into(),
+            provider_session_id: Some("provider-1".into()),
+            state: AgentState::Stopped,
+            sequence: None,
+            updated: 0,
+            resume: Some(Resume {
+                program: "codex".into(),
+                args: vec!["resume".into(), "provider-1".into()],
+            }),
+        }];
+        app.preferences.expanded.insert("a".into(), true);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.projects(ui));
+        output.textures_delta.clear();
+        let target = |name: &str| {
+            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+        };
+        assert!(target("session-row:live-shell").is_some());
+        assert!(target("session-row:open-file").is_none());
+        assert!(target("session-row:ended-other").is_none());
+        app.preferences.tool = SidebarTool::History;
+        app.preferences.all_projects = false;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.sidebar(ui));
+        output.textures_delta.clear();
+        assert!(target("session-row:ended-other").is_none());
+        assert!(target("session-row:ended-resumable").is_some());
+        assert!(target("history-filter").is_some());
+        assert!(target("history-sort").is_some());
+        assert!(target("history-toggle-all").is_some());
+        assert_eq!(app.state.sessions.len(), 4);
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn project_header_controls_share_height() {
+        let (mut app, ctx, _dir) = fixture();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 400.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.projects(ui),
+        );
+        output.textures_delta.clear();
+        let target = |name: &str| {
+            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+                .unwrap()
+        };
+        let add = target("project-add");
+        let sort = target("project-sort");
+        assert!(
+            (add.height() - sort.height()).abs() < 8.0,
+            "add={add:?} sort={sort:?}"
+        );
+        assert!(
+            (add.center().y - sort.center().y).abs() < 4.0,
+            "add={add:?} sort={sort:?}"
+        );
+    }
+
+    #[test]
+    fn file_only_views_are_distinguished_from_shell_and_mixed_tabs() {
+        let (mut app, _, _dir) = fixture();
+        app.state.sessions.extend([
+            session_fixture("file", SessionKind::Editor),
+            session_fixture("shell", SessionKind::Shell),
+        ]);
+        assert!(app.editors_only(&["file".into()]));
+        assert!(!app.editors_only(&["shell".into()]));
+        assert!(!app.editors_only(&["file".into(), "shell".into()]));
+        assert!(!app.editors_only(&[]));
+    }
+
+    #[test]
+    fn extra_close_while_prompting_does_not_queue_another_check() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.upsert_unsaved_close(
+            editor_close::Target::Pane("file".into()),
+            vec!["file".into()],
+            "Unsaved changes".into(),
+        );
+        assert!(app.skip_editor_close_request(&["file".into()]));
+        assert!(!app.skip_editor_close_request(&["other".into()]));
+        app.close_editors(
+            editor_close::Target::Pane("file".into()),
+            vec!["file".into()],
+            editor_close::Mode::Discard,
+        );
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Job::CloseEditors(_, _, editor_close::Mode::Discard, _)
+        ));
+        app.close_editors(
+            editor_close::Target::Pane("file".into()),
+            vec!["file".into()],
+            editor_close::Mode::Discard,
+        );
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn failed_close_updates_the_same_prompt() {
+        let (mut app, _, _dir) = fixture();
+        app.upsert_unsaved_close(
+            editor_close::Target::Pane("file".into()),
+            vec!["file".into()],
+            "Unsaved changes".into(),
+        );
+        app.editors_closed(
+            editor_close::Target::Pane("file".into()),
+            vec!["file".into()],
+            Err("Editor did not close. Check for unsaved buffers or running editor jobs.".into()),
+        );
+        assert_eq!(app.editor_close_prompts.len(), 1);
+        assert!(
+            app.editor_close_prompts[0]
+                .2
+                .contains("Editor did not close")
+        );
+        app.editors_closed(
+            editor_close::Target::Pane("other".into()),
+            vec!["other".into()],
+            Err("Unsaved changes".into()),
+        );
+        assert_eq!(app.editor_close_prompts.len(), 2);
+        assert!(app.unsaved_close_prompt("file").is_some());
+        assert!(app.unsaved_close_prompt("other").is_some());
+    }
+    #[test]
+    fn inline_rename_saves_with_enter_and_cancels_with_escape() {
+        for surface in [
+            RenameSurface::Workspace,
+            RenameSurface::Pane,
+            RenameSurface::Sidebar,
+        ] {
+            for save in [false, true] {
+                let (mut app, ctx, _dir) = fixture();
+                app.state
+                    .sessions
+                    .push(session_fixture("named", SessionKind::Shell));
+                let (jobs, requests) = mpsc::channel();
+                app.jobs = jobs.into();
+                app.begin_rename("named", surface);
+                let rect = egui::Rect::from_min_size(egui::pos2(8.0, 8.0), egui::vec2(220.0, 24.0));
+                let mut frame = |events| {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(260.0, 80.0),
+                            )),
+                            events,
+                            ..Default::default()
+                        },
+                        |ui| app.inline_rename(ui, "named", surface, rect),
+                    );
+                    output.textures_delta.clear();
+                };
+                frame(vec![]);
+                frame(vec![
+                    egui::Event::Text("New title".into()),
+                    egui::Event::Key {
+                        key: if save {
+                            egui::Key::Enter
+                        } else {
+                            egui::Key::Escape
+                        },
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: Default::default(),
+                    },
+                ]);
+                assert!(app.rename_session.is_none());
+                assert!(ctx.input(|input| {
+                    !input.events.iter().any(|event| {
+                        matches!(event, egui::Event::Text(_) | egui::Event::Key { .. })
+                    })
+                }));
+                if save {
+                    let Ok(Job::Control(request, _)) = requests.try_recv() else {
+                        panic!("Inline rename should save")
+                    };
+                    assert!(
+                        matches!(*request,Request::Rename {ref session,ref label} if session=="named"&&label=="New title")
+                    );
+                } else {
+                    assert!(requests.try_recv().is_err());
+                }
+            }
+        }
+    }
+    #[test]
+    fn closing_editor_tab_restores_the_other_tabs_latest_pane_focus() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state.sessions.extend([
+            session_fixture("shell", SessionKind::Shell),
+            session_fixture("other", SessionKind::Shell),
+        ]);
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        let original = app.layouts["a"].active.clone();
+        app.update_tx
+            .send(Update::WorkspaceCreated(
+                session_fixture("editor", SessionKind::Editor),
+                "file".into(),
+                vec![Tab::Terminal("shell".into())],
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        app.layouts.get_mut("a").unwrap().active = original.clone();
+        app.insert("a", Tab::Terminal("other".into()), Some("right"));
+        app.layouts.get_mut("a").unwrap().active = "file".into();
+        app.active_session = Some("editor".into());
+        let mut state = app.state.clone();
+        state
+            .sessions
+            .iter_mut()
+            .find(|s| s.id == "editor")
+            .unwrap()
+            .lifecycle = Lifecycle::Ended;
+        app.apply_state(state);
+        assert_eq!(app.layouts["a"].active, original);
+        assert_eq!(app.active_session.as_deref(), Some("other"));
+    }
+    #[test]
+    fn legacy_daemon_diff_never_sends_an_unsupported_creation_request() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state.settings.review_mode = ReviewMode::Neovim;
+        app.context = Some(services::ContextData {
+            cwd: "/a".into(),
+            root: Some("/a".into()),
+            git_dirs: vec![],
+            branch: "main".into(),
+            changes: vec![],
+            decorations: Default::default(),
+            error: None,
+        });
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.selected = Some("a".into());
+        app.error = Some("failed to fill whole buffer".into());
+        for staged in [false, true] {
+            let action =
+                sidebar_ui::git_click_action(false, Some(staged), true, ReviewMode::Neovim, false)
+                    .unwrap();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.file_action(ui, action, Path::new("/a/file.rs"), None);
+            });
+            output.textures_delta.clear();
+            let Job::Diff(Tab::Diff { staged: actual, .. }) = requests.recv().unwrap() else {
+                panic!("Legacy daemon must use the local diff renderer");
+            };
+            assert_eq!(actual, staged);
+        }
+        assert!(requests.try_recv().is_err());
+        assert!(app.error.is_none());
+        assert!(app.info.as_ref().unwrap().contains("updated daemon"));
+        assert!(app.state.sessions.is_empty());
+        assert_eq!(app.layouts["a"].tabs.len(), 2);
+    }
+    #[test]
+    fn native_menu_diff_opens_the_built_in_viewer_when_neovim_is_selected() {
+        let (mut app, _, _dir) = fixture();
+        app.state.settings.review_mode = ReviewMode::Neovim;
+        app.state.capabilities.push(NVIM_REVIEW_CAPABILITY.into());
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.selected = Some("a".into());
+        app.spawn_diff(SpawnDiff {
+            cwd: "/a".into(),
+            path: "/a/file.rs".into(),
+            staged: false,
+            native: true,
+        });
+        let Job::Diff(Tab::Diff { staged, .. }) = requests.recv().unwrap() else {
+            panic!("Native menu diff must stay in the GUI");
+        };
+        assert!(!staged);
+        assert!(requests.try_recv().is_err());
+        assert!(app.info.is_none());
+        assert!(app.state.sessions.is_empty());
+    }
+    #[test]
+    fn native_review_skips_create_review_when_the_daemon_can_review() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state.capabilities.push(NVIM_REVIEW_CAPABILITY.into());
+        app.context = Some(services::ContextData {
+            cwd: "/a".into(),
+            root: Some("/a".into()),
+            git_dirs: vec![],
+            branch: "main".into(),
+            changes: vec![],
+            decorations: Default::default(),
+            error: None,
+        });
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.selected = Some("a".into());
+        let action = sidebar_ui::git_click_action(
+            false,
+            Some(false),
+            true,
+            app.state.settings.review_mode,
+            true,
+        )
+        .unwrap();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.file_action(ui, action, Path::new("/a/file.rs"), None);
+        });
+        output.textures_delta.clear();
+        let Job::Diff(Tab::Diff { staged, .. }) = requests.recv().unwrap() else {
+            panic!("Native review must stay in the GUI");
+        };
+        assert!(!staged);
+        assert!(requests.try_recv().is_err());
+        assert!(app.info.is_none());
+        assert!(app.state.sessions.is_empty());
+    }
+    #[test]
+    fn rapid_file_activation_opens_one_editor_and_a_later_click_opens_another() {
+        let (mut app, ctx, directory) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        ctx.options_mut(|options| options.input_options.max_double_click_delay = 0.01);
+        let path = directory.path().join("file.rs");
+        let click = |app: &mut App, ctx: &egui::Context| {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.activate_file_action(ui, &path, FileAction::Open);
+            });
+            output.textures_delta.clear();
+        };
+        click(&mut app, &ctx);
+        click(&mut app, &ctx);
+        assert_eq!(requests.try_iter().filter(|job| matches!(job, Job::Control(request, _) if matches!(request.as_ref(), Request::Create { .. }))).count(), 1);
+        thread::sleep(Duration::from_millis(15));
+        click(&mut app, &ctx);
+        assert_eq!(requests.try_iter().filter(|job| matches!(job, Job::Control(request, _) if matches!(request.as_ref(), Request::Create { .. }))).count(), 1);
+    }
+
+    #[test]
+    fn git_click_opens_a_native_diff() {
+        let (mut app, ctx, _dir) = fixture();
+        app.context = Some(services::ContextData {
+            cwd: "/a".into(),
+            root: Some("/a".into()),
+            git_dirs: vec![],
+            branch: "main".into(),
+            changes: vec![],
+            decorations: Default::default(),
+            error: None,
+        });
+        app.selected = Some("a".into());
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        let action = sidebar_ui::git_click_action(
+            false,
+            Some(false),
+            true,
+            app.state.settings.review_mode,
+            false,
+        )
+        .unwrap();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.file_action(ui, action, Path::new("/a/dirty.rs"), None);
+        });
+        output.textures_delta.clear();
+        let Job::Diff(Tab::Diff { path, staged, .. }) = requests.recv().unwrap() else {
+            panic!("Git click must open a native diff");
+        };
+        assert_eq!(path, PathBuf::from("/a/dirty.rs"));
+        assert!(!staged);
+        assert!(requests.try_recv().is_err());
+    }
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn git_panel_clicks_reuse_an_open_diff_instead_of_duplicating() {
+        let (mut app, ctx, _dir) = fixture();
+        app.context = Some(services::ContextData {
+            cwd: "/a".into(),
+            root: Some("/a".into()),
+            git_dirs: vec![],
+            branch: "main".into(),
+            changes: vec![terminator_git::Change {
+                path: "/a/dirty.rs".into(),
+                status: " M".into(),
+            }],
+            decorations: Default::default(),
+            error: None,
+        });
+        app.selected = Some("a".into());
+        ctx.options_mut(|options| options.input_options.max_double_click_delay = 5.0);
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        let mut clicks = 0;
+        let mut draw = |events, time: f64| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(260.0, 200.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let context = app.context.clone().unwrap();
+                    let outcome = {
+                        let input = sidebar_ui::GitPanelInput {
+                            context: &context,
+                            review_mode: app.state.settings.review_mode,
+                            neovim_review: false,
+                            theme: &app.theme,
+                        };
+                        sidebar_ui::git_panel(ui, &input)
+                    };
+                    clicks += outcome.clicked.len();
+                    app.perform_git_outcome(ui, outcome);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        draw(vec![], 1.0);
+        let rect = agent_target(&ctx, "git-file-dirty.rs").expect("git row is recorded");
+        let pos = rect.center();
+        draw(vec![egui::Event::PointerMoved(pos)], 1.01);
+        for (time, pressed) in [(1.02, true), (1.03, false), (1.04, true), (1.05, false)] {
+            draw(
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                time,
+            );
+        }
+        assert_eq!(clicks, 2);
+        assert!(matches!(requests.try_recv().unwrap(), Job::Diff(_)));
+        assert!(requests.try_recv().is_err());
+        assert_eq!(
+            app.layouts["a"]
+                .iter_all_tabs()
+                .filter(|(_, tab)| matches!(tab, Tab::Diff { .. }))
+                .count(),
+            1
+        );
+    }
+    #[test]
+    fn explorer_click_on_a_dirty_html_file_opens_the_browser() {
+        let (mut app, ctx, dir) = fixture();
+        let path = dir.path().join("page.html");
+        fs::write(&path, "<html></html>").unwrap();
+        app.dirs.insert(
+            dir.path().into(),
+            vec![terminator_git::Entry {
+                path: path.clone(),
+                directory: false,
+                ignored: false,
+            }],
+        );
+        app.context = Some(services::ContextData {
+            cwd: dir.path().into(),
+            root: Some(dir.path().into()),
+            git_dirs: vec![],
+            branch: "main".into(),
+            changes: vec![terminator_git::Change {
+                path: path.clone(),
+                status: " M".into(),
+            }],
+            decorations: std::collections::HashMap::from([(path.clone(), 'M')]),
+            error: None,
+        });
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        let mut draw = |events| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(260.0, 80.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.tree(ui, dir.path(), 0),
+            );
+            output.textures_delta.clear();
+        };
+        draw(vec![]);
+        let pos = egui::pos2(55.0, 12.0);
+        draw(vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            draw(vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Default::default(),
+            }]);
+        }
+        app.process_updates(&ctx);
+        assert!(app.layouts["a"].contains(&Tab::browser_file(
+            std::path::absolute(&path).unwrap_or(path)
+        )));
+        assert!(!requests.try_iter().any(|job| matches!(job, Job::Diff(_))));
+    }
+    #[test]
+    fn git_reviews_open_distinct_top_level_tabs_in_the_origin_project() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state.settings.review_mode = ReviewMode::Neovim;
+        app.state.capabilities.push(NVIM_REVIEW_CAPABILITY.into());
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.selected = Some("a".into());
+        app.context = Some(services::ContextData {
+            cwd: "/a".into(),
+            root: Some("/a".into()),
+            git_dirs: vec![],
+            branch: "main".into(),
+            changes: vec![],
+            decorations: Default::default(),
+            error: None,
+        });
+        for staged in [false, true] {
+            let action =
+                sidebar_ui::git_click_action(false, Some(staged), true, ReviewMode::Neovim, true)
+                    .unwrap();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.file_action(ui, action, Path::new("/a/file.rs"), None);
+            });
+            output.textures_delta.clear();
+        }
+        let mut ids = Vec::new();
+        for staged in [false, true] {
+            let Job::Control(request, After::Workspace(id, anchors)) = requests.recv().unwrap()
+            else {
+                panic!("Expected review workspace")
+            };
+            assert!(
+                matches!(*request, Request::CreateReview { ref project, staged: actual, .. } if project == "a" && actual == staged)
+            );
+            ids.push(id.clone());
+            app.selected = Some("b".into());
+            let mut session = session_fixture(
+                if staged { "staged" } else { "working" },
+                SessionKind::Editor,
+            );
+            session.review = true;
+            app.update_tx
+                .send(Update::WorkspaceCreated(session, id, anchors))
+                .unwrap();
+            app.process_updates(&ctx);
+            assert_eq!(app.selected.as_deref(), Some("b"));
+        }
+        assert_ne!(ids[0], ids[1]);
+        assert!(app.layouts["a"].contains(&Tab::Terminal("working".into())));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("staged".into())));
+    }
+    #[test]
+    fn invalid_saved_focus_reports_error_and_preserves_layout() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        let workspace = Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        let mut saved = sanitize_layout(serde_json::to_value(workspace).unwrap());
+        saved["tabs"][0]["layout"]["surfaces"][0]["Main"]["focused_node"] = serde_json::json!(999);
+        let mut state = app.state.clone();
+        state.projects[0].layout = saved.clone();
+        app.layouts.clear();
+        app.apply_state(state);
+        // Loading persisted input must not allow an invalid index to reach the GUI.
+        app.layouts["a"].active_pane();
+        assert!(app.error.as_ref().is_some_and(|e| e.contains("focus")));
+        assert!(app.layout_readonly.contains("a"));
+        app.save_layouts();
+        assert_eq!(app.state.projects[0].layout, saved);
+        assert!(
+            !requests
+                .try_iter()
+                .any(|job| matches!(job, Job::SaveLayout(ref project, _, _) if project == "a"))
+        );
+    }
+    #[test]
+    fn unknown_workspace_format_is_not_overwritten() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.layouts.clear();
+        let mut state = app.state.clone();
+        state.projects[0].layout = serde_json::json!({"version":99});
+        app.apply_state(state);
+        app.save_layouts();
+        assert!(app.layout_readonly.contains("a"));
+        assert!(
+            !requests
+                .try_iter()
+                .any(|job| matches!(job,Job::SaveLayout(ref project,_,_) if project=="a"))
+        );
+    }
+    #[test]
+    fn save_layouts_skips_unknown_projects() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.layouts.insert("ghost".into(), Workspace::empty());
+        app.save_layouts();
+        let Job::PrepareLayouts(_, layouts) = requests.try_recv().unwrap() else {
+            panic!("expected prepared layouts")
+        };
+        assert!(layouts.iter().all(|(project, _)| project != "ghost"));
+        assert!(layouts.iter().any(|(project, _)| project == "a"));
+    }
+    #[test]
+    fn snapshot_drops_layouts_for_removed_projects() {
+        let (mut app, _, _dir) = fixture();
+        app.layouts.insert("ghost".into(), Workspace::empty());
+        app.layout_saved.insert("ghost".into(), "{}".into());
+        app.layout_pending.insert("ghost".into(), "{}".into());
+        app.layout_readonly.insert("ghost".into());
+        app.selected = Some("ghost".into());
+        let mut state = app.state.clone();
+        state.revision += 1;
+        app.apply_state(state);
+        assert!(!app.layouts.contains_key("ghost"));
+        assert!(!app.layout_saved.contains_key("ghost"));
+        assert!(!app.layout_pending.contains_key("ghost"));
+        assert!(!app.layout_readonly.contains("ghost"));
+        assert_ne!(app.selected.as_deref(), Some("ghost"));
+    }
+    #[test]
+    fn sidebar_navigation_selects_owning_top_level_tab() {
+        let (mut app, _, _dir) = fixture();
+        app.state.sessions.extend([
+            session_fixture("one", SessionKind::Shell),
+            session_fixture("two", SessionKind::Shell),
+        ]);
+        app.insert("a", Tab::Terminal("one".into()), None);
+        let first = app.layouts["a"].active.clone();
+        app.layouts
+            .get_mut("a")
+            .unwrap()
+            .add("second".into(), Tab::Terminal("two".into()));
+        app.go_session("one");
+        assert_eq!(app.layouts["a"].active, first);
+        assert_eq!(app.active_session.as_deref(), Some("one"));
+        app.go_session("two");
+        assert_eq!(app.layouts["a"].active, "second");
+        assert_eq!(app.layouts["a"].tabs.len(), 2);
+    }
+    #[test]
+    fn delayed_split_stays_in_origin_tab_without_stealing_tab_selection() {
+        let (mut app, ctx, _dir) = fixture();
+        app.insert("a", Tab::Terminal("one".into()), None);
+        let first = app.layouts["a"].active.clone();
+        app.layouts
+            .get_mut("a")
+            .unwrap()
+            .add("second".into(), Tab::Terminal("two".into()));
+        app.active_session = Some("two".into());
+        app.update_tx
+            .send(Update::Created(
+                session_fixture("split", SessionKind::Shell),
+                Some("right".into()),
+                Some(vec![Tab::Terminal("one".into())]),
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(app.layouts["a"].active, "second");
+        assert_eq!(app.active_session.as_deref(), Some("two"));
+        assert_eq!(
+            app.layouts["a"]
+                .tabs
+                .iter()
+                .find(|tab| tab.id == first)
+                .unwrap()
+                .layout
+                .iter_all_tabs()
+                .count(),
+            2
+        );
+    }
+    #[test]
+    fn closing_either_split_direction_expands_the_remaining_pane() {
+        for direction in ["left", "right", "up", "down"] {
+            let (mut app, _, _dir) = fixture();
+            app.state.sessions.extend([
+                session_fixture("remaining", SessionKind::Shell),
+                session_fixture("closed", SessionKind::Shell),
+            ]);
+            app.insert("a", Tab::Terminal("remaining".into()), None);
+            app.insert("a", Tab::Terminal("closed".into()), Some(direction));
+            app.active_session = Some("closed".into());
+            let mut next = app.state.clone();
+            next.sessions
+                .iter_mut()
+                .find(|s| s.id == "closed")
+                .unwrap()
+                .lifecycle = Lifecycle::Ended;
+            app.apply_state(next);
+            let leaf = app.layouts["a"].main_surface()[NodeIndex::root()]
+                .get_leaf()
+                .expect("Remaining pane should replace the split root");
+            assert_eq!(leaf.tabs, vec![Tab::Terminal("remaining".into())]);
+            assert_eq!(app.active_session.as_deref(), Some("remaining"));
+            assert!(
+                app.state
+                    .sessions
+                    .iter()
+                    .any(|s| s.id == "closed" && s.lifecycle == Lifecycle::Ended)
+            );
+        }
+    }
+    #[test]
+    fn restart_cleans_ended_panes_but_history_can_be_reopened() {
+        let (mut app, _, _dir) = fixture();
+        let mut dock = DockState::new(vec![Tab::Terminal("remaining".into())]);
+        dock.main_surface_mut().split_below(
+            NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("ended".into())],
+        );
+        let mut state = app.state.clone();
+        state.projects[0].layout = sanitize_layout(serde_json::to_value(&dock).unwrap());
+        let mut ended = session_fixture("ended", SessionKind::Shell);
+        ended.lifecycle = Lifecycle::Ended;
+        state.sessions = vec![session_fixture("remaining", SessionKind::Shell), ended];
+        app.layouts.clear();
+        app.state_loaded = false;
+        app.apply_state(state.clone());
+        assert!(app.layouts["a"].main_surface()[NodeIndex::root()].is_leaf());
+        app.go_session("ended");
+        app.apply_state(state);
+        assert!(
+            app.layouts["a"]
+                .find_tab(&Tab::Terminal("ended".into()))
+                .is_some()
+        );
+    }
+    #[test]
+    fn editor_open_preserves_shell_tabs_and_quit_restores_original_focus() {
+        for lower in [false, true] {
+            let (mut app, ctx, _dir) = fixture();
+            let shell = session_fixture("shell", SessionKind::Shell);
+            app.state.sessions.push(shell.clone());
+            app.insert("a", Tab::Terminal(shell.id.clone()), None);
+            if lower {
+                let lower = session_fixture("lower", SessionKind::Shell);
+                app.state.sessions.push(lower);
+                app.insert("a", Tab::Terminal("lower".into()), Some("down"));
+            }
+            let original = if lower { "lower" } else { "shell" };
+            app.active_session = Some(original.into());
+            let After::Workspace(workspace_id, anchors) = app.editor_target("a", None, None) else {
+                panic!("Expected anchored editor creation")
+            };
+
+            let editor = session_fixture("editor", SessionKind::Editor);
+            app.update_tx
+                .send(Update::WorkspaceCreated(
+                    editor.clone(),
+                    workspace_id,
+                    anchors,
+                ))
+                .unwrap();
+            app.process_updates(&ctx);
+            assert!(app.layouts["a"].contains(&Tab::Terminal(original.into())));
+            assert_eq!(app.layouts["a"].tabs.len(), 2);
+            assert_eq!(app.layouts["a"].iter_all_tabs().count(), 1);
+            let mut state = app.state.clone();
+            state
+                .sessions
+                .iter_mut()
+                .find(|s| s.id == editor.id)
+                .unwrap()
+                .lifecycle = Lifecycle::Ended;
+            app.apply_state(state);
+            assert!(
+                app.layouts["a"]
+                    .find_tab(&Tab::Terminal(editor.id))
+                    .is_none()
+            );
+            assert!(
+                app.layouts["a"]
+                    .find_tab(&Tab::Terminal(original.into()))
+                    .is_some()
+            );
+            assert_eq!(app.active_session.as_deref(), Some(original));
+            assert!(
+                app.state
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == original)
+                    .unwrap()
+                    .lifecycle
+                    .live()
+            );
+        }
+    }
+    #[test]
+    fn editor_exit_does_not_change_another_projects_focus() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        app.update_tx
+            .send(Update::Created(
+                session_fixture("editor", SessionKind::Editor),
+                Some("right".into()),
+                Some(vec![Tab::Terminal("shell".into())]),
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        app.select_project("b".into());
+        app.insert("b", Tab::Terminal("other".into()), None);
+        app.active_session = Some("other".into());
+        let mut state = app.state.clone();
+        state
+            .sessions
+            .iter_mut()
+            .find(|s| s.id == "editor")
+            .unwrap()
+            .lifecycle = Lifecycle::Ended;
+        app.apply_state(state);
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        assert_eq!(app.active_session.as_deref(), Some("other"));
+    }
+    #[test]
+    fn rename_targets_the_requested_session() {
+        let (mut app, _, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("named", SessionKind::Shell));
+        app.active_session = Some("different".into());
+        app.begin_rename("named", RenameSurface::Sidebar);
+        assert_eq!(app.rename_session, Some(("named".into(), "named".into())));
+        assert!(app.rename_focus);
+    }
+    #[test]
+    fn explorer_single_click_opens_an_editor_tab_across_the_entire_row() {
+        for x in [12.0, 55.0, 230.0] {
+            let (mut app, ctx, dir) = fixture();
+            let path = dir.path().join(".gitkeep");
+            fs::write(&path, "").unwrap();
+            app.dirs.insert(
+                dir.path().into(),
+                vec![terminator_git::Entry {
+                    path: path.clone(),
+                    directory: false,
+                    ignored: false,
+                }],
+            );
+            let (jobs, received) = mpsc::channel();
+            app.jobs = jobs.into();
+            let mut draw = |events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(260.0, 80.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| app.tree(ui, dir.path(), 0),
+                );
+                output.textures_delta.clear();
+            };
+            draw(vec![]);
+            let pos = egui::pos2(x, 12.0);
+            draw(vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true, false] {
+                draw(vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                }]);
+            }
+            let Ok(Job::Control(request, After::Workspace(_, _))) = received.try_recv() else {
+                panic!("A single click at x={x} should open an editor tab");
+            };
+            assert!(
+                matches!(*request, Request::Create { file: Some(ref file), editor: true, ref project, .. } if file == &path && project == "a")
+            );
+            assert!(
+                received.try_recv().is_err(),
+                "One click should create only one tab"
+            );
+        }
+    }
+    #[test]
+    fn appearance_preview_cancel_and_external_conflict() {
+        let (mut app, ctx, _dir) = fixture();
+        app.open_settings();
+        app.theme_draft.text = "#123456".into();
+        app.preview_appearance(&ctx);
+        assert_eq!(app.theme.text, "#123456");
+        app.hide_center_overlay();
+        app.preview_appearance(&ctx);
+        assert_eq!(app.theme, app.theme_committed);
+        app.open_settings();
+        app.theme_draft.text = "#123456".into();
+        let external = AppearanceConfig {
+            text: "#654321".into(),
+            ..Default::default()
+        };
+        app.update_tx
+            .send(Update::Appearance(Box::new(AppearanceFile {
+                config: external.clone(),
+                source: "external".into(),
+            })))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(app.theme_conflict);
+        assert_eq!(app.theme_draft.text, "#123456");
+        assert_eq!(app.theme_committed, external);
+    }
+    #[test]
+    fn idle_close_deduplicates_and_preserves_new_tab_contents() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.state
+            .capabilities
+            .push(terminator_core::idle_close::CAPABILITY.into());
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        let tab = app.layouts["a"].active.clone();
+        let target = editor_close::Target::Workspace("a".into(), tab.clone());
+        assert!(app.check_idle_close(target.clone(), vec!["shell".into()]));
+        assert!(app.check_idle_close(target.clone(), vec!["shell".into()]));
+        assert!(matches!(received.try_recv().unwrap(), Job::CloseIdle(..)));
+        assert!(received.try_recv().is_err());
+        app.insert("a", Tab::Terminal("new-shell".into()), Some("right"));
+        app.idle_closed(
+            target,
+            vec!["shell".into()],
+            Ok(vec![terminator_core::idle_close::Outcome {
+                session: "shell".into(),
+                status: terminator_core::idle_close::Status::Closed,
+                reason: "Exited".into(),
+            }]),
+        );
+        assert!(app.layouts["a"].tabs.iter().any(|t| t.id == tab));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("new-shell".into())));
+    }
+
+    #[test]
+    fn older_daemons_and_mixed_editor_tabs_keep_confirmation() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.state
+            .sessions
+            .push(session_fixture("editor", SessionKind::Editor));
+        let target = editor_close::Target::Pane("shell".into());
+        assert!(!app.check_idle_close(target.clone(), vec!["shell".into()]));
+        app.state
+            .capabilities
+            .push(terminator_core::idle_close::CAPABILITY.into());
+        assert!(!app.check_idle_close(target, vec!["shell".into(), "editor".into()]));
+        assert!(received.try_recv().is_err());
+    }
+
+    #[test]
+    fn idle_close_busy_shell_asks_without_error() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.state
+            .capabilities
+            .push(terminator_core::idle_close::CAPABILITY.into());
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        let tab = app.layouts["a"].active.clone();
+        let target = editor_close::Target::Workspace("a".into(), tab.clone());
+        app.close_workspace = Some(("a".into(), tab.clone()));
+        assert!(app.check_idle_close(target.clone(), vec!["shell".into()]));
+        assert!(matches!(received.try_recv().unwrap(), Job::CloseIdle(..)));
+        app.idle_closed(
+            target.clone(),
+            vec!["shell".into()],
+            Ok(vec![terminator_core::idle_close::Outcome {
+                session: "shell".into(),
+                status: terminator_core::idle_close::Status::Busy,
+                reason: "A foreground command owns the terminal".into(),
+            }]),
+        );
+        assert_eq!(
+            app.close_workspace.as_ref(),
+            Some(&(String::from("a"), tab))
+        );
+        assert_eq!(app.idle_close_fallback.as_ref(), Some(&target));
+        assert!(app.error.is_none());
+        assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
+    }
+
+    #[test]
+    fn idle_close_failed_signal_reports_error() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.state
+            .capabilities
+            .push(terminator_core::idle_close::CAPABILITY.into());
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        let target = editor_close::Target::Pane("shell".into());
+        assert!(app.check_idle_close(target.clone(), vec!["shell".into()]));
+        assert!(matches!(received.try_recv().unwrap(), Job::CloseIdle(..)));
+        app.idle_closed(
+            target.clone(),
+            vec!["shell".into()],
+            Ok(vec![terminator_core::idle_close::Outcome {
+                session: "shell".into(),
+                status: terminator_core::idle_close::Status::Failed,
+                reason: "Signal delivered, but exit was not confirmed; view preserved".into(),
+            }]),
+        );
+        assert_eq!(app.idle_close_fallback.as_ref(), Some(&target));
+        assert!(app.error.as_deref().is_some_and(|e| e.contains("Failed")));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
+    }
+
+    #[test]
+    fn workspace_created_inserts_at_requested_index() {
+        let (mut app, ctx, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add("t0".into(), Tab::Terminal("s0".into()));
+        workspace.add("t1".into(), Tab::Terminal("s1".into()));
+        app.workspace_insert.insert("mid".into(), 1);
+        app.update_tx
+            .send(Update::WorkspaceCreated(
+                session_fixture("mid-session", SessionKind::Shell),
+                "mid".into(),
+                vec![],
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(
+            app.layouts["a"]
+                .tabs
+                .iter()
+                .map(|tab| tab.id.as_str())
+                .collect::<Vec<_>>(),
+            ["t0", "mid", "t1"]
+        );
+        assert_eq!(app.layouts["a"].active, "mid");
+        assert!(app.workspace_insert.is_empty());
+    }
+
+    #[test]
+    fn add_tab_to_the_left_records_insert_index() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.selected = Some("a".into());
+        app.create_workspace_tab(Some(1));
+        let Job::Control(_, After::Workspace(id, anchors)) = received.try_recv().unwrap() else {
+            panic!("Expected workspace create")
+        };
+        assert!(anchors.is_empty());
+        assert_eq!(app.workspace_insert.get(&id), Some(&1));
+    }
+
+    #[test]
+    fn close_tabs_to_the_left_queues_then_cancel_keeps_the_rest() {
+        let (mut app, _, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add("t0".into(), Tab::Terminal("s0".into()));
+        workspace.add("t1".into(), Tab::Terminal("s1".into()));
+        workspace.add("t2".into(), Tab::Terminal("s2".into()));
+        app.begin_workspace_close_tabs("a", vec!["t0".into(), "t1".into()]);
+        assert_eq!(app.close_workspace, Some(("a".into(), "t0".into())));
+        assert_eq!(app.close_workspace_queue, ["t1"]);
+        app.close_workspace_tab_now("a", "t0");
+        assert_eq!(app.close_workspace, Some(("a".into(), "t1".into())));
+        assert!(!app.layouts["a"].tabs.iter().any(|tab| tab.id == "t0"));
+        assert!(app.layouts["a"].tabs.iter().any(|tab| tab.id == "t2"));
+        app.abort_workspace_close();
+        assert!(app.close_workspace.is_none());
+        assert!(app.close_workspace_queue.is_empty());
+        assert!(app.layouts["a"].tabs.iter().any(|tab| tab.id == "t1"));
+    }
+
+    #[test]
+    fn close_all_tabs_queues_every_tab() {
+        let (mut app, _, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add("t0".into(), Tab::Terminal("s0".into()));
+        workspace.add("t1".into(), Tab::Terminal("s1".into()));
+        workspace.add("t2".into(), Tab::Terminal("s2".into()));
+        let ids = app.layouts["a"].ids();
+        app.begin_workspace_close_tabs("a", ids);
+        assert_eq!(app.close_workspace, Some(("a".into(), "t0".into())));
+        assert_eq!(app.close_workspace_queue, ["t1", "t2"]);
+    }
+
+    #[test]
+    fn close_all_empty_tabs_leaves_an_empty_workspace() {
+        let (mut app, ctx, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add(
+            "t0".into(),
+            Tab::Image {
+                path: "/a.png".into(),
+            },
+        );
+        workspace.add(
+            "t1".into(),
+            Tab::Image {
+                path: "/b.png".into(),
+            },
+        );
+        workspace.add(
+            "t2".into(),
+            Tab::Image {
+                path: "/c.png".into(),
+            },
+        );
+        let ids = app.layouts["a"].ids();
+        app.begin_workspace_close_tabs("a", ids);
+        app.poll_workspace_close(&ctx);
+        assert!(app.close_workspace.is_none());
+        assert!(app.close_workspace_queue.is_empty());
+        assert_eq!(app.layouts["a"].tabs.len(), 1);
+        assert_eq!(app.layouts["a"].iter_all_tabs().count(), 0);
+    }
+
+    #[test]
+    fn close_all_live_tabs_wait_then_keep_running_advances() {
+        let (mut app, ctx, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add("t0".into(), Tab::Terminal("s0".into()));
+        workspace.add("t1".into(), Tab::Terminal("s1".into()));
+        workspace.add("t2".into(), Tab::Terminal("s2".into()));
+        app.state.sessions.extend([
+            session_fixture("s0", SessionKind::Shell),
+            session_fixture("s1", SessionKind::Shell),
+            session_fixture("s2", SessionKind::Shell),
+        ]);
+        let ids = app.layouts["a"].ids();
+        app.begin_workspace_close_tabs("a", ids);
+        poll_workspace_close_in_frame(&mut app, &ctx);
+        assert_eq!(app.close_workspace, Some(("a".into(), "t0".into())));
+        assert_eq!(app.close_workspace_queue, ["t1", "t2"]);
+        assert_eq!(app.layouts["a"].ids(), ["t0", "t1", "t2"]);
+        app.close_workspace_tab_now("a", "t0");
+        assert_eq!(app.close_workspace, Some(("a".into(), "t1".into())));
+        assert_eq!(app.close_workspace_queue, ["t2"]);
+        assert_eq!(app.layouts["a"].ids(), ["t1", "t2"]);
+    }
+
+    #[test]
+    fn close_all_drains_empty_tabs_until_a_live_session() {
+        let (mut app, ctx, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add(
+            "t0".into(),
+            Tab::Image {
+                path: "/a.png".into(),
+            },
+        );
+        workspace.add("t1".into(), Tab::Terminal("s1".into()));
+        workspace.add(
+            "t2".into(),
+            Tab::Image {
+                path: "/c.png".into(),
+            },
+        );
+        app.state
+            .sessions
+            .push(session_fixture("s1", SessionKind::Shell));
+        let ids = app.layouts["a"].ids();
+        app.begin_workspace_close_tabs("a", ids);
+        poll_workspace_close_in_frame(&mut app, &ctx);
+        assert_eq!(app.close_workspace, Some(("a".into(), "t1".into())));
+        assert_eq!(app.close_workspace_queue, ["t2"]);
+        assert_eq!(app.layouts["a"].ids(), ["t1", "t2"]);
+    }
+
+    #[test]
+    fn close_all_ended_sessions_leave_an_empty_workspace() {
+        let (mut app, ctx, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add("t0".into(), Tab::Terminal("s0".into()));
+        workspace.add("t1".into(), Tab::Terminal("s1".into()));
+        app.state.sessions.extend(["s0", "s1"].map(|id| {
+            let mut session = session_fixture(id, SessionKind::Shell);
+            session.lifecycle = Lifecycle::Ended;
+            session
+        }));
+        let ids = app.layouts["a"].ids();
+        app.begin_workspace_close_tabs("a", ids);
+        app.poll_workspace_close(&ctx);
+        assert!(app.close_workspace.is_none());
+        assert!(app.close_workspace_queue.is_empty());
+        assert_eq!(app.layouts["a"].tabs.len(), 1);
+        assert_eq!(app.layouts["a"].iter_all_tabs().count(), 0);
+    }
+
+    #[test]
+    fn empty_workspace_tabs_drain_without_prompt() {
+        let (mut app, ctx, _dir) = fixture();
+        let workspace = app.layouts.get_mut("a").unwrap();
+        workspace.add(
+            "t0".into(),
+            Tab::Image {
+                path: "/a.png".into(),
+            },
+        );
+        workspace.add(
+            "t1".into(),
+            Tab::Image {
+                path: "/b.png".into(),
+            },
+        );
+        workspace.add(
+            "t2".into(),
+            Tab::Image {
+                path: "/c.png".into(),
+            },
+        );
+        app.begin_workspace_close_tabs("a", vec!["t0".into(), "t1".into()]);
+        app.poll_workspace_close(&ctx);
+        assert!(app.close_workspace.is_none());
+        assert!(app.close_workspace_queue.is_empty());
+        assert_eq!(
+            app.layouts["a"]
+                .tabs
+                .iter()
+                .map(|tab| tab.id.as_str())
+                .collect::<Vec<_>>(),
+            ["t2"]
+        );
+    }
+
+    #[test]
+    fn unsaved_close_cancel_aborts_remaining_workspace_tabs() {
+        let (mut app, _, _dir) = fixture();
+        app.close_workspace_queue = vec!["t1".into()];
+        app.apply_unsaved_close_choice(
+            appearance::UnsavedCloseChoice::Cancel,
+            editor_close::Target::Workspace("a".into(), "t0".into()),
+            vec!["editor".into()],
+        );
+        assert!(app.close_workspace_queue.is_empty());
+    }
+
+    #[test]
+    fn failed_directory_refresh_preserves_cached_entries_until_retry_succeeds() {
+        let (mut app, ctx, _dir) = fixture();
+        let path = PathBuf::from("/a");
+        let cached = terminator_git::Entry {
+            path: path.join("retained.rs"),
+            directory: false,
+            ignored: false,
+        };
+        app.dirs.insert(path.clone(), vec![cached]);
+        app.refresh_generation = 7;
+        app.refresh_request = Some(refresh::Request {
+            cwd: path.clone(),
+            generation: 7,
+            directories: vec![path.clone()],
+        });
+        let context = services::ContextData {
+            cwd: path.clone(),
+            root: None,
+            git_dirs: vec![],
+            branch: String::new(),
+            changes: vec![],
+            decorations: Default::default(),
+            error: None,
+        };
+        app.update_tx
+            .send(Update::Refresh(
+                7,
+                context.clone(),
+                vec![(
+                    path.clone(),
+                    Err(services::DirectoryError {
+                        path: path.clone(),
+                        kind: std::io::ErrorKind::PermissionDenied,
+                        message: "Fixture access revoked".into(),
+                    }),
+                )],
+                false,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(app.dirs[&path].len(), 1);
+        assert!(app.directory_errors.contains_key(&path));
+        app.update_tx
+            .send(Update::Refresh(
+                7,
+                context,
+                vec![(path.clone(), Ok(vec![]))],
+                false,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(app.dirs[&path].is_empty());
+        assert!(!app.directory_errors.contains_key(&path));
+    }
+
+    #[test]
+    fn stale_refresh_is_ignored_even_for_same_directory() {
+        let (mut app, ctx, _dir) = fixture();
+        app.refresh_generation = 3;
+        app.refresh_request = Some(refresh::Request {
+            cwd: "/a".into(),
+            generation: 3,
+            directories: vec![],
+        });
+        app.update_tx
+            .send(Update::Refresh(
+                2,
+                services::ContextData {
+                    cwd: "/a".into(),
+                    root: None,
+                    git_dirs: vec![],
+                    branch: "stale".into(),
+                    changes: vec![],
+                    decorations: Default::default(),
+                    error: None,
+                },
+                vec![],
+                false,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(app.context.is_none());
+    }
+    #[test]
+    fn delayed_creation_uses_original_project_after_navigation_and_pane_removal() {
+        let (mut app, ctx, _dir) = fixture();
+        app.insert("a", Tab::Terminal("anchor".into()), None);
+        app.select_project("b".into());
+        app.remove_tab("anchor");
+        let session = Session {
+            review: false,
+            id: "created".into(),
+            project_id: "a".into(),
+            label: "new".into(),
+            cwd: "/a/subdir".into(),
+            kind: SessionKind::Shell,
+            file: None,
+            lifecycle: Lifecycle::Running,
+            created: 0,
+            exit_code: None,
+            rows: 24,
+            cols: 80,
+            generation: "fixture".into(),
+            pid: None,
+            truncated: false,
+            cwd_confirmed: true,
+        };
+        app.update_tx
+            .send(Update::Created(
+                session,
+                None,
+                Some(vec![Tab::Terminal("anchor".into())]),
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        assert!(
+            app.layouts["a"]
+                .find_tab(&Tab::Terminal("created".into()))
+                .is_some()
+        );
+    }
+    #[test]
+    fn cancelled_picker_and_error_keep_workspace_and_layout() {
+        let (mut app, ctx, _dir) = fixture();
+        app.insert("a", Tab::Terminal("original".into()), None);
+        app.update_tx.send(Update::PickedProject(None, 0)).unwrap();
+        app.update_tx
+            .send(Update::Error("folder unavailable".into()))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(app.selected.as_deref(), Some("a"));
+        assert!(
+            app.layouts["a"]
+                .find_tab(&Tab::Terminal("original".into()))
+                .is_some()
+        );
+    }
+    #[test]
+    fn delayed_open_refreshes_inventory_without_overriding_new_selection() {
+        let (mut app, ctx, _dir) = fixture();
+        app.select_project("b".into());
+        app.select_project("a".into());
+        app.update_tx
+            .send(Update::OpenedProject(
+                Box::new(app.state.clone()),
+                "b".into(),
+                0,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(app.selected.as_deref(), Some("a"));
+        app.update_tx
+            .send(Update::OpenedProject(
+                Box::new(app.state.clone()),
+                "b".into(),
+                app.selection_generation,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(app.selected.as_deref(), Some("b"));
+    }
+    #[test]
+    fn project_round_trip_restores_split_tabs_and_focus() {
+        let (mut app, _, _dir) = fixture();
+        app.insert("a", Tab::Terminal("first".into()), None);
+        app.insert("a", Tab::Terminal("focused".into()), Some("right"));
+        app.select_project("b".into());
+        app.insert("b", Tab::Terminal("other".into()), None);
+        app.select_project("a".into());
+        assert_eq!(app.active_session.as_deref(), Some("focused"));
+        assert_eq!(app.layouts["a"].iter_all_tabs().count(), 2);
+        assert_eq!(app.layouts["b"].iter_all_tabs().count(), 1);
+    }
+    #[test]
+    fn repeated_gui_show_focuses_the_existing_session_without_duplicate_tabs() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        for _ in 0..2 {
+            app.ui_request(
+                &ctx,
+                terminator_core::ui_control::Request::ShowSession {
+                    session: "shell".into(),
+                    anchor: None,
+                    split: None,
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(app.layouts["a"].tabs.len(), 1);
+        assert_eq!(app.layouts["a"].iter_all_tabs().count(), 1);
+    }
+    #[test]
+    fn image_open_creates_no_editor_and_keeps_original_project() {
+        let (mut app, ctx, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.open_file("/a/image.PNG".into(), None, None, false);
+        app.select_project("b".into());
+        app.process_updates(&ctx);
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        assert!(app.layouts["a"].contains(&Tab::Image {
+            path: "/a/image.PNG".into()
+        }));
+        assert_eq!(app.layouts["a"].version, 3);
+        assert!(app.state.sessions.is_empty());
+        assert!(!requests.try_iter().any(|j|matches!(j,Job::Control(request,_) if matches!(*request,Request::Create { editor:true,.. }))));
+    }
+    #[test]
+    fn html_open_creates_no_editor_and_keeps_original_project() {
+        let (mut app, ctx, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.open_file("/a/index.HTML".into(), None, None, false);
+        app.select_project("b".into());
+        app.process_updates(&ctx);
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        assert!(app.layouts["a"].contains(&Tab::browser_file("/a/index.HTML".into())));
+        assert_eq!(app.layouts["a"].version, 6);
+        assert!(app.state.sessions.is_empty());
+        assert!(!requests.try_iter().any(|j|matches!(j,Job::Control(request,_) if matches!(*request,Request::Create { editor:true,.. }))));
+    }
+    #[test]
+    fn http_url_opens_browser_tab_and_rejects_other_schemes() {
+        let (mut app, ctx, _dir) = fixture();
+        app.open_browser_url("a", "https://example.com/app", None)
+            .unwrap();
+        app.select_project("b".into());
+        app.process_updates(&ctx);
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        assert!(app.layouts["a"].contains(&Tab::Browser {
+            id: String::new(),
+            target: BrowserTarget::Url("https://example.com/app".into())
+        }));
+        assert_eq!(app.layouts["a"].version, 6);
+        assert!(app.state.sessions.is_empty());
+        assert!(
+            app.open_browser_url("a", "javascript:alert(1)", None)
+                .is_err()
+        );
+        assert!(
+            app.open_browser_url("a", "file:///tmp/x.html", None)
+                .is_err()
+        );
+    }
+    #[test]
+    fn browser_url_submit_replaces_tab_target() {
+        let (mut app, ctx, _dir) = fixture();
+        app.open_browser_url("a", "https://example.com/app", None)
+            .unwrap();
+        app.process_updates(&ctx);
+        app.selected = Some("a".into());
+        let old = app.layouts["a"].active_pane().unwrap().clone();
+        app.browser_submit = Some((
+            old.key(),
+            BrowserTarget::from_http_url("https://example.com/other").unwrap(),
+        ));
+        app.apply_browser_submit();
+        assert!(app.layouts["a"].contains(&Tab::Browser {
+            id: String::new(),
+            target: BrowserTarget::from_http_url("https://example.com/other").unwrap()
+        }));
+        assert!(!app.layouts["a"].contains(&old));
+    }
+    #[test]
+    fn background_player_advances_its_own_project_playlist() {
+        let (mut app, _, _dir) = fixture();
+        app.selected = Some("b".into());
+        app.preferences.playlists = vec![crate::preferences::Playlist {
+            name: "Default".into(),
+            tracks: vec!["/a/one.wav".into(), "/a/two.wav".into()],
+        }];
+        app.preferences.selected_playlist = "Default".into();
+        app.player = player::Controller::finished_fixture("a", Some(0));
+        app.poll_player();
+        assert_eq!(app.player.project.as_deref(), Some("a"));
+        assert_eq!(app.preferences.player_index.get("Default"), Some(&1));
+    }
+
+    #[test]
+    fn radio_completion_does_not_start_a_playlist() {
+        let (mut app, _, _dir) = fixture();
+        app.preferences.playlists = vec![crate::preferences::Playlist {
+            name: "Default".into(),
+            tracks: vec!["/a/one.wav".into(), "/a/two.wav".into()],
+        }];
+        app.preferences.selected_playlist = "Default".into();
+        app.player = player::Controller::finished_fixture("a", None);
+        app.poll_player();
+        assert!(!app.preferences.player_index.contains_key("Default"));
+    }
+
+    #[test]
+    fn closing_a_player_tab_does_not_stop_playback() {
+        let (mut app, _, _dir) = fixture();
+        app.layouts
+            .get_mut("a")
+            .unwrap()
+            .add("player-a".into(), Tab::Player);
+        app.player = player::Controller::finished_fixture("a", Some(0));
+        app.layouts.get_mut("a").unwrap().close("player-a");
+        app.reconcile_gui_resources();
+        assert_eq!(app.player.project.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn radio_next_wraps_bundled_stations() {
+        let (mut app, _, _dir) = fixture();
+        app.play_station_at("a", 0);
+        assert_eq!(app.player.station_index, Some(0));
+        app.play_station_offset("a", 1);
+        assert_eq!(app.player.station_index, Some(1));
+        app.play_station_offset("a", -1);
+        assert_eq!(app.player.station_index, Some(0));
+        app.play_station_offset("a", -1);
+        assert_eq!(
+            app.player.station_index,
+            Some(player::radio::catalog().len() - 1)
+        );
+    }
+
+    #[test]
+    fn navigation_retains_identity_and_updates_the_originating_project() {
+        let (mut app, ctx, _dir) = fixture();
+        app.open_browser_url("a", "https://example.com/start", None)
+            .unwrap();
+        app.process_updates(&ctx);
+        let key = app.layouts["a"].active_pane().unwrap().key();
+        app.selected = Some("b".into());
+        let target = BrowserTarget::from_http_url("https://example.com/next").unwrap();
+        app.apply_browser_navigation(&key, target.clone());
+        assert_eq!(app.layouts["a"].active_pane().unwrap().key(), key);
+        assert_eq!(app.browser_urls[&key], "https://example.com/next");
+        assert!(
+            matches!(app.layouts["a"].active_pane(), Some(Tab::Browser { target: current, .. }) if *current == target)
+        );
+        assert_eq!(
+            app.layouts["a"].tabs[0].primary.as_ref().unwrap().key(),
+            key
+        );
+        let tab_id = app.layouts["a"].active.clone();
+        app.layouts.get_mut("a").unwrap().close(&tab_id);
+        app.reconcile_gui_resources();
+        assert!(!app.browser_urls.contains_key(&key));
+    }
+
+    #[test]
+    fn audio_open_plays_without_a_player_tab_and_keeps_original_project() {
+        let (mut app, ctx, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.open_file("/a/song.MP3".into(), None, None, false);
+        app.select_project("b".into());
+        app.process_updates(&ctx);
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        assert!(!app.layouts["a"].contains(&Tab::Player));
+        assert_eq!(app.player.project.as_deref(), Some("a"));
+        assert!(app.state.sessions.is_empty());
+        assert!(!requests.try_iter().any(|j|matches!(j,Job::Control(request,_) if matches!(*request,Request::Create { editor:true,.. }))));
+        assert_eq!(app.preferences.selected_playlist, "Default");
+        assert_eq!(
+            app.preferences.selected_tracks(),
+            [PathBuf::from("/a/song.MP3")].as_slice()
+        );
+    }
+
+    #[test]
+    fn adding_audio_files_appends_to_the_selected_playlist() {
+        let (mut app, _, _dir) = fixture();
+        app.add_audio_files(vec![
+            "/a/one.MP3".into(),
+            "/a/two.flac".into(),
+            "/a/notes.txt".into(),
+        ]);
+        assert_eq!(
+            app.preferences.selected_tracks(),
+            [PathBuf::from("/a/one.MP3"), PathBuf::from("/a/two.flac")].as_slice()
+        );
+        assert_eq!(app.player.project.as_deref(), Some("a"));
+        app.add_audio_files(vec!["/a/three.ogg".into()]);
+        assert_eq!(app.preferences.selected_tracks().len(), 3);
+        assert_eq!(app.player.project.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn image_split_survives_layout_temporarily_owned_by_renderer() {
+        let (mut app, ctx, _dir) = fixture();
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        app.active_session = Some("shell".into());
+        let mut dock = app.layouts.remove("a").unwrap();
+        let path = dock
+            .find_tab(&Tab::Terminal("shell".into()))
+            .unwrap()
+            .node_path();
+        app.pane_by_tab
+            .insert(Tab::Terminal("shell".into()).key(), path);
+        app.pane_tabs
+            .insert(path, vec![Tab::Terminal("shell".into())]);
+        app.open_image("a", "/a/picture.png".into(), Some("right"));
+        let original = dock.active.clone();
+        dock.add("other".into(), Tab::Terminal("other".into()));
+        app.layouts.insert("a".into(), dock);
+        app.process_updates(&ctx);
+        assert_eq!(app.layouts["a"].active, "other");
+        let source = app.layouts["a"]
+            .tabs
+            .iter()
+            .find(|t| t.id == original)
+            .unwrap();
+        assert!(
+            source
+                .layout
+                .find_tab(&Tab::Image {
+                    path: "/a/picture.png".into()
+                })
+                .is_some()
+        );
+    }
+    #[test]
+    fn pane_maps_reuse_unchanged_dock_and_refresh_on_change() {
+        let (mut app, _, _dir) = fixture();
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        let dock = app.layouts.get("a").cloned().unwrap();
+        app.refresh_pane_maps("a", &dock);
+        assert_eq!(app.pane_by_tab.len(), 1);
+        // Same dock next frame: cleared maps staying empty proves no rebuild.
+        app.pane_by_tab.clear();
+        app.pane_tabs.clear();
+        app.refresh_pane_maps("a", &dock);
+        assert!(app.pane_by_tab.is_empty());
+        assert!(app.pane_tabs.is_empty());
+        // Structural change rebuilds the maps.
+        let mut changed = dock.clone();
+        changed.add("other".into(), Tab::Terminal("other".into()));
+        app.refresh_pane_maps("a", &changed);
+        assert!(
+            app.pane_by_tab
+                .contains_key(&Tab::Terminal("other".into()).key())
+        );
+    }
+    /// Drive one headless frame of the strip plus the dock in real panel
+    /// order (strip first, dock after) with synthetic pointer events.
+    /// Needs test-support for the geometry records.
+    #[cfg(feature = "test-support")]
+    fn combined_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 600.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                let mut dock = app.layouts.remove("a").unwrap_or_else(Workspace::empty);
+                app.workspace_bar(ui, "a", &mut dock);
+                app.paint_dock(ui, "a", &mut dock);
+                app.layouts.insert("a".into(), dock);
+            },
+        );
+        output.textures_delta.clear();
+    }
+    #[cfg(feature = "test-support")]
+    fn frame_center(app: &App, ctx: &egui::Context, name: &str) -> egui::Pos2 {
+        let rect = app
+            .fixture_rect(ctx, name)
+            .unwrap_or_else(|| panic!("missing geometry for {name}"));
+        egui::pos2(rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0)
+    }
+    #[cfg(feature = "test-support")]
+    fn frame_press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+    #[cfg(feature = "test-support")]
+    fn frame_glide(
+        app: &mut App,
+        ctx: &egui::Context,
+        from: egui::Pos2,
+        to: egui::Pos2,
+        steps: usize,
+    ) {
+        for step in 1..=steps {
+            let k = step as f32 / steps as f32;
+            combined_frame(
+                app,
+                ctx,
+                vec![egui::Event::PointerMoved(egui::pos2(
+                    from.x + (to.x - from.x) * k,
+                    from.y + (to.y - from.y) * k,
+                ))],
+            );
+        }
+    }
+    #[test]
+    fn drag_ghost_paints_without_changing_state() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("one", SessionKind::Shell));
+        app.pane_drag = Some(Tab::Terminal("one".into()));
+        let pos = egui::pos2(500.0, 300.0);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 600.0),
+                )),
+                events: vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::default(),
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                app.paint_drag_ghost(ui);
+            },
+        );
+        output.textures_delta.clear();
+        assert_eq!(app.pane_drag, Some(Tab::Terminal("one".into())));
+    }
+    /// Hovering another strip tab mid-drag previews its splits; dropping on
+    /// one of its leaves lands the terminal precisely there.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_drag_preview_switches_tab_and_drops_into_its_leaf() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two", "three"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("three".into())],
+        );
+        let group_a = workspace.tabs[0].id.clone();
+        workspace.active = group_a.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("one".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let start = frame_center(&app, &ctx, "pane-drag:one");
+        let dest = frame_center(&app, &ctx, "workspace-tab:two");
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        frame_glide(&mut app, &ctx, start, dest, 4);
+        // The destination tab content is previewed while hovering its strip
+        // tab, remembering the origin tab.
+        assert_eq!(app.layouts["a"].active, "tB");
+        assert_eq!(
+            app.drop_preview_origin,
+            Some(("a".to_owned(), group_a.clone()))
+        );
+        let leaf_caption = frame_center(&app, &ctx, "pane-drag:three");
+        // Aim at the middle of the previewed split: its caption sits in the
+        // top edge band, which would split instead of swapping.
+        let leaf = egui::pos2(leaf_caption.x, 320.0);
+        frame_glide(&mut app, &ctx, dest, leaf, 3);
+        combined_frame(&mut app, &ctx, vec![frame_press(leaf, false)]);
+        assert!(app.pane_drag.is_none());
+        assert!(app.drop_preview_origin.is_none());
+        let dock = app.layouts.get("a").unwrap();
+        // Single panes swap: both tabs survive with everything visible.
+        assert_eq!(dock.tabs.len(), 2);
+        assert_eq!(dock.active, "tB");
+        // "one" landed in the targeted previewed leaf.
+        let landed = dock
+            .find_tab(&Tab::Terminal("one".into()))
+            .unwrap()
+            .node_path();
+        assert!(
+            dock.leaf(landed).unwrap().rect.contains(leaf),
+            "drop missed the targeted leaf"
+        );
+        // "three" swapped back into the origin tab.
+        let origin = dock
+            .tabs
+            .iter()
+            .find(|tab| tab.id != "tB")
+            .expect("origin tab survives the swap");
+        assert!(
+            origin
+                .layout
+                .find_tab(&Tab::Terminal("three".into()))
+                .is_some()
+        );
+    }
+    /// Dropping a pane near the edge of another split opens it in a new
+    /// split beside that leaf instead of swapping.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_drag_edge_drop_opens_a_split() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["left", "right"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("left".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("right".into())],
+        );
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("left".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let start = frame_center(&app, &ctx, "pane-drag:left");
+        let right = app
+            .fixture_rect(&ctx, "pane-drag:right")
+            .expect("caption geometry");
+        // Near the right edge of the right split, vertically centered on
+        // its caption so the top band cannot win the zone.
+        let edge = egui::pos2(right[0] + right[2] - 4.0, right[1] + right[3] / 2.0);
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        frame_glide(&mut app, &ctx, start, edge, 4);
+        assert_eq!(
+            app.pane_drag,
+            Some(Tab::Terminal("left".into())),
+            "caption drag did not start"
+        );
+        combined_frame(&mut app, &ctx, vec![frame_press(edge, false)]);
+        assert!(app.pane_drag.is_none());
+        // One more frame so leaf rectangles reflect the new split.
+        combined_frame(&mut app, &ctx, vec![]);
+        let dock = app.layouts.get("a").unwrap();
+        assert_eq!(dock.iter_leaves().count(), 2);
+        let left_rect = dock
+            .find_tab(&Tab::Terminal("left".into()))
+            .map(|path| dock.leaf(path.node_path()).unwrap().rect)
+            .unwrap();
+        let right_rect = dock
+            .find_tab(&Tab::Terminal("right".into()))
+            .map(|path| dock.leaf(path.node_path()).unwrap().rect)
+            .unwrap();
+        assert!(
+            left_rect.center().x > right_rect.center().x,
+            "edge drop did not split right"
+        );
+        assert_eq!(dock.active_pane(), Some(&Tab::Terminal("left".into())));
+    }
+    /// Cancelling a pane drag (Esc) after previewing another tab switches
+    /// back to the origin tab without moving anything.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_drag_cancel_restores_origin_tab() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        let group_a = workspace.tabs[0].id.clone();
+        workspace.active = group_a.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let start = frame_center(&app, &ctx, "pane-drag:one");
+        let dest = frame_center(&app, &ctx, "workspace-tab:two");
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(dest)]);
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(dest)]);
+        assert_eq!(app.layouts["a"].active, "tB");
+        combined_frame(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+        assert!(app.pane_drag.is_none());
+        assert!(app.drop_preview_origin.is_none());
+        let dock = app.layouts.get("a").unwrap();
+        assert_eq!(dock.active, group_a);
+        assert_eq!(dock.tabs.len(), 2);
+        assert!(dock.contains(&Tab::Terminal("one".into())));
+    }
+    /// Dropping a dragged pane into a gap between strip tabs opens it in a
+    /// fresh top-level tab at that slot instead of appending at the end.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_drag_gap_drop_creates_tab_at_slot() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two", "three"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("three".into())],
+        );
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        let group_a = workspace.tabs[0].id.clone();
+        workspace.active = group_a.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("one".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let tab_a = app
+            .fixture_rect(&ctx, "workspace-tab:one")
+            .expect("tab geometry");
+        let tab_b = app
+            .fixture_rect(&ctx, "workspace-tab:two")
+            .expect("tab geometry");
+        let (left, right) = if tab_a[0] < tab_b[0] {
+            (tab_a, tab_b)
+        } else {
+            (tab_b, tab_a)
+        };
+        let gap = egui::pos2(
+            (left[0] + left[2] + right[0]) / 2.0,
+            left[1] + left[3] / 2.0,
+        );
+        let start = frame_center(&app, &ctx, "pane-drag:one");
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        frame_glide(&mut app, &ctx, start, gap, 4);
+        combined_frame(&mut app, &ctx, vec![frame_press(gap, false)]);
+        assert!(app.pane_drag.is_none());
+        assert!(app.drop_preview_origin.is_none());
+        let dock = app.layouts.get("a").unwrap();
+        assert_eq!(dock.tabs.len(), 3);
+        assert!(
+            dock.tabs[0]
+                .layout
+                .find_tab(&Tab::Terminal("three".into()))
+                .is_some()
+        );
+        assert!(
+            dock.tabs[1]
+                .layout
+                .find_tab(&Tab::Terminal("one".into()))
+                .is_some()
+        );
+        assert!(
+            dock.tabs[2]
+                .layout
+                .find_tab(&Tab::Terminal("two".into()))
+                .is_some()
+        );
+        assert_eq!(dock.active, dock.tabs[1].id);
+    }
+    /// Dragging a strip tab reorders the top-level tabs to the drop slot.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn strip_tab_drag_reorders_top_level_tabs() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        let group_a = workspace.tabs[0].id.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("two".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let start = frame_center(&app, &ctx, "workspace-tab:two");
+        let first = app
+            .fixture_rect(&ctx, "workspace-tab:one")
+            .expect("tab geometry");
+        // Inside the first tab's left edge band: a gap for insertion math
+        // while still on the strip for the drop.
+        let dest = egui::pos2(first[0] + 5.0, first[1] + first[3] / 2.0);
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        frame_glide(&mut app, &ctx, start, dest, 4);
+        assert_eq!(app.tab_drag, Some("tB".to_owned()));
+        combined_frame(&mut app, &ctx, vec![frame_press(dest, false)]);
+        assert!(app.tab_drag.is_none());
+        let dock = app.layouts.get("a").unwrap();
+        assert_eq!(dock.ids(), vec!["tB".to_owned(), group_a.clone()]);
+        assert_eq!(dock.active, "tB");
+    }
+    /// Hovering a strip tab mid pane-drag washes the previewed tab's
+    /// focused leaf at real size, showing where a release would land.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_drag_strip_hover_washes_the_landing_leaf() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two", "three"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("three".into())],
+        );
+        let group_a = workspace.tabs[0].id.clone();
+        workspace.active = group_a.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("one".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let start = frame_center(&app, &ctx, "pane-drag:one");
+        let dest = frame_center(&app, &ctx, "workspace-tab:two");
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        frame_glide(&mut app, &ctx, start, dest, 4);
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(dest)]);
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(dest)]);
+        // Still dragging: the destination tab is previewed, nothing moved.
+        assert_eq!(app.pane_drag, Some(Tab::Terminal("one".into())));
+        assert_eq!(app.layouts["a"].active, "tB");
+        let wash = app
+            .fixture_rect(&ctx, "strip-drop-wash")
+            .expect("landing wash");
+        assert!(
+            wash[2] > 200.0 && wash[3] > 100.0,
+            "wash must cover the landing leaf at real size, got {wash:?}"
+        );
+    }
+    /// A tab reorder drag paints a tab-sized ghost that tracks the pointer.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn tab_drag_ghost_follows_the_pointer() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.tab_drag = Some("tB".to_owned());
+        let pos = egui::pos2(500.0, 300.0);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 600.0),
+                )),
+                events: vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::default(),
+                    },
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                app.paint_tab_ghost(ui);
+            },
+        );
+        output.textures_delta.clear();
+        let ghost = app.fixture_rect(&ctx, "tab-ghost").expect("tab ghost");
+        assert!(
+            ghost[2] < 180.0 && ghost[2] > 60.0,
+            "short tab ghost must hug the title, got {ghost:?}"
+        );
+        assert_eq!(ghost[3], 32.0);
+        assert!(
+            (ghost[0] - (pos.x - ghost[2] / 2.0)).abs() < 2.0
+                && (ghost[1] - (pos.y - 16.0)).abs() < 2.0,
+            "ghost must track the pointer, got {ghost:?}"
+        );
+        assert_eq!(app.tab_drag, Some("tB".to_owned()));
+    }
+    /// Short titles stay narrow, long titles grow, and the active tab's
+    /// accent underline is painted inside the tab rather than on its edge.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn workspace_tabs_hug_their_labels_and_underline_inside() {
+        let (mut app, ctx, _dir) = fixture();
+        let mut short = session_fixture("one", SessionKind::Shell);
+        short.label = "one".into();
+        let mut long = session_fixture("two", SessionKind::Shell);
+        long.label = "codex supervisor".into();
+        app.state.sessions.push(short);
+        app.state.sessions.push(long);
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        workspace.active = workspace.tabs[0].id.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let one = app
+            .fixture_rect(&ctx, "workspace-tab:one")
+            .expect("short tab");
+        let long = app
+            .fixture_rect(&ctx, "workspace-tab:codex supervisor")
+            .expect("long tab");
+        assert!(
+            one[2] < long[2] && one[2] < 160.0 && long[2] < 220.0,
+            "tabs must hug the label, got one={one:?} long={long:?}"
+        );
+        let underline = app
+            .fixture_rect(&ctx, "workspace-tab-underline:one")
+            .expect("active underline");
+        let tab_bottom = one[1] + one[3];
+        assert!(
+            underline[1] > one[1]
+                && underline[1] + underline[3] < tab_bottom
+                && underline[0] >= one[0]
+                && underline[0] + underline[2] <= one[0] + one[2] + 0.5,
+            "underline must sit inside the tab, tab={one:?} bar={underline:?}"
+        );
+        assert!(
+            app.fixture_rect(&ctx, "pane-caption:one").is_none(),
+            "a lone pane must not repeat the workspace tab title"
+        );
+    }
+    /// Split panes keep a caption so each one can be named and dragged.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn split_panes_keep_their_captions() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["left", "right"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("left".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("right".into())],
+        );
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        assert!(app.fixture_rect(&ctx, "pane-caption:left").is_some());
+        assert!(app.fixture_rect(&ctx, "pane-caption:right").is_some());
+    }
+    /// A pane dragged over a strip gap shows the tab-sized ghost (the
+    /// new-tab outcome), never stacked with the pane snapshot ghost.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_drag_strip_gap_shows_tab_ghost() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two", "three"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("three".into())],
+        );
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        let group_a = workspace.tabs[0].id.clone();
+        workspace.active = group_a.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("one".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let tab_a = app
+            .fixture_rect(&ctx, "workspace-tab:one")
+            .expect("tab geometry");
+        let tab_b = app
+            .fixture_rect(&ctx, "workspace-tab:two")
+            .expect("tab geometry");
+        let (left, right) = if tab_a[0] < tab_b[0] {
+            (tab_a, tab_b)
+        } else {
+            (tab_b, tab_a)
+        };
+        let gap = egui::pos2(
+            (left[0] + left[2] + right[0]) / 2.0,
+            left[1] + left[3] / 2.0,
+        );
+        let start = frame_center(&app, &ctx, "pane-drag:one");
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        frame_glide(&mut app, &ctx, start, gap, 4);
+        assert!(!app.strip_tab_hover);
+        assert!(app.strip_new_tab_hover);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 600.0),
+                )),
+                events: vec![egui::Event::PointerMoved(gap)],
+                ..Default::default()
+            },
+            |ui| {
+                app.paint_drag_ghost(ui);
+                app.paint_tab_ghost(ui);
+            },
+        );
+        output.textures_delta.clear();
+        let ghost = app.fixture_rect(&ctx, "tab-ghost").expect("tab ghost");
+        assert!(
+            ghost[2] < 180.0 && ghost[2] > 60.0,
+            "short tab ghost must hug the title, got {ghost:?}"
+        );
+        assert_eq!(ghost[3], 32.0);
+        assert!(
+            (ghost[0] - (gap.x - ghost[2] / 2.0)).abs() < 2.0,
+            "tab ghost must track the pointer, got {ghost:?}"
+        );
+        assert!(
+            app.fixture_rect(&ctx, "pane-ghost").is_none(),
+            "pane ghost must yield to the tab ghost over the strip"
+        );
+        assert_eq!(app.pane_drag, Some(Tab::Terminal("one".into())));
+    }
+    /// Dragging a terminal caption onto another split leaf rearranges the
+    /// active tab (single panes swap). Runs headless with synthetic pointer
+    /// events; needs test-support for the caption geometry records.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_caption_drag_swaps_split_terminals() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("left", SessionKind::Shell));
+        app.state
+            .sessions
+            .push(session_fixture("right", SessionKind::Shell));
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("left".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("right".into())],
+        );
+        let left_home = workspace
+            .find_tab(&Tab::Terminal("left".into()))
+            .unwrap()
+            .node_path();
+        let right_home = workspace
+            .find_tab(&Tab::Terminal("right".into()))
+            .unwrap()
+            .node_path();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("left".into());
+        fn dock_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut dock = app.layouts.remove("a").unwrap_or_else(Workspace::empty);
+                    app.paint_dock(ui, "a", &mut dock);
+                    app.layouts.insert("a".into(), dock);
+                },
+            );
+            output.textures_delta.clear();
+        }
+        fn center(rect: [f32; 4]) -> egui::Pos2 {
+            egui::pos2(rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0)
+        }
+        let press = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        dock_frame(&mut app, &ctx, vec![]);
+        let start = center(
+            app.fixture_rect(&ctx, "pane-drag:left")
+                .expect("left caption geometry"),
+        );
+        let end = center(
+            app.fixture_rect(&ctx, "pane-drag:right")
+                .expect("right caption geometry"),
+        );
+        // Aim at the middle of the right split: the caption sits in the top
+        // edge band, which would split instead of swapping.
+        let middle = egui::pos2(end.x, 300.0);
+        dock_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        dock_frame(&mut app, &ctx, vec![press(start, true)]);
+        assert!(app.pane_drag.is_none());
+        for step in 1..=4 {
+            let k = step as f32 / 4.0;
+            dock_frame(
+                &mut app,
+                &ctx,
+                vec![egui::Event::PointerMoved(egui::pos2(
+                    start.x + (middle.x - start.x) * k,
+                    start.y + (middle.y - start.y) * k,
+                ))],
+            );
+        }
+        assert_eq!(
+            app.pane_drag,
+            Some(Tab::Terminal("left".into())),
+            "caption drag did not start"
+        );
+        dock_frame(&mut app, &ctx, vec![press(middle, false)]);
+        assert!(app.pane_drag.is_none());
+        // A middle drop swaps the two single panes in place: same leaves,
+        // exchanged terminals.
+        let dock = app.layouts.get("a").unwrap();
+        assert_eq!(
+            dock.find_tab(&Tab::Terminal("left".into()))
+                .unwrap()
+                .node_path(),
+            right_home,
+            "middle drop did not swap into the right split"
+        );
+        assert_eq!(
+            dock.find_tab(&Tab::Terminal("right".into()))
+                .unwrap()
+                .node_path(),
+            left_home,
+            "middle drop did not swap into the left split"
+        );
+    }
+    /// Dragging a terminal caption onto another workspace strip tab moves it
+    /// across top-level tabs. Needs test-support for geometry records.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_caption_drop_on_strip_tab_moves_across_groups() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("one", SessionKind::Shell));
+        app.state
+            .sessions
+            .push(session_fixture("two", SessionKind::Shell));
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.add("tB".into(), Tab::Terminal("two".into()));
+        let group_a = workspace.tabs[0].id.clone();
+        workspace.active = group_a.clone();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("one".into());
+        fn combined_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 600.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    // Same order as the real panels: strip first, dock after.
+                    let mut dock = app.layouts.remove("a").unwrap_or_else(Workspace::empty);
+                    app.workspace_bar(ui, "a", &mut dock);
+                    app.paint_dock(ui, "a", &mut dock);
+                    app.layouts.insert("a".into(), dock);
+                },
+            );
+            output.textures_delta.clear();
+        }
+        fn center(rect: [f32; 4]) -> egui::Pos2 {
+            egui::pos2(rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0)
+        }
+        let press = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        combined_frame(&mut app, &ctx, vec![]);
+        let start = center(
+            app.fixture_rect(&ctx, "pane-drag:one")
+                .expect("caption geometry"),
+        );
+        let dest = center(
+            app.fixture_rect(&ctx, "workspace-tab:two")
+                .expect("strip tab geometry"),
+        );
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![press(start, true)]);
+        for step in 1..=4 {
+            let k = step as f32 / 4.0;
+            combined_frame(
+                &mut app,
+                &ctx,
+                vec![egui::Event::PointerMoved(egui::pos2(
+                    start.x + (dest.x - start.x) * k,
+                    start.y + (dest.y - start.y) * k,
+                ))],
+            );
+        }
+        assert_eq!(
+            app.pane_drag,
+            Some(Tab::Terminal("one".into())),
+            "caption drag did not start"
+        );
+        combined_frame(&mut app, &ctx, vec![press(dest, false)]);
+        assert!(app.pane_drag.is_none());
+        let dock = app.layouts.get("a").unwrap();
+        // Both sides held one terminal: they swap instead of hiding one.
+        assert_eq!(dock.tabs.len(), 2, "swap must keep both tabs");
+        assert_eq!(dock.active, "tB");
+        assert!(dock.contains(&Tab::Terminal("one".into())));
+        assert!(dock.contains(&Tab::Terminal("two".into())));
+    }
+    #[test]
+    fn attention_migration_retries_without_ack_and_preserves_later_choices() {
+        let (mut app, ctx, dir) = fixture();
+        app.preferences_writable = true;
+        app.migrate_attention();
+        assert!(app.attention_requested.is_some());
+        assert!(!app.preferences.attention_migrated);
+        app.attention_requested = Some(Instant::now() - Duration::from_secs(6));
+        app.migrate_attention();
+        assert!(app.attention_requested.unwrap().elapsed() >= Duration::from_secs(6));
+        app.update_tx
+            .send(Update::AttentionMigrated(Err("rejected".into())))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(!app.preferences.attention_migrated);
+        app.attention_requested = Some(Instant::now() - Duration::from_secs(6));
+        app.migrate_attention();
+        assert!(app.attention_requested.unwrap().elapsed() < Duration::from_secs(1));
+        app.update_tx
+            .send(Update::AttentionMigrated(Ok(())))
+            .unwrap();
+        app.process_updates(&ctx);
+        app.preferences.save(dir.path()).unwrap();
+        assert!(UiPreferences::load(dir.path()).unwrap().attention_migrated);
+        app.state.settings.notifications_side = false;
+        app.attention_requested = None;
+        app.migrate_attention();
+        assert!(app.attention_requested.is_none());
+        assert!(!app.state.settings.notifications_side);
+    }
+    #[test]
+    fn opening_settings_keeps_selected_sidebar_and_custom_editor() {
+        let (mut app, _, _dir) = fixture();
+        app.preferences.tool = SidebarTool::Git;
+        app.preferences.visible = false;
+        app.state.settings.external_editor = "/custom/editor".into();
+        app.state.settings.external_args = vec!["a b".into()];
+        app.open_settings();
+        assert_eq!(app.preferences.tool, SidebarTool::Git);
+        assert!(!app.preferences.visible);
+        assert_eq!(app.editor_preset, external_editor::CUSTOM);
+        assert_eq!(app.settings_draft.external_args, vec!["a b"]);
+    }
+    #[test]
+    fn failed_migration_does_not_set_marker() {
+        let (mut app, ctx, _dir) = fixture();
+        app.update_tx
+            .send(Update::Error("Settings rejected".into()))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(!app.preferences.typography_migrated);
+        app.update_tx.send(Update::TypographyMigrated).unwrap();
+        app.process_updates(&ctx);
+        assert!(app.preferences.typography_migrated);
+    }
+    #[test]
+    fn hidden_agent_terminal_keeps_owner_and_directory_context() {
+        let (mut app, _, _dir) = fixture();
+        app.state.sessions.push(Session {
+            review: false,
+            id: "hidden".into(),
+            project_id: "a".into(),
+            label: "Shell".into(),
+            cwd: "/b".into(),
+            kind: SessionKind::Shell,
+            file: None,
+            lifecycle: Lifecycle::Running,
+            created: 0,
+            exit_code: None,
+            rows: 24,
+            cols: 80,
+            generation: "same".into(),
+            pid: Some(123),
+            truncated: false,
+            cwd_confirmed: true,
+        });
+        app.select_project("b".into());
+        assert!(
+            !app.preferences
+                .includes_project("a", app.selected.as_deref())
+        );
+        app.preferences.all_projects = true;
+        assert!(
+            app.preferences
+                .includes_project("a", app.selected.as_deref())
+        );
+        app.go_session("hidden");
+        assert_eq!(app.selected.as_deref(), Some("a"));
+        assert_eq!(app.cwd(), Some(PathBuf::from("/b")));
+        assert!(
+            app.layouts["a"]
+                .find_tab(&Tab::Terminal("hidden".into()))
+                .is_some()
+        );
+        assert_eq!(app.state.sessions[0].pid, Some(123));
+        app.terminal_context.insert("a".into(), "hidden".into());
+        app.active_session = None; // diff/editor focus retains the preceding shell.
+        assert_eq!(app.cwd(), Some(PathBuf::from("/b")));
+        app.preferences.all_projects = false;
+        assert!(
+            app.preferences
+                .includes_project("a", app.selected.as_deref())
+        );
+    }
+
+    fn notice_fixture(id: &str, session: &str, state: AgentState, created: u64) -> Notification {
+        Notification {
+            id: id.into(),
+            session_id: session.into(),
+            invocation_id: id.into(),
+            request_id: None,
+            state,
+            summary: state.label().into(),
+            details: "Agent: codex\nEvent: PermissionRequest\nSession: test".into(),
+            created,
+            read: false,
+            dismissed: false,
+            resolved: false,
+            snoozed_until: 0,
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    fn agent_target(ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
+        ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+    }
+
+    #[cfg(feature = "test-support")]
+    fn render_agents(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 800.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| app.agents_view(ui),
+        );
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn inline_attention_preserves_input_but_out_of_scope_details_remain_modal() {
+        let (mut app, _, _dir) = fixture();
+        app.preferences.left_agents = true;
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        app.state.notifications = vec![notice_fixture(
+            "wait",
+            "live-shell",
+            AgentState::WaitingPermission,
+            now(),
+        )];
+        app.detail = Some("wait".into());
+        assert!(!app.notice_detail_modal_open());
+        app.preferences.left_agents = false;
+        app.preferences.visible = false;
+        assert!(app.notice_detail_modal_open());
+        app.preferences.left_agents = true;
+        app.preferences.all_projects = false;
+        app.selected = Some("different-project".into());
+        assert!(app.notice_detail_modal_open());
+        app.preferences.all_projects = true;
+        app.state.notifications[0].snoozed_until = now() + 600;
+        assert!(app.notice_detail_modal_open());
+        app.state.notifications[0].snoozed_until = 0;
+        app.state.notifications[0].resolved = true;
+        assert!(app.notice_detail_modal_open());
+        app.state.notifications[0].resolved = false;
+        app.state.notifications[0].dismissed = true;
+        assert!(app.notice_detail_modal_open());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn attention_bell_lives_on_the_left_sidebar_only() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state.settings.notifications_side = true;
+        app.preferences.visible = true;
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        app.state.notifications = vec![notice_fixture(
+            "wait",
+            "live-shell",
+            AgentState::WaitingPermission,
+            now(),
+        )];
+        let target = |name: &str| {
+            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+        };
+        // The right sidebar never paints the bell, even with waiting notices.
+        for tool in [
+            SidebarTool::History,
+            SidebarTool::Git,
+            SidebarTool::Explorer,
+            SidebarTool::Agents,
+        ] {
+            app.preferences.tool = tool;
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                if app.preferences.visible {
+                    app.sidebar(ui);
+                }
+            });
+            output.textures_delta.clear();
+            assert!(target("attention-bell").is_none());
+        }
+        assert!(target("agent-go:live-shell").is_some());
+        // The left sidebar keeps the bell toggle.
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.agent_bar(ui);
+        });
+        output.textures_delta.clear();
+        assert!(target("left-agent-bar").is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn player_chrome_paints_next_to_the_project_bell() {
+        let (mut app, ctx, _dir) = fixture();
+        let target = |name: &str| {
+            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+        };
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.agent_bar(ui);
+        });
+        output.textures_delta.clear();
+        let bell = target("left-agent-bar").expect("project bell");
+        let chrome = target("player-chrome").expect("player chrome");
+        assert!(
+            chrome.min.x < bell.min.x,
+            "player icon must sit left of the project bell, chrome={chrome:?} bell={bell:?}"
+        );
+        assert!(
+            (chrome.center().y - bell.center().y).abs() < 1.0,
+            "player and activity icons should share a vertical center, chrome={chrome:?} bell={bell:?}"
+        );
+        assert!(chrome.height() <= 28.0 && bell.height() <= 28.0);
+    }
+
+    fn generation_health(
+        id: &str,
+        directory: &std::path::Path,
+        revision: u64,
+        status: generations::Status,
+    ) -> generations::Health {
+        generations::Health {
+            owner: generations::Generation {
+                id: id.into(),
+                data: directory.to_path_buf(),
+                runtime: directory.to_path_buf(),
+                version: "0.35.0".into(),
+                build: "fixture".into(),
+                protocol: 1,
+                catalog: 1,
+                status,
+                pid: None,
+            },
+            revision,
+            error: None,
+            live_sessions: 1,
+            capabilities: Vec::new(),
+            helper: None,
+        }
+    }
+
+    #[test]
+    fn older_observation_cannot_restore_a_previous_active_generation() {
+        let (mut app, _, _directory) = fixture();
+        let mut state = app.state.clone();
+        state.generation = "new-owner".into();
+        state.client_observation = 3;
+        app.apply_state(state.clone());
+        state.generation = "old-owner".into();
+        state.client_observation = 2;
+        app.apply_state(state);
+        assert_eq!(app.state.generation, "new-owner");
+    }
+
+    #[test]
+    fn shell_exit_is_applied_when_a_newer_revision_has_an_older_observation() {
+        let (mut app, _, _directory) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        app.state.generation = "owner".into();
+        app.state.revision = 10;
+        app.state.client_observation = 5;
+        let mut ended = app.state.clone();
+        ended.client_observation = 4;
+        ended.revision = 11;
+        ended
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == "shell")
+            .unwrap()
+            .lifecycle = Lifecycle::Ended;
+        app.apply_state(ended);
+        assert!(
+            app.layouts["a"]
+                .find_tab(&Tab::Terminal("shell".into()))
+                .is_none()
+        );
+        assert_eq!(app.state.revision, 11);
+    }
+
+    #[test]
+    fn stale_historical_owner_does_not_block_shell_exit_cleanup() {
+        let (mut app, _, directory) = fixture();
+        let mut shell = session_fixture("shell", SessionKind::Shell);
+        shell.generation = "active".into();
+        app.state.sessions.push(shell);
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        app.state.generation = "active".into();
+        app.state.revision = 10;
+        app.state.client_observation = 5;
+        app.state.generations = vec![
+            generation_health("active", directory.path(), 10, generations::Status::Active),
+            generation_health(
+                "retired",
+                directory.path(),
+                50,
+                generations::Status::Retired,
+            ),
+        ];
+        let mut ended = app.state.clone();
+        ended.revision = 11;
+        ended.client_observation = 6;
+        ended.generations[0].revision = 11;
+        ended.generations[1].revision = 49;
+        ended
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == "shell")
+            .unwrap()
+            .lifecycle = Lifecycle::Ended;
+        app.apply_state(ended);
+        assert!(
+            app.layouts["a"]
+                .find_tab(&Tab::Terminal("shell".into()))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn poller_ended_snapshot_wins_over_an_older_job_snapshot() {
+        let (mut app, ctx, _directory) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        app.state.generation = "owner".into();
+        app.state.revision = 10;
+        app.state.client_observation = 1;
+        let mut stale = app.state.clone();
+        stale.client_observation = 3;
+        let mut ended = app.state.clone();
+        ended.client_observation = 2;
+        ended.revision = 11;
+        ended
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == "shell")
+            .unwrap()
+            .lifecycle = Lifecycle::Ended;
+        app.service_ready.push_back(Update::State(Box::new(stale)));
+        *app.service_owner.snapshot.lock().unwrap() = Some(Box::new(ended));
+        app.process_updates(&ctx);
+        assert!(
+            app.layouts["a"]
+                .find_tab(&Tab::Terminal("shell".into()))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn unavailable_owner_keeps_last_records_but_updates_health() {
+        let (mut app, _, directory) = fixture();
+        let mut state = app.state.clone();
+        state.generation = "owner".into();
+        state.revision = 20;
+        let mut session = session_fixture("last-observed", SessionKind::Shell);
+        session.generation = "owner".into();
+        state.sessions.push(session);
+        state.generations.push(generations::Health {
+            owner: generations::Generation {
+                id: "owner".into(),
+                data: directory.path().into(),
+                runtime: directory.path().into(),
+                version: "0.35.0".into(),
+                build: "fixture".into(),
+                protocol: 1,
+                catalog: 1,
+                status: generations::Status::Active,
+                pid: None,
+            },
+            revision: 20,
+            error: None,
+            live_sessions: 1,
+            capabilities: Vec::new(),
+            helper: None,
+        });
+        app.apply_state(state.clone());
+        state.sessions.clear();
+        state.revision = 19;
+        state.generations[0].revision = 19;
+        state.generations[0].error = Some("Owner unavailable".into());
+        app.apply_state(state);
+        assert!(
+            app.state
+                .sessions
+                .iter()
+                .any(|session| session.id == "last-observed")
+        );
+        assert!(app.state.generations[0].error.is_some());
+    }
+
+    #[test]
+    fn late_snapshot_cannot_erase_a_newer_project_inventory() {
+        let (mut app, _, _dir) = fixture();
+        let mut fresh = app.state.clone();
+        fresh.generation = "snapshot-owner".into();
+        fresh.revision = 20;
+        fresh.catalog_revision = 7;
+        let projects = fresh.projects.len();
+        assert!(projects > 0);
+        app.apply_state(fresh.clone());
+        let mut stale = fresh;
+        stale.revision = 19;
+        stale.projects.clear();
+        app.apply_state(stale);
+        assert_eq!(app.state.projects.len(), projects);
+        assert_eq!(app.state.revision, 20);
+    }
+
+    #[test]
+    fn opening_player_seeds_sample_tracks_once() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.open_player();
+        assert_eq!(app.preferences.selected_tracks().len(), 3);
+        assert!(
+            app.preferences
+                .selected_tracks()
+                .iter()
+                .all(|path| path.extension().is_some_and(|ext| ext == "wav"))
+        );
+        app.preferences
+            .selected_tracks_mut()
+            .expect("playlist")
+            .clear();
+        app.open_player();
+        assert!(app.preferences.selected_tracks().is_empty());
+    }
+
+    #[test]
+    fn player_icon_opens_a_global_window_not_a_tab() {
+        let (mut app, _, _dir) = fixture();
+        app.open_player();
+        assert!(app.player_open);
+        assert!(!app.layouts["a"].contains(&Tab::Player));
+        app.open_player();
+        assert!(app.player_open);
+        assert_eq!(
+            app.layouts["a"]
+                .iter_all_tabs()
+                .filter(|(_, tab)| matches!(tab, Tab::Player))
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn leftover_player_tabs_are_stripped_without_stopping_playback() {
+        let (mut app, _, _dir) = fixture();
+        app.layouts
+            .get_mut("a")
+            .unwrap()
+            .add("player-a".into(), Tab::Player);
+        app.player = player::Controller::finished_fixture("a", Some(0));
+        app.reconcile_gui_resources();
+        assert!(!app.layouts["a"].contains(&Tab::Player));
+        assert_eq!(app.player.project.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn opening_the_player_closes_a_leftover_player_tab() {
+        let (mut app, _, _dir) = fixture();
+        app.layouts
+            .get_mut("a")
+            .unwrap()
+            .add("player-a".into(), Tab::Player);
+        app.open_player();
+        assert!(app.player_open);
+        assert!(!app.layouts["a"].contains(&Tab::Player));
+        app.open_player();
+        assert!(app.player_open);
+    }
+
+    #[test]
+    fn settings_and_player_are_center_singletons() {
+        let (mut app, _, _dir) = fixture();
+        app.open_settings();
+        app.settings_draft.shell = "/tmp/custom-shell".into();
+        app.settings_section = SettingsSection::Terminal;
+        app.settings_search = "shell".into();
+        app.hide_center_overlay();
+        assert!(!app.settings_open);
+        assert!(app.settings_session);
+        app.open_settings();
+        assert_eq!(app.settings_draft.shell, "/tmp/custom-shell");
+        assert_eq!(app.settings_section, SettingsSection::Terminal);
+        assert_eq!(app.settings_search, "shell");
+        app.open_player();
+        assert!(app.player_open);
+        assert!(!app.settings_open);
+        assert!(app.settings_session);
+        app.open_settings();
+        assert!(!app.player_open);
+        assert_eq!(app.settings_draft.shell, "/tmp/custom-shell");
+        app.end_settings_session();
+        app.open_settings();
+        assert!(app.settings_draft.shell.is_empty());
+        assert!(app.settings_search.is_empty());
+    }
+
+    #[test]
+    fn go_session_hides_center_overlay() {
+        let (mut app, _, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.open_player();
+        app.go_session("shell");
+        assert!(!app.player_open);
+        app.open_player();
+        assert!(app.player_open);
+    }
+
+    #[test]
+    fn create_hides_settings_without_ending_session() {
+        let (mut app, _, _dir) = fixture();
+        app.open_settings();
+        app.settings_search = "shell".into();
+        app.create(None);
+        assert!(!app.settings_open);
+        assert!(app.settings_session);
+        app.open_settings();
+        assert_eq!(app.settings_search, "shell");
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn attention_actions_fit_minimum_sidebar_widths() {
+        for width in [170.0, 220.0, 320.0] {
+            let (mut app, ctx, _dir) = fixture();
+            appearance::install(&ctx);
+            app.preferences.all_projects = true;
+            app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+            app.state.notifications = vec![notice_fixture(
+                "wait",
+                "live-shell",
+                AgentState::WaitingPermission,
+                now(),
+            )];
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let bounds = ui.max_rect();
+                    app.agents_view(ui);
+                    let mut action_rects = Vec::new();
+                    for action in ["go", "snooze", "dismiss"] {
+                        let rect =
+                            agent_target(&ctx, &format!("agent-{action}:live-shell")).unwrap();
+                        assert!(
+                            bounds.contains_rect(rect),
+                            "width {width}: {action} {rect:?} outside {bounds:?}"
+                        );
+                        action_rects.push(rect);
+                    }
+                    assert!(
+                        (action_rects[0].center().y - action_rects[2].center().y).abs() < 2.0,
+                        "width {width}: actions should stay one cluster {:?}",
+                        action_rects
+                    );
+                    if width >= 320.0 {
+                        let row = agent_target(&ctx, "agent-row:live-shell").unwrap();
+                        assert!(
+                            (row.center().y - action_rects[0].center().y).abs() < 8.0,
+                            "width {width}: title and actions should share one row"
+                        );
+                        assert!(
+                            action_rects[0].min.x >= row.max.x - 2.0,
+                            "width {width}: actions should follow the title"
+                        );
+                    }
+                },
+            );
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn waiting_badge_matches_pending_notices_not_live_agents() {
+        let (mut app, _, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.selected = Some("a".into());
+        app.state.sessions = vec![session_fixture("s", SessionKind::Shell)];
+        app.state.agents = vec![Agent {
+            invocation_id: "agent".into(),
+            session_id: "s".into(),
+            kind: "codex".into(),
+            provider_session_id: None,
+            state: AgentState::WaitingInput,
+            sequence: Some(1),
+            updated: 0,
+            resume: None,
+        }];
+        assert_eq!(app.waiting_notice_count(), 0);
+        app.state.notifications = vec![Notification {
+            id: "n".into(),
+            session_id: "s".into(),
+            invocation_id: "agent".into(),
+            request_id: None,
+            state: AgentState::WaitingInput,
+            summary: "Need input".into(),
+            details: String::new(),
+            created: 1,
+            read: false,
+            dismissed: false,
+            resolved: false,
+            snoozed_until: 0,
+        }];
+        assert_eq!(app.waiting_notice_count(), 1);
+        app.state.notifications[0].state = AgentState::WaitingPermission;
+        assert_eq!(app.waiting_notice_count(), 1);
+        app.state.notifications[0].dismissed = true;
+        assert_eq!(app.waiting_notice_count(), 0);
+        app.state.notifications[0].dismissed = false;
+        app.state.notifications[0].snoozed_until = now() + 600;
+        assert_eq!(app.waiting_notice_count(), 0);
+        app.state.notifications[0].snoozed_until = 0;
+        app.preferences.all_projects = false;
+        app.selected = Some("b".into());
+        assert_eq!(app.waiting_notice_count(), 0);
+        app.preferences.all_projects = true;
+        app.state.notifications[0].resolved = true;
+        assert_eq!(app.waiting_notice_count(), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn resolved_waiting_notice_is_not_listed() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![
+            session_fixture("done", SessionKind::Shell),
+            session_fixture("resolved", SessionKind::Shell),
+        ];
+        let mut resolved =
+            notice_fixture("old-wait", "resolved", AgentState::WaitingPermission, now());
+        resolved.resolved = true;
+        app.state.notifications = vec![
+            resolved,
+            notice_fixture("done", "done", AgentState::Completed, 1),
+        ];
+        render_agents(&mut app, &ctx, vec![]);
+        assert!(agent_target(&ctx, "agent-row:done").is_some());
+        assert!(agent_target(&ctx, "agent-row:resolved").is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn agents_inbox_lists_terminal_notices() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        app.state.terminal_notices = vec![TerminalNotice {
+            id: "tn".into(),
+            session_id: "live-shell".into(),
+            title: "Terminal".into(),
+            body: "bell".into(),
+            created: 1,
+            dismissed: false,
+        }];
+        render_agents(&mut app, &ctx, vec![]);
+        assert!(agent_target(&ctx, "terminal-row:live-shell").is_some());
+        assert!(agent_target(&ctx, "terminal-go:live-shell").is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn agents_inbox_lists_pending_notices_not_stopped_agents() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![
+            session_fixture("stopped-shell", SessionKind::Shell),
+            session_fixture("live-shell", SessionKind::Shell),
+        ];
+        app.state.agents = vec![Agent {
+            invocation_id: "stopped".into(),
+            session_id: "stopped-shell".into(),
+            kind: "codex".into(),
+            provider_session_id: None,
+            state: AgentState::Stopped,
+            sequence: None,
+            updated: 1,
+            resume: None,
+        }];
+        app.state.notifications = vec![notice_fixture(
+            "wait",
+            "live-shell",
+            AgentState::WaitingPermission,
+            now(),
+        )];
+        render_agents(&mut app, &ctx, vec![]);
+        assert!(agent_target(&ctx, "agent-row:stopped-shell").is_none());
+        assert!(agent_target(&ctx, "agent-row:live-shell").is_some());
+        assert!(agent_target(&ctx, "agent-go:live-shell").is_some());
+        assert!(agent_target(&ctx, "agent-snooze:live-shell").is_some());
+        assert!(agent_target(&ctx, "agent-dismiss:live-shell").is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn agents_inbox_puts_waiting_above_completed() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![
+            session_fixture("done-shell", SessionKind::Shell),
+            session_fixture("live-shell", SessionKind::Shell),
+        ];
+        app.state.notifications = vec![
+            notice_fixture("done", "done-shell", AgentState::Completed, now()),
+            notice_fixture("wait", "live-shell", AgentState::WaitingPermission, 1),
+        ];
+        render_agents(&mut app, &ctx, vec![]);
+        let waiting = agent_target(&ctx, "agent-row:live-shell").unwrap();
+        let completed = agent_target(&ctx, "agent-row:done-shell").unwrap();
+        assert!(waiting.top() < completed.top());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn agents_inbox_go_focuses_session_and_dismiss_hides_card() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        app.state.notifications = vec![notice_fixture(
+            "wait",
+            "live-shell",
+            AgentState::WaitingPermission,
+            now(),
+        )];
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.apply_notice_action("wait".into(), AttentionAction::Go);
+        assert_eq!(app.active_session.as_deref(), Some("live-shell"));
+        app.apply_notice_action("wait".into(), AttentionAction::Dismiss);
+        assert!(
+            app.state
+                .notifications
+                .iter()
+                .all(|notice| notice.dismissed)
+        );
+        render_agents(&mut app, &ctx, vec![]);
+        assert!(agent_target(&ctx, "agent-row:live-shell").is_none());
+        let mut saw_dismiss = false;
+        while let Ok(job) = received.try_recv() {
+            if let Job::Control(request, _) = job
+                && matches!(
+                    *request,
+                    Request::Notice {
+                        ref action,
+                        ..
+                    } if action == "dismiss"
+                )
+            {
+                saw_dismiss = true;
+            }
+        }
+        assert!(saw_dismiss);
+    }
+
+    #[test]
+    fn status_menu_lists_pending_notices_in_inbox_order() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![
+            session_fixture("done-shell", SessionKind::Shell),
+            session_fixture("live-shell", SessionKind::Shell),
+        ];
+        app.state.notifications = vec![
+            notice_fixture("done", "done-shell", AgentState::Completed, now()),
+            notice_fixture("wait", "live-shell", AgentState::WaitingPermission, 1),
+        ];
+        let items = app.status_menu_items();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "wait");
+        assert!(items[0].title.contains("live-shell"));
+        assert!(items[0].title.contains("Needs permission"));
+        assert_eq!(items[1].id, "done");
+    }
+
+    #[test]
+    fn status_menu_skips_settled_notices_and_caps_single_line_titles() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        let mut long = notice_fixture("long", "live-shell", AgentState::WaitingInput, now());
+        long.summary = "line one\nline two ".to_string() + &"word ".repeat(40);
+        let mut dismissed =
+            notice_fixture("dismissed", "live-shell", AgentState::WaitingInput, now());
+        dismissed.dismissed = true;
+        let mut resolved =
+            notice_fixture("resolved", "live-shell", AgentState::WaitingInput, now());
+        resolved.resolved = true;
+        let mut snoozed = notice_fixture("snoozed", "live-shell", AgentState::WaitingInput, now());
+        snoozed.snoozed_until = now() + 600;
+        let mut overflow: Vec<_> = (0..13)
+            .map(|index| {
+                notice_fixture(
+                    &format!("extra-{index}"),
+                    "live-shell",
+                    AgentState::Completed,
+                    now(),
+                )
+            })
+            .collect();
+        let mut notices = vec![long, dismissed, resolved, snoozed];
+        notices.append(&mut overflow);
+        app.state.notifications = notices;
+        let items = app.status_menu_items();
+        assert_eq!(items.len(), 12);
+        assert_eq!(items[0].id, "long");
+        assert!(!items[0].title.contains('\n'));
+        assert!(items[0].title.chars().count() <= 90);
+        assert!(items.iter().all(|item| item.id != "dismissed"));
+        assert!(items.iter().all(|item| item.id != "resolved"));
+        assert!(items.iter().all(|item| item.id != "snoozed"));
+    }
+
+    #[test]
+    fn status_menu_pick_focuses_the_waiting_agent() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        app.state.notifications = vec![notice_fixture(
+            "wait",
+            "live-shell",
+            AgentState::WaitingPermission,
+            now(),
+        )];
+        let (jobs, _received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.preferences.tool = SidebarTool::Explorer;
+        app.preferences.visible = false;
+        app.detail = Some("wait".into());
+        app.focus_status_notice(&ctx, "wait");
+        assert_eq!(app.preferences.tool, SidebarTool::Agents);
+        assert!(app.preferences.visible);
+        assert_eq!(app.active_session.as_deref(), Some("live-shell"));
+        assert_eq!(app.selected.as_deref(), Some("a"));
+        assert_eq!(app.detail, None);
+    }
+
+    #[test]
+    fn status_menu_pick_with_stale_id_just_opens_the_inbox() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.tool = SidebarTool::Explorer;
+        app.preferences.visible = false;
+        app.focus_status_notice(&ctx, "gone");
+        assert_eq!(app.preferences.tool, SidebarTool::Agents);
+        assert!(app.preferences.visible);
+        assert_eq!(app.active_session, None);
+        assert_eq!(app.detail, None);
+    }
+
+    #[test]
+    fn attention_counts_share_waiting_and_unread_with_both_bells() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![
+            session_fixture("one", SessionKind::Shell),
+            session_fixture("two", SessionKind::Shell),
+        ];
+        let mut waiting = notice_fixture("wait", "one", AgentState::WaitingPermission, now());
+        waiting.read = true;
+        app.state.notifications = vec![
+            waiting,
+            notice_fixture("done", "two", AgentState::Completed, now()),
+        ];
+        assert_eq!(app.attention_counts(), (1, 1));
+    }
+
+    #[cfg(feature = "test-support")]
+    fn click_agent_target(app: &mut App, ctx: &egui::Context, name: &str) {
+        render_agents(app, ctx, vec![]);
+        let pos = agent_target(ctx, name).unwrap().center();
+        render_agents(app, ctx, vec![egui::Event::PointerMoved(pos)]);
+        render_agents(
+            app,
+            ctx,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            }],
+        );
+        render_agents(
+            app,
+            ctx,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    fn waiting_inbox() -> (App, egui::Context, tempfile::TempDir, mpsc::Receiver<Job>) {
+        let (mut app, ctx, dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        app.state.notifications = vec![notice_fixture(
+            "wait",
+            "live-shell",
+            AgentState::WaitingPermission,
+            now(),
+        )];
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        (app, ctx, dir, received)
+    }
+
+    #[cfg(feature = "test-support")]
+    fn control_actions(received: &mpsc::Receiver<Job>) -> Vec<String> {
+        let mut actions = Vec::new();
+        while let Ok(job) = received.try_recv() {
+            if let Job::Control(request, _) = job {
+                match *request {
+                    Request::Notice { action, .. } => actions.push(action),
+                    Request::Focus { .. } => actions.push("focus".into()),
+                    _ => {}
+                }
+            }
+        }
+        actions
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn dismiss_click_does_not_focus_the_agent() {
+        let (mut app, ctx, _dir, received) = waiting_inbox();
+        click_agent_target(&mut app, &ctx, "agent-dismiss:live-shell");
+        assert!(app.state.notifications[0].dismissed);
+        assert!(app.active_session.is_none());
+        let actions = control_actions(&received);
+        assert!(actions.iter().any(|action| action == "dismiss"));
+        assert!(!actions.iter().any(|action| action == "focus"));
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn snooze_click_does_not_focus_the_agent() {
+        let (mut app, ctx, _dir, received) = waiting_inbox();
+        click_agent_target(&mut app, &ctx, "agent-snooze:live-shell");
+        assert!(app.state.notifications[0].snoozed_until > now());
+        assert!(!app.state.notifications[0].dismissed);
+        assert!(app.active_session.is_none());
+        let actions = control_actions(&received);
+        assert!(actions.iter().any(|action| action == "snooze"));
+        assert!(!actions.iter().any(|action| action == "focus"));
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn go_click_focuses_the_agent() {
+        let (mut app, ctx, _dir, received) = waiting_inbox();
+        click_agent_target(&mut app, &ctx, "agent-go:live-shell");
+        assert_eq!(app.active_session.as_deref(), Some("live-shell"));
+        assert!(
+            control_actions(&received)
+                .iter()
+                .any(|action| action == "focus")
+        );
+    }
+}

@@ -196,7 +196,7 @@ mod tests {
         app.dirs.insert(
             dir.path().into(),
             (0..50)
-                .map(|index| services::Entry {
+                .map(|index| terminator_git::Entry {
                     path: dir.path().join(format!("file-{index:02}.rs")),
                     directory: false,
                     ignored: false,

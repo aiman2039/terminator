@@ -179,6 +179,29 @@ mod tests {
     }
 
     #[test]
+    fn unknown_healthy_current_and_newer_daemons_are_preserved() {
+        let mut state = State {
+            attachment_helper_available: Some(true),
+            capabilities: vec![
+                STABLE_HELPER_CAPABILITY.into(),
+                generations::CAPABILITY.into(),
+            ],
+            ..State::default()
+        };
+        assert!(!can_retire_daemon(&state));
+        state.daemon_version = Some("0.0.1".into());
+        assert!(!can_retire_daemon(&state));
+        state.capabilities.push(SHUTDOWN_IF_IDLE_CAPABILITY.into());
+        assert!(can_retire_daemon(&state));
+        assert!(!can_restart_service(&state));
+        for version in ["unknown", env!("CARGO_PKG_VERSION"), "999.0.0"] {
+            state.daemon_version = Some(version.into());
+            assert!(!can_retire_daemon(&state));
+            assert!(!can_restart_service(&state));
+        }
+    }
+
+    #[test]
     fn repair_rechecks_identity_and_capability_before_sending_shutdown() {
         for changed_generation in [false, true] {
             let (_dir, paths, exe) = fixture();

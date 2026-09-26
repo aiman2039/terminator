@@ -1,13 +1,8 @@
 //! Read-only Git snapshots rendered with similar + syntect. Never runs on the GUI thread.
-#[cfg(test)]
-use anyhow::bail;
 use anyhow::{Context, Result, ensure};
 use similar::{ChangeTag, DiffTag, TextDiff};
 use std::{
-    io::Read,
-    os::unix::ffi::OsStrExt,
-    path::{Component, Path, PathBuf},
-    process::Command,
+    path::{Path, PathBuf},
     sync::OnceLock,
 };
 use syntect::{
@@ -16,8 +11,8 @@ use syntect::{
     parsing::{SyntaxReference, SyntaxSet},
     util::LinesWithEndings,
 };
+use terminator_core::CommandOptions;
 
-const LIMIT: usize = 1024 * 1024;
 const CONTEXT: usize = 3;
 
 #[cfg(test)]
@@ -75,186 +70,36 @@ pub struct DiffDocument {
 #[cfg(test)]
 pub fn document(DiffRequest { cwd, path, staged }: DiffRequest<'_>) -> Result<DiffDocument> {
     let root = git_root(cwd)?;
-    let relative = relative_path(&root, path)?;
-    let (left, right) = snapshots(&root, &relative, staged)?;
-    Ok(build(&relative, &left, &right, staged))
+    let relative = terminator_git::relative_path(&root, path)?;
+    let options = CommandOptions {
+        stdout_limit: 4 * 1024 * 1024,
+        ..Default::default()
+    };
+    let (left, right) = terminator_git::snapshots(&root, &relative, staged, &options)?;
+    Ok(build(
+        &relative,
+        &decode_side(&left)?,
+        &decode_side(&right)?,
+        staged,
+    ))
 }
 
 #[cfg(test)]
 fn git_root(cwd: &Path) -> Result<PathBuf> {
-    let bytes = git(cwd, &["rev-parse", "--show-toplevel"])?;
+    let options = CommandOptions {
+        stdout_limit: 4 * 1024 * 1024,
+        ..Default::default()
+    };
+    let bytes = terminator_git::run_blocking(cwd, &["rev-parse", "--show-toplevel"], options)?;
     let text = std::str::from_utf8(&bytes)?.trim();
     PathBuf::from(text)
         .canonicalize()
         .context("Resolve Git root")
 }
 
-fn relative_path(root: &Path, path: &Path) -> Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        root.join(path)
-    };
-    // Resolve directory aliases, but retain the Git entry's own identity.
-    // Resolving the final component could silently review a symlink's target.
-    match std::fs::symlink_metadata(&absolute) {
-        Ok(meta) => ensure!(
-            !meta.file_type().is_symlink(),
-            "Diff review supports regular files, not symlinks or submodules"
-        ),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    let absolute = absolute
-        .parent()
-        .and_then(|parent| parent.canonicalize().ok())
-        .and_then(|parent| absolute.file_name().map(|name| parent.join(name)))
-        .unwrap_or(absolute);
-    let relative = absolute
-        .strip_prefix(root)
-        .or_else(|_| path.strip_prefix(root))
-        .context("Diff file is outside the repository")?;
-    ensure!(
-        relative
-            .components()
-            .all(|c| matches!(c, Component::Normal(_))),
-        "Review path must be inside the repository"
-    );
-    Ok(relative.to_path_buf())
-}
-
-#[cfg(test)]
-fn git(cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    let mut cmd = Command::new("git");
-    cmd.env("GIT_OPTIONAL_LOCKS", "0")
-        .arg("-C")
-        .arg(cwd)
-        .args(args);
-    crate::services::run(cmd)
-}
-
-#[cfg(test)]
-fn git_os(cwd: &Path, args: &[&std::ffi::OsStr]) -> Result<Vec<u8>> {
-    let mut cmd = Command::new("git");
-    cmd.env("GIT_OPTIONAL_LOCKS", "0")
-        .arg("-C")
-        .arg(cwd)
-        .args(args);
-    crate::services::run(cmd)
-}
-
-#[cfg(test)]
-fn blob(root: &Path, oid: &str) -> Result<Vec<u8>> {
-    if oid.bytes().all(|b| b == b'0') {
-        return Ok(vec![]);
-    }
-    let bytes = git_os(root, &["cat-file".as_ref(), "blob".as_ref(), oid.as_ref()])?;
-    ensure!(bytes.len() <= LIMIT, "Diff file exceeds 1 MiB");
-    Ok(bytes)
-}
-
-fn worktree_file(path: &Path) -> Result<Vec<u8>> {
-    let meta = match std::fs::symlink_metadata(path) {
-        Ok(meta) => meta,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(error) => return Err(error.into()),
-    };
-    ensure!(
-        meta.is_file(),
-        "Diff review supports regular files, not symlinks or submodules"
-    );
-    ensure!(meta.len() <= LIMIT as u64, "Diff file exceeds 1 MiB");
-    let mut bytes = vec![];
-    std::fs::File::open(path)?
-        .take((LIMIT + 1) as u64)
-        .read_to_end(&mut bytes)?;
-    ensure!(bytes.len() <= LIMIT, "Diff file exceeds 1 MiB");
-    Ok(bytes)
-}
-
-#[cfg(test)]
-fn changed_blob(root: &Path, path: &Path, staged: bool) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
-    let mut args: Vec<&std::ffi::OsStr> = vec![
-        "diff".as_ref(),
-        "--raw".as_ref(),
-        "-z".as_ref(),
-        "--no-abbrev".as_ref(),
-        "--no-ext-diff".as_ref(),
-        "--no-textconv".as_ref(),
-        "--find-renames".as_ref(),
-    ];
-    if staged {
-        args.push("--cached".as_ref());
-    }
-    let raw = git_os(root, &args)?;
-    let mut fields = raw.split(|b| *b == 0).filter(|f| !f.is_empty());
-    while let Some(header) = fields.next() {
-        let header = std::str::from_utf8(header)?;
-        let parts: Vec<_> = header.split_whitespace().collect();
-        ensure!(parts.len() == 5, "Invalid Git diff record");
-        let first = fields.next().context("Missing Git path")?;
-        let target = if parts[4].starts_with(['R', 'C']) {
-            fields.next().context("Missing rename target")?
-        } else {
-            first
-        };
-        if target != path.as_os_str().as_bytes() {
-            continue;
-        }
-        ensure!(
-            !parts[4].starts_with('U'),
-            "Resolve this file's merge conflict in your editor before opening a two-way diff"
-        );
-        ensure!(
-            parts[0] != ":160000"
-                && parts[1] != "160000"
-                && parts[0] != ":120000"
-                && parts[1] != "120000",
-            "Diff review supports regular files, not symlinks or submodules"
-        );
-        let left = blob(root, parts[2])?;
-        let right = if staged {
-            blob(root, parts[3])?
-        } else {
-            worktree_file(&root.join(path))?
-        };
-        return Ok(Some((left, right)));
-    }
-    Ok(None)
-}
-
-#[cfg(test)]
-fn snapshots(root: &Path, path: &Path, staged: bool) -> Result<(String, String)> {
-    let pair = match changed_blob(root, path, staged)? {
-        Some(pair) => pair,
-        None if staged => bail!("This file has no staged changes; refresh Git status"),
-        None => {
-            let tracked = git_os(
-                root,
-                &[
-                    "ls-files".as_ref(),
-                    "-z".as_ref(),
-                    "--".as_ref(),
-                    path.as_os_str(),
-                ],
-            )?;
-            ensure!(
-                tracked.is_empty(),
-                "This file has no working-tree changes; refresh Git status"
-            );
-            ensure!(
-                root.join(path).exists(),
-                "File no longer exists; refresh Git status"
-            );
-            (vec![], worktree_file(&root.join(path))?)
-        }
-    };
-    Ok((decode_side(&pair.0)?, decode_side(&pair.1)?))
-}
-
 fn decode_side(bytes: &[u8]) -> Result<String> {
     ensure!(
-        !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok(),
+        terminator_git::check_text(bytes),
         "Binary or non-UTF-8 files cannot be reviewed natively"
     );
     Ok(String::from_utf8_lossy(bytes).into_owned())
@@ -540,10 +385,16 @@ pub async fn document_async(
     staged: bool,
     cancel: &terminator_core::async_service::CancellationToken,
 ) -> Result<DiffDocument> {
-    let root_bytes = git_async(
-        service,
+    let options = || CommandOptions {
+        stdout_limit: 4 * 1024 * 1024,
+        ..Default::default()
+    };
+    let root_bytes = terminator_git::run(
+        service.processes(),
+        service.fs(),
         &cwd,
         vec!["rev-parse".into(), "--show-toplevel".into()],
+        options(),
     )
     .await?;
     let root = PathBuf::from(std::str::from_utf8(&root_bytes)?.trim());
@@ -551,7 +402,7 @@ pub async fn document_async(
         .fs()
         .run(cancel, move || {
             let root = root.canonicalize().context("Resolve Git root")?;
-            let relative = relative_path(&root, &path)?;
+            let relative = terminator_git::relative_path(&root, &path)?;
             Ok((root, relative))
         })
         .await?;
@@ -570,44 +421,32 @@ pub async fn document_async(
     if staged {
         args.push("--cached".into());
     }
-    let raw = git_async(service, &root, args).await?;
-    let mut fields = raw.split(|b| *b == 0).filter(|f| !f.is_empty());
-    let mut oids = None;
-    while let Some(header) = fields.next() {
-        let parts: Vec<_> = std::str::from_utf8(header)?.split_whitespace().collect();
-        ensure!(parts.len() == 5, "Invalid Git diff record");
-        let first = fields.next().context("Missing Git path")?;
-        let target = if parts[4].starts_with(['R', 'C']) {
-            fields.next().context("Missing rename target")?
-        } else {
-            first
-        };
-        if target != relative.as_os_str().as_bytes() {
-            continue;
-        }
-        ensure!(
-            !parts[4].starts_with('U'),
-            "Resolve this file's merge conflict in your editor before opening a two-way diff"
-        );
-        ensure!(
-            parts[0] != ":160000"
-                && parts[1] != "160000"
-                && parts[0] != ":120000"
-                && parts[1] != "120000",
-            "Diff review supports regular files, not symlinks or submodules"
-        );
-        oids = Some((parts[2].to_owned(), parts[3].to_owned()));
-        break;
-    }
+    let raw =
+        terminator_git::run(service.processes(), service.fs(), &root, args, options()).await?;
+    let oids = terminator_git::find_record(&raw, &relative)?;
     let (left, right) = if let Some((left, right)) = oids {
-        let left = blob_async(service, &root, &left).await?;
+        let left = terminator_git::snapshot::blob_async(
+            service.processes(),
+            service.fs(),
+            &root,
+            &left,
+            options(),
+        )
+        .await?;
         let right = if staged {
-            blob_async(service, &root, &right).await?
+            terminator_git::snapshot::blob_async(
+                service.processes(),
+                service.fs(),
+                &root,
+                &right,
+                options(),
+            )
+            .await?
         } else {
             let path = root.join(&relative);
             service
                 .fs()
-                .run(cancel, move || worktree_file(&path))
+                .run(cancel, move || terminator_git::worktree_file(&path))
                 .await?
         };
         (left, right)
@@ -616,8 +455,9 @@ pub async fn document_async(
             !staged,
             "This file has no staged changes; refresh Git status"
         );
-        let tracked = git_async(
-            service,
+        let tracked = terminator_git::run(
+            service.processes(),
+            service.fs(),
             &root,
             vec![
                 "ls-files".into(),
@@ -625,6 +465,7 @@ pub async fn document_async(
                 "--".into(),
                 relative.as_os_str().to_owned(),
             ],
+            options(),
         )
         .await?;
         ensure!(
@@ -636,7 +477,7 @@ pub async fn document_async(
             .fs()
             .run(cancel, move || {
                 ensure!(path.exists(), "File no longer exists; refresh Git status");
-                worktree_file(&path)
+                terminator_git::worktree_file(&path)
             })
             .await?;
         (Vec::new(), right)
@@ -653,56 +494,6 @@ pub async fn document_async(
         })
         .await
 }
-async fn blob_async(
-    service: &crate::gui_services::Services,
-    root: &Path,
-    oid: &str,
-) -> Result<Vec<u8>> {
-    if oid.bytes().all(|b| b == b'0') {
-        return Ok(Vec::new());
-    }
-    let bytes = git_async(
-        service,
-        root,
-        vec!["cat-file".into(), "blob".into(), oid.into()],
-    )
-    .await?;
-    ensure!(bytes.len() <= LIMIT, "Diff file exceeds 1 MiB");
-    Ok(bytes)
-}
-pub(crate) async fn git_async(
-    service: &crate::gui_services::Services,
-    cwd: &Path,
-    args: Vec<std::ffi::OsString>,
-) -> Result<Vec<u8>> {
-    let mut command = Command::new("git");
-    command
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .arg("-C")
-        .arg(cwd)
-        .args(args);
-    let directory = cwd.to_owned();
-    let key = service
-        .fs()
-        .run(
-            &terminator_core::async_service::CancellationToken::new(),
-            move || Ok(terminator_core::async_process::git_key(&directory)),
-        )
-        .await?;
-    Ok(service
-        .processes()
-        .run(
-            command,
-            terminator_core::CommandOptions {
-                stdout_limit: 4 * 1024 * 1024,
-                ..Default::default()
-            },
-            Some(key),
-        )
-        .await?
-        .stdout)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -798,93 +589,5 @@ mod tests {
         assert!(joined.contains("working"));
         assert!(!joined.contains("base"));
         assert!(!working.split.is_empty());
-    }
-
-    #[test]
-    fn symlink_reviews_reject_the_link_instead_of_reviewing_its_target() {
-        let dir = repo();
-        let root = dir.path();
-        let outside = tempfile::tempdir().unwrap();
-        std::fs::write(root.join("target.rs"), "old\n").unwrap();
-        std::fs::write(outside.path().join("target.rs"), "outside\n").unwrap();
-        std::os::unix::fs::symlink("target.rs", root.join("inside.rs")).unwrap();
-        std::os::unix::fs::symlink(outside.path().join("target.rs"), root.join("outside.rs"))
-            .unwrap();
-        std::os::unix::fs::symlink("missing.rs", root.join("dangling.rs")).unwrap();
-        git_cmd(root, &["add", "."]);
-        git_cmd(root, &["commit", "-qm", "base"]);
-        std::fs::write(root.join("target.rs"), "staged\n").unwrap();
-        git_cmd(root, &["add", "target.rs"]);
-        std::fs::write(root.join("target.rs"), "working\n").unwrap();
-        for name in ["inside.rs", "outside.rs", "dangling.rs"] {
-            for path in [PathBuf::from(name), root.join(name)] {
-                for staged in [false, true] {
-                    let error = document(DiffRequest {
-                        cwd: root,
-                        path: &path,
-                        staged,
-                    })
-                    .unwrap_err();
-                    assert!(
-                        error.to_string().contains("symlinks"),
-                        "{path:?}: {error:#}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn directory_aliases_and_deleted_files_keep_their_git_identity() {
-        let dir = repo();
-        let root = dir.path();
-        std::fs::write(root.join("file.rs"), "old\n").unwrap();
-        git_cmd(root, &["add", "."]);
-        git_cmd(root, &["commit", "-qm", "base"]);
-        let alias_dir = tempfile::tempdir().unwrap();
-        let alias = alias_dir.path().join("repo");
-        std::os::unix::fs::symlink(root, &alias).unwrap();
-        std::fs::remove_file(root.join("file.rs")).unwrap();
-        let doc = document(DiffRequest {
-            cwd: &alias,
-            path: &alias.join("file.rs"),
-            staged: false,
-        })
-        .unwrap();
-        assert!(doc.unified.iter().any(|line| line.kind == LineKind::Delete));
-    }
-
-    #[test]
-    fn untracked_and_binary_and_outside_paths_are_explicit() {
-        let dir = repo();
-        let root = dir.path();
-        std::fs::write(root.join("new.rs"), "fn new() {}\n").unwrap();
-        let doc = document(DiffRequest {
-            cwd: root,
-            path: Path::new("new.rs"),
-            staged: false,
-        })
-        .unwrap();
-        assert!(doc.unified.iter().any(|line| line.kind == LineKind::Insert
-            && line.spans.iter().any(|s| s.text.contains("new"))));
-        std::fs::write(root.join("new.rs"), b"binary\0").unwrap();
-        assert!(
-            document(DiffRequest {
-                cwd: root,
-                path: Path::new("new.rs"),
-                staged: false,
-            })
-            .unwrap_err()
-            .to_string()
-            .contains("Binary")
-        );
-        assert!(
-            document(DiffRequest {
-                cwd: root,
-                path: Path::new("../outside.rs"),
-                staged: false,
-            })
-            .is_err()
-        );
     }
 }

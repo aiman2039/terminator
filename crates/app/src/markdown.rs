@@ -462,7 +462,7 @@ impl Previews {
             }
             Ok(Vec::new())
         });
-        let images = crate::markdown_images::Images::with_services(ctx, services.clone());
+        let images = crate::markdown_images::Images::with_submit(ctx, services.submit());
         Self {
             entries: HashMap::new(),
             requests,

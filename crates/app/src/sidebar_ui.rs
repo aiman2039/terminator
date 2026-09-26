@@ -1,6 +1,28 @@
 //! Project, file, Git, and notification sidebar rendering.
-use super::*;
-use std::cmp::Reverse;
+#[cfg(feature = "test-support")]
+use crate::diagnostics;
+use crate::{
+    App, RenameSurface, Tab, appearance,
+    file_actions::{self, FileAction},
+    icons,
+    preferences::{
+        HistoryInput, HistorySort, ProjectSort, SidebarTool, VisibleProjects, sort_history,
+        sort_visible_projects,
+    },
+    services::ContextData,
+    settings_ui::SettingsSection,
+    updater,
+};
+use eframe::egui::{self, Color32, RichText};
+use std::{
+    cmp::Reverse,
+    path::{Path, PathBuf},
+};
+use terminator_core::appearance::AppearanceConfig;
+use terminator_core::{
+    Agent, AgentState, NVIM_REVIEW_CAPABILITY, Notification, Project, Request, ReviewMode, Session,
+    SessionKind, TERMINAL_NOTICES_CAPABILITY, now,
+};
 
 fn skip_clipped_git_row(ui: &mut egui::Ui) -> bool {
     let rect = egui::Rect::from_min_size(
@@ -703,7 +725,7 @@ impl App {
                     let color = if entry.ignored {
                         appearance::color(&self.theme.git_ignored)
                     } else {
-                        self.git_color(status)
+                        git_color(&self.theme, status)
                     };
                     if appearance::file_row(
                         ui,
@@ -720,7 +742,7 @@ impl App {
                         if entry.ignored {
                             "Ignored"
                         } else {
-                            services::status_description(status)
+                            terminator_git::status_description(status)
                         }
                     ))
                     .clicked()
@@ -741,50 +763,20 @@ impl App {
                         .and_then(|c| c.decorations.get(&entry.path))
                         .copied()
                         .unwrap_or(' ');
-                    let color = if entry.ignored {
-                        appearance::color(&self.theme.git_ignored)
-                    } else {
-                        self.git_color(status)
-                    };
-                    let r = appearance::file_row(
+                    let outcome = explorer_file_row(
                         ui,
+                        &entry.path,
                         &label,
-                        icons::file_icon(&entry.path),
-                        false,
-                        24.0,
-                        &status.to_string(),
-                        color,
-                    )
-                    .on_hover_text(format!(
-                        "{}\n{}",
-                        entry.path.display(),
-                        if entry.ignored {
-                            "Ignored"
-                        } else {
-                            services::status_description(status)
-                        }
-                    ));
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(ui.ctx(), &format!("explorer-file:{}", label), r.rect);
-                    let pointer = FilePointer {
-                        path: entry.path.clone(),
-                        deleted: false,
-                        staged: None,
-                    };
-                    self.file_pointer_action(&r, pointer);
-                    appearance::context_menu(&r, |ui| {
-                        if let Some(action) = file_actions::menu(
-                            ui,
-                            file_actions::FileMenu {
-                                file: true,
-                                browser: file_actions::browser_document(&entry.path),
-                                git: None,
-                                neovim: false,
-                            },
-                        ) {
-                            self.file_action(ui, action, &entry.path, None);
-                        }
-                    });
+                        status,
+                        entry.ignored,
+                        &self.theme,
+                    );
+                    if let Some(action) = outcome.clicked {
+                        self.activate_file_action(ui, &entry.path, action);
+                    }
+                    if let Some(action) = outcome.menu {
+                        self.file_action(ui, action, &entry.path, None);
+                    }
                 }
             }
         } else if !self.directory_errors.contains_key(path) {
@@ -1190,118 +1182,268 @@ impl App {
             ui.weak("Filesystem watch unavailable; refreshing every 3 seconds");
         }
         if let Some(context) = self.context.clone() {
-            if context.root.is_none() {
-                ui.weak("Not a Git repository");
-            } else {
-                ui.label(
-                    RichText::new(&context.branch)
-                        .color(appearance::color(&self.theme.status_running)),
-                );
-                if context.changes.is_empty() {
-                    ui.weak("Working tree clean");
-                }
-                appearance::sidebar_scroll("git").show(ui, |ui| {
-                    for group in services::GitGroup::ALL {
-                        let entries: Vec<_> = context
-                            .changes
-                            .iter()
-                            .filter(|c| c.in_group(group))
-                            .collect();
-                        if entries.is_empty() {
-                            continue;
-                        }
-                        egui::CollapsingHeader::new(format!(
-                            "{}  {}",
-                            group.label(),
-                            entries.len()
-                        ))
-                        .id_salt((context.root.clone(), group.label()))
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            for change in entries {
-                                // Keep layout height without constructing thousands of off-screen
-                                // buttons, labels, tooltips, and context menus on every frame.
-                                if skip_clipped_git_row(ui) {
-                                    continue;
-                                }
-                                let name = change
-                                    .path
-                                    .strip_prefix(context.root.as_ref().unwrap())
-                                    .unwrap_or(&change.path)
-                                    .display()
-                                    .to_string();
-                                let letter = change.letter(group);
-                                let response = appearance::file_row(
-                                    ui,
-                                    &name,
-                                    icons::file_icon(&change.path),
-                                    false,
-                                    24.0,
-                                    &letter.to_string(),
-                                    self.git_color(letter),
-                                )
-                                .on_hover_text(format!(
-                                    "{}\n{} ({})",
-                                    change.path.display(),
-                                    services::status_description(letter),
-                                    group.label()
-                                ));
-                                #[cfg(feature = "test-support")]
-                                diagnostics::record(
-                                    ui.ctx(),
-                                    &format!(
-                                        "git-file-{}",
-                                        change
-                                            .path
-                                            .file_name()
-                                            .unwrap_or_default()
-                                            .to_string_lossy()
-                                    ),
-                                    response.rect,
-                                );
-                                self.file_pointer_action(
-                                    &response,
-                                    FilePointer {
-                                        path: change.path.clone(),
-                                        deleted: letter == 'D',
-                                        staged: (!change.conflict())
-                                            .then_some(group == services::GitGroup::Staged),
-                                    },
-                                );
-                                appearance::context_menu(&response, |ui| {
-                                    if let Some(action) = file_actions::menu(
-                                        ui,
-                                        file_actions::FileMenu {
-                                            file: true,
-                                            browser: file_actions::browser_document(&change.path),
-                                            git: Some(group),
-                                            neovim: true,
-                                        },
-                                    ) {
-                                        self.file_action(ui, action, &change.path, None);
-                                    }
-                                });
-                            }
-                        });
-                    }
-                });
-            }
-            if let Some(e) = context.error {
-                ui.colored_label(appearance::color(&self.theme.status_failed), e);
-            }
+            let outcome = git_panel(
+                ui,
+                &GitPanelInput {
+                    context: &context,
+                    review_mode: self.state.settings.review_mode,
+                    neovim_review: self
+                        .state
+                        .capabilities
+                        .iter()
+                        .any(|c| c == NVIM_REVIEW_CAPABILITY),
+                    theme: &self.theme,
+                },
+            );
+            self.perform_git_outcome(ui, outcome);
         } else {
             ui.weak("Select a terminal to inspect its context.");
         }
     }
-    fn git_color(&self, status: char) -> Color32 {
-        appearance::color(match status {
-            'A' => &self.theme.git_added,
-            'M' => &self.theme.git_modified,
-            'D' | '!' => &self.theme.git_deleted,
-            'R' | 'C' | 'U' => &self.theme.git_untracked,
-            _ => &self.theme.secondary,
-        })
+}
+
+pub fn git_color(theme: &AppearanceConfig, status: char) -> Color32 {
+    appearance::color(match status {
+        'A' => &theme.git_added,
+        'M' => &theme.git_modified,
+        'D' | '!' => &theme.git_deleted,
+        'R' | 'C' | 'U' => &theme.git_untracked,
+        _ => &theme.secondary,
+    })
+}
+
+/// View data for the Git panel. `App` passes a snapshot of its state; the
+/// panel paints it and returns actions without touching `App` or `Services`.
+pub struct GitPanelInput<'a> {
+    pub context: &'a ContextData,
+    pub review_mode: ReviewMode,
+    pub neovim_review: bool,
+    pub theme: &'a AppearanceConfig,
+}
+
+/// A concrete file action with its target, ready for `App` to perform.
+pub struct GitFileAction {
+    pub action: FileAction,
+    pub path: PathBuf,
+}
+
+/// What the Git panel asks `App` to do after painting.
+#[derive(Default)]
+pub struct GitPanelOutcome {
+    /// Row clicks mapped to concrete actions. `App` dedups rapid repeats.
+    pub clicked: Vec<GitFileAction>,
+    /// Context-menu picks, performed directly.
+    pub menu: Vec<GitFileAction>,
+    /// The error-state Retry button was pressed: re-queue a context refresh.
+    pub refresh: bool,
+}
+
+/// Map a Git row click to the concrete action `App` performs. Conflicts open
+/// as files; a deleted row with no staged side is a no-op; otherwise the diff
+/// viewer preference picks native vs Neovim (Neovim only when the daemon
+/// advertises it).
+pub fn git_click_action(
+    deleted: bool,
+    staged: Option<bool>,
+    clicked: bool,
+    review_mode: ReviewMode,
+    neovim_review: bool,
+) -> Option<FileAction> {
+    if !clicked {
+        return None;
     }
+    let Some(staged) = staged else {
+        return if deleted {
+            None
+        } else {
+            Some(FileAction::Open)
+        };
+    };
+    if review_mode != ReviewMode::Neovim || !neovim_review {
+        return Some(if staged {
+            FileAction::NativeStagedDiff
+        } else {
+            FileAction::NativeWorkingDiff
+        });
+    }
+    Some(if staged {
+        FileAction::StagedDiff
+    } else {
+        FileAction::WorkingDiff
+    })
+}
+
+pub fn git_panel(ui: &mut egui::Ui, input: &GitPanelInput) -> GitPanelOutcome {
+    let mut outcome = GitPanelOutcome::default();
+    let context = input.context;
+    if context.root.is_none() {
+        ui.weak("Not a Git repository");
+    } else {
+        ui.label(
+            RichText::new(&context.branch).color(appearance::color(&input.theme.status_running)),
+        );
+        if context.changes.is_empty() {
+            ui.weak("Working tree clean");
+        }
+        appearance::sidebar_scroll("git").show(ui, |ui| {
+            for group in terminator_git::GitGroup::ALL {
+                let entries: Vec<_> = context
+                    .changes
+                    .iter()
+                    .filter(|c| c.in_group(group))
+                    .collect();
+                if entries.is_empty() {
+                    continue;
+                }
+                egui::CollapsingHeader::new(format!("{}  {}", group.label(), entries.len()))
+                    .id_salt((context.root.clone(), group.label()))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        for change in entries {
+                            // Keep layout height without constructing thousands of off-screen
+                            // buttons, labels, tooltips, and context menus on every frame.
+                            if skip_clipped_git_row(ui) {
+                                continue;
+                            }
+                            let name = change
+                                .path
+                                .strip_prefix(context.root.as_ref().unwrap())
+                                .unwrap_or(&change.path)
+                                .display()
+                                .to_string();
+                            let letter = change.letter(group);
+                            let response = appearance::file_row(
+                                ui,
+                                &name,
+                                icons::file_icon(&change.path),
+                                false,
+                                24.0,
+                                &letter.to_string(),
+                                git_color(input.theme, letter),
+                            )
+                            .on_hover_text(format!(
+                                "{}\n{} ({})",
+                                change.path.display(),
+                                terminator_git::status_description(letter),
+                                group.label()
+                            ));
+                            #[cfg(feature = "test-support")]
+                            diagnostics::record(
+                                ui.ctx(),
+                                &format!(
+                                    "git-file-{}",
+                                    change
+                                        .path
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                ),
+                                response.rect,
+                            );
+                            let staged = (!change.conflict())
+                                .then_some(group == terminator_git::GitGroup::Staged);
+                            if let Some(action) = git_click_action(
+                                letter == 'D',
+                                staged,
+                                response.clicked() || response.double_clicked(),
+                                input.review_mode,
+                                input.neovim_review,
+                            ) {
+                                outcome.clicked.push(GitFileAction {
+                                    action,
+                                    path: change.path.clone(),
+                                });
+                            }
+                            appearance::context_menu(&response, |ui| {
+                                if let Some(action) = file_actions::menu(
+                                    ui,
+                                    file_actions::FileMenu {
+                                        file: true,
+                                        browser: file_actions::browser_document(&change.path),
+                                        git: Some(group),
+                                        neovim: input.neovim_review,
+                                    },
+                                ) {
+                                    outcome.menu.push(GitFileAction {
+                                        action,
+                                        path: change.path.clone(),
+                                    });
+                                }
+                            });
+                        }
+                    });
+            }
+        });
+    }
+    if let Some(e) = &context.error {
+        ui.horizontal(|ui| {
+            ui.colored_label(appearance::color(&input.theme.status_failed), e);
+            if ui.small_button("Retry").clicked() {
+                outcome.refresh = true;
+            }
+        });
+    }
+    outcome
+}
+
+/// What an explorer file row asks `App` to do after painting.
+#[derive(Default)]
+pub struct ExplorerRowOutcome {
+    pub clicked: Option<FileAction>,
+    pub menu: Option<FileAction>,
+}
+
+pub fn explorer_file_row(
+    ui: &mut egui::Ui,
+    path: &Path,
+    label: &str,
+    status: char,
+    ignored: bool,
+    theme: &AppearanceConfig,
+) -> ExplorerRowOutcome {
+    let mut outcome = ExplorerRowOutcome::default();
+    let color = if ignored {
+        appearance::color(&theme.git_ignored)
+    } else {
+        git_color(theme, status)
+    };
+    let r = appearance::file_row(
+        ui,
+        label,
+        icons::file_icon(path),
+        false,
+        24.0,
+        &status.to_string(),
+        color,
+    )
+    .on_hover_text(format!(
+        "{}\n{}",
+        path.display(),
+        if ignored {
+            "Ignored"
+        } else {
+            terminator_git::status_description(status)
+        }
+    ));
+    #[cfg(feature = "test-support")]
+    diagnostics::record(ui.ctx(), &format!("explorer-file:{label}"), r.rect);
+    if r.clicked() || r.double_clicked() {
+        outcome.clicked = Some(FileAction::Open);
+    }
+    appearance::context_menu(&r, |ui| {
+        if let Some(action) = file_actions::menu(
+            ui,
+            file_actions::FileMenu {
+                file: true,
+                browser: file_actions::browser_document(path),
+                git: None,
+                neovim: false,
+            },
+        ) {
+            outcome.menu = Some(action);
+        }
+    });
+    outcome
 }
 
 pub(super) fn state_color(state: AgentState, theme: &AppearanceConfig) -> Color32 {
@@ -1575,6 +1717,80 @@ mod tests {
         assert_eq!(attention_badge_label(0, 2), "2 unread");
         assert_eq!(attention_badge_label(3, 0), "3 waiting");
         assert_eq!(attention_badge_label(3, 2), "3 waiting · 2 unread");
+    }
+
+    #[test]
+    fn git_click_actions_route_by_viewer_preference_and_capability() {
+        use FileAction::*;
+        assert_eq!(ReviewMode::default(), ReviewMode::Native);
+        for (deleted, staged, clicked, mode, advertised, expected) in [
+            (false, None, true, ReviewMode::Native, false, Some(Open)),
+            (false, None, true, ReviewMode::Neovim, true, Some(Open)),
+            (true, None, true, ReviewMode::Native, false, None),
+            (
+                false,
+                Some(false),
+                true,
+                ReviewMode::Native,
+                false,
+                Some(NativeWorkingDiff),
+            ),
+            (
+                false,
+                Some(true),
+                true,
+                ReviewMode::Native,
+                true,
+                Some(NativeStagedDiff),
+            ),
+            (
+                false,
+                Some(false),
+                true,
+                ReviewMode::Neovim,
+                false,
+                Some(NativeWorkingDiff),
+            ),
+            (
+                false,
+                Some(true),
+                true,
+                ReviewMode::Neovim,
+                false,
+                Some(NativeStagedDiff),
+            ),
+            (
+                false,
+                Some(false),
+                true,
+                ReviewMode::Neovim,
+                true,
+                Some(WorkingDiff),
+            ),
+            (
+                false,
+                Some(true),
+                true,
+                ReviewMode::Neovim,
+                true,
+                Some(StagedDiff),
+            ),
+            (
+                true,
+                Some(false),
+                true,
+                ReviewMode::Neovim,
+                true,
+                Some(WorkingDiff),
+            ),
+            (false, Some(false), false, ReviewMode::Neovim, true, None),
+        ] {
+            assert_eq!(
+                git_click_action(deleted, staged, clicked, mode, advertised),
+                expected,
+                "deleted={deleted} staged={staged:?} clicked={clicked} mode={mode:?} advertised={advertised}"
+            );
+        }
     }
 
     #[test]

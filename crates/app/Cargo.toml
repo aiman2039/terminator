@@ -5,8 +5,13 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+name = "terminator"
+path = "src/lib.rs"
+
 [dependencies]
 terminator-core = { workspace = true, features = ["async-client"] }
+terminator-git.workspace = true
 terminator-integrations.workspace = true
 terminator-native-edit = { path = "../native_edit" }
 terminator-sys.workspace = true

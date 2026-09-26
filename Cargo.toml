@@ -9,6 +9,7 @@ license = "MIT"
 rust-version = "1.97.1"
 [workspace.dependencies]
 terminator-core = { path = "crates/core" }
+terminator-git = { path = "crates/git" }
 terminator-integrations = { path = "crates/integrations" }
 terminator-sys = { path = "crates/sys" }
 terminator-updater = { path = "crates/updater" }

@@ -16,8 +16,8 @@ pub enum FileAction {
     NativeStagedDiff,
     NativeWorkingDiff,
 }
-pub fn review_action(group: crate::services::GitGroup) -> Option<FileAction> {
-    use crate::services::GitGroup;
+pub fn review_action(group: terminator_git::GitGroup) -> Option<FileAction> {
+    use terminator_git::GitGroup;
     match group {
         GitGroup::Staged => Some(FileAction::StagedDiff),
         GitGroup::Changes | GitGroup::Untracked => Some(FileAction::WorkingDiff),
@@ -28,7 +28,7 @@ pub fn review_action(group: crate::services::GitGroup) -> Option<FileAction> {
 pub struct FileMenu {
     pub file: bool,
     pub browser: bool,
-    pub git: Option<crate::services::GitGroup>,
+    pub git: Option<terminator_git::GitGroup>,
     pub neovim: bool,
 }
 
@@ -120,7 +120,7 @@ pub fn menu(ui: &mut egui::Ui, spec: FileMenu) -> Option<FileAction> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::{Change, GitGroup};
+    use terminator_git::{Change, GitGroup};
 
     #[test]
     fn unstaged_files_offer_a_working_diff_before_staging_or_committing() {

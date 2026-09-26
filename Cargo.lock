@@ -5953,6 +5953,7 @@ dependencies = [
  "syntect",
  "tempfile",
  "terminator-core",
+ "terminator-git",
  "terminator-integrations",
  "terminator-native-edit",
  "terminator-sys",
@@ -6003,9 +6004,19 @@ dependencies = [
  "serde_json",
  "tempfile",
  "terminator-core",
+ "terminator-git",
  "terminator-integrations",
  "uuid",
  "vt100",
+]
+
+[[package]]
+name = "terminator-git"
+version = "0.49.0"
+dependencies = [
+ "anyhow",
+ "tempfile",
+ "terminator-core",
 ]
 
 [[package]]

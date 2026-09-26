@@ -296,7 +296,7 @@ pub fn preflight() -> anyhow::Result<bool> {
     Ok(true)
 }
 
-pub(crate) fn show_crash_dialog(notice: &CrashNotice) {
+pub fn show_crash_dialog(notice: &CrashNotice) {
     let _ = show_message("Terminator crashed", &notice.dialog_body(), false);
 }
 

@@ -16,7 +16,7 @@ struct Entry {
 }
 pub struct Images {
     entries: Arc<Mutex<HashMap<String, Entry>>>,
-    services: crate::gui_services::Services,
+    submit: crate::gui_services::Submit,
     #[cfg(test)]
     _owner: Option<Mutex<crate::gui_services::Owner>>,
     next: std::sync::atomic::AtomicU64,
@@ -29,20 +29,17 @@ impl Images {
         let (services, owner) = crate::gui_services::Services::new(paths, ctx.clone(), tx).unwrap();
         let loader = Arc::new(Self {
             entries: Default::default(),
-            services,
+            submit: services.submit(),
             next: Default::default(),
             _owner: Some(Mutex::new(owner)),
         });
         ctx.add_image_loader(loader.clone());
         loader
     }
-    pub fn with_services(
-        ctx: &egui::Context,
-        services: crate::gui_services::Services,
-    ) -> Arc<Self> {
+    pub fn with_submit(ctx: &egui::Context, submit: crate::gui_services::Submit) -> Arc<Self> {
         let loader = Arc::new(Self {
             entries: Default::default(),
-            services,
+            submit,
             next: Default::default(),
             #[cfg(test)]
             _owner: None,
@@ -100,13 +97,13 @@ impl ImageLoader for Images {
         let token = CancellationToken::new();
         let cancelled = token.clone();
         let cache = self.entries.clone();
-        let service = self.services.clone();
+        let submit = self.submit.clone();
         let target = uri.to_owned();
         let repaint = ctx.clone();
         let context =
             OperationContext::new("markdown-image", target.clone(), Policy::ReplaceableRead);
         let result = self
-            .services
+            .submit
             .handle()
             .submit(context, token.clone(), async move {
                 let path = target
@@ -114,10 +111,15 @@ impl ImageLoader for Images {
                     .and_then(|s| url::Url::parse(s).ok())
                     .and_then(|u| u.to_file_path().ok());
                 let result = match path {
-                    Some(path) => crate::image_preview::load(&service, path, &cancelled)
-                        .await
-                        .map(Arc::new)
-                        .map_err(|e| format!("{e:#}")),
+                    Some(path) => crate::image_preview::load_pools(
+                        submit.fs(),
+                        submit.cpu(),
+                        path,
+                        &cancelled,
+                    )
+                    .await
+                    .map(Arc::new)
+                    .map_err(|e| format!("{e:#}")),
                     None => Err("Invalid local image path".into()),
                 };
                 let mut entries = cache.lock().unwrap();

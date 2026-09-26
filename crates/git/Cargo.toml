@@ -1,0 +1,13 @@
+[package]
+name = "terminator-git"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+terminator-core = { workspace = true, features = ["async-client"] }
+anyhow.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

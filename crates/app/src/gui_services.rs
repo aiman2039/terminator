@@ -1,6 +1,25 @@
 //! All ordinary GUI commands are submitted without waiting on the UI thread.
-use super::*;
-use std::sync::Arc;
+#[cfg(feature = "test-support")]
+use crate::nvim_rpc;
+use crate::{
+    After, Job, Tab, Update, clipboard, daemon_connection, diff, editor_close, external_editor,
+    image_preview, installation, player, services,
+};
+use anyhow::{Context, Result};
+use eframe::egui;
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::{Arc, mpsc::Sender},
+    time::{Duration, Instant},
+};
+#[cfg(feature = "test-support")]
+use terminator_core::CommandOptions;
+use terminator_core::appearance::{AppearanceFile, config_path};
+use terminator_core::{
+    Paths, Request, Response, State, async_client, async_service, find_executable, sanitize_layout,
+};
 use terminator_core::{
     async_client::Client,
     async_process::Processes,
@@ -26,6 +45,24 @@ pub struct Owner {
     pub supervisor: Supervisor<Vec<Update>>,
     pub events: tokio::sync::mpsc::Receiver<Update>,
     pub snapshot: Arc<std::sync::Mutex<Option<Box<State>>>>,
+}
+/// Narrow background-decode handle; see [`Services::submit`].
+#[derive(Clone)]
+pub struct Submit {
+    handle: Handle<Vec<Update>>,
+    fs: NativePool,
+    cpu: NativePool,
+}
+impl Submit {
+    pub fn handle(&self) -> &Handle<Vec<Update>> {
+        &self.handle
+    }
+    pub fn fs(&self) -> &NativePool {
+        &self.fs
+    }
+    pub fn cpu(&self) -> &NativePool {
+        &self.cpu
+    }
 }
 impl Services {
     pub fn new(paths: Paths, ctx: egui::Context, updates: Sender<Update>) -> Result<(Self, Owner)> {
@@ -102,6 +139,15 @@ impl Services {
     }
     pub fn handle(&self) -> &Handle<Vec<Update>> {
         &self.0.handle
+    }
+    /// Narrow background-decode handle: job submission plus the filesystem
+    /// and CPU pools, without the daemon client, process pool, or snapshots.
+    pub fn submit(&self) -> Submit {
+        Submit {
+            handle: self.0.handle.clone(),
+            fs: self.0.fs.clone(),
+            cpu: self.0.client.cpu.clone(),
+        }
     }
     pub async fn emit(&self, update: Update) -> Result<()> {
         self.0
@@ -883,6 +929,9 @@ impl ImageJobs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{nvim_rpc, preferences::UiPreferences};
+    use std::sync::mpsc;
+    use terminator_core::CommandOptions;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     #[tokio::test]
     async fn stalled_radio_git_and_neovim_do_not_block_another_editor() {

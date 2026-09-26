@@ -3537,12 +3537,36 @@ mod tests {
         let Tab::Diff { cwd, path, staged } = &tab else {
             unreachable!()
         };
+        app.context = Some(services::ContextData {
+            cwd: cwd.clone(),
+            root: Some(cwd.clone()),
+            git_dirs: vec![],
+            branch: "main".into(),
+            changes: vec![],
+            decorations: Default::default(),
+            error: None,
+        });
+        let open_native = |app: &mut App| {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                app.file_action(
+                    ui,
+                    if *staged {
+                        FileAction::NativeStagedDiff
+                    } else {
+                        FileAction::NativeWorkingDiff
+                    },
+                    path,
+                    None,
+                );
+            });
+            output.textures_delta.clear();
+        };
         app.state.settings.diff_split_default = true;
-        app.add_diff(cwd.clone(), path.clone(), *staged);
+        open_native(&mut app);
         assert!(app.diff_split.contains(&tab.key()));
         app.layouts.clear();
         app.state.settings.diff_split_default = false;
-        app.add_diff(cwd.clone(), path.clone(), *staged);
+        open_native(&mut app);
         assert!(!app.diff_split.contains(&tab.key()));
     }
 

@@ -3,6 +3,8 @@
 use crate::{CommandOptions, find_executable, run_command};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "async-client")]
+use std::ffi::OsString;
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -49,14 +51,11 @@ pub struct Metadata {
     pub ports_error: Option<String>,
 }
 fn git(cwd: &Path, args: &[&str]) -> Result<String> {
-    let mut c = Command::new(find_executable("git").context("Git not found")?);
-    c.arg("-C")
-        .arg(cwd)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0");
+    let program = find_executable("git").context("Git not found")?;
+    let command = crate::git::command_with(program.as_os_str(), cwd, args);
     Ok(String::from_utf8(
         run_command(
-            c,
+            command,
             CommandOptions {
                 timeout: Duration::from_secs(3),
                 stdout_limit: 65536,
@@ -371,30 +370,20 @@ async fn git_async(
     cwd: &Path,
     args: &[&str],
 ) -> Result<String> {
-    let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(cwd)
-        .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0");
-    let directory = cwd.to_owned();
-    let key = files
-        .run(&crate::async_service::CancellationToken::new(), move || {
-            Ok(crate::async_process::git_key(&directory))
-        })
-        .await?;
-    let output = processes
-        .run(
-            command,
-            CommandOptions {
-                timeout: Duration::from_secs(3),
-                stdout_limit: 65536,
-                ..Default::default()
-            },
-            Some(key),
-        )
-        .await?;
-    Ok(String::from_utf8(output.stdout)?.trim_end().into())
+    let args = args.iter().map(OsString::from).collect();
+    let output = crate::git::run(
+        processes,
+        files,
+        cwd,
+        args,
+        CommandOptions {
+            timeout: Duration::from_secs(3),
+            stdout_limit: 65536,
+            ..Default::default()
+        },
+    )
+    .await?;
+    Ok(String::from_utf8(output)?.trim_end().into())
 }
 #[cfg(feature = "async-client")]
 async fn pull_request_async(
