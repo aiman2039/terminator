@@ -4335,15 +4335,12 @@ impl eframe::App for App {
         if self.state_loaded {
             self.migrate_attention();
         }
-        // macOS stacks a second header row for the tab strip below the
-        // native titlebar drag band so tab drags never race window moves.
-        let header_height = if cfg!(target_os = "macos") {
-            76.0
-        } else {
-            40.0
-        };
+        // Single drag-band row. The tab strip is a second top panel
+        // shown after the sidebars, so it spans only the center and the
+        // sidebars run full height. Both rows sit below the native
+        // titlebar band, so tab drags never race window moves.
         egui::Panel::top("window-header")
-            .exact_size(header_height)
+            .exact_size(40.0)
             .frame(egui::Frame::NONE.fill(appearance::color(&self.theme.surface)))
             .show(ui, |ui| self.window_header(ui));
         if !self.state.settings.notifications_side {
@@ -4550,6 +4547,12 @@ impl eframe::App for App {
                 });
             self.preferences.width = response.response.rect.width().clamp(220.0, 480.0);
         }
+        // Center-only: shown after the sidebars so the strip sits beside
+        // them instead of pushing them down.
+        egui::Panel::top("workspace-tabs")
+            .exact_size(36.0)
+            .frame(egui::Frame::NONE.fill(appearance::color(&self.theme.surface)))
+            .show(ui, |ui| self.window_header_tabs(ui));
         if self.preferences_writable
             && !self.preferences_pending
             && self.preferences != self.preferences_saved
@@ -4655,16 +4658,43 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// Bring the window forward from the menu-bar status item.
+    fn focus_window_from_menu(ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+    fn open_agents_inbox(&mut self) {
+        self.preferences.tool = SidebarTool::Agents;
+        self.preferences.visible = true;
+    }
+    /// A status-menu pick: the inbox Go button plus opening the inbox
+    /// behind it. A stale id just opens the inbox.
+    fn focus_status_notice(&mut self, ctx: &egui::Context, id: &str) {
+        Self::focus_window_from_menu(ctx);
+        self.open_agents_inbox();
+        if let Some(session) = self
+            .state
+            .notifications
+            .iter()
+            .find(|notice| notice.id == id)
+            .map(|notice| notice.session_id.clone())
+        {
+            self.go_session(&session);
+        }
+        self.detail = None;
+    }
     #[cfg(all(not(test), target_os = "macos"))]
     fn sync_menu_bar(&mut self, ctx: &egui::Context) {
         if updater::take_status_click() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            Self::focus_window_from_menu(ctx);
             if self.waiting_notice_count() > 0 {
-                self.preferences.tool = SidebarTool::Agents;
-                self.preferences.visible = true;
+                self.open_agents_inbox();
             }
+        }
+        updater::sync_status_menu(&self.status_menu_items());
+        if let Some(id) = updater::take_status_selection() {
+            self.focus_status_notice(ctx, &id);
         }
         let waiting = self.waiting_notice_count();
         if self.status_waiting_shown == Some(waiting) {
@@ -5433,12 +5463,12 @@ mod navigation_tests {
         assert!(rect("toggle-right-sidebar").is_some());
     }
 
-    /// On macOS the tab strip must sit below AppKit's transparent-titlebar
-    /// drag band (~28pt), or press-and-move gestures on tabs move the whole
-    /// window instead of reordering tabs.
+    /// The tab strip must sit below the 40px drag band (or press-and-move
+    /// gestures on tabs move the whole window instead of reordering tabs)
+    /// and beside the sidebars, which run full height underneath the band.
     #[test]
-    #[cfg(all(feature = "test-support", target_os = "macos"))]
-    fn macos_tab_strip_sits_below_the_native_drag_band() {
+    #[cfg(feature = "test-support")]
+    fn tab_strip_sits_below_the_drag_band_and_beside_full_height_sidebars() {
         let (mut app, ctx, _dir) = fixture();
         let workspace = Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
         app.layouts.insert("a".into(), workspace);
@@ -5447,21 +5477,42 @@ mod navigation_tests {
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(1200.0, 76.0),
+                    egui::vec2(1200.0, 600.0),
                 )),
                 ..Default::default()
             },
-            |ui| app.window_header(ui),
+            |ui| {
+                // Same order as the real panels: drag band, sidebars,
+                // then the center-only tab strip.
+                egui::Panel::top("window-header")
+                    .exact_size(40.0)
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| app.window_header(ui));
+                assert!(
+                    header_target(&ctx)("workspace-strip").is_none(),
+                    "the drag band must not paint the tab strip"
+                );
+                egui::Panel::left("projects")
+                    .exact_size(225.0)
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| {
+                        ui.label("sidebar");
+                    });
+                egui::Panel::top("workspace-tabs")
+                    .exact_size(36.0)
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| app.window_header_tabs(ui));
+            },
         );
         output.textures_delta.clear();
-        let strip = ctx
-            .data(|data| {
-                data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", "workspace-strip")))
-            })
-            .expect("strip geometry");
+        let strip = header_target(&ctx)("workspace-strip").expect("strip geometry");
         assert!(
-            strip.top() >= 28.0,
+            strip.top() >= 40.0,
             "tab strip must clear the native drag band, got {strip:?}"
+        );
+        assert!(
+            strip.left() >= 225.0,
+            "tab strip must sit beside the full-height sidebar, got {strip:?}"
         );
     }
 
@@ -9588,6 +9639,117 @@ mod navigation_tests {
             }
         }
         assert!(saw_dismiss);
+    }
+
+    #[test]
+    fn status_menu_lists_pending_notices_in_inbox_order() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![
+            session_fixture("done-shell", SessionKind::Shell),
+            session_fixture("live-shell", SessionKind::Shell),
+        ];
+        app.state.notifications = vec![
+            notice_fixture("done", "done-shell", AgentState::Completed, now()),
+            notice_fixture("wait", "live-shell", AgentState::WaitingPermission, 1),
+        ];
+        let items = app.status_menu_items();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "wait");
+        assert!(items[0].title.contains("live-shell"));
+        assert!(items[0].title.contains("Needs permission"));
+        assert_eq!(items[1].id, "done");
+    }
+
+    #[test]
+    fn status_menu_skips_settled_notices_and_caps_single_line_titles() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        let mut long = notice_fixture("long", "live-shell", AgentState::WaitingInput, now());
+        long.summary = "line one\nline two ".to_string() + &"word ".repeat(40);
+        let mut dismissed =
+            notice_fixture("dismissed", "live-shell", AgentState::WaitingInput, now());
+        dismissed.dismissed = true;
+        let mut resolved =
+            notice_fixture("resolved", "live-shell", AgentState::WaitingInput, now());
+        resolved.resolved = true;
+        let mut snoozed = notice_fixture("snoozed", "live-shell", AgentState::WaitingInput, now());
+        snoozed.snoozed_until = now() + 600;
+        let mut overflow: Vec<_> = (0..13)
+            .map(|index| {
+                notice_fixture(
+                    &format!("extra-{index}"),
+                    "live-shell",
+                    AgentState::Completed,
+                    now(),
+                )
+            })
+            .collect();
+        let mut notices = vec![long, dismissed, resolved, snoozed];
+        notices.append(&mut overflow);
+        app.state.notifications = notices;
+        let items = app.status_menu_items();
+        assert_eq!(items.len(), 12);
+        assert_eq!(items[0].id, "long");
+        assert!(!items[0].title.contains('\n'));
+        assert!(items[0].title.chars().count() <= 90);
+        assert!(items.iter().all(|item| item.id != "dismissed"));
+        assert!(items.iter().all(|item| item.id != "resolved"));
+        assert!(items.iter().all(|item| item.id != "snoozed"));
+    }
+
+    #[test]
+    fn status_menu_pick_focuses_the_waiting_agent() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        app.state.notifications = vec![notice_fixture(
+            "wait",
+            "live-shell",
+            AgentState::WaitingPermission,
+            now(),
+        )];
+        let (jobs, _received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.preferences.tool = SidebarTool::Explorer;
+        app.preferences.visible = false;
+        app.detail = Some("wait".into());
+        app.focus_status_notice(&ctx, "wait");
+        assert_eq!(app.preferences.tool, SidebarTool::Agents);
+        assert!(app.preferences.visible);
+        assert_eq!(app.active_session.as_deref(), Some("live-shell"));
+        assert_eq!(app.selected.as_deref(), Some("a"));
+        assert_eq!(app.detail, None);
+    }
+
+    #[test]
+    fn status_menu_pick_with_stale_id_just_opens_the_inbox() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.tool = SidebarTool::Explorer;
+        app.preferences.visible = false;
+        app.focus_status_notice(&ctx, "gone");
+        assert_eq!(app.preferences.tool, SidebarTool::Agents);
+        assert!(app.preferences.visible);
+        assert_eq!(app.active_session, None);
+        assert_eq!(app.detail, None);
+    }
+
+    #[test]
+    fn attention_counts_share_waiting_and_unread_with_both_bells() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![
+            session_fixture("one", SessionKind::Shell),
+            session_fixture("two", SessionKind::Shell),
+        ];
+        let mut waiting = notice_fixture("wait", "one", AgentState::WaitingPermission, now());
+        waiting.read = true;
+        app.state.notifications = vec![
+            waiting,
+            notice_fixture("done", "two", AgentState::Completed, now()),
+        ];
+        assert_eq!(app.attention_counts(), (1, 1));
     }
 
     #[cfg(feature = "test-support")]

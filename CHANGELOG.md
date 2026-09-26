@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- macOS menu-bar item opens a pending-notifications menu: each entry jumps
+  straight to its waiting agent's terminal (same as the inbox Go button),
+  with Show Terminator below and a "No pending notifications" placeholder
+  when empty. The left agent bell and the IDE status-bar bell now share one
+  waiting/unread count helper; both sidebars already render the same Agents
+  inbox state.
+
+- Header is a single 40px drag band again: the workspace tab strip moved
+  into its own center-only row beside the sidebars, so both sidebars run
+  full height. Tabs stay below the native drag band, so tab-reorder drags
+  still never race window moves.
+
 - IDE mode toggle (header switch, `command+E`, command palette): pins both
   sidebars on, adds a bottom terminal strip bound to the active shell
   session, and mirrors the player transport plus the agent notification

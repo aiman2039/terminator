@@ -77,19 +77,8 @@ impl App {
     /// mode so waiting/unread counts survive collapsed sidebars. Clicking
     /// reveals the Agents inbox in the right sidebar.
     pub(super) fn notification_status_badge(&mut self, ui: &mut egui::Ui) {
-        let waiting = self.waiting_notice_count();
-        let unread = self
-            .state
-            .notifications
-            .iter()
-            .filter(|notice| !notice.read && notice_pending(notice, now()))
-            .count();
-        let label = match (waiting, unread) {
-            (0, 0) => String::new(),
-            (0, unread) => format!("{unread} unread"),
-            (waiting, 0) => format!("{waiting} waiting"),
-            (waiting, unread) => format!("{waiting} waiting · {unread} unread"),
-        };
+        let (waiting, unread) = self.attention_counts();
+        let label = attention_badge_label(waiting, unread);
         let response = ui
             .add(
                 egui::Button::image_and_text(
@@ -130,19 +119,8 @@ impl App {
 
     fn player_activity_row(&mut self, ui: &mut egui::Ui) {
         self.player_toggle_button(ui);
-        let waiting = self.waiting_notice_count();
-        let unread = self
-            .state
-            .notifications
-            .iter()
-            .filter(|notice| !notice.read && notice_pending(notice, now()))
-            .count();
-        let badge = match (waiting, unread) {
-            (0, 0) => String::new(),
-            (0, unread) => format!("{unread} unread"),
-            (waiting, 0) => format!("{waiting} waiting"),
-            (waiting, unread) => format!("{waiting} waiting · {unread} unread"),
-        };
+        let (waiting, unread) = self.attention_counts();
+        let badge = attention_badge_label(waiting, unread);
         #[cfg(feature = "test-support")]
         ui.ctx()
             .data_mut(|data| data.insert_temp(egui::Id::new("agent-bar-badge"), badge.clone()));
@@ -950,6 +928,49 @@ impl App {
             .filter(|notice| notice_waiting(notice))
             .count()
     }
+    /// Single source for the waiting/unread counts rendered as bells in
+    /// the left agent bar and the IDE status-bar mirror.
+    pub(super) fn attention_counts(&self) -> (usize, usize) {
+        let waiting = self.waiting_notice_count();
+        let unread = self
+            .state
+            .notifications
+            .iter()
+            .filter(|notice| !notice.read && notice_pending(notice, now()))
+            .count();
+        (waiting, unread)
+    }
+    /// Pending agent notices as menu-bar items, in inbox order (waiting
+    /// first). Titles are single-line and capped so the native menu stays
+    /// readable. Same list the Agents inbox renders.
+    pub(super) fn status_menu_items(&self) -> Vec<updater::StatusMenuItem> {
+        const MAX_ITEMS: usize = 12;
+        const MAX_TITLE: usize = 90;
+        self.pending_notices()
+            .into_iter()
+            .take(MAX_ITEMS)
+            .map(|notice| {
+                let session = self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == notice.session_id)
+                    .map(|session| session.label.as_str())
+                    .unwrap_or("Terminal");
+                let title = format!("{} — {}: {}", session, notice.state.label(), notice.summary);
+                let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+                let title = if title.chars().count() > MAX_TITLE {
+                    format!("{}…", title.chars().take(MAX_TITLE - 1).collect::<String>())
+                } else {
+                    title
+                };
+                updater::StatusMenuItem {
+                    id: notice.id,
+                    title,
+                }
+            })
+            .collect()
+    }
     fn pending_notices(&self) -> Vec<Notification> {
         let selected = self.selected.as_deref();
         let mut notices: Vec<_> = self
@@ -1330,6 +1351,15 @@ fn notice_pending(notice: &Notification, timestamp: u64) -> bool {
     !notice.dismissed && !notice.resolved && notice.snoozed_until <= timestamp
 }
 
+fn attention_badge_label(waiting: usize, unread: usize) -> String {
+    match (waiting, unread) {
+        (0, 0) => String::new(),
+        (0, unread) => format!("{unread} unread"),
+        (waiting, 0) => format!("{waiting} waiting"),
+        (waiting, unread) => format!("{waiting} waiting · {unread} unread"),
+    }
+}
+
 fn notice_preview(markdown: &str) -> String {
     use pulldown_cmark::{Event, Parser, TagEnd};
     let mut text = String::new();
@@ -1538,6 +1568,14 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attention_badge_label_covers_the_count_matrix() {
+        assert_eq!(attention_badge_label(0, 0), "");
+        assert_eq!(attention_badge_label(0, 2), "2 unread");
+        assert_eq!(attention_badge_label(3, 0), "3 waiting");
+        assert_eq!(attention_badge_label(3, 2), "3 waiting · 2 unread");
+    }
 
     #[test]
     fn large_git_sidebar_only_builds_visible_rows() {

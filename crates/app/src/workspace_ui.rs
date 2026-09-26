@@ -326,38 +326,16 @@ impl App {
         }
     }
 
+    /// Single drag-band row: traffic lights, project label, and tools.
+    /// The tab strip is a separate center panel below the sidebars' top
+    /// edge so the sidebars run full height.
     pub(super) fn window_header(&mut self, ui: &mut egui::Ui) {
-        if cfg!(target_os = "macos") {
-            // AppKit claims press-and-move gestures in the transparent
-            // titlebar band for window dragging, which would race
-            // tab-reorder drags started on the strip. Keep traffic lights,
-            // project, and tools in that band and paint the tab strip in a
-            // second row that egui fully owns.
-            let rect = ui.max_rect();
-            let divider = rect.top() + 40.0;
-            ui.scope_builder(
-                egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(
-                    rect.min,
-                    egui::pos2(rect.right(), divider),
-                )),
-                |ui| self.window_header_row(ui, false),
-            );
-            ui.scope_builder(
-                egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(
-                    egui::pos2(rect.left(), divider),
-                    rect.max,
-                )),
-                |ui| self.window_header_tabs(ui),
-            );
-            return;
-        }
-        self.window_header_row(ui, true);
+        self.window_header_row(ui);
     }
 
-    /// Top header row: traffic lights, project label, and tools. Holds the
-    /// tab strip too, except on macOS where the strip lives in
-    /// [`Self::window_header_tabs`] below the native drag band.
-    fn window_header_row(&mut self, ui: &mut egui::Ui, with_tabs: bool) {
+    /// Top header row: traffic lights, project label, and tools. The middle
+    /// is window drag space; tabs live in [`Self::window_header_tabs`].
+    fn window_header_row(&mut self, ui: &mut egui::Ui) {
         let rect = ui.max_rect();
         let left = self.header_left_width(rect.width());
         let right = self.preferences.width.min(rect.width() - left - 100.0);
@@ -415,11 +393,7 @@ impl App {
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
             ui.set_clip_rect(tabs_rect);
-            if with_tabs {
-                self.window_header_tabs(ui);
-            } else {
-                header_drag_space(ui);
-            }
+            header_drag_space(ui);
         });
         ui.scope_builder(
             egui::UiBuilder::new()
@@ -429,9 +403,10 @@ impl App {
         );
     }
 
-    /// Full-width tab strip below the native drag band (macOS only), where
-    /// egui owns every gesture so tabs can be dragged to reorder.
-    fn window_header_tabs(&mut self, ui: &mut egui::Ui) {
+    /// Center-only tab strip below the native drag band, where egui owns
+    /// every gesture so tabs can be dragged to reorder. Shown as a top
+    /// panel after the sidebars so the strip sits beside them, not above.
+    pub(super) fn window_header_tabs(&mut self, ui: &mut egui::Ui) {
         ui.set_clip_rect(ui.max_rect());
         if let Some(project) = self.selected.clone() {
             let mut workspace = self

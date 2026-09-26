@@ -464,10 +464,21 @@ mod macos {
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
+/// One pending agent notice in the menu-bar status menu. The GUI rebuilds
+/// this list every frame; the status item only rebuilds its NSMenu when the
+/// serialized list changes, and reports the picked id back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusMenuItem {
+    pub id: String,
+    pub title: String,
+}
+
 #[cfg(target_os = "macos")]
 mod status_item;
 #[cfg(target_os = "macos")]
-pub use status_item::{sync_status_item, take_status_click};
+pub use status_item::{
+    sync_status_item, sync_status_menu, take_status_click, take_status_selection,
+};
 
 #[cfg(not(target_os = "macos"))]
 mod other {
@@ -516,6 +527,14 @@ pub fn sync_status_item(_png: &[u8], _width_pt: f32, _height_pt: f32) {}
 #[cfg(not(target_os = "macos"))]
 pub fn take_status_click() -> bool {
     false
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn sync_status_menu(_items: &[StatusMenuItem]) {}
+
+#[cfg(not(target_os = "macos"))]
+pub fn take_status_selection() -> Option<String> {
+    None
 }
 
 #[cfg(test)]

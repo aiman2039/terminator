@@ -1,21 +1,28 @@
 //! macOS menu-bar status item. The app crate forbids unsafe, so the
-//! NSStatusItem lives here. Clicking it orders the window forward; the GUI
-//! reads [`take_status_click`] on the next frame.
+//! NSStatusItem lives here. Clicking it opens a menu of pending agent
+//! notices plus Show Terminator. The GUI syncs the menu with
+//! [`sync_status_menu`] and reads [`take_status_click`] /
+//! [`take_status_selection`] on the next frame.
 
+use super::StatusMenuItem;
 use objc2::{
     AnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, sel,
 };
 use objc2_app_kit::{
-    NSApplication, NSButton, NSCellImagePosition, NSControl, NSImage, NSImageScaling, NSStatusBar,
-    NSStatusBarButton, NSStatusItem, NSVariableStatusItemLength,
+    NSApplication, NSButton, NSCellImagePosition, NSControl, NSImage, NSImageScaling, NSMenu,
+    NSMenuItem, NSStatusBar, NSStatusBarButton, NSStatusItem, NSVariableStatusItemLength,
 };
-use objc2_foundation::{NSData, NSObject, NSObjectProtocol, NSSize, ns_string};
+use objc2_foundation::{NSData, NSObject, NSObjectProtocol, NSSize, NSString, ns_string};
 use std::{
     cell::RefCell,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 static CLICKED: AtomicBool = AtomicBool::new(false);
+static SELECTION: Mutex<Option<String>> = Mutex::new(None);
 
 struct StatusIvars;
 
@@ -30,27 +37,52 @@ define_class!(
     impl StatusTarget {
         #[unsafe(method(showTerminator:))]
         fn show_terminator(&self, _sender: Option<&objc2::runtime::AnyObject>) {
-            let Some(mtm) = MainThreadMarker::new() else {
-                return;
-            };
-            let app = NSApplication::sharedApplication(mtm);
-            app.unhide(None);
-            app.activate();
-            for window in app.windows().iter() {
-                if window.isMiniaturized() {
-                    window.deminiaturize(None);
-                }
-                window.makeKeyAndOrderFront(None);
-            }
+            order_front();
             CLICKED.store(true, Ordering::Release);
+        }
+
+        #[unsafe(method(selectNotice:))]
+        fn select_notice(&self, sender: Option<&NSMenuItem>) {
+            if let Some(tag) = sender.map(|item| item.tag())
+                && let Ok(index) = usize::try_from(tag)
+            {
+                BAR.with(|slot| {
+                    if let Some(id) = slot
+                        .borrow()
+                        .as_ref()
+                        .and_then(|bar| bar.menu_ids.get(index))
+                        .cloned()
+                    {
+                        *SELECTION.lock().unwrap() = Some(id);
+                    }
+                });
+            }
+            order_front();
         }
     }
 );
+
+fn order_front() {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    app.unhide(None);
+    app.activate();
+    for window in app.windows().iter() {
+        if window.isMiniaturized() {
+            window.deminiaturize(None);
+        }
+        window.makeKeyAndOrderFront(None);
+    }
+}
 
 struct Bar {
     item: Retained<NSStatusItem>,
     _target: Retained<StatusTarget>,
     png: Vec<u8>,
+    menu_key: String,
+    menu_ids: Vec<String>,
 }
 
 thread_local! {
@@ -76,6 +108,89 @@ pub fn take_status_click() -> bool {
     CLICKED.swap(false, Ordering::AcqRel)
 }
 
+/// Rebuild the status menu only when the notice list changed. Menu tags
+/// index [`Bar::menu_ids`]; GUI frames (the only writer) never run while
+/// menu tracking holds the main thread, so a pick always resolves against
+/// the list the menu was built from.
+pub fn sync_status_menu(items: &[StatusMenuItem]) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    BAR.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let bar = slot.get_or_insert_with(|| install(mtm));
+        let key = menu_key(items);
+        if bar.menu_key == key {
+            return;
+        }
+        bar.menu_key = key;
+        bar.menu_ids = items.iter().map(|item| item.id.clone()).collect();
+        rebuild_menu(mtm, bar, items);
+    });
+}
+
+pub fn take_status_selection() -> Option<String> {
+    SELECTION.lock().unwrap().take()
+}
+
+fn menu_key(items: &[StatusMenuItem]) -> String {
+    let mut key = String::new();
+    for item in items {
+        key.push_str(&item.id);
+        key.push('\n');
+        key.push_str(&item.title);
+        key.push('\n');
+    }
+    key
+}
+
+fn rebuild_menu(mtm: MainThreadMarker, bar: &Bar, items: &[StatusMenuItem]) {
+    let menu = NSMenu::new(mtm);
+    if items.is_empty() {
+        let none = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                ns_string!("No pending notifications"),
+                None,
+                &NSString::new(),
+            )
+        };
+        none.setEnabled(false);
+        menu.addItem(&none);
+    } else {
+        for (index, item) in items.iter().enumerate() {
+            let title = NSString::from_str(&item.title);
+            let entry = unsafe {
+                NSMenuItem::initWithTitle_action_keyEquivalent(
+                    NSMenuItem::alloc(mtm),
+                    &title,
+                    Some(sel!(selectNotice:)),
+                    &NSString::new(),
+                )
+            };
+            entry.setTag(index as isize);
+            unsafe {
+                entry.setTarget(Some(&*bar._target));
+            }
+            menu.addItem(&entry);
+        }
+    }
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    let show = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            ns_string!("Show Terminator"),
+            Some(sel!(showTerminator:)),
+            &NSString::new(),
+        )
+    };
+    unsafe {
+        show.setTarget(Some(&*bar._target));
+    }
+    menu.addItem(&show);
+    bar.item.setMenu(Some(&menu));
+}
+
 fn install(mtm: MainThreadMarker) -> Bar {
     let target = new_target(mtm);
     let item = NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
@@ -92,6 +207,8 @@ fn install(mtm: MainThreadMarker) -> Bar {
         item,
         _target: target,
         png: Vec::new(),
+        menu_key: String::new(),
+        menu_ids: Vec::new(),
     }
 }
 
@@ -120,4 +237,31 @@ fn apply_image(
     button.setImage(Some(&image));
     button.setImagePosition(NSCellImagePosition::ImageOnly);
     button.setImageScaling(NSImageScaling::ScaleProportionallyDown);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(id: &str, title: &str) -> StatusMenuItem {
+        StatusMenuItem {
+            id: id.into(),
+            title: title.into(),
+        }
+    }
+
+    #[test]
+    fn menu_key_changes_with_ids_titles_and_order() {
+        let base = vec![item("a", "one"), item("b", "two")];
+        assert_eq!(menu_key(&base), menu_key(&base));
+        assert_ne!(menu_key(&base), menu_key(&[]));
+        assert_ne!(
+            menu_key(&base),
+            menu_key(&[item("a", "one"), item("b", "three")])
+        );
+        assert_ne!(
+            menu_key(&base),
+            menu_key(&[item("b", "two"), item("a", "one")])
+        );
+    }
 }
