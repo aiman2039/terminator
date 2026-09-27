@@ -7,11 +7,9 @@
 //! timeouts and stdout limits stay per caller.
 use crate::{CommandOptions, run_command};
 use anyhow::Result;
-use std::{
-    ffi::{OsStr, OsString},
-    path::Path,
-    process::Command,
-};
+#[cfg(feature = "async-client")]
+use std::ffi::OsString;
+use std::{ffi::OsStr, path::Path, process::Command};
 
 /// `git -C <cwd> <args>` without optional locks.
 pub fn command<A: AsRef<OsStr>>(cwd: &Path, args: &[A]) -> Command {
