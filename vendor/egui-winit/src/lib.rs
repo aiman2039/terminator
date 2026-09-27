@@ -1420,11 +1420,19 @@ fn open_url_in_browser(_url: &str) {
 /// Ctrl+A–Z produce C0 bytes (`Ctrl+E` is ENQ, `\u{5}`). Map that byte back to
 /// the letter and mark Control held. egui's modifier snapshot can miss Control
 /// on the key event even when AppKit already folded it into the character.
+///
+/// Tab and Enter already arrive as named keys whose produced text is also C0
+/// (`\t`, `\r`). They have nothing to recover, so leave them alone: remapping
+/// Tab to `I` would deliver Shift+Tab to the terminal as Ctrl+Shift+I instead
+/// of Backtab.
 fn apply_control_character(
     key: egui::Key,
     mut modifiers: egui::Modifiers,
     produced: Option<&str>,
 ) -> (egui::Key, egui::Modifiers) {
+    if matches!(key, egui::Key::Tab | egui::Key::Enter) {
+        return (key, modifiers);
+    }
     let Some(letter) = produced.and_then(key_for_control_character) else {
         return (key, modifiers);
     };
@@ -2374,5 +2382,27 @@ mod control_character_tests {
         assert_eq!(key, egui::Key::E);
         assert!(modifiers.ctrl);
         assert!(!modifiers.mac_cmd);
+    }
+
+    #[test]
+    fn shift_tab_stays_shift_tab() {
+        let (key, modifiers) =
+            apply_control_character(egui::Key::Tab, egui::Modifiers::SHIFT, Some("\t"));
+        assert_eq!(key, egui::Key::Tab);
+        assert_eq!(modifiers, egui::Modifiers::SHIFT);
+    }
+
+    #[test]
+    fn tab_and_enter_keep_their_identity() {
+        for (key, produced) in [(egui::Key::Tab, "\t"), (egui::Key::Enter, "\r")] {
+            let (out_key, modifiers) =
+                apply_control_character(key, egui::Modifiers::NONE, Some(produced));
+            assert_eq!(out_key, key);
+            assert!(!modifiers.ctrl);
+            let (out_key, modifiers) =
+                apply_control_character(key, egui::Modifiers::SHIFT, Some(produced));
+            assert_eq!(out_key, key);
+            assert_eq!(modifiers, egui::Modifiers::SHIFT);
+        }
     }
 }

@@ -197,6 +197,32 @@ mod tests {
     }
 
     #[test]
+    fn shift_tab_is_backtab() {
+        assert_eq!(
+            bytes_for_pressed_key(
+                &BindingsLayout::default(),
+                Key::Tab,
+                Modifiers::SHIFT,
+                TerminalMode::empty()
+            ),
+            Some(b"\x1b[Z".to_vec())
+        );
+    }
+
+    #[test]
+    fn tab_is_horizontal_tab() {
+        assert_eq!(
+            bytes_for_pressed_key(
+                &BindingsLayout::default(),
+                Key::Tab,
+                Modifiers::NONE,
+                TerminalMode::empty()
+            ),
+            Some(vec![0x09])
+        );
+    }
+
+    #[test]
     fn control_e_stays_enq() {
         assert_eq!(
             bytes_for_pressed_key(

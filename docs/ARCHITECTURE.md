@@ -296,7 +296,12 @@ close gate; older generated shells may still emit them and the daemon ignores th
 DEC focus-reporting (1004) and alternate-scroll (1007) settings are retained through
 vt100 extension callbacks and replayed after the formatted attachment snapshot.
 A reset-boundary feeder clears extension modes in stream order on RIS; it does not
-create another screen model or infer lifecycle from text. Long-running native
+create another screen model or infer lifecycle from text. vt100 has no
+scrollback-clear primitive, so plain `CSI 3 J` (from `clear` and
+scrollback-clearing aliases) rebuilds the single parser from its formatted
+state after the chunk, preserving callbacks, cursor, colors, and input modes;
+otherwise the attach snapshot replays pre-clear scrollback on every reattach.
+The rebuild never runs on the alternate screen. Long-running native
 fixtures may opt into rendering while occluded through the test-support build;
 normal application occlusion/minimization behavior is preserved.
 
