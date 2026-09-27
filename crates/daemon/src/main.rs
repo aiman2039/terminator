@@ -398,13 +398,17 @@ impl Shared {
         let pid = child.process_id();
         let mut reader = pair.master.try_clone_reader()?;
         let writer = Arc::new(Mutex::new(pair.master.take_writer()?));
+        let mut parser = vt100::Parser::new_with_callbacks(
+            24,
+            80,
+            settings.scrollback_lines,
+            terminal_events::Events::default(),
+        );
+        parser
+            .callbacks_mut()
+            .set_scrollback_cap(settings.scrollback_lines);
         let runtime = Arc::new(Mutex::new(Runtime {
-            parser: vt100::Parser::new_with_callbacks(
-                24,
-                80,
-                settings.scrollback_lines,
-                terminal_events::Events::default(),
-            ),
+            parser,
             master: pair.master,
             writer,
             subscribers: vec![],

@@ -296,7 +296,12 @@ close gate; older generated shells may still emit them and the daemon ignores th
 DEC focus-reporting (1004) and alternate-scroll (1007) settings are retained through
 vt100 extension callbacks and replayed after the formatted attachment snapshot.
 A reset-boundary feeder clears extension modes in stream order on RIS; it does not
-create another screen model or infer lifecycle from text. Long-running native
+create another screen model or infer lifecycle from text. vt100 has no
+scrollback-clear primitive, so plain `CSI 3 J` (from `clear` and
+scrollback-clearing aliases) rebuilds the single parser from its formatted
+state after the chunk, preserving callbacks, cursor, colors, and input modes;
+otherwise the attach snapshot replays pre-clear scrollback on every reattach.
+The rebuild never runs on the alternate screen. Long-running native
 fixtures may opt into rendering while occluded through the test-support build;
 normal application occlusion/minimization behavior is preserved.
 
@@ -422,8 +427,8 @@ Application source checks reject `spawn_blocking`, `block_in_place`, `tokio::fs`
 threaded Tokio DNS lookup, reqwest blocking clients, and SyncIoBridge. The resolved
 Tokio feature graph does not enable `fs`; reqwest multipart, blocking, and stream
 file adapters are disabled. Source checking does not establish transitive safety:
-reqwest 0.13.5/Hickory 0.26.3 initialization, CPAL 0.16.0, Rodio 0.21.1, rtrb
-0.3.5, and rfd 0.17 call paths were inspected separately. HTTP/DNS libraries own
+reqwest 0.13.5/Hickory 0.26.3 initialization, CPAL 0.17.3, Rodio 0.22.2, rtrb
+0.4.0, and rfd 0.17 call paths were inspected separately. HTTP/DNS libraries own
 internal async tasks; CPAL owns audio-device callbacks, notify owns OS watcher
 threads, rfd owns native dialog dispatch, and terminal/windowing frameworks retain
 their existing threads. These are separate from application worker limits.

@@ -8,6 +8,7 @@ use std::{
     cell::RefCell,
     fs::File,
     io::{self, Read, Seek, SeekFrom},
+    num::NonZero,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -711,8 +712,8 @@ struct PreparedSource {
     controls: Arc<Controls>,
     counters: Arc<PlaybackCounters>,
     generation: u64,
-    channels: u16,
-    rate: u32,
+    channels: NonZero<u16>,
+    rate: NonZero<u32>,
     channel: u16,
     mix: f32,
 }
@@ -731,8 +732,8 @@ impl Iterator for PreparedSource {
                 self.counters.consumed.fetch_add(1, Ordering::Relaxed);
                 self.mix += sample;
                 self.channel += 1;
-                if self.channel == self.channels {
-                    let _ = self.tap.push(self.mix / f32::from(self.channels));
+                if self.channel == self.channels.get() {
+                    let _ = self.tap.push(self.mix / f32::from(self.channels.get()));
                     self.channel = 0;
                     self.mix = 0.0;
                 }
@@ -754,10 +755,10 @@ impl Source for PreparedSource {
     fn current_span_len(&self) -> Option<usize> {
         None
     }
-    fn channels(&self) -> u16 {
+    fn channels(&self) -> NonZero<u16> {
         self.channels
     }
-    fn sample_rate(&self) -> u32 {
+    fn sample_rate(&self) -> NonZero<u32> {
         self.rate
     }
     fn total_duration(&self) -> Option<Duration> {
@@ -867,14 +868,15 @@ fn decode_audio(
     let configuration = device
         .default_output_config()
         .map_err(|_| Permanent("Audio output device configuration is unavailable"))?;
-    let channels = configuration.channels();
-    let rate = configuration.sample_rate().0;
+    let channels =
+        NonZero::new(configuration.channels()).ok_or(Permanent("Invalid audio sample format"))?;
+    let rate = NonZero::new(configuration.sample_rate())
+        .ok_or(Permanent("Invalid audio sample format"))?;
     // Resampling/channel conversion stays on this native decoder worker.
     let mut decoder = rodio::source::UniformSourceIterator::new(decoder, channels, rate);
     let output_failed = Arc::new(AtomicBool::new(false));
-    ensure!(channels != 0 && rate != 0, "Invalid audio sample format");
-    let capacity = (rate as usize * channels as usize * 2).min(MAX_PCM_SAMPLES);
-    let threshold = (rate as usize * channels as usize / 4).min(capacity);
+    let capacity = (rate.get() as usize * channels.get() as usize * 2).min(MAX_PCM_SAMPLES);
+    let threshold = (rate.get() as usize * channels.get() as usize / 4).min(capacity);
     let (mut pcm, consumer) = rtrb::RingBuffer::new(capacity);
     let (tap_producer, mut tap_consumer) = rtrb::RingBuffer::new(tap::FFT_N * 2);
     let mut prepared = Some(PreparedSource {
@@ -940,19 +942,19 @@ fn decode_audio(
                 for (i, sample) in window.iter_mut().enumerate() {
                     *sample = samples[(sample_index + i) % tap::FFT_N];
                 }
-                spectrum.submit(window, rate, desired.generation);
+                spectrum.submit(window, rate.get(), desired.generation);
             }
             if ready.load(Ordering::Acquire) {
                 if counters.consumed.load(Ordering::Relaxed)
-                    >= u64::from(rate) * u64::from(channels) * 60
+                    >= u64::from(rate.get()) * u64::from(channels.get()) * 60
                 {
                     healthy.store(true, Ordering::Release);
                 }
                 let position = desired.offset
                     + Duration::from_secs_f64(
                         counters.consumed.load(Ordering::Relaxed) as f64
-                            / f64::from(rate)
-                            / f64::from(channels),
+                            / f64::from(rate.get())
+                            / f64::from(channels.get()),
                     );
                 let title = source.title().to_owned();
                 let next = if controls.paused.load(Ordering::Acquire) {
@@ -1010,8 +1012,8 @@ mod tests {
                 }),
                 counters: Arc::default(),
                 generation: 1,
-                channels: 1,
-                rate: 8000,
+                channels: NonZero::new(1).unwrap(),
+                rate: NonZero::new(8000).unwrap(),
                 channel: 0,
                 mix: 0.0,
             },

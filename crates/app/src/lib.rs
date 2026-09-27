@@ -49,6 +49,7 @@ mod clipboard;
 mod diagnostics;
 mod diff;
 mod gui_services;
+#[cfg(any(test, target_os = "macos"))]
 mod menu_bar;
 mod native_jobs;
 mod services;
@@ -4641,17 +4642,20 @@ impl eframe::App for App {
 
 impl App {
     /// Bring the window forward from the menu-bar status item.
+    #[cfg(any(test, target_os = "macos"))]
     fn focus_window_from_menu(ctx: &egui::Context) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
+    #[cfg(any(test, target_os = "macos"))]
     fn open_agents_inbox(&mut self) {
         self.preferences.tool = SidebarTool::Agents;
         self.preferences.visible = true;
     }
     /// A status-menu pick: the inbox Go button plus opening the inbox
     /// behind it. A stale id just opens the inbox.
+    #[cfg(any(test, target_os = "macos"))]
     fn focus_status_notice(&mut self, ctx: &egui::Context, id: &str) {
         Self::focus_window_from_menu(ctx);
         self.open_agents_inbox();

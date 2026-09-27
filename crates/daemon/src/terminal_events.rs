@@ -43,6 +43,8 @@ pub struct Events {
     chunks: BTreeMap<String, Notice>,
     extra_modes: BTreeMap<u16, bool>,
     escape_pending: bool,
+    scrollback_cap: usize,
+    scrollback_clear_pending: bool,
 }
 /// Feed the existing vt100 parser, clearing extension modes in stream order on
 /// RIS. vt100 handles RIS internally without a callback. ESC starts an escape
@@ -64,7 +66,48 @@ pub fn process(parser: &mut vt100::Parser<Events>, bytes: &[u8]) {
         }
     }
     parser.process(&bytes[start..]);
+    if parser.callbacks().scrollback_clear_pending {
+        rebuild_without_scrollback(parser);
+    }
     parser.callbacks_mut().escape_pending = escaped;
+}
+
+/// vt100 models ED 0-2 but offers no scrollback-clear primitive, so plain
+/// `CSI 3 J` (emitted by `clear`, and again by scrollback-clearing aliases)
+/// lands in `unhandled_csi`. Without this rebuild the attach snapshot keeps
+/// replaying pre-clear scrollback and every reattach resurrects cleared
+/// lines. The fresh parser replays the formatted screen, cursor, colors, and
+/// input modes; only saved scrollback is dropped. Callback state (replies,
+/// notices, extension modes) moves across untouched.
+///
+/// The rebuild runs after the chunk that carried E3, so same-chunk output
+/// scrolled after E3 is dropped from the model too; the live attach stream
+/// is raw passthrough and unaffected. Never rebuilds on the alternate
+/// screen: its grid holds no scrollback, and replaying alt-screen content
+/// onto a fresh primary grid would corrupt the model.
+fn rebuild_without_scrollback(parser: &mut vt100::Parser<Events>) {
+    parser.callbacks_mut().scrollback_clear_pending = false;
+    if parser.screen().alternate_screen() {
+        return;
+    }
+    let (rows, cols) = parser.screen().size();
+    parser.screen_mut().set_scrollback(usize::MAX);
+    let len = parser.screen().scrollback();
+    parser.screen_mut().set_scrollback(0);
+    let cap = parser.callbacks().scrollback_cap.max(len);
+    let state = parser.screen().state_formatted();
+    let cursor = parser.screen().cursor_state_formatted();
+    let attrs = parser.screen().attributes_formatted();
+    let mut fresh = vt100::Parser::new_with_callbacks(rows, cols, cap, Events::default());
+    std::mem::swap(fresh.callbacks_mut(), parser.callbacks_mut());
+    fresh.process(&state);
+    fresh.process(&cursor);
+    fresh.process(&attrs);
+    *parser = fresh;
+}
+
+fn first_param(params: &[&[u16]]) -> u16 {
+    params.first().and_then(|p| p.first()).copied().unwrap_or(0)
 }
 
 fn text(bytes: &[u8], limit: usize) -> String {
@@ -75,6 +118,9 @@ fn text(bytes: &[u8], limit: usize) -> String {
         .collect()
 }
 impl Events {
+    pub fn set_scrollback_cap(&mut self, cap: usize) {
+        self.scrollback_cap = cap;
+    }
     pub fn modes_formatted(&self) -> Vec<u8> {
         self.extra_modes
             .iter()
@@ -256,6 +302,11 @@ impl vt100::Callbacks for Events {
                     }
                 }
             }
+            (None, None, 'J') if first_param(params) == 3 => {
+                if !screen.alternate_screen() {
+                    self.scrollback_clear_pending = true;
+                }
+            }
             (Some(b'?'), Some(b'$'), 'p') => self.reply_decrqm(screen, params),
             (_, Some(_), _) => {}
             (i1, None, c) => self.reply_csi(screen, i1, params, c),
@@ -422,6 +473,69 @@ mod tests {
         assert_eq!(replies[replies.len() - 3], "\x1b[?1049;1$y");
         assert_eq!(replies[replies.len() - 2], "\x1b[?1000;1$y");
         assert_eq!(replies[replies.len() - 1], "\x1b[?1006;1$y");
+    }
+    fn scrollback_len(parser: &mut vt100::Parser<Events>) -> usize {
+        parser.screen_mut().set_scrollback(usize::MAX);
+        let len = parser.screen().scrollback();
+        parser.screen_mut().set_scrollback(0);
+        len
+    }
+    #[test]
+    fn e3_clears_scrollback_so_reattach_does_not_resurrect_cleared_lines() {
+        let mut p = vt100::Parser::new_with_callbacks(24, 80, 100, Events::default());
+        for i in 0..60 {
+            process(&mut p, format!("FILL_{i}\r\n").as_bytes());
+        }
+        assert!(scrollback_len(&mut p) > 0);
+        // `clear` output plus the trailing E3 from `clear && printf '\033[3J'`.
+        process(&mut p, b"\x1b[3J\x1b[H\x1b[2J");
+        process(&mut p, b"\x1b[3J");
+        process(&mut p, b"AFTER\r\n");
+        assert_eq!(scrollback_len(&mut p), 0);
+        assert!(p.screen().contents().contains("AFTER"));
+        assert!(!p.screen().contents().contains("FILL"));
+    }
+    #[test]
+    fn e3_preserves_screen_cursor_colors_modes_and_future_scrollback() {
+        let mut events = Events::default();
+        events.set_scrollback_cap(100);
+        let mut p = vt100::Parser::new_with_callbacks(24, 80, 100, events);
+        for i in 0..60 {
+            process(&mut p, format!("FILL_{i}\r\n").as_bytes());
+        }
+        process(&mut p, b"\x1b[?1004h\x1b[31mRED\x1b[5;10H\x1b[3J");
+        assert_eq!(scrollback_len(&mut p), 0);
+        assert!(p.screen().contents().contains("FILL_59"));
+        assert_eq!(p.screen().cursor_position(), (4, 9));
+        assert_eq!(
+            p.screen().cell(23, 0).unwrap().fgcolor(),
+            vt100::Color::Idx(1)
+        );
+        assert_eq!(p.callbacks().modes_formatted(), b"\x1b[?1004h");
+        // Future scrollback uses the wired capacity, not the emptied buffer.
+        process(&mut p, b"\x1b[24;1H");
+        for i in 0..60 {
+            process(&mut p, format!("NEW_{i}\r\n").as_bytes());
+        }
+        assert_eq!(scrollback_len(&mut p), 60);
+    }
+    #[test]
+    fn e3_split_across_chunks_still_clears_scrollback() {
+        let mut p = vt100::Parser::new_with_callbacks(24, 80, 100, Events::default());
+        for i in 0..30 {
+            process(&mut p, format!("FILL_{i}\r\n").as_bytes());
+        }
+        assert!(scrollback_len(&mut p) > 0);
+        process(&mut p, b"\x1b[3");
+        process(&mut p, b"J");
+        assert_eq!(scrollback_len(&mut p), 0);
+    }
+    #[test]
+    fn e3_on_the_alternate_screen_keeps_alt_content() {
+        let mut p = vt100::Parser::new_with_callbacks(24, 80, 100, Events::default());
+        process(&mut p, b"normal\r\n\x1b[?1049hALTSCREEN\x1b[3J");
+        assert!(p.screen().alternate_screen());
+        assert!(p.screen().contents().contains("ALTSCREEN"));
     }
     #[test]
     fn palette_queries_return_distinct_ansi_colors() {

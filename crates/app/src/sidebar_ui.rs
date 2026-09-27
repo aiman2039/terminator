@@ -1,6 +1,8 @@
 //! Project, file, Git, and notification sidebar rendering.
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
+#[cfg(any(test, target_os = "macos"))]
+use crate::updater;
 use crate::{
     App, RenameSurface, Tab, appearance,
     file_actions::{self, FileAction},
@@ -11,7 +13,6 @@ use crate::{
     },
     services::ContextData,
     settings_ui::SettingsSection,
-    updater,
 };
 use eframe::egui::{self, Color32, RichText};
 use std::{
@@ -935,6 +936,7 @@ impl App {
     /// Pending agent notices as menu-bar items, in inbox order (waiting
     /// first). Titles are single-line and capped so the native menu stays
     /// readable. Same list the Agents inbox renders.
+    #[cfg(any(test, target_os = "macos"))]
     pub(super) fn status_menu_items(&self) -> Vec<updater::StatusMenuItem> {
         const MAX_ITEMS: usize = 12;
         const MAX_TITLE: usize = 90;

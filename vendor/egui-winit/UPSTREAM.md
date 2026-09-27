@@ -2,6 +2,16 @@ Vendored egui-winit 0.36.1 from https://github.com/emilk/egui at
 4c1f2fae95475a40e524884ebb298bcb1714b08e (crates/egui-winit).
 MIT and Apache-2.0 licenses retained. Cargo.toml is the published crate manifest.
 
+## Shift+Tab / Shift+Enter keep their identity (2026-09-27)
+
+`apply_control_character` mapped any C0 `text_with_all_modifiers` byte back to
+a letter, including the `\t` / `\r` AppKit reports for Tab and Enter without
+any modifiers held. Shift+Tab arrived at the terminal as Ctrl+Shift+I (kitty
+`CSI 105;6 u`) instead of Backtab (`ESC [ Z`), so terminal applications such
+as Codex never saw the key. Bare Tab/Enter only worked because Ctrl+I and
+Ctrl+M encode to the same bytes. Tab and Enter now bypass the remap; Ctrl+E
+and the other control-letter recoveries are unchanged.
+
 ## Ctrl+E control character (2026-09-21)
 
 AppKit delivers Ctrl+E as ENQ (`\u{5}`) in `text_with_all_modifiers`. If egui's
