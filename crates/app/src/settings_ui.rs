@@ -67,7 +67,7 @@ impl SettingsSection {
             Self::Terminal => {
                 "shell nvim editor neovim zsh bash fish folder access privacy diff split close timeout"
             }
-            Self::Notifications => "alert os desktop dismiss sound",
+            Self::Notifications => "alert os desktop dismiss sound ntfy channel machine",
             Self::History => "days mib scrollback disk",
             Self::Shortcuts => "keymap command shortcut chord palette",
             Self::AgentHooks => "claude codex opencode muse grok install hook",
@@ -935,6 +935,26 @@ impl App {
                         ui.end_row();
                     }
                 });
+        }
+        if self.field_visible("ntfy", "channel machine phone push") {
+            ui.add_enabled_ui(
+                self.state.capabilities.iter().any(|c| c == NTFY_CAPABILITY),
+                |ui| {
+                    ui.checkbox(&mut self.settings_draft.ntfy_enabled, "Send agent notifications to ntfy");
+                    ui.horizontal(|ui| {
+                        ui.label("Channel (ntfy.sh)");
+                        ui.text_edit_singleline(&mut self.settings_draft.ntfy_channel);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Machine name");
+                        ui.text_edit_singleline(&mut self.settings_draft.ntfy_machine);
+                    });
+                    ui.small("Sends the In app events above, even while focused or the GUI is closed. Subscribe to this channel in ntfy. Sends only agent and status, not prompt text.");
+                },
+            );
+            if !self.state.capabilities.iter().any(|c| c == NTFY_CAPABILITY) {
+                ui.small("Activate an updated daemon to enable ntfy. Older sessions need a supporting daemon.");
+            }
         }
         if self.field_visible("Dismiss notifications", "focus resolve manual") {
             settings_controls::settings_row(

@@ -360,6 +360,9 @@ pub struct Settings {
     pub terminal_notifications: bool,
     pub terminal_notifications_os: bool,
     pub notification_sound: bool,
+    pub ntfy_enabled: bool,
+    pub ntfy_channel: String,
+    pub ntfy_machine: String,
     pub pr_metadata: bool,
     pub editor_mode: EditorMode,
     pub review_mode: ReviewMode,
@@ -398,6 +401,9 @@ impl Default for Settings {
             terminal_notifications: true,
             terminal_notifications_os: false,
             notification_sound: true,
+            ntfy_enabled: false,
+            ntfy_channel: String::new(),
+            ntfy_machine: String::new(),
             pr_metadata: false,
             editor_mode: EditorMode::Embedded,
             review_mode: ReviewMode::Native,
@@ -448,6 +454,19 @@ impl Default for Settings {
 impl Settings {
     pub fn validate(&self) -> Result<()> {
         ensure!(
+            self.ntfy_channel.len() <= 128
+                && self
+                    .ntfy_channel
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                && (!self.ntfy_enabled || !self.ntfy_channel.is_empty()),
+            "ntfy channel must contain 1–128 letters, digits, underscores or hyphens when enabled"
+        );
+        ensure!(
+            self.ntfy_machine.len() <= 128 && !self.ntfy_machine.chars().any(char::is_control),
+            "ntfy machine name must be at most 128 bytes without control characters"
+        );
+        ensure!(
             (1..=3650).contains(&self.history_days),
             "History age must be 1–3650 days"
         );
@@ -480,6 +499,7 @@ pub const STABLE_HELPER_CAPABILITY: &str = "stable-helper-v1";
 pub const SCREEN_CAPABILITY: &str = "screen-v1";
 pub const TERMINAL_NOTICES_CAPABILITY: &str = "terminal-notices-v1";
 pub const DIFF_CLOSE_SETTINGS_CAPABILITY: &str = "diff-close-settings-v1";
+pub const NTFY_CAPABILITY: &str = "ntfy-v1";
 pub const NOTIFICATION_SOUND_CAPABILITY: &str = "notification-sound-v1";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TerminalNotice {
@@ -1264,6 +1284,43 @@ mod tests {
         }
     }
     #[test]
+    fn ntfy_eligible_notifications_suppress_duplicate_and_stale_hooks() {
+        let mut state = setup();
+        state.settings.ntfy_enabled = true;
+        state.settings.ntfy_channel = "fixture".into();
+        assert!(
+            state
+                .apply_hook(event(2, AgentState::WaitingInput))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            state
+                .apply_hook(event(2, AgentState::WaitingInput))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            state
+                .apply_hook(event(1, AgentState::Completed))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            state
+                .apply_hook(event(3, AgentState::WaitingInput))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            state
+                .apply_hook(event(4, AgentState::Completed))
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
     fn dismissal_does_not_resume_agent() {
         let mut s = setup();
         s.apply_hook(event(1, AgentState::WaitingInput)).unwrap();
@@ -1496,6 +1553,27 @@ mod snapshot_tests {
         state.revision = previous.revision;
         assert_ne!(previous, state.snapshot_hint());
     }
+    #[test]
+    fn ntfy_settings_default_off_validate_and_round_trip() {
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(!settings.ntfy_enabled);
+        settings.ntfy_enabled = true;
+        assert!(settings.validate().is_err());
+        settings.ntfy_channel = "phone_123-test".into();
+        settings.ntfy_machine = "My laptop".into();
+        settings.validate().unwrap();
+        let restored: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(restored, settings);
+        for channel in ["https://ntfy.sh/topic", "a/b", "a?b", "a\nB", "has space"] {
+            settings.ntfy_channel = channel.into();
+            assert!(settings.validate().is_err());
+        }
+        settings.ntfy_channel = "valid".into();
+        settings.ntfy_machine = "bad\nheader".into();
+        assert!(settings.validate().is_err());
+    }
+
     #[test]
     fn notification_sound_defaults_on_and_round_trips() {
         assert!(Settings::default().notification_sound);

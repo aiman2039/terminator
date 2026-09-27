@@ -3,6 +3,7 @@ mod editor;
 mod helper;
 mod idle_close;
 mod notifications;
+mod ntfy;
 mod review;
 mod terminal_env;
 mod terminal_events;
@@ -75,6 +76,7 @@ struct Shared {
     shutdown: AtomicBool,
     history: SyncSender<HistoryJob>,
     alerts: SyncSender<String>,
+    ntfy: SyncSender<ntfy::Ping>,
 }
 impl Shared {
     fn forward_input(&self, runtime: &Arc<Mutex<Runtime>>, bytes: &[u8]) -> Result<()> {
@@ -895,7 +897,15 @@ impl Shared {
                     .settings
                     .os_events
                     .contains(&event.state);
-                let nid = self.state.lock().unwrap().apply_hook(event)?;
+                let mut state = self.state.lock().unwrap();
+                let ping = ntfy::Ping::from_event(&state.settings, &event);
+                let nid = state.apply_hook(event)?;
+                drop(state);
+                if nid.is_some()
+                    && let Some(ping) = ping
+                {
+                    let _ = self.ntfy.try_send(ping);
+                }
                 let focused = *self.focused.lock().unwrap();
                 if let Some(nid) = nid
                     && should_os
@@ -1312,6 +1322,7 @@ fn main() -> Result<()> {
         NVIM_REVIEW_CAPABILITY.into(),
         TERMINAL_NOTICES_CAPABILITY.into(),
         NOTIFICATION_SOUND_CAPABILITY.into(),
+        NTFY_CAPABILITY.into(),
         DIFF_CLOSE_SETTINGS_CAPABILITY.into(),
         WORKTREES_CAPABILITY.into(),
         SCREEN_CAPABILITY.into(),
@@ -1343,6 +1354,7 @@ fn main() -> Result<()> {
         shutdown: AtomicBool::new(false),
         history,
         alerts,
+        ntfy: ntfy::start(),
     });
     let weak = Arc::downgrade(&shared);
     thread::spawn(move || {

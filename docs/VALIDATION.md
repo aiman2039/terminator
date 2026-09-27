@@ -1,5 +1,19 @@
 # Validation evidence — 2026-09-08
 
+## ntfy hook notifications (2026-09-27)
+
+- Focused core regressions: 2 passed (default-off settings, validation and JSON
+  round trip; duplicate/request/stale hook suppression).
+- Focused daemon regressions: 2 passed (opt-in and payload privacy; curl JSON POST
+  to a loopback HTTP fixture). The loopback test required execution outside the
+  filesystem/network sandbox because localhost binding was denied there.
+- `cargo check -p terminator --all-targets --locked --offline`, formatting and
+  diff whitespace checks passed.
+- Strict Clippy passed for core, daemon and app with all targets and features.
+- Native Settings interaction, live agent/provider hooks and delivery to ntfy.sh
+  or a phone were not exercised. No running daemon or installed hooks changed.
+
+
 ## Crash exiting the last strip terminal (2026-09-25)
 
 - Crash log (`/tmp/terminator-ux/crashes/terminator-1790312992.log`)

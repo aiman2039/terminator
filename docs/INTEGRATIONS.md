@@ -60,3 +60,24 @@ without confirmation. Generated startup files still install cwd hooks; they do
 not gate close on prompt acknowledgments. Older shells may still emit `prompt`
 helper calls; the daemon ignores them. The GUI never infers readiness from
 terminal text.
+
+## ntfy phone notifications
+
+Settings → Notifications includes an opt-in ntfy toggle, channel (topic on
+`ntfy.sh`), and optional machine name. Subscribe to that channel in ntfy. The
+machine prefixes titles, for example `[laptop] codex: Needs permission`.
+Only agent name and status are sent; hook summaries, details, paths and prompts
+are excluded. Delivery uses ntfy's [JSON publishing API](https://docs.ntfy.sh/publish/#publish-as-json).
+
+The daemon queues pings after accepting and deduplicating a hook notification.
+The selected **In app** events control which states send; desktop focus and OS
+notification selections do not suppress ntfy. It continues with the GUI closed.
+No hook reinstall is required. `ntfy-v1` gates the settings UI; sessions owned by
+older daemons do not gain this delivery until they use a supporting daemon.
+Settings are stored with functional settings in SQLite.
+
+Delivery uses `curl` (required on PATH), one worker and a 64-item bounded queue.
+Requests time out after eight seconds and are not retried; queue overflow drops
+pings rather than blocking hooks. Failures log a generic daemon message and do
+not affect lifecycle tracking. `TERMINATOR_NO_NOTIFICATIONS` suppresses delivery
+for fixtures. This option currently supports public ntfy.sh topics without auth.
