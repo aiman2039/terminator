@@ -2704,3 +2704,36 @@ sequence and exercises both Deref impls; it fails on the old inline
 retain and passes with the fix. (No `unsafe` in this path — the panic
 was the safe fail-stop, not memory unsafety.) Evidence: workspace
 39/39, native-edit 50/50, workspace clippy clean, fmt clean.
+
+## 2026-09-28: multi-line paste — backspace stuck on newline
+
+Report: pasting multi-line text at a shell prompt left backspace stuck at a
+newline — it would not go to the previous line and keep deleting. Cause: the
+paste paths wrote clipboard text to the PTY verbatim, so each newline was
+accept-line and the paste ran line by line; there was no single editable
+buffer whose newlines backspace could cross. Fix: `egui_term::paste_input`
+normalizes newlines to CR and wraps the text in `ESC[200~…ESC[201~` when the
+application enabled bracketed paste (mode 2004), used by both paste paths
+(widget `Event::Paste`, context-menu Paste). Real-PTY before/after in
+`egui_term::view::paste_tests`, driving interactive zsh through the widget's
+own backend (skipped when zsh is absent):
+
+- after (`bracketed_paste_stays_one_editable_block_and_backspace_crosses_newlines`):
+  the paste lands as one block (nothing submitted before Enter), and17
+  backspaces delete the second line and its newline so a typed `4` prints
+  `424` from `$((7*6))4` — the joined line. Fails against the pre-fix
+  encoding twice over: the wrapped-bytes assertion, and the oracle
+  (`paste must not submit its lines`, `42` printed without Enter).
+- before (`raw_multi_line_paste_submits_each_line_instead_of_staying_editable`):
+  raw bytes with bare newlines print `42` without Enter — the bug pinned.
+
+Encoder unit tests pin the bytes (bracketed vs plain, CRLF once, empty).
+Manual pyte screen dumps agreed: wrapped paste + zsh `bindkey -e` deletes
+across every newline back to the prompt; raw paste executes each line and
+deletion stops at the prompt. Note: zsh in vi keymap
+(`vi-backward-delete-char`) never joins lines by shell design; emacs keymap
+(`bindkey -e`, the reporter's setup) does. Evidence: egui_term 58/58,
+workspace clippy `-D warnings` and fmt clean, full workspace tests green
+(`navigation_tests::removing_projects_only_hides_sidebar_entries_and_survives_snapshots`
+is a pre-existing flake under parallel load: fails ~3/4 runs on the clean
+tree too, passes in isolation).

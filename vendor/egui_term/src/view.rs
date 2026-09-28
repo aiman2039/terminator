@@ -572,14 +572,20 @@ fn process_keyboard_event(
         egui::Event::Paste(text) => InputAction::BackendCall(
             #[cfg(not(any(target_os = "ios", target_os = "macos")))]
             if modifiers.contains(Modifiers::COMMAND | Modifiers::SHIFT) {
-                BackendCommand::Write(text.as_bytes().to_vec())
+                BackendCommand::Write(crate::keyboard::paste_input(
+                    &text,
+                    backend.last_content().terminal_mode,
+                ))
             } else {
                 // Hotfix - Send ^V when there's not selection on view.
                 BackendCommand::Write([0x16].to_vec())
             },
             #[cfg(any(target_os = "ios", target_os = "macos"))]
             {
-                BackendCommand::Write(text.as_bytes().to_vec())
+                BackendCommand::Write(crate::keyboard::paste_input(
+                    &text,
+                    backend.last_content().terminal_mode,
+                ))
             },
         ),
         egui::Event::Copy => copy_input_action(backend.selectable_content(), modifiers),
@@ -1329,5 +1335,163 @@ mod paint_tests {
             "cursor {cursor_x} last glyph {glyph_x}"
         );
         assert!(cursor_x > 400.0, "expected a long line; cursor {cursor_x}");
+    }
+}
+
+/// Real-PTY paste regressions for the reported bug: a pasted multi-line
+/// block must stay editable and backspace must cross its newlines, instead of
+/// each newline submitting a line. Each test drives a real interactive zsh
+/// through the widget's own backend (skipped when zsh is absent).
+///
+/// The `print -r -- $((…))` oracle keeps the proof out of input echo: `42` /
+/// `424` can only appear on the grid when the shell actually ran arithmetic.
+#[cfg(test)]
+mod paste_tests {
+    use super::*;
+    use crate::backend::settings::BackendSettings;
+    use crate::backend::PtyEvent;
+    use std::sync::mpsc::{self, Receiver};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    /// Two lines; deleting the second plus its newline leaves `…$((7*6))`,
+    /// so a typed `4` prints `424` only when the lines joined.
+    const PASTE: &str = "print -r -- $((7*6))\nprint -r -- MARK";
+    const SECOND_LINE: &str = "print -r -- MARK";
+
+    struct Zsh {
+        backend: TerminalBackend,
+        _events: Receiver<(u64, PtyEvent)>,
+    }
+
+    impl Zsh {
+        fn spawn() -> Option<Self> {
+            if !std::process::Command::new("zsh")
+                .args(["-f", "-c", "exit 0"])
+                .status()
+                .is_ok_and(|status| status.success())
+            {
+                eprintln!("skipping paste regression: zsh not on PATH");
+                return None;
+            }
+            let (tx, rx) = mpsc::channel();
+            let mut me = Self {
+                backend: TerminalBackend::new(
+                    0,
+                    egui::Context::default(),
+                    tx,
+                    BackendSettings {
+                        shell: "zsh".into(),
+                        args: vec!["-f".into(), "-i".into()],
+                        ..BackendSettings::default()
+                    },
+                )
+                .expect("spawn zsh pty"),
+                _events: rx,
+            };
+            // The shell must have requested bracketed paste before the paste
+            // below is encoded, and emacs keymap so backspace joins lines the
+            // way `bindkey -e` shells do (`vi-backward-delete-char` never
+            // joins). `$((5*9))` prints `45`: the echo cannot fake it.
+            me.backend.process_command(BackendCommand::Write(
+                b"bindkey -e; print -r -- $((5*9))\r".to_vec(),
+            ));
+            me.wait_text(10, "zsh ready (45)", |text| text.contains("45"));
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !me
+                .backend
+                .sync()
+                .terminal_mode
+                .contains(TermMode::BRACKETED_PASTE)
+            {
+                if Instant::now() >= deadline {
+                    panic!("zsh never enabled bracketed paste (mode 2004)");
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Some(me)
+        }
+
+        fn text(&self) -> String {
+            self.backend
+                .search_rows()
+                .into_iter()
+                .map(|row| row.text)
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        fn wait_text(&mut self, secs: u64, what: &str, pred: impl Fn(&str) -> bool) -> String {
+            let deadline = Instant::now() + Duration::from_secs(secs);
+            loop {
+                let text = self.text();
+                if pred(&text) {
+                    return text;
+                }
+                if Instant::now() >= deadline {
+                    panic!("timed out waiting for {what}; grid:\n{text}");
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+
+    #[test]
+    fn bracketed_paste_stays_one_editable_block_and_backspace_crosses_newlines() {
+        let Some(mut zsh) = Zsh::spawn() else {
+            return;
+        };
+        // COMMAND|SHIFT routes `Event::Paste` to the text branch on every
+        // platform (elsewhere only that chord writes pasted text).
+        let action = process_keyboard_event(
+            egui::Event::Paste(PASTE.to_string()),
+            &zsh.backend,
+            &BindingsLayout::default(),
+            Modifiers::COMMAND | Modifiers::SHIFT,
+        );
+        let InputAction::BackendCall(BackendCommand::Write(bytes)) = action else {
+            panic!("paste must write to the pty");
+        };
+        // The widget's paste path must send the bracketed encoding the shell
+        // asked for, not the raw clipboard text.
+        assert_eq!(
+            bytes,
+            crate::keyboard::paste_input(PASTE, zsh.backend.last_content().terminal_mode)
+        );
+        assert!(bytes.starts_with(b"\x1b[200~") && bytes.ends_with(b"\x1b[201~"));
+        zsh.backend.process_command(BackendCommand::Write(bytes));
+        // Nothing was submitted: the whole paste is still in the line buffer.
+        let text = zsh.wait_text(10, "pasted text is editable", |t| t.contains("MARK"));
+        assert!(
+            !text.contains("42"),
+            "paste must not submit its lines:\n{text}"
+        );
+        // Delete the second line and its newline, then type `4` + Enter: the
+        // digit joins the first line and `print` answers `424` (was `42` plus
+        // a separate `command not found: 4` when the newline refused to go).
+        zsh.backend.process_command(BackendCommand::Write(vec![
+            0x7f;
+            SECOND_LINE.chars().count() + 1
+        ]));
+        zsh.backend
+            .process_command(BackendCommand::Write(b"4\r".to_vec()));
+        zsh.wait_text(10, "backspace crossed the pasted newline", |t| {
+            t.contains("424")
+        });
+    }
+
+    #[test]
+    fn raw_multi_line_paste_submits_each_line_instead_of_staying_editable() {
+        let Some(mut zsh) = Zsh::spawn() else {
+            return;
+        };
+        // The pre-fix encoding: raw clipboard text, bare newlines. Each
+        // newline is accept-line, so the first line runs immediately and
+        // there is no multi-line buffer left to delete through.
+        zsh.backend
+            .process_command(BackendCommand::Write(PASTE.as_bytes().to_vec()));
+        zsh.wait_text(10, "raw paste submitted its first line", |t| {
+            t.contains("42")
+        });
     }
 }

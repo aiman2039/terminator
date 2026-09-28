@@ -1688,8 +1688,9 @@ impl App {
                 Update::ClipboardPaste(session, text) => {
                     // Resolve by captured identity, never by current focus.
                     if let Some(backend) = self.backends.get_mut(&session) {
-                        backend
-                            .process_command(egui_term::BackendCommand::Write(text.into_bytes()));
+                        let mode = backend.last_content().terminal_mode;
+                        let bytes = egui_term::paste_input(&text, mode);
+                        backend.process_command(egui_term::BackendCommand::Write(bytes));
                     }
                 }
                 Update::WorktreeCreated(state, project, open_terminal) => {
