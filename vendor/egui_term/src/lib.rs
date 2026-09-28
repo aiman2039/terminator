@@ -15,5 +15,6 @@ pub use backend::{
 pub use bindings::{Binding, BindingAction, InputKind, KeyboardBinding};
 pub use find::{RowMatch, MAX_MATCHES};
 pub use font::{FontSettings, TerminalFont};
+pub use keyboard::paste_input;
 pub use theme::{ColorPalette, TerminalTheme};
 pub use view::{FindPaint, TerminalView};

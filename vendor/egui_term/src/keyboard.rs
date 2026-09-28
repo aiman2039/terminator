@@ -24,6 +24,25 @@ pub(crate) fn bytes_for_pressed_key(
     }
 }
 
+/// Bytes to write to the PTY for a pasted `text`.
+///
+/// Newlines become carriage returns (the shared terminal paste convention;
+/// the PTY line discipline maps CR back to NL under `ICRNL`). When the
+/// application enabled bracketed paste (mode 2004), the text is wrapped in
+/// its markers so a multi-line paste is inserted as one editable block
+/// instead of arriving as line-by-line submits.
+pub fn paste_input(text: &str, terminal_mode: TerminalMode) -> Vec<u8> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut paste = text.replace("\r\n", "\r").replace('\n', "\r");
+    if terminal_mode.contains(TerminalMode::BRACKETED_PASTE) {
+        paste.insert_str(0, "\x1b[200~");
+        paste.push_str("\x1b[201~");
+    }
+    paste.into_bytes()
+}
+
 fn encode_unbound_modified_key(key: Key, modifiers: Modifiers) -> Option<Vec<u8>> {
     if !text_omitted(modifiers) {
         return None;
@@ -269,5 +288,34 @@ mod tests {
     #[test]
     fn alt_letter_is_left_to_text_events() {
         assert_eq!(encode_unbound_modified_key(Key::E, Modifiers::ALT), None);
+    }
+
+    #[test]
+    fn multi_line_paste_is_one_editable_block_when_bracketed_paste_is_on() {
+        assert_eq!(
+            paste_input("hello\nworld", TerminalMode::BRACKETED_PASTE),
+            b"\x1b[200~hello\rworld\x1b[201~".to_vec()
+        );
+    }
+
+    #[test]
+    fn multi_line_paste_stays_plain_when_bracketed_paste_is_off() {
+        assert_eq!(
+            paste_input("hello\nworld", TerminalMode::empty()),
+            b"hello\rworld".to_vec()
+        );
+    }
+
+    #[test]
+    fn paste_normalizes_crlf_without_doubling_carriage_returns() {
+        assert_eq!(
+            paste_input("a\r\nb\nc", TerminalMode::empty()),
+            b"a\rb\rc".to_vec()
+        );
+    }
+
+    #[test]
+    fn empty_paste_writes_nothing() {
+        assert_eq!(paste_input("", TerminalMode::BRACKETED_PASTE), Vec::new());
     }
 }

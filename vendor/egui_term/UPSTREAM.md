@@ -122,3 +122,16 @@ the keyboard arrow bindings already make. Those wheels were ignored by such
 agents, so scrolling felt dead. The byte encoding moved into `scroll_key_bytes`,
 which follows `APP_CURSOR` like the bindings do. Unit tests cover CSI without
 application cursor, SS3 with it, both directions, and zero delta.
+
+## Bracketed paste for pasted text (2026-09-28)
+
+Pastes wrote the clipboard text to the PTY verbatim, so multi-line pastes
+arrived as line-by-line submits: at a shell prompt each newline ran a command,
+leaving nothing editable to backspace through. `paste_input` now normalizes
+newlines to carriage returns (the shared terminal paste convention) and wraps
+the text in `ESC [ 200 ~` / `ESC [ 201 ~` markers when the application enabled
+bracketed paste (mode 2004), so shells and TUIs insert the paste as one
+editable block and backspace can cross its newlines. Both paste paths use it:
+the widget's `Event::Paste` handling and the application's clipboard-Paste
+command. Unit tests cover bracketed and plain pastes, CRLF normalization, and
+the empty paste.
