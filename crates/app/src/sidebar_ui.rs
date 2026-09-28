@@ -8,8 +8,8 @@ use crate::{
     file_actions::{self, FileAction},
     icons,
     preferences::{
-        HistoryInput, HistorySort, ProjectSort, SidebarTool, VisibleProjects, sort_history,
-        sort_visible_projects,
+        AgentsTab, HistoryInput, HistorySort, ProjectSort, SidebarTool, VisibleProjects,
+        sort_history, sort_visible_projects,
     },
     services::ContextData,
     settings_ui::SettingsSection,
@@ -82,6 +82,9 @@ impl App {
             let response = ui
                 .add(button)
                 .on_hover_text(format!("{pending} pending notifications"));
+            if response.clicked() {
+                self.preferences.agents_tab = AgentsTab::NeedsAttention;
+            }
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "attention-bell", response.rect);
             let popup = egui::Popup::from_toggle_button_response(&response).show(|ui| {
@@ -117,6 +120,7 @@ impl App {
         if response.clicked() {
             self.preferences.tool = SidebarTool::Agents;
             self.preferences.visible = true;
+            self.preferences.agents_tab = AgentsTab::NeedsAttention;
         }
     }
 
@@ -166,6 +170,9 @@ impl App {
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "left-agent-bar", response.rect);
         if response.clicked() {
+            if !self.preferences.left_agents {
+                self.preferences.agents_tab = AgentsTab::NeedsAttention;
+            }
             self.preferences.left_agents = !self.preferences.left_agents;
         }
     }
@@ -473,14 +480,8 @@ impl App {
         ui.weak(format!("{live} live sessions")).on_hover_text("Sessions continue when this window closes. Ended sessions remain in History until removed.");
     }
     fn session_row(&mut self, ui: &mut egui::Ui, session: &Session) {
-        let agent = self
-            .state
-            .agents
-            .iter()
-            .filter(|a| a.session_id == session.id)
-            .max_by_key(|a| a.updated);
-        let agent_state = agent.map(|a| a.state);
-        let summary = session_summary(&self.state.notifications, &session.id, agent_state);
+        let presented = super::agent_presence::present_session(&self.state, &session.id, now());
+        let summary = session_summary(&self.state.notifications, &session.id, presented.lifecycle);
         let terminal_note = self
             .state
             .terminal_notices
@@ -519,24 +520,30 @@ impl App {
             ui,
             appearance::SessionRowSpec {
                 label: if editing { "" } else { &session.label },
-                icon: match agent_state {
-                    Some(state) => attention_status_icon(state),
+                icon: match presented.lifecycle {
+                    Some(_) => presented.status_icon,
                     None if session.kind == SessionKind::Editor => "FileCode",
                     None => "Terminal",
                 },
                 selected: self.active_session.as_ref() == Some(&session.id),
                 trailing,
                 tint: color,
-                icon_tint: agent_state.map(|state| state_color(state, &self.theme)),
-                spin: agent_state == Some(AgentState::Running),
+                icon_tint: presented
+                    .lifecycle
+                    .map(|state| state_color(state, &self.theme)),
+                spin: presented.spin,
                 subtitle: summary.as_deref().filter(|_| !editing),
+                brand: presented.brand_icon,
             },
         )
         .on_hover_text(format!(
-            "{}{}\n{}{}",
-            agent_state.map_or(String::new(), |s| format!("{}\n", s.label())),
-            session.cwd.display(),
-            secondary,
+            "{}{}{}",
+            presented.diagnostics,
+            if secondary.is_empty() {
+                String::new()
+            } else {
+                format!("\n{secondary}")
+            },
             terminal_note
                 .map(|n| format!("\nTerminal: {}\n{}", n.title, n.body))
                 .unwrap_or_default()
@@ -811,6 +818,39 @@ impl App {
 
     pub(super) fn agents_view(&mut self, ui: &mut egui::Ui) {
         ui.heading("Agents");
+        // The tab bar scrolls instead of widening narrow sidebars.
+        egui::ScrollArea::horizontal()
+            .id_salt("agents-tabs")
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (tab, label, name) in [
+                        (AgentsTab::NeedsAttention, "Needs attention", "needs"),
+                        (AgentsTab::AllLive, "All live", "live"),
+                        (AgentsTab::Unread, "Unread", "unread"),
+                    ] {
+                        let response =
+                            ui.selectable_label(self.preferences.agents_tab == tab, label);
+                        #[cfg(feature = "test-support")]
+                        diagnostics::record(ui.ctx(), &format!("agent-tab:{name}"), response.rect);
+                        #[cfg(not(feature = "test-support"))]
+                        let _ = name;
+                        if response.clicked() {
+                            self.preferences.agents_tab = tab;
+                            self.unread_selected = None;
+                        }
+                    }
+                });
+            });
+        match self.preferences.agents_tab {
+            AgentsTab::NeedsAttention => self.agents_needs_attention(ui),
+            AgentsTab::AllLive => self.agents_all_live(ui),
+            AgentsTab::Unread => self.agents_unread(ui),
+        }
+    }
+
+    /// The existing inbox: pending notifications plus terminal notices.
+    fn agents_needs_attention(&mut self, ui: &mut egui::Ui) {
         ui.checkbox(&mut self.preferences.all_projects, "All projects");
         let notices = self.pending_notices();
         let terminal_notices: Vec<_> = self
@@ -849,6 +889,8 @@ impl App {
                     .cloned();
                 let highlight = self.detail.as_ref() == Some(&notice.id);
                 let selected = self.active_session.as_ref() == Some(&notice.session_id);
+                let presented =
+                    super::agent_presence::present_session(&self.state, &notice.session_id, now());
                 let action = attention_card(
                     ui,
                     AttentionCard {
@@ -857,6 +899,9 @@ impl App {
                         session: session.as_ref(),
                         selected,
                         highlight,
+                        brand_icon: presented.brand_icon,
+                        brand_label: presented.brand_label.as_deref(),
+                        show_read: false,
                     },
                 );
                 self.apply_notice_action(notice.id, action);
@@ -902,6 +947,343 @@ impl App {
                 let _ = row;
             }
         });
+    }
+
+    pub(super) fn unread_notices(&self) -> Vec<Notification> {
+        let selected = self.selected.as_deref();
+        let mut notices: Vec<_> = self
+            .state
+            .notifications
+            .iter()
+            .filter(|notice| {
+                !notice.dismissed
+                    && !notice.resolved
+                    && notice.snoozed_until <= now()
+                    && self.notice_in_scope(notice, selected)
+                    && (!notice.read || self.unread_selected.as_deref() == Some(notice.id.as_str()))
+            })
+            .cloned()
+            .collect();
+        notices.sort_by_key(|notice| (notice.read, Reverse(notice.created)));
+        notices
+    }
+
+    /// Read-state inbox. Marking read never resolves, dismisses, or changes
+    /// lifecycle; the selected row stays until selection or filter changes.
+    fn agents_unread(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .checkbox(&mut self.preferences.all_projects, "All projects")
+            .changed()
+        {
+            self.unread_selected = None;
+        }
+        let notices = self.unread_notices();
+        appearance::sidebar_scroll("agents-unread").show(ui, |ui| {
+            if notices.is_empty() {
+                ui.weak("No unread agent events");
+                return;
+            }
+            for notice in notices {
+                let session = self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == notice.session_id)
+                    .cloned();
+                let highlight = self.detail.as_ref() == Some(&notice.id)
+                    || self.unread_selected.as_deref() == Some(notice.id.as_str());
+                let selected = self.active_session.as_ref() == Some(&notice.session_id);
+                let presented =
+                    super::agent_presence::present_session(&self.state, &notice.session_id, now());
+                let action = attention_card(
+                    ui,
+                    AttentionCard {
+                        theme: &self.theme,
+                        notice: &notice,
+                        session: session.as_ref(),
+                        selected,
+                        highlight,
+                        brand_icon: presented.brand_icon,
+                        brand_label: presented.brand_label.as_deref(),
+                        show_read: true,
+                    },
+                );
+                self.apply_notice_action(notice.id, action);
+            }
+        });
+    }
+
+    /// Verified live agents grouped by project/worktree, plus hook-only and
+    /// unavailable-owner entries under Presence unverified.
+    fn agents_all_live(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let width = (ui.available_width() - 132.0).max(80.0);
+            let response = ui.add_sized(
+                egui::vec2(width, 22.0),
+                egui::TextEdit::singleline(&mut self.preferences.agents_search)
+                    .id(egui::Id::new("agents-search"))
+                    .hint_text("Search agents"),
+            );
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "agents-search", response.rect);
+            #[cfg(not(feature = "test-support"))]
+            let _ = &response;
+            if !self.preferences.agents_search.is_empty()
+                && ui.small_button("✕").on_hover_text("Clear search").clicked()
+            {
+                self.preferences.agents_search.clear();
+            }
+            self.agents_filter_menu(ui);
+        });
+        let moment = now();
+        let query = self.preferences.agents_search.trim().to_lowercase();
+        let kind_filter = self.preferences.agents_filter.clone();
+        let live = super::agent_presence::live_sessions(&self.state, moment);
+        let unverified = super::agent_presence::unverified_sessions(&self.state, moment);
+        let matches = |session: &Session, kinds: &[String]| -> bool {
+            if !kind_filter.is_empty() && !kinds.iter().any(|k| k == &kind_filter) {
+                return false;
+            }
+            if query.is_empty() {
+                return true;
+            }
+            let project = self
+                .state
+                .projects
+                .iter()
+                .find(|p| p.id == session.project_id)
+                .map(|p| p.name.to_lowercase())
+                .unwrap_or_default();
+            let presented =
+                super::agent_presence::present_session(&self.state, &session.id, moment);
+            let mut haystack = format!(
+                "{} {project} {}",
+                session.label.to_lowercase(),
+                presented.status_label.to_lowercase()
+            );
+            for kind in kinds {
+                haystack.push(' ');
+                haystack.push_str(&terminator_core::agents::display_name(kind).to_lowercase());
+            }
+            query.split_whitespace().all(|word| haystack.contains(word))
+        };
+        let live: Vec<(Session, Vec<String>)> = live
+            .into_iter()
+            .filter(|(session, kinds)| matches(session, kinds))
+            .map(|(session, kinds)| (session.clone(), kinds))
+            .collect();
+        let unverified: Vec<Session> = unverified
+            .into_iter()
+            .filter(|session| {
+                let kinds: Vec<String> = self
+                    .state
+                    .agents
+                    .iter()
+                    .filter(|a| a.session_id == session.id)
+                    .map(|a| a.kind.clone())
+                    .collect();
+                matches(session, &kinds)
+            })
+            .cloned()
+            .collect();
+        appearance::sidebar_scroll("agents-live").show(ui, |ui| {
+            if live.is_empty() && unverified.is_empty() {
+                ui.weak(if query.is_empty() && kind_filter.is_empty() {
+                    "No live agents"
+                } else {
+                    "No matching agents"
+                });
+                return;
+            }
+            // Stable project order; worktree checkouts are their own groups.
+            for project in self.state.projects.clone() {
+                let sessions: Vec<_> = live
+                    .iter()
+                    .filter(|(session, _)| session.project_id == project.id)
+                    .collect();
+                if sessions.is_empty() {
+                    continue;
+                }
+                let collapsed = self.preferences.agents_collapsed.contains(&project.id);
+                let header = appearance::row(
+                    ui,
+                    &project.name,
+                    if collapsed {
+                        "ChevronRight"
+                    } else {
+                        "ChevronDown"
+                    },
+                    false,
+                    26.0,
+                    &sessions.len().to_string(),
+                    appearance::color(&self.theme.text),
+                )
+                .on_hover_text(format!(
+                    "{}{}{}",
+                    project.path.display(),
+                    if self.managed_worktree(&project.id).is_some() {
+                        "\nManaged Git worktree"
+                    } else {
+                        ""
+                    },
+                    "\nVerified live agents"
+                ));
+                #[cfg(feature = "test-support")]
+                diagnostics::record(
+                    ui.ctx(),
+                    &format!("live-project:{}", project.id),
+                    header.rect,
+                );
+                if header.clicked() {
+                    if collapsed {
+                        self.preferences.agents_collapsed.remove(&project.id);
+                    } else {
+                        self.preferences.agents_collapsed.insert(project.id.clone());
+                    }
+                }
+                if !collapsed {
+                    ui.indent(("live-project", &project.id), |ui| {
+                        for (session, _) in sessions {
+                            self.live_agent_row(ui, session, "live-row");
+                        }
+                    });
+                }
+                ui.add_space(4.0);
+            }
+            if !unverified.is_empty() {
+                let collapsed = self.preferences.agents_collapsed.contains("unverified");
+                let header = appearance::row(
+                    ui,
+                    "Presence unverified",
+                    if collapsed {
+                        "ChevronRight"
+                    } else {
+                        "ChevronDown"
+                    },
+                    false,
+                    26.0,
+                    &unverified.len().to_string(),
+                    appearance::color(&self.theme.status_waiting),
+                )
+                .on_hover_text(
+                    "Hook-only or unavailable-owner sessions.\nLast reported hook state; no verified live process.",
+                );
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "live-unverified", header.rect);
+                if header.clicked() {
+                    if collapsed {
+                        self.preferences.agents_collapsed.remove("unverified");
+                    } else {
+                        self.preferences.agents_collapsed.insert("unverified".into());
+                    }
+                }
+                if !collapsed {
+                    ui.indent("live-unverified", |ui| {
+                        for session in &unverified {
+                            self.live_agent_row(ui, session, "unverified-row");
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    fn live_agent_row(&mut self, ui: &mut egui::Ui, session: &Session, target: &str) {
+        let presented = super::agent_presence::present_session(&self.state, &session.id, now());
+        let mut subtitle = match (&presented.brand_label, presented.status_label.as_str()) {
+            (Some(brand), status) => format!("{brand} · {status}"),
+            (None, status) => status.to_string(),
+        };
+        if !presented.verified {
+            subtitle.push_str(" · unverified");
+        }
+        let unread = if presented.unread > 0 {
+            format!("{} unread", presented.unread)
+        } else {
+            String::new()
+        };
+        let response = appearance::session_row_spec(
+            ui,
+            appearance::SessionRowSpec {
+                label: &session.label,
+                icon: match presented.lifecycle {
+                    Some(_) => presented.status_icon,
+                    None => "Terminal",
+                },
+                selected: self.active_session.as_ref() == Some(&session.id),
+                trailing: &unread,
+                tint: appearance::color(&self.theme.secondary),
+                icon_tint: presented
+                    .lifecycle
+                    .map(|state| state_color(state, &self.theme)),
+                spin: presented.spin,
+                subtitle: Some(&subtitle),
+                brand: presented.brand_icon,
+            },
+        )
+        .on_hover_text(presented.diagnostics.clone());
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), &format!("{target}:{}", session.id), response.rect);
+        #[cfg(not(feature = "test-support"))]
+        let _ = target;
+        if response.clicked() {
+            self.go_session(&session.id);
+        }
+    }
+
+    fn agents_filter_menu(&mut self, ui: &mut egui::Ui) {
+        let mut kinds: Vec<String> = self
+            .state
+            .agents
+            .iter()
+            .map(|a| a.kind.clone())
+            .chain(
+                self.state
+                    .presence
+                    .iter()
+                    .flat_map(|p| p.agents.iter().map(|a| a.kind.clone())),
+            )
+            .collect();
+        kinds.sort();
+        kinds.dedup();
+        ui.spacing_mut().interact_size.y = 22.0;
+        ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
+        let current = self.preferences.agents_filter.clone();
+        let label = if current.is_empty() {
+            "All agents".to_string()
+        } else {
+            terminator_core::agents::display_name(&current).to_string()
+        };
+        let menu = appearance::menu_button(ui, &label, |ui| {
+            for kind in std::iter::once(String::new()).chain(kinds) {
+                let name = if kind.is_empty() {
+                    "All agents".to_string()
+                } else {
+                    terminator_core::agents::display_name(&kind).to_string()
+                };
+                let check = if current == kind { "✓" } else { "" };
+                let response = appearance::menu_item(ui, &name, "Search", check);
+                #[cfg(feature = "test-support")]
+                diagnostics::record(
+                    ui.ctx(),
+                    &format!(
+                        "agents-filter:{}",
+                        if kind.is_empty() { "all" } else { &kind }
+                    ),
+                    response.rect,
+                );
+                if response.clicked() {
+                    self.preferences.agents_filter = kind;
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Filter by agent");
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "agents-filter", menu.rect);
+        let _ = menu;
     }
     fn agents_empty(&mut self, ui: &mut egui::Ui) {
         if self.hook_status.is_empty() {
@@ -1012,7 +1394,24 @@ impl App {
                 {
                     self.go_session(&session);
                 }
+                self.unread_selected = Some(id.clone());
                 self.detail = None;
+            }
+            AttentionAction::Read => {
+                self.send(Request::Notice {
+                    id: id.clone(),
+                    action: "read".into(),
+                });
+                if let Some(notice) = self
+                    .state
+                    .notifications
+                    .iter_mut()
+                    .find(|notice| notice.id == id)
+                {
+                    // Read state only: never resolve, dismiss, or touch lifecycle.
+                    notice.read = true;
+                }
+                self.unread_selected = Some(id);
             }
             AttentionAction::Snooze => {
                 self.send(Request::Notice {
@@ -1043,6 +1442,9 @@ impl App {
                     .find(|notice| notice.id == id)
                 {
                     notice.dismissed = true;
+                }
+                if self.unread_selected.as_deref() == Some(id.as_str()) {
+                    self.unread_selected = None;
                 }
                 if self.detail.as_ref() == Some(&id) {
                     self.detail = None;
@@ -1475,6 +1877,8 @@ pub(super) enum AttentionAction {
     Go,
     Snooze,
     Dismiss,
+    /// Mark read without resolving, dismissing, or changing lifecycle.
+    Read,
 }
 
 pub(super) struct AttentionCard<'a> {
@@ -1483,6 +1887,11 @@ pub(super) struct AttentionCard<'a> {
     pub session: Option<&'a Session>,
     pub selected: bool,
     pub highlight: bool,
+    /// Stable agent brand beside the status glyph, from the shared model.
+    pub brand_icon: Option<&'static str>,
+    pub brand_label: Option<&'a str>,
+    /// Show the mark-read button (Unread view only).
+    pub show_read: bool,
 }
 
 fn notice_waiting(notice: &Notification) -> bool {
@@ -1534,6 +1943,7 @@ fn notice_preview(markdown: &str) -> String {
 
 const ATTENTION_ACTION_SIZE: f32 = 22.0;
 const ATTENTION_ACTION_COUNT: f32 = 3.0;
+const ATTENTION_ACTION_READ_COUNT: f32 = 4.0;
 
 /// Latest agent sentence for a session row. Hooks fall back to the state
 /// label ("Completed") when no message was sent; the icon already says that,
@@ -1552,17 +1962,7 @@ fn session_summary(
     (!text.is_empty() && text != notice.state.label()).then_some(text)
 }
 
-pub(super) fn attention_status_icon(state: AgentState) -> &'static str {
-    match state {
-        AgentState::WaitingInput => "MessageCircleQuestion",
-        AgentState::WaitingPermission => "ShieldQuestion",
-        AgentState::Completed => "CircleCheck",
-        AgentState::Failed => "CircleAlert",
-        AgentState::Running => "LoaderCircle",
-        AgentState::Stopped => "CircleStop",
-        AgentState::Unknown => "CircleQuestion",
-    }
-}
+pub(super) use super::agent_presence::attention_status_icon;
 
 fn attention_status_detail(state: AgentState) -> &'static str {
     match state {
@@ -1576,8 +1976,14 @@ fn attention_status_detail(state: AgentState) -> &'static str {
     }
 }
 
-fn attention_label_width(available: f32, spacing: f32) -> f32 {
-    let reserved = ATTENTION_ACTION_SIZE * (1.0 + ATTENTION_ACTION_COUNT) + spacing * 2.0;
+fn attention_label_width(available: f32, spacing: f32, brand: bool, show_read: bool) -> f32 {
+    let actions = if show_read {
+        ATTENTION_ACTION_READ_COUNT
+    } else {
+        ATTENTION_ACTION_COUNT
+    };
+    let reserved =
+        ATTENTION_ACTION_SIZE * (1.0 + actions) + spacing * 2.0 + if brand { 18.0 } else { 0.0 };
     (available - reserved).max(24.0)
 }
 
@@ -1612,9 +2018,25 @@ fn attention_title(
     notice: &Notification,
     session: Option<&Session>,
     theme: &AppearanceConfig,
+    brand: Option<(&'static str, &str)>,
+    show_read: bool,
 ) -> egui::Response {
     let spacing = ui.spacing().item_spacing.x;
-    let label_width = attention_label_width(ui.available_size_before_wrap().x, spacing);
+    let label_width = attention_label_width(
+        ui.available_size_before_wrap().x,
+        spacing,
+        brand.is_some(),
+        show_read,
+    );
+    let brand_response = brand.map(|(icon, label)| {
+        ui.add_sized(
+            [18.0, ATTENTION_ACTION_SIZE],
+            egui::Image::new(crate::icons::source(icon))
+                .fit_to_exact_size(egui::vec2(14.0, 14.0))
+                .sense(egui::Sense::hover()),
+        )
+        .on_hover_text(label)
+    });
     let icon = attention_status_glyph(ui, notice.state, theme);
     #[cfg(feature = "test-support")]
     diagnostics::record(
@@ -1637,11 +2059,19 @@ fn attention_title(
             }
             ui.label(notice_preview(&notice.summary));
         });
-    icon.union(label)
+    match brand_response {
+        Some(brand) => brand.union(icon).union(label),
+        None => icon.union(label),
+    }
 }
 
-fn attention_actions(ui: &mut egui::Ui, session_id: &str) -> AttentionAction {
-    let width = ATTENTION_ACTION_SIZE * ATTENTION_ACTION_COUNT;
+fn attention_actions(ui: &mut egui::Ui, session_id: &str, show_read: bool) -> AttentionAction {
+    let count = if show_read {
+        ATTENTION_ACTION_READ_COUNT
+    } else {
+        ATTENTION_ACTION_COUNT
+    };
+    let width = ATTENTION_ACTION_SIZE * count;
     if ui.available_size_before_wrap().x < width {
         ui.end_row();
     }
@@ -1652,7 +2082,7 @@ fn attention_actions(ui: &mut egui::Ui, session_id: &str) -> AttentionAction {
             ui.spacing_mut().interact_size =
                 egui::vec2(ATTENTION_ACTION_SIZE, ATTENTION_ACTION_SIZE);
             let mut action = AttentionAction::None;
-            for (icon, tip, name, next) in [
+            let mut buttons = vec![
                 ("ArrowRight", "Go to context", "go", AttentionAction::Go),
                 (
                     "Moon",
@@ -1661,7 +2091,19 @@ fn attention_actions(ui: &mut egui::Ui, session_id: &str) -> AttentionAction {
                     AttentionAction::Snooze,
                 ),
                 ("X", "Dismiss", "dismiss", AttentionAction::Dismiss),
-            ] {
+            ];
+            if show_read {
+                buttons.insert(
+                    1,
+                    (
+                        "CircleCheck",
+                        "Mark read (keeps agent state)",
+                        "read",
+                        AttentionAction::Read,
+                    ),
+                );
+            }
+            for (icon, tip, name, next) in buttons {
                 let response = appearance::sidebar_action(ui, icon, tip);
                 #[cfg(feature = "test-support")]
                 diagnostics::record(
@@ -1689,7 +2131,15 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
         session,
         selected,
         highlight,
+        brand_icon,
+        brand_label,
+        show_read,
     } = input;
+    let brand = match (brand_icon, brand_label) {
+        (Some(icon), Some(label)) => Some((icon, label)),
+        (Some(icon), None) => Some((icon, "Agent")),
+        _ => None,
+    };
     let stroke = if highlight {
         egui::Stroke::new(1.0, appearance::color(&theme.accent))
     } else if selected {
@@ -1708,7 +2158,7 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
             let action = ui
                 .horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(4.0, 2.0);
-                    let header = attention_title(ui, notice, session, theme);
+                    let header = attention_title(ui, notice, session, theme, brand, show_read);
                     #[cfg(feature = "test-support")]
                     diagnostics::record(
                         ui.ctx(),
@@ -1720,7 +2170,7 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
                     } else {
                         AttentionAction::None
                     };
-                    let buttons = attention_actions(ui, &notice.session_id);
+                    let buttons = attention_actions(ui, &notice.session_id, show_read);
                     if buttons != AttentionAction::None {
                         action = buttons;
                     }
@@ -1926,9 +2376,18 @@ mod tests {
     fn attention_label_width_reserves_status_and_actions() {
         let spacing = 4.0;
         let available = 280.0;
-        let width = attention_label_width(available, spacing);
+        let width = attention_label_width(available, spacing, false, false);
         let used = width + ATTENTION_ACTION_SIZE * (1.0 + ATTENTION_ACTION_COUNT) + spacing * 2.0;
         assert!((used - available).abs() < f32::EPSILON);
-        assert!(attention_label_width(40.0, spacing) >= 24.0);
+        assert!(attention_label_width(40.0, spacing, false, false) >= 24.0);
+        // Brand glyph and mark-read button each reserve their own width.
+        assert!(
+            attention_label_width(available, spacing, true, true)
+                < attention_label_width(available, spacing, false, false)
+        );
+        let read = attention_label_width(available, spacing, false, true);
+        let read_used =
+            read + ATTENTION_ACTION_SIZE * (1.0 + ATTENTION_ACTION_READ_COUNT) + spacing * 2.0;
+        assert!((read_used - available).abs() < f32::EPSILON);
     }
 }

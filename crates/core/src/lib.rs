@@ -1,5 +1,6 @@
 //! Versioned local protocol and persistent, renderer-independent models.
 #![forbid(unsafe_code)]
+pub mod agents;
 pub mod appearance;
 #[cfg(feature = "async-client")]
 pub mod async_client;
@@ -277,6 +278,10 @@ pub struct HookEvent {
     pub details: String,
     #[serde(default)]
     pub resume: Option<Resume>,
+    /// Hook-helper ancestor process identity. The daemon verifies it against
+    /// live presence observations before linking lifecycle to a process.
+    #[serde(default)]
+    pub process: Option<agents::ProcessIdentity>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Resume {
@@ -303,6 +308,11 @@ pub struct Agent {
     pub sequence: Option<u64>,
     pub updated: u64,
     pub resume: Option<Resume>,
+    /// Last verified process link. Set only when the daemon confirms the
+    /// hook's process identity against a live presence observation of the
+    /// same kind; unlinked hook events remain as "Last reported" state.
+    #[serde(default)]
+    pub process: Option<agents::ProcessIdentity>,
 }
 impl Agent {
     /// A session is worth keeping in History only when an agent left a
@@ -446,6 +456,7 @@ impl Default for Settings {
                 ("toggle_ide_mode".into(), "command+E".into()),
                 ("open_settings".into(), "command+,".into()),
                 ("open_palette".into(), "command+P".into()),
+                ("next_attention".into(), "command+shift+J".into()),
             ]
             .into(),
         }
@@ -501,6 +512,7 @@ pub const TERMINAL_NOTICES_CAPABILITY: &str = "terminal-notices-v1";
 pub const DIFF_CLOSE_SETTINGS_CAPABILITY: &str = "diff-close-settings-v1";
 pub const NTFY_CAPABILITY: &str = "ntfy-v1";
 pub const NOTIFICATION_SOUND_CAPABILITY: &str = "notification-sound-v1";
+pub const AGENT_PRESENCE_CAPABILITY: &str = agents::CAPABILITY;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TerminalNotice {
     pub id: String,
@@ -536,6 +548,10 @@ pub struct State {
     pub agents: Vec<Agent>,
     pub notifications: Vec<Notification>,
     pub terminal_notices: Vec<TerminalNotice>,
+    /// Live agent-presence observations. Additive, never persisted, never a
+    /// lifecycle source; absent on older daemons.
+    #[serde(default)]
+    pub presence: Vec<agents::TerminalPresence>,
     pub settings: Settings,
     pub recent_events: Vec<String>,
     pub selected_project: Option<String>,
@@ -570,6 +586,7 @@ impl State {
             .retain(|n| !removed.contains(&n.session_id));
         self.terminal_notices
             .retain(|n| !removed.contains(&n.session_id));
+        self.presence.retain(|p| !removed.contains(&p.session_id));
         self.revision += 1;
         removed
     }
@@ -654,7 +671,12 @@ impl State {
             ) {
                 a.state = AgentState::Unknown;
             }
+            // Verified process links do not survive a daemon restart; the
+            // inspector re-observes live processes from scratch.
+            a.process = None;
         }
+        // Presence is live observation only; a restart clears it.
+        self.presence.clear();
         self.revision += 1;
     }
     pub fn apply_hook(&mut self, e: HookEvent) -> Result<Option<String>> {
@@ -711,10 +733,28 @@ impl State {
             sequence: None,
             updated: now(),
             resume: None,
+            // A new invocation never inherits an earlier invocation's process link.
+            process: None,
         });
         agent.state = e.state;
         agent.sequence = e.sequence;
         agent.updated = now();
+        // Link lifecycle to a detected process only after verifying the
+        // helper-supplied identity against a fresh observation of the same
+        // kind in the same terminal. Unlinked events keep existing delivery.
+        if let Some(identity) = &e.process {
+            let observed = now();
+            if self.presence.iter().any(|p| {
+                p.session_id == e.terminal_session_id
+                    && p.outcome == agents::PresenceOutcome::Verified
+                    && agents::observation_fresh(p.observed_at, observed)
+                    && p.agents
+                        .iter()
+                        .any(|a| a.kind == e.agent_kind && a.process == *identity)
+            }) {
+                agent.process = Some(identity.clone());
+            }
+        }
         if e.provider_session_id.is_some() {
             agent.provider_session_id = e.provider_session_id.clone();
         }
@@ -1223,7 +1263,7 @@ mod tests {
         fs::remove_file(dir.path().join("bash")).unwrap();
         assert_eq!(choose(), Some(dir.path().join("sh")));
     }
-    fn setup() -> State {
+    pub(crate) fn setup() -> State {
         let mut s = State::default();
         s.sessions.push(Session {
             review: false,
@@ -1267,7 +1307,7 @@ mod tests {
         }
         assert_eq!(state.terminal_notices.len(), 128);
     }
-    fn event(n: u64, state: AgentState) -> HookEvent {
+    pub(crate) fn event(n: u64, state: AgentState) -> HookEvent {
         HookEvent {
             protocol_version: 1,
             event_id: format!("e{n}"),
@@ -1281,6 +1321,7 @@ mod tests {
             summary: "Need input".into(),
             details: String::new(),
             resume: None,
+            process: None,
         }
     }
     #[test]
@@ -1396,7 +1437,7 @@ mod tests {
         assert_eq!(restored.editor_close_timeout_secs, 5);
         assert!(restored.diff_split_default);
     }
-    fn ended_session(id: &str, lifecycle: Lifecycle) -> Session {
+    pub(crate) fn ended_session(id: &str, lifecycle: Lifecycle) -> Session {
         Session {
             review: false,
             id: id.into(),
@@ -1429,6 +1470,7 @@ mod tests {
                 program: "codex".into(),
                 args: vec!["resume".into(), "provider-1".into()],
             }),
+            process: None,
         }
     }
     #[test]
@@ -1488,6 +1530,7 @@ mod tests {
 
 #[cfg(test)]
 mod snapshot_tests {
+    use super::tests::{ended_session, event, setup};
     use super::*;
     #[test]
     fn envelopes_remain_compatible_in_both_directions() {
@@ -1584,6 +1627,183 @@ mod snapshot_tests {
         assert!(!off.notification_sound);
         let encoded = serde_json::to_value(&off).unwrap();
         assert_eq!(encoded["notification_sound"], false);
+    }
+
+    fn presence_for(session: &str, kind: &str, pid: u32, start: u64) -> State {
+        let mut state = setup();
+        state.presence.push(agents::TerminalPresence {
+            session_id: session.into(),
+            generation: state.sessions[0].generation.clone(),
+            agents: vec![agents::DetectedAgent {
+                kind: kind.into(),
+                process: agents::ProcessIdentity {
+                    pid,
+                    start_time: start,
+                },
+                foreground: true,
+            }],
+            outcome: agents::PresenceOutcome::Verified,
+            observed_at: now(),
+        });
+        state
+    }
+
+    #[test]
+    fn hook_process_identity_links_only_to_a_verified_live_observation() {
+        let mut state = presence_for("s", "codex", 4242, 777);
+        let mut linked = event(1, AgentState::Running);
+        linked.agent_kind = "codex".into();
+        linked.process = Some(agents::ProcessIdentity {
+            pid: 4242,
+            start_time: 777,
+        });
+        state.apply_hook(linked).unwrap();
+        assert_eq!(
+            state.agents[0].process,
+            Some(agents::ProcessIdentity {
+                pid: 4242,
+                start_time: 777
+            })
+        );
+        // Wrong PID, recycled start time, and wrong kind never link.
+        for (pid, start, kind) in [
+            (9999, 777, "codex"),
+            (4242, 778, "codex"),
+            (4242, 777, "claude"),
+        ] {
+            let mut state = presence_for("s", "codex", 4242, 777);
+            let mut e = event(1, AgentState::Running);
+            e.agent_kind = kind.into();
+            e.event_id = format!("e-{pid}-{start}-{kind}");
+            e.process = Some(agents::ProcessIdentity {
+                pid,
+                start_time: start,
+            });
+            state.apply_hook(e).unwrap();
+            assert!(
+                state.agents[0].process.is_none(),
+                "unverified identity must not link: {pid}/{start}/{kind}"
+            );
+            // ... but lifecycle delivery is preserved.
+            assert_eq!(state.agents[0].state, AgentState::Running);
+        }
+        // Stale observations cannot verify new links.
+        let mut state = presence_for("s", "codex", 4242, 777);
+        state.presence[0].observed_at = now().saturating_sub(30);
+        let mut e = event(1, AgentState::Running);
+        e.agent_kind = "codex".into();
+        e.process = Some(agents::ProcessIdentity {
+            pid: 4242,
+            start_time: 777,
+        });
+        state.apply_hook(e).unwrap();
+        assert!(state.agents[0].process.is_none());
+    }
+
+    #[test]
+    fn hook_without_process_identity_preserves_existing_delivery() {
+        let mut state = presence_for("s", "codex", 4242, 777);
+        let delivered = state
+            .apply_hook(event(1, AgentState::WaitingInput))
+            .unwrap();
+        assert!(delivered.is_some());
+        assert!(state.agents[0].process.is_none());
+        assert_eq!(state.agents[0].state, AgentState::WaitingInput);
+        assert_eq!(state.notifications.len(), 1);
+    }
+
+    #[test]
+    fn new_invocation_cannot_inherit_an_earlier_invocations_process_link() {
+        let mut state = presence_for("s", "codex", 4242, 777);
+        let mut first = event(1, AgentState::Running);
+        first.agent_kind = "codex".into();
+        first.agent_invocation_id = "first".into();
+        first.process = Some(agents::ProcessIdentity {
+            pid: 4242,
+            start_time: 777,
+        });
+        state.apply_hook(first).unwrap();
+        assert!(state.agents[0].process.is_some());
+        let mut second = event(2, AgentState::Running);
+        second.agent_kind = "codex".into();
+        second.agent_invocation_id = "second".into();
+        second.event_id = "e-second".into();
+        second.process = Some(agents::ProcessIdentity {
+            pid: 4242,
+            start_time: 777,
+        });
+        // The detected process left; the observation is empty now.
+        state.presence[0].agents.clear();
+        state.apply_hook(second).unwrap();
+        assert_eq!(state.agents.len(), 2);
+        assert!(state.agents[1].process.is_none());
+    }
+
+    #[test]
+    fn presence_observations_never_emit_lifecycle_events_or_notifications() {
+        let state = presence_for("s", "codex", 4242, 777);
+        assert!(state.agents.is_empty());
+        assert!(state.notifications.is_empty());
+        assert!(state.recent_events.is_empty());
+    }
+
+    #[test]
+    fn presence_fields_are_additive_and_old_snapshots_parse_cleanly() {
+        let legacy: State = serde_json::from_value(serde_json::json!({
+            "revision": 3,
+            "agents": [{"invocation_id": "a", "session_id": "s", "kind": "codex",
+                        "provider_session_id": null, "state": "running",
+                        "sequence": null, "updated": 1, "resume": null}],
+        }))
+        .unwrap();
+        assert!(legacy.presence.is_empty());
+        assert!(legacy.agents[0].process.is_none());
+        let legacy_event: HookEvent = serde_json::from_value(serde_json::json!({
+            "protocol_version": 1, "event_id": "e", "terminal_session_id": "s",
+            "agent_invocation_id": "a", "agent_kind": "codex",
+            "provider_session_id": null, "state": "running", "request_id": null,
+            "sequence": null, "summary": "hi", "details": "", "resume": null,
+        }))
+        .unwrap();
+        assert!(legacy_event.process.is_none());
+        // New snapshots round-trip through the additive fields.
+        let state = presence_for("s", "codex", 4242, 777);
+        let encoded = serde_json::to_value(&state).unwrap();
+        assert_eq!(encoded["presence"][0]["agents"][0]["kind"], "codex");
+        let restored: State = serde_json::from_value(encoded).unwrap();
+        assert_eq!(restored.presence, state.presence);
+    }
+
+    #[test]
+    fn recovery_clears_presence_and_process_links_without_relaunching() {
+        let mut state = presence_for("s", "codex", 4242, 777);
+        let mut e = event(1, AgentState::Running);
+        e.agent_kind = "codex".into();
+        e.process = Some(agents::ProcessIdentity {
+            pid: 4242,
+            start_time: 777,
+        });
+        state.apply_hook(e).unwrap();
+        assert!(state.agents[0].process.is_some());
+        state.recover();
+        assert!(state.presence.is_empty());
+        assert!(state.agents[0].process.is_none());
+        assert_eq!(state.sessions[0].lifecycle, Lifecycle::Interrupted);
+    }
+
+    #[test]
+    fn prune_drops_presence_for_removed_sessions() {
+        let mut s = State::default();
+        s.sessions.push(ended_session("gone", Lifecycle::Ended));
+        s.presence.push(agents::TerminalPresence {
+            session_id: "gone".into(),
+            generation: "g".into(),
+            agents: Vec::new(),
+            outcome: agents::PresenceOutcome::Verified,
+            observed_at: now(),
+        });
+        s.prune_non_resumable_ended();
+        assert!(s.presence.is_empty());
     }
 }
 

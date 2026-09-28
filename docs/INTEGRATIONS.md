@@ -14,6 +14,11 @@ These are capability targets, not an assertion that all providers report identic
 
 Installers add/remove only managed command entries (or the app's own OpenCode plugin), retain unrelated configuration, and create a backup before mutation. No credentials or account setup are modified. Installation does not launch a provider.
 
+Detection coverage is separate from installers: Pi has process-identity
+detection but no hook installer, and lifecycle reporting still requires
+hooks for every agent, including Pi. The GUI shows detected processes
+without hook state as Status unavailable, never Working or Idle.
+
 ## Manual integration
 
 Within an app-owned terminal, send a JSON event to `terminator-hook emit` on stdin. The session ID is taken from the terminal environment rather than trusted from the payload. Required example:

@@ -77,12 +77,14 @@ fn hook(args: &[String]) -> Result<()> {
     if let Some(i) = args.iter().position(|a| a == "--runtime-dir") {
         paths.runtime = args.get(i + 1).context("Missing runtime path")?.into();
     }
-    let (parent, actual, ancestors) =
-        if args[0] == "event" || std::env::var_os("TERMINATOR_SESSION_ID").is_none() {
-            agent_parent()
-        } else {
-            (String::new(), None, vec![])
-        };
+    let (parent, actual, ancestors, process) = if args[0] == "event"
+        || args[0] == "emit"
+        || std::env::var_os("TERMINATOR_SESSION_ID").is_none()
+    {
+        agent_parent()
+    } else {
+        (String::new(), None, vec![], None)
+    };
     if args[0] == "event" && parent.is_empty() {
         return Ok(());
     }
@@ -146,6 +148,9 @@ fn hook(args: &[String]) -> Result<()> {
         if args[0] == "emit" {
             let mut event: HookEvent = serde_json::from_slice(&data)?;
             event.terminal_session_id = sid;
+            // Ancestor-supplied identity; the daemon verifies it against live
+            // presence before linking lifecycle to a detected process.
+            event.process = process;
             Request::Hook(event)
         } else {
             let kind = args.get(1).context("Missing adapter")?;
@@ -154,10 +159,12 @@ fn hook(args: &[String]) -> Result<()> {
             if actual.as_deref().is_some_and(|a| a != kind) {
                 return Ok(());
             }
-            let Some(event) = terminator_integrations::normalize(kind, &sid, &parent, &payload)?
+            let Some(mut event) =
+                terminator_integrations::normalize(kind, &sid, &parent, &payload)?
             else {
                 return Ok(());
             };
+            event.process = process;
             Request::Hook(event)
         }
     };
@@ -171,7 +178,12 @@ fn hook(args: &[String]) -> Result<()> {
     }
     Ok(())
 }
-fn agent_parent() -> (String, Option<String>, Vec<u32>) {
+fn agent_parent() -> (
+    String,
+    Option<String>,
+    Vec<u32>,
+    Option<agents::ProcessIdentity>,
+) {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let mut system = System::new();
     let mut pid = Pid::from_u32(std::os::unix::process::parent_id());
@@ -226,12 +238,17 @@ fn agent_parent() -> (String, Option<String>, Vec<u32>) {
                     .is_some_and(|p| p.start_time() == start_time)
                 && let Some(identity) = legacy_identity(pid, &out.stdout)
             {
-                return (identity, kind, ancestors);
+                return (
+                    identity,
+                    kind,
+                    ancestors,
+                    Some(agents::ProcessIdentity { pid, start_time }),
+                );
             }
         }
     }
     // No guessed PID-only ownership when process inspection is unavailable.
-    (String::new(), None, ancestors)
+    (String::new(), None, ancestors, None)
 }
 fn legacy_identity(pid: u32, text: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(text).ok()?;

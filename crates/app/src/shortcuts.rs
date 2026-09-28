@@ -24,6 +24,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("toggle_ide_mode", "Toggle IDE mode"),
     ("open_settings", "Settings"),
     ("open_palette", "Command palette"),
+    ("next_attention", "Next agent needing attention"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

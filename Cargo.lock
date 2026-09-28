@@ -6039,6 +6039,7 @@ dependencies = [
  "portable-pty",
  "rusqlite",
  "serde_json",
+ "sysinfo",
  "tempfile",
  "terminator-core",
  "terminator-git",

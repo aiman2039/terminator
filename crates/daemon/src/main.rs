@@ -4,6 +4,7 @@ mod helper;
 mod idle_close;
 mod notifications;
 mod ntfy;
+mod presence;
 mod review;
 mod terminal_env;
 mod terminal_events;
@@ -1327,6 +1328,7 @@ fn main() -> Result<()> {
         WORKTREES_CAPABILITY.into(),
         SCREEN_CAPABILITY.into(),
         METADATA_SETTINGS_CAPABILITY.into(),
+        AGENT_PRESENCE_CAPABILITY.into(),
     ];
     if catalog_paths.is_some() {
         state.daemon_build = Some(generations::build_identity(
@@ -1548,6 +1550,7 @@ fn main() -> Result<()> {
             }
         }
     });
+    presence::start(Arc::downgrade(&shared));
     let active = Arc::new(AtomicUsize::new(0));
     while !shared.shutdown.load(Ordering::Relaxed) {
         match listener.accept() {

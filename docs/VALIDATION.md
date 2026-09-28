@@ -1,5 +1,53 @@
 # Validation evidence — 2026-09-08
 
+## Agent identity and live visibility (2026-09-28)
+
+- Shared catalog (`crates/core/src/agents.rs`): 11 unit tests passed —
+  six exact-executable matchers, `-bin`/Node/Bun wrappers, false-positive
+  arguments/titles/paths, child-tool retention with nested-agent ignore,
+  sibling entries, foreground preference, PID reuse, exit removal, zombie
+  exclusion, five-second staleness, generic fallback.
+- Hook/compat core regressions: 7 passed — verified-only process linking
+  (wrong PID/start/kind/stale rejected, delivery preserved), identity-less
+  delivery, no invocation inheritance, observations emit no lifecycle, old
+  JSON parses, restart/prune clearing. Generations compat: 3 passed —
+  merge gate matrix, `clear_owned`/`saved` stripping, socket-free mixed
+  snapshot excluding historical and unavailable-owner presence.
+- Daemon: 2 real-process fixtures passed (renamed test-binary sleepers as
+  fake `codex`/`claude`/`pi` executables; appearance, sibling entries,
+  removal-as-verified-empty) plus persistence-exclusion round trip. A
+  copied `/bin/sleep` is SIGKILLed by macOS signing enforcement, hence the
+  sleeper design. No paid agents launched.
+- App: 8 presentation unit tests passed (brand/status pairing, no Working
+  or Idle without hooks, unverified hook-only, multi-agent count,
+  stale/unavailable, attention-count distinctions, live/unverified
+  partition); 3 navigation/unread unit tests passed (waiting-then-failed
+  oldest-first multi-project cycling with wrap, empty-queue info, retained
+  unread selection with read-only lifecycle); 2 render tests passed
+  (All-live grouping/search/filter with unverified section, workspace-tab
+  aggregate badge). Palette label and width-reservation tests extended.
+- `cargo fmt --all --check` clean.
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+  clean. `cargo check --workspace --locked` clean (one-line `Cargo.lock`
+  edge for the daemon's direct sysinfo dependency).
+- Full `cargo test --workspace --all-features --locked`: app 397 passed /
+  13 failed, core 101/9, daemon 31/1, hook 6/7, all other crates green.
+  Every failure reproduces identically on the clean tree (verified via
+  stash comparison): sandbox-denied Unix-socket binds, loopback HTTP, and
+  process/network fixtures. None in touched areas.
+- Not exercised: live GUI run, native `gui` fixtures (desktop-gated),
+  real agent CLIs, multi-daemon live upgrade, 50-session responsiveness,
+  and live-PTY foreground end to end (sandbox denies `openpty`; foreground
+  preference is unit-tested, and appearance/removal use real processes).
+  No running daemon, installed hooks, database, or layout version changed.
+- Follow-up: geometric placeholder glyphs replaced with official vendor
+  marks (OpenAI monoblossom bundle, claude.com/pi.dev favicons, sst/opencode
+  repo mark, xAI org avatar with transparency, Meta loop for Muse Code;
+  Lucide bot/copy for generic/multiple). All seven SVGs rasterized with the
+  vendored resvg 0.45.1 and visually verified on a dark contact sheet; the
+  xAI PNG conversion verified flattened on dark. Full attribution in
+  `crates/app/assets/icons/README.md`. App check/clippy/tests re-green.
+
 ## ntfy hook notifications (2026-09-27)
 
 - Focused core regressions: 2 passed (default-off settings, validation and JSON

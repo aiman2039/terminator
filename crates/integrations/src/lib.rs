@@ -437,6 +437,9 @@ pub fn normalize(
         summary,
         details,
         resume: resume_for(kind, provider),
+        // The hook helper attaches ancestor process identity after
+        // normalization; the normalizer itself never inspects processes.
+        process: None,
     }))
 }
 #[cfg(test)]

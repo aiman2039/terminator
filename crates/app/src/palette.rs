@@ -12,6 +12,7 @@ pub(crate) enum PaletteItem {
     NewWorktree,
     OpenPlayer,
     ToggleIdeMode,
+    NextAttention,
     SaveLayout,
     ApplyLayout(String),
 }
@@ -31,6 +32,7 @@ impl PaletteItem {
             Self::NewWorktree => "New task worktree".into(),
             Self::OpenPlayer => "Open player".into(),
             Self::ToggleIdeMode => "Toggle IDE mode".into(),
+            Self::NextAttention => "Next agent needing attention".into(),
             Self::SaveLayout => "Save layout".into(),
             Self::ApplyLayout(name) => format!("Layout  {name}"),
         }
@@ -42,6 +44,7 @@ impl App {
         let mut items = vec![
             PaletteItem::AddProject,
             PaletteItem::NewTerminal,
+            PaletteItem::NextAttention,
             PaletteItem::OpenPlayer,
             PaletteItem::ToggleIdeMode,
             PaletteItem::SaveLayout,
@@ -186,6 +189,7 @@ impl App {
             }
             PaletteItem::AddProject => self.add_project = true,
             PaletteItem::NewTerminal => self.create(None),
+            PaletteItem::NextAttention => self.next_attention(),
             PaletteItem::NewWorktree => self.open_worktree_wizard(),
             PaletteItem::OpenPlayer => self.open_player(),
             PaletteItem::ToggleIdeMode => self.toggle_ide_mode(),
@@ -233,6 +237,10 @@ mod tests {
     fn palette_labels_are_stable() {
         assert_eq!(PaletteItem::AddProject.label(), "Add project");
         assert_eq!(PaletteItem::ToggleIdeMode.label(), "Toggle IDE mode");
+        assert_eq!(
+            PaletteItem::NextAttention.label(),
+            "Next agent needing attention"
+        );
         assert_eq!(
             PaletteItem::Settings(SettingsSection::Terminal).label(),
             "Settings  Terminal & Editor"

@@ -29,3 +29,27 @@ player.
 
 `menu.svg` comes from Lucide 0.577.0 with the same license and white-stroke
 adaptation, for the header overflow menu.
+
+Agent identity icons are official vendor marks, used only to identify the
+agent running in a terminal (nominative use; all marks are trademarks of
+their owners: OpenAI, Anthropic, SST, xAI, Meta, Mario Zechner/pi.dev):
+
+- `agent-codex.svg`: `OpenAI-white-monoblossom.svg` verbatim from the
+  official bundle at <https://cdn.openai.com/brand/OpenAI-Logos-2025.zip>
+  (brand terms: <https://openai.com/brand/>).
+- `agent-claude.svg`: `favicon.svg` verbatim from <https://claude.com/>.
+- `agent-pi.svg`: `favicon.svg` from <https://pi.dev/>, theme media query
+  replaced with a fixed white fill for the tint pipeline; paths verbatim.
+- `agent-opencode.svg`: `opencode-logo-dark.svg` verbatim from the MIT
+  repo at <https://github.com/sst/opencode>
+  (`packages/console/app/src/asset/brand/`).
+- `agent-grok.png`: xAI mark from the official `xai-org` GitHub avatar
+  (<https://github.com/xai-org>), black background converted to
+  transparency (luminance alpha); mark pixels otherwise unchanged.
+- `agent-muse.svg`: Meta loop mark (Muse Code has no separate public
+  vector mark) via <https://cdn.simpleicons.org/meta> (CC0 reproduction).
+- `agent-generic.svg` (`bot`) and `agent-multiple.svg` (`copy`) come from
+  Lucide 0.577.0 with the same license and white-stroke adaptation, for
+  custom hook agents and multi-agent terminals.
+
+Tooltips and the Agents sidebar always pair a glyph with the agent name.

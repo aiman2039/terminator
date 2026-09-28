@@ -36,6 +36,46 @@ fn tab_tooltip(label: &str, cwd: Option<&std::path::Path>) -> String {
     }
 }
 
+/// Focused-terminal face for a workspace strip tab.
+struct TabFace {
+    label: String,
+    icon: &'static str,
+    sid: Option<String>,
+    brand: Option<&'static str>,
+    diagnostics: String,
+    status: Option<(AgentState, &'static str, Color32)>,
+}
+
+/// Terminal sessions in a top-level tab's split layout.
+fn group_terminal_ids(layout: &egui_dock::DockState<Tab>) -> Vec<String> {
+    layout
+        .iter_all_tabs()
+        .filter_map(|(_, tab)| match tab {
+            Tab::Terminal(sid) => Some(sid.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Aggregate attention badge text and tooltip breakdown for a workspace tab.
+/// Input requests, permission requests, and failures stay distinct.
+fn tab_attention_text(counts: super::agent_presence::AttentionCounts) -> Option<(String, String)> {
+    if counts.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if counts.input > 0 {
+        parts.push(format!("{} input", counts.input));
+    }
+    if counts.permission > 0 {
+        parts.push(format!("{} permission", counts.permission));
+    }
+    if counts.failed > 0 {
+        parts.push(format!("{} failed", counts.failed));
+    }
+    Some((counts.total().to_string(), parts.join(" · ")))
+}
+
 fn snapshot_rows(backend: &TerminalBackend) -> Vec<String> {
     let kept: Vec<String> = backend
         .search_rows()
@@ -588,16 +628,10 @@ impl App {
             HeaderAction::Palette => self.open_command_palette(),
         }
     }
-    #[allow(clippy::type_complexity)]
-    fn tab_face(
-        &self,
-        primary: Option<&Tab>,
-    ) -> (
-        String,
-        &'static str,
-        Option<String>,
-        Option<(AgentState, &'static str, Color32)>,
-    ) {
+    /// Workspace strip tab face: the focused terminal's label, kind icon,
+    /// stable agent brand, and hook lifecycle status, all from the shared
+    /// agent presentation model.
+    fn tab_face(&self, primary: Option<&Tab>) -> TabFace {
         match primary {
             Some(Tab::Terminal(sid)) => self
                 .state
@@ -605,66 +639,105 @@ impl App {
                 .iter()
                 .find(|s| &s.id == sid)
                 .map(|s| {
-                    let agent_status = self
-                        .state
-                        .agents
-                        .iter()
-                        .filter(|a| a.session_id == *sid)
-                        .max_by_key(|a| a.updated)
-                        .map(|a| {
-                            (
-                                a.state,
-                                super::sidebar_ui::attention_status_icon(a.state),
-                                super::sidebar_ui::state_color(a.state, &self.theme),
-                            )
-                        });
-                    (
-                        s.label.clone(),
-                        if s.kind == SessionKind::Editor {
+                    let presented = super::agent_presence::present_session(&self.state, sid, now());
+                    TabFace {
+                        label: s.label.clone(),
+                        icon: if s.kind == SessionKind::Editor {
                             "FileCode"
                         } else {
                             "Terminal"
                         },
-                        Some(sid.clone()),
-                        agent_status,
-                    )
+                        sid: Some(sid.clone()),
+                        brand: presented.brand_icon,
+                        diagnostics: presented.diagnostics,
+                        status: presented.lifecycle.map(|lifecycle| {
+                            (
+                                lifecycle,
+                                presented.status_icon,
+                                super::sidebar_ui::state_color(lifecycle, &self.theme),
+                            )
+                        }),
+                    }
                 })
-                .unwrap_or(("Terminal".into(), "Terminal", None, None)),
-            Some(Tab::Diff { path, .. }) | Some(Tab::Image { path }) => (
-                path.file_name()
+                .unwrap_or(TabFace {
+                    label: "Terminal".into(),
+                    icon: "Terminal",
+                    sid: None,
+                    brand: None,
+                    diagnostics: String::new(),
+                    status: None,
+                }),
+            Some(Tab::Diff { path, .. }) | Some(Tab::Image { path }) => TabFace {
+                label: path
+                    .file_name()
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into_owned(),
-                if matches!(primary, Some(Tab::Image { .. })) {
+                icon: if matches!(primary, Some(Tab::Image { .. })) {
                     "FileImage"
                 } else {
                     "FileDiff"
                 },
-                None,
-                None,
-            ),
-            Some(Tab::Browser { target, .. }) => (target.title(), "FileCode", None, None),
-            Some(Tab::NativeEditor { path }) => (
-                path.file_name()
+                sid: None,
+                brand: None,
+                diagnostics: String::new(),
+                status: None,
+            },
+            Some(Tab::Browser { target, .. }) => TabFace {
+                label: target.title(),
+                icon: "FileCode",
+                sid: None,
+                brand: None,
+                diagnostics: String::new(),
+                status: None,
+            },
+            Some(Tab::NativeEditor { path }) => TabFace {
+                label: path
+                    .file_name()
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into_owned(),
-                "FileCode",
-                None,
-                None,
-            ),
-            Some(Tab::Player) => ("Player".into(), "FileMusic", None, None),
-            Some(Tab::CommitLog { .. }) => ("Commit Log".into(), "FileDiff", None, None),
-            Some(Tab::Blame { path, .. }) => (
-                format!(
+                icon: "FileCode",
+                sid: None,
+                brand: None,
+                diagnostics: String::new(),
+                status: None,
+            },
+            Some(Tab::Player) => TabFace {
+                label: "Player".into(),
+                icon: "FileMusic",
+                sid: None,
+                brand: None,
+                diagnostics: String::new(),
+                status: None,
+            },
+            Some(Tab::CommitLog { .. }) => TabFace {
+                label: "Commit Log".into(),
+                icon: "FileDiff",
+                sid: None,
+                brand: None,
+                diagnostics: String::new(),
+                status: None,
+            },
+            Some(Tab::Blame { path, .. }) => TabFace {
+                label: format!(
                     "Blame {}",
                     path.file_name().unwrap_or_default().to_string_lossy()
                 ),
-                "FileDiff",
-                None,
-                None,
-            ),
-            None => ("Workspace".into(), "Terminal", None, None),
+                icon: "FileDiff",
+                sid: None,
+                brand: None,
+                diagnostics: String::new(),
+                status: None,
+            },
+            None => TabFace {
+                label: "Workspace".into(),
+                icon: "Terminal",
+                sid: None,
+                brand: None,
+                diagnostics: String::new(),
+                status: None,
+            },
         }
     }
 
@@ -692,6 +765,7 @@ impl App {
         ui.painter()
             .rect_filled(strip_rect, 0, appearance::color(&self.theme.surface));
         ui.horizontal(|ui| {
+            let moment = now();
             let tab_widths: Vec<f32> = workspace
                 .tabs
                 .iter()
@@ -701,8 +775,19 @@ impl App {
                         .as_ref()
                         .filter(|tab| group.layout.find_tab(tab).is_some())
                         .or_else(|| group.layout.iter_all_tabs().next().map(|(_, tab)| tab));
-                    let (label, _, _, _) = self.tab_face(primary);
-                    workspace_tab_width(tab_label_width(ui, &label))
+                    let face = self.tab_face(primary);
+                    let width = workspace_tab_width(tab_label_width(ui, &face.label));
+                    let attention = super::agent_presence::tab_attention(
+                        &self.state,
+                        &group_terminal_ids(&group.layout),
+                        moment,
+                    );
+                    width
+                        + if tab_attention_text(attention).is_some() {
+                            22.0
+                        } else {
+                            0.0
+                        }
                 })
                 .collect();
             let content_width =
@@ -765,7 +850,13 @@ impl App {
                                 .or_else(|| {
                                     group.layout.iter_all_tabs().next().map(|(_, tab)| tab)
                                 });
-                            let (label, icon, sid, agent_status) = self.tab_face(primary);
+                            let face = self.tab_face(primary);
+                            let attention = super::agent_presence::tab_attention(
+                                &self.state,
+                                &group_terminal_ids(&group.layout),
+                                moment,
+                            );
+                            let badge = tab_attention_text(attention);
                             let active = workspace.active == group.id;
                             let (rect, response) = ui.allocate_exact_size(
                                 egui::vec2(tab_widths[index], 32.0),
@@ -831,11 +922,31 @@ impl App {
                             } else {
                                 &self.theme.secondary
                             });
+                            // Focused terminal identity: stable brand glyph
+                            // beside the hook lifecycle status.
+                            if let Some(brand) = face.brand {
+                                appearance::paint_status_icon(
+                                    ui,
+                                    egui::Rect::from_center_size(
+                                        egui::pos2(rect.left() + 10.0, rect.center().y),
+                                        egui::vec2(13.0, 13.0),
+                                    ),
+                                    brand,
+                                    appearance::ICON_COLOR,
+                                    false,
+                                );
+                            }
+                            let status_center = if face.brand.is_some() {
+                                rect.left() + 24.0
+                            } else {
+                                rect.left() + 16.0
+                            };
+                            let status_size = if face.brand.is_some() { 13.0 } else { 16.0 };
                             let icon_rect = egui::Rect::from_center_size(
-                                egui::pos2(rect.left() + 16.0, rect.center().y),
-                                egui::vec2(16.0, 16.0),
+                                egui::pos2(status_center, rect.center().y),
+                                egui::vec2(status_size, status_size),
                             );
-                            if let Some((state, status_icon, tint)) = agent_status {
+                            if let Some((state, status_icon, tint)) = face.status {
                                 appearance::paint_status_icon(
                                     ui,
                                     icon_rect,
@@ -844,42 +955,69 @@ impl App {
                                     state == AgentState::Running,
                                 );
                             } else {
-                                egui::Image::new(icons::source(icon))
+                                egui::Image::new(icons::source(face.icon))
                                     .tint(appearance::ICON_COLOR)
                                     .paint_at(ui, icon_rect);
                             }
-                            let editing = sid
+                            let label_x = if face.brand.is_some() { 36.0 } else { 30.0 };
+                            let badge_reserve = if badge.is_some() { 22.0 } else { 0.0 };
+                            let editing = face
+                                .sid
                                 .as_ref()
                                 .is_some_and(|sid| self.renaming(sid, RenameSurface::Workspace));
                             if editing {
-                                if let Some(sid) = &sid {
+                                if let Some(sid) = &face.sid {
                                     self.inline_rename(
                                         ui,
                                         sid,
                                         RenameSurface::Workspace,
                                         egui::Rect::from_min_max(
-                                            rect.min + egui::vec2(30.0, 8.0),
-                                            rect.max - egui::vec2(28.0, 7.0),
+                                            rect.min + egui::vec2(label_x, 8.0),
+                                            rect.max - egui::vec2(28.0 + badge_reserve, 7.0),
                                         ),
                                     );
                                 }
                             } else {
                                 let mut text = egui::text::LayoutJob::simple(
-                                    label.clone(),
+                                    face.label.clone(),
                                     egui::FontId::proportional(13.0),
                                     tint,
-                                    rect.width() - 58.0,
+                                    rect.width() - 58.0 - (label_x - 30.0) - badge_reserve,
                                 );
                                 text.wrap.max_rows = 1;
                                 text.wrap.break_anywhere = true;
                                 let galley = ui.painter().layout_job(text);
                                 ui.painter().galley(
                                     egui::pos2(
-                                        rect.left() + 30.0,
+                                        rect.left() + label_x,
                                         rect.center().y - galley.size().y * 0.5,
                                     ),
                                     galley,
                                     tint,
+                                );
+                            }
+                            // Aggregate attention across the tab's terminals.
+                            if let Some((count, _)) = &badge {
+                                let badge_rect = egui::Rect::from_min_max(
+                                    egui::pos2(rect.right() - 44.0, rect.center().y - 8.0),
+                                    egui::pos2(rect.right() - 26.0, rect.center().y + 8.0),
+                                );
+                                ui.painter().text(
+                                    badge_rect.right_center(),
+                                    egui::Align2::RIGHT_CENTER,
+                                    count,
+                                    egui::FontId::proportional(11.0),
+                                    appearance::color(if attention.waiting() > 0 {
+                                        &self.theme.status_waiting
+                                    } else {
+                                        &self.theme.status_failed
+                                    }),
+                                );
+                                #[cfg(feature = "test-support")]
+                                diagnostics::record(
+                                    ui.ctx(),
+                                    &format!("workspace-tab-attention:{}", face.label),
+                                    badge_rect,
                                 );
                             }
                             if active {
@@ -897,7 +1035,7 @@ impl App {
                                 #[cfg(feature = "test-support")]
                                 diagnostics::record(
                                     ui.ctx(),
-                                    &format!("workspace-tab-underline:{label}"),
+                                    &format!("workspace-tab-underline:{}", face.label),
                                     underline,
                                 );
                             }
@@ -940,13 +1078,13 @@ impl App {
                             if response.double_clicked()
                                 && !editing
                                 && self.tab_drag.is_none()
-                                && let Some(sid) = &sid
+                                && let Some(sid) = &face.sid
                             {
                                 self.begin_rename(sid, RenameSurface::Workspace);
                             }
-                            let tooltip = tab_tooltip(
-                                &label,
-                                sid.as_ref().and_then(|sid| {
+                            let mut tooltip = tab_tooltip(
+                                &face.label,
+                                face.sid.as_ref().and_then(|sid| {
                                     self.state
                                         .sessions
                                         .iter()
@@ -954,6 +1092,14 @@ impl App {
                                         .map(|s| s.cwd.as_path())
                                 }),
                             );
+                            if !face.diagnostics.is_empty()
+                                && let Some(first) = face.diagnostics.lines().next()
+                            {
+                                tooltip.push_str(&format!("\n{first}"));
+                            }
+                            if let Some((_, breakdown)) = &badge {
+                                tooltip.push_str(&format!("\nAttention: {breakdown}"));
+                            }
                             response
                                 .clone()
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -963,14 +1109,14 @@ impl App {
                                     egui::WidgetType::SelectableLabel,
                                     true,
                                     active,
-                                    &label,
+                                    &face.label,
                                 )
                             });
                             appearance::context_menu(&response, |ui| {
                                 let action = self.workspace_tab_menu(
                                     ui,
                                     WorkspaceTabMenuSpec {
-                                        sid: sid.as_deref(),
+                                        sid: face.sid.as_deref(),
                                         index,
                                         count: tab_count,
                                     },
@@ -998,12 +1144,12 @@ impl App {
                             {
                                 diagnostics::record(
                                     ui.ctx(),
-                                    &format!("workspace-tab:{label}"),
+                                    &format!("workspace-tab:{}", face.label),
                                     rect,
                                 );
                                 diagnostics::record(
                                     ui.ctx(),
-                                    &format!("workspace-close:{label}"),
+                                    &format!("workspace-close:{}", face.label),
                                     close_rect,
                                 );
                             }
@@ -2609,15 +2755,26 @@ impl TabViewer for Viewer<'_> {
                 .into(),
             Tab::Browser { target, .. } => target.title().into(),
             Tab::Player => "Player".into(),
-            Tab::Terminal(sid) => self
-                .app
-                .state
-                .sessions
-                .iter()
-                .find(|s| s.id == *sid)
-                .map(|s| s.label.clone())
-                .unwrap_or("Session".into())
-                .into(),
+            Tab::Terminal(sid) => {
+                let label = self
+                    .app
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == *sid)
+                    .map(|s| s.label.clone())
+                    .unwrap_or("Session".into());
+                // Split-pane headers and terminal-strip tabs share the
+                // presentation model: waiting attention first, then failures.
+                let presented = super::agent_presence::present_session(&self.app.state, sid, now());
+                if presented.attention.waiting() > 0 {
+                    format!("● {label}").into()
+                } else if presented.attention.failed > 0 {
+                    format!("▲ {label}").into()
+                } else {
+                    label.into()
+                }
+            }
             Tab::Diff { path, staged, .. } => format!(
                 "{} {}",
                 if *staged { "Staged:" } else { "Diff:" },
@@ -2672,6 +2829,10 @@ impl TabViewer for Viewer<'_> {
         OnCloseResponse::Close
     }
     fn on_tab_button(&mut self, tab: &mut Tab, response: &egui::Response) {
+        if let Tab::Terminal(sid) = tab {
+            let presented = super::agent_presence::present_session(&self.app.state, sid, now());
+            response.clone().on_hover_text(presented.diagnostics);
+        }
         if response.hovered() && !response.dragged() {
             response.ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
         }

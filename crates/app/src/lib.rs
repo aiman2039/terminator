@@ -13,6 +13,7 @@ use workspace_ui::Viewer;
 mod dialogs_ui;
 mod sidebar_ui;
 use sidebar_ui::{AttentionAction, AttentionCard, attention_card};
+mod agent_presence;
 mod appearance;
 mod browser;
 mod browser_host;
@@ -42,7 +43,7 @@ mod editor_close;
 mod popup;
 mod preferences;
 mod workspace;
-use preferences::{SidebarTool, UiPreferences};
+use preferences::{AgentsTab, SidebarTool, UiPreferences};
 use terminator_core::appearance::{AppearanceConfig, AppearanceFile};
 use workspace::Workspace;
 mod clipboard;
@@ -692,6 +693,10 @@ pub struct App {
     last_focus: Option<String>,
     highlight_session: Option<String>,
     highlight_since: Instant,
+    /// Round-robin position for Next-agent-needing-attention navigation.
+    attention_cycle: usize,
+    /// Unread-view row retained after marking read, until selection/filter changes.
+    unread_selected: Option<String>,
     connected: bool,
     control_server: Option<ui_control::Server>,
 }
@@ -944,6 +949,8 @@ impl App {
             last_focus: None,
             highlight_session: None,
             highlight_since: Instant::now(),
+            attention_cycle: 0,
+            unread_selected: None,
             connected: false,
             control_server: None,
         }
@@ -2651,8 +2658,66 @@ impl App {
             "toggle_left_sidebar" => self.toggle_left_sidebar(),
             "toggle_right_sidebar" => self.toggle_right_sidebar(),
             "toggle_ide_mode" => self.toggle_ide_mode(),
+            "next_attention" => self.next_attention(),
             _ => {}
         }
+    }
+
+    /// Global cycle order for attention navigation: distinct live terminals
+    /// with pending permission/input requests first, then failures; oldest
+    /// first within each group. Dismissal and snooze are respected.
+    fn attention_order(&self) -> Vec<String> {
+        let live: HashSet<&str> = self
+            .state
+            .sessions
+            .iter()
+            .filter(|s| s.lifecycle.live())
+            .map(|s| s.id.as_str())
+            .collect();
+        let mut earliest_waiting: HashMap<&str, u64> = HashMap::new();
+        let mut earliest_failed: HashMap<&str, u64> = HashMap::new();
+        for notice in &self.state.notifications {
+            if !live.contains(notice.session_id.as_str())
+                || notice.dismissed
+                || notice.resolved
+                || notice.snoozed_until > now()
+            {
+                continue;
+            }
+            let slot = match notice.state {
+                AgentState::WaitingInput | AgentState::WaitingPermission => &mut earliest_waiting,
+                AgentState::Failed => &mut earliest_failed,
+                _ => continue,
+            };
+            slot.entry(notice.session_id.as_str())
+                .and_modify(|seen| *seen = (*seen).min(notice.created))
+                .or_insert(notice.created);
+        }
+        let mut order: Vec<(&str, u64)> = earliest_waiting.into_iter().collect();
+        order.sort_by_key(|(_, created)| *created);
+        let mut failed: Vec<(&str, u64)> = earliest_failed
+            .into_iter()
+            .filter(|(session, _)| !order.iter().any(|(waiting, _)| waiting == session))
+            .collect();
+        failed.sort_by_key(|(_, created)| *created);
+        order
+            .into_iter()
+            .chain(failed)
+            .map(|(session, _)| session.to_string())
+            .collect()
+    }
+
+    /// Reveal the next terminal needing attention, cycling globally through
+    /// [`Self::attention_order`] and reusing session navigation.
+    fn next_attention(&mut self) {
+        let order = self.attention_order();
+        if order.is_empty() {
+            self.info = Some("No agents need attention".into());
+            return;
+        }
+        let target = order[self.attention_cycle % order.len()].clone();
+        self.attention_cycle = self.attention_cycle.wrapping_add(1);
+        self.go_session(&target);
     }
 
     fn open_command_palette(&mut self) {
@@ -4704,6 +4769,7 @@ impl App {
     fn open_agents_inbox(&mut self) {
         self.preferences.tool = SidebarTool::Agents;
         self.preferences.visible = true;
+        self.preferences.agents_tab = AgentsTab::NeedsAttention;
     }
     /// A status-menu pick: the inbox Go button plus opening the inbox
     /// behind it. A stale id just opens the inbox.
@@ -6319,6 +6385,7 @@ mod navigation_tests {
                 program: "codex".into(),
                 args: vec!["resume".into(), "provider-1".into()],
             }),
+            process: None,
         }];
         app.preferences.expanded.insert("a".into(), true);
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.projects(ui));
@@ -9451,6 +9518,7 @@ mod navigation_tests {
             sequence: Some(1),
             updated: 0,
             resume: None,
+            process: None,
         }];
         assert_eq!(app.waiting_notice_count(), 0);
         app.state.notifications = vec![Notification {
@@ -9542,6 +9610,7 @@ mod navigation_tests {
             sequence: None,
             updated: 1,
             resume: None,
+            process: None,
         }];
         app.state.notifications = vec![notice_fixture(
             "wait",
@@ -9727,6 +9796,197 @@ mod navigation_tests {
             notice_fixture("done", "two", AgentState::Completed, now()),
         ];
         assert_eq!(app.attention_counts(), (1, 1));
+    }
+
+    #[test]
+    fn next_attention_cycles_waiting_then_failed_oldest_first() {
+        let (mut app, _ctx, _dir) = fixture();
+        let mut failed = session_fixture("failed", SessionKind::Shell);
+        failed.project_id = "b".into();
+        let mut ended = session_fixture("ended", SessionKind::Shell);
+        ended.lifecycle = Lifecycle::Ended;
+        app.state.sessions = vec![
+            session_fixture("early", SessionKind::Shell),
+            session_fixture("late", SessionKind::Shell),
+            failed,
+            ended,
+        ];
+        let mut notices = vec![
+            notice_fixture("w-early", "early", AgentState::WaitingPermission, 10),
+            notice_fixture("w-late", "late", AgentState::WaitingInput, 20),
+            // Older than every waiting notice, still sorted after the group.
+            notice_fixture("f-failed", "failed", AgentState::Failed, 5),
+            // A session with both appears once, in the waiting group.
+            notice_fixture("f-early-too", "early", AgentState::Failed, 1),
+        ];
+        let mut dismissed = notice_fixture("dismissed", "late", AgentState::WaitingInput, 0);
+        dismissed.dismissed = true;
+        let mut snoozed = notice_fixture("snoozed", "late", AgentState::WaitingInput, 0);
+        snoozed.snoozed_until = now() + 600;
+        let mut resolved = notice_fixture("resolved", "late", AgentState::WaitingInput, 0);
+        resolved.resolved = true;
+        let gone = notice_fixture("gone", "ended", AgentState::WaitingInput, 0);
+        notices.extend([dismissed, snoozed, resolved, gone]);
+        app.state.notifications = notices;
+        assert_eq!(app.attention_order(), vec!["early", "late", "failed"]);
+        app.next_attention();
+        assert_eq!(app.active_session.as_deref(), Some("early"));
+        assert_eq!(app.selected.as_deref(), Some("a"));
+        app.next_attention();
+        assert_eq!(app.active_session.as_deref(), Some("late"));
+        // Cross-project navigation reuses session navigation.
+        app.next_attention();
+        assert_eq!(app.active_session.as_deref(), Some("failed"));
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        app.next_attention();
+        assert_eq!(app.active_session.as_deref(), Some("early"));
+    }
+
+    #[test]
+    fn next_attention_reports_an_empty_queue_without_moving() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.state.sessions = vec![session_fixture("s", SessionKind::Shell)];
+        app.next_attention();
+        assert_eq!(app.active_session, None);
+        assert_eq!(app.info.as_deref(), Some("No agents need attention"));
+    }
+
+    #[test]
+    fn unread_selection_survives_marking_read_without_touching_lifecycle() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("s", SessionKind::Shell)];
+        app.state.agents = vec![Agent {
+            invocation_id: "agent".into(),
+            session_id: "s".into(),
+            kind: "codex".into(),
+            provider_session_id: None,
+            state: AgentState::WaitingInput,
+            sequence: None,
+            updated: 0,
+            resume: None,
+            process: None,
+        }];
+        app.state.notifications = vec![
+            notice_fixture("n1", "s", AgentState::WaitingInput, 1),
+            notice_fixture("n2", "s", AgentState::WaitingInput, 2),
+        ];
+        assert_eq!(app.unread_notices().len(), 2);
+        app.apply_notice_action("n1".into(), AttentionAction::Read);
+        let first = app
+            .state
+            .notifications
+            .iter()
+            .find(|n| n.id == "n1")
+            .unwrap();
+        assert!(first.read);
+        assert!(!first.resolved && !first.dismissed);
+        assert_eq!(app.state.agents[0].state, AgentState::WaitingInput);
+        // Retained until selection changes, even though it is now read.
+        assert!(app.unread_notices().iter().any(|n| n.id == "n1"));
+        app.apply_notice_action("n2".into(), AttentionAction::Read);
+        assert!(!app.unread_notices().iter().any(|n| n.id == "n1"));
+        assert!(app.unread_notices().iter().any(|n| n.id == "n2"));
+        // Scope changes drop retained rows.
+        app.preferences.all_projects = false;
+        app.selected = Some("b".into());
+        assert!(app.unread_notices().is_empty());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn all_live_groups_verified_agents_with_an_unverified_section() {
+        use terminator_core::agents::{DetectedAgent, PresenceOutcome, ProcessIdentity};
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.preferences.agents_tab = AgentsTab::AllLive;
+        let mut live_b = session_fixture("live-b", SessionKind::Shell);
+        live_b.project_id = "b".into();
+        app.state.sessions = vec![
+            session_fixture("live-a", SessionKind::Shell),
+            live_b,
+            session_fixture("hook-only", SessionKind::Shell),
+        ];
+        app.state
+            .capabilities
+            .push(AGENT_PRESENCE_CAPABILITY.into());
+        for (sid, kind) in [("live-a", "codex"), ("live-b", "claude")] {
+            app.state
+                .presence
+                .push(terminator_core::agents::TerminalPresence {
+                    session_id: sid.into(),
+                    generation: "fixture".into(),
+                    agents: vec![DetectedAgent {
+                        kind: kind.into(),
+                        process: ProcessIdentity {
+                            pid: 200,
+                            start_time: 500,
+                        },
+                        foreground: true,
+                    }],
+                    outcome: PresenceOutcome::Verified,
+                    observed_at: now(),
+                });
+        }
+        app.state.agents = vec![Agent {
+            invocation_id: "hook".into(),
+            session_id: "hook-only".into(),
+            kind: "grok".into(),
+            provider_session_id: None,
+            state: AgentState::Running,
+            sequence: None,
+            updated: now(),
+            resume: None,
+            process: None,
+        }];
+        render_agents(&mut app, &ctx, vec![]);
+        assert!(agent_target(&ctx, "live-project:a").is_some());
+        assert!(agent_target(&ctx, "live-project:b").is_some());
+        assert!(agent_target(&ctx, "live-row:live-a").is_some());
+        assert!(agent_target(&ctx, "live-row:live-b").is_some());
+        assert!(agent_target(&ctx, "live-unverified").is_some());
+        assert!(agent_target(&ctx, "unverified-row:hook-only").is_some());
+        // Text search narrows across projects, kinds, and labels. Fresh
+        // contexts per phase: fixture targets persist across renders.
+        let search_ctx = egui::Context::default();
+        app.preferences.agents_search = "claude".into();
+        render_agents(&mut app, &search_ctx, vec![]);
+        assert!(agent_target(&search_ctx, "live-row:live-a").is_none());
+        assert!(agent_target(&search_ctx, "live-row:live-b").is_some());
+        assert!(agent_target(&search_ctx, "unverified-row:hook-only").is_none());
+        // The agent filter keeps only the selected kind.
+        let filter_ctx = egui::Context::default();
+        app.preferences.agents_search.clear();
+        app.preferences.agents_filter = "codex".into();
+        render_agents(&mut app, &filter_ctx, vec![]);
+        assert!(agent_target(&filter_ctx, "live-row:live-a").is_some());
+        assert!(agent_target(&filter_ctx, "live-row:live-b").is_none());
+        assert!(agent_target(&filter_ctx, "unverified-row:hook-only").is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn workspace_tab_shows_focused_identity_with_aggregate_attention() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state.sessions = vec![
+            session_fixture("one", SessionKind::Shell),
+            session_fixture("two", SessionKind::Shell),
+        ];
+        app.state.notifications = vec![
+            notice_fixture("wait", "two", AgentState::WaitingPermission, 1),
+            notice_fixture("broke", "one", AgentState::Failed, 2),
+        ];
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(DockState::new(vec![
+                Tab::Terminal("one".into()),
+                Tab::Terminal("two".into()),
+            ])),
+        );
+        app.selected = Some("a".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        assert!(agent_target(&ctx, "workspace-tab:one").is_some());
+        assert!(agent_target(&ctx, "workspace-tab-attention:one").is_some());
     }
 
     #[cfg(feature = "test-support")]

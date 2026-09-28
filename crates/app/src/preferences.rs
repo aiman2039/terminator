@@ -280,6 +280,16 @@ pub enum SidebarTool {
     Git,
     History,
 }
+
+/// Agents sidebar views. Needs attention preserves the existing inbox;
+/// All live is the verified-agent overview; Unread follows read state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentsTab {
+    #[default]
+    NeedsAttention,
+    AllLive,
+    Unread,
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RadioStation {
     pub name: String,
@@ -425,6 +435,18 @@ pub struct UiPreferences {
     pub left_agents: bool,
     pub width: f32,
     pub all_projects: bool,
+    /// Selected Agents sidebar view.
+    #[serde(default)]
+    pub agents_tab: AgentsTab,
+    /// All-live text search (session, project, agent, status).
+    #[serde(default)]
+    pub agents_search: String,
+    /// All-live agent filter: "" for all kinds, else a hook `agent_kind`.
+    #[serde(default)]
+    pub agents_filter: String,
+    /// Collapsed All-live project groups (project ids + "unverified").
+    #[serde(default)]
+    pub agents_collapsed: HashSet<String>,
     pub show_ignored: bool,
     pub typography_migrated: bool,
     pub attention_migrated: bool,
@@ -471,6 +493,10 @@ impl Default for UiPreferences {
             left_agents: false,
             width: 285.0,
             all_projects: false,
+            agents_tab: AgentsTab::NeedsAttention,
+            agents_search: String::new(),
+            agents_filter: String::new(),
+            agents_collapsed: HashSet::new(),
             show_ignored: false,
             typography_migrated: false,
             attention_migrated: false,
@@ -1012,6 +1038,7 @@ mod tests {
             sequence: None,
             updated: 20,
             resume: None,
+            process: None,
         }];
         let ranked = |activity: &HashMap<String, u64>, agents: &[Agent]| {
             ids(VisibleProjects {
@@ -1093,6 +1120,7 @@ mod tests {
             sequence: None,
             updated,
             resume: None,
+            process: None,
         }
     }
 

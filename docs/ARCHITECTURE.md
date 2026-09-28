@@ -26,6 +26,19 @@ A terminal ID is independent of its project path, PID, or provider conversation.
 
 Environment-based session capabilities are the fast path. For agents such as Muse that clear hook environments, installers include the local endpoint paths. The helper must then find an actual live ancestor shell in this daemon's inventory. It never correlates by working directory or window title. A provider running in an unrelated shared process cannot be assigned to a terminal by this fallback.
 
+Live agent identity is observed separately from hook lifecycle. A daemon
+background thread inspects owned live shells every two seconds against one
+batched process inventory (`agent-presence-v1`). Only exact executable names
+and known Node/Bun entrypoints match the shared catalog (Codex, Claude Code,
+Pi, OpenCode, Grok, Muse); arguments, titles, output, and working directories
+never match. Roots keep their PID/start-time identity while running child
+tools, nested agents under a recognized root are ignored, and sibling agents
+each report. Observations ride snapshots additively, merge only from live
+capable owners, are never persisted, and never emit lifecycle events,
+notifications, or resume commands. Hook events carry helper-supplied ancestor
+process identity that the daemon verifies against a fresh same-kind
+observation before linking; unlinked events remain as Last reported state.
+
 `catalog.sqlite3` holds shared projects, layouts, settings, worktrees and the active
 owner. Registered generations each keep a separate `state.sqlite3`, history,
 socket, authentication token, daemon lock and immutable executable copies. Only

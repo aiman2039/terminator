@@ -108,6 +108,7 @@ mod tests {
             summary: "private prompt".into(),
             details: "private details".into(),
             resume: None,
+            process: None,
         }
     }
     #[test]

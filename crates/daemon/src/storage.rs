@@ -19,7 +19,7 @@ impl Store {
         let version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         ensure!(version <= 1, "Database is newer than this application");
         conn.execute_batch("CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL); PRAGMA user_version=1;")?;
-        let state =
+        let mut state: State =
             match conn.query_row::<String, _, _>("SELECT json FROM app_state WHERE id=1", [], |r| {
                 r.get(0)
             }) {
@@ -27,6 +27,8 @@ impl Store {
                 Err(rusqlite::Error::QueryReturnedNoRows) => State::default(),
                 Err(e) => return Err(e.into()),
             };
+        // Presence is live-only; nothing persisted may claim it.
+        state.presence.clear();
         Ok((Self { conn, owner: None }, state))
     }
     pub fn bind_owner(&mut self, owner: String) {
@@ -34,6 +36,7 @@ impl Store {
     }
     pub fn save(&self, state: &State) -> Result<()> {
         let mut owned;
+        let mut stripped;
         let state = if let Some(owner) = &self.owner {
             ensure!(&state.generation == owner, "Session store owner changed");
             ensure!(
@@ -45,9 +48,15 @@ impl Store {
             owned.worktrees.clear();
             owned.selected_project = None;
             owned.generations.clear();
+            owned.presence.clear();
             &owned
-        } else {
+        } else if state.presence.is_empty() {
             state
+        } else {
+            // Presence is live-only and never persisted; no migration needed.
+            stripped = state.clone();
+            stripped.presence.clear();
+            &stripped
         };
         self.conn.execute("INSERT INTO app_state(id,json) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET json=excluded.json WHERE json_extract(excluded.json,'$.revision') >= json_extract(app_state.json,'$.revision')",params![serde_json::to_string(state)?])?;
         Ok(())
@@ -366,6 +375,37 @@ mod tests {
         drop(db);
         let (_, t) = Store::open(&p).unwrap();
         assert_eq!(t.projects.len(), 1);
+    }
+    #[test]
+    fn presence_observations_are_never_persisted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = Paths::at(tmp.path().into());
+        p.init().unwrap();
+        let (db, mut s) = Store::open(&p).unwrap();
+        s.presence.push(agents::TerminalPresence {
+            session_id: "live".into(),
+            generation: s.generation.clone(),
+            agents: vec![agents::DetectedAgent {
+                kind: "codex".into(),
+                process: agents::ProcessIdentity {
+                    pid: 1,
+                    start_time: 1,
+                },
+                foreground: true,
+            }],
+            outcome: agents::PresenceOutcome::Verified,
+            observed_at: now(),
+        });
+        db.save(&s).unwrap();
+        drop(db);
+        let (_, t) = Store::open(&p).unwrap();
+        assert!(t.presence.is_empty());
+        let conn = Connection::open(tmp.path().join("state.sqlite3")).unwrap();
+        let json: String = conn
+            .query_row("SELECT json FROM app_state WHERE id=1", [], |r| r.get(0))
+            .unwrap();
+        let stored: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(stored["presence"], serde_json::json!([]));
     }
     #[test]
     fn history_replay_has_no_escape_side_effects() {

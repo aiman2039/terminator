@@ -226,6 +226,7 @@ impl App {
                 .cloned();
             let mut open = true;
             let mut action = AttentionAction::None;
+            let presented = agent_presence::present_session(&self.state, &n.session_id, now());
             self.popups
                 .window(ctx, "Agent needs attention")
                 .id(egui::Id::new("notice-detail"))
@@ -240,6 +241,9 @@ impl App {
                             session: session.as_ref(),
                             selected: self.active_session.as_ref() == Some(&n.session_id),
                             highlight: true,
+                            brand_icon: presented.brand_icon,
+                            brand_label: presented.brand_label.as_deref(),
+                            show_read: false,
                         },
                     );
                 });

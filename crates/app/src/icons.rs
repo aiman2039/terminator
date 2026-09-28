@@ -362,6 +362,14 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         "FileAxis3D" => egui::include_image!("../assets/icons/file-axis-3d.svg"),
         "FileJson" => egui::include_image!("../assets/icons/file-json.svg"),
         "FileBraces" => egui::include_image!("../assets/icons/file-json.svg"),
+        "AgentCodex" => egui::include_image!("../assets/icons/agent-codex.svg"),
+        "AgentClaude" => egui::include_image!("../assets/icons/agent-claude.svg"),
+        "AgentPi" => egui::include_image!("../assets/icons/agent-pi.svg"),
+        "AgentOpencode" => egui::include_image!("../assets/icons/agent-opencode.svg"),
+        "AgentGrok" => egui::include_image!("../assets/icons/agent-grok.png"),
+        "AgentMuse" => egui::include_image!("../assets/icons/agent-muse.svg"),
+        "AgentGeneric" => egui::include_image!("../assets/icons/agent-generic.svg"),
+        "AgentMultiple" => egui::include_image!("../assets/icons/agent-multiple.svg"),
         _ => egui::include_image!("../assets/icons/file.svg"),
     }
 }

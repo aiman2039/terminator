@@ -465,18 +465,22 @@ pub fn clear_owned(state: &mut State) {
     state.agents.clear();
     state.notifications.clear();
     state.terminal_notices.clear();
+    state.presence.clear();
     state.recent_events.clear();
     state.generations.clear();
 }
 
 /// Read historical records only; a failed connection never changes their lifecycle.
+/// Presence observations are live-only and never part of historical fallback.
 pub fn saved(paths: &Paths) -> Result<State> {
     let conn = Connection::open_with_flags(
         paths.data.join("state.sqlite3"),
         OpenFlags::SQLITE_OPEN_READ_ONLY,
     )?;
     let json: String = conn.query_row("SELECT json FROM app_state WHERE id=1", [], |r| r.get(0))?;
-    Ok(serde_json::from_str(&json)?)
+    let mut state: State = serde_json::from_str(&json)?;
+    state.presence.clear();
+    Ok(state)
 }
 
 /// Lock release plus an absent recorded process proves death. PID reuse is
@@ -484,6 +488,24 @@ pub fn saved(paths: &Paths) -> Result<State> {
 #[must_use]
 pub fn historical(owner: &Generation, active: Option<&str>) -> bool {
     owner.status == Status::Retired && active != Some(owner.id.as_str())
+}
+
+/// True when an owner's presence observations may merge into an aggregate
+/// snapshot: the owner is live (not historical fallback, no health error)
+/// and advertises the presence capability. Shared by the synchronous and
+/// asynchronous generation clients.
+#[must_use]
+pub fn mergeable_presence(
+    owner: &Generation,
+    capabilities: &[String],
+    error: &Option<String>,
+    active: &str,
+) -> bool {
+    error.is_none()
+        && !historical(owner, Some(active))
+        && capabilities
+            .iter()
+            .any(|c| c == crate::AGENT_PRESENCE_CAPABILITY)
 }
 
 fn process_alive(pid: u32) -> bool {
@@ -694,6 +716,11 @@ pub fn snapshot(paths: &Paths) -> Result<State> {
     aggregate.generation = active;
     catalog.refresh(&mut aggregate)?;
     for (owner, state, error) in inventories {
+        // Presence merges only from live owners advertising the capability.
+        // Historical fallback and unavailable owners stay presence-free, so
+        // their hook records render as unverified presence.
+        let present =
+            mergeable_presence(&owner, &state.capabilities, &error, &aggregate.generation);
         aggregate.generations.push(Health {
             live_sessions: state.sessions.iter().filter(|s| s.lifecycle.live()).count(),
             owner,
@@ -706,6 +733,9 @@ pub fn snapshot(paths: &Paths) -> Result<State> {
         aggregate.agents.extend(state.agents);
         aggregate.notifications.extend(state.notifications);
         aggregate.terminal_notices.extend(state.terminal_notices);
+        if present {
+            aggregate.presence.extend(state.presence);
+        }
     }
     Ok(aggregate)
 }
@@ -1424,6 +1454,154 @@ mod tests {
                 .any(|generation| {
                     generation.id == active.id && generation.status == Status::Active
                 })
+        );
+    }
+
+    fn presence_generation(status: Status) -> Generation {
+        Generation {
+            id: "owner".into(),
+            data: "/tmp/owner".into(),
+            runtime: "/tmp/owner-run".into(),
+            version: "1.0.0".into(),
+            build: "fixture".into(),
+            protocol: PROTOCOL_VERSION,
+            catalog: CATALOG_VERSION,
+            status,
+            pid: None,
+        }
+    }
+
+    #[test]
+    fn presence_merges_only_from_live_capable_owners() {
+        let capable = vec![crate::AGENT_PRESENCE_CAPABILITY.into()];
+        // Live owner advertising the capability merges.
+        assert!(mergeable_presence(
+            &presence_generation(Status::Active),
+            &capable,
+            &None,
+            "active",
+        ));
+        assert!(mergeable_presence(
+            &presence_generation(Status::Draining),
+            &capable,
+            &None,
+            "active",
+        ));
+        // Historical fallback never merges, even when capable.
+        assert!(!mergeable_presence(
+            &presence_generation(Status::Retired),
+            &capable,
+            &None,
+            "active",
+        ));
+        // Unavailable owners never merge.
+        assert!(!mergeable_presence(
+            &presence_generation(Status::Active),
+            &capable,
+            &Some("Owner unavailable".into()),
+            "active",
+        ));
+        // Older daemons without the capability never merge.
+        assert!(!mergeable_presence(
+            &presence_generation(Status::Active),
+            &[],
+            &None,
+            "active",
+        ));
+    }
+
+    #[test]
+    fn clear_owned_and_saved_states_carry_no_presence() {
+        let mut state = State {
+            presence: vec![crate::agents::TerminalPresence {
+                session_id: "s".into(),
+                generation: "g".into(),
+                agents: Vec::new(),
+                outcome: crate::agents::PresenceOutcome::Verified,
+                observed_at: now(),
+            }],
+            ..Default::default()
+        };
+        clear_owned(&mut state);
+        assert!(state.presence.is_empty());
+        let (_dir, paths, catalog) = fixture();
+        let g = owner(&paths, &catalog);
+        let mut stored = State {
+            generation: g.id.clone(),
+            presence: vec![crate::agents::TerminalPresence {
+                session_id: "s".into(),
+                generation: g.id.clone(),
+                agents: Vec::new(),
+                outcome: crate::agents::PresenceOutcome::Verified,
+                observed_at: now(),
+            }],
+            ..Default::default()
+        };
+        save(&g, &stored);
+        assert!(saved(&g.paths()).unwrap().presence.is_empty());
+        stored.presence.clear();
+        save(&g, &stored);
+    }
+
+    #[test]
+    fn mixed_snapshot_excludes_historical_and_unavailable_presence() {
+        // No sockets: the live owner is unreachable, so it falls back to its
+        // saved state with an availability error. Neither it nor the retired
+        // owner may contribute presence to the aggregate.
+        let (_dir, paths, mut catalog) = fixture();
+        let retired = owner(&paths, &catalog);
+        let active = owner(&paths, &catalog);
+        catalog.activate(&retired.id).unwrap();
+        catalog.activate(&active.id).unwrap();
+        catalog.retire(&retired.id).unwrap();
+        let observed = |generation: &str| crate::agents::TerminalPresence {
+            session_id: format!("session-{generation}"),
+            generation: generation.into(),
+            agents: vec![crate::agents::DetectedAgent {
+                kind: "codex".into(),
+                process: crate::agents::ProcessIdentity {
+                    pid: 42,
+                    start_time: 42,
+                },
+                foreground: true,
+            }],
+            outcome: crate::agents::PresenceOutcome::Verified,
+            observed_at: now(),
+        };
+        save(
+            &retired,
+            &State {
+                generation: retired.id.clone(),
+                sessions: vec![session(&retired.id, Lifecycle::Ended)],
+                capabilities: vec![crate::AGENT_PRESENCE_CAPABILITY.into()],
+                presence: vec![observed(&retired.id)],
+                ..Default::default()
+            },
+        );
+        save(
+            &active,
+            &State {
+                generation: active.id.clone(),
+                sessions: vec![session(&active.id, Lifecycle::Running)],
+                capabilities: vec![crate::AGENT_PRESENCE_CAPABILITY.into()],
+                presence: vec![observed(&active.id)],
+                ..Default::default()
+            },
+        );
+        let aggregate = snapshot(&paths).unwrap();
+        assert!(aggregate.presence.is_empty());
+        // Sessions and hook records still merge; only presence is excluded.
+        assert_eq!(aggregate.sessions.len(), 2);
+        let health = aggregate
+            .generations
+            .iter()
+            .find(|g| g.owner.id == active.id)
+            .unwrap();
+        assert!(health.error.is_some());
+        assert!(
+            health
+                .capabilities
+                .contains(&crate::AGENT_PRESENCE_CAPABILITY.to_string())
         );
     }
 }

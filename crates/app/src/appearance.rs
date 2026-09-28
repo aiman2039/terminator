@@ -465,6 +465,7 @@ pub fn project_row(
 }
 /// Session row with an optional status-tinted (and spinning) icon and a
 /// muted second line. The subtitle gets its own line; it never overlaps the label.
+/// `brand` paints the stable agent glyph beside the status icon.
 pub struct SessionRowSpec<'a> {
     pub label: &'a str,
     pub icon: &'a str,
@@ -474,6 +475,7 @@ pub struct SessionRowSpec<'a> {
     pub icon_tint: Option<Color32>,
     pub spin: bool,
     pub subtitle: Option<&'a str>,
+    pub brand: Option<&'a str>,
 }
 
 pub const SESSION_ROW_HEIGHT: f32 = 24.0;
@@ -500,6 +502,7 @@ pub fn session_row_spec(ui: &mut egui::Ui, spec: SessionRowSpec<'_>) -> egui::Re
                 icon_tint: spec.icon_tint,
                 spin: spec.spin,
                 subtitle: spec.subtitle,
+                brand: spec.brand,
             },
         )
     })
@@ -527,6 +530,7 @@ struct RowSpec<'a> {
     icon_tint: Option<Color32>,
     spin: bool,
     subtitle: Option<&'a str>,
+    brand: Option<&'a str>,
 }
 
 /// Consistent full-width native sidebar row with fixed icon and status columns.
@@ -551,6 +555,7 @@ pub fn row(
             icon_tint: None,
             spin: false,
             subtitle: None,
+            brand: None,
         },
     )
 }
@@ -566,7 +571,9 @@ fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
         icon_tint,
         spin,
         subtitle,
+        brand,
     } = spec;
+    let label_left = if brand.is_some() { 36.0 } else { 26.0 };
     let response = ui.add_sized(
         [ui.available_width(), height],
         egui::Button::new("").frame(false),
@@ -593,9 +600,9 @@ fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
     };
     let right = response.rect.right() - trailing_width;
     let rect = egui::Rect::from_min_max(
-        egui::pos2(response.rect.left() + 26.0, response.rect.top()),
+        egui::pos2(response.rect.left() + label_left, response.rect.top()),
         egui::pos2(
-            right.max(response.rect.left() + 26.0),
+            right.max(response.rect.left() + label_left),
             response.rect.bottom(),
         ),
     );
@@ -623,9 +630,25 @@ fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
     let block = galley.size().y + sub.as_ref().map_or(0.0, |s| GAP + s.size().y);
     let top = response.rect.center().y - block * 0.5;
     let label_center = top + galley.size().y * 0.5;
+    if let Some(brand) = brand {
+        paint_status_icon(
+            ui,
+            egui::Rect::from_center_size(
+                egui::pos2(response.rect.left() + 9.0, label_center),
+                egui::vec2(14.0, 14.0),
+            ),
+            brand,
+            ICON_COLOR,
+            false,
+        );
+    }
+    let size = if brand.is_some() { 14.0 } else { 16.0 };
     let icon_rect = egui::Rect::from_center_size(
-        egui::pos2(response.rect.left() + 12.0, label_center),
-        egui::vec2(16.0, 16.0),
+        egui::pos2(
+            response.rect.left() + if brand.is_some() { 25.0 } else { 12.0 },
+            label_center,
+        ),
+        egui::vec2(size, size),
     );
     paint_status_icon(ui, icon_rect, icon, icon_tint.unwrap_or(ICON_COLOR), spin);
     let painter = ui.painter().with_clip_rect(rect);
@@ -1279,6 +1302,7 @@ mod row_tests {
                     icon_tint: Some(Color32::BLUE),
                     spin: false,
                     subtitle: Some("Tests pass; ready for review"),
+                    brand: None,
                 },
             );
         });

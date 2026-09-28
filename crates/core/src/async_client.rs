@@ -250,6 +250,15 @@ impl Client {
                 aggregate.generation = active;
                 catalog.refresh(&mut aggregate)?;
                 for (owner, state, error) in inventories {
+                    // Presence merges only from live owners advertising the
+                    // capability; historical and unavailable owners stay
+                    // presence-free so hook records render as unverified.
+                    let present = generations::mergeable_presence(
+                        &owner,
+                        &state.capabilities,
+                        &error,
+                        &aggregate.generation,
+                    );
                     aggregate.generations.push(generations::Health {
                         live_sessions: state.sessions.iter().filter(|s| s.lifecycle.live()).count(),
                         owner,
@@ -262,6 +271,9 @@ impl Client {
                     aggregate.agents.extend(state.agents);
                     aggregate.notifications.extend(state.notifications);
                     aggregate.terminal_notices.extend(state.terminal_notices);
+                    if present {
+                        aggregate.presence.extend(state.presence);
+                    }
                 }
                 Ok(aggregate)
             })
