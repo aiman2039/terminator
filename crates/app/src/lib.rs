@@ -6814,10 +6814,18 @@ mod navigation_tests {
                 modifiers: Default::default(),
             }]);
         }
-        app.process_updates(&ctx);
-        assert!(app.layouts["a"].contains(&Tab::browser_file(
-            std::path::absolute(&path).unwrap_or(path)
-        )));
+        let expected = Tab::browser_file(std::path::absolute(&path).unwrap_or(path));
+        // `process_updates` is budget-limited (2ms/64 items per call, like one
+        // production frame) and drains background service updates before the
+        // click's update. On a loaded runner the click can be deferred past a
+        // single call, so pump until it lands instead of asserting after one.
+        for _ in 0..100 {
+            app.process_updates(&ctx);
+            if app.layouts["a"].contains(&expected) {
+                break;
+            }
+        }
+        assert!(app.layouts["a"].contains(&expected));
         assert!(!requests.try_iter().any(|job| matches!(job, Job::Diff(_))));
     }
     #[test]
