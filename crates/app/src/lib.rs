@@ -25,6 +25,7 @@ mod markdown;
 mod markdown_images;
 mod metadata_refresh;
 mod native_editor;
+mod notify_test;
 mod nvim_rpc;
 mod player;
 mod refresh;
@@ -240,6 +241,10 @@ enum Job {
 
     Diff(Tab),
     Install(String, bool),
+    TestNtfy {
+        channel: String,
+        machine: String,
+    },
     External(PathBuf),
     TestExternal(PathBuf, String, Vec<String>),
 }
