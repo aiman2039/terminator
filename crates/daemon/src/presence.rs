@@ -40,7 +40,7 @@ fn targets(shared: &Shared) -> Vec<agents::ShellTarget> {
 
 /// One batched inspection pass. Runs only on the inspector thread: passes
 /// never overlap and never run during GUI rendering.
-fn inspect_once(shared: &Shared) {
+fn inspect_once(shared: &Shared, system: &mut sysinfo::System) {
     let targets = targets(shared);
     if targets.is_empty() {
         let mut state = shared.state.lock().unwrap();
@@ -50,25 +50,64 @@ fn inspect_once(shared: &Shared) {
         }
         return;
     }
-    let system = sysinfo::System::new_with_specifics(
-        sysinfo::RefreshKind::nothing().with_processes(
-            sysinfo::ProcessRefreshKind::nothing()
-                .with_exe(sysinfo::UpdateKind::Always)
-                .with_cmd(sysinfo::UpdateKind::Always),
-        ),
+    system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::All,
+        true,
+        sysinfo::ProcessRefreshKind::nothing()
+            .with_exe(sysinfo::UpdateKind::Always)
+            .with_cmd(sysinfo::UpdateKind::Always),
     );
-    let procs = agents::snapshot_processes(&system);
+    let procs = agents::snapshot_processes(system);
     let presence = agents::inspect_shells(&procs, &targets, now());
     let mut state = shared.state.lock().unwrap();
-    state.presence = presence;
-    state.revision += 1;
+    update_presence(&mut state, presence);
     // Deliberately no persist: presence never touches SQLite.
+}
+
+/// Snapshot requests check this independently of the inspector, including before
+/// conditional replies. A stalled/panicked inspector must not leave verified
+/// observations behind while the IPC thread continues to answer successfully.
+pub(super) fn expire_observations(state: &mut State, moment: u64) {
+    let mut changed = false;
+    for presence in &mut state.presence {
+        if presence.outcome == agents::PresenceOutcome::Verified
+            && !agents::observation_fresh(presence.observed_at, moment)
+        {
+            presence.outcome = agents::PresenceOutcome::Unavailable;
+            changed = true;
+        }
+    }
+    if changed {
+        state.revision += 1;
+    }
+}
+
+fn update_presence(state: &mut State, presence: Vec<agents::TerminalPresence>) {
+    if presence_changed(&state.presence, &presence) {
+        state.revision += 1;
+    }
+    // Hook linking still needs the latest successful inspection timestamp.
+    state.presence = presence;
+}
+
+fn presence_changed(
+    previous: &[agents::TerminalPresence],
+    current: &[agents::TerminalPresence],
+) -> bool {
+    previous.len() != current.len()
+        || previous.iter().zip(current).any(|(a, b)| {
+            a.session_id != b.session_id
+                || a.generation != b.generation
+                || a.agents != b.agents
+                || a.outcome != b.outcome
+        })
 }
 
 /// Spawn the single inspector thread. Sleep-then-inspect keeps exactly one
 /// pass per interval with no overlapping scans.
 pub(super) fn start(shared: std::sync::Weak<Shared>) {
     thread::spawn(move || {
+        let mut system = sysinfo::System::new();
         loop {
             thread::sleep(Duration::from_secs(agents::INSPECTION_INTERVAL_SECS));
             let Some(shared) = shared.upgrade() else {
@@ -77,7 +116,7 @@ pub(super) fn start(shared: std::sync::Weak<Shared>) {
             if shared.shutdown.load(Ordering::Relaxed) {
                 break;
             }
-            inspect_once(&shared);
+            inspect_once(&shared, &mut system);
         }
     });
 }
@@ -86,6 +125,91 @@ pub(super) fn start(shared: std::sync::Weak<Shared>) {
 mod tests {
     use super::*;
     use std::os::unix::process::CommandExt;
+
+    #[test]
+    fn unchanged_inspection_keeps_revision_but_refreshes_hook_observation() {
+        let mut state = State::default();
+        let mut current = vec![agents::TerminalPresence {
+            session_id: "s".into(),
+            generation: "g".into(),
+            agents: vec![],
+            outcome: agents::PresenceOutcome::Verified,
+            observed_at: 1,
+        }];
+        update_presence(&mut state, current.clone());
+        let revision = state.revision;
+        current[0].observed_at = 3;
+        update_presence(&mut state, current.clone());
+        assert_eq!(state.revision, revision);
+        assert_eq!(state.presence[0].observed_at, 3);
+        current[0].agents.push(agents::DetectedAgent {
+            kind: "codex".into(),
+            process: agents::ProcessIdentity {
+                pid: 42,
+                start_time: 1,
+            },
+            foreground: false,
+        });
+        update_presence(&mut state, current.clone());
+        assert_eq!(state.revision, revision + 1);
+        current[0].agents[0].foreground = true;
+        update_presence(&mut state, current.clone());
+        assert_eq!(state.revision, revision + 2);
+        current[0].outcome = agents::PresenceOutcome::Unavailable;
+        update_presence(&mut state, current);
+        assert_eq!(state.revision, revision + 3);
+        update_presence(&mut state, vec![]);
+        assert_eq!(state.revision, revision + 4);
+    }
+
+    #[test]
+    fn stalled_inspection_expires_once_and_recovers_on_next_scan() {
+        let mut state = State::default();
+        let mut observation = agents::TerminalPresence {
+            session_id: "s".into(),
+            generation: "g".into(),
+            agents: vec![agents::DetectedAgent {
+                kind: "codex".into(),
+                process: agents::ProcessIdentity {
+                    pid: 42,
+                    start_time: 1,
+                },
+                foreground: true,
+            }],
+            outcome: agents::PresenceOutcome::Verified,
+            observed_at: 100,
+        };
+        update_presence(&mut state, vec![observation.clone()]);
+        let verified_hint = state.snapshot_hint();
+        let revision = state.revision;
+        expire_observations(&mut state, 105);
+        assert_eq!(state.snapshot_hint(), verified_hint);
+        expire_observations(&mut state, 106);
+        assert_ne!(
+            state.snapshot_hint(),
+            verified_hint,
+            "expiry must prevent Unchanged"
+        );
+        assert_eq!(state.revision, revision + 1);
+        assert_eq!(
+            state.presence[0].outcome,
+            agents::PresenceOutcome::Unavailable
+        );
+        assert_eq!(state.presence[0].observed_at, 100);
+        let expired_hint = state.snapshot_hint();
+        expire_observations(&mut state, 200);
+        assert_eq!(
+            state.snapshot_hint(),
+            expired_hint,
+            "do not bump repeatedly while stalled"
+        );
+        observation.observed_at = 201;
+        update_presence(&mut state, vec![observation]);
+        expire_observations(&mut state, 201);
+        assert_ne!(state.snapshot_hint(), expired_hint);
+        assert_eq!(state.revision, revision + 2);
+        assert!(agents::presence_verified(state.presence.first(), 201));
+    }
 
     /// Renamed copies of this test binary run only
     /// [`presence_fixture_sleeper`], so fixtures verify appearance and

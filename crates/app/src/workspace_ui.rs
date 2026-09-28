@@ -42,7 +42,6 @@ struct TabFace {
     icon: &'static str,
     sid: Option<String>,
     brand: Option<&'static str>,
-    diagnostics: String,
     status: Option<(AgentState, &'static str, Color32)>,
 }
 
@@ -639,7 +638,7 @@ impl App {
                 .iter()
                 .find(|s| &s.id == sid)
                 .map(|s| {
-                    let presented = super::agent_presence::present_session(&self.state, sid, now());
+                    let presented = self.present_session(sid);
                     TabFace {
                         label: s.label.clone(),
                         icon: if s.kind == SessionKind::Editor {
@@ -649,7 +648,6 @@ impl App {
                         },
                         sid: Some(sid.clone()),
                         brand: presented.brand_icon,
-                        diagnostics: presented.diagnostics,
                         status: presented.lifecycle.map(|lifecycle| {
                             (
                                 lifecycle,
@@ -664,7 +662,6 @@ impl App {
                     icon: "Terminal",
                     sid: None,
                     brand: None,
-                    diagnostics: String::new(),
                     status: None,
                 }),
             Some(Tab::Diff { path, .. }) | Some(Tab::Image { path }) => TabFace {
@@ -680,7 +677,6 @@ impl App {
                 },
                 sid: None,
                 brand: None,
-                diagnostics: String::new(),
                 status: None,
             },
             Some(Tab::Browser { target, .. }) => TabFace {
@@ -688,7 +684,6 @@ impl App {
                 icon: "FileCode",
                 sid: None,
                 brand: None,
-                diagnostics: String::new(),
                 status: None,
             },
             Some(Tab::NativeEditor { path }) => TabFace {
@@ -700,7 +695,6 @@ impl App {
                 icon: "FileCode",
                 sid: None,
                 brand: None,
-                diagnostics: String::new(),
                 status: None,
             },
             Some(Tab::Player) => TabFace {
@@ -708,7 +702,6 @@ impl App {
                 icon: "FileMusic",
                 sid: None,
                 brand: None,
-                diagnostics: String::new(),
                 status: None,
             },
             Some(Tab::CommitLog { .. }) => TabFace {
@@ -716,7 +709,6 @@ impl App {
                 icon: "FileDiff",
                 sid: None,
                 brand: None,
-                diagnostics: String::new(),
                 status: None,
             },
             Some(Tab::Blame { path, .. }) => TabFace {
@@ -727,7 +719,6 @@ impl App {
                 icon: "FileDiff",
                 sid: None,
                 brand: None,
-                diagnostics: String::new(),
                 status: None,
             },
             None => TabFace {
@@ -735,7 +726,6 @@ impl App {
                 icon: "Terminal",
                 sid: None,
                 brand: None,
-                diagnostics: String::new(),
                 status: None,
             },
         }
@@ -1082,28 +1072,34 @@ impl App {
                             {
                                 self.begin_rename(sid, RenameSurface::Workspace);
                             }
-                            let mut tooltip = tab_tooltip(
-                                &face.label,
-                                face.sid.as_ref().and_then(|sid| {
-                                    self.state
-                                        .sessions
-                                        .iter()
-                                        .find(|s| &s.id == sid)
-                                        .map(|s| s.cwd.as_path())
-                                }),
-                            );
-                            if !face.diagnostics.is_empty()
-                                && let Some(first) = face.diagnostics.lines().next()
-                            {
-                                tooltip.push_str(&format!("\n{first}"));
-                            }
-                            if let Some((_, breakdown)) = &badge {
-                                tooltip.push_str(&format!("\nAttention: {breakdown}"));
-                            }
                             response
                                 .clone()
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .on_hover_text(&tooltip);
+                                .on_hover_ui(|ui| {
+                                    let mut tooltip = tab_tooltip(
+                                        &face.label,
+                                        face.sid.as_ref().and_then(|sid| {
+                                            self.state
+                                                .sessions
+                                                .iter()
+                                                .find(|s| &s.id == sid)
+                                                .map(|s| s.cwd.as_path())
+                                        }),
+                                    );
+                                    if let Some(sid) = &face.sid
+                                        && let Some(first) = self
+                                            .present_session(sid)
+                                            .diagnostics(now())
+                                            .lines()
+                                            .next()
+                                    {
+                                        tooltip.push_str(&format!("\n{first}"));
+                                    }
+                                    if let Some((_, breakdown)) = &badge {
+                                        tooltip.push_str(&format!("\nAttention: {breakdown}"));
+                                    }
+                                    ui.label(tooltip);
+                                });
                             response.widget_info(|| {
                                 egui::WidgetInfo::selected(
                                     egui::WidgetType::SelectableLabel,
@@ -2766,7 +2762,7 @@ impl TabViewer for Viewer<'_> {
                     .unwrap_or("Session".into());
                 // Split-pane headers and terminal-strip tabs share the
                 // presentation model: waiting attention first, then failures.
-                let presented = super::agent_presence::present_session(&self.app.state, sid, now());
+                let presented = self.app.present_session(sid);
                 if presented.attention.waiting() > 0 {
                     format!("● {label}").into()
                 } else if presented.attention.failed > 0 {
@@ -2830,8 +2826,10 @@ impl TabViewer for Viewer<'_> {
     }
     fn on_tab_button(&mut self, tab: &mut Tab, response: &egui::Response) {
         if let Tab::Terminal(sid) = tab {
-            let presented = super::agent_presence::present_session(&self.app.state, sid, now());
-            response.clone().on_hover_text(presented.diagnostics);
+            let presented = self.app.present_session(sid);
+            response.clone().on_hover_ui(|ui| {
+                ui.label(presented.diagnostics(now()));
+            });
         }
         if response.hovered() && !response.dragged() {
             response.ctx.set_cursor_icon(egui::CursorIcon::PointingHand);

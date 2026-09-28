@@ -226,7 +226,7 @@ impl App {
                 .cloned();
             let mut open = true;
             let mut action = AttentionAction::None;
-            let presented = agent_presence::present_session(&self.state, &n.session_id, now());
+            let presented = self.present_session(&n.session_id);
             self.popups
                 .window(ctx, "Agent needs attention")
                 .id(egui::Id::new("notice-detail"))

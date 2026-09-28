@@ -38,6 +38,7 @@ struct Inner {
     events: tokio::sync::mpsc::Sender<Update>,
     ctx: egui::Context,
     paused: std::sync::atomic::AtomicBool,
+    snapshot_received: std::sync::Mutex<Option<Instant>>,
     editors: std::sync::Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     snapshot: Arc<std::sync::Mutex<Option<Box<State>>>>,
 }
@@ -95,6 +96,7 @@ impl Services {
             events: events.clone(),
             ctx,
             paused: Default::default(),
+            snapshot_received: Default::default(),
             editors: Default::default(),
             snapshot: snapshot.clone(),
         }));
@@ -124,6 +126,11 @@ impl Services {
                 snapshot,
             },
         ))
+    }
+    pub fn presence_fresh(&self) -> Option<bool> {
+        self.0.snapshot_received.lock().unwrap().map(|received| {
+            received.elapsed().as_secs() <= terminator_core::agents::STALE_AFTER_SECS
+        })
     }
     pub fn client(&self) -> &Client {
         &self.0.client
@@ -299,6 +306,9 @@ impl Services {
                     _ = token.cancelled() => break,
                     result = service.client().snapshot(revision.clone()) => result,
                 };
+                if matches!(&result, Ok(Response::State(_) | Response::Unchanged)) {
+                    *service.0.snapshot_received.lock().unwrap() = Some(Instant::now());
+                }
                 let update = match result {
                     Ok(Response::State(state)) => {
                         let paths = service.client().paths.clone();

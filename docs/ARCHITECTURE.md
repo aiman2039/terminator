@@ -38,6 +38,19 @@ capable owners, are never persisted, and never emit lifecycle events,
 notifications, or resume commands. Hook events carry helper-supplied ancestor
 process identity that the daemon verifies against a fresh same-kind
 observation before linking; unlinked events remain as Last reported state.
+The inspector reuses its process inventory and only changes the revision when
+presence identity, foreground association, or inspection outcome changes; it still
+refreshes observation timestamps for hook validation. Independently of the
+inspector thread, snapshot requests mark verified observations older than five
+seconds unavailable and bump the revision once, before checking conditional
+snapshot hints. A resumed successful inspection restores verification and bumps
+the revision again. GUI presence freshness uses the last successful snapshot
+reply (including unchanged replies), with owner
+availability checked separately. Unchanged replies do not request a repaint.
+Session presentations are cached until an accepted snapshot, local notice action,
+snooze expiry, or freshness transition; diagnostic strings are built on hover.
+Attention badges and navigation both exclude ended sessions. Navigation advances
+from the active terminal, and unread rows retain creation-time ordering when read.
 
 `catalog.sqlite3` holds shared projects, layouts, settings, worktrees and the active
 owner. Registered generations each keep a separate `state.sqlite3`, history,

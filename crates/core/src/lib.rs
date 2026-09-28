@@ -222,7 +222,7 @@ pub struct Session {
     pub truncated: bool,
     pub cwd_confirmed: bool,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Project {
     pub id: String,
     pub name: String,

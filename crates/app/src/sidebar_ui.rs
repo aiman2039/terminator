@@ -279,9 +279,20 @@ impl App {
         let _ = menu;
     }
 
-    pub(super) fn visible_projects(&self) -> Vec<Project> {
+    fn sidebar_project(&self, project: &Project) -> std::sync::Arc<Project> {
+        let mut cached = self.sidebar_projects.borrow_mut();
+        let entry = cached
+            .entry(project.id.clone())
+            .or_insert_with(|| std::sync::Arc::new(project.clone()));
+        if entry.as_ref() != project {
+            *entry = std::sync::Arc::new(project.clone());
+        }
+        entry.clone()
+    }
+
+    pub(super) fn visible_projects(&self) -> Vec<std::sync::Arc<Project>> {
         sort_visible_projects(VisibleProjects {
-            projects: self.state.projects.clone(),
+            projects: &self.state.projects,
             hidden: &self.preferences.hidden_projects,
             sort: self.preferences.project_sort,
             activity: &self.preferences.project_activity,
@@ -290,6 +301,9 @@ impl App {
             notifications: &self.state.notifications,
             terminal_notices: &self.state.terminal_notices,
         })
+        .into_iter()
+        .map(|project| self.sidebar_project(project))
+        .collect()
     }
     pub(super) fn projects(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
@@ -323,12 +337,13 @@ impl App {
             .filter(|s| s.lifecycle.live() && s.kind != SessionKind::Editor)
             .count();
         let footer = 28.0;
+        let projects = self.visible_projects();
         appearance::sidebar_scroll("projects")
             .max_height((ui.available_height() - footer).max(0.0))
             .show(ui, |ui| {
-                for p in self.visible_projects() {
+                for p in &projects {
                     if self.managed_worktree(&p.id).is_some()
-                        && self.visible_projects().iter().any(|parent| {
+                        && projects.iter().any(|parent| {
                             self.worktree_children(parent)
                                 .iter()
                                 .any(|worktree| worktree.project_id == p.id)
@@ -448,7 +463,7 @@ impl App {
                                     self.session_row(ui, session);
                                 }
                                 let children: Vec<_> = self
-                                    .worktree_children(&p)
+                                    .worktree_children(p)
                                     .into_iter()
                                     .map(|worktree| worktree.project_id.clone())
                                     .collect();
@@ -480,7 +495,7 @@ impl App {
         ui.weak(format!("{live} live sessions")).on_hover_text("Sessions continue when this window closes. Ended sessions remain in History until removed.");
     }
     fn session_row(&mut self, ui: &mut egui::Ui, session: &Session) {
-        let presented = super::agent_presence::present_session(&self.state, &session.id, now());
+        let presented = self.present_session(&session.id);
         let summary = session_summary(&self.state.notifications, &session.id, presented.lifecycle);
         let terminal_note = self
             .state
@@ -536,18 +551,20 @@ impl App {
                 brand: presented.brand_icon,
             },
         )
-        .on_hover_text(format!(
-            "{}{}{}",
-            presented.diagnostics,
-            if secondary.is_empty() {
-                String::new()
-            } else {
-                format!("\n{secondary}")
-            },
-            terminal_note
-                .map(|n| format!("\nTerminal: {}\n{}", n.title, n.body))
-                .unwrap_or_default()
-        ));
+        .on_hover_ui(|ui| {
+            ui.label(format!(
+                "{}{}{}",
+                presented.diagnostics(now()),
+                if secondary.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n{secondary}")
+                },
+                terminal_note
+                    .map(|n| format!("\nTerminal: {}\n{}", n.title, n.body))
+                    .unwrap_or_default()
+            ));
+        });
         #[cfg(feature = "test-support")]
         diagnostics::record(
             ui.ctx(),
@@ -889,8 +906,7 @@ impl App {
                     .cloned();
                 let highlight = self.detail.as_ref() == Some(&notice.id);
                 let selected = self.active_session.as_ref() == Some(&notice.session_id);
-                let presented =
-                    super::agent_presence::present_session(&self.state, &notice.session_id, now());
+                let presented = self.present_session(&notice.session_id);
                 let action = attention_card(
                     ui,
                     AttentionCard {
@@ -964,7 +980,7 @@ impl App {
             })
             .cloned()
             .collect();
-        notices.sort_by_key(|notice| (notice.read, Reverse(notice.created)));
+        notices.sort_by_key(|notice| Reverse(notice.created));
         notices
     }
 
@@ -993,8 +1009,7 @@ impl App {
                 let highlight = self.detail.as_ref() == Some(&notice.id)
                     || self.unread_selected.as_deref() == Some(notice.id.as_str());
                 let selected = self.active_session.as_ref() == Some(&notice.session_id);
-                let presented =
-                    super::agent_presence::present_session(&self.state, &notice.session_id, now());
+                let presented = self.present_session(&notice.session_id);
                 let action = attention_card(
                     ui,
                     AttentionCard {
@@ -1036,11 +1051,28 @@ impl App {
             }
             self.agents_filter_menu(ui);
         });
-        let moment = now();
         let query = self.preferences.agents_search.trim().to_lowercase();
         let kind_filter = self.preferences.agents_filter.clone();
-        let live = super::agent_presence::live_sessions(&self.state, moment);
-        let unverified = super::agent_presence::unverified_sessions(&self.state, moment);
+        let live: Vec<_> = self
+            .state
+            .sessions
+            .iter()
+            .filter(|s| s.lifecycle.live())
+            .filter_map(|s| {
+                let p = self.present_session(&s.id);
+                p.live.then(|| (s, p.detected_kinds.clone()))
+            })
+            .collect();
+        let unverified: Vec<_> = self
+            .state
+            .sessions
+            .iter()
+            .filter(|s| s.lifecycle.live())
+            .filter(|s| {
+                let presented = self.present_session(&s.id);
+                !presented.live && presented.lifecycle.is_some()
+            })
+            .collect();
         let matches = |session: &Session, kinds: &[String]| -> bool {
             if !kind_filter.is_empty() && !kinds.iter().any(|k| k == &kind_filter) {
                 return false;
@@ -1055,8 +1087,7 @@ impl App {
                 .find(|p| p.id == session.project_id)
                 .map(|p| p.name.to_lowercase())
                 .unwrap_or_default();
-            let presented =
-                super::agent_presence::present_session(&self.state, &session.id, moment);
+            let presented = self.present_session(&session.id);
             let mut haystack = format!(
                 "{} {project} {}",
                 session.label.to_lowercase(),
@@ -1097,7 +1128,11 @@ impl App {
                 return;
             }
             // Stable project order; worktree checkouts are their own groups.
-            for project in self.state.projects.clone() {
+            let groups: Vec<_> = self.state.projects.iter()
+                .filter(|p| live.iter().any(|(s, _)| s.project_id == p.id))
+                .map(|p| self.sidebar_project(p))
+                .collect();
+            for project in groups {
                 let sessions: Vec<_> = live
                     .iter()
                     .filter(|(session, _)| session.project_id == project.id)
@@ -1190,7 +1225,7 @@ impl App {
     }
 
     fn live_agent_row(&mut self, ui: &mut egui::Ui, session: &Session, target: &str) {
-        let presented = super::agent_presence::present_session(&self.state, &session.id, now());
+        let presented = self.present_session(&session.id);
         let mut subtitle = match (&presented.brand_label, presented.status_label.as_str()) {
             (Some(brand), status) => format!("{brand} · {status}"),
             (None, status) => status.to_string(),
@@ -1222,7 +1257,9 @@ impl App {
                 brand: presented.brand_icon,
             },
         )
-        .on_hover_text(presented.diagnostics.clone());
+        .on_hover_ui(|ui| {
+            ui.label(presented.diagnostics(now()));
+        });
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), &format!("{target}:{}", session.id), response.rect);
         #[cfg(not(feature = "test-support"))]
@@ -1233,20 +1270,6 @@ impl App {
     }
 
     fn agents_filter_menu(&mut self, ui: &mut egui::Ui) {
-        let mut kinds: Vec<String> = self
-            .state
-            .agents
-            .iter()
-            .map(|a| a.kind.clone())
-            .chain(
-                self.state
-                    .presence
-                    .iter()
-                    .flat_map(|p| p.agents.iter().map(|a| a.kind.clone())),
-            )
-            .collect();
-        kinds.sort();
-        kinds.dedup();
         ui.spacing_mut().interact_size.y = 22.0;
         ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
         let current = self.preferences.agents_filter.clone();
@@ -1256,6 +1279,20 @@ impl App {
             terminator_core::agents::display_name(&current).to_string()
         };
         let menu = appearance::menu_button(ui, &label, |ui| {
+            let mut kinds: Vec<String> = self
+                .state
+                .agents
+                .iter()
+                .map(|a| a.kind.clone())
+                .chain(
+                    self.state
+                        .presence
+                        .iter()
+                        .flat_map(|p| p.agents.iter().map(|a| a.kind.clone())),
+                )
+                .collect();
+            kinds.sort();
+            kinds.dedup();
             for kind in std::iter::once(String::new()).chain(kinds) {
                 let name = if kind.is_empty() {
                     "All agents".to_string()
@@ -1382,6 +1419,9 @@ impl App {
         })
     }
     pub(super) fn apply_notice_action(&mut self, id: String, action: AttentionAction) {
+        if !matches!(action, AttentionAction::None) {
+            self.presentations.get_mut().clear();
+        }
         match action {
             AttentionAction::None => {}
             AttentionAction::Go => {

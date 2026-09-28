@@ -47,7 +47,7 @@ impl HistorySort {
 }
 
 pub struct VisibleProjects<'a> {
-    pub projects: Vec<Project>,
+    pub projects: &'a [Project],
     pub hidden: &'a HashSet<String>,
     pub sort: ProjectSort,
     pub activity: &'a HashMap<String, u64>,
@@ -57,9 +57,9 @@ pub struct VisibleProjects<'a> {
     pub terminal_notices: &'a [TerminalNotice],
 }
 
-pub fn sort_visible_projects(input: VisibleProjects<'_>) -> Vec<Project> {
+pub fn sort_visible_projects<'a>(input: VisibleProjects<'a>) -> Vec<&'a Project> {
     let VisibleProjects {
-        mut projects,
+        projects,
         hidden,
         sort,
         activity,
@@ -68,7 +68,10 @@ pub fn sort_visible_projects(input: VisibleProjects<'_>) -> Vec<Project> {
         notifications,
         terminal_notices,
     } = input;
-    projects.retain(|project| !hidden.contains(&project.id));
+    let mut projects: Vec<_> = projects
+        .iter()
+        .filter(|project| !hidden.contains(&project.id))
+        .collect();
     let times = project_times(ProjectTimes {
         sessions,
         agents,
@@ -88,9 +91,9 @@ struct ProjectTimes<'a> {
     activity: &'a HashMap<String, u64>,
 }
 
-fn apply_sort(sort: ProjectSort, projects: &mut [Project], times: &HashMap<String, u64>) {
+fn apply_sort(sort: ProjectSort, projects: &mut [&Project], times: &HashMap<String, u64>) {
     match sort {
-        ProjectSort::NameAsc => projects.sort_by(name_order),
+        ProjectSort::NameAsc => projects.sort_by(|left, right| name_order(left, right)),
         ProjectSort::NameDesc => projects.sort_by(|left, right| name_order(right, left)),
         ProjectSort::LatestActivity => projects.sort_by(|left, right| {
             times
@@ -992,7 +995,7 @@ mod tests {
     fn ids(input: VisibleProjects<'_>) -> Vec<String> {
         sort_visible_projects(input)
             .into_iter()
-            .map(|project| project.id)
+            .map(|project| project.id.clone())
             .collect()
     }
 
@@ -1006,8 +1009,8 @@ mod tests {
             project("m", "Banana"),
         ];
         let empty = HashMap::new();
-        let input = |sort: ProjectSort, projects: Vec<Project>| VisibleProjects {
-            projects,
+        let input = |sort: ProjectSort| VisibleProjects {
+            projects: &projects,
             hidden: &hidden,
             sort,
             activity: &empty,
@@ -1016,11 +1019,8 @@ mod tests {
             notifications: &[],
             terminal_notices: &[],
         };
-        assert_eq!(
-            ids(input(ProjectSort::NameAsc, projects.clone())),
-            ["a", "m", "z"]
-        );
-        assert_eq!(ids(input(ProjectSort::NameDesc, projects)), ["z", "m", "a"]);
+        assert_eq!(ids(input(ProjectSort::NameAsc)), ["a", "m", "z"]);
+        assert_eq!(ids(input(ProjectSort::NameDesc)), ["z", "m", "a"]);
     }
 
     #[test]
@@ -1042,7 +1042,7 @@ mod tests {
         }];
         let ranked = |activity: &HashMap<String, u64>, agents: &[Agent]| {
             ids(VisibleProjects {
-                projects: projects.clone(),
+                projects: &projects,
                 hidden: &hidden,
                 sort: ProjectSort::LatestActivity,
                 activity,
@@ -1090,7 +1090,7 @@ mod tests {
         }];
         assert_eq!(
             ids(VisibleProjects {
-                projects: vec![project("a", "a"), project("b", "b")],
+                projects: &[project("a", "a"), project("b", "b")],
                 hidden: &hidden,
                 sort: ProjectSort::LatestActivity,
                 activity: &empty,

@@ -373,3 +373,33 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         _ => egui::include_image!("../assets/icons/file.svg"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grok_icon_decodes_with_application_loaders() {
+        let ctx = egui::Context::default();
+        crate::appearance::install(&ctx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let loaded = source("AgentGrok")
+                .load(
+                    &ctx,
+                    egui::TextureOptions::LINEAR,
+                    egui::SizeHint::Width(24),
+                )
+                .expect("bundled Grok PNG must have an installed decoder");
+            if let egui::load::TexturePoll::Ready { texture } = loaded {
+                assert!(texture.size.x > 0.0 && texture.size.y > 0.0);
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Grok decoder stayed pending"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+}

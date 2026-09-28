@@ -739,9 +739,9 @@ impl Shared {
                 return Ok(Response::Text(screen));
             }
             Request::Snapshot => {
-                return Ok(Response::State(Box::new(
-                    self.state.lock().unwrap().clone(),
-                )));
+                let mut state = self.state.lock().unwrap();
+                presence::expire_observations(&mut state, now());
+                return Ok(Response::State(Box::new(state.clone())));
             }
             Request::Heartbeat { focused } => {
                 *self.focused.lock().unwrap() = (focused, Instant::now());
@@ -1126,12 +1126,10 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
             state.attachment_helper_available = Some(available);
             state.revision += 1;
         }
-    }
-    if matches!(env.request, Request::Snapshot)
-        && let Some(hint) = &env.snapshot_hint
-    {
-        let state = shared.state.lock().unwrap();
-        if hint == &state.snapshot_hint() {
+        presence::expire_observations(&mut state, now());
+        if let Some(hint) = &env.snapshot_hint
+            && hint == &state.snapshot_hint()
+        {
             write_frame(&mut stream, &Response::Unchanged)?;
             return Ok(());
         }

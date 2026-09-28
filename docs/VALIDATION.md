@@ -1,5 +1,45 @@
 # Validation evidence — 2026-09-08
 
+## Grok decoder and inspector expiry follow-up (2026-09-28)
+
+- Enabled egui_extras' image loader for the bundled Grok PNG; the existing image
+  dependency already enables PNG. A regression loads the actual asset through
+  the application's installed loaders and waits for a nonempty texture.
+- Snapshot handling expires verified observations older than five seconds before
+  comparing revision hints, independently of the inspector thread. A deterministic
+  test verifies the five-second boundary, a single revision bump while stalled,
+  unchanged replies after expiry, and recovery on the next successful inspection.
+  The GUI cache test also rejects an unavailable observation despite fresh IPC.
+- 16 focused tests passed: icon decoding (1), presence presentation/cache (9),
+  All-live egui rendering (1), and daemon presence (5, including two real-process
+  fixtures). Strict workspace Clippy with all targets/features, formatting, and
+  diff whitespace checks passed.
+- Removed the duplicate presentation lookup and split the project-group chain.
+  Optional cache refactors remain deferred; no 50-session profiling, native GUI
+  run, live inspector fault injection, or running-daemon replacement was done.
+
+## Agent visibility review fixes (2026-09-28)
+
+- 33 focused app tests passed with all features: shared presentation/cache (9),
+  attention navigation (2), unread ordering/counts (3), All-live and workspace-tab
+  rendering (2), project sidebar sorting (1), and preferences (16).
+- Four daemon presence tests passed, including two real-process fixtures and a
+  regression proving unchanged inspections refresh hook timestamps without
+  incrementing revision; agent appearance, foreground changes, unavailable
+  inspection, and removal increment revision.
+- Cache regression covers reuse across time, successful unchanged-snapshot
+  freshness, loss/recovery of snapshot freshness, snooze expiry, and ended-session
+  exclusion. Navigation follows the active terminal even after manual selection;
+  marking the newest unread row read preserves its position.
+- `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`,
+  `cargo fmt --all --check`, and `git diff --check` passed.
+- Native desktop interaction, live daemon upgrade, real PTYs, and performance
+  profiling were not run for this follow-up. Render tests use the egui fixture;
+  the daemon process fixtures launch test sleepers, not paid agents. No live
+  sessions, installed hooks, or user configuration changed.
+- Removed the stale untracked `PLAN.md`; preserved the pre-existing 0.52.0 version
+  changes without committing them.
+
 ## Agent identity and live visibility (2026-09-28)
 
 - Shared catalog (`crates/core/src/agents.rs`): 11 unit tests passed —

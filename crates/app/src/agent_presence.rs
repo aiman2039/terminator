@@ -56,9 +56,18 @@ pub fn notice_pending(notice: &terminator_core::Notification, now: u64) -> bool 
 /// Aggregate pending attention over a set of terminal sessions.
 #[must_use]
 pub fn tab_attention(state: &State, session_ids: &[String], now: u64) -> AttentionCounts {
+    let live: std::collections::HashSet<_> = state
+        .sessions
+        .iter()
+        .filter(|s| s.lifecycle.live())
+        .map(|s| s.id.as_str())
+        .collect();
     let mut counts = AttentionCounts::default();
     for notice in &state.notifications {
-        if !session_ids.contains(&notice.session_id) || !notice_pending(notice, now) {
+        if !live.contains(notice.session_id.as_str())
+            || !session_ids.contains(&notice.session_id)
+            || !notice_pending(notice, now)
+        {
             continue;
         }
         match notice.state {
@@ -128,8 +137,92 @@ pub struct AgentPresentation {
     pub spin: bool,
     pub unread: usize,
     pub attention: AttentionCounts,
-    /// Tooltip/details text. Never contains command arguments.
-    pub diagnostics: String,
+    /// Deferred tooltip inputs. Never contain command arguments.
+    diagnostics: Option<Diagnostics>,
+}
+
+#[derive(Clone, Debug)]
+struct Diagnostics {
+    session: Session,
+    presence: Option<agents::TerminalPresence>,
+    detected: Vec<agents::DetectedAgent>,
+    hook: Option<terminator_core::Agent>,
+    support: OwnerSupport,
+    hook_linked: bool,
+}
+
+impl AgentPresentation {
+    pub fn diagnostics(&self, now: u64) -> String {
+        let Some(d) = &self.diagnostics else {
+            return "Unknown session".into();
+        };
+        diagnostics_text(
+            &d.session,
+            d.presence.as_ref(),
+            &d.detected,
+            d.hook.as_ref(),
+            d.support,
+            self.verified,
+            d.hook_linked,
+            &self.status_label,
+            self.unread,
+            now,
+        )
+    }
+}
+
+/// Rebuilt on snapshot/local mutation, freshness changes, and snooze expiry.
+/// Time alone does not rebuild stable presentations on every frame.
+#[derive(Default)]
+pub struct PresentationCache {
+    entries: std::collections::HashMap<String, std::sync::Arc<AgentPresentation>>,
+    fresh: Option<bool>,
+    expires: u64,
+}
+impl PresentationCache {
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+    pub fn get(
+        &mut self,
+        state: &State,
+        id: &str,
+        now: u64,
+        fresh: Option<bool>,
+    ) -> std::sync::Arc<AgentPresentation> {
+        if self.entries.is_empty() || self.fresh != fresh || now >= self.expires {
+            self.entries = state
+                .sessions
+                .iter()
+                .map(|s| {
+                    (
+                        s.id.clone(),
+                        std::sync::Arc::new(present_session_with_freshness(
+                            state, &s.id, now, fresh,
+                        )),
+                    )
+                })
+                .collect();
+            self.fresh = fresh;
+            self.expires = state
+                .notifications
+                .iter()
+                .map(|n| n.snoozed_until)
+                .chain(
+                    state
+                        .presence
+                        .iter()
+                        .filter(|_| fresh.is_none())
+                        .map(|p| p.observed_at.saturating_add(agents::STALE_AFTER_SECS + 1)),
+                )
+                .filter(|at| *at > now)
+                .min()
+                .unwrap_or(u64::MAX);
+        }
+        self.entries.get(id).cloned().unwrap_or_else(|| {
+            std::sync::Arc::new(present_session_with_freshness(state, id, now, fresh))
+        })
+    }
 }
 
 fn ago(timestamp: u64, now: u64) -> String {
@@ -145,9 +238,19 @@ fn ago(timestamp: u64, now: u64) -> String {
 
 /// Present one terminal session. Callers must pass the current time; the
 /// model never reads the clock itself so tests stay deterministic.
+#[cfg(test)]
 #[must_use]
 pub fn present_session(state: &State, session_id: &str, now: u64) -> AgentPresentation {
-    let empty = |diagnostics: String| AgentPresentation {
+    present_session_with_freshness(state, session_id, now, None)
+}
+
+fn present_session_with_freshness(
+    state: &State,
+    session_id: &str,
+    now: u64,
+    fresh: Option<bool>,
+) -> AgentPresentation {
+    let empty = || AgentPresentation {
         brand_icon: None,
         brand_label: None,
         detected_kinds: Vec::new(),
@@ -159,15 +262,18 @@ pub fn present_session(state: &State, session_id: &str, now: u64) -> AgentPresen
         spin: false,
         unread: 0,
         attention: AttentionCounts::default(),
-        diagnostics,
+        diagnostics: None,
     };
     let Some(session) = state.sessions.iter().find(|s| s.id == session_id) else {
-        return empty("Unknown session".into());
+        return empty();
     };
     let support = owner_support(state, session);
     let presence = state.presence.iter().find(|p| p.session_id == session_id);
-    let verified =
-        support.supported && support.available && agents::presence_verified(presence, now);
+    let verified = session.lifecycle.live()
+        && support.supported
+        && support.available
+        && presence.is_some_and(|p| p.outcome == PresenceOutcome::Verified)
+        && fresh.unwrap_or_else(|| agents::presence_verified(presence, now));
     let detected: Vec<_> = if verified {
         presence.map(|p| p.agents.clone()).unwrap_or_default()
     } else {
@@ -217,18 +323,14 @@ pub fn present_session(state: &State, session_id: &str, now: u64) -> AgentPresen
         .iter()
         .filter(|n| n.session_id == session_id && !n.read && notice_pending(n, now))
         .count();
-    let diagnostics = diagnostics_text(
-        session,
-        presence,
-        &detected,
-        hook,
+    let diagnostics = Some(Diagnostics {
+        session: session.clone(),
+        presence: presence.cloned(),
+        detected: detected.clone(),
+        hook: hook.cloned(),
         support,
-        verified,
         hook_linked,
-        &status_label,
-        unread,
-        now,
-    );
+    });
     AgentPresentation {
         brand_icon,
         brand_label,
@@ -329,6 +431,7 @@ fn diagnostics_text(
 }
 
 /// Sessions with verified live agents, for the All-live view.
+#[cfg(test)]
 #[must_use]
 pub fn live_sessions(state: &State, now: u64) -> Vec<(&Session, Vec<String>)> {
     state
@@ -349,6 +452,7 @@ pub fn live_sessions(state: &State, now: u64) -> Vec<(&Session, Vec<String>)> {
 /// Live sessions with hook records but no verified live agent. Covers older
 /// daemons, unavailable owners, stale observations, detection failures, and
 /// agents that already exited: all render as presence unverified.
+#[cfg(test)]
 #[must_use]
 pub fn unverified_sessions(state: &State, now: u64) -> Vec<&Session> {
     state
@@ -433,6 +537,62 @@ mod tests {
     }
 
     #[test]
+    fn cache_reuses_presentations_and_expires_snoozes_and_snapshot_health() {
+        let mut state = State::default();
+        state.capabilities.push(AGENT_PRESENCE_CAPABILITY.into());
+        state.sessions.push(session("s"));
+        state.presence.push(agents::TerminalPresence {
+            session_id: "s".into(),
+            generation: "g".into(),
+            agents: vec![],
+            outcome: PresenceOutcome::Verified,
+            observed_at: 1,
+        });
+        let mut cache = PresentationCache::default();
+        let first = cache.get(&state, "s", 100, Some(true));
+        assert!(
+            first.verified,
+            "successful unchanged snapshots keep presence fresh"
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &first,
+            &cache.get(&state, "s", 200, Some(true))
+        ));
+        assert!(!cache.get(&state, "s", 200, Some(false)).verified);
+        assert!(cache.get(&state, "s", 201, Some(true)).verified);
+        // A responsive daemon can explicitly expire a stalled inspector's data.
+        state.presence[0].outcome = PresenceOutcome::Unavailable;
+        cache.clear();
+        assert!(!cache.get(&state, "s", 202, Some(true)).verified);
+        state.presence[0].outcome = PresenceOutcome::Verified;
+        state.presence[0].observed_at = 203;
+        cache.clear();
+        assert!(cache.get(&state, "s", 203, Some(true)).verified);
+        state.notifications.push(Notification {
+            id: "n".into(),
+            session_id: "s".into(),
+            invocation_id: "i".into(),
+            request_id: None,
+            state: AgentState::WaitingInput,
+            summary: String::new(),
+            details: String::new(),
+            created: 100,
+            read: false,
+            dismissed: false,
+            resolved: false,
+            snoozed_until: 300,
+        });
+        cache.clear();
+        assert_eq!(cache.get(&state, "s", 299, Some(true)).attention.input, 0);
+        assert_eq!(cache.get(&state, "s", 300, Some(true)).attention.input, 1);
+        state.sessions[0].lifecycle = Lifecycle::Ended;
+        cache.clear();
+        let ended = cache.get(&state, "s", 301, Some(true));
+        assert!(!ended.verified);
+        assert!(ended.attention.is_empty());
+    }
+
+    #[test]
     fn verified_detection_pairs_brand_with_hook_status() {
         let mut state = State::default();
         state.sessions.push(session("s"));
@@ -446,8 +606,12 @@ mod tests {
         assert_eq!(presented.status_label, "Working");
         assert_eq!(presented.status_icon, "LoaderCircle");
         assert!(presented.spin);
-        assert!(presented.diagnostics.contains("process inspection"));
-        assert!(presented.diagnostics.contains("linked to live process"));
+        assert!(presented.diagnostics(now()).contains("process inspection"));
+        assert!(
+            presented
+                .diagnostics(now())
+                .contains("linked to live process")
+        );
     }
 
     #[test]
@@ -461,7 +625,7 @@ mod tests {
         assert_eq!(presented.brand_label.as_deref(), Some("Pi"));
         assert_eq!(presented.status_label, "Status unavailable");
         assert!(!presented.spin);
-        assert!(presented.diagnostics.contains("Hook: none reported"));
+        assert!(presented.diagnostics(now()).contains("Hook: none reported"));
     }
 
     #[test]
@@ -473,8 +637,8 @@ mod tests {
         assert!(!presented.verified && !presented.live);
         assert_eq!(presented.brand_icon, Some(agents::GENERIC_ICON));
         assert_eq!(presented.status_label, "Needs input");
-        assert!(presented.diagnostics.contains("unsupported daemon"));
-        assert!(presented.diagnostics.contains("last reported"));
+        assert!(presented.diagnostics(now()).contains("unsupported daemon"));
+        assert!(presented.diagnostics(now()).contains("last reported"));
     }
 
     #[test]
@@ -505,7 +669,8 @@ mod tests {
         assert_eq!(presented.brand_icon, Some(agents::MULTIPLE_ICON));
         assert_eq!(presented.brand_label.as_deref(), Some("2 agents"));
         assert!(
-            presented.diagnostics.contains("Codex") && presented.diagnostics.contains("Claude")
+            presented.diagnostics(now()).contains("Codex")
+                && presented.diagnostics(now()).contains("Claude")
         );
     }
 
@@ -536,15 +701,15 @@ mod tests {
             let presented = present_session(&state, "s", now());
             assert!(!presented.verified && !presented.live, "{needle}");
             assert!(
-                presented.diagnostics.contains("last reported")
-                    || presented.diagnostics.contains("Hook: none reported"),
+                presented.diagnostics(now()).contains("last reported")
+                    || presented.diagnostics(now()).contains("Hook: none reported"),
                 "{}",
-                presented.diagnostics
+                presented.diagnostics(now())
             );
             assert!(
-                presented.diagnostics.contains(needle),
+                presented.diagnostics(now()).contains(needle),
                 "{}",
-                presented.diagnostics
+                presented.diagnostics(now())
             );
         }
     }

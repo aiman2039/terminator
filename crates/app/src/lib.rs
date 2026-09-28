@@ -693,8 +693,9 @@ pub struct App {
     last_focus: Option<String>,
     highlight_session: Option<String>,
     highlight_since: Instant,
-    /// Round-robin position for Next-agent-needing-attention navigation.
-    attention_cycle: usize,
+    /// Shared render data, invalidated by snapshots and local notice changes.
+    presentations: std::cell::RefCell<agent_presence::PresentationCache>,
+    sidebar_projects: std::cell::RefCell<HashMap<String, std::sync::Arc<Project>>>,
     /// Unread-view row retained after marking read, until selection/filter changes.
     unread_selected: Option<String>,
     connected: bool,
@@ -949,7 +950,8 @@ impl App {
             last_focus: None,
             highlight_session: None,
             highlight_since: Instant::now(),
-            attention_cycle: 0,
+            presentations: Default::default(),
+            sidebar_projects: Default::default(),
             unread_selected: None,
             connected: false,
             control_server: None,
@@ -2048,6 +2050,10 @@ impl App {
                 .iter()
                 .any(|s| &s.id == sid && markdown::available(s))
         });
+        self.presentations.get_mut().clear();
+        self.sidebar_projects
+            .get_mut()
+            .retain(|id, _| state.projects.iter().any(|p| &p.id == id));
         self.state = state;
         self.migrate_attention();
 
@@ -2114,7 +2120,12 @@ impl App {
             self.finish_rename(true);
             self.selected = None;
             self.active_session = None;
-            if let Some(next) = self.visible_projects().into_iter().next().map(|p| p.id) {
+            if let Some(next) = self
+                .visible_projects()
+                .into_iter()
+                .next()
+                .map(|p| p.id.clone())
+            {
                 self.select_project(next);
             }
         }
@@ -2663,6 +2674,12 @@ impl App {
         }
     }
 
+    fn present_session(&self, id: &str) -> std::sync::Arc<agent_presence::AgentPresentation> {
+        self.presentations
+            .borrow_mut()
+            .get(&self.state, id, now(), self.services.presence_fresh())
+    }
+
     /// Global cycle order for attention navigation: distinct live terminals
     /// with pending permission/input requests first, then failures; oldest
     /// first within each group. Dismissal and snooze are respected.
@@ -2678,9 +2695,7 @@ impl App {
         let mut earliest_failed: HashMap<&str, u64> = HashMap::new();
         for notice in &self.state.notifications {
             if !live.contains(notice.session_id.as_str())
-                || notice.dismissed
-                || notice.resolved
-                || notice.snoozed_until > now()
+                || !agent_presence::notice_pending(notice, now())
             {
                 continue;
             }
@@ -2694,12 +2709,12 @@ impl App {
                 .or_insert(notice.created);
         }
         let mut order: Vec<(&str, u64)> = earliest_waiting.into_iter().collect();
-        order.sort_by_key(|(_, created)| *created);
+        order.sort_by_key(|(id, created)| (*created, *id));
         let mut failed: Vec<(&str, u64)> = earliest_failed
             .into_iter()
             .filter(|(session, _)| !order.iter().any(|(waiting, _)| waiting == session))
             .collect();
-        failed.sort_by_key(|(_, created)| *created);
+        failed.sort_by_key(|(id, created)| (*created, *id));
         order
             .into_iter()
             .chain(failed)
@@ -2715,8 +2730,12 @@ impl App {
             self.info = Some("No agents need attention".into());
             return;
         }
-        let target = order[self.attention_cycle % order.len()].clone();
-        self.attention_cycle = self.attention_cycle.wrapping_add(1);
+        let next = self
+            .active_session
+            .as_ref()
+            .and_then(|active| order.iter().position(|id| id == active))
+            .map_or(0, |index| (index + 1) % order.len());
+        let target = order[next].clone();
         self.go_session(&target);
     }
 
@@ -6153,7 +6172,7 @@ mod navigation_tests {
     fn visible_ids(app: &App) -> Vec<String> {
         app.visible_projects()
             .into_iter()
-            .map(|project| project.id)
+            .map(|project| project.id.clone())
             .collect()
     }
 
@@ -9829,6 +9848,11 @@ mod navigation_tests {
         notices.extend([dismissed, snoozed, resolved, gone]);
         app.state.notifications = notices;
         assert_eq!(app.attention_order(), vec!["early", "late", "failed"]);
+        app.active_session = Some("late".into());
+        app.next_attention();
+        assert_eq!(app.active_session.as_deref(), Some("failed"));
+        app.active_session = Some("outside".into());
+
         app.next_attention();
         assert_eq!(app.active_session.as_deref(), Some("early"));
         assert_eq!(app.selected.as_deref(), Some("a"));
@@ -9849,6 +9873,25 @@ mod navigation_tests {
         app.next_attention();
         assert_eq!(app.active_session, None);
         assert_eq!(app.info.as_deref(), Some("No agents need attention"));
+    }
+
+    #[test]
+    fn reading_newest_unread_row_keeps_its_position() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("s", SessionKind::Shell)];
+        app.state.notifications = vec![
+            notice_fixture("old", "s", AgentState::WaitingInput, 1),
+            notice_fixture("new", "s", AgentState::WaitingInput, 2),
+        ];
+        app.apply_notice_action("new".into(), AttentionAction::Read);
+        assert_eq!(
+            app.unread_notices()
+                .iter()
+                .map(|n| n.id.as_str())
+                .collect::<Vec<_>>(),
+            ["new", "old"]
+        );
     }
 
     #[test]
@@ -9885,6 +9928,7 @@ mod navigation_tests {
         // Retained until selection changes, even though it is now read.
         assert!(app.unread_notices().iter().any(|n| n.id == "n1"));
         app.apply_notice_action("n2".into(), AttentionAction::Read);
+        assert_eq!(app.unread_notices().first().unwrap().id, "n2");
         assert!(!app.unread_notices().iter().any(|n| n.id == "n1"));
         assert!(app.unread_notices().iter().any(|n| n.id == "n2"));
         // Scope changes drop retained rows.
