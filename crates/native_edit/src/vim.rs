@@ -293,7 +293,14 @@ impl VimEngine {
     }
 
     fn clamp<B: Buffer>(&mut self, doc: &B) {
-        let last = Self::last_addressable(doc);
+        let last = if self.mode == Mode::Insert {
+            // Insert may sit just past a trailing newline (the cursor stays
+            // where editing left it), so backspace can delete that newline
+            // and keep going into the previous line.
+            doc.line_count().saturating_sub(1)
+        } else {
+            Self::last_addressable(doc)
+        };
         self.cursor.line = self.cursor.line.min(last);
         let len = line_len(doc, self.cursor.line);
         let max_col = if self.mode == Mode::Insert || len == 0 {
@@ -305,6 +312,22 @@ impl VimEngine {
         self.anchor.line = self.anchor.line.min(last);
         let alen = line_len(doc, self.anchor.line);
         self.anchor.col = self.anchor.col.min(alen);
+    }
+
+    /// Editing can leave the cursor just past a trailing newline, a spot only
+    /// insert mode holds. Other modes land at the end of the last real line
+    /// (vim has no cursor past the final newline) instead of line start.
+    fn settle_cursor<B: Buffer>(&mut self, doc: &B) {
+        if self.mode == Mode::Insert {
+            return;
+        }
+        let last = Self::last_addressable(doc);
+        if self.cursor.line > last {
+            self.cursor = Cursor {
+                line: last,
+                col: line_len(doc, last),
+            };
+        }
     }
 
     fn char_idx<B: Buffer>(&self, doc: &B, cursor: Cursor) -> usize {
@@ -361,6 +384,7 @@ impl VimEngine {
         self.clear_pending();
         self.command.clear();
         doc.end_run();
+        self.settle_cursor(doc);
         self.clamp(doc);
     }
 
@@ -456,8 +480,9 @@ impl VimEngine {
         let end = at + text.chars().count().min(doc.len_chars().saturating_sub(at));
         let (line, col) = doc.line_col_at(end);
         self.cursor = Cursor { line, col };
-        self.preferred_col = col;
+        self.settle_cursor(doc);
         self.clamp(doc);
+        self.preferred_col = self.cursor.col;
     }
 
     /// Consume a pending cursor-reveal request (search jumps, `G`/`gg`).
@@ -1614,5 +1639,50 @@ mod tests {
         assert!(parse_vimrc("set ignorecase\t\" tab comment\n").ignorecase);
         assert!(!parse_vimrc("\" full-line comment\nset noignorecase\n").ignorecase);
         assert!(!parse_vimrc("set ignorecase\"glued quote is not a comment\n").ignorecase);
+    }
+
+    #[test]
+    fn backspace_after_a_multiline_paste_deletes_across_the_newlines() {
+        let (mut eng, mut doc) = engine("");
+        eng.press_key(&mut doc, Key::Char('i'));
+        eng.paste_text(&mut doc, "hello\nworld");
+        assert_eq!(doc.text(), "hello\nworld");
+        for _ in 0..11 {
+            eng.press_key(&mut doc, Key::Backspace);
+        }
+        assert_eq!(doc.text(), "");
+    }
+
+    #[test]
+    fn enter_then_typing_continues_on_the_next_line() {
+        let (mut eng, mut doc) = engine("");
+        eng.press_key(&mut doc, Key::Char('i'));
+        eng.type_text(&mut doc, "ab");
+        eng.press_key(&mut doc, Key::Enter);
+        eng.type_text(&mut doc, "c");
+        assert_eq!(doc.text(), "ab\nc");
+        assert_eq!(eng.cursor(), Cursor { line: 1, col: 1 });
+    }
+
+    #[test]
+    fn esc_from_just_past_a_newline_lands_on_the_previous_line_end() {
+        let (mut eng, mut doc) = engine("");
+        eng.press_key(&mut doc, Key::Char('i'));
+        eng.paste_text(&mut doc, "hello\nworld");
+        for _ in 0..5 {
+            eng.press_key(&mut doc, Key::Backspace);
+        }
+        assert_eq!(doc.text(), "hello\n");
+        assert_eq!(eng.cursor(), Cursor { line: 1, col: 0 });
+        eng.press_key(&mut doc, Key::Escape);
+        assert_eq!(eng.cursor(), Cursor { line: 0, col: 4 });
+    }
+
+    #[test]
+    fn paste_ending_with_a_newline_leaves_the_cursor_on_the_last_line() {
+        let (mut eng, mut doc) = engine("");
+        eng.paste_text(&mut doc, "hello\nworld\n");
+        assert_eq!(doc.text(), "hello\nworld\n");
+        assert_eq!(eng.cursor(), Cursor { line: 1, col: 4 });
     }
 }

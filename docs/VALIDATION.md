@@ -2737,3 +2737,30 @@ workspace clippy `-D warnings` and fmt clean, full workspace tests green
 (`navigation_tests::removing_projects_only_hides_sidebar_entries_and_survives_snapshots`
 is a pre-existing flake under parallel load: fails ~3/4 runs on the clean
 tree too, passes in isolation).
+
+## 2026-09-28: native editor — backspace stuck on newline after multi-line paste
+
+Same symptom in file tabs (`native_edit`, reported as a follow-up): paste
+multi-line text, backspace deletes to the first newline and freezes — it
+would not go to the previous line. Cause: `clamp` treats a trailing empty
+line as the file's final newline and un-parkable in every mode, so deleting
+the last line's content yanked the cursor from just-past-the-newline to line
+start (`(0, 0)`), where `char_idx == 0` makes backspace a permanent no-op.
+Insert could never delete the joining newline. Fix: insert mode may hold
+just-past-a-trailing-newline (`clamp` uses the raw last line), so backspace
+deletes the newline and keeps going; modes that cannot hold that spot (ESC,
+normal-mode `paste_text`) settle at the end of the last real line via
+`settle_cursor` instead of line start — which also fixes pastes ending in a
+newline parking the cursor at the start of the pasted last line, and typing
+after Enter prepending at line start on newline-less buffers. Vim's
+"final newline is not a line" convention for normal-mode motions is
+unchanged (`hjkl_moves_with_counts_and_clamps` stays green).
+
+Regressions (mutation-checked both halves): `backspace_after_a_multiline_
+paste_deletes_across_the_newlines`, `enter_then_typing_continues_on_the_
+next_line`, `esc_from_just_past_a_newline_lands_on_the_previous_line_end`,
+`paste_ending_with_a_newline_leaves_the_cursor_on_the_last_line`. With the
+clamp fix reverted, the first three fail; with `settle_cursor` no-op'd, the
+ESC and paste tests fail. Evidence: native-edit 55/55, workspace clippy
+`-D warnings` and fmt clean, full workspace tests green (same pre-existing
+navigation flake as the entry above).
