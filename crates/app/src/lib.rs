@@ -43,7 +43,9 @@ mod editor_close;
 mod popup;
 mod preferences;
 mod workspace;
-use preferences::{AgentsTab, SidebarTool, UiPreferences};
+#[cfg(any(test, target_os = "macos"))]
+use preferences::AgentsTab;
+use preferences::{SidebarTool, UiPreferences};
 use terminator_core::appearance::{AppearanceConfig, AppearanceFile};
 use workspace::Workspace;
 mod clipboard;
