@@ -1238,6 +1238,8 @@ pub struct GitPanelOutcome {
     pub menu: Vec<GitFileAction>,
     /// The error-state Retry button was pressed: re-queue a context refresh.
     pub refresh: bool,
+    /// User pressed the View log button.
+    pub view_log: bool,
 }
 
 /// Map a Git row click to the concrete action `App` performs. Conflicts open
@@ -1281,9 +1283,15 @@ pub fn git_panel(ui: &mut egui::Ui, input: &GitPanelInput) -> GitPanelOutcome {
     if context.root.is_none() {
         ui.weak("Not a Git repository");
     } else {
-        ui.label(
-            RichText::new(&context.branch).color(appearance::color(&input.theme.status_running)),
-        );
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(&context.branch)
+                    .color(appearance::color(&input.theme.status_running)),
+            );
+            if ui.small_button("Log").clicked() {
+                outcome.view_log = true;
+            }
+        });
         if context.changes.is_empty() {
             ui.weak("Working tree clean");
         }

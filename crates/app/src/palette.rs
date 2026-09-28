@@ -12,6 +12,8 @@ pub(crate) enum PaletteItem {
     NewWorktree,
     OpenPlayer,
     ToggleIdeMode,
+    SaveLayout,
+    ApplyLayout(String),
 }
 
 impl PaletteItem {
@@ -29,6 +31,8 @@ impl PaletteItem {
             Self::NewWorktree => "New task worktree".into(),
             Self::OpenPlayer => "Open player".into(),
             Self::ToggleIdeMode => "Toggle IDE mode".into(),
+            Self::SaveLayout => "Save layout".into(),
+            Self::ApplyLayout(name) => format!("Layout  {name}"),
         }
     }
 }
@@ -40,7 +44,11 @@ impl App {
             PaletteItem::NewTerminal,
             PaletteItem::OpenPlayer,
             PaletteItem::ToggleIdeMode,
+            PaletteItem::SaveLayout,
         ];
+        for name in self.preferences.named_layouts.keys() {
+            items.push(PaletteItem::ApplyLayout(name.clone()));
+        }
         if self
             .state
             .capabilities
@@ -181,6 +189,10 @@ impl App {
             PaletteItem::NewWorktree => self.open_worktree_wizard(),
             PaletteItem::OpenPlayer => self.open_player(),
             PaletteItem::ToggleIdeMode => self.toggle_ide_mode(),
+            PaletteItem::SaveLayout => self.save_layout_dialog(),
+            PaletteItem::ApplyLayout(name) => {
+                self.preferences.apply_layout(&name);
+            }
         }
     }
 }

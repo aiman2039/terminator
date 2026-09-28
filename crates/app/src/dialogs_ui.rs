@@ -38,6 +38,7 @@ impl App {
     pub(super) fn modals(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         self.first_project_dialog(ctx);
         self.native_close_modal(ctx);
+        self.layout_save_dialog(ctx);
         if self.restart_confirm {
             let live = self
                 .state
@@ -518,5 +519,50 @@ impl App {
         if !open && !decided {
             self.abort_workspace_close();
         }
+    }
+
+    fn layout_save_dialog(&mut self, ctx: &egui::Context) {
+        if self.layout_save_name.is_none() {
+            return;
+        }
+        let mut name = self.layout_save_name.take().unwrap_or_default();
+        self.popups
+            .centered(ctx, "Save layout")
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.set_width(280.0);
+                ui.label("Name this layout:");
+                ui.add(
+                    egui::TextEdit::singleline(&mut name)
+                        .hint_text("My layout")
+                        .desired_width(f32::INFINITY),
+                );
+                let mut action = None;
+                if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                    action = Some(true);
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Save").clicked() {
+                        action = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        action = Some(false);
+                    }
+                });
+                if let Some(save) = action {
+                    if save {
+                        let trimmed = name.trim().to_string();
+                        if !trimmed.is_empty() {
+                            self.preferences.save_current_layout(&trimmed);
+                        }
+                    }
+                    ui.close();
+                }
+            });
+    }
+
+    pub(super) fn save_layout_dialog(&mut self) {
+        self.layout_save_name = Some(String::new());
     }
 }
