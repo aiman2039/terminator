@@ -81,3 +81,17 @@ Requests time out after eight seconds and are not retried; queue overflow drops
 pings rather than blocking hooks. Failures log a generic daemon message and do
 not affect lifecycle tracking. `TERMINATOR_NO_NOTIFICATIONS` suppresses delivery
 for fixtures. This option currently supports public ntfy.sh topics without auth.
+
+## Notification self-tests
+
+Settings → Notifications → Send test posts directly to ntfy.sh with the draft
+channel; it needs no Apply and no live terminal. If the test arrives but real
+alerts do not, check the toggle, Apply, and the selected In app events. Copy
+test command gives the equivalent `curl` for any terminal.
+
+Settings → Agent hooks → Send hello from all agents emits one `waiting_input`
+hello per built-in agent to the active (or first live) terminal through the
+normal hook path, so it exercises the Agents inbox, desktop, and ntfy together.
+It uses saved settings, needs Waiting input enabled, and works even for agents
+whose hooks are not installed. Copy hello command gives a
+`terminator-hook emit` loop to paste inside a Terminator terminal instead.

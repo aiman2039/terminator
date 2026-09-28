@@ -67,10 +67,10 @@ impl SettingsSection {
             Self::Terminal => {
                 "shell nvim editor neovim zsh bash fish folder access privacy diff split close timeout"
             }
-            Self::Notifications => "alert os desktop dismiss sound ntfy channel machine",
+            Self::Notifications => "alert os desktop dismiss sound ntfy channel machine test",
             Self::History => "days mib scrollback disk",
             Self::Shortcuts => "keymap command shortcut chord palette",
-            Self::AgentHooks => "claude codex opencode muse grok install hook",
+            Self::AgentHooks => "claude codex opencode muse grok install hook test hello",
             Self::Updates => "sparkle install repair session service",
         }
     }
@@ -955,6 +955,28 @@ impl App {
             if !self.state.capabilities.iter().any(|c| c == NTFY_CAPABILITY) {
                 ui.small("Activate an updated daemon to enable ntfy. Older sessions need a supporting daemon.");
             }
+            ui.horizontal(|ui| {
+                let channel = self.settings_draft.ntfy_channel.clone();
+                let machine = self.settings_draft.ntfy_machine.clone();
+                let ready = !channel.is_empty();
+                let test = ui.add_enabled(ready, egui::Button::new("Send test"));
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "ntfy-send-test", test.rect);
+                if test.clicked()
+                    && let Err(error) = self.send_ntfy_test(channel.clone(), machine.clone())
+                {
+                    self.error = Some(error);
+                }
+                let copy = ui.add_enabled(ready, egui::Button::new("Copy test command"));
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "ntfy-copy-test", copy.rect);
+                if copy.clicked() {
+                    ui.ctx()
+                        .copy_text(notify_test::curl_command(&channel, &machine));
+                    self.info = Some("ntfy test command copied.".into());
+                }
+            });
+            ui.small("Test posts directly to ntfy.sh with this channel; no Apply needed. Real alerts need the toggle on plus Apply, and no hook reinstall.");
         }
         if self.field_visible("Dismiss notifications", "focus resolve manual") {
             settings_controls::settings_row(
@@ -1008,6 +1030,66 @@ impl App {
                 );
             },
         );
+    }
+
+    fn send_ntfy_test(&mut self, channel: String, machine: String) -> Result<(), String> {
+        notify_test::validate(&channel, &machine)?;
+        let _ = self.jobs.send(Job::TestNtfy { channel, machine });
+        self.info = Some("Sending ntfy test…".into());
+        Ok(())
+    }
+
+    fn send_hello_test(&mut self) {
+        let live = |id: &str| {
+            self.state
+                .sessions
+                .iter()
+                .any(|s| s.id == id && s.lifecycle.live())
+        };
+        let sid = self
+            .active_session
+            .clone()
+            .filter(|id| live(id))
+            .or_else(|| {
+                self.state
+                    .sessions
+                    .iter()
+                    .find(|s| s.lifecycle.live())
+                    .map(|s| s.id.clone())
+            });
+        let Some(sid) = sid else {
+            self.error = Some("Open a terminal first, then send the hello test.".into());
+            return;
+        };
+        let label = self
+            .state
+            .sessions
+            .iter()
+            .find(|s| s.id == sid)
+            .map(|s| s.label.clone())
+            .unwrap_or_default();
+        for event in notify_test::hello_events(&sid) {
+            self.send(Request::Hook(event));
+        }
+        let mut note = format!(
+            "Sent hello from {} agents to '{label}'. Check the Agents inbox.",
+            terminator_integrations::AGENTS.len()
+        );
+        if !self
+            .state
+            .settings
+            .events
+            .contains(&AgentState::WaitingInput)
+        {
+            note.push_str(
+                " Waiting input is off in saved Notifications → Events, so enable it and Apply.",
+            );
+        } else if !(self.state.settings.ntfy_enabled
+            && !self.state.settings.ntfy_channel.is_empty())
+        {
+            note.push_str(" ntfy is off in saved settings, so phones stay silent.");
+        }
+        self.info = Some(note);
     }
 
     fn history_settings(&mut self, ui: &mut egui::Ui) {
@@ -1154,6 +1236,29 @@ impl App {
                 }
             });
         ui.weak("See docs/INTEGRATIONS.md for event limitations.");
+        ui.add_space(8.0);
+        if self.field_visible("hello test", "hello test verify notification") {
+            ui.weak("Send a hello from every agent to a live terminal. Uses saved settings; Apply notification changes first.");
+            ui.horizontal(|ui| {
+                let hello = ui.button("Send hello from all agents");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "hook-send-hello", hello.rect);
+                if hello.clicked() {
+                    self.send_hello_test();
+                }
+                let copy = ui.button("Copy hello command");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "hook-copy-hello", copy.rect);
+                if copy.clicked() {
+                    let helper = std::env::current_exe()
+                        .map(|exe| exe.with_file_name("terminator-hook").display().to_string())
+                        .unwrap_or_else(|_| "terminator-hook".into());
+                    ui.ctx().copy_text(notify_test::hello_command(&helper));
+                    self.info =
+                        Some("Hello command copied. Paste it inside a Terminator terminal.".into());
+                }
+            });
+        }
     }
 
     fn settings_validation(&self) -> Result<(), String> {

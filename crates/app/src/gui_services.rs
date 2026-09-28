@@ -3,7 +3,7 @@
 use crate::nvim_rpc;
 use crate::{
     After, Job, Tab, Update, clipboard, daemon_connection, diff, editor_close, external_editor,
-    image_preview, installation, player, services,
+    image_preview, installation, notify_test, player, services,
 };
 use anyhow::{Context, Result};
 use eframe::egui;
@@ -678,6 +678,24 @@ impl Services {
                     .await?;
                 updates.push(Update::Info(message));
             }
+            Job::TestNtfy { channel, machine } => {
+                let delivered = self
+                    .0
+                    .platform
+                    .run(&cancel, move || {
+                        notify_test::send(notify_test::ENDPOINT, &channel, &machine)
+                    })
+                    .await;
+                match delivered {
+                    Ok(()) => updates.push(Update::Info(
+                        "ntfy test posted. If your phone stayed silent, open the channel in ntfy to subscribe."
+                            .into(),
+                    )),
+                    Err(error) => updates.push(Update::Error(format!(
+                        "ntfy test failed: {error:#}"
+                    ))),
+                }
+            }
             Job::External(path) => {
                 let (program, args) = if image_preview::supported(&path) {
                     external_editor::image_opener()
@@ -869,6 +887,7 @@ fn context(job: &Job) -> OperationContext {
         Job::Diff(tab) => ("diff", tab.key(), Policy::ReplaceableRead),
         Job::ResolveTarget(key, _, _) => ("files", key.clone(), Policy::ReplaceableRead),
         Job::HookStatus => ("catalog", "hooks".into(), Policy::ReplaceableRead),
+        Job::TestNtfy { .. } => ("platform", "ntfy-test".into(), Policy::ReplaceableRead),
         Job::Preferences(_) => ("catalog", "preferences".into(), Policy::OrderedMutation),
         Job::SaveAppearance(..) => ("catalog", "appearance".into(), Policy::OrderedMutation),
         _ => ("daemon", "workspace".into(), Policy::OrderedMutation),
