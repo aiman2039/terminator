@@ -384,6 +384,20 @@ fn strip_node_equal(
     }
 }
 
+/// A named layout preset capturing IDE mode, sidebar visibility, tool selection,
+/// sidebar widths, and terminal strip state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LayoutPreset {
+    pub ide_mode: bool,
+    pub ide_terminal_collapsed: bool,
+    pub visible: bool,
+    pub left_visible: bool,
+    pub tool: SidebarTool,
+    pub left_agents: bool,
+    pub sidebar_width: f32,
+    pub left_width: f32,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiPreferences {
@@ -394,13 +408,17 @@ pub struct UiPreferences {
     pub tool: SidebarTool,
     pub visible: bool,
     /// IDE layout preset: fixed explorer/terminal zones instead of the
-    /// free-floating dock. Session-only view state: never persisted or
-    /// migrated, so the app always opens in dock mode.
-    #[serde(skip)]
+    /// free-floating dock. Persisted so the user's preference survives restart.
     pub ide_mode: bool,
     /// Bottom IDE terminal strip collapsed (IDE mode only).
     #[serde(default)]
     pub ide_terminal_collapsed: bool,
+    /// Named layout presets for quick switching.
+    #[serde(default)]
+    pub named_layouts: HashMap<String, LayoutPreset>,
+    /// Currently active named layout, if any.
+    #[serde(default)]
+    pub active_layout: Option<String>,
     /// Projects column. Missing files stay open; `bool`'s serde default is false.
     #[serde(default = "default_true")]
     pub left_visible: bool,
@@ -439,7 +457,7 @@ pub struct UiPreferences {
 impl Default for UiPreferences {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             setup_completed: false,
             expanded: HashMap::new(),
             history_expanded: HashMap::new(),
@@ -447,6 +465,8 @@ impl Default for UiPreferences {
             visible: true,
             ide_mode: false,
             ide_terminal_collapsed: false,
+            named_layouts: HashMap::new(),
+            active_layout: None,
             left_visible: true,
             left_agents: false,
             width: 285.0,
@@ -493,7 +513,14 @@ impl UiPreferences {
             *docks = terminator_core::sanitize_layout(docks.take());
         }
         let mut prefs: Self = serde_json::from_value(value).context("Invalid UI preferences")?;
-        anyhow::ensure!(prefs.version == 1, "Unsupported UI preference version");
+        anyhow::ensure!(
+            prefs.version == 1 || prefs.version == 2,
+            "Unsupported UI preference version"
+        );
+        // Version 1 never persisted ide_mode; ignore any stray value.
+        if prefs.version == 1 {
+            prefs.ide_mode = false;
+        }
         prefs.width = if prefs.width.is_finite() {
             prefs.width.clamp(220.0, 480.0)
         } else {
@@ -550,6 +577,49 @@ impl UiPreferences {
                 .unwrap_or_default();
         }
     }
+    /// Save the current UI state as a named layout preset.
+    pub fn save_current_layout(&mut self, name: &str) {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let preset = LayoutPreset {
+            ide_mode: self.ide_mode,
+            ide_terminal_collapsed: self.ide_terminal_collapsed,
+            visible: self.visible,
+            left_visible: self.left_visible,
+            tool: self.tool,
+            left_agents: self.left_agents,
+            sidebar_width: self.width,
+            left_width: 225.0,
+        };
+        self.named_layouts.insert(name.clone(), preset);
+        self.active_layout = Some(name);
+    }
+
+    /// Apply a named layout preset to the current preferences.
+    pub fn apply_layout(&mut self, name: &str) -> Option<&LayoutPreset> {
+        let preset = self.named_layouts.get(name)?;
+        self.ide_mode = preset.ide_mode;
+        self.ide_terminal_collapsed = preset.ide_terminal_collapsed;
+        self.visible = preset.visible;
+        self.left_visible = preset.left_visible;
+        self.tool = preset.tool;
+        self.left_agents = preset.left_agents;
+        self.width = preset.sidebar_width;
+        self.active_layout = Some(name.to_string());
+        Some(preset)
+    }
+
+    /// Delete a named layout preset.
+    #[allow(dead_code)]
+    pub fn delete_layout(&mut self, name: &str) {
+        self.named_layouts.remove(name);
+        if self.active_layout.as_deref() == Some(name) {
+            self.active_layout = None;
+        }
+    }
+
     pub fn save(&self, data: &Path) -> Result<()> {
         fs::create_dir_all(data)?;
         terminator_core::atomic_write(
@@ -756,18 +826,24 @@ mod tests {
     }
 
     #[test]
-    fn ide_mode_starts_off_and_is_not_persisted() {
+    fn ide_mode_is_persisted_and_survives_restart() {
         let dir = tempfile::tempdir().unwrap();
         let prefs = UiPreferences::load(dir.path()).unwrap();
         assert!(!prefs.ide_mode);
         assert!(!prefs.ide_terminal_collapsed);
         let mut prefs = prefs;
         prefs.ide_mode = true;
+        prefs.ide_terminal_collapsed = true;
         prefs.save(dir.path()).unwrap();
         let raw = fs::read_to_string(dir.path().join("ui-preferences.json")).unwrap();
-        assert!(!raw.contains("ide_mode"));
-        assert!(!UiPreferences::load(dir.path()).unwrap().ide_mode);
-        // Stale files written before still open with IDE mode off.
+        assert!(raw.contains("ide_mode"));
+        assert!(UiPreferences::load(dir.path()).unwrap().ide_mode);
+        assert!(
+            UiPreferences::load(dir.path())
+                .unwrap()
+                .ide_terminal_collapsed
+        );
+        // Stale version-1 files written before version-2 still open with IDE mode off.
         fs::write(
             dir.path().join("ui-preferences.json"),
             r#"{"version":1,"ide_mode":true}"#,
@@ -841,7 +917,7 @@ mod tests {
     #[test]
     fn unknown_version_is_not_overwritten_and_width_is_bounded() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("ui-preferences.json"), r#"{"version":2}"#).unwrap();
+        fs::write(dir.path().join("ui-preferences.json"), r#"{"version":3}"#).unwrap();
         assert!(UiPreferences::load(dir.path()).is_err());
         fs::write(dir.path().join("ui-preferences.json"), r#"{"width":900}"#).unwrap();
         assert_eq!(UiPreferences::load(dir.path()).unwrap().width, 480.0);

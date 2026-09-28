@@ -48,7 +48,8 @@ use workspace::Workspace;
 mod clipboard;
 #[cfg(feature = "test-support")]
 mod diagnostics;
-mod diff;
+pub(crate) mod diff;
+pub(crate) mod git_log;
 mod gui_services;
 #[cfg(any(test, target_os = "macos"))]
 mod menu_bar;
@@ -144,6 +145,13 @@ pub(crate) enum Tab {
         path: PathBuf,
         staged: bool,
     },
+    CommitLog {
+        cwd: PathBuf,
+    },
+    Blame {
+        cwd: PathBuf,
+        path: PathBuf,
+    },
 }
 impl Tab {
     fn key(&self) -> String {
@@ -168,7 +176,9 @@ impl Tab {
             Self::Browser { .. } => 6,
             Self::Player => 5,
             Self::Image { .. } => 3,
-            Self::Diff { .. } | Self::Terminal(_) => 2,
+            Self::Diff { .. } | Self::Terminal(_) | Self::CommitLog { .. } | Self::Blame { .. } => {
+                2
+            }
         }
     }
 }
@@ -599,7 +609,10 @@ pub struct App {
     diffs: HashMap<String, Result<std::sync::Arc<diff::DiffDocument>, String>>,
     diff_split: HashSet<String>,
     diff_preview: HashSet<String>,
+    diff_ignore_ws: HashSet<String>,
     loading: HashSet<String>,
+    git_logs: HashMap<String, git_log::CommitLog>,
+    selected_commit: Option<String>,
     dirs: HashMap<PathBuf, Vec<terminator_git::Entry>>,
     directory_errors: HashMap<PathBuf, services::DirectoryError>,
     context: Option<services::ContextData>,
@@ -638,6 +651,9 @@ pub struct App {
     detail: Option<String>,
     close_session: Option<String>,
     popups: popup::Popups,
+    /// Dialog shown when user picks "Save layout" from the palette.
+    /// `Some(name)` = dialog open with pre-filled name.
+    layout_save_name: Option<String>,
     editor_close_sessions: HashSet<String>,
     editor_close_prompts: Vec<(editor_close::Target, Vec<String>, String)>,
     rename_session: Option<(String, String)>,
@@ -847,7 +863,10 @@ impl App {
             diffs: HashMap::new(),
             diff_split: HashSet::new(),
             diff_preview: HashSet::new(),
+            diff_ignore_ws: HashSet::new(),
             loading: HashSet::new(),
+            git_logs: HashMap::new(),
+            selected_commit: None,
             dirs: HashMap::new(),
             directory_errors: HashMap::new(),
             context: None,
@@ -886,6 +905,7 @@ impl App {
             detail: None,
             close_session: None,
             popups: popup::Popups::default(),
+            layout_save_name: None,
             editor_close_sessions: HashSet::new(),
             editor_close_prompts: Vec::new(),
             rename_session: None,
@@ -1950,7 +1970,9 @@ impl App {
                     | Tab::Image { .. }
                     | Tab::Browser { .. }
                     | Tab::Player
-                    | Tab::NativeEditor { .. } => true,
+                    | Tab::NativeEditor { .. }
+                    | Tab::CommitLog { .. }
+                    | Tab::Blame { .. } => true,
                 };
                 let survives = old_group
                     .as_ref()
@@ -3264,12 +3286,35 @@ impl App {
         if outcome.refresh {
             self.refresh_request = None;
         }
+        if outcome.view_log {
+            self.open_commit_log();
+        }
         for clicked in outcome.clicked {
             self.activate_file_action(ui, &clicked.path, clicked.action);
         }
         for picked in outcome.menu {
             self.file_action(ui, picked.action, &picked.path, None);
         }
+    }
+    fn open_commit_log(&mut self) {
+        let Some(project) = self.selected.clone() else {
+            return;
+        };
+        let Some(context) = &self.context else {
+            return;
+        };
+        let Some(root) = &context.root else {
+            return;
+        };
+        let workspace = self
+            .layouts
+            .entry(project.clone())
+            .or_insert_with(Workspace::empty);
+        let tab = Tab::CommitLog { cwd: root.clone() };
+        if !workspace.contains(&tab) {
+            workspace.add(terminator_core::id(), tab.clone());
+        }
+        self.insert(&project, tab, None);
     }
     /// Performs a row-click action, collapsing rapid repeats the way a
     /// double-click does. Menu picks bypass this and go to `file_action`.
@@ -4188,6 +4233,7 @@ impl App {
                     target.file().and_then(Path::parent).map(PathBuf::from)
                 }
                 Tab::Player => None,
+                Tab::CommitLog { cwd } | Tab::Blame { cwd, .. } => Some(cwd.clone()),
             })
             .or_else(|| self.selected_project().map(|p| p.path.clone()));
         let _ = self.jobs.send(Job::rpc(

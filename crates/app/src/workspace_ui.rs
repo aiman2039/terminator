@@ -626,6 +626,16 @@ impl App {
                 None,
             ),
             Some(Tab::Player) => ("Player".into(), "FileMusic", None, None),
+            Some(Tab::CommitLog { .. }) => ("Commit Log".into(), "FileDiff", None, None),
+            Some(Tab::Blame { path, .. }) => (
+                format!(
+                    "Blame {}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                "FileDiff",
+                None,
+                None,
+            ),
             None => ("Workspace".into(), "Terminal", None, None),
         }
     }
@@ -1244,6 +1254,11 @@ impl App {
                 .into_owned(),
             Tab::Browser { target, .. } => target.title(),
             Tab::Player => "Player".into(),
+            Tab::CommitLog { .. } => "Commit Log".into(),
+            Tab::Blame { path, .. } => format!(
+                "Blame {}",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ),
         }
     }
 
@@ -1496,6 +1511,11 @@ impl App {
                         .into_owned(),
                     Tab::Browser { target, .. } => target.title(),
                     Tab::Player => "Player".into(),
+                    Tab::CommitLog { .. } => "Commit Log".into(),
+                    Tab::Blame { path, .. } => format!(
+                        "Blame {}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ),
                 };
                 if appearance::menu_item(ui, &label, "Terminal", "").clicked() {
                     if strip {
@@ -1753,6 +1773,18 @@ impl App {
             if side_by_side.clicked() {
                 self.diff_split.insert(key.clone());
             }
+            let ignore = self.diff_ignore_ws.contains(&key);
+            if ui.selectable_label(ignore, "Ignore whitespace").clicked() {
+                if ignore {
+                    self.diff_ignore_ws.remove(&key);
+                } else {
+                    self.diff_ignore_ws.insert(key.clone());
+                }
+                self.diff_preview.remove(&key);
+                self.loading.insert(key.clone());
+                self.diffs.remove(&key);
+                let _ = self.jobs.send(Job::Diff(tab.clone()));
+            }
             if is_md {
                 let preview = self.diff_preview.contains(&key);
                 if ui.selectable_label(preview, "Preview").clicked() {
@@ -1765,6 +1797,7 @@ impl App {
             }
             if ui.small_button("Refresh").clicked() {
                 self.diff_preview.remove(&key);
+                self.diff_ignore_ws.remove(&key);
                 self.loading.insert(key.clone());
                 let _ = self.jobs.send(Job::Diff(tab.clone()));
             }
@@ -1803,6 +1836,125 @@ impl App {
             }
             None => {
                 ui.spinner();
+            }
+        }
+    }
+
+    fn commit_log_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
+        let Tab::CommitLog { cwd } = tab else { return };
+        let key = tab.key();
+        let log = self.git_logs.entry(key.clone()).or_insert_with(|| {
+            match git_log::fetch_log(cwd.as_path()) {
+                Ok(log) => log,
+                Err(e) => git_log::CommitLog {
+                    error: Some(e),
+                    ..Default::default()
+                },
+            }
+        });
+        if let Some(error) = &log.error {
+            ui.colored_label(appearance::color(&self.theme.status_failed), error);
+            return;
+        }
+        ui.columns(3, |cols| {
+            // Left: branch tree
+            cols[0].strong("Branches");
+            cols[0].separator();
+            appearance::sidebar_scroll("branches").show(&mut cols[0], |ui| {
+                for rf in &log.refs {
+                    let icon = match rf.kind {
+                        git_log::RefKind::LocalBranch => "\u{2398}",
+                        git_log::RefKind::RemoteBranch => "\u{1F310}",
+                        git_log::RefKind::Tag => "\u{2B50}",
+                        git_log::RefKind::Head => "\u{1F4CC}",
+                    };
+                    let selected = rf.name == log.active_branch;
+                    let text = if selected {
+                        format!("{} {} \u{2713}", icon, rf.name)
+                    } else {
+                        format!("{} {}", icon, rf.name)
+                    };
+                    let _ = ui.selectable_label(selected, &text);
+                }
+            });
+            // Center: commit list
+            cols[1].strong("Commits");
+            cols[1].separator();
+            let selected_hash = self.selected_commit.clone();
+            appearance::sidebar_scroll("commits").show(&mut cols[1], |ui| {
+                for commit in &log.commits {
+                    let selected = selected_hash.as_deref() == Some(&commit.hash);
+                    let response = ui.horizontal(|ui| {
+                        if selected {
+                            ui.colored_label(appearance::color(&self.theme.accent), "\u{25CF}");
+                        } else {
+                            ui.add(egui::Label::new(
+                                egui::RichText::new("\u{25CF}")
+                                    .size(10.0)
+                                    .color(appearance::color(&self.theme.text)),
+                            ));
+                        }
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(&commit.subject));
+                            ui.horizontal(|ui| {
+                                ui.weak(&commit.short_hash);
+                                ui.weak(&commit.date);
+                                ui.weak(&commit.author);
+                            });
+                        });
+                    });
+                    if response.response.clicked() {
+                        self.selected_commit = Some(commit.hash.clone());
+                    }
+                }
+            });
+            // Right: commit details
+            cols[2].strong("Details");
+            cols[2].separator();
+            if let Some(hash) = &self.selected_commit {
+                if let Some(commit) = log.commits.iter().find(|c| &c.hash == hash) {
+                    cols[2].horizontal(|ui| {
+                        ui.weak("Hash: ");
+                        ui.label(&commit.short_hash);
+                    });
+                    cols[2].horizontal(|ui| {
+                        ui.weak("Author: ");
+                        ui.label(&commit.author);
+                    });
+                    cols[2].horizontal(|ui| {
+                        ui.weak("Date: ");
+                        ui.label(&commit.date);
+                    });
+                    cols[2].separator();
+                    cols[2].label(&commit.message);
+                }
+            } else if let Some(first) = log.commits.first() {
+                self.selected_commit = Some(first.hash.clone());
+            }
+        });
+    }
+    fn blame_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
+        let Tab::Blame { cwd, path } = tab else {
+            return;
+        };
+        ui.weak(format!("Blame: {}", path.display()));
+        ui.separator();
+        match git_log::fetch_blame(cwd, path) {
+            Ok(data) => {
+                appearance::sidebar_scroll("blame").show(ui, |ui| {
+                    for entry in &data.entries {
+                        ui.horizontal(|ui| {
+                            ui.weak(&entry.hash[..7.min(entry.hash.len())]);
+                            ui.weak(&entry.author);
+                            ui.weak(&entry.date);
+                            ui.weak("| ");
+                            ui.monospace(&entry.code);
+                        });
+                    }
+                });
+            }
+            Err(e) => {
+                ui.colored_label(appearance::color(&self.theme.status_failed), e);
             }
         }
     }
@@ -2444,6 +2596,12 @@ impl TabViewer for Viewer<'_> {
                 }
             )
             .into(),
+            Tab::CommitLog { .. } => "Commit Log".into(),
+            Tab::Blame { path, .. } => format!(
+                "Blame {}",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            )
+            .into(),
         }
     }
     fn allowed_in_windows(&self, _: &mut Tab) -> bool {
@@ -2543,6 +2701,8 @@ impl TabViewer for Viewer<'_> {
             }
             Tab::Diff { .. } => self.app.diff_view(ui, tab),
             Tab::NativeEditor { path } => self.app.native_editor_view(ui, path),
+            Tab::CommitLog { .. } => self.app.commit_log_view(ui, tab),
+            Tab::Blame { .. } => self.app.blame_view(ui, tab),
             Tab::Terminal(sid) => {
                 let Some(session) = self
                     .app
