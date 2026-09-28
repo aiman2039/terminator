@@ -456,7 +456,7 @@ impl App {
                                         self.worktree_card(ui, &child);
                                     }
                                 }
-                            });
+});
                         });
                     }
                 }
@@ -479,6 +479,8 @@ impl App {
             .iter()
             .filter(|a| a.session_id == session.id)
             .max_by_key(|a| a.updated);
+        let agent_state = agent.map(|a| a.state);
+        let summary = session_summary(&self.state.notifications, &session.id, agent_state);
         let terminal_note = self
             .state
             .terminal_notices
@@ -486,15 +488,11 @@ impl App {
             .rev()
             .find(|n| n.session_id == session.id);
         let unread_terminal = terminal_note.is_some_and(|n| !n.dismissed);
-        let color = agent
-            .map(|a| state_color(a.state, &self.theme))
-            .unwrap_or_else(|| {
-                appearance::color(if unread_terminal {
-                    &self.theme.accent
-                } else {
-                    &self.theme.secondary
-                })
-            });
+        let color = appearance::color(if unread_terminal {
+            &self.theme.accent
+        } else {
+            &self.theme.secondary
+        });
         let visible = self
             .layouts
             .get(&session.project_id)
@@ -507,31 +505,36 @@ impl App {
             ""
         };
         let editing = self.renaming(&session.id, RenameSurface::Sidebar);
-        let response = appearance::session_row(
+        // The status icon carries agent state; the dot is for terminal notices.
+        let trailing = if editing {
+            ""
+        } else if !secondary.is_empty() {
+            secondary
+        } else if unread_terminal {
+            "●"
+        } else {
+            ""
+        };
+        let response = appearance::session_row_spec(
             ui,
-            if editing { "" } else { &session.label },
-            if session.kind == SessionKind::Editor {
-                "FileCode"
-            } else {
-                "Terminal"
+            appearance::SessionRowSpec {
+                label: if editing { "" } else { &session.label },
+                icon: match agent_state {
+                    Some(state) => attention_status_icon(state),
+                    None if session.kind == SessionKind::Editor => "FileCode",
+                    None => "Terminal",
+                },
+                selected: self.active_session.as_ref() == Some(&session.id),
+                trailing,
+                tint: color,
+                icon_tint: agent_state.map(|state| state_color(state, &self.theme)),
+                spin: agent_state == Some(AgentState::Running),
+                subtitle: summary.as_deref().filter(|_| !editing),
             },
-            self.active_session.as_ref() == Some(&session.id),
-            24.0,
-            &if editing {
-                String::new()
-            } else if secondary.is_empty() {
-                if agent.is_some() || unread_terminal {
-                    "●".into()
-                } else {
-                    String::new()
-                }
-            } else {
-                secondary.into()
-            },
-            color,
         )
         .on_hover_text(format!(
-            "{}\n{}{}",
+            "{}{}\n{}{}",
+            agent_state.map_or(String::new(), |s| format!("{}\n", s.label())),
             session.cwd.display(),
             secondary,
             terminal_note
@@ -1524,7 +1527,24 @@ fn notice_preview(markdown: &str) -> String {
 const ATTENTION_ACTION_SIZE: f32 = 22.0;
 const ATTENTION_ACTION_COUNT: f32 = 3.0;
 
-fn attention_status_icon(state: AgentState) -> &'static str {
+/// Latest agent sentence for a session row. Hooks fall back to the state
+/// label ("Completed") when no message was sent; the icon already says that,
+/// so a bare state word is not repeated as a subtitle.
+fn session_summary(
+    notifications: &[Notification],
+    session: &str,
+    state: Option<AgentState>,
+) -> Option<String> {
+    state?;
+    let notice = notifications
+        .iter()
+        .filter(|n| n.session_id == session && !n.dismissed)
+        .max_by_key(|n| n.created)?;
+    let text = notice_preview(&notice.summary);
+    (!text.is_empty() && text != notice.state.label()).then_some(text)
+}
+
+pub(super) fn attention_status_icon(state: AgentState) -> &'static str {
     match state {
         AgentState::WaitingInput => "MessageCircleQuestion",
         AgentState::WaitingPermission => "ShieldQuestion",

@@ -463,23 +463,72 @@ pub fn project_row(
     })
     .inner
 }
-pub fn session_row(
-    ui: &mut egui::Ui,
-    label: &str,
-    icon: &str,
-    selected: bool,
-    height: f32,
-    trailing: &str,
-    tint: Color32,
-) -> egui::Response {
+/// Session row with an optional status-tinted (and spinning) icon and a
+/// muted second line. The subtitle gets its own line; it never overlaps the label.
+pub struct SessionRowSpec<'a> {
+    pub label: &'a str,
+    pub icon: &'a str,
+    pub selected: bool,
+    pub trailing: &'a str,
+    pub tint: Color32,
+    pub icon_tint: Option<Color32>,
+    pub spin: bool,
+    pub subtitle: Option<&'a str>,
+}
+
+pub const SESSION_ROW_HEIGHT: f32 = 24.0;
+pub const SESSION_ROW_DETAIL_HEIGHT: f32 = 38.0;
+
+pub fn session_row_spec(ui: &mut egui::Ui, spec: SessionRowSpec<'_>) -> egui::Response {
     ui.scope(|ui| {
-        if !selected {
+        if !spec.selected {
             ui.visuals_mut().override_text_color = Some(ui.visuals().weak_text_color());
         }
-        row(ui, label, icon, selected, height, trailing, tint)
+        row_ext(
+            ui,
+            RowSpec {
+                label: spec.label,
+                icon: spec.icon,
+                selected: spec.selected,
+                height: if spec.subtitle.is_some() {
+                    SESSION_ROW_DETAIL_HEIGHT
+                } else {
+                    SESSION_ROW_HEIGHT
+                },
+                trailing: spec.trailing,
+                tint: spec.tint,
+                icon_tint: spec.icon_tint,
+                spin: spec.spin,
+                subtitle: spec.subtitle,
+            },
+        )
     })
     .inner
 }
+
+/// Paint an icon, optionally rotating it continuously (one turn per second).
+pub fn paint_status_icon(ui: &egui::Ui, rect: egui::Rect, icon: &str, tint: Color32, spin: bool) {
+    let mut image = egui::Image::new(crate::icons::source(icon)).tint(tint);
+    if spin {
+        let angle = (ui.input(|i| i.time) % 1.0) as f32 * std::f32::consts::TAU;
+        image = image.rotate(angle, egui::Vec2::splat(0.5));
+        ui.ctx().request_repaint();
+    }
+    image.paint_at(ui, rect);
+}
+
+struct RowSpec<'a> {
+    label: &'a str,
+    icon: &'a str,
+    selected: bool,
+    height: f32,
+    trailing: &'a str,
+    tint: Color32,
+    icon_tint: Option<Color32>,
+    spin: bool,
+    subtitle: Option<&'a str>,
+}
+
 /// Consistent full-width native sidebar row with fixed icon and status columns.
 pub fn row(
     ui: &mut egui::Ui,
@@ -490,6 +539,34 @@ pub fn row(
     trailing: &str,
     tint: Color32,
 ) -> egui::Response {
+    row_ext(
+        ui,
+        RowSpec {
+            label,
+            icon,
+            selected,
+            height,
+            trailing,
+            tint,
+            icon_tint: None,
+            spin: false,
+            subtitle: None,
+        },
+    )
+}
+
+fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
+    let RowSpec {
+        label,
+        icon,
+        selected,
+        height,
+        trailing,
+        tint,
+        icon_tint,
+        spin,
+        subtitle,
+    } = spec;
     let response = ui.add_sized(
         [ui.available_width(), height],
         egui::Button::new("").frame(false),
@@ -505,20 +582,6 @@ pub fn row(
             },
         );
     }
-    if trailing == "●" {
-        ui.painter().circle_filled(
-            egui::pos2(response.rect.right() - 10.0, response.rect.center().y),
-            3.5,
-            tint,
-        );
-    }
-    let icon_rect = egui::Rect::from_center_size(
-        egui::pos2(response.rect.left() + 12.0, response.rect.center().y),
-        egui::vec2(16.0, 16.0),
-    );
-    egui::Image::new(crate::icons::source(icon))
-        .tint(ICON_COLOR)
-        .paint_at(ui, icon_rect);
     let trailing_width = if trailing.is_empty() {
         4.0
     } else {
@@ -538,22 +601,56 @@ pub fn row(
     );
     // Paint the label rather than overlaying a selectable Label widget: the row
     // must own clicks on its text as well as its icon and empty space.
-    let mut job = egui::text::LayoutJob::simple(
-        label.to_owned(),
+    let single_line = |text: &str, font: FontId, color: Color32| {
+        let mut job = egui::text::LayoutJob::simple(text.to_owned(), font, color, rect.width());
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        ui.painter().layout_job(job)
+    };
+    let galley = single_line(
+        label,
         TextStyle::Body.resolve(ui.style()),
         ui.visuals().text_color(),
-        rect.width(),
     );
-    job.wrap.max_rows = 1;
-    job.wrap.break_anywhere = true;
-    let galley = ui.painter().layout_job(job);
-    let position = egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5);
-    ui.painter()
-        .with_clip_rect(rect)
-        .galley(position, galley, ui.visuals().text_color());
-    if trailing != "●" {
+    let sub = subtitle.map(|text| {
+        single_line(
+            text,
+            FontId::proportional(11.0),
+            ui.visuals().weak_text_color(),
+        )
+    });
+    const GAP: f32 = 1.0;
+    let block = galley.size().y + sub.as_ref().map_or(0.0, |s| GAP + s.size().y);
+    let top = response.rect.center().y - block * 0.5;
+    let label_center = top + galley.size().y * 0.5;
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(response.rect.left() + 12.0, label_center),
+        egui::vec2(16.0, 16.0),
+    );
+    paint_status_icon(ui, icon_rect, icon, icon_tint.unwrap_or(ICON_COLOR), spin);
+    let painter = ui.painter().with_clip_rect(rect);
+    let sub_top = top + galley.size().y + GAP;
+    painter.galley(
+        egui::pos2(rect.left(), top),
+        galley,
+        ui.visuals().text_color(),
+    );
+    if let Some(sub) = sub {
+        painter.galley(
+            egui::pos2(rect.left(), sub_top),
+            sub,
+            ui.visuals().weak_text_color(),
+        );
+    }
+    if trailing == "●" {
+        ui.painter().circle_filled(
+            egui::pos2(response.rect.right() - 10.0, label_center),
+            3.5,
+            tint,
+        );
+    } else {
         ui.painter().text(
-            egui::pos2(response.rect.right() - 5.0, response.rect.center().y),
+            egui::pos2(response.rect.right() - 5.0, label_center),
             egui::Align2::RIGHT_CENTER,
             trailing,
             FontId::proportional(12.0),
@@ -1166,6 +1263,74 @@ mod row_tests {
             focus_stroke(accent, std::time::Duration::from_secs(60))
         );
     }
+    #[test]
+    fn session_subtitle_sits_below_the_label_without_overlap() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            session_row_spec(
+                ui,
+                SessionRowSpec {
+                    label: "Terminal 2",
+                    icon: "CircleCheck",
+                    selected: true,
+                    trailing: "",
+                    tint: Color32::GRAY,
+                    icon_tint: Some(Color32::BLUE),
+                    spin: false,
+                    subtitle: Some("Tests pass; ready for review"),
+                },
+            );
+        });
+        output.textures_delta.clear();
+        let texts: Vec<egui::Rect> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if !text.galley.text().is_empty() => {
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts.len(), 2, "label and subtitle: {texts:?}");
+        assert!(
+            texts[0].bottom() <= texts[1].top(),
+            "label {:?} overlaps subtitle {:?}",
+            texts[0],
+            texts[1]
+        );
+        assert!(texts[0].left() == texts[1].left());
+    }
+
+    #[test]
+    fn running_status_icon_spins_and_keeps_repainting() {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(16.0, 16.0));
+        for spin in [false, true] {
+            let ctx = egui::Context::default();
+            install(&ctx);
+            let run = || {
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    paint_status_icon(ui, rect, "LoaderCircle", Color32::GREEN, spin);
+                });
+                output.textures_delta.clear();
+                output
+            };
+            // Settle startup repaints (fonts, image loaders) before checking.
+            for _ in 0..3 {
+                run();
+            }
+            let output = run();
+            assert_eq!(
+                output
+                    .viewport_output
+                    .values()
+                    .any(|v| v.repaint_delay.is_zero()),
+                spin
+            );
+        }
+    }
+
     #[test]
     fn row_click_works_on_icon_label_and_empty_space() {
         for x in [12.0, 55.0, 230.0] {

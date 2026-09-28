@@ -560,7 +560,16 @@ impl App {
             HeaderAction::Palette => self.open_command_palette(),
         }
     }
-    fn tab_face(&self, primary: Option<&Tab>) -> (String, &'static str, Option<String>) {
+    #[allow(clippy::type_complexity)]
+    fn tab_face(
+        &self,
+        primary: Option<&Tab>,
+    ) -> (
+        String,
+        &'static str,
+        Option<String>,
+        Option<(AgentState, &'static str, Color32)>,
+    ) {
         match primary {
             Some(Tab::Terminal(sid)) => self
                 .state
@@ -568,6 +577,19 @@ impl App {
                 .iter()
                 .find(|s| &s.id == sid)
                 .map(|s| {
+                    let agent_status = self
+                        .state
+                        .agents
+                        .iter()
+                        .filter(|a| a.session_id == *sid)
+                        .max_by_key(|a| a.updated)
+                        .map(|a| {
+                            (
+                                a.state,
+                                super::sidebar_ui::attention_status_icon(a.state),
+                                super::sidebar_ui::state_color(a.state, &self.theme),
+                            )
+                        });
                     (
                         s.label.clone(),
                         if s.kind == SessionKind::Editor {
@@ -576,9 +598,10 @@ impl App {
                             "Terminal"
                         },
                         Some(sid.clone()),
+                        agent_status,
                     )
                 })
-                .unwrap_or(("Terminal".into(), "Terminal", None)),
+                .unwrap_or(("Terminal".into(), "Terminal", None, None)),
             Some(Tab::Diff { path, .. }) | Some(Tab::Image { path }) => (
                 path.file_name()
                     .unwrap_or_default()
@@ -590,8 +613,9 @@ impl App {
                     "FileDiff"
                 },
                 None,
+                None,
             ),
-            Some(Tab::Browser { target, .. }) => (target.title(), "FileCode", None),
+            Some(Tab::Browser { target, .. }) => (target.title(), "FileCode", None, None),
             Some(Tab::NativeEditor { path }) => (
                 path.file_name()
                     .unwrap_or_default()
@@ -599,9 +623,10 @@ impl App {
                     .into_owned(),
                 "FileCode",
                 None,
+                None,
             ),
-            Some(Tab::Player) => ("Player".into(), "FileMusic", None),
-            None => ("Workspace".into(), "Terminal", None),
+            Some(Tab::Player) => ("Player".into(), "FileMusic", None, None),
+            None => ("Workspace".into(), "Terminal", None, None),
         }
     }
 
@@ -638,7 +663,7 @@ impl App {
                         .as_ref()
                         .filter(|tab| group.layout.find_tab(tab).is_some())
                         .or_else(|| group.layout.iter_all_tabs().next().map(|(_, tab)| tab));
-                    let (label, _, _) = self.tab_face(primary);
+                    let (label, _, _, _) = self.tab_face(primary);
                     workspace_tab_width(tab_label_width(ui, &label))
                 })
                 .collect();
@@ -702,7 +727,7 @@ impl App {
                                 .or_else(|| {
                                     group.layout.iter_all_tabs().next().map(|(_, tab)| tab)
                                 });
-                            let (label, icon, sid) = self.tab_face(primary);
+                            let (label, icon, sid, agent_status) = self.tab_face(primary);
                             let active = workspace.active == group.id;
                             let (rect, response) = ui.allocate_exact_size(
                                 egui::vec2(tab_widths[index], 32.0),
@@ -772,9 +797,19 @@ impl App {
                                 egui::pos2(rect.left() + 16.0, rect.center().y),
                                 egui::vec2(16.0, 16.0),
                             );
-                            egui::Image::new(icons::source(icon))
-                                .tint(appearance::ICON_COLOR)
-                                .paint_at(ui, icon_rect);
+                            if let Some((state, status_icon, tint)) = agent_status {
+                                appearance::paint_status_icon(
+                                    ui,
+                                    icon_rect,
+                                    status_icon,
+                                    tint,
+                                    state == AgentState::Running,
+                                );
+                            } else {
+                                egui::Image::new(icons::source(icon))
+                                    .tint(appearance::ICON_COLOR)
+                                    .paint_at(ui, icon_rect);
+                            }
                             let editing = sid
                                 .as_ref()
                                 .is_some_and(|sid| self.renaming(sid, RenameSurface::Workspace));
