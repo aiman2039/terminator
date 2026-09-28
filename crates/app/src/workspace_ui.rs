@@ -27,6 +27,15 @@ fn tab_label_width(ui: &egui::Ui, label: &str) -> f32 {
     ui.painter().layout_job(text).size().x
 }
 
+/// Workspace tab hover tooltip: the label plus the session working
+/// directory on a second line when the tab has a live session.
+fn tab_tooltip(label: &str, cwd: Option<&std::path::Path>) -> String {
+    match cwd {
+        Some(cwd) => format!("{label}\n{}", cwd.display()),
+        None => label.to_owned(),
+    }
+}
+
 fn snapshot_rows(backend: &TerminalBackend) -> Vec<String> {
     let kept: Vec<String> = backend
         .search_rows()
@@ -37,6 +46,25 @@ fn snapshot_rows(backend: &TerminalBackend) -> Vec<String> {
         .collect();
     let start = kept.len().saturating_sub(8);
     kept.into_iter().skip(start).collect()
+}
+
+#[cfg(test)]
+mod tab_tooltip_tests {
+    use super::tab_tooltip;
+    use std::path::Path;
+
+    #[test]
+    fn tooltip_appends_the_working_directory() {
+        assert_eq!(
+            tab_tooltip("shell", Some(Path::new("/repo/proj"))),
+            "shell\n/repo/proj"
+        );
+    }
+
+    #[test]
+    fn tooltip_without_a_session_is_just_the_label() {
+        assert_eq!(tab_tooltip("shell", None), "shell");
+    }
 }
 
 #[cfg(test)]
@@ -916,10 +944,20 @@ impl App {
                             {
                                 self.begin_rename(sid, RenameSurface::Workspace);
                             }
+                            let tooltip = tab_tooltip(
+                                &label,
+                                sid.as_ref().and_then(|sid| {
+                                    self.state
+                                        .sessions
+                                        .iter()
+                                        .find(|s| &s.id == sid)
+                                        .map(|s| s.cwd.as_path())
+                                }),
+                            );
                             response
                                 .clone()
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .on_hover_text(&label);
+                                .on_hover_text(&tooltip);
                             response.widget_info(|| {
                                 egui::WidgetInfo::selected(
                                     egui::WidgetType::SelectableLabel,
@@ -3443,6 +3481,8 @@ impl Viewer<'_> {
             }
         }
         appearance::context_menu(&response, |ui| {
+            let cwd = session.cwd.display().to_string();
+            appearance::target_header(ui, &cwd, &cwd);
             let selected = self
                 .app
                 .backends
