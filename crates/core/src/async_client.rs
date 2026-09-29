@@ -6,6 +6,10 @@ use crate::{
     bail, ensure, generations, redirect_allowed, snapshot,
 };
 use futures_util::{StreamExt, stream};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex},
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
@@ -20,12 +24,23 @@ impl std::fmt::Display for UncertainMutation {
 }
 impl std::error::Error for UncertainMutation {}
 
+/// A snapshot owner, resolved up front so retired owners can serve a cached
+/// state while live owners are queried over their sockets.
+enum Plan {
+    Live(generations::Generation),
+    Historical(generations::Generation, Arc<State>),
+}
+
 #[derive(Clone)]
 pub struct Client {
     pub paths: Paths,
     pub catalog: NativePool,
     pub cpu: NativePool,
     observations: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// Retired generations are immutable: their state is parsed from disk once
+    /// and reused. Without this, every 100 ms poll re-read and JSON-decoded the
+    /// whole history (tens of megabytes) for each retired owner.
+    historical: Arc<Mutex<HashMap<String, Arc<State>>>>,
 }
 impl Client {
     #[must_use]
@@ -35,6 +50,7 @@ impl Client {
             catalog,
             cpu,
             observations: Default::default(),
+            historical: Arc::new(Mutex::new(HashMap::new())),
         }
     }
     pub fn observe(&self, state: &mut State) {
@@ -177,61 +193,114 @@ impl Client {
                 .checked();
         }
         let paths = self.paths.clone();
-        let (active, owners) = self
+        let cache = self.historical.clone();
+        // One catalog read lists owners and reads the shared revision. Retired
+        // owners are immutable, so their state is decoded from disk once and
+        // then served from `cache`; only a retired owner's first poll touches
+        // SQLite. Building the aggregate is deferred until something changed.
+        let (active, catalog_revision, plans) = self
             .catalog
             .run(&CancellationToken::new(), move || {
                 let catalog = generations::Catalog::open(&paths)?;
-                Ok((
-                    catalog.active()?.context("No active generation")?,
-                    catalog.generations()?,
-                ))
+                let active = catalog.active()?.context("No active generation")?;
+                let catalog_revision = catalog.revision()?;
+                let mut plans = Vec::new();
+                let mut retired = HashSet::new();
+                for owner in catalog.generations()? {
+                    if owner.status == generations::Status::Prepared {
+                        continue;
+                    }
+                    if !generations::historical(&owner, Some(active.as_str())) {
+                        plans.push(Plan::Live(owner));
+                        continue;
+                    }
+                    let state = {
+                        let mut cache = cache.lock().unwrap();
+                        if let Some(state) = cache.get(&owner.id) {
+                            state.clone()
+                        } else {
+                            // A retired generation can be pruned between this
+                            // catalog read and the load; skip it rather than
+                            // failing the whole snapshot.
+                            let Ok(state) = generations::saved(&owner.paths()) else {
+                                continue;
+                            };
+                            let state = Arc::new(state);
+                            cache.insert(owner.id.clone(), state.clone());
+                            state
+                        }
+                    };
+                    retired.insert(owner.id.clone());
+                    plans.push(Plan::Historical(owner, state));
+                }
+                // Bound the cache to owners that are retired right now.
+                cache.lock().unwrap().retain(|id, _| retired.contains(id));
+                Ok((active, catalog_revision, plans))
             })
             .await?;
-        let mut inventories = Vec::new();
-        let mut requests = stream::iter(
-            owners
-                .into_iter()
-                .filter(|g| g.status != generations::Status::Prepared)
-                .map(|owner| {
-                    let active = active.clone();
-                    async move {
-                        let historical = generations::historical(&owner, Some(&active));
-                        let response = if historical {
-                            None
-                        } else {
-                            Some(self.direct(owner.paths(), Request::Snapshot, None).await)
-                        };
-                        let (state, error) = match response {
-                            Some(Ok(Response::State(state))) => (*state, None),
-                            result => {
-                                let paths = owner.paths();
-                                let saved = self
-                                    .catalog
-                                    .run(&CancellationToken::new(), move || {
-                                        generations::saved(&paths)
-                                    })
-                                    .await?;
-                                (
-                                    saved,
-                                    if historical {
-                                        None
-                                    } else {
-                                        Some(format!("Owner unavailable: {result:?}"))
-                                    },
-                                )
-                            }
-                        };
-                        Ok::<_, anyhow::Error>((owner, state, error))
+        let mut inventories = Vec::with_capacity(plans.len());
+        let mut live = Vec::new();
+        for plan in plans {
+            match plan {
+                Plan::Live(owner) => live.push(owner),
+                Plan::Historical(owner, state) => inventories.push((owner, state, None)),
+            }
+        }
+        let mut responses = stream::iter(live.into_iter().map(|owner| {
+            let client = self.clone();
+            async move {
+                let response = client.direct(owner.paths(), Request::Snapshot, None).await;
+                let (state, error) = match response {
+                    Ok(Response::State(state)) => (Arc::new(*state), None),
+                    result => {
+                        let paths = owner.paths();
+                        let saved = client
+                            .catalog
+                            .run(&CancellationToken::new(), move || {
+                                generations::saved(&paths).map(Arc::new)
+                            })
+                            .await?;
+                        (saved, Some(format!("Owner unavailable: {result:?}")))
                     }
-                }),
-        )
+                };
+                Ok::<_, anyhow::Error>((owner, state, error))
+            }
+        }))
         .buffer_unordered(4);
-        while let Some(result) = requests.next().await {
+        while let Some(result) = responses.next().await {
             inventories.push(result?);
         }
-        drop(requests);
+        drop(responses);
         // Stable ordering preserves conditional-snapshot equality across concurrent polls.
         inventories.sort_by(|a, b| a.0.id.cmp(&b.0.id));
+        // Compare the cheap hint before rebuilding the aggregate. The usual
+        // 100 ms poll has no changes, so this skips cloning and serializing the
+        // entire history. Historical states come from the cache, so unchanged
+        // polls no longer re-read or JSON-decode the retired generations.
+        let active_revision = inventories
+            .iter()
+            .find(|(owner, _, _)| owner.id == active)
+            .map_or(0, |(_, state, _)| state.revision);
+        let owner_revisions = inventories
+            .iter()
+            .map(|(owner, state, error)| {
+                (
+                    owner.id.clone(),
+                    state.revision,
+                    error.clone(),
+                    owner.status.clone(),
+                )
+            })
+            .collect();
+        let candidate = SnapshotHint {
+            generation: active.clone(),
+            revision: active_revision,
+            catalog_revision,
+            owner_revisions,
+        };
+        if hint.as_ref() == Some(&candidate) {
+            return Ok(Response::Unchanged);
+        }
         let paths = self.paths.clone();
         let mut state = self
             .catalog
@@ -239,7 +308,7 @@ impl Client {
                 let mut aggregate = inventories
                     .iter()
                     .find(|(g, _, _)| g.id == active)
-                    .map(|(_, s, _)| s.clone())
+                    .map(|(_, s, _)| (**s).clone())
                     .unwrap_or_default();
                 generations::clear_owned(&mut aggregate);
                 let catalog = generations::Catalog::open(&paths)?;
@@ -264,26 +333,26 @@ impl Client {
                         owner,
                         revision: state.revision,
                         error,
-                        capabilities: state.capabilities,
-                        helper: state.attachment_helper_executable,
+                        capabilities: state.capabilities.clone(),
+                        helper: state.attachment_helper_executable.clone(),
                     });
-                    aggregate.sessions.extend(state.sessions);
-                    aggregate.agents.extend(state.agents);
-                    aggregate.notifications.extend(state.notifications);
-                    aggregate.terminal_notices.extend(state.terminal_notices);
+                    aggregate.sessions.extend(state.sessions.iter().cloned());
+                    aggregate.agents.extend(state.agents.iter().cloned());
+                    aggregate
+                        .notifications
+                        .extend(state.notifications.iter().cloned());
+                    aggregate
+                        .terminal_notices
+                        .extend(state.terminal_notices.iter().cloned());
                     if present {
-                        aggregate.presence.extend(state.presence);
+                        aggregate.presence.extend(state.presence.iter().cloned());
                     }
                 }
                 Ok(aggregate)
             })
             .await?;
         self.observe(&mut state);
-        if hint.as_ref() == Some(&state.snapshot_hint()) {
-            Ok(Response::Unchanged)
-        } else {
-            Ok(Response::State(Box::new(state)))
-        }
+        Ok(Response::State(Box::new(state)))
     }
     pub async fn direct(
         &self,
@@ -504,5 +573,76 @@ mod tests {
                 .contains("too large")
         );
         server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn catalog_snapshot_short_circuits_unchanged_without_rebuilding() {
+        use crate::generations::{self, Catalog, Generation, Status};
+        let dir = tempfile::Builder::new()
+            .prefix("snap-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let root = Paths::at(dir.path().into());
+        root.init().unwrap();
+        generations::migrate_idle(&root).unwrap();
+        let id = crate::id();
+        let owner = Generation {
+            id: id.clone(),
+            data: root.data.join("generations").join(&id),
+            runtime: root.runtime.join(&id[..8]),
+            version: "test".into(),
+            build: "test".into(),
+            protocol: PROTOCOL_VERSION,
+            catalog: generations::CATALOG_VERSION,
+            status: Status::Prepared,
+            pid: None,
+        };
+        owner.paths().init().unwrap();
+        let db = rusqlite::Connection::open(owner.data.join("state.sqlite3")).unwrap();
+        db.execute_batch(
+            "CREATE TABLE app_state(id INTEGER PRIMARY KEY,json TEXT NOT NULL); PRAGMA user_version=1;",
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO app_state VALUES(1,?1)",
+            [serde_json::to_string(&State {
+                generation: id.clone(),
+                ..Default::default()
+            })
+            .unwrap()],
+        )
+        .unwrap();
+        let mut catalog = Catalog::open(&root).unwrap();
+        catalog.register(&owner).unwrap();
+        catalog.set_pid(&id, std::process::id()).unwrap();
+        catalog.activate(&id).unwrap();
+        std::fs::write(owner.paths().auth(), "fixture").unwrap();
+        let served = State {
+            generation: id.clone(),
+            revision: 7,
+            ..Default::default()
+        };
+        let listener = tokio::net::UnixListener::bind(owner.paths().socket()).unwrap();
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let _ = envelope(&mut socket).await;
+                let mut bytes = Vec::new();
+                write_frame(&mut bytes, &Response::State(Box::new(served.clone()))).unwrap();
+                let _ = socket.write_all(&bytes).await;
+            }
+        });
+        let client = Client::new(
+            root,
+            NativePool::new("catalog-snap", 1).unwrap(),
+            NativePool::new("cpu-snap", 1).unwrap(),
+        );
+        let Response::State(first) = client.snapshot(None).await.unwrap() else {
+            panic!("expected a built state");
+        };
+        assert_eq!(first.revision, 7);
+        assert!(matches!(
+            client.snapshot(Some(first.snapshot_hint())).await.unwrap(),
+            Response::Unchanged
+        ));
+        server.abort();
     }
 }

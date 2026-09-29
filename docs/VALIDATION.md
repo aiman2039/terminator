@@ -1,5 +1,28 @@
 # Validation evidence — 2026-09-08
 
+## Snapshot caching, generation retention, and idle polling (2026-09-29)
+
+- Symptom: the GUI held ~40% CPU. `sample` showed the `gui-catalog-0` worker
+  burning ~16% of a core inside `generations::saved`, and the 100 ms poll in
+  `gui_services::start_polling` re-read and JSON-decoded every retired
+  generation's whole state (28 generations, ~9.9 MB) on every tick.
+- `async_client::Client` now caches retired-generation states (immutable once
+  retired) and compares the cheap `SnapshotHint` before rebuilding the
+  aggregate, so an unchanged 100 ms poll does no disk read, decode, or clone.
+  Concurrent pruning is tolerated by skipping an owner whose state load fails.
+- `generations::saved` drops live-only `presence`/`recent_events` and caps
+  settled notifications and stopped agents (`State::compact_history`). Live
+  growth caps: notifications 10,000→512, events 8192→2048, agents 512.
+- The active daemon prunes retired generations beyond `RETIRED_RETENTION` (4),
+  never removing a generation whose saved state still records a live session.
+- Daemon `notifications::idle` only pumps the Cocoa run loop while a
+  notification awaits an action; the agent status spin interval is 100 ms.
+- `cargo test --workspace --all-features --locked`, strict workspace Clippy, and
+  `cargo fmt --all --check` passed.
+- Not run: before/after native `sample` of the rebuilt package, GUI smoke, or
+  replacement of the running installed GUI/daemon.
+
+
 ## Attachment failure retry limit (2026-09-29)
 
 - Nonzero attachment-bridge exits consume the three-failure budget regardless of

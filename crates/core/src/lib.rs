@@ -35,6 +35,12 @@ use std::{
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const NVIM_REVIEW_CAPABILITY: &str = "nvim-review-v1";
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
+/// Retained agent/notification records are aggregated into every snapshot, so
+/// they are bounded independently per generation. Pending attention is never
+/// dropped by these caps.
+pub const MAX_NOTIFICATIONS: usize = 512;
+pub const MAX_AGENTS: usize = 512;
+pub const MAX_RECENT_EVENTS: usize = 2048;
 #[must_use]
 pub fn now() -> u64 {
     SystemTime::now()
@@ -590,6 +596,36 @@ impl State {
         self.revision += 1;
         removed
     }
+    /// Drop transient records that only matter to a live owner so a historical
+    /// state stays small when it is loaded for aggregation. Pending attention
+    /// is never dropped; only already dismissed/resolved notifications beyond
+    /// the retention cap are removed. Sessions and resumable agents are kept.
+    pub fn compact_history(&mut self) {
+        self.recent_events.clear();
+        self.presence.clear();
+        let len = self.notifications.len();
+        if len > MAX_NOTIFICATIONS {
+            let cutoff = len - MAX_NOTIFICATIONS;
+            let mut index = 0;
+            self.notifications.retain(|n| {
+                let keep = index >= cutoff || !(n.dismissed || n.resolved);
+                index += 1;
+                keep
+            });
+        }
+        let len = self.agents.len();
+        if len > MAX_AGENTS {
+            let cutoff = len - MAX_AGENTS;
+            let mut index = 0;
+            self.agents.retain(|a| {
+                // Keep live/resumable agents and the most recent records; a
+                // resumable handle must never be trimmed.
+                let keep = index >= cutoff || a.resumable() || a.state == AgentState::Running;
+                index += 1;
+                keep
+            });
+        }
+    }
     /// Resolve from the already-loaded inventory; safe to use in GUI rendering.
     #[must_use]
     pub fn session_paths(&self, fallback: &Paths, session: &str) -> Paths {
@@ -719,8 +755,9 @@ impl State {
             }
         }
         self.recent_events.push(e.event_id.clone());
-        if self.recent_events.len() > 8192 {
-            self.recent_events.drain(..4096);
+        if self.recent_events.len() > MAX_RECENT_EVENTS {
+            self.recent_events
+                .drain(..self.recent_events.len() - MAX_RECENT_EVENTS / 2);
         }
         let repeated_state =
             existing.is_some_and(|i| self.agents[i].state == e.state) && e.request_id.is_none();
@@ -812,7 +849,7 @@ impl State {
             snoozed_until: 0,
         });
         // Bound completed history; never silently discard pending attention.
-        if self.notifications.len() > 10_000
+        if self.notifications.len() > MAX_NOTIFICATIONS
             && let Some(i) = self
                 .notifications
                 .iter()
@@ -1525,6 +1562,46 @@ mod tests {
         assert!(kept.contains(&"live".to_string()));
         assert!(s.notifications.is_empty());
         assert!(s.agents.iter().all(|a| a.session_id != "plain-ended"));
+    }
+    #[test]
+    fn compact_history_bounds_records_and_keeps_pending_attention() {
+        fn notice(id: String, settled: bool) -> Notification {
+            Notification {
+                id,
+                session_id: "s".into(),
+                invocation_id: "x".into(),
+                request_id: None,
+                state: AgentState::Completed,
+                summary: String::new(),
+                details: String::new(),
+                created: 0,
+                read: settled,
+                dismissed: settled,
+                resolved: settled,
+                snoozed_until: 0,
+            }
+        }
+        let mut s = State::default();
+        s.notifications.push(notice("pending".into(), false));
+        for i in 0..(MAX_NOTIFICATIONS + 200) {
+            s.notifications.push(notice(format!("n{i}"), true));
+        }
+        // Live and resumable agents must survive even when older than the cap.
+        let mut running = agent_for("live-agent", false);
+        running.state = AgentState::Running;
+        s.agents.push(running);
+        s.agents.push(agent_for("resumable-agent", true));
+        for i in 0..(MAX_AGENTS + 200) {
+            s.agents.push(agent_for(&format!("stopped-{i}"), false));
+        }
+        s.recent_events.push("event".into());
+        s.compact_history();
+        assert!(s.recent_events.is_empty());
+        assert!(s.notifications.iter().any(|n| n.id == "pending"));
+        assert!(s.notifications.len() <= MAX_NOTIFICATIONS + 1);
+        assert!(s.agents.iter().any(|a| a.session_id == "live-agent"));
+        assert!(s.agents.iter().any(|a| a.session_id == "resumable-agent"));
+        assert!(s.agents.len() <= MAX_AGENTS + 2);
     }
 }
 

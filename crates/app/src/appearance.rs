@@ -546,7 +546,7 @@ pub fn session_row_spec(ui: &mut egui::Ui, spec: SessionRowSpec<'_>) -> egui::Re
 /// so several icons share one schedule. A clipped icon, a hidden sidebar, or a
 /// minimized window does not request another frame. An unfocused but visible
 /// window still animates. Keyboard, pointer, and terminal updates are separate.
-const STATUS_SPIN_INTERVAL: Duration = Duration::from_millis(33);
+const STATUS_SPIN_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Paint an icon, optionally rotating it continuously (one turn per second).
 pub fn paint_status_icon(ui: &egui::Ui, rect: egui::Rect, icon: &str, tint: Color32, spin: bool) {

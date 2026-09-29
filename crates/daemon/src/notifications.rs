@@ -104,12 +104,17 @@ pub fn idle() {
     #[cfg(target_os = "macos")]
     {
         use core_foundation::{base::TCFType, runloop::CFRunLoop, string::CFString};
-        let mode = CFString::new("kCFRunLoopDefaultMode");
-        let _ = CFRunLoop::run_in_mode(
-            mode.as_concrete_TypeRef(),
-            std::time::Duration::from_millis(10),
-            true,
-        );
+        // Only pump the CF run loop while a notification is waiting for an
+        // action. Running it unconditionally made the accept loop spin the
+        // notification-center machinery at 100 Hz even when idle.
+        if ACTIVE.load(Ordering::Relaxed) > 0 {
+            let mode = CFString::new("kCFRunLoopDefaultMode");
+            let _ = CFRunLoop::run_in_mode(
+                mode.as_concrete_TypeRef(),
+                std::time::Duration::from_millis(10),
+                true,
+            );
+        }
     }
     std::thread::sleep(std::time::Duration::from_millis(10).saturating_sub(started.elapsed()));
 }

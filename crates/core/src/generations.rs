@@ -265,6 +265,15 @@ impl Catalog {
             .0
             .query_row("SELECT active FROM control WHERE id=1", [], |r| r.get(0))?)
     }
+    /// Shared workspace revision without re-reading and decoding the workspace
+    /// JSON. Used to detect no-op conditional snapshots cheaply.
+    pub fn revision(&self) -> Result<u64> {
+        Ok(u64::try_from(self.0.query_row(
+            "SELECT revision FROM workspace WHERE id=1",
+            [],
+            |r| r.get::<_, i64>(0),
+        )?)?)
+    }
     fn frozen(&self) -> Result<bool> {
         let (frozen, pid): (bool, Option<u32>) = self.0.query_row(
             "SELECT frozen,freeze_pid FROM control WHERE id=1",
@@ -342,6 +351,11 @@ impl Catalog {
             "UPDATE generations SET json=?2 WHERE id=?1",
             params![owner, serde_json::to_string(&g)?],
         )?;
+        Ok(())
+    }
+    pub fn remove(&self, owner: &str) -> Result<()> {
+        self.0
+            .execute("DELETE FROM generations WHERE id=?1", [owner])?;
         Ok(())
     }
 
@@ -479,7 +493,9 @@ pub fn saved(paths: &Paths) -> Result<State> {
     )?;
     let json: String = conn.query_row("SELECT json FROM app_state WHERE id=1", [], |r| r.get(0))?;
     let mut state: State = serde_json::from_str(&json)?;
-    state.presence.clear();
+    // Historical reads only feed display and aggregation: drop live-only
+    // presence/event-dedup data and cap transient notifications/agents.
+    state.compact_history();
     Ok(state)
 }
 
@@ -601,6 +617,50 @@ pub fn recover_exited(root: &Paths, owner: &Generation) -> Result<bool> {
     let _ = fs::remove_file(owner.paths().socket());
     let _ = fs::remove_file(owner.paths().auth());
     Ok(true)
+}
+
+/// Number of retired generations kept for History/resume. Older retired
+/// generations are deleted so their state is not loaded into every snapshot.
+pub const RETIRED_RETENTION: usize = 4;
+
+/// Delete the oldest retired generations beyond `keep`. Acquires the
+/// coordination lock, so callers must not already hold it. A generation whose
+/// saved state still records a live session is never removed. Returns the
+/// number of generations deleted.
+pub fn prune_retired(root: &Paths, keep: usize) -> Result<usize> {
+    let _coordination = coordinate(root)?;
+    let catalog = Catalog::open(root)?;
+    let active = catalog.active()?;
+    let mut retired: Vec<Generation> = catalog
+        .generations()?
+        .into_iter()
+        .filter(|g| g.status == Status::Retired && active.as_deref() != Some(g.id.as_str()))
+        .collect();
+    if retired.len() <= keep {
+        return Ok(0);
+    }
+    let doomed: Vec<Generation> = retired.drain(..retired.len() - keep).collect();
+    let mut removed = 0;
+    for owner in doomed {
+        if owner.data == root.data {
+            continue;
+        }
+        let live = saved(&owner.paths())
+            .map(|state| state.sessions.iter().any(|s| s.lifecycle.live()))
+            .unwrap_or(true);
+        if live {
+            continue;
+        }
+        catalog.remove(&owner.id)?;
+        let _ = fs::remove_file(owner.paths().socket());
+        let _ = fs::remove_file(owner.paths().auth());
+        let _ = fs::remove_dir_all(&owner.data);
+        if owner.runtime != root.runtime {
+            let _ = fs::remove_dir_all(&owner.runtime);
+        }
+        removed += 1;
+    }
+    Ok(removed)
 }
 
 pub fn owner_for(paths: &Paths, request: &Request) -> Result<Paths> {
@@ -1603,5 +1663,56 @@ mod tests {
                 .capabilities
                 .contains(&crate::AGENT_PRESENCE_CAPABILITY.to_string())
         );
+    }
+
+    #[test]
+    fn retired_generations_are_pruned_beyond_the_retention_limit() {
+        let (_dir, paths, catalog) = fixture();
+        let mut ids = Vec::new();
+        for _ in 0..6 {
+            let g = owner(&paths, &catalog);
+            catalog.retire(&g.id).unwrap();
+            ids.push(g.id);
+        }
+        assert_eq!(prune_retired(&paths, 4).unwrap(), 2);
+        let remaining: Vec<String> = Catalog::open(&paths)
+            .unwrap()
+            .generations()
+            .unwrap()
+            .into_iter()
+            .filter(|g| g.status == Status::Retired)
+            .map(|g| g.id)
+            .collect();
+        assert_eq!(remaining.len(), 4);
+        assert!(!remaining.contains(&ids[0]));
+        assert!(!remaining.contains(&ids[1]));
+        assert!(remaining.contains(&ids[5]));
+        assert!(!paths.data.join("generations").join(&ids[0]).exists());
+        assert!(paths.data.join("generations").join(&ids[5]).exists());
+        // Nothing left to prune on a second pass.
+        assert_eq!(prune_retired(&paths, 4).unwrap(), 0);
+    }
+
+    #[test]
+    fn retired_generation_with_live_records_is_never_pruned() {
+        let (_dir, paths, catalog) = fixture();
+        let live = owner(&paths, &catalog);
+        save(
+            &live,
+            &State {
+                generation: live.id.clone(),
+                sessions: vec![session(&live.id, Lifecycle::Running)],
+                ..Default::default()
+            },
+        );
+        catalog.retire(&live.id).unwrap();
+        for _ in 0..4 {
+            let g = owner(&paths, &catalog);
+            catalog.retire(&g.id).unwrap();
+        }
+        assert_eq!(prune_retired(&paths, 1).unwrap(), 3);
+        let owners = Catalog::open(&paths).unwrap().generations().unwrap();
+        assert!(owners.iter().any(|g| g.id == live.id));
+        assert!(live.data.exists());
     }
 }

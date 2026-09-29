@@ -1524,6 +1524,11 @@ fn main() -> Result<()> {
                             if let Err(error) = shared.prune_global(&owners) {
                                 shared.degraded(&format!("Global history retention: {error:#}"));
                             }
+                            if let Err(error) =
+                                generations::prune_retired(root, generations::RETIRED_RETENTION)
+                            {
+                                shared.degraded(&format!("Generation retention: {error:#}"));
+                            }
                             global_prune = Instant::now();
                         }
                         for other in owners
