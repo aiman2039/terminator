@@ -95,7 +95,25 @@ pub fn items(
 }
 
 pub fn menu(ui: &mut egui::Ui, spec: FileMenu) -> Option<FileAction> {
+    menu_with(ui, spec, "", "")
+}
+
+/// `open` and `split` are the displayed shortcuts for those rows.
+pub fn menu_with(ui: &mut egui::Ui, spec: FileMenu, open: &str, split: &str) -> Option<FileAction> {
+    let mut previous_group = None;
     for (label, action) in items(spec) {
+        let group = match action {
+            FileAction::StagedDiff
+            | FileAction::WorkingDiff
+            | FileAction::NativeStagedDiff
+            | FileAction::NativeWorkingDiff => 0,
+            FileAction::Copy => 2,
+            _ => 1,
+        };
+        if previous_group.is_some_and(|previous| previous != group) {
+            ui.separator();
+        }
+        previous_group = Some(group);
         let icon = match action {
             FileAction::Open | FileAction::Text => "FileCode",
             FileAction::Split => "PanelRightClose",
@@ -106,7 +124,12 @@ pub fn menu(ui: &mut egui::Ui, spec: FileMenu) -> Option<FileAction> {
             | FileAction::NativeStagedDiff
             | FileAction::NativeWorkingDiff => "FileDiff",
         };
-        let response = crate::appearance::menu_item(ui, label, icon, "");
+        let shortcut = match action {
+            FileAction::Open => open,
+            FileAction::Split => split,
+            _ => "",
+        };
+        let response = crate::appearance::menu_item(ui, label, icon, shortcut);
         #[cfg(feature = "test-support")]
         crate::diagnostics::record(ui.ctx(), label, response.rect);
         if response.clicked() {

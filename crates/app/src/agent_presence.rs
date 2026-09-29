@@ -280,11 +280,7 @@ fn present_session_with_freshness(
         Vec::new()
     };
     let detected_kinds: Vec<String> = detected.iter().map(|a| a.kind.clone()).collect();
-    let hook = state
-        .agents
-        .iter()
-        .filter(|a| a.session_id == session_id)
-        .max_by_key(|a| a.updated);
+    let hook = agents::select_session_agent(&state.agents, session_id);
     let (brand_icon, brand_label) = if !detected.is_empty() {
         match agents::preferred_agent(&detected) {
             Some(agent) => (
@@ -712,6 +708,37 @@ mod tests {
                 presented.diagnostics(now())
             );
         }
+    }
+
+    #[test]
+    fn muse_subagent_tool_after_stop_shows_completed() {
+        let mut state = State::default();
+        state.sessions.push(session("s"));
+        state.agents.push(Agent {
+            invocation_id: "lead".into(),
+            session_id: "s".into(),
+            kind: "muse".into(),
+            provider_session_id: Some("01a0e846-a59d-7da0-a7c8-3de6bf83174b".into()),
+            state: AgentState::Completed,
+            sequence: None,
+            updated: 10,
+            resume: None,
+            process: None,
+        });
+        state.agents.push(Agent {
+            invocation_id: "tool".into(),
+            session_id: "s".into(),
+            kind: "muse".into(),
+            provider_session_id: Some("ee1080b7-a350-4c2b-844b-ae1786b1b3c0".into()),
+            state: AgentState::Running,
+            sequence: None,
+            updated: 50,
+            resume: None,
+            process: None,
+        });
+        let presented = present_session(&state, "s", 100);
+        assert_eq!(presented.status_label, "Completed");
+        assert!(!presented.spin);
     }
 
     #[test]

@@ -1207,12 +1207,12 @@ impl App {
                         None => "Checking…",
                     })
                     .on_hover_text(
-                        terminator_integrations::config_path(
+                        terminator_integrations::settings_path(
                             Path::new(&std::env::var("HOME").unwrap_or_default()),
                             kind,
                         )
-                        .map(|path| path.display().to_string())
-                        .unwrap_or_default(),
+                        .display()
+                        .to_string(),
                     );
                     if ui
                         .button(if installed == Some(true) {

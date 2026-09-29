@@ -13,11 +13,12 @@ impl Shared {
             return Ok(None);
         }
         ensure!(
-            !state.agents.iter().any(|a| a.session_id == session
-                && !matches!(
-                    a.state,
+            agents::select_session_agent(&state.agents, session).is_none_or(|agent| {
+                matches!(
+                    agent.state,
                     AgentState::Stopped | AgentState::Completed | AgentState::Failed
-                )),
+                )
+            }),
             "An agent is active or its lifecycle is unknown"
         );
         let runtime = self.runtime(session)?;

@@ -19,6 +19,7 @@ mod browser;
 mod browser_host;
 mod external_editor;
 mod file_actions;
+mod workspace_ops;
 pub(crate) use browser::{BrowserTarget, rewrite_html_tabs};
 mod icons;
 mod image_preview;
@@ -250,6 +251,7 @@ enum Job {
     },
     External(PathBuf),
     TestExternal(PathBuf, String, Vec<String>),
+    Workspace(PathBuf, workspace_ops::Op),
 }
 impl Job {
     fn rpc(request: Request, after: After) -> Self {
@@ -314,6 +316,7 @@ enum Update {
     StripCreated(Session, Option<String>, Vec<Tab>),
     Text(String, String),
     Diff(String, Result<diff::DiffDocument, String>),
+    Workspace(workspace_ops::Op, Result<workspace_ops::Report, String>),
     Refresh(
         u64,
         services::ContextData,
@@ -492,6 +495,15 @@ impl TerminalFind {
 
 pub struct App {
     file_activation: Option<FileActivation>,
+    git_commit: String,
+    git_history: bool,
+    git_branches: Vec<String>,
+    git_log: Vec<(String, String)>,
+    git_list_root: Option<PathBuf>,
+    git_collapse: u64,
+    explorer_query: String,
+    name_prompt: Option<workspace_ops::NamePrompt>,
+    pending_delete: Option<PathBuf>,
     services: gui_services::Services,
     service_owner: gui_services::Owner,
     service_completion: Option<async_service::Completion<Vec<Update>>>,
@@ -783,6 +795,15 @@ impl App {
         let (pty_tx, pty_rx) = mpsc::channel();
         Self {
             file_activation: None,
+            git_commit: String::new(),
+            git_history: false,
+            git_branches: Vec::new(),
+            git_log: Vec::new(),
+            git_list_root: None,
+            git_collapse: 0,
+            explorer_query: String::new(),
+            name_prompt: None,
+            pending_delete: None,
             services: services.clone(),
             service_owner,
             service_completion: None,
@@ -1767,6 +1788,21 @@ impl App {
                     self.error = Some(e);
                 }
                 Update::Info(i) => self.info = Some(i),
+                Update::Workspace(op, result) => match result {
+                    Ok(workspace_ops::Report::Message(text)) => {
+                        self.info = Some(text);
+                        self.refresh_request = None;
+                        if matches!(
+                            op,
+                            workspace_ops::Op::Commit(_) | workspace_ops::Op::Switch(_)
+                        ) {
+                            self.git_list_root = None;
+                        }
+                    }
+                    Ok(workspace_ops::Report::Branches(names)) => self.git_branches = names,
+                    Ok(workspace_ops::Report::Log(rows)) => self.git_log = rows,
+                    Err(error) => self.error = Some(error),
+                },
             }
         }
         let mut budget = native_jobs::ResultBudget::new();
@@ -3372,6 +3408,7 @@ impl App {
     fn perform_git_outcome(&mut self, ui: &egui::Ui, outcome: sidebar_ui::GitPanelOutcome) {
         if outcome.refresh {
             self.refresh_request = None;
+            self.git_list_root = None;
         }
         if outcome.view_log {
             self.open_commit_log();
@@ -3381,6 +3418,34 @@ impl App {
         }
         for picked in outcome.menu {
             self.file_action(ui, picked.action, &picked.path, None);
+        }
+        if let Some(history) = outcome.history {
+            self.git_history = history;
+        }
+        if outcome.collapse {
+            self.git_collapse = self.git_collapse.wrapping_add(1);
+        }
+        if let Some(name) = outcome.switch {
+            self.queue_workspace(workspace_ops::Op::Switch(name));
+        }
+        if outcome.commit {
+            let message = std::mem::take(&mut self.git_commit);
+            self.queue_workspace(workspace_ops::Op::Commit(message));
+        }
+        for path in outcome.stage {
+            self.queue_workspace(workspace_ops::Op::Stage(path));
+        }
+        for path in outcome.unstage {
+            self.queue_workspace(workspace_ops::Op::Unstage(path));
+        }
+        for (path, untracked) in outcome.discard {
+            self.queue_workspace(workspace_ops::Op::Discard { path, untracked });
+        }
+        for path in outcome.delete {
+            self.pending_delete = Some(path);
+        }
+        for text in outcome.copy {
+            ui.ctx().copy_text(text);
         }
     }
     fn open_commit_log(&mut self) {
@@ -6430,6 +6495,57 @@ mod navigation_tests {
     }
 
     #[test]
+    fn project_sidebar_paints_a_working_agent_icon() {
+        let (mut app, ctx, _dir) = fixture();
+        appearance::install(&ctx);
+        app.selected = Some("a".into());
+        app.preferences.expanded.insert("a".into(), true);
+        app.state.sessions = vec![session_fixture("s", SessionKind::Shell)];
+        app.state.agents = vec![Agent {
+            invocation_id: "agent".into(),
+            session_id: "s".into(),
+            kind: "codex".into(),
+            provider_session_id: None,
+            state: AgentState::Running,
+            sequence: None,
+            updated: 1,
+            resume: None,
+            process: None,
+        }];
+        let presented = app.present_session("s");
+        assert_eq!(presented.brand_icon, Some("AgentCodex"));
+        assert_eq!(presented.status_icon, "LoaderCircle");
+        let mut marks = 0;
+        for _ in 0..4 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(280.0, 500.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.projects(ui),
+            );
+            marks = output
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(
+                        &shape.shape,
+                        egui::Shape::Rect(rect) if rect.brush.is_some()
+                    ) || matches!(&shape.shape, egui::Shape::Mesh(_))
+                })
+                .count();
+            output.textures_delta.clear();
+        }
+        assert!(
+            marks >= 2,
+            "a working agent must paint its brand icon and status icon, got {marks}"
+        );
+    }
+
+    #[test]
     #[cfg(feature = "test-support")]
     fn project_header_controls_share_height() {
         let (mut app, ctx, _dir) = fixture();
@@ -6810,13 +6926,20 @@ mod navigation_tests {
                 |ui| {
                     let context = app.context.clone().unwrap();
                     let outcome = {
+                        let mut draft = String::new();
                         let input = sidebar_ui::GitPanelInput {
                             context: &context,
                             review_mode: app.state.settings.review_mode,
                             neovim_review: false,
                             theme: &app.theme,
+                            history: false,
+                            commits: &[],
+                            branches: &[],
+                            commit_draft: &mut draft,
+                            collapse_generation: 0,
+                            open_shortcut: "",
                         };
-                        sidebar_ui::git_panel(ui, &input)
+                        sidebar_ui::git_panel(ui, &mut { input })
                     };
                     clicks += outcome.clicked.len();
                     app.perform_git_outcome(ui, outcome);
@@ -7753,6 +7876,65 @@ mod navigation_tests {
         app.process_updates(&ctx);
         assert!(app.context.is_none());
     }
+
+    #[test]
+    fn commit_switch_and_refresh_invalidate_git_lists() {
+        let (mut app, ctx, _dir) = fixture();
+        let root = PathBuf::from("/repo");
+        app.git_list_root = Some(root.clone());
+        app.update_tx
+            .send(Update::Workspace(
+                workspace_ops::Op::Stage(root.join("a.txt")),
+                Ok(workspace_ops::Report::Message("Staged".into())),
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(app.git_list_root, Some(root.clone()));
+        app.update_tx
+            .send(Update::Workspace(
+                workspace_ops::Op::Commit("nope".into()),
+                Err("commit failed".into()),
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(app.git_list_root, Some(root.clone()));
+        app.update_tx
+            .send(Update::Workspace(
+                workspace_ops::Op::Commit("yes".into()),
+                Ok(workspace_ops::Report::Message("Committed".into())),
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(app.git_list_root.is_none());
+        app.git_list_root = Some(root.clone());
+        app.update_tx
+            .send(Update::Workspace(
+                workspace_ops::Op::Switch("feature".into()),
+                Ok(workspace_ops::Report::Message("Switched".into())),
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(app.git_list_root.is_none());
+        app.git_list_root = Some(root.clone());
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let outcome = sidebar_ui::GitPanelOutcome {
+                    refresh: true,
+                    ..Default::default()
+                };
+                app.perform_git_outcome(ui, outcome);
+            },
+        );
+        output.textures_delta.clear();
+        assert!(app.git_list_root.is_none());
+    }
     #[test]
     fn delayed_creation_uses_original_project_after_navigation_and_pane_removal() {
         let (mut app, ctx, _dir) = fixture();
@@ -8643,6 +8825,70 @@ mod navigation_tests {
         assert!(app.fixture_rect(&ctx, "pane-caption:left").is_some());
         assert!(app.fixture_rect(&ctx, "pane-caption:right").is_some());
     }
+    /// Every terminal caption carries Git and both split buttons on one row.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn terminal_bars_keep_git_and_splits_on_one_row() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["left", "right"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        app.metadata = Some(metadata::Metadata {
+            cwd: "/a".into(),
+            branch: Some("master".into()),
+            ..Default::default()
+        });
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("left".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("right".into())],
+        );
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        for sid in ["left", "right"] {
+            let caption = app
+                .fixture_rect(&ctx, &format!("pane-caption:{sid}"))
+                .expect("caption");
+            for (name, action) in [
+                ("git", "pane-git"),
+                ("vertical", "pane-split-vertical"),
+                ("horizontal", "pane-split-horizontal"),
+            ] {
+                let rect = app
+                    .fixture_rect(&ctx, &format!("{action}:{sid}"))
+                    .unwrap_or_else(|| panic!("missing {name} on {sid}"));
+                assert!(
+                    (rect[1] + rect[3] / 2.0 - (caption[1] + caption[3] / 2.0)).abs() < 4.0,
+                    "{name} on {sid} should sit on the caption row"
+                );
+                assert!(
+                    rect[0] >= caption[0] && rect[0] + rect[2] <= caption[0] + caption[2] + 1.0,
+                    "{name} on {sid} should stay inside the caption"
+                );
+            }
+        }
+        let git = frame_center(&app, &ctx, "pane-git:left");
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(git)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(git, true)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(git, false)]);
+        assert!(app.preferences.visible);
+        assert_eq!(app.preferences.tool, SidebarTool::Git);
+        let split = frame_center(&app, &ctx, "pane-split-horizontal:right");
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(split)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(split, true)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(split, false)]);
+        assert_eq!(
+            app.add_tab
+                .as_ref()
+                .map(|(_, direction)| direction.as_deref()),
+            Some(Some("down"))
+        );
+    }
     /// A pane dragged over a strip gap shows the tab-sized ghost (the
     /// new-tab outcome), never stacked with the pane snapshot ghost.
     #[cfg(feature = "test-support")]
@@ -9475,6 +9721,17 @@ mod navigation_tests {
             appearance::install(&ctx);
             app.preferences.all_projects = true;
             app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+            app.state.agents = vec![Agent {
+                invocation_id: "agent".into(),
+                session_id: "live-shell".into(),
+                kind: "codex".into(),
+                provider_session_id: None,
+                state: AgentState::WaitingPermission,
+                sequence: None,
+                updated: 0,
+                resume: None,
+                process: None,
+            }];
             app.state.notifications = vec![notice_fixture(
                 "wait",
                 "live-shell",
@@ -9507,17 +9764,15 @@ mod navigation_tests {
                         "width {width}: actions should stay one cluster {:?}",
                         action_rects
                     );
-                    if width >= 320.0 {
-                        let row = agent_target(&ctx, "agent-row:live-shell").unwrap();
-                        assert!(
-                            (row.center().y - action_rects[0].center().y).abs() < 8.0,
-                            "width {width}: title and actions should share one row"
-                        );
-                        assert!(
-                            action_rects[0].min.x >= row.max.x - 2.0,
-                            "width {width}: actions should follow the title"
-                        );
-                    }
+                    let row = agent_target(&ctx, "agent-row:live-shell").unwrap();
+                    assert!(
+                        (row.center().y - action_rects[0].center().y).abs() < 8.0,
+                        "width {width}: title and actions should share one row"
+                    );
+                    assert!(
+                        action_rects[0].min.x >= row.max.x - 2.0,
+                        "width {width}: actions should follow the title"
+                    );
                 },
             );
             output.textures_delta.clear();

@@ -30,6 +30,71 @@ pub struct AgentInfo {
     pub entrypoints: &'static [&'static str],
 }
 
+/// Muse Code conversation ids are UUID version 7 (`01…-…-7…`).
+/// Tool and subagent hooks report a different id on the same terminal.
+fn muse_conversation_id(id: &str) -> bool {
+    let mut parts = id.split('-');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    let Some(second) = parts.next() else {
+        return false;
+    };
+    let Some(third) = parts.next() else {
+        return false;
+    };
+    let Some(fourth) = parts.next() else {
+        return false;
+    };
+    let Some(fifth) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none()
+        && first.len() == 8
+        && first.starts_with("01")
+        && second.len() == 4
+        && third.len() == 4
+        && third.starts_with('7')
+        && fourth.len() == 4
+        && fifth.len() == 12
+        && id
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() || character == '-')
+}
+
+/// Agent record that should drive a terminal's lifecycle.
+///
+/// Muse tool and subagent events are separate records. Once a conversation id
+/// exists, those records do not outrank it, so a later tool event cannot keep
+/// the row on Working after Stop.
+pub fn select_session_agent<'a>(
+    agents: &'a [crate::Agent],
+    session_id: &str,
+) -> Option<&'a crate::Agent> {
+    let matched: Vec<_> = agents
+        .iter()
+        .filter(|agent| agent.session_id == session_id)
+        .collect();
+    let has_conversation = matched.iter().any(|agent| {
+        agent.kind == "muse"
+            && agent
+                .provider_session_id
+                .as_deref()
+                .is_some_and(muse_conversation_id)
+    });
+    matched
+        .into_iter()
+        .filter(|agent| {
+            !has_conversation
+                || agent.kind != "muse"
+                || agent
+                    .provider_session_id
+                    .as_deref()
+                    .is_some_and(muse_conversation_id)
+        })
+        .max_by_key(|agent| agent.updated)
+}
+
 /// First-release detection coverage. Custom hook agents receive a generic icon.
 pub const CATALOG: &[AgentInfo] = &[
     AgentInfo {
@@ -577,6 +642,79 @@ mod tests {
         };
         assert!(!presence_verified(Some(&unavailable), 105));
         assert!(!presence_verified(None, 105));
+    }
+
+    #[test]
+    fn muse_tool_records_do_not_outrank_the_conversation() {
+        let agents = vec![
+            crate::Agent {
+                invocation_id: "lead".into(),
+                session_id: "s".into(),
+                kind: "muse".into(),
+                provider_session_id: Some("01a0e846-a59d-7da0-a7c8-3de6bf83174b".into()),
+                state: crate::AgentState::Completed,
+                sequence: None,
+                updated: 10,
+                resume: None,
+                process: None,
+            },
+            crate::Agent {
+                invocation_id: "tool".into(),
+                session_id: "s".into(),
+                kind: "muse".into(),
+                provider_session_id: Some("ee1080b7-a350-4c2b-844b-ae1786b1b3c0".into()),
+                state: crate::AgentState::Running,
+                sequence: None,
+                updated: 50,
+                resume: None,
+                process: None,
+            },
+        ];
+        let selected = select_session_agent(&agents, "s").unwrap();
+        assert_eq!(selected.invocation_id, "lead");
+        assert_eq!(selected.state, crate::AgentState::Completed);
+    }
+
+    #[test]
+    fn muse_new_conversation_replaces_a_finished_one() {
+        let agents = vec![
+            crate::Agent {
+                invocation_id: "old".into(),
+                session_id: "s".into(),
+                kind: "muse".into(),
+                provider_session_id: Some("01a0e28b-93b7-79e2-b68a-afafe2b9146b".into()),
+                state: crate::AgentState::Completed,
+                sequence: None,
+                updated: 10,
+                resume: None,
+                process: None,
+            },
+            crate::Agent {
+                invocation_id: "new".into(),
+                session_id: "s".into(),
+                kind: "muse".into(),
+                provider_session_id: Some("01a0e8b4-2220-7dc3-8096-aaed0ec12cf8".into()),
+                state: crate::AgentState::Running,
+                sequence: None,
+                updated: 40,
+                resume: None,
+                process: None,
+            },
+            crate::Agent {
+                invocation_id: "tool".into(),
+                session_id: "s".into(),
+                kind: "muse".into(),
+                provider_session_id: Some("a38cd0bf-3185-4ffe-9a75-d230070f9fba".into()),
+                state: crate::AgentState::Running,
+                sequence: None,
+                updated: 50,
+                resume: None,
+                process: None,
+            },
+        ];
+        let selected = select_session_agent(&agents, "s").unwrap();
+        assert_eq!(selected.invocation_id, "new");
+        assert_eq!(selected.state, crate::AgentState::Running);
     }
 
     #[test]

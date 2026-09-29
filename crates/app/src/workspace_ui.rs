@@ -345,9 +345,54 @@ impl App {
             && !self.editor_close_sessions.contains(sid)
             && (self.close_workspace.is_none() || self.idle_close_pending.is_some())
             && self.rename_session.is_none()
+            && self.name_prompt.is_none()
+            && self.pending_delete.is_none()
             && !self.open_path
             && !self.search_open
             && self.search_session.is_none()
+    }
+
+    fn terminal_status_color(&self, session: &Session) -> Option<egui::Color32> {
+        let presented = self.present_session(&session.id);
+        let theme = &self.theme;
+        if let Some(state) = presented.lifecycle {
+            return Some(appearance::color(match state {
+                AgentState::Running => &theme.status_running,
+                AgentState::WaitingInput | AgentState::WaitingPermission => &theme.status_waiting,
+                AgentState::Failed => &theme.status_failed,
+                AgentState::Completed => &theme.accent,
+                _ => &theme.secondary,
+            }));
+        }
+        session
+            .lifecycle
+            .live()
+            .then(|| appearance::color(&theme.status_running))
+    }
+
+    fn branch_at(&self, cwd: &std::path::Path) -> Option<String> {
+        if let Some(metadata) = &self.metadata
+            && metadata.cwd == cwd
+        {
+            return metadata.branch.clone().filter(|branch| !branch.is_empty());
+        }
+        self.context.as_ref().and_then(|context| {
+            (context.cwd == cwd && !context.branch.is_empty()).then(|| context.branch.clone())
+        })
+    }
+
+    fn show_git_sidebar(&mut self) {
+        self.preferences.visible = true;
+        self.preferences.tool = SidebarTool::Git;
+    }
+
+    fn action_tip(&self, label: &str, action: &str) -> String {
+        let keys = self.shortcut_label(action);
+        if keys.is_empty() {
+            label.to_string()
+        } else {
+            format!("{label} ({keys})")
+        }
     }
 
     fn header_left_width(&self, total: f32) -> f32 {
@@ -1931,56 +1976,109 @@ impl App {
             });
     }
     fn diff_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
-        let Tab::Diff { cwd, path, staged } = tab else {
+        let Tab::Diff {
+            cwd,
+            path,
+            staged: _,
+        } = tab
+        else {
             return;
         };
         let is_md = crate::markdown::supported(path);
         let key = tab.key();
+        let split = self.diff_split.contains(&key);
         ui.horizontal(|ui| {
-            ui.weak(services::compact_path(path));
-            ui.weak(if *staged {
-                "HEAD → Index"
-            } else {
-                "Index → Working tree"
-            });
-            let split = self.diff_split.contains(&key);
-            if ui.selectable_label(!split, "Unified").clicked() {
-                self.diff_split.remove(&key);
+            ui.strong(
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+            );
+            if let Some(letter) = self.context.as_ref().and_then(|context| {
+                context
+                    .decorations
+                    .get(&cwd.join(path))
+                    .copied()
+                    .filter(|letter| *letter != ' ')
+            }) {
+                ui.colored_label(
+                    sidebar_ui::git_color(&self.theme, letter),
+                    letter.to_string(),
+                );
             }
-            let side_by_side = ui.selectable_label(split, "Side by side");
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "diff-side-by-side", side_by_side.rect);
-            if side_by_side.clicked() {
-                self.diff_split.insert(key.clone());
-            }
-            let ignore = self.diff_ignore_ws.contains(&key);
-            if ui.selectable_label(ignore, "Ignore whitespace").clicked() {
-                if ignore {
-                    self.diff_ignore_ws.remove(&key);
-                } else {
-                    self.diff_ignore_ws.insert(key.clone());
-                }
-                self.diff_preview.remove(&key);
-                self.loading.insert(key.clone());
-                self.diffs.remove(&key);
-                let _ = self.jobs.send(Job::Diff(tab.clone()));
-            }
-            if is_md {
-                let preview = self.diff_preview.contains(&key);
-                if ui.selectable_label(preview, "Preview").clicked() {
-                    if preview {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let more = appearance::menu_button(ui, "…", |ui| {
+                    if appearance::menu_item(ui, "Unified", "Rows2", "").clicked() {
+                        self.diff_split.remove(&key);
+                        ui.close();
+                    }
+                    ui.separator();
+                    let ignore = self.diff_ignore_ws.contains(&key);
+                    if appearance::menu_item(
+                        ui,
+                        if ignore {
+                            "Show whitespace"
+                        } else {
+                            "Ignore whitespace"
+                        },
+                        "Eraser",
+                        "",
+                    )
+                    .clicked()
+                    {
+                        if ignore {
+                            self.diff_ignore_ws.remove(&key);
+                        } else {
+                            self.diff_ignore_ws.insert(key.clone());
+                        }
                         self.diff_preview.remove(&key);
+                        self.loading.insert(key.clone());
+                        self.diffs.remove(&key);
+                        let _ = self.jobs.send(Job::Diff(tab.clone()));
+                        ui.close();
+                    }
+                    if is_md {
+                        let preview = self.diff_preview.contains(&key);
+                        if appearance::menu_item(
+                            ui,
+                            if preview { "Hide preview" } else { "Preview" },
+                            "FileText",
+                            "",
+                        )
+                        .clicked()
+                        {
+                            if preview {
+                                self.diff_preview.remove(&key);
+                            } else {
+                                self.diff_preview.insert(key.clone());
+                            }
+                            ui.close();
+                        }
+                    }
+                    ui.separator();
+                    if appearance::menu_item(ui, "Refresh", "RefreshCw", "").clicked() {
+                        self.diff_preview.remove(&key);
+                        self.diff_ignore_ws.remove(&key);
+                        self.loading.insert(key.clone());
+                        let _ = self.jobs.send(Job::Diff(tab.clone()));
+                        ui.close();
+                    }
+                })
+                .response
+                .on_hover_text("Diff view");
+                let _ = more;
+                let side_by_side = ui.selectable_label(split, "Side by side");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "diff-side-by-side", side_by_side.rect);
+                if side_by_side.clicked() {
+                    if split {
+                        self.diff_split.remove(&key);
                     } else {
-                        self.diff_preview.insert(key.clone());
+                        self.diff_split.insert(key.clone());
                     }
                 }
-            }
-            if ui.small_button("Refresh").clicked() {
-                self.diff_preview.remove(&key);
-                self.diff_ignore_ws.remove(&key);
-                self.loading.insert(key.clone());
-                let _ = self.jobs.send(Job::Diff(tab.clone()));
-            }
+            });
         });
         if !self.diffs.contains_key(&key) && self.loading.insert(key.clone()) {
             let _ = self.jobs.send(Job::Diff(tab.clone()));
@@ -2687,9 +2785,18 @@ impl TabViewer for Viewer<'_> {
         self.strip
     }
     fn trailing_controls_width(&self) -> f32 {
-        28.0
+        let actions = if self.strip {
+            appearance::strip_terminal_actions_width() + 4.0
+        } else {
+            0.0
+        };
+        actions + 28.0
     }
     fn trailing_controls(&mut self, ui: &mut egui::Ui, path: egui_dock::NodePath) {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if self.strip {
+            self.strip_terminal_actions(ui, path);
+        }
         #[cfg(feature = "test-support")]
         {
             let rect = ui.max_rect();
@@ -2948,14 +3055,33 @@ impl TabViewer for Viewer<'_> {
                         .pane_index
                         .as_ref()
                         .is_some_and(|index| index.tabs == 1);
-                    let (response, close) = if is_markdown {
-                        self.markdown_header(ui, &session, editing)
+                    let branch = self.app.branch_at(&session.cwd);
+                    let git_tip = match &branch {
+                        Some(name) => format!("{name}\nOpen Git"),
+                        None => "Open Git".into(),
+                    };
+                    let vertical_tip = self.app.action_tip("Split vertically", "split_right");
+                    let horizontal_tip = self.app.action_tip("Split horizontally", "split_down");
+                    let (response, close, actions) = if is_markdown {
+                        let header = self.markdown_header(ui, &session, editing);
+                        (header.0, header.1, None)
                     } else {
-                        appearance::pane_caption(
+                        let bar = appearance::terminal_bar(
                             ui,
-                            if editing || lone { "" } else { &session.label },
-                            self.app.active_session.as_ref() == Some(sid),
-                            true,
+                            appearance::TerminalBarSpec {
+                                title: if editing || lone { "" } else { &session.label },
+                                active: self.app.active_session.as_ref() == Some(sid),
+                                branch: branch.as_deref(),
+                                status: self.app.terminal_status_color(&session),
+                                git_tip: &git_tip,
+                                vertical_tip: &vertical_tip,
+                                horizontal_tip: &horizontal_tip,
+                            },
+                        );
+                        (
+                            bar.bar,
+                            Some(bar.close),
+                            Some((bar.git, bar.split_vertical, bar.split_horizontal)),
                         )
                     };
                     #[cfg(feature = "test-support")]
@@ -2966,6 +3092,17 @@ impl TabViewer for Viewer<'_> {
                             response.rect,
                         );
                     }
+                    let controls_left = actions
+                        .as_ref()
+                        .map(|(git, _, _)| git.rect.left() - 4.0)
+                        .unwrap_or_else(|| {
+                            response.rect.right()
+                                - if close.is_some() && !is_markdown {
+                                    28.0
+                                } else {
+                                    8.0
+                                }
+                        });
                     if editing {
                         self.app.inline_rename(
                             ui,
@@ -2973,30 +3110,47 @@ impl TabViewer for Viewer<'_> {
                             RenameSurface::Pane,
                             egui::Rect::from_min_max(
                                 response.rect.min + egui::vec2(8.0, 1.0),
-                                response.rect.max
-                                    - egui::vec2(
-                                        if close.is_some() && !is_markdown {
-                                            28.0
-                                        } else {
-                                            8.0
-                                        },
-                                        1.0,
-                                    ),
+                                egui::pos2(controls_left, response.rect.bottom() - 1.0),
                             ),
                         );
                     }
                     let closing = close.as_ref().is_some_and(|response| response.clicked());
+                    let git_clicked = actions.as_ref().is_some_and(|(git, _, _)| git.clicked());
+                    let split_vertical = actions
+                        .as_ref()
+                        .is_some_and(|(_, split, _)| split.clicked());
+                    let split_horizontal = actions
+                        .as_ref()
+                        .is_some_and(|(_, _, split)| split.clicked());
+                    let on_control = close.as_ref().is_some_and(|close| close.hovered())
+                        || actions.as_ref().is_some_and(|(git, vertical, horizontal)| {
+                            git.hovered() || vertical.hovered() || horizontal.hovered()
+                        });
                     #[cfg(feature = "test-support")]
                     if let Some(close) = &close {
                         diagnostics::record(ui.ctx(), &format!("editor-close:{sid}"), close.rect);
                         diagnostics::record(ui.ctx(), &format!("pane-close:{sid}"), close.rect);
                     }
                     #[cfg(feature = "test-support")]
+                    if let Some((git, vertical, horizontal)) = &actions {
+                        diagnostics::record(ui.ctx(), &format!("pane-git:{sid}"), git.rect);
+                        diagnostics::record(
+                            ui.ctx(),
+                            &format!("pane-split-vertical:{sid}"),
+                            vertical.rect,
+                        );
+                        diagnostics::record(
+                            ui.ctx(),
+                            &format!("pane-split-horizontal:{sid}"),
+                            horizontal.rect,
+                        );
+                    }
+                    #[cfg(feature = "test-support")]
                     diagnostics::record(ui.ctx(), &format!("pane-drag:{sid}"), response.rect);
                     // Caption drag starts a pane move. The drop lands on another
                     // split leaf (rearrange) or a workspace strip tab (move
                     // across top-level tabs); clicks still focus as before.
-                    if response.drag_started() && !editing && !closing {
+                    if response.drag_started() && !editing && !closing && !on_control {
                         self.app.pane_drag = Some(Tab::Terminal(sid.clone()));
                         // Snapshot once: the ghost reuses it every frame instead
                         // of re-reading the live grid while it scrolls.
@@ -3016,11 +3170,28 @@ impl TabViewer for Viewer<'_> {
                     if closing {
                         self.app.close_session = Some(sid.clone());
                     }
-                    if response.clicked() && !closing && !editing {
+                    if git_clicked {
+                        self.app.active_session = Some(sid.clone());
+                        self.app.focus_tab = Some(Tab::Terminal(sid.clone()));
+                        self.app.show_git_sidebar();
+                    }
+                    if split_vertical || split_horizontal {
                         self.app.active_session = Some(sid.clone());
                         self.app.focus_tab = Some(Tab::Terminal(sid.clone()));
                     }
-                    if response.double_clicked() && !closing && !editing {
+                    if let Some(pane) = pane {
+                        if split_vertical {
+                            self.app.add_tab = Some((pane, Some("right".into())));
+                        }
+                        if split_horizontal {
+                            self.app.add_tab = Some((pane, Some("down".into())));
+                        }
+                    }
+                    if response.clicked() && !closing && !editing && !git_clicked && !on_control {
+                        self.app.active_session = Some(sid.clone());
+                        self.app.focus_tab = Some(Tab::Terminal(sid.clone()));
+                    }
+                    if response.double_clicked() && !closing && !editing && !on_control {
                         self.app.begin_rename(sid, RenameSurface::Pane);
                     }
                     appearance::context_menu(&response, |ui| {
@@ -3167,6 +3338,104 @@ impl App {
 }
 
 impl Viewer<'_> {
+    fn strip_terminal_actions(&mut self, ui: &mut egui::Ui, path: egui_dock::NodePath) {
+        let tabs = self
+            .app
+            .strip_pane_tabs
+            .get(&path)
+            .cloned()
+            .unwrap_or_default();
+        let sid = self
+            .app
+            .active_session
+            .as_ref()
+            .filter(|sid| {
+                tabs.iter()
+                    .any(|tab| matches!(tab, Tab::Terminal(id) if id == *sid))
+            })
+            .cloned()
+            .or_else(|| {
+                tabs.iter().find_map(|tab| match tab {
+                    Tab::Terminal(id) => Some(id.clone()),
+                    _ => None,
+                })
+            });
+        let branch = sid.as_ref().and_then(|sid| {
+            self.app
+                .state
+                .sessions
+                .iter()
+                .find(|session| &session.id == sid)
+                .and_then(|session| self.app.branch_at(&session.cwd))
+        });
+        let git_tip = match &branch {
+            Some(name) => format!("{name}\nOpen Git"),
+            None => "Open Git".into(),
+        };
+        let vertical_tip = self.app.action_tip("Split vertically", "split_right");
+        let horizontal_tip = self.app.action_tip("Split horizontally", "split_down");
+        let (dot, _) = ui.allocate_exact_size(egui::vec2(14.0, 22.0), egui::Sense::hover());
+        if let Some(color) = sid.as_ref().and_then(|sid| {
+            self.app
+                .state
+                .sessions
+                .iter()
+                .find(|session| &session.id == sid)
+                .and_then(|session| self.app.terminal_status_color(session))
+        }) {
+            ui.painter().circle_filled(dot.center(), 3.5, color);
+        }
+        let git_icon = appearance::sidebar_action(ui, "GitBranch", &git_tip);
+        let branch_label = ui
+            .add_sized(
+                [appearance::TERMINAL_BRANCH_MAX, appearance::TERMINAL_BUTTON],
+                egui::Label::new(
+                    egui::RichText::new(branch.as_deref().unwrap_or(""))
+                        .size(12.0)
+                        .color(ui.visuals().weak_text_color()),
+                )
+                .truncate()
+                .sense(egui::Sense::click()),
+            )
+            .on_hover_text(&git_tip);
+        let git = git_icon.union(branch_label);
+        let split_vertical = appearance::sidebar_action(ui, "Columns2", &vertical_tip);
+        let split_horizontal = appearance::sidebar_action(ui, "Rows2", &horizontal_tip);
+        #[cfg(feature = "test-support")]
+        if let Some(sid) = &sid {
+            diagnostics::record(ui.ctx(), &format!("pane-git:{sid}"), git.rect);
+            diagnostics::record(
+                ui.ctx(),
+                &format!("pane-split-vertical:{sid}"),
+                split_vertical.rect,
+            );
+            diagnostics::record(
+                ui.ctx(),
+                &format!("pane-split-horizontal:{sid}"),
+                split_horizontal.rect,
+            );
+        }
+        if git.clicked() {
+            if let Some(sid) = sid.clone() {
+                self.app.active_session = Some(sid.clone());
+                self.app.focus_strip_tab = Some(Tab::Terminal(sid));
+            }
+            self.app.show_git_sidebar();
+        }
+        if split_vertical.clicked() || split_horizontal.clicked() {
+            if let Some(sid) = &sid {
+                self.app.active_session = Some(sid.clone());
+                self.app.focus_strip_tab = Some(Tab::Terminal(sid.clone()));
+            }
+            let direction = if split_vertical.clicked() {
+                "right"
+            } else {
+                "down"
+            };
+            self.app.add_strip_tab = Some((path, Some(direction.into())));
+        }
+    }
+
     fn markdown_header(
         &mut self,
         ui: &mut egui::Ui,

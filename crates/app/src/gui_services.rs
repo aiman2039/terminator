@@ -3,7 +3,7 @@
 use crate::nvim_rpc;
 use crate::{
     After, Job, Tab, Update, clipboard, daemon_connection, diff, editor_close, external_editor,
-    image_preview, installation, notify_test, player, services,
+    image_preview, installation, notify_test, player, services, workspace_ops,
 };
 use anyhow::{Context, Result};
 use eframe::egui;
@@ -787,6 +787,15 @@ impl Services {
                         .await?;
                     Ok(vec![Update::RestartFinished(message)])
                 })?;
+            }
+            Job::Workspace(root, op) => {
+                let reply = op.clone();
+                let result = self
+                    .fs()
+                    .run(&cancel, move || workspace_ops::perform(&root, op))
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                updates.push(Update::Workspace(reply, result));
             }
             Job::StartSessionService => {
                 let paths = client.paths.clone();

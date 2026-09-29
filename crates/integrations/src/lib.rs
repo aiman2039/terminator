@@ -23,10 +23,44 @@ pub fn config_path(home: &Path, kind: &str) -> Result<PathBuf> {
 }
 #[must_use]
 pub fn installed(home: &Path, kind: &str) -> bool {
-    config_path(home, kind)
-        .ok()
-        .and_then(|p| fs::read_to_string(p).ok())
-        .is_some_and(|s| s.contains(MARKER))
+    let mut paths = Vec::new();
+    if let Ok(path) = config_path(home, kind) {
+        paths.push(path);
+    }
+    if kind == "muse" {
+        paths.push(muse_settings_path(home));
+    }
+    paths
+        .iter()
+        .any(|path| fs::read_to_string(path).is_ok_and(|text| text.contains(MARKER)))
+}
+
+/// Settings hover path. Muse Code 1.4 reads user hooks from this file.
+#[must_use]
+pub fn settings_path(home: &Path, kind: &str) -> PathBuf {
+    if kind == "muse" {
+        muse_settings_path(home)
+    } else {
+        config_path(home, kind).unwrap_or_else(|_| home.to_path_buf())
+    }
+}
+
+fn muse_settings_path(home: &Path) -> PathBuf {
+    home.join(".config/muse/settings.json")
+}
+
+fn muse_hook_events() -> &'static [&'static str] {
+    &[
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PermissionRequest",
+        "Stop",
+        "SubagentStart",
+        "SubagentStop",
+        "SessionEnd",
+    ]
 }
 pub fn install(home: &Path, kind: &str, helper: &Path, remove: bool) -> Result<PathBuf> {
     install_at(home, kind, helper, remove, &Paths::discover()?)
@@ -88,15 +122,7 @@ pub fn install_at(
         }
         if !remove {
             let events = if kind == "muse" {
-                vec![
-                    "SessionStart",
-                    "UserPromptSubmit",
-                    "PreToolUse",
-                    "PostToolUse",
-                    "PermissionRequest",
-                    "Stop",
-                    "SessionEnd",
-                ]
+                muse_hook_events().to_vec()
             } else {
                 vec![
                     "SessionStart",
@@ -134,7 +160,69 @@ pub fn install_at(
     } else {
         atomic_write(&path, after.as_bytes())?;
     }
+    if kind == "muse" {
+        sync_muse_settings(home, &command, remove)?;
+    }
     Ok(path)
+}
+
+fn sync_muse_settings(home: &Path, command: &str, remove: bool) -> Result<()> {
+    let path = muse_settings_path(home);
+    ensure!(
+        !path.is_symlink(),
+        "Refusing to rewrite a symlinked Muse settings file"
+    );
+    let before = fs::read_to_string(&path).or_else(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            Ok(String::new())
+        } else {
+            Err(error)
+        }
+    })?;
+    if before.is_empty() && remove {
+        return Ok(());
+    }
+    let mut doc: Value = if before.trim().is_empty() {
+        json!({"schema_version": 1})
+    } else {
+        serde_json::from_str(&before).context("Muse settings are invalid JSON; left untouched")?
+    };
+    ensure!(doc.is_object(), "Muse settings must be an object");
+    match doc.get("schema_version") {
+        None => doc["schema_version"] = json!(1),
+        Some(version) if version.as_u64() == Some(1) => {}
+        Some(_) => bail!("Muse settings schema is not version 1; left untouched"),
+    }
+    if doc.get("hooks").is_none() {
+        doc["hooks"] = json!({});
+    }
+    let hooks = doc["hooks"]
+        .as_object_mut()
+        .context("Muse hooks must be an object")?;
+    for groups in hooks.values_mut() {
+        clean_json_groups(groups)?;
+    }
+    if !remove {
+        for event in muse_hook_events() {
+            let list = hooks
+                .entry(*event)
+                .or_insert(json!([]))
+                .as_array_mut()
+                .context("Hook groups must be arrays")?;
+            list.push(json!({"hooks":[{"type":"command","command":command,"timeout":2}]}));
+        }
+    }
+    let after = serde_json::to_string_pretty(&doc)? + "\n";
+    if !before.is_empty() && before != after {
+        atomic_write(
+            &path.with_extension(format!("terminator-backup-{}", now())),
+            before.as_bytes(),
+        )?;
+    }
+    if before != after {
+        atomic_write(&path, after.as_bytes())?;
+    }
+    Ok(())
 }
 fn clean_json_groups(groups: &mut Value) -> Result<()> {
     let groups = groups
@@ -339,7 +427,10 @@ fn hook_state(name: &str, payload: &Value, tool: &str) -> Option<AgentState> {
             Some(AgentState::WaitingPermission)
         }
         "question.asked" | "question.v2.asked" => Some(AgentState::WaitingInput),
-        "Stop" | "session.idle" | "agent-turn-complete" => Some(AgentState::Completed),
+        "Stop" | "session.idle" | "agent-turn-complete" | "SubagentStop" => {
+            Some(AgentState::Completed)
+        }
+        "SubagentStart" => Some(AgentState::Running),
         "StopFailure" | "session.error" => Some(AgentState::Failed),
         "SessionEnd" | "session.deleted" => Some(AgentState::Stopped),
         "Interrupt" => Some(AgentState::Unknown),
@@ -621,6 +712,50 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(rejected.state, AgentState::Running);
+    }
+    #[test]
+    fn muse_settings_keep_user_keys_and_subagent_hooks() {
+        let home = tempfile::tempdir().unwrap();
+        let settings = home.path().join(".config/muse/settings.json");
+        atomic_write(
+            &settings,
+            br#"{"schema_version":1,"model":"muse-spark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}"#,
+        )
+        .unwrap();
+        let helper = Path::new("/tmp/space dir/hook");
+        install(home.path(), "muse", helper, false).unwrap();
+        let once = fs::read_to_string(&settings).unwrap();
+        assert!(once.contains(MARKER));
+        assert!(once.contains("SubagentStop"));
+        assert!(once.contains("echo mine"));
+        assert!(once.contains("muse-spark"));
+        assert!(
+            fs::read_to_string(config_path(home.path(), "muse").unwrap())
+                .unwrap()
+                .contains("SubagentStop")
+        );
+        install(home.path(), "muse", helper, false).unwrap();
+        assert_eq!(once, fs::read_to_string(&settings).unwrap());
+        assert!(installed(home.path(), "muse"));
+        install(home.path(), "muse", helper, true).unwrap();
+        let after = fs::read_to_string(&settings).unwrap();
+        assert!(after.contains("echo mine"));
+        assert!(after.contains("muse-spark"));
+        assert!(!after.contains(MARKER));
+        assert!(!installed(home.path(), "muse"));
+    }
+    #[test]
+    fn muse_subagent_stop_completes() {
+        let event = normalize(
+            "muse",
+            "s",
+            "p",
+            &json!({"hook_event_name":"SubagentStop","session_id":"child"}),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(event.state, AgentState::Completed);
+        assert_eq!(event.provider_session_id.as_deref(), Some("child"));
     }
     #[test]
     fn opencode_unknown_events_ignored() {

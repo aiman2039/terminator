@@ -336,8 +336,10 @@ pub fn menu_button<R>(
 pub fn menu_item(ui: &mut egui::Ui, label: &str, icon: &str, shortcut: &str) -> egui::Response {
     ui.set_min_width(220.0);
     ui.spacing_mut().item_spacing.y = 2.0;
-    let destructive =
-        label.starts_with("Close ") || label.starts_with("Remove ") || label.starts_with("Clear ");
+    let destructive = label.starts_with("Close ")
+        || label.starts_with("Remove ")
+        || label.starts_with("Clear ")
+        || label.starts_with("Delete");
     let previous = ui.visuals().override_text_color;
     let tint = if destructive {
         ui.visuals().error_fg_color
@@ -934,38 +936,106 @@ pub fn unsaved_close_bar(ui: &mut egui::Ui, input: UnsavedCloseBar<'_>) -> Unsav
     response.inner
 }
 
-/// A compact caption inside a pane border, without tab or split controls.
-pub fn pane_caption(
-    ui: &mut egui::Ui,
-    title: &str,
-    active: bool,
-    closeable: bool,
-) -> (egui::Response, Option<egui::Response>) {
-    // Click-and-drag so terminal panes can be dragged between splits and
-    // top-level tabs; plain clicks still select/focus as before.
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), 18.0),
+/// Terminal pane top bar: title, Git, vertical split, horizontal split, close.
+pub struct TerminalBar {
+    pub bar: egui::Response,
+    pub git: egui::Response,
+    pub split_vertical: egui::Response,
+    pub split_horizontal: egui::Response,
+    pub close: egui::Response,
+}
+
+pub struct TerminalBarSpec<'a> {
+    pub title: &'a str,
+    pub active: bool,
+    pub branch: Option<&'a str>,
+    pub status: Option<Color32>,
+    pub git_tip: &'a str,
+    pub vertical_tip: &'a str,
+    pub horizontal_tip: &'a str,
+}
+
+const TERMINAL_BAR_HEIGHT: f32 = 26.0;
+pub(crate) const TERMINAL_BUTTON: f32 = 22.0;
+pub(crate) const TERMINAL_BRANCH_MAX: f32 = 96.0;
+
+/// Fixed width of the Git and split cluster on a tab bar, where the branch
+/// slot cannot be measured per leaf.
+pub fn strip_terminal_actions_width() -> f32 {
+    14.0 + TERMINAL_BUTTON
+        + 4.0
+        + TERMINAL_BRANCH_MAX
+        + 4.0
+        + TERMINAL_BUTTON
+        + 4.0
+        + TERMINAL_BUTTON
+}
+
+pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar {
+    let TerminalBarSpec {
+        title,
+        active,
+        branch,
+        status,
+        git_tip,
+        vertical_tip,
+        horizontal_tip,
+    } = spec;
+    let (rect, bar) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), TERMINAL_BAR_HEIGHT),
         egui::Sense::click_and_drag(),
     );
+    let branch_width = branch
+        .map(|text| {
+            ui.painter()
+                .layout_no_wrap(text.into(), FontId::proportional(12.0), ICON_COLOR)
+                .size()
+                .x
+                + 6.0
+        })
+        .unwrap_or(0.0)
+        .min(TERMINAL_BRANCH_MAX);
+    let git_width = TERMINAL_BUTTON + branch_width;
+    let mut cursor = rect.right() - 2.0;
+    let slot = |cursor: &mut f32, width: f32| {
+        let slot = egui::Rect::from_min_max(
+            egui::pos2(*cursor - width, rect.center().y - TERMINAL_BUTTON / 2.0),
+            egui::pos2(*cursor, rect.center().y + TERMINAL_BUTTON / 2.0),
+        );
+        *cursor -= width + 2.0;
+        slot
+    };
+    let close_rect = slot(&mut cursor, TERMINAL_BUTTON);
+    let horizontal_rect = slot(&mut cursor, TERMINAL_BUTTON);
+    let vertical_rect = slot(&mut cursor, TERMINAL_BUTTON);
+    let git_rect = slot(&mut cursor, git_width);
     let tint = if active {
         ui.visuals().selection.stroke.color
     } else {
         ui.visuals().weak_text_color()
     };
-    let mut job = egui::text::LayoutJob::simple(
-        title.into(),
-        FontId::proportional(12.0),
-        tint,
-        (rect.width() - if closeable { 40.0 } else { 16.0 }).max(0.0),
-    );
+    let dot_gap = if status.is_some() { 14.0 } else { 0.0 };
+    let title_width = (git_rect.left() - dot_gap - rect.left() - 12.0).max(0.0);
+    let mut job =
+        egui::text::LayoutJob::simple(title.into(), FontId::proportional(12.0), tint, title_width);
     job.wrap.max_rows = 1;
     job.wrap.break_anywhere = true;
     let galley = ui.painter().layout_job(job);
     let position = egui::pos2(rect.left() + 8.0, rect.center().y - galley.size().y * 0.5);
     ui.painter()
-        .with_clip_rect(rect)
+        .with_clip_rect(egui::Rect::from_min_max(
+            rect.min,
+            egui::pos2(git_rect.left() - dot_gap - 4.0, rect.bottom()),
+        ))
         .galley(position, galley, tint);
-    response.widget_info(|| {
+    if let Some(color) = status {
+        ui.painter().circle_filled(
+            egui::pos2(git_rect.left() - 8.0, rect.center().y),
+            3.5,
+            color,
+        );
+    }
+    bar.widget_info(|| {
         egui::WidgetInfo::selected(
             egui::WidgetType::SelectableLabel,
             ui.is_enabled(),
@@ -973,47 +1043,87 @@ pub fn pane_caption(
             title,
         )
     });
-    let close = closeable.then(|| {
-        let close_rect = egui::Rect::from_center_size(
-            egui::pos2(rect.right() - 10.0, rect.center().y),
-            egui::vec2(18.0, 18.0),
-        );
-        let response = ui
-            .interact(
-                close_rect,
-                response.id.with("close-pane"),
-                egui::Sense::click(),
-            )
-            .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text("Close pane");
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), "Close pane")
-        });
-        if response.hovered() {
-            ui.painter()
-                .rect_filled(close_rect, 2, ui.visuals().widgets.hovered.bg_fill);
-        }
-        egui::Image::new(crate::icons::source("X"))
-            .tint(if response.hovered() {
-                ui.visuals().error_fg_color
-            } else {
-                ICON_COLOR
-            })
-            .paint_at(
-                ui,
-                egui::Rect::from_center_size(close_rect.center(), egui::vec2(12.0, 12.0)),
-            );
-        response
-    });
-    let response = response.on_hover_cursor(egui::CursorIcon::Grab);
-    (
-        if title.is_empty() {
+    let bar_id = bar.id;
+    let button =
+        |rect: egui::Rect, id: &str, icon: &str, tip: &str, hover_tint: Option<Color32>| {
+            let response = ui
+                .interact(rect, bar_id.with(id), egui::Sense::click())
+                .on_hover_text(tip)
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tip)
+            });
+            if response.hovered() {
+                ui.painter()
+                    .rect_filled(rect, 4.0, ui.visuals().widgets.hovered.bg_fill);
+            }
+            let tint = hover_tint
+                .filter(|_| response.hovered())
+                .unwrap_or(ICON_COLOR);
+            egui::Image::new(crate::icons::source(icon))
+                .tint(tint)
+                .paint_at(
+                    ui,
+                    egui::Rect::from_center_size(
+                        egui::pos2(rect.left() + TERMINAL_BUTTON / 2.0, rect.center().y),
+                        egui::vec2(14.0, 14.0),
+                    ),
+                );
             response
+        };
+    let git = button(git_rect, "git", "GitBranch", git_tip, None);
+    if let Some(branch) = branch.filter(|branch| !branch.is_empty()) {
+        let mut job = egui::text::LayoutJob::simple(
+            branch.into(),
+            FontId::proportional(12.0),
+            ui.visuals().weak_text_color(),
+            (git_rect.width() - TERMINAL_BUTTON).max(0.0),
+        );
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        let galley = ui.painter().layout_job(job);
+        ui.painter().with_clip_rect(git_rect).galley(
+            egui::pos2(
+                git_rect.left() + TERMINAL_BUTTON,
+                git_rect.center().y - galley.size().y * 0.5,
+            ),
+            galley,
+            ui.visuals().weak_text_color(),
+        );
+    }
+    let split_vertical = button(
+        vertical_rect,
+        "split-vertical",
+        "Columns2",
+        vertical_tip,
+        None,
+    );
+    let split_horizontal = button(
+        horizontal_rect,
+        "split-horizontal",
+        "Rows2",
+        horizontal_tip,
+        None,
+    );
+    let close = button(
+        close_rect,
+        "close-pane",
+        "X",
+        "Close pane",
+        Some(ui.visuals().error_fg_color),
+    );
+    let bar = bar.on_hover_cursor(egui::CursorIcon::Grab);
+    TerminalBar {
+        bar: if title.is_empty() {
+            bar
         } else {
-            response.on_hover_text(title)
+            bar.on_hover_text(title)
         },
+        git,
+        split_vertical,
+        split_horizontal,
         close,
-    )
+    }
 }
 
 /// Brief focus emphasis, fading to a thin, translucent steady-state outline.
@@ -1244,7 +1354,18 @@ mod row_tests {
                         row(ui, "File", "FileCode", false, 24.0, "", Color32::GRAY);
                     }
                     _ => {
-                        pane_caption(ui, "Terminal", false, true);
+                        terminal_bar(
+                            ui,
+                            TerminalBarSpec {
+                                title: "Terminal",
+                                active: false,
+                                branch: None,
+                                status: None,
+                                git_tip: "Open Git",
+                                vertical_tip: "Split vertically",
+                                horizontal_tip: "Split horizontally",
+                            },
+                        );
                     }
                 });
                 output.textures_delta.clear();

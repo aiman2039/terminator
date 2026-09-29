@@ -4,7 +4,7 @@ use crate::diagnostics;
 #[cfg(any(test, target_os = "macos"))]
 use crate::updater;
 use crate::{
-    App, RenameSurface, Tab, appearance,
+    App, Job, RenameSurface, Tab, appearance,
     file_actions::{self, FileAction},
     icons,
     preferences::{
@@ -13,6 +13,7 @@ use crate::{
     },
     services::ContextData,
     settings_ui::SettingsSection,
+    workspace_ops,
 };
 use eframe::egui::{self, Color32, RichText};
 use std::{
@@ -21,7 +22,7 @@ use std::{
 };
 use terminator_core::appearance::AppearanceConfig;
 use terminator_core::{
-    Agent, AgentState, NVIM_REVIEW_CAPABILITY, Notification, Project, Request, ReviewMode, Session,
+    AgentState, NVIM_REVIEW_CAPABILITY, Notification, Project, Request, ReviewMode, Session,
     SessionKind, TERMINAL_NOTICES_CAPABILITY, now,
 };
 
@@ -178,33 +179,32 @@ impl App {
     }
 
     fn project_sort_menu(&mut self, ui: &mut egui::Ui) {
-        ui.spacing_mut().interact_size.y = 22.0;
-        ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
         let current = self.preferences.project_sort;
-        let menu = appearance::menu_button(ui, "Sort", |ui| {
-            for (sort, icon, target) in [
-                (ProjectSort::NameAsc, "ArrowDown", "sort-name-asc"),
-                (ProjectSort::NameDesc, "ArrowUp", "sort-name-desc"),
-                (
-                    ProjectSort::LatestActivity,
-                    "History",
-                    "sort-latest-activity",
-                ),
-            ] {
-                let check = if current == sort { "✓" } else { "" };
-                let response = appearance::menu_item(ui, sort.menu_label(), icon, check);
-                #[cfg(feature = "test-support")]
-                diagnostics::record(ui.ctx(), target, response.rect);
-                #[cfg(not(feature = "test-support"))]
-                let _ = target;
-                if response.clicked() {
-                    self.preferences.project_sort = sort;
-                    ui.close();
+        let menu = appearance::sidebar_action(ui, "ArrowDownWideNarrow", "Sort projects");
+        egui::Popup::menu(&menu)
+            .style(appearance::menu_style)
+            .show(|ui| {
+                for (sort, icon, target) in [
+                    (ProjectSort::NameAsc, "ArrowDown", "sort-name-asc"),
+                    (ProjectSort::NameDesc, "ArrowUp", "sort-name-desc"),
+                    (
+                        ProjectSort::LatestActivity,
+                        "History",
+                        "sort-latest-activity",
+                    ),
+                ] {
+                    let check = if current == sort { "✓" } else { "" };
+                    let response = appearance::menu_item(ui, sort.menu_label(), icon, check);
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(ui.ctx(), target, response.rect);
+                    #[cfg(not(feature = "test-support"))]
+                    let _ = target;
+                    if response.clicked() {
+                        self.preferences.project_sort = sort;
+                        ui.close();
+                    }
                 }
-            }
-        })
-        .response
-        .on_hover_text("Sort projects by name or latest activity");
+            });
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "project-sort", menu.rect);
         let _ = menu;
@@ -305,6 +305,225 @@ impl App {
         .map(|project| self.sidebar_project(project))
         .collect()
     }
+    fn op_root(&self) -> Option<std::path::PathBuf> {
+        self.git_root()
+            .or_else(|| self.cwd())
+            .or_else(|| self.selected_project().map(|project| project.path.clone()))
+    }
+
+    pub(super) fn queue_workspace(&mut self, op: workspace_ops::Op) {
+        let Some(root) = self.op_root() else {
+            self.error = Some("Open a project folder first.".into());
+            return;
+        };
+        let _ = self.jobs.send(Job::Workspace(root, op));
+    }
+
+    fn ensure_git_lists(&mut self, root: Option<std::path::PathBuf>) {
+        let Some(root) = root else {
+            return;
+        };
+        if self.git_list_root.as_ref() == Some(&root) {
+            return;
+        }
+        self.git_list_root = Some(root);
+        self.git_branches.clear();
+        self.git_log.clear();
+        self.queue_workspace(workspace_ops::Op::Branches);
+        self.queue_workspace(workspace_ops::Op::Log);
+    }
+
+    fn explorer_local(&mut self, path: &std::path::Path, local: ExplorerLocal, ui: &egui::Ui) {
+        let root = self.op_root().unwrap_or_else(|| path.to_path_buf());
+        match local {
+            ExplorerLocal::Reveal => self.queue_workspace(workspace_ops::Op::Reveal(path.into())),
+            ExplorerLocal::CopyRelative => {
+                ui.ctx()
+                    .copy_text(workspace_ops::relative_display(&root, path));
+            }
+            ExplorerLocal::Rename => {
+                self.name_prompt = Some(workspace_ops::NamePrompt::Rename {
+                    from: path.into(),
+                    name: path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                });
+            }
+            ExplorerLocal::Duplicate => {
+                self.queue_workspace(workspace_ops::Op::Duplicate(path.into()));
+            }
+            ExplorerLocal::Delete => self.pending_delete = Some(path.into()),
+        }
+    }
+
+    fn pending_delete_bar(&mut self, ui: &mut egui::Ui) {
+        let Some(path) = self.pending_delete.clone() else {
+            return;
+        };
+        ui.horizontal(|ui| {
+            ui.label(format!(
+                "Delete {}?",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ));
+            if ui.button("Delete").clicked() {
+                self.queue_workspace(workspace_ops::Op::Delete(path));
+                self.pending_delete = None;
+            }
+            if ui.button("Cancel").clicked() {
+                self.pending_delete = None;
+            }
+        });
+    }
+
+    fn explorer_toolbar(&mut self, ui: &mut egui::Ui, cwd: &std::path::Path) {
+        let mut focus_find = false;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let new_file = appearance::sidebar_action(ui, "File", "New file");
+            let new_folder = appearance::sidebar_action(ui, "Folder", "New folder");
+            let collapse = appearance::sidebar_action(ui, "ChevronDown", "Collapse all");
+            let refresh = appearance::sidebar_action(ui, "RefreshCw", "Refresh");
+            #[cfg(feature = "test-support")]
+            {
+                diagnostics::record(ui.ctx(), "explorer-new-file", new_file.rect);
+                diagnostics::record(ui.ctx(), "explorer-new-folder", new_folder.rect);
+                diagnostics::record(ui.ctx(), "explorer-collapse", collapse.rect);
+                diagnostics::record(ui.ctx(), "explorer-refresh", refresh.rect);
+            }
+            if new_file.clicked() {
+                self.name_prompt = Some(workspace_ops::NamePrompt::File {
+                    dir: cwd.into(),
+                    name: String::new(),
+                });
+            }
+            if new_folder.clicked() {
+                self.name_prompt = Some(workspace_ops::NamePrompt::Folder {
+                    dir: cwd.into(),
+                    name: String::new(),
+                });
+            }
+            if collapse.clicked() {
+                self.expanded_dirs.clear();
+            }
+            if refresh.clicked() {
+                self.refresh_request = None;
+            }
+            let cwd = cwd.to_path_buf();
+            let more = appearance::menu_button(ui, "…", |ui| {
+                if appearance::menu_item(ui, "Reveal in file manager", "FolderOpen", "").clicked() {
+                    self.queue_workspace(workspace_ops::Op::Reveal(cwd.clone()));
+                    ui.close();
+                }
+                if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
+                    ui.ctx().copy_text(cwd.display().to_string());
+                    ui.close();
+                }
+                if appearance::menu_item(ui, "Copy relative path", "Copy", "").clicked() {
+                    let root = self.op_root().unwrap_or_else(|| cwd.clone());
+                    ui.ctx()
+                        .copy_text(workspace_ops::relative_display(&root, &cwd));
+                    ui.close();
+                }
+                ui.separator();
+                if appearance::menu_item(ui, "Find in folder", "Search", "").clicked() {
+                    focus_find = true;
+                    ui.close();
+                }
+                if appearance::menu_item(ui, "Collapse all", "ChevronDown", "").clicked() {
+                    self.expanded_dirs.clear();
+                    ui.close();
+                }
+            })
+            .response
+            .on_hover_text("Folder actions");
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "explorer-more", more.rect);
+            let _ = more;
+        });
+        let find = ui.add(
+            egui::TextEdit::singleline(&mut self.explorer_query)
+                .hint_text("Find in folder")
+                .desired_width(f32::INFINITY),
+        );
+        if focus_find {
+            find.request_focus();
+        }
+        self.name_prompt_bar(ui);
+    }
+
+    fn name_prompt_bar(&mut self, ui: &mut egui::Ui) {
+        let Some(prompt) = self.name_prompt.clone() else {
+            return;
+        };
+        let title = match prompt {
+            workspace_ops::NamePrompt::File { .. } => "New file",
+            workspace_ops::NamePrompt::Folder { .. } => "New folder",
+            workspace_ops::NamePrompt::Rename { .. } => "Rename",
+        };
+        let mut name = match &prompt {
+            workspace_ops::NamePrompt::File { name, .. }
+            | workspace_ops::NamePrompt::Folder { name, .. }
+            | workspace_ops::NamePrompt::Rename { name, .. } => name.clone(),
+        };
+        let mut cancel = false;
+        let mut submit = false;
+        ui.horizontal(|ui| {
+            ui.label(title);
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut name)
+                    .hint_text("Name")
+                    .desired_width(140.0),
+            );
+            submit = ui.button("Save").clicked()
+                || (field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)));
+            cancel = ui.button("Cancel").clicked();
+        });
+        if cancel {
+            self.name_prompt = None;
+            return;
+        }
+        self.name_prompt = Some(match prompt {
+            workspace_ops::NamePrompt::File { dir, .. } => {
+                workspace_ops::NamePrompt::File { dir, name }
+            }
+            workspace_ops::NamePrompt::Folder { dir, .. } => {
+                workspace_ops::NamePrompt::Folder { dir, name }
+            }
+            workspace_ops::NamePrompt::Rename { from, .. } => {
+                workspace_ops::NamePrompt::Rename { from, name }
+            }
+        });
+        if submit {
+            self.submit_name_prompt();
+        }
+    }
+
+    fn submit_name_prompt(&mut self) {
+        let Some(prompt) = self.name_prompt.clone() else {
+            return;
+        };
+        let op = match prompt {
+            workspace_ops::NamePrompt::File { dir, name } => {
+                workspace_ops::Op::CreateFile(dir.join(name.trim()))
+            }
+            workspace_ops::NamePrompt::Folder { dir, name } => {
+                workspace_ops::Op::CreateDir(dir.join(name.trim()))
+            }
+            workspace_ops::NamePrompt::Rename { from, name } => {
+                let Some(parent) = from.parent().map(std::path::Path::to_path_buf) else {
+                    return;
+                };
+                workspace_ops::Op::Rename {
+                    from,
+                    to: parent.join(name.trim()),
+                }
+            }
+        };
+        self.name_prompt = None;
+        self.queue_workspace(op);
+    }
+
     pub(super) fn projects(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -321,7 +540,7 @@ impl App {
                         self.worktree_open = true;
                     }
                 }
-                let add = appearance::sidebar_action(ui, "Plus", "Add local project");
+                let add = appearance::sidebar_action(ui, "Plus", "New project");
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "project-add", add.rect);
                 if add.clicked() {
@@ -368,82 +587,114 @@ impl App {
                         .expanded
                         .entry(p.id.clone())
                         .or_insert(true);
-                    let project_left = ui.horizontal(|ui| {
-                        if ui
-                            .add_sized(
-                                [16.0, self.theme.row_height()],
-                                egui::Button::image(
-                                    egui::Image::new(icons::source(if expanded {
-                                        "ChevronDown"
-                                    } else {
-                                        "ChevronRight"
-                                    }))
-                                    .tint(appearance::ICON_COLOR)
-                                    .fit_to_exact_size(egui::vec2(12.0, 12.0)),
+                    let project_left = ui
+                        .horizontal(|ui| {
+                            if ui
+                                .add_sized(
+                                    [16.0, self.theme.row_height()],
+                                    egui::Button::image(
+                                        egui::Image::new(icons::source(if expanded {
+                                            "ChevronDown"
+                                        } else {
+                                            "ChevronRight"
+                                        }))
+                                        .tint(appearance::ICON_COLOR)
+                                        .fit_to_exact_size(egui::vec2(12.0, 12.0)),
+                                    )
+                                    .frame(false),
                                 )
-                                .frame(false),
-                            )
-                            .on_hover_text("Expand or collapse project")
-                            .clicked()
-                        {
-                            self.finish_rename(true);
-                            expanded = !expanded;
-                            self.preferences.expanded.insert(p.id.clone(), expanded);
-                        }
-                        let response = appearance::project_row(
-                            ui,
-                            &p.name,
-                            if expanded { "FolderOpen" } else { "Folder" },
-                            selected,
-                            self.theme.row_height(),
-                            &count.to_string(),
-                            appearance::color(&self.theme.secondary),
-                        )
-                        .on_hover_text(format!(
-                            "{}\n{}{}",
-                            p.name,
-                            p.path.display(),
-                            self.state
-                                .worktrees
-                                .iter()
-                                .find(|w| w.project_id == p.id)
-                                .map(|w| if w.removed {
-                                    "\nRemoved worktree; session history retained"
-                                } else {
-                                    "\nManaged Git worktree"
-                                })
-                                .unwrap_or("")
-                        ));
-                        #[cfg(feature = "test-support")]
-                        diagnostics::record(ui.ctx(), &format!("project-row:{}", p.id), response.rect);
-                        if response.clicked() {
-                            self.select_project(p.id.clone());
-                        }
-                        appearance::context_menu(&response, |ui| {
-                            if self.has_worktrees()
-                                && appearance::menu_item(ui, "New task worktree…", "GitBranch", "")
-                                    .clicked()
+                                .on_hover_text("Expand or collapse project")
+                                .clicked()
                             {
+                                self.finish_rename(true);
+                                expanded = !expanded;
+                                self.preferences.expanded.insert(p.id.clone(), expanded);
+                            }
+                            let agent_face = self.project_agent_face(&p.id);
+                            let response = if let Some((brand, state)) = agent_face {
+                                appearance::session_row_spec(
+                                    ui,
+                                    appearance::SessionRowSpec {
+                                        label: &p.name,
+                                        icon: attention_status_icon(state),
+                                        selected,
+                                        trailing: &count.to_string(),
+                                        tint: appearance::color(&self.theme.secondary),
+                                        icon_tint: Some(state_color(state, &self.theme)),
+                                        spin: state == AgentState::Running,
+                                        subtitle: None,
+                                        brand: Some(brand),
+                                    },
+                                )
+                            } else {
+                                appearance::project_row(
+                                    ui,
+                                    &p.name,
+                                    if expanded { "FolderOpen" } else { "Folder" },
+                                    selected,
+                                    self.theme.row_height(),
+                                    &count.to_string(),
+                                    appearance::color(&self.theme.secondary),
+                                )
+                            }
+                            .on_hover_text(format!(
+                                "{}\n{}{}",
+                                p.name,
+                                p.path.display(),
+                                self.state
+                                    .worktrees
+                                    .iter()
+                                    .find(|w| w.project_id == p.id)
+                                    .map(|w| if w.removed {
+                                        "\nRemoved worktree; session history retained"
+                                    } else {
+                                        "\nManaged Git worktree"
+                                    })
+                                    .unwrap_or("")
+                            ));
+                            #[cfg(feature = "test-support")]
+                            diagnostics::record(
+                                ui.ctx(),
+                                &format!("project-row:{}", p.id),
+                                response.rect,
+                            );
+                            if response.clicked() {
                                 self.select_project(p.id.clone());
-                                self.open_worktree_wizard();
-                                ui.close();
                             }
-                            if self.managed_worktree(&p.id).is_some()
-                                && appearance::menu_item(ui, "Remove worktree…", "X", "")
+                            appearance::context_menu(&response, |ui| {
+                                if self.has_worktrees()
+                                    && appearance::menu_item(
+                                        ui,
+                                        "New task worktree…",
+                                        "GitBranch",
+                                        "",
+                                    )
                                     .clicked()
-                            {
-                                self.confirm_remove_worktree(&p.id);
-                                ui.close();
-                            }
-                            if appearance::menu_item(ui, "Remove project from sidebar", "X", "")
-                                .on_hover_text("Keep files, layouts, and running sessions. Restore it from Removed or add the folder again.")
-                                .clicked() {
-                                self.hide_project(&p.id);
-                                ui.close();
-                            }
-                        });
-                        response.rect.left()
-                    }).inner;
+                                {
+                                    self.select_project(p.id.clone());
+                                    self.open_worktree_wizard();
+                                    ui.close();
+                                }
+                                if self.has_worktrees() {
+                                    ui.separator();
+                                }
+                                if self.managed_worktree(&p.id).is_some()
+                                    && appearance::menu_item(ui, "Remove worktree…", "X", "")
+                                        .clicked()
+                                {
+                                    self.confirm_remove_worktree(&p.id);
+                                    ui.close();
+                                }
+                                if appearance::menu_item(ui, "Remove project from sidebar", "X", "")
+                                    .clicked()
+                                {
+                                    self.hide_project(&p.id);
+                                    ui.close();
+                                }
+                            });
+                            response.rect.left()
+                        })
+                        .inner;
                     if expanded && !self.preferences.hidden_projects.contains(&p.id) {
                         ui.scope(|ui| {
                             // Indent from the project row, past its separate expand button.
@@ -453,7 +704,9 @@ impl App {
                                     .state
                                     .sessions
                                     .iter()
-                                    .filter(|s| s.project_id == p.id && s.kind != SessionKind::Editor)
+                                    .filter(|s| {
+                                        s.project_id == p.id && s.kind != SessionKind::Editor
+                                    })
                                     .cloned()
                                     .collect();
                                 for session in sessions
@@ -478,11 +731,16 @@ impl App {
                                         self.worktree_card(ui, &child);
                                     }
                                 }
-});
+                            });
                         });
                     }
                 }
-                if self.state.projects.iter().all(|p| self.preferences.hidden_projects.contains(&p.id)) {
+                if self
+                    .state
+                    .projects
+                    .iter()
+                    .all(|p| self.preferences.hidden_projects.contains(&p.id))
+                {
                     ui.weak(if self.state.projects.is_empty() {
                         "Add a folder to begin."
                     } else {
@@ -494,6 +752,34 @@ impl App {
         ui.separator();
         ui.weak(format!("{live} live sessions")).on_hover_text("Sessions continue when this window closes. Ended sessions remain in History until removed.");
     }
+    /// Brand plus status for a project row when one of its live sessions has an agent.
+    /// A running agent wins over a finished one, so a working logo is not replaced by a folder.
+    fn project_agent_face(&self, project_id: &str) -> Option<(&'static str, AgentState)> {
+        let mut best: Option<(&'static str, AgentState, u8)> = None;
+        for session in self.state.sessions.iter().filter(|session| {
+            session.project_id == project_id
+                && session.lifecycle.live()
+                && session.kind != SessionKind::Editor
+        }) {
+            let presented = self.present_session(&session.id);
+            let Some(brand) = presented.brand_icon else {
+                continue;
+            };
+            let state = presented.lifecycle.unwrap_or(AgentState::Unknown);
+            let rank = match state {
+                AgentState::Running => 0,
+                AgentState::WaitingInput | AgentState::WaitingPermission => 1,
+                AgentState::Failed => 2,
+                AgentState::Completed => 3,
+                _ => 4,
+            };
+            if best.is_none_or(|(_, _, previous)| rank < previous) {
+                best = Some((brand, state, rank));
+            }
+        }
+        best.map(|(brand, state, _)| (brand, state))
+    }
+
     fn session_row(&mut self, ui: &mut egui::Ui, session: &Session) {
         let presented = self.present_session(&session.id);
         let summary = session_summary(&self.state.notifications, &session.id, presented.lifecycle);
@@ -587,10 +873,12 @@ impl App {
         }
         appearance::context_menu(&response, |ui| {
             self.rename_action(ui, &session.id, RenameSurface::Sidebar);
+            ui.separator();
             if appearance::menu_item(ui, "Open session", "Terminal", "").clicked() {
                 self.go_session(&session.id);
                 ui.close();
             }
+            ui.separator();
             if session.lifecycle.live() {
                 if appearance::menu_item(
                     ui,
@@ -623,23 +911,20 @@ impl App {
                     && session.kind != SessionKind::Editor
             })
             .count();
-        let agent_in_project = |agent: &Agent| {
-            self.state
-                .sessions
-                .iter()
-                .any(|session| session.id == agent.session_id && session.project_id == project.id)
-        };
-        let waiting = self.state.agents.iter().any(|agent| {
-            matches!(
-                agent.state,
-                AgentState::WaitingInput | AgentState::WaitingPermission
-            ) && agent_in_project(agent)
-        });
-        let running = self
+        let mut waiting = false;
+        let mut running = false;
+        for session in self
             .state
-            .agents
+            .sessions
             .iter()
-            .any(|agent| agent.state == AgentState::Running && agent_in_project(agent));
+            .filter(|session| session.project_id == project.id && session.lifecycle.live())
+        {
+            match self.present_session(&session.id).lifecycle {
+                Some(AgentState::WaitingInput | AgentState::WaitingPermission) => waiting = true,
+                Some(AgentState::Running) => running = true,
+                _ => {}
+            }
+        }
         let tint = appearance::color(if waiting {
             &self.theme.status_waiting
         } else if running {
@@ -689,6 +974,7 @@ impl App {
                 self.create(None);
                 ui.close();
             }
+            ui.separator();
             if appearance::menu_item(ui, "Remove worktree…", "X", "").clicked() {
                 self.confirm_remove_worktree(&project.id);
                 ui.close();
@@ -742,6 +1028,14 @@ impl App {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
+                if !entry.directory
+                    && !self.explorer_query.is_empty()
+                    && !label
+                        .to_lowercase()
+                        .contains(&self.explorer_query.to_lowercase())
+                {
+                    continue;
+                }
                 if entry.directory {
                     let expanded = self.expanded_dirs.contains(&entry.path);
                     let status = self
@@ -755,12 +1049,12 @@ impl App {
                     } else {
                         git_color(&self.theme, status)
                     };
-                    if appearance::file_row(
+                    let folder = appearance::file_row(
                         ui,
                         &label,
                         if expanded { "FolderOpen" } else { "Folder" },
                         false,
-                        24.0,
+                        22.0,
                         &status.to_string(),
                         color,
                     )
@@ -772,15 +1066,46 @@ impl App {
                         } else {
                             terminator_git::status_description(status)
                         }
-                    ))
-                    .clicked()
-                    {
+                    ));
+                    if folder.clicked() {
                         if expanded {
                             self.expanded_dirs.remove(&entry.path);
                         } else {
                             self.expanded_dirs.insert(entry.path.clone());
                         }
                     }
+                    let folder_path = entry.path.clone();
+                    appearance::context_menu(&folder, |ui| {
+                        if appearance::menu_item(ui, "New file", "File", "").clicked() {
+                            self.name_prompt = Some(workspace_ops::NamePrompt::File {
+                                dir: folder_path.clone(),
+                                name: String::new(),
+                            });
+                            ui.close();
+                        }
+                        if appearance::menu_item(ui, "New folder", "Folder", "").clicked() {
+                            self.name_prompt = Some(workspace_ops::NamePrompt::Folder {
+                                dir: folder_path.clone(),
+                                name: String::new(),
+                            });
+                            ui.close();
+                        }
+                        if appearance::menu_item(ui, "Reveal in file manager", "FolderOpen", "")
+                            .clicked()
+                        {
+                            self.queue_workspace(workspace_ops::Op::Reveal(folder_path.clone()));
+                            ui.close();
+                        }
+                        if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
+                            ui.ctx().copy_text(folder_path.display().to_string());
+                            ui.close();
+                        }
+                        ui.separator();
+                        if appearance::menu_item(ui, "Collapse all", "ChevronDown", "").clicked() {
+                            self.expanded_dirs.clear();
+                            ui.close();
+                        }
+                    });
                     if expanded {
                         ui.indent(&entry.path, |ui| self.tree(ui, &entry.path, depth + 1));
                     }
@@ -791,6 +1116,8 @@ impl App {
                         .and_then(|c| c.decorations.get(&entry.path))
                         .copied()
                         .unwrap_or(' ');
+                    let open_shortcut = self.shortcut_label("open_file");
+                    let split_shortcut = self.shortcut_label("split_right");
                     let outcome = explorer_file_row(
                         ui,
                         &entry.path,
@@ -798,12 +1125,17 @@ impl App {
                         status,
                         entry.ignored,
                         &self.theme,
+                        &open_shortcut,
+                        &split_shortcut,
                     );
                     if let Some(action) = outcome.clicked {
                         self.activate_file_action(ui, &entry.path, action);
                     }
                     if let Some(action) = outcome.menu {
                         self.file_action(ui, action, &entry.path, None);
+                    }
+                    if let Some(local) = outcome.local {
+                        self.explorer_local(&entry.path, local, ui);
                     }
                 }
             }
@@ -1612,9 +1944,11 @@ impl App {
             return;
         }
         if self.preferences.tool == SidebarTool::Explorer {
+            self.pending_delete_bar(ui);
             ui.checkbox(&mut self.preferences.show_ignored, "Show ignored files")
                 .on_hover_text("Show files excluded by Git ignore rules and Git metadata");
             if let Some(cwd) = self.cwd() {
+                self.explorer_toolbar(ui, &cwd);
                 appearance::sidebar_scroll("files")
                     .max_height(ui.available_height())
                     .show(ui, |ui| self.tree(ui, &cwd, 0));
@@ -1628,10 +1962,14 @@ impl App {
         if self.watch_fallback {
             ui.weak("Filesystem watch unavailable; refreshing every 3 seconds");
         }
+        self.pending_delete_bar(ui);
         if let Some(context) = self.context.clone() {
+            self.ensure_git_lists(context.root.clone());
+            let open_shortcut = self.shortcut_label("open_file");
+            let mut draft = std::mem::take(&mut self.git_commit);
             let outcome = git_panel(
                 ui,
-                &GitPanelInput {
+                &mut GitPanelInput {
                     context: &context,
                     review_mode: self.state.settings.review_mode,
                     neovim_review: self
@@ -1640,8 +1978,15 @@ impl App {
                         .iter()
                         .any(|c| c == NVIM_REVIEW_CAPABILITY),
                     theme: &self.theme,
+                    history: self.git_history,
+                    commits: &self.git_log,
+                    branches: &self.git_branches,
+                    commit_draft: &mut draft,
+                    collapse_generation: self.git_collapse,
+                    open_shortcut: &open_shortcut,
                 },
             );
+            self.git_commit = draft;
             self.perform_git_outcome(ui, outcome);
         } else {
             ui.weak("Select a terminal to inspect its context.");
@@ -1666,6 +2011,12 @@ pub struct GitPanelInput<'a> {
     pub review_mode: ReviewMode,
     pub neovim_review: bool,
     pub theme: &'a AppearanceConfig,
+    pub history: bool,
+    pub commits: &'a [(String, String)],
+    pub branches: &'a [String],
+    pub commit_draft: &'a mut String,
+    pub collapse_generation: u64,
+    pub open_shortcut: &'a str,
 }
 
 /// A concrete file action with its target, ready for `App` to perform.
@@ -1685,6 +2036,15 @@ pub struct GitPanelOutcome {
     pub refresh: bool,
     /// User pressed the View log button.
     pub view_log: bool,
+    pub history: Option<bool>,
+    pub collapse: bool,
+    pub commit: bool,
+    pub switch: Option<String>,
+    pub stage: Vec<PathBuf>,
+    pub unstage: Vec<PathBuf>,
+    pub discard: Vec<(PathBuf, bool)>,
+    pub delete: Vec<PathBuf>,
+    pub copy: Vec<String>,
 }
 
 /// Map a Git row click to the concrete action `App` performs. Conflicts open
@@ -1722,37 +2082,116 @@ pub fn git_click_action(
     })
 }
 
-pub fn git_panel(ui: &mut egui::Ui, input: &GitPanelInput) -> GitPanelOutcome {
+pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcome {
     let mut outcome = GitPanelOutcome::default();
-    let context = input.context;
-    if context.root.is_none() {
+    let branch_name = input.context.branch.clone();
+    let root = input.context.root.clone();
+    let changes = input.context.changes.clone();
+    let error = input.context.error.clone();
+    if root.is_none() {
         ui.weak("Not a Git repository");
     } else {
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(&context.branch)
-                    .color(appearance::color(&input.theme.status_running)),
-            );
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let collapse = appearance::sidebar_action(ui, "ChevronDown", "Collapse all");
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "git-collapse", collapse.rect);
+            if collapse.clicked() {
+                outcome.collapse = true;
+            }
+            let changes = ui.selectable_label(!input.history, "Changes");
+            let history = ui.selectable_label(input.history, "History");
+            #[cfg(feature = "test-support")]
+            {
+                diagnostics::record(ui.ctx(), "git-changes", changes.rect);
+                diagnostics::record(ui.ctx(), "git-history", history.rect);
+            }
+            if changes.clicked() {
+                outcome.history = Some(false);
+            }
+            if history.clicked() {
+                outcome.history = Some(true);
+            }
+            let branch = appearance::menu_button(ui, &branch_name, |ui| {
+                if input.branches.is_empty() {
+                    ui.weak("No branches");
+                }
+                for name in input.branches {
+                    let mark = if name == &branch_name { "✓" } else { "" };
+                    if appearance::menu_item(ui, name, "GitBranch", mark).clicked() {
+                        outcome.switch = Some(name.clone());
+                        ui.close();
+                    }
+                }
+            })
+            .response
+            .on_hover_text("Switch branch");
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "git-branch", branch.rect);
+            let _ = branch;
+            let refresh = appearance::sidebar_action(ui, "RefreshCw", "Refresh");
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "git-refresh", refresh.rect);
+            if refresh.clicked() {
+                outcome.refresh = true;
+            }
             if ui.small_button("Log").clicked() {
                 outcome.view_log = true;
             }
         });
-        if context.changes.is_empty() {
+        let staged = changes
+            .iter()
+            .any(|change| change.in_group(terminator_git::GitGroup::Staged));
+        if staged && !input.history {
+            ui.add(
+                egui::TextEdit::multiline(input.commit_draft)
+                    .hint_text("Commit message")
+                    .desired_rows(2),
+            );
+            if ui
+                .add_enabled(
+                    !input.commit_draft.trim().is_empty(),
+                    egui::Button::new("Commit"),
+                )
+                .clicked()
+            {
+                outcome.commit = true;
+            }
+        }
+        if input.history {
+            appearance::sidebar_scroll("git-log").show(ui, |ui| {
+                if input.commits.is_empty() {
+                    ui.weak("No commits");
+                }
+                for (hash, subject) in input.commits {
+                    let row = appearance::row(
+                        ui,
+                        subject,
+                        "GitBranch",
+                        false,
+                        22.0,
+                        hash,
+                        appearance::color(&input.theme.secondary),
+                    );
+                    if row.clicked() {
+                        outcome.view_log = true;
+                    }
+                }
+            });
+            return outcome;
+        }
+        if changes.is_empty() {
             ui.weak("Working tree clean");
         }
         appearance::sidebar_scroll("git").show(ui, |ui| {
             for group in terminator_git::GitGroup::ALL {
-                let entries: Vec<_> = context
-                    .changes
-                    .iter()
-                    .filter(|c| c.in_group(group))
-                    .collect();
+                let entries: Vec<_> = changes.iter().filter(|c| c.in_group(group)).collect();
                 if entries.is_empty() {
                     continue;
                 }
                 egui::CollapsingHeader::new(format!("{}  {}", group.label(), entries.len()))
-                    .id_salt((context.root.clone(), group.label()))
-                    .default_open(true)
+                    .id_salt((root.clone(), group.label(), input.collapse_generation))
+                    .default_open(input.collapse_generation == 0)
                     .show(ui, |ui| {
                         for change in entries {
                             // Keep layout height without constructing thousands of off-screen
@@ -1762,7 +2201,7 @@ pub fn git_panel(ui: &mut egui::Ui, input: &GitPanelInput) -> GitPanelOutcome {
                             }
                             let name = change
                                 .path
-                                .strip_prefix(context.root.as_ref().unwrap())
+                                .strip_prefix(root.as_ref().unwrap())
                                 .unwrap_or(&change.path)
                                 .display()
                                 .to_string();
@@ -1810,19 +2249,76 @@ pub fn git_panel(ui: &mut egui::Ui, input: &GitPanelInput) -> GitPanelOutcome {
                                 });
                             }
                             appearance::context_menu(&response, |ui| {
-                                if let Some(action) = file_actions::menu(
-                                    ui,
-                                    file_actions::FileMenu {
-                                        file: true,
-                                        browser: file_actions::browser_document(&change.path),
-                                        git: Some(group),
-                                        neovim: input.neovim_review,
-                                    },
-                                ) {
+                                let open_changes = git_click_action(
+                                    letter == 'D',
+                                    staged,
+                                    true,
+                                    input.review_mode,
+                                    input.neovim_review,
+                                );
+                                if let Some(action) = open_changes
+                                    && appearance::menu_item(ui, "Open changes", "FileDiff", "")
+                                        .clicked()
+                                {
                                     outcome.menu.push(GitFileAction {
                                         action,
                                         path: change.path.clone(),
                                     });
+                                    ui.close();
+                                }
+                                if appearance::menu_item(
+                                    ui,
+                                    "Open file",
+                                    "FileCode",
+                                    input.open_shortcut,
+                                )
+                                .clicked()
+                                {
+                                    outcome.menu.push(GitFileAction {
+                                        action: FileAction::Open,
+                                        path: change.path.clone(),
+                                    });
+                                    ui.close();
+                                }
+                                ui.separator();
+                                if group == terminator_git::GitGroup::Staged {
+                                    if appearance::menu_item(ui, "Unstage", "ArrowLeft", "")
+                                        .clicked()
+                                    {
+                                        outcome.unstage.push(change.path.clone());
+                                        ui.close();
+                                    }
+                                } else if appearance::menu_item(ui, "Stage", "Plus", "").clicked() {
+                                    outcome.stage.push(change.path.clone());
+                                    ui.close();
+                                }
+                                if appearance::menu_item(ui, "Discard changes", "Eraser", "")
+                                    .clicked()
+                                {
+                                    outcome.discard.push((
+                                        change.path.clone(),
+                                        group == terminator_git::GitGroup::Untracked,
+                                    ));
+                                    ui.close();
+                                }
+                                ui.separator();
+                                if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
+                                    outcome.copy.push(change.path.display().to_string());
+                                    ui.close();
+                                }
+                                if let Some(root) = &root
+                                    && appearance::menu_item(ui, "Copy relative path", "Copy", "")
+                                        .clicked()
+                                {
+                                    outcome
+                                        .copy
+                                        .push(workspace_ops::relative_display(root, &change.path));
+                                    ui.close();
+                                }
+                                ui.separator();
+                                if appearance::menu_item(ui, "Delete file", "X", "").clicked() {
+                                    outcome.delete.push(change.path.clone());
+                                    ui.close();
                                 }
                             });
                         }
@@ -1830,7 +2326,7 @@ pub fn git_panel(ui: &mut egui::Ui, input: &GitPanelInput) -> GitPanelOutcome {
             }
         });
     }
-    if let Some(e) = &context.error {
+    if let Some(e) = &error {
         ui.horizontal(|ui| {
             ui.colored_label(appearance::color(&input.theme.status_failed), e);
             if ui.small_button("Retry").clicked() {
@@ -1842,10 +2338,19 @@ pub fn git_panel(ui: &mut egui::Ui, input: &GitPanelInput) -> GitPanelOutcome {
 }
 
 /// What an explorer file row asks `App` to do after painting.
+pub enum ExplorerLocal {
+    Reveal,
+    CopyRelative,
+    Rename,
+    Duplicate,
+    Delete,
+}
+
 #[derive(Default)]
 pub struct ExplorerRowOutcome {
     pub clicked: Option<FileAction>,
     pub menu: Option<FileAction>,
+    pub local: Option<ExplorerLocal>,
 }
 
 pub fn explorer_file_row(
@@ -1855,6 +2360,8 @@ pub fn explorer_file_row(
     status: char,
     ignored: bool,
     theme: &AppearanceConfig,
+    open_shortcut: &str,
+    split_shortcut: &str,
 ) -> ExplorerRowOutcome {
     let mut outcome = ExplorerRowOutcome::default();
     let color = if ignored {
@@ -1886,7 +2393,7 @@ pub fn explorer_file_row(
         outcome.clicked = Some(FileAction::Open);
     }
     appearance::context_menu(&r, |ui| {
-        if let Some(action) = file_actions::menu(
+        if let Some(action) = file_actions::menu_with(
             ui,
             file_actions::FileMenu {
                 file: true,
@@ -1894,8 +2401,33 @@ pub fn explorer_file_row(
                 git: None,
                 neovim: false,
             },
+            open_shortcut,
+            split_shortcut,
         ) {
             outcome.menu = Some(action);
+        }
+        ui.separator();
+        if appearance::menu_item(ui, "Reveal in file manager", "FolderOpen", "").clicked() {
+            outcome.local = Some(ExplorerLocal::Reveal);
+            ui.close();
+        }
+        if appearance::menu_item(ui, "Copy relative path", "Copy", "").clicked() {
+            outcome.local = Some(ExplorerLocal::CopyRelative);
+            ui.close();
+        }
+        ui.separator();
+        if appearance::menu_item(ui, "Rename", "Pencil", "").clicked() {
+            outcome.local = Some(ExplorerLocal::Rename);
+            ui.close();
+        }
+        if appearance::menu_item(ui, "Duplicate", "Copy", "").clicked() {
+            outcome.local = Some(ExplorerLocal::Duplicate);
+            ui.close();
+        }
+        ui.separator();
+        if appearance::menu_item(ui, "Delete", "X", "").clicked() {
+            outcome.local = Some(ExplorerLocal::Delete);
+            ui.close();
         }
     });
     outcome
@@ -2016,15 +2548,15 @@ fn attention_status_detail(state: AgentState) -> &'static str {
     }
 }
 
-fn attention_label_width(available: f32, spacing: f32, brand: bool, show_read: bool) -> f32 {
+/// Width left for the session label after the status glyph (and optional
+/// brand) are already placed. `remaining` is that leftover row width.
+fn attention_label_width(remaining: f32, spacing: f32, show_read: bool) -> f32 {
     let actions = if show_read {
         ATTENTION_ACTION_READ_COUNT
     } else {
         ATTENTION_ACTION_COUNT
     };
-    let reserved =
-        ATTENTION_ACTION_SIZE * (1.0 + actions) + spacing * 2.0 + if brand { 18.0 } else { 0.0 };
-    (available - reserved).max(24.0)
+    (remaining - spacing - ATTENTION_ACTION_SIZE * actions).max(0.0)
 }
 
 fn attention_status_glyph(
@@ -2062,12 +2594,6 @@ fn attention_title(
     show_read: bool,
 ) -> egui::Response {
     let spacing = ui.spacing().item_spacing.x;
-    let label_width = attention_label_width(
-        ui.available_size_before_wrap().x,
-        spacing,
-        brand.is_some(),
-        show_read,
-    );
     let brand_response = brand.map(|(icon, label)| {
         ui.add_sized(
             [18.0, ATTENTION_ACTION_SIZE],
@@ -2085,6 +2611,9 @@ fn attention_title(
         icon.rect,
     );
     let text = session.map_or("Unknown session", |session| session.label.as_str());
+    // Measure after the leading icons so a brand glyph cannot push the
+    // actions onto a second row.
+    let label_width = attention_label_width(ui.available_width(), spacing, show_read);
     let label = ui
         .add_sized(
             [label_width, ATTENTION_ACTION_SIZE],
@@ -2112,9 +2641,6 @@ fn attention_actions(ui: &mut egui::Ui, session_id: &str, show_read: bool) -> At
         ATTENTION_ACTION_COUNT
     };
     let width = ATTENTION_ACTION_SIZE * count;
-    if ui.available_size_before_wrap().x < width {
-        ui.end_row();
-    }
     ui.push_id(session_id, |ui| {
         ui.horizontal(|ui| {
             ui.set_max_width(width);
@@ -2191,13 +2717,13 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
         .stroke(stroke)
         .corner_radius(6)
         .fill(appearance::color(&theme.window))
-        .inner_margin(egui::Margin::symmetric(6, 4))
+        .inner_margin(egui::Margin::symmetric(6, 2))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing = egui::vec2(4.0, 2.0);
             let action = ui
-                .horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 2.0);
+                .horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
                     let header = attention_title(ui, notice, session, theme, brand, show_read);
                     #[cfg(feature = "test-support")]
                     diagnostics::record(
@@ -2413,21 +2939,16 @@ mod tests {
     }
 
     #[test]
-    fn attention_label_width_reserves_status_and_actions() {
+    fn attention_label_width_leaves_the_action_row_intact() {
         let spacing = 4.0;
-        let available = 280.0;
-        let width = attention_label_width(available, spacing, false, false);
-        let used = width + ATTENTION_ACTION_SIZE * (1.0 + ATTENTION_ACTION_COUNT) + spacing * 2.0;
-        assert!((used - available).abs() < f32::EPSILON);
-        assert!(attention_label_width(40.0, spacing, false, false) >= 24.0);
-        // Brand glyph and mark-read button each reserve their own width.
-        assert!(
-            attention_label_width(available, spacing, true, true)
-                < attention_label_width(available, spacing, false, false)
-        );
-        let read = attention_label_width(available, spacing, false, true);
-        let read_used =
-            read + ATTENTION_ACTION_SIZE * (1.0 + ATTENTION_ACTION_READ_COUNT) + spacing * 2.0;
-        assert!((read_used - available).abs() < f32::EPSILON);
+        let remaining = 200.0;
+        let width = attention_label_width(remaining, spacing, false);
+        let used = width + spacing + ATTENTION_ACTION_SIZE * ATTENTION_ACTION_COUNT;
+        assert!((used - remaining).abs() < f32::EPSILON);
+        assert_eq!(attention_label_width(10.0, spacing, false), 0.0);
+        let read = attention_label_width(remaining, spacing, true);
+        assert!(read < width);
+        let read_used = read + spacing + ATTENTION_ACTION_SIZE * ATTENTION_ACTION_READ_COUNT;
+        assert!((read_used - remaining).abs() < f32::EPSILON);
     }
 }
