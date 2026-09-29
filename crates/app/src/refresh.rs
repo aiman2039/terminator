@@ -60,6 +60,7 @@ fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Con
     let mut dirty_paths = Vec::<PathBuf>::new();
     let mut refresh_all = true;
     let mut watch_ok = watcher.is_some();
+    let mut missing_path = crate::retry_budget::RetryBudget::default();
     loop {
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(mut request) => {
@@ -109,6 +110,10 @@ fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Con
             pending = None;
             continue;
         };
+        if missing_path.exhausted(&request.cwd, request.generation) {
+            pending = None;
+            continue;
+        }
         let interval = if watch_ok {
             Duration::from_secs(30)
         } else {
@@ -189,6 +194,11 @@ fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Con
         }
         ctx.request_repaint();
         last = Instant::now();
+        let missing = crate::retry_budget::path_missing(&request.cwd);
+        missing_path.record(&request.cwd, request.generation, missing);
+        if missing && !missing_path.exhausted(&request.cwd, request.generation) {
+            pending = Some(Instant::now() - Duration::from_secs(1));
+        }
     }
 }
 
@@ -241,12 +251,20 @@ pub fn spawn_async(
         }).await?;
         let watcher = std::sync::Arc::new(std::sync::Mutex::new(watcher));
         let mut watched = Vec::<PathBuf>::new();
+        let mut missing_path = crate::retry_budget::RetryBudget::default();
         loop {
             let request = requests.borrow_and_update().clone();
             let Some(request) = request else {
                 tokio::select! { _ = token.cancelled() => break, result = requests.changed() => if result.is_err() { break } }
                 continue;
             };
+            if missing_path.exhausted(&request.cwd, request.generation) {
+                tokio::select! {
+                    _ = token.cancelled() => break,
+                    result = requests.changed() => if result.is_err() { break; },
+                }
+                continue;
+            }
             let operation = token.child_token();
             let _guard = operation.clone().drop_guard();
             let work = async {
@@ -280,6 +298,17 @@ pub fn spawn_async(
                 result = work => result,
             };
             let fallback = match result { Ok((targets, fallback)) => { watched = targets; fallback }, Err(error) => { service.emit(Update::Error(format!("Refresh: {error:#}"))).await?; true } };
+            let cwd = request.cwd.clone();
+            let generation = request.generation;
+            let missing = service
+                .fs()
+                .run(&operation, move || Ok(crate::retry_budget::path_missing(&cwd)))
+                .await
+                .unwrap_or(false);
+            missing_path.record(&request.cwd, generation, missing);
+            if missing {
+                continue;
+            }
             tokio::select! {
                 _ = token.cancelled() => break,
                 result = requests.changed() => if result.is_err() { break; },
@@ -389,5 +418,50 @@ mod tests {
             assert_eq!(actual, generation);
             assert!(dirs[0].1.as_ref().unwrap().is_empty());
         }
+    }
+
+    #[test]
+    fn missing_cwd_refresh_stops_after_three_attempts() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("deleted-worktree");
+        let (tx, rx) = mpsc::channel();
+        let coordinator = spawn(tx, eframe::egui::Context::default());
+        coordinator
+            .send(Some(Request {
+                cwd: cwd.clone(),
+                generation: 1,
+                directories: vec![cwd.clone()],
+            }))
+            .unwrap();
+        let mut refreshes = 0;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(Update::Refresh(1, ..)) => refreshes += 1,
+                Ok(_) => panic!("unexpected refresh update"),
+                Err(_) => {
+                    if refreshes >= 3 {
+                        break;
+                    }
+                }
+            }
+        }
+        assert_eq!(refreshes, 3, "a missing directory is refreshed three times");
+        assert!(
+            rx.recv_timeout(Duration::from_millis(500)).is_err(),
+            "refresh keeps running after the retry limit"
+        );
+        std::fs::create_dir(&cwd).unwrap();
+        coordinator
+            .send(Some(Request {
+                cwd,
+                generation: 2,
+                directories: vec![dir.path().join("deleted-worktree")],
+            }))
+            .unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Update::Refresh(2, ..)
+        ));
     }
 }

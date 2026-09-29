@@ -1,4 +1,5 @@
 use eframe::egui::{self, Color32, FontFamily, FontId, RichText, TextStyle};
+use std::time::Duration;
 use terminator_core::appearance::{AppearanceConfig, rgb};
 
 /// Keep small navigation/action glyphs legible independently of secondary text.
@@ -511,13 +512,17 @@ pub fn session_row_spec(ui: &mut egui::Ui, spec: SessionRowSpec<'_>) -> egui::Re
     .inner
 }
 
+/// One turn per second. Repaint on a short interval so a spinning icon does not
+/// redraw the whole window, including terminals, on every frame.
+const STATUS_SPIN_INTERVAL: Duration = Duration::from_millis(100);
+
 /// Paint an icon, optionally rotating it continuously (one turn per second).
 pub fn paint_status_icon(ui: &egui::Ui, rect: egui::Rect, icon: &str, tint: Color32, spin: bool) {
     let mut image = egui::Image::new(crate::icons::source(icon)).tint(tint);
     if spin {
         let angle = (ui.input(|i| i.time) % 1.0) as f32 * std::f32::consts::TAU;
         image = image.rotate(angle, egui::Vec2::splat(0.5));
-        ui.ctx().request_repaint();
+        ui.ctx().request_repaint_after(STATUS_SPIN_INTERVAL);
     }
     image.paint_at(ui, rect);
 }
@@ -1449,7 +1454,7 @@ mod row_tests {
     }
 
     #[test]
-    fn running_status_icon_spins_and_keeps_repainting() {
+    fn running_status_icon_spins_on_a_bounded_interval() {
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(16.0, 16.0));
         for spin in [false, true] {
             let ctx = egui::Context::default();
@@ -1466,13 +1471,23 @@ mod row_tests {
                 run();
             }
             let output = run();
-            assert_eq!(
-                output
-                    .viewport_output
-                    .values()
-                    .any(|v| v.repaint_delay.is_zero()),
-                spin
-            );
+            let delay = output
+                .viewport_output
+                .values()
+                .map(|viewport| viewport.repaint_delay)
+                .min();
+            if spin {
+                let delay = delay.expect("spinner schedules a repaint");
+                assert!(
+                    !delay.is_zero() && delay <= super::STATUS_SPIN_INTERVAL,
+                    "spinning status icon repaint delay {delay:?}"
+                );
+            } else {
+                assert!(
+                    delay.is_none_or(|delay| !delay.is_zero()),
+                    "idle status icon must not request an immediate repaint"
+                );
+            }
         }
     }
 

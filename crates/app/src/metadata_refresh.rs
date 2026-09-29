@@ -19,12 +19,31 @@ pub fn spawn(service: Services) -> tokio::sync::watch::Sender<Option<Request>> {
     let handle = service.handle().clone();
     let _ = handle.submit(context, cancel, async move {
         let mut cache = terminator_core::metadata::Cache::default();
+        let mut missing_path = crate::retry_budget::RetryBudget::default();
         loop {
             let request = requests.borrow_and_update().clone();
             let Some(request) = request else {
                 tokio::select! { _ = token.cancelled() => break, result = requests.changed() => if result.is_err() { break } }
                 continue;
             };
+            if missing_path.exhausted(&request.cwd, request.generation) {
+                tokio::select! {
+                    _ = token.cancelled() => break,
+                    result = requests.changed() => if result.is_err() { break; },
+                }
+                continue;
+            }
+            let cwd = request.cwd.clone();
+            let missing = service
+                .fs()
+                .run(&token, move || Ok(crate::retry_budget::path_missing(&cwd)))
+                .await
+                .unwrap_or(false);
+            if missing {
+                missing_path.record(&request.cwd, request.generation, true);
+                continue;
+            }
+            missing_path.record(&request.cwd, request.generation, false);
             let mut collecting = cache.clone();
             let result = tokio::select! {
                 _ = token.cancelled() => break,

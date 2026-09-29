@@ -3673,6 +3673,27 @@ impl Viewer<'_> {
     pub(super) fn terminal_view(&mut self, ui: &mut egui::Ui, session: &Session) {
         let sid = &session.id;
         self.app.visible_sessions.insert(sid.clone());
+        if !self.app.backends.contains_key(sid)
+            && self
+                .app
+                .attach_budget
+                .get(sid)
+                .is_some_and(|budget| budget.exhausted(&session.cwd, 0))
+        {
+            let message = self.app.attach_error.get(sid).cloned().unwrap_or_else(|| {
+                "Stopped retrying this terminal. The working directory may have been removed."
+                    .into()
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(appearance::color(&self.app.theme.status_failed), message);
+                if ui.small_button("Retry").clicked() {
+                    self.app.attach_budget.remove(sid);
+                    self.app.attach_error.remove(sid);
+                    self.app.attach_started.remove(sid);
+                }
+            });
+            return;
+        }
         if !self.app.backends.contains_key(sid) {
             let id = self.app.next_backend;
             self.app.next_backend += 1;
@@ -3720,14 +3741,19 @@ impl Viewer<'_> {
                 },
             ) {
                 Ok(b) => {
+                    self.app.attach_started.insert(sid.clone(), Instant::now());
                     self.app.backends.insert(sid.clone(), b);
                     self.app.backend_ids.insert(id, sid.clone());
                 }
                 Err(e) => {
-                    ui.colored_label(
-                        appearance::color(&self.app.theme.status_failed),
-                        format!("Cannot attach terminal: {e}"),
-                    );
+                    let message = format!("Cannot attach terminal: {e}");
+                    self.app
+                        .attach_budget
+                        .entry(sid.clone())
+                        .or_default()
+                        .record(&session.cwd, 0, true);
+                    self.app.attach_error.insert(sid.clone(), message.clone());
+                    ui.colored_label(appearance::color(&self.app.theme.status_failed), message);
                     return;
                 }
             }

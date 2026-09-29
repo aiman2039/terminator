@@ -2353,6 +2353,7 @@ pub struct ExplorerRowOutcome {
     pub local: Option<ExplorerLocal>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn explorer_file_row(
     ui: &mut egui::Ui,
     path: &Path,

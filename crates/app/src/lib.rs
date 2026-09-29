@@ -31,6 +31,7 @@ mod notify_test;
 mod nvim_rpc;
 mod player;
 mod refresh;
+mod retry_budget;
 mod settings_ui;
 use settings_ui::{BrowseTarget, SettingsSection};
 mod palette;
@@ -574,6 +575,10 @@ pub struct App {
     visible_sessions: HashSet<String>,
     backend_ids: HashMap<u64, String>,
     next_backend: u64,
+    /// Failed attaches for a session, keyed by its working directory.
+    attach_budget: HashMap<String, retry_budget::RetryBudget>,
+    attach_started: HashMap<String, Instant>,
+    attach_error: HashMap<String, String>,
     pty_tx: Sender<(u64, PtyEvent)>,
     pty_rx: Receiver<(u64, PtyEvent)>,
     jobs: exit::JobQueue,
@@ -637,6 +642,11 @@ pub struct App {
     metadata_generation: u64,
     context_path: Option<PathBuf>,
     error: Option<String>,
+    /// Same status text the user dismissed. Identical reports stay hidden.
+    dismissed_error: Option<String>,
+    /// Working directory the dismiss latch and missing-path budget belong to.
+    error_cwd: Option<PathBuf>,
+    missing_path_reports: u8,
     info: Option<String>,
     add_project: bool,
     settings_open: bool,
@@ -714,6 +724,15 @@ pub struct App {
     unread_selected: Option<String>,
     connected: bool,
     control_server: Option<ui_control::Server>,
+}
+
+fn is_missing_path_error(error: &str) -> bool {
+    if daemon_connection::is_connection_error(error) {
+        return false;
+    }
+    error
+        .lines()
+        .any(|line| line.trim() == "No such file or directory (os error 2)")
 }
 
 fn observation_is_stale(current: &State, incoming: &State) -> bool {
@@ -865,6 +884,9 @@ impl App {
             visible_sessions: HashSet::new(),
             backend_ids: HashMap::new(),
             next_backend: 0,
+            attach_budget: HashMap::new(),
+            attach_started: HashMap::new(),
+            attach_error: HashMap::new(),
             pty_tx,
             pty_rx,
             jobs,
@@ -905,6 +927,9 @@ impl App {
             metadata_generation: 0,
             context_path: None,
             error: preference_error.or(upgrade_error),
+            dismissed_error: None,
+            error_cwd: None,
+            missing_path_reports: 0,
             info: None,
             add_project: false,
             settings_open: false,
@@ -1333,7 +1358,7 @@ impl App {
                             if self.exit.active() {
                                 self.cancel_exit(error);
                             } else {
-                                self.error = Some(error);
+                                self.report_status_error(error);
                             }
                         }
                     }
@@ -1785,7 +1810,7 @@ impl App {
                     if daemon_connection::is_connection_error(&e) {
                         self.connected = false;
                     }
-                    self.error = Some(e);
+                    self.report_status_error(e);
                 }
                 Update::Info(i) => self.info = Some(i),
                 Update::Workspace(op, result) => match result {
@@ -1801,7 +1826,7 @@ impl App {
                     }
                     Ok(workspace_ops::Report::Branches(names)) => self.git_branches = names,
                     Ok(workspace_ops::Report::Log(rows)) => self.git_log = rows,
-                    Err(error) => self.error = Some(error),
+                    Err(error) => self.report_status_error(error),
                 },
             }
         }
@@ -1822,6 +1847,26 @@ impl App {
                 && self.backends.get(&session).is_some_and(|b| b.id() == id)
             {
                 self.backends.remove(&session);
+                let started = self.attach_started.remove(&session);
+                if retry_budget::attach_exit_is_failure(started.map(|at| at.elapsed())) {
+                    let cwd = self
+                        .state
+                        .sessions
+                        .iter()
+                        .find(|candidate| candidate.id == session)
+                        .map(|candidate| candidate.cwd.clone())
+                        .unwrap_or_default();
+                    self.attach_budget
+                        .entry(session.clone())
+                        .or_default()
+                        .record(&cwd, 0, true);
+                    self.attach_error.entry(session).or_insert_with(|| {
+                        "Stopped retrying this terminal. The working directory may have been removed.".into()
+                    });
+                } else {
+                    self.attach_budget.remove(&session);
+                    self.attach_error.remove(&session);
+                }
             }
         }
         self.ui_service_peak_ms = self
@@ -2222,6 +2267,32 @@ impl App {
         self.context_session()
             .map(|s| s.cwd.clone())
             .or_else(|| self.selected_project().map(|p| p.path.clone()))
+    }
+    fn report_status_error(&mut self, error: String) {
+        let cwd = self.cwd();
+        if self.error_cwd.as_deref() != cwd.as_deref() {
+            self.error_cwd = cwd;
+            self.dismissed_error = None;
+            self.missing_path_reports = 0;
+        }
+        if self.dismissed_error.as_deref() == Some(error.as_str()) {
+            return;
+        }
+        if is_missing_path_error(&error) {
+            if self.error.as_deref() != Some(error.as_str()) {
+                if self.missing_path_reports >= retry_budget::MISSING_PATH_RETRY_LIMIT {
+                    return;
+                }
+                self.missing_path_reports = self.missing_path_reports.saturating_add(1);
+            }
+        } else if self.error.as_deref() != Some(error.as_str()) {
+            self.dismissed_error = None;
+            self.missing_path_reports = 0;
+        }
+        self.error = Some(error);
+    }
+    fn dismiss_status_error(&mut self) {
+        self.dismissed_error = self.error.take();
     }
     fn dialog_directory(&self) -> PathBuf {
         self.cwd()
@@ -3259,7 +3330,7 @@ impl App {
         if self.exit.active() {
             self.cancel_exit(error);
         } else {
-            self.error = Some(error);
+            self.report_status_error(error);
         }
     }
     fn save_layouts(&mut self) {
@@ -4612,7 +4683,7 @@ impl eframe::App for App {
                 } else if let Some(error) = self.error.clone() {
                     ui.horizontal_wrapped(|ui| {
                         if ui.small_button("Dismiss").clicked() {
-                            self.error = None;
+                            self.dismiss_status_error();
                         }
                         ui.colored_label(appearance::color(&self.theme.status_failed), error);
                     });
@@ -5951,6 +6022,67 @@ mod navigation_tests {
             app.apply_state(app.state.clone());
             assert_eq!(app.error.as_deref(), Some(message));
         }
+    }
+
+    #[test]
+    fn dismissed_missing_directory_error_does_not_return() {
+        let (mut app, ctx, _dir) = fixture();
+        let message = "No such file or directory (os error 2)";
+        for _ in 0..2 {
+            app.update_tx.send(Update::Error(message.into())).unwrap();
+            app.process_updates(&ctx);
+            assert_eq!(app.error.as_deref(), Some(message));
+        }
+        app.dismiss_status_error();
+        assert!(app.error.is_none());
+        app.update_tx.send(Update::Error(message.into())).unwrap();
+        app.process_updates(&ctx);
+        assert!(
+            app.error.is_none(),
+            "dismissed missing-path error must stay dismissed"
+        );
+        app.update_tx
+            .send(Update::Error("Settings rejected".into()))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(app.error.as_deref(), Some("Settings rejected"));
+    }
+
+    #[test]
+    fn missing_directory_error_stops_after_three_reports() {
+        let (mut app, ctx, _dir) = fixture();
+        let message = "No such file or directory (os error 2)";
+        for _ in 0..retry_budget::MISSING_PATH_RETRY_LIMIT {
+            app.update_tx.send(Update::Error(message.into())).unwrap();
+            app.process_updates(&ctx);
+            assert_eq!(app.error.as_deref(), Some(message));
+            app.error = None;
+        }
+        app.update_tx.send(Update::Error(message.into())).unwrap();
+        app.process_updates(&ctx);
+        assert!(app.error.is_none());
+    }
+
+    #[test]
+    fn missing_directory_error_retries_after_the_working_directory_changes() {
+        let (mut app, ctx, _dir) = fixture();
+        let message = "No such file or directory (os error 2)";
+        for _ in 0..retry_budget::MISSING_PATH_RETRY_LIMIT {
+            app.update_tx.send(Update::Error(message.into())).unwrap();
+            app.process_updates(&ctx);
+            app.error = None;
+        }
+        app.update_tx.send(Update::Error(message.into())).unwrap();
+        app.process_updates(&ctx);
+        assert!(app.error.is_none());
+        let mut session = session_fixture("shell", SessionKind::Shell);
+        session.cwd = "/gone".into();
+        app.state.sessions.push(session);
+        app.selected = Some("a".into());
+        app.active_session = Some("shell".into());
+        app.update_tx.send(Update::Error(message.into())).unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(app.error.as_deref(), Some(message));
     }
 
     #[test]
