@@ -223,6 +223,35 @@ pub fn sidebar_action(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Respons
     .on_hover_text(tip)
 }
 
+/// Icon-only selectable control (tabs, toggles). The hover overlay carries the
+/// text label and the selected state fills the frame.
+pub fn selectable_icon(ui: &mut egui::Ui, icon: &str, tip: &str, selected: bool) -> egui::Response {
+    let response = ui
+        .add_sized([30.0, 24.0], egui::Button::new("").frame(false))
+        .on_hover_text(tip);
+    if response.hovered() || selected {
+        ui.painter().rect_filled(
+            response.rect,
+            5,
+            if selected {
+                ui.visuals().selection.bg_fill
+            } else {
+                ui.visuals().widgets.hovered.bg_fill
+            },
+        );
+    }
+    egui::Image::new(crate::icons::source(icon))
+        .tint(ICON_COLOR)
+        .paint_at(
+            ui,
+            egui::Rect::from_center_size(response.rect.center(), egui::vec2(15.0, 15.0)),
+        );
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, tip)
+    });
+    response
+}
+
 /// Sidebar lists stay wheel/trackpad-scrollable without a visible bar.
 pub fn sidebar_scroll(salt: &'static str) -> egui::ScrollArea {
     egui::ScrollArea::vertical()

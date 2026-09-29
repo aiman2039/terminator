@@ -351,6 +351,8 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         "Repeat" => egui::include_image!("../assets/icons/repeat.svg"),
         "Radio" => egui::include_image!("../assets/icons/radio.svg"),
         "Bell" => egui::include_image!("../assets/icons/bell.svg"),
+        "Eye" => egui::include_image!("../assets/icons/eye.svg"),
+        "EyeOff" => egui::include_image!("../assets/icons/eye-off.svg"),
         "CircleCheck" => egui::include_image!("../assets/icons/circle-check.svg"),
         "CircleAlert" => egui::include_image!("../assets/icons/circle-alert.svg"),
         "Info" => egui::include_image!("../assets/icons/info.svg"),

@@ -384,12 +384,27 @@ impl App {
             let new_folder = appearance::sidebar_action(ui, "Folder", "New folder");
             let collapse = appearance::sidebar_action(ui, "ChevronDown", "Collapse all");
             let refresh = appearance::sidebar_action(ui, "RefreshCw", "Refresh");
+            let ignored_icon = if self.preferences.show_ignored {
+                "Eye"
+            } else {
+                "EyeOff"
+            };
+            let ignored = appearance::selectable_icon(
+                ui,
+                ignored_icon,
+                "Show ignored files (excluded by Git ignore rules and Git metadata)",
+                self.preferences.show_ignored,
+            );
             #[cfg(feature = "test-support")]
             {
                 diagnostics::record(ui.ctx(), "explorer-new-file", new_file.rect);
                 diagnostics::record(ui.ctx(), "explorer-new-folder", new_folder.rect);
                 diagnostics::record(ui.ctx(), "explorer-collapse", collapse.rect);
                 diagnostics::record(ui.ctx(), "explorer-refresh", refresh.rect);
+                diagnostics::record(ui.ctx(), "explorer-show-ignored", ignored.rect);
+            }
+            if ignored.clicked() {
+                self.preferences.show_ignored = !self.preferences.show_ignored;
             }
             if new_file.clicked() {
                 self.name_prompt = Some(workspace_ops::NamePrompt::File {
@@ -1171,13 +1186,18 @@ impl App {
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    for (tab, label, name) in [
-                        (AgentsTab::NeedsAttention, "Needs attention", "needs"),
-                        (AgentsTab::AllLive, "All live", "live"),
-                        (AgentsTab::Unread, "Unread", "unread"),
+                    for (tab, icon, label, name) in [
+                        (
+                            AgentsTab::NeedsAttention,
+                            "CircleAlert",
+                            "Needs attention",
+                            "needs",
+                        ),
+                        (AgentsTab::AllLive, "CircleCheck", "All live", "live"),
+                        (AgentsTab::Unread, "Bell", "Unread", "unread"),
                     ] {
-                        let response =
-                            ui.selectable_label(self.preferences.agents_tab == tab, label);
+                        let selected = self.preferences.agents_tab == tab;
+                        let response = appearance::selectable_icon(ui, icon, label, selected);
                         #[cfg(feature = "test-support")]
                         diagnostics::record(ui.ctx(), &format!("agent-tab:{name}"), response.rect);
                         #[cfg(not(feature = "test-support"))]
@@ -2016,8 +2036,6 @@ impl App {
         }
         if self.preferences.tool == SidebarTool::Explorer {
             self.pending_delete_bar(ui);
-            ui.checkbox(&mut self.preferences.show_ignored, "Show ignored files")
-                .on_hover_text("Show files excluded by Git ignore rules and Git metadata");
             if let Some(cwd) = self.cwd() {
                 self.explorer_toolbar(ui, &cwd);
                 appearance::sidebar_scroll("files")

@@ -16,6 +16,9 @@ white-stroke adaptation, for the native Markdown refresh control.
 `moon.svg` comes from Lucide 0.577.0 with the same license and white-stroke
 adaptation, for the notification snooze action.
 
+`eye.svg` and `eye-off.svg` come from Lucide 0.577.0 with the same license and
+white-stroke adaptation, for the explorer's show-ignored-files toggle.
+
 Agent inbox status icons also come from Lucide 0.577.0 with the same license
 and white-stroke adaptation: `message-circle-question-mark` (needs input),
 `shield-question-mark` (needs permission), `circle-check` (done),
