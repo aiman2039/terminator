@@ -145,3 +145,15 @@ event and could hold the window at back-to-back full frames. It now calls
 a burst coalesces into at most one frame per 16 ms while hidden panes are
 still updated lazily on their next paint. Host-side behavior is unchanged:
 the application already drops backends for terminals it is not painting.
+
+## Painted-only 30 fps repaint wakeups (2026-09-29)
+
+Terminal output still forced 60 fps full-window frames, including for a
+terminal an agent was animating while it was not on screen. The subscription
+thread now wakes the UI at most every 33 ms (about 30 fps), and only when the
+backend was painted in the current frame: `TerminalBackend::set_painted` is
+cleared for every backend at frame start and set by the host when the terminal
+is drawn. A hidden terminal records `grid_dirty` but does not wake the UI, so
+its next paint picks up the new grid instead of driving frames the user cannot
+see.
+

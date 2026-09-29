@@ -3287,16 +3287,37 @@ impl App {
     }
 
     fn ide_terminal_strip(&mut self, ui: &mut egui::Ui) {
+        // Keep the resizable panel at its stored height even when the strip has
+        // nothing to show. Otherwise the frame shrinks to its content and the
+        // separator jumps down for whichever project you switch away from.
+        ui.set_min_height(ui.available_height());
         let Some(project) = self.selected.clone() else {
             ui.weak("Select a project to use the terminal strip.");
             return;
         };
         ui.horizontal(|ui| {
-            ui.strong("Terminal");
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new("Terminal")
+                        .size(11.0)
+                        .color(appearance::color(&self.theme.secondary)),
+                )
+                .selectable(false),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if appearance::sidebar_action(ui, "PanelBottomClose", "Hide terminal strip")
-                    .clicked()
-                {
+                let hide = ui
+                    .add_sized(
+                        [18.0, 18.0],
+                        egui::Button::image(
+                            egui::Image::new(crate::icons::source("PanelBottomClose"))
+                                .tint(appearance::ICON_COLOR)
+                                .fit_to_exact_size(egui::vec2(12.0, 12.0)),
+                        )
+                        .frame(false),
+                    )
+                    .on_hover_text("Hide terminal strip");
+                if hide.clicked() {
                     self.preferences.ide_terminal_collapsed = true;
                     self.resync_active_from_dock();
                 }
@@ -3311,10 +3332,44 @@ impl App {
             .remove(&project)
             .unwrap_or_else(|| egui_dock::DockState::new(vec![]));
         if strip.iter_all_tabs().next().is_none() {
-            ui.weak("No terminal open. Start one to dock it here.");
-            if ui.button("Open terminal").clicked() {
-                self.create_strip();
-            }
+            let remaining = ui.available_size();
+            ui.allocate_ui_with_layout(
+                remaining,
+                egui::Layout::top_down(egui::Align::Center),
+                |ui| {
+                    ui.add_space(((remaining.y - 120.0) * 0.5).max(6.0));
+                    ui.add(
+                        egui::Image::new(crate::icons::source("Terminal"))
+                            .tint(appearance::color(&self.theme.secondary))
+                            .fit_to_exact_size(egui::vec2(24.0, 24.0)),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("No terminal open")
+                            .color(appearance::color(&self.theme.secondary)),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("Start one to dock it here.")
+                                .size(11.0)
+                                .color(appearance::color(&self.theme.secondary)),
+                        )
+                        .selectable(false),
+                    );
+                    ui.add_space(10.0);
+                    if ui
+                        .add(egui::Button::image_and_text(
+                            egui::Image::new(crate::icons::source("Terminal"))
+                                .tint(appearance::ICON_COLOR)
+                                .fit_to_exact_size(egui::vec2(13.0, 13.0)),
+                            "Open terminal",
+                        ))
+                        .clicked()
+                    {
+                        self.create_strip();
+                    }
+                },
+            );
         } else {
             let style = self.dock_style(ui);
             self.refresh_strip_pane_maps(&strip);
@@ -4664,6 +4719,9 @@ impl eframe::App for App {
         self.visible_sessions.clear();
         self.visible_images.clear();
         self.visible_browsers.clear();
+        for backend in self.backends.values() {
+            backend.set_painted(false);
+        }
         self.markdown.begin_frame();
         #[cfg(feature = "test-support")]
         self.diagnostics.frame(&ctx);

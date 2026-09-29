@@ -3780,6 +3780,7 @@ impl Viewer<'_> {
         }
         let find_paint = self.find_paint_for(sid);
         let backend = self.app.backends.get_mut(sid).unwrap();
+        backend.set_painted(true);
         let font = egui_term::TerminalFont::new(egui_term::FontSettings {
             font_type: egui::FontId::monospace(self.app.state.settings.font_size),
         });

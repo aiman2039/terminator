@@ -1,5 +1,32 @@
 # Validation evidence — 2026-09-08
 
+## Bounded notification waiters and 30 fps terminal repaints (2026-09-29)
+
+- Daemon: `notifications::send` no longer spawns a thread per alert. One
+  long-lived `desktop-notifications` worker serializes every wait, so at most
+  one waiter exists. A 60 s deadline clears delivered notifications on the
+  daemon main thread (`NSUserNotificationCenter::removeAllDeliveredNotifications`),
+  ending a waiter that the user never acted on. The run loop is still pumped
+  only while a waiter exists.
+- Daemon accept loop is event-driven: the main thread blocks in `poll` with no
+  timeout while no notification waiter exists, and a socketpair wakes it when
+  a waiter starts or ends or when a shutdown request arrives. The previous
+  non-blocking `accept` + 10 ms sleep did ~100 wakeups/s even when idle.
+  Isolated smoke: idle CPU 0.0–0.2%, a `Snapshot` request answered, and a
+  `Shutdown` request exits the daemon.
+- Regression `notification_waiters_are_bounded` queues 32 alerts against a
+  blocked presenter and asserts the waiter count never exceeds one; a burst of
+  queued alerts coalesces to the newest after the active one ends.
+- GUI/vendor: `egui_term` coalesces PTY-driven repaints to 33 ms and only wakes
+  the UI for a terminal painted in the current frame; hidden terminals mark the
+  grid dirty and skip the wake. The host clears `set_painted(false)` for every
+  backend at frame start and sets it when the terminal is drawn.
+- `cargo test -p terminator-daemon -p terminator --all-features --locked`
+  passed (454 app, 36 daemon). Strict workspace Clippy and `cargo fmt --all
+  --check` passed; the daemon binary links `objc2-foundation` and starts.
+- Not run: before/after native `sample` of the rebuilt package, GUI smoke, or
+  replacement of a running installed daemon/GUI.
+
 ## Snapshot caching, generation retention, and idle polling (2026-09-29)
 
 - Symptom: the GUI held ~40% CPU. `sample` showed the `gui-catalog-0` worker
@@ -15,7 +42,7 @@
   growth caps: notifications 10,000→512, events 8192→2048, agents 512.
 - The active daemon prunes retired generations beyond `RETIRED_RETENTION` (4),
   never removing a generation whose saved state still records a live session.
-- Daemon `notifications::idle` only pumps the Cocoa run loop while a
+- Daemon `notifications::pump` only services the Cocoa run loop while a
   notification awaits an action; the agent status spin interval is 100 ms.
 - `cargo test --workspace --all-features --locked`, strict workspace Clippy, and
   `cargo fmt --all --check` passed.

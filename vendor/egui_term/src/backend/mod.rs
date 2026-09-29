@@ -174,6 +174,7 @@ pub struct TerminalBackend {
     notifier: Notifier,
     last_content: RenderableContent,
     grid_dirty: Arc<AtomicBool>,
+    painted: Arc<AtomicBool>,
 }
 
 impl TerminalBackend {
@@ -222,6 +223,8 @@ impl TerminalBackend {
         let url_regex = RegexSearch::new(r#"(ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file://|git://|ssh:|ftp://)[^\u{0000}-\u{001F}\u{007F}-\u{009F}<>"\s{-}\^⟨⟩`]+"#).unwrap();
         let grid_dirty = Arc::new(AtomicBool::new(true));
         let grid_dirty_for_events = grid_dirty.clone();
+        let painted = Arc::new(AtomicBool::new(false));
+        let painted_for_events = painted.clone();
         let _pty_event_loop_thread = pty_event_loop.spawn();
         let _pty_event_subscription = std::thread::Builder::new()
             .name(format!("pty_event_subscription_{}", id))
@@ -232,12 +235,14 @@ impl TerminalBackend {
                         break;
                     }
                     // Coalesce a burst of PTY events into at most one frame
-                    // every 16 ms instead of waking the UI thread per event.
-                    // egui keeps the smallest pending deadline, so a busy
-                    // terminal no longer forces back-to-back full-window frames.
-                    app_context
-                        .clone()
-                        .request_repaint_after(Duration::from_millis(16));
+                    // every 33 ms instead of waking the UI thread per event.
+                    // Hidden terminals only mark the grid dirty: an agent
+                    // streaming in a background tab must not force frames.
+                    if painted_for_events.load(Ordering::Relaxed) {
+                        app_context
+                            .clone()
+                            .request_repaint_after(Duration::from_millis(33));
+                    }
                     match event {
                         Event::Exit => break,
                         // The owning daemon answers terminal queries, including when detached.
@@ -258,6 +263,7 @@ impl TerminalBackend {
             notifier,
             last_content: initial_content,
             grid_dirty,
+            painted,
         })
     }
 
@@ -482,6 +488,12 @@ impl TerminalBackend {
 
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    /// Mark whether this terminal was painted in the current frame. Hidden
+    /// terminals still record grid changes but do not wake the UI.
+    pub fn set_painted(&self, painted: bool) {
+        self.painted.store(painted, Ordering::Relaxed);
     }
 
     pub fn pty_id(&self) -> u32 {

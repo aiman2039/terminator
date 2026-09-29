@@ -21,6 +21,8 @@ use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use fs2::FileExt;
 use portable_pty::{MasterPty, PtySize, native_pty_system};
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
+use rustix::io::Errno;
 use std::{
     collections::HashMap,
     fs,
@@ -1048,6 +1050,7 @@ impl Shared {
                     .map_err(anyhow::Error::msg)?;
                 self.persist()?;
                 self.shutdown.store(true, Ordering::Release);
+                notifications::wake();
                 if let Some(root) = &self.catalog_paths {
                     generations::Catalog::open(root)?
                         .retire(&self.state.lock().unwrap().generation)?;
@@ -1089,6 +1092,19 @@ impl Shared {
         ))
     }
 }
+
+/// Drain the notification waker socketpair after `poll` reports it readable.
+/// The read end is non-blocking, so this stops at the first `WouldBlock`.
+fn drain_wake(stream: &UnixStream) {
+    let mut reader = stream;
+    let mut buf = [0u8; 64];
+    while let Ok(read) = reader.read(&mut buf) {
+        if read == 0 {
+            break;
+        }
+    }
+}
+
 fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
@@ -1559,21 +1575,58 @@ fn main() -> Result<()> {
     });
     presence::start(Arc::downgrade(&shared));
     let active = Arc::new(AtomicUsize::new(0));
+    // Event-driven accept loop: the main thread blocks in `poll` with no
+    // timeout while no notification waiter exists, so an idle daemon does no
+    // periodic work. A socketpair wakes it when a waiter needs Cocoa run-loop
+    // pumping or has finished; a shutdown request wakes it explicitly. The
+    // listener is still non-blocking so the poll/accept pair never blocks.
+    let (wake_tx, wake_rx) = UnixStream::pair()?;
+    wake_tx.set_nonblocking(true)?;
+    wake_rx.set_nonblocking(true)?;
+    notifications::set_waker({
+        let wake_tx = wake_tx.try_clone()?;
+        move || {
+            let _ = (&wake_tx).write(&[1u8]);
+        }
+    });
     while !shared.shutdown.load(Ordering::Relaxed) {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                if active.load(Ordering::Relaxed) > 256 {
-                    continue;
+        let waiting = notifications::waiting();
+        let timeout = waiting.then_some(Timespec {
+            tv_sec: 0,
+            tv_nsec: 10_000_000,
+        });
+        let mut fds = [
+            PollFd::new(&listener, PollFlags::IN),
+            PollFd::new(&wake_rx, PollFlags::IN),
+        ];
+        match poll(&mut fds, timeout.as_ref()) {
+            Ok(0) => notifications::pump(),
+            Ok(_) => {
+                if fds[1].revents().contains(PollFlags::IN) {
+                    drain_wake(&wake_rx);
                 }
-                let s = shared.clone();
-                let count = active.clone();
-                count.fetch_add(1, Ordering::Relaxed);
-                thread::spawn(move || {
-                    let _ = serve(stream, s);
-                    count.fetch_sub(1, Ordering::Relaxed);
-                });
+                if fds[0].revents().contains(PollFlags::IN) {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            if active.load(Ordering::Relaxed) <= 256 {
+                                let s = shared.clone();
+                                let count = active.clone();
+                                count.fetch_add(1, Ordering::Relaxed);
+                                thread::spawn(move || {
+                                    let _ = serve(stream, s);
+                                    count.fetch_sub(1, Ordering::Relaxed);
+                                });
+                            }
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+                if waiting {
+                    notifications::pump();
+                }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => notifications::idle(),
+            Err(Errno::INTR) => notifications::pump(),
             Err(e) => return Err(e.into()),
         }
     }
