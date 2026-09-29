@@ -194,6 +194,7 @@ before the final layout/focus/preference checkpoint. Successful
 write acknowledgments permit exit; errors or a deadline restore interaction.
 The macOS bridge intercepts `NSApplication.terminate:` while retaining winit's
 delegate and calls its original implementation on the main queue after saving.
+If that call returns, the process still exits.
 
 Generation-aware services advertise `daemon-generations-v1`. On launch, the app
 stages the installed daemon/helper, starts a candidate with creation disabled,

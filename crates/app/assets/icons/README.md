@@ -30,6 +30,9 @@ player.
 `menu.svg` comes from Lucide 0.577.0 with the same license and white-stroke
 adaptation, for the header overflow menu.
 
+`archive.svg` comes from Lucide 0.577.0 with the same license and white-stroke
+adaptation, for the removed-projects control.
+
 Agent identity icons are official vendor marks, used only to identify the
 agent running in a terminal (nominative use; all marks are trademarks of
 their owners: OpenAI, Anthropic, SST, xAI, Meta, Mario Zechner/pi.dev):

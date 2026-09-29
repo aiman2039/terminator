@@ -175,6 +175,8 @@ mod macos {
             if let Some(original) = ORIGINAL.get() {
                 // Exact ABI of -[NSApplication terminate:]. Calling the saved
                 // implementation preserves AppKit and Sparkle quit observers.
+                // AppKit exits inside that call. Returning means the process
+                // is still alive, so Sparkle's Install and Relaunch waits forever.
                 unsafe {
                     let original: unsafe extern "C-unwind" fn(
                         *const NSApplication,
@@ -184,10 +186,7 @@ mod macos {
                     original(&*app, sel!(terminate:), std::ptr::null());
                 }
             }
-            CANCELLED.store(true, Ordering::Release);
-            if let Some(ctx) = CONTEXT.get() {
-                ctx.request_repaint();
-            }
+            std::process::exit(0);
         });
     }
 
@@ -422,8 +421,99 @@ mod macos {
             // Preserve the old choice above before disabling Sparkle's own timer.
             let _: () = msg_send![updater, setAutomaticallyChecksForUpdates: false];
             let _: () = msg_send![&*controller, startUpdater];
+            keep_sparkle_status_button_in_layout();
             Ok((controller, framework))
         }
+    }
+
+    /// Sparkle 2.10 sizes the status button with `setFrame` while Auto Layout
+    /// owns it (`translatesAutoresizingMaskIntoConstraints = NO`). On macOS 26
+    /// that frame is not the control the user sees, so Install and Relaunch
+    /// can ignore the click. Keep the title binding and point the real button
+    /// at the action; leave the constraints in place.
+    fn keep_sparkle_status_button_in_layout() {
+        static INSTALLED: OnceLock<()> = OnceLock::new();
+        INSTALLED.get_or_init(|| unsafe {
+            let Some(class) = AnyClass::get(c"SUStatusController") else {
+                return;
+            };
+            let Some(method) = class.instance_method(
+                sel!(setButtonTitle:target:action:isDefault:accessibilityIdentifier:),
+            ) else {
+                return;
+            };
+            method.set_implementation(std::mem::transmute::<
+                unsafe extern "C-unwind" fn(
+                    *mut AnyObject,
+                    Sel,
+                    *const NSString,
+                    *mut AnyObject,
+                    Option<Sel>,
+                    Bool,
+                    *const NSString,
+                ),
+                Imp,
+            >(set_status_button));
+        });
+    }
+
+    unsafe extern "C-unwind" fn set_status_button(
+        this: *mut AnyObject,
+        _cmd: Sel,
+        title: *const NSString,
+        target: *mut AnyObject,
+        action: Option<Sel>,
+        is_default: Bool,
+        identifier: *const NSString,
+    ) {
+        use objc2_app_kit::{NSButton, NSView};
+        if this.is_null() {
+            return;
+        }
+        let this = unsafe { &*this };
+        if !title.is_null() {
+            let title = unsafe { &*title };
+            let _: () = unsafe { msg_send![this, setButtonTitle: title] };
+        }
+        let window: *mut AnyObject = unsafe { msg_send![this, window] };
+        if window.is_null() {
+            return;
+        }
+        let content: *mut NSView = unsafe { msg_send![window, contentView] };
+        if content.is_null() {
+            return;
+        }
+        let content = unsafe { &*content };
+        let button_class = NSButton::class();
+        let subviews = content.subviews();
+        let mut held = None;
+        for index in 0..subviews.count() {
+            let view = subviews.objectAtIndex(index);
+            if view.isKindOfClass(button_class) {
+                held = Some(view);
+                break;
+            }
+        }
+        let Some(view) = held else {
+            return;
+        };
+        let button = unsafe { &*(objc2::rc::Retained::as_ptr(&view) as *const NSButton) };
+        unsafe {
+            button.setTarget((!target.is_null()).then(|| &*target));
+            button.setAction(action);
+        }
+        let key = if is_default.as_bool() {
+            ns_string!("\r")
+        } else {
+            ns_string!("")
+        };
+        button.setKeyEquivalent(key);
+        if !identifier.is_null() {
+            let identifier = unsafe { &*identifier };
+            let _: () = unsafe { msg_send![button, setAccessibilityIdentifier: identifier] };
+        }
+        button.setEnabled(!target.is_null());
+        content.layoutSubtreeIfNeeded();
     }
 
     fn install_menu(mtm: MainThreadMarker, target: &UpdateDelegate) -> bool {

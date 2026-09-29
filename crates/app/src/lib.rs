@@ -702,6 +702,8 @@ pub struct App {
     native_pending_line: HashMap<PathBuf, usize>,
     native_close_prompt: Option<PathBuf>,
     native_close_after_save: Option<PathBuf>,
+    /// Quit is waiting on the unsaved-native prompt. Save or discard continues it.
+    pending_app_quit: bool,
     pending_native_close: Vec<PathBuf>,
     pending_unavailable_close: Vec<String>,
     pending_quit_all: Option<bool>,
@@ -991,6 +993,7 @@ impl App {
             native_pending_line: HashMap::new(),
             native_close_prompt: None,
             native_close_after_save: None,
+            pending_app_quit: false,
             pending_native_close: Vec::new(),
             pending_unavailable_close: Vec::new(),
             pending_quit_all: None,
@@ -4583,19 +4586,12 @@ impl eframe::App for App {
         if (updater::termination_requested() || ctx.input(|i| i.viewport().close_requested()))
             && !matches!(self.exit, exit::Exit::Ready)
         {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            // Unsaved native buffers die with the process: hold quit behind
-            // the same prompt as dock closes instead of draining silently.
-            if let Some(path) = self
-                .native_docs
-                .iter()
-                .find_map(|(path, doc)| doc.dirty().then(|| path.clone()))
-            {
-                self.native_close_prompt = Some(path);
-            } else {
-                self.begin_exit();
-            }
+            // Unsaved native buffers die with the process. The prompt has to
+            // finish the quit Sparkle is waiting on; dropping it leaves
+            // Install and Relaunch up with a process that never exits.
+            self.accept_app_quit(ctx);
         }
+        self.continue_app_quit(ctx);
         self.advance_exit(ctx);
         if !self.exit.active() && self.last_heartbeat.elapsed() > Duration::from_secs(1) {
             self.send(Request::Heartbeat {

@@ -82,8 +82,9 @@ intercepts `NSApplication.terminate:` before AppKit begins its termination loop.
 After persistence, it invokes the saved original implementation on a subsequent
 main-queue callback, outside winit's event handler. This avoids both AppKit's
 modal deferred-quit loop (which prevents GUI checkpoint progress) and synchronous
-termination notifications re-entering winit. Native installation cancellation
-restores GUI interaction. Review this bridge when upgrading winit or Sparkle.
+termination notifications re-entering winit. A finished checkpoint exits the
+process even if that call returns, so Sparkle is not left waiting on a live
+app. Review this bridge when upgrading winit or Sparkle.
 
 GUI updates do not stop existing session owners or relaunch their shells,
 agents, or editors. Services advertising `daemon-generations-v1` can coexist:

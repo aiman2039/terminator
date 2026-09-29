@@ -255,26 +255,25 @@ impl App {
         if hidden.is_empty() {
             return;
         }
-        ui.spacing_mut().interact_size.y = 22.0;
-        ui.spacing_mut().button_padding = egui::vec2(6.0, 3.0);
-        let menu = appearance::menu_button(ui, "Removed", |ui| {
-            for project in hidden {
-                let response = appearance::menu_item(ui, &project.name, "FolderOpen", "")
-                    .on_hover_text(project.path.display().to_string());
-                #[cfg(feature = "test-support")]
-                diagnostics::record(
-                    ui.ctx(),
-                    &format!("restore-project:{}", project.id),
-                    response.rect,
-                );
-                if response.clicked() {
-                    self.select_project(project.id);
-                    ui.close();
+        let menu = appearance::sidebar_action(ui, "Archive", "Removed projects");
+        egui::Popup::menu(&menu)
+            .style(appearance::menu_style)
+            .show(|ui| {
+                for project in hidden {
+                    let response = appearance::menu_item(ui, &project.name, "FolderOpen", "")
+                        .on_hover_text(project.path.display().to_string());
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(
+                        ui.ctx(),
+                        &format!("restore-project:{}", project.id),
+                        response.rect,
+                    );
+                    if response.clicked() {
+                        self.select_project(project.id);
+                        ui.close();
+                    }
                 }
-            }
-        })
-        .response
-        .on_hover_text("Restore a project to the sidebar");
+            });
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "removed-projects", menu.rect);
         let _ = menu;
@@ -528,7 +527,6 @@ impl App {
     pub(super) fn projects(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            ui.label(RichText::new("PROJECTS").small().weak().strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 self.removed_projects_menu(ui);

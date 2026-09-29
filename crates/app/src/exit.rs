@@ -103,6 +103,58 @@ impl App {
             self.exit = Exit::Waiting(Instant::now());
         }
     }
+    fn dirty_native_path(&self) -> Option<PathBuf> {
+        self.native_docs
+            .iter()
+            .find_map(|(path, doc)| doc.dirty().then(|| path.clone()))
+    }
+    /// Window close, Quit, and Sparkle's terminate all arrive here.
+    /// A dirty native buffer must be resolved before the checkpoint, and that
+    /// resolution has to come back to this quit.
+    pub(super) fn accept_app_quit(&mut self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        if self.exit.active() {
+            return;
+        }
+        let waiting_on_native = self.dirty_native_path().is_some()
+            || self.native_close_prompt.is_some()
+            || self.native_close_after_save.is_some()
+            || !self.pending_native_close.is_empty();
+        if waiting_on_native {
+            self.pending_app_quit = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            self.continue_app_quit(ctx);
+        } else {
+            self.pending_app_quit = false;
+            self.begin_exit();
+        }
+    }
+    pub(super) fn continue_app_quit(&mut self, ctx: &egui::Context) {
+        if !self.pending_app_quit || self.exit.active() {
+            return;
+        }
+        if self.native_close_after_save.is_some() || !self.pending_native_close.is_empty() {
+            return;
+        }
+        if self.native_close_prompt.is_some() {
+            return;
+        }
+        if let Some(path) = self.dirty_native_path() {
+            self.native_close_prompt = Some(path);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            return;
+        }
+        self.pending_app_quit = false;
+        self.begin_exit();
+    }
+    pub(super) fn cancel_app_quit(&mut self) {
+        if !self.pending_app_quit {
+            return;
+        }
+        self.pending_app_quit = false;
+        self.native_close_after_save = None;
+        crate::updater::cancel_termination();
+    }
     pub(super) fn native_installation_cancelled(&mut self) {
         self.exit = Exit::Idle;
         self.services.pause_reads(false);
@@ -435,5 +487,45 @@ mod tests {
         );
         server.join().unwrap();
         assert!(!paths.data.join("ui-preferences.json").exists());
+    }
+    #[test]
+    fn dirty_native_buffer_holds_quit_until_the_buffer_is_gone() {
+        let (mut app, ctx, dir, _requests) = fixture();
+        let path = dir.path().join("note.txt");
+        app.native_docs.insert(
+            path.clone(),
+            super::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        app.accept_app_quit(&ctx);
+        assert!(app.pending_app_quit);
+        assert_eq!(app.native_close_prompt.as_deref(), Some(path.as_path()));
+        assert!(!app.exit.active());
+        app.native_close_prompt = None;
+        app.native_docs.clear();
+        app.continue_app_quit(&ctx);
+        assert!(!app.pending_app_quit);
+        assert!(matches!(app.exit, Exit::Waiting(_)));
+    }
+    #[test]
+    fn dismissing_the_unsaved_prompt_cancels_the_quit() {
+        let (mut app, ctx, dir, _requests) = fixture();
+        let path = dir.path().join("note.txt");
+        app.native_docs.insert(
+            path.clone(),
+            super::native_editor::NativeDoc::dirty_for_test(path),
+        );
+        app.accept_app_quit(&ctx);
+        app.cancel_app_quit();
+        app.native_close_prompt = None;
+        app.continue_app_quit(&ctx);
+        assert!(!app.pending_app_quit);
+        assert!(!app.exit.active());
+    }
+    #[test]
+    fn quit_without_a_dirty_native_buffer_starts_the_checkpoint() {
+        let (mut app, ctx, _dir, _requests) = fixture();
+        app.accept_app_quit(&ctx);
+        assert!(!app.pending_app_quit);
+        assert!(matches!(app.exit, Exit::Waiting(_)));
     }
 }

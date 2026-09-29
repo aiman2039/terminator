@@ -314,6 +314,7 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         "ArrowDownWideNarrow" => {
             egui::include_image!("../assets/icons/arrow-down-wide-narrow.svg")
         }
+        "Archive" => egui::include_image!("../assets/icons/archive.svg"),
         "ArrowLeft" => egui::include_image!("../assets/icons/arrow-left.svg"),
         "ArrowRight" => egui::include_image!("../assets/icons/arrow-right.svg"),
         "FileKey" => egui::include_image!("../assets/icons/file-key.svg"),

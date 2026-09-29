@@ -606,9 +606,22 @@ impl App {
                 doc.force_save = false;
                 doc.start_save(&self.services.clone());
             }
+        } else if !open {
+            // Dismissing the prompt is the quit's Cancel. Sparkle keeps
+            // waiting if we only hide the prompt.
+            self.cancel_app_quit();
         }
         if !open {
             self.native_close_prompt = None;
         }
+    }
+}
+
+#[cfg(test)]
+impl NativeDoc {
+    pub(super) fn dirty_for_test(path: PathBuf) -> Self {
+        let mut doc = Self::new(path, true);
+        doc.doc = Some(Doc::new("unsaved"));
+        doc
     }
 }
