@@ -3682,7 +3682,7 @@ impl Viewer<'_> {
                 .is_some_and(|budget| budget.exhausted(&session.cwd, 0))
         {
             let message = self.app.attach_error.get(sid).cloned().unwrap_or_else(|| {
-                "Stopped retrying this terminal. The working directory may have been removed."
+                "Stopped retrying this terminal after repeated attachment failures. Check the session service, then retry."
                     .into()
             });
             ui.horizontal_wrapped(|ui| {

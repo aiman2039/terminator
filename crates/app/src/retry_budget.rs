@@ -56,9 +56,9 @@ pub(crate) fn path_missing(path: &Path) -> bool {
     }
 }
 
-/// An attach that dies before the shell has been up counts as a failed retry.
-pub(crate) fn attach_exit_is_failure(lifetime: Option<Duration>) -> bool {
-    !lifetime.is_some_and(|lifetime| lifetime >= ATTACH_FAILURE_WINDOW)
+/// Failed bridge exits always consume the budget, even after a slow connection.
+pub(crate) fn attach_exit_is_failure(lifetime: Option<Duration>, failed: bool) -> bool {
+    failed || !lifetime.is_some_and(|lifetime| lifetime >= ATTACH_FAILURE_WINDOW)
 }
 
 #[cfg(test)]
@@ -84,9 +84,26 @@ mod tests {
 
     #[test]
     fn attach_exit_within_a_second_is_a_failed_retry() {
-        assert!(attach_exit_is_failure(None));
-        assert!(attach_exit_is_failure(Some(Duration::from_millis(200))));
-        assert!(!attach_exit_is_failure(Some(Duration::from_secs(1))));
+        assert!(attach_exit_is_failure(None, false));
+        assert!(attach_exit_is_failure(
+            Some(Duration::from_millis(200)),
+            false
+        ));
+        assert!(!attach_exit_is_failure(Some(Duration::from_secs(1)), false));
+    }
+
+    #[test]
+    fn slow_failed_attachments_exhaust_the_retry_budget() {
+        let cwd = Path::new("/existing/worktree");
+        let mut budget = RetryBudget::default();
+        for _ in 0..MISSING_PATH_RETRY_LIMIT {
+            budget.record(
+                cwd,
+                0,
+                attach_exit_is_failure(Some(Duration::from_secs(5)), true),
+            );
+        }
+        assert!(budget.exhausted(cwd, 0));
     }
 
     #[test]

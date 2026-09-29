@@ -581,6 +581,7 @@ pub struct App {
     /// Failed attaches for a session, keyed by its working directory.
     attach_budget: HashMap<String, retry_budget::RetryBudget>,
     attach_started: HashMap<String, Instant>,
+    attach_failed: HashSet<u64>,
     attach_error: HashMap<String, String>,
     pty_tx: Sender<(u64, PtyEvent)>,
     pty_rx: Receiver<(u64, PtyEvent)>,
@@ -896,6 +897,7 @@ impl App {
             next_backend: 0,
             attach_budget: HashMap::new(),
             attach_started: HashMap::new(),
+            attach_failed: HashSet::new(),
             attach_error: HashMap::new(),
             pty_tx,
             pty_rx,
@@ -1859,13 +1861,19 @@ impl App {
             if let PtyEvent::ClipboardStore(_, ref text) = event {
                 ctx.copy_text(text.clone());
             }
+            if let PtyEvent::ChildExit(status) = &event
+                && !status.success()
+            {
+                self.attach_failed.insert(id);
+            }
+            let failed = matches!(event, PtyEvent::Exit) && self.attach_failed.remove(&id);
             if let PtyEvent::Exit = event
                 && let Some(session) = self.backend_ids.remove(&id)
                 && self.backends.get(&session).is_some_and(|b| b.id() == id)
             {
                 self.backends.remove(&session);
                 let started = self.attach_started.remove(&session);
-                if retry_budget::attach_exit_is_failure(started.map(|at| at.elapsed())) {
+                if retry_budget::attach_exit_is_failure(started.map(|at| at.elapsed()), failed) {
                     let cwd = self
                         .state
                         .sessions
@@ -1878,7 +1886,7 @@ impl App {
                         .or_default()
                         .record(&cwd, 0, true);
                     self.attach_error.entry(session).or_insert_with(|| {
-                        "Stopped retrying this terminal. The working directory may have been removed.".into()
+                        "Stopped retrying this terminal after repeated attachment failures. Check the session service, then retry.".into()
                     });
                 } else {
                     self.attach_budget.remove(&session);

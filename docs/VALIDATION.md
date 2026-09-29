@@ -1,5 +1,17 @@
 # Validation evidence — 2026-09-08
 
+## Attachment failure retry limit (2026-09-29)
+
+- Nonzero attachment-bridge exits consume the three-failure budget regardless of
+  elapsed lifetime. Previously, an exit after one second reset that budget.
+  Child status is tracked by backend ID so an old bridge cannot affect its replacement.
+- Read-only local inspection found the old `my-ai / terra form` owner socket and
+  helper present but its runtime `auth` file absent. The installed GUI was 0.53.0;
+  this checkout was 0.58.0. No live session or authentication files were changed.
+- `cargo test -p terminator --lib retry_budget --locked --offline`: four passed,
+  including repeated slow failed attachments. Formatting passed.
+- Native flicker reproduction, package installation, and live recovery were not run.
+
 ## Presentation cache and bounded status spin (2026-09-29)
 
 - Row lookup uses one index over sessions, presence, generations, hooks, and notifications. Unchanged sessions keep their `Arc`. Accepted snapshots reconcile once. `Go` does not invalidate. Replacing those collections refreshes a warm cache on the next lookup; in-place notice edits still reconcile explicitly. Tooltip age is computed at hover from `observed_at`.
