@@ -1,5 +1,42 @@
 # Validation evidence — 2026-09-08
 
+## E2E regression fix, CI e2e/coverage jobs, and focused coverage (2026-09-29)
+
+- `cargo xtask integration` failed deterministically at `regressions::history_burst`
+  (`Expected every burst byte in saved history, got 0`). Root cause: the readiness
+  markers (`BURST_READY`, `HISTORY_BURST_DONE`) appeared in the shell's echoed
+  command line, so the wait returned before `stty -echo` or the 6 MiB pipeline ran,
+  and `Stop` killed the shell first. The commands now assemble the token at runtime
+  (`printf 'BURST%s\n' _READY`), so the wait observes real output. Full
+  `cargo xtask integration` passes: `history_burst_bytes_saved: 6291456`.
+- New real-daemon e2e case `integration::hook_controls` covers the user-invoked
+  `terminator-hook ctl` surface headlessly: list, add-project, background create,
+  stdin send, history read, worktree list, unknown-session refusal, and the 1 MiB
+  input limit. Wired into `Task::Integration`; full `cargo xtask integration` passes.
+- CI now runs the e2e suites and coverage. `.github/workflows/ci.yaml` gains an
+  `e2e` job (macOS + Ubuntu) running `cargo xtask integration` and
+  `cargo xtask idle-close`, plus a `coverage` job running
+  `cargo llvm-cov --summary-only --fail-under-lines 50` and writing the table to
+  the job summary. Two environment-dependent tests (sandboxed process-group SIGHUP
+  and a socket reconnect) are skipped by name.
+- Coverage baseline (`cargo test --workspace --all-features`): 59.8% lines / 62.1%
+  functions overall; product crates excluding `xtask` fixtures 66.8% lines.
+  Lowest product modules: `daemon` 44%, `hook` 50%, `sys` 32%, `updater` 26%;
+  e2e-only modules read 0% under the cargo-test run because fixtures were excluded.
+- New focused tests: `app::git_log` (real temp repository: log/refs/branch/blame and
+  non-repository error), `player::ui` (panel render, clock, playlist time, EQ
+  presets), `settings_ui` (every section paints, search narrowing), `dialogs_ui`
+  (first-project chooser), and `terminator-sys` (`detach_session` process group,
+  `double_fork_setsid` survival, `all_threads_waiting`).
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --all-features
+  --locked -- -D warnings`, and `cargo test --workspace --all-features --locked
+  --no-fail-fast` pass except two environment-dependent core tests
+  (`signals::hangup_ends_a_spawned_process_group` and
+  `generations::legacy_exit_recovery_requires_lock_and_preserves_original_records`),
+  which need sandboxed process/socket access and reproduce on the clean tree.
+- Not run: GitHub-hosted CI jobs, native `cargo xtask gui` fixtures (desktop), and
+  the coverage job on Linux.
+
 ## Bounded notification waiters and 30 fps terminal repaints (2026-09-29)
 
 - Daemon: `notifications::send` no longer spawns a thread per alert. One
