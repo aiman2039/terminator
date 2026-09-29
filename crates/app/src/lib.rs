@@ -5715,9 +5715,10 @@ mod navigation_tests {
     #[cfg(feature = "test-support")]
     fn narrow_header_puts_search_behind_the_overflow_menu() {
         let (mut app, ctx, _dir) = fixture();
-        app.preferences.width = 285.0;
+        app.preferences.width = UiPreferences::default().width;
         paint_header(&mut app, &ctx, &[]);
         let rect = header_target(&ctx);
+        assert!(rect("tool-Info").is_some());
         assert!(rect("palette").is_none(), "search must leave the bar");
         assert!(rect("settings").is_some());
         let overflow = rect("header-overflow").expect("overflow menu");

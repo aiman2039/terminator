@@ -398,6 +398,10 @@ fn strip_node_equal(
     }
 }
 
+/// Right sidebar width that fits six header actions plus the overflow menu:
+/// Explorer through Settings stay on the bar, and search does not.
+const DEFAULT_SIDEBAR_WIDTH: f32 = 328.0;
+
 /// A named layout preset capturing IDE mode, sidebar visibility, tool selection,
 /// sidebar widths, and terminal strip state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -502,7 +506,7 @@ impl Default for UiPreferences {
             active_layout: None,
             left_visible: true,
             left_agents: false,
-            width: 285.0,
+            width: DEFAULT_SIDEBAR_WIDTH,
             all_projects: false,
             agents_tab: AgentsTab::NeedsAttention,
             agents_search: String::new(),
@@ -564,7 +568,7 @@ impl UiPreferences {
         prefs.width = if prefs.width.is_finite() {
             prefs.width.clamp(220.0, 480.0)
         } else {
-            285.0
+            DEFAULT_SIDEBAR_WIDTH
         };
         prefs.player_volume = if prefs.player_volume.is_finite() {
             prefs.player_volume.clamp(0.0, 1.0)
