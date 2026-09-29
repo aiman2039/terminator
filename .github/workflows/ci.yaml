@@ -68,8 +68,6 @@ jobs:
         os: [macos-15, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    env:
-      TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-e2e-state
     steps:
       - uses: actions/checkout@v6
         with:
@@ -95,16 +93,18 @@ jobs:
         run: cargo build --locked --bin terminator-daemon --bin terminator-hook
       # Real PTYs, auth, hooks, reconnect, worktrees, shutdown, history, and snapshots.
       - name: Integration (real daemon)
+        env:
+          TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-e2e-state
         run: cargo xtask integration
       - name: Idle close (real shells)
+        env:
+          TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-e2e-state
         run: cargo xtask idle-close
 
   coverage:
     name: Coverage
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    env:
-      TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-coverage-state
     steps:
       - uses: actions/checkout@v6
         with:
@@ -130,6 +130,8 @@ jobs:
       # The two skipped tests are environment-dependent (sandboxed sockets and
       # process-group signals); they exercise nothing under coverage.
       - name: Workspace line and function coverage
+        env:
+          TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-coverage-state
         run: |
           cargo llvm-cov --workspace --all-features --locked --summary-only \
             --fail-under-lines 50 \
