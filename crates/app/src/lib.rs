@@ -550,6 +550,10 @@ pub struct App {
     workspace_visible: Option<(String, String)>,
     layout_saved: HashMap<String, String>,
     layout_pending: HashMap<String, String>,
+    /// Serialized signature of the last persistable layouts sent to the daemon.
+    /// `save_layouts` compares against it so an unchanged workspace set does not
+    /// clone workspaces, cross a thread, or wake the GUI every second.
+    layout_signature: Option<Vec<(String, String)>>,
     layout_generation: u64,
     selected: Option<String>,
     active_session: Option<String>,
@@ -877,6 +881,7 @@ impl App {
             workspace_visible: None,
             layout_saved: HashMap::new(),
             layout_pending: HashMap::new(),
+            layout_signature: None,
             layout_generation: 0,
             selected: None,
             active_session: None,
@@ -1318,7 +1323,13 @@ impl App {
                         Ok(()) => {
                             self.layout_saved.insert(project, text);
                         }
-                        Err(error) => self.layout_save_failed(error),
+                        Err(error) => {
+                            // Force the next pass to resend so a transient
+                            // failure is retried instead of being treated as
+                            // "already persisted" by the unchanged signature.
+                            self.layout_signature = None;
+                            self.layout_save_failed(error);
+                        }
                     }
                 }
 
@@ -2752,6 +2763,8 @@ impl App {
         self.browser_urls.retain(|key, _| browsers.contains(key));
         self.visible_browsers
             .retain(|pane| browsers.contains(&pane.key));
+        // Safe to run per frame: `strip_player` returns early when a workspace
+        // holds no Player pane, so it never rebuilds or re-identifies one.
         for workspace in self.layouts.values_mut() {
             workspace.strip_player();
         }
@@ -3374,6 +3387,9 @@ impl App {
             .retain(|id, _| known.contains(id.as_str()));
         self.layout_pending
             .retain(|id, _| known.contains(id.as_str()));
+        if let Some(signature) = &mut self.layout_signature {
+            signature.retain(|(id, _)| known.contains(id.as_str()));
+        }
         self.layout_readonly
             .retain(|id| known.contains(id.as_str()));
         if self
@@ -3396,6 +3412,23 @@ impl App {
         }
     }
     fn save_layouts(&mut self) {
+        let mut signature: Vec<(String, String)> = self
+            .layouts
+            .iter()
+            .filter(|(project, _)| self.can_persist_layout(project))
+            .map(|(project, layout)| {
+                let text = terminator_core::sanitize_layout(
+                    serde_json::to_value(layout).unwrap_or(serde_json::Value::Null),
+                )
+                .to_string();
+                (project.clone(), text)
+            })
+            .collect();
+        signature.sort_by(|a, b| a.0.cmp(&b.0));
+        if self.layout_signature.as_ref() == Some(&signature) {
+            return;
+        }
+        self.layout_signature = Some(signature);
         let layouts = self.persistable_layouts();
         self.layout_generation = self.layout_generation.wrapping_add(1);
         let _ = self
@@ -7334,6 +7367,60 @@ mod navigation_tests {
         assert!(layouts.iter().all(|(project, _)| project != "ghost"));
         assert!(layouts.iter().any(|(project, _)| project == "a"));
     }
+
+    #[test]
+    fn idle_app_does_not_resave_unchanged_layouts() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.save_layouts();
+        assert!(
+            matches!(requests.try_recv(), Ok(Job::PrepareLayouts(..))),
+            "the first pass must prepare layouts"
+        );
+        app.save_layouts();
+        assert!(
+            !requests
+                .try_iter()
+                .any(|job| matches!(job, Job::PrepareLayouts(..))),
+            "an unchanged workspace set must not be prepared again"
+        );
+    }
+
+    #[test]
+    fn mutating_a_workspace_resaves_its_layout() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.save_layouts();
+        let _ = requests.try_recv();
+        app.layouts
+            .get_mut("a")
+            .unwrap()
+            .add("shell".into(), Tab::Terminal("s".into()));
+        app.save_layouts();
+        assert!(
+            requests
+                .try_iter()
+                .any(|job| matches!(job, Job::PrepareLayouts(..))),
+            "a changed workspace must be prepared again"
+        );
+    }
+    #[test]
+    fn reconciling_empty_workspaces_does_not_change_them() {
+        let (mut app, _, _dir) = fixture();
+        let snapshot = |app: &App| -> HashMap<String, serde_json::Value> {
+            app.layouts
+                .iter()
+                .map(|(id, workspace)| (id.clone(), serde_json::to_value(workspace).unwrap()))
+                .collect()
+        };
+        let before = snapshot(&app);
+        app.reconcile_gui_resources();
+        app.reconcile_gui_resources();
+        assert_eq!(snapshot(&app), before);
+    }
+
     #[test]
     fn snapshot_drops_layouts_for_removed_projects() {
         let (mut app, _, _dir) = fixture();

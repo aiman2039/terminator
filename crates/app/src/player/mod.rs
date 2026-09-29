@@ -603,7 +603,12 @@ impl App {
     }
 
     pub(super) fn player_toggle_button(&mut self, ui: &mut egui::Ui) {
-        ui.ctx().request_repaint_after(Duration::from_millis(200));
+        // Only playback needs a steady frame cadence for the now-playing stamp.
+        // Requesting this unconditionally pinned the window to 5 fps even with
+        // no audio and no player view.
+        if matches!(self.player.status, Status::Playing { .. }) {
+            ui.ctx().request_repaint_after(Duration::from_millis(200));
+        }
         let icon = Self::paint_player_icon(
             ui,
             PlayerIconButton {

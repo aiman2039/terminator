@@ -135,3 +135,13 @@ editable block and backspace can cross its newlines. Both paste paths use it:
 the widget's `Event::Paste` handling and the application's clipboard-Paste
 command. Unit tests cover bracketed and plain pastes, CRLF normalization, and
 the empty paste.
+
+## Coalesced PTY repaint wakeups (2026-09-29)
+
+The PTY event subscription thread called `request_repaint()` for every
+terminal event, so a fast-producing terminal woke the UI thread once per
+event and could hold the window at back-to-back full frames. It now calls
+`request_repaint_after(16 ms)`; egui keeps the smallest pending deadline, so
+a burst coalesces into at most one frame per 16 ms while hidden panes are
+still updated lazily on their next paint. Host-side behavior is unchanged:
+the application already drops backends for terminals it is not painting.

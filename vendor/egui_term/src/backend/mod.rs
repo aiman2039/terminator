@@ -23,6 +23,7 @@ use std::ops::{Index, RangeInclusive};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{mpsc, Arc};
+use std::time::Duration;
 
 pub type TerminalMode = TermMode;
 pub type PtyEvent = Event;
@@ -230,7 +231,13 @@ impl TerminalBackend {
                     if pty_event_proxy_sender.send((id, event.clone())).is_err() {
                         break;
                     }
-                    app_context.clone().request_repaint();
+                    // Coalesce a burst of PTY events into at most one frame
+                    // every 16 ms instead of waking the UI thread per event.
+                    // egui keeps the smallest pending deadline, so a busy
+                    // terminal no longer forces back-to-back full-window frames.
+                    app_context
+                        .clone()
+                        .request_repaint_after(Duration::from_millis(16));
                     match event {
                         Event::Exit => break,
                         // The owning daemon answers terminal queries, including when detached.

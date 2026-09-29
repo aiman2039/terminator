@@ -481,6 +481,11 @@ impl Workspace {
     }
 
     pub fn strip_player(&mut self) {
+        if !self.tabs.iter().any(|tab| {
+            tab.primary == Some(Tab::Player) || tab.layout.find_tab(&Tab::Player).is_some()
+        }) {
+            return;
+        }
         let previous = self.active_index();
         for tab in &mut self.tabs {
             while let Some(path) = tab.layout.find_tab(&Tab::Player) {
@@ -499,6 +504,14 @@ impl Workspace {
         self.normalize(previous);
     }
     pub fn remove_session(&mut self, sid: &str) {
+        let target = Tab::Terminal(sid.into());
+        if !self
+            .tabs
+            .iter()
+            .any(|tab| tab.layout.find_tab(&target).is_some())
+        {
+            return;
+        }
         let previous = self.active_index();
         for tab in &mut self.tabs {
             if let Some(path) = tab.layout.find_tab(&Tab::Terminal(sid.into())) {
@@ -518,7 +531,20 @@ impl Workspace {
     }
     fn normalize(&mut self, previous: usize) {
         if self.tabs.is_empty() {
+            // An emptied workspace is rebuilt from scratch. `Self::empty()` mints
+            // a fresh top-level id, so callers that normalize every frame (or on
+            // every unrelated mutation) would otherwise see a different layout
+            // each time and re-persist it. Keep the previous identity instead.
+            let id = std::mem::take(&mut self.active);
+            let version = self.version;
             *self = Self::empty();
+            self.version = version;
+            if !id.is_empty() {
+                if let Some(tab) = self.tabs.first_mut() {
+                    tab.id.clone_from(&id);
+                }
+                self.active = id;
+            }
         } else if !self.tabs.iter().any(|tab| tab.id == self.active) {
             self.active = self.tabs[previous.saturating_sub(1).min(self.tabs.len() - 1)]
                 .id
@@ -756,6 +782,25 @@ mod tests {
         workspace.strip_player();
         assert!(!workspace.contains(&Tab::Player));
         assert!(workspace.contains(&Tab::Terminal("s".into())));
+    }
+
+    #[test]
+    fn strip_player_keeps_empty_workspace_identity() {
+        let mut workspace = Workspace::empty();
+        let before = serde_json::to_value(&workspace).unwrap();
+        workspace.strip_player();
+        workspace.remove_session("missing");
+        assert_eq!(serde_json::to_value(&workspace).unwrap(), before);
+    }
+
+    #[test]
+    fn emptied_workspace_keeps_its_identity() {
+        let mut workspace = Workspace::empty();
+        let id = workspace.active.clone();
+        workspace.drop_empty_tabs();
+        workspace.drop_empty_tabs();
+        assert_eq!(workspace.active, id);
+        assert_eq!(workspace.tabs[0].id, id);
     }
 
     fn demote_browser_tabs_to_html(value: &mut serde_json::Value) {
