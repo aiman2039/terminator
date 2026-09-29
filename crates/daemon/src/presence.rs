@@ -237,8 +237,10 @@ mod tests {
                 let exe = dir.path().join(agent);
                 fs::copy(&current, &exe).unwrap();
                 fs::set_permissions(&exe, fs::Permissions::from_mode(0o700)).unwrap();
+                // --exact matches the full test path only; the short name
+                // matches zero tests and the fixture would exit immediately.
                 launches.push(format!(
-                    "TERMINATOR_FIXTURE_SLEEPER=1 '{}' presence_fixture_sleeper --exact --nocapture &",
+                    "TERMINATOR_FIXTURE_SLEEPER=1 '{}' presence::tests::presence_fixture_sleeper --exact --nocapture &",
                     exe.display()
                 ));
             }
