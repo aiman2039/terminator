@@ -1620,6 +1620,7 @@ impl App {
                     }
                     if !self.state.sessions.iter().any(|s| s.id == session.id) {
                         self.state.sessions.push(session);
+                        self.reconcile_presentations();
                     }
                 }
                 Update::Created(session, split, target) => {
@@ -1655,6 +1656,7 @@ impl App {
                     }
                     if !self.state.sessions.iter().any(|s| s.id == session.id) {
                         self.state.sessions.push(session.clone());
+                        self.reconcile_presentations();
                     }
                     self.insert(
                         &session.project_id,
@@ -1672,6 +1674,7 @@ impl App {
                 Update::StripCreated(session, split, anchors) => {
                     if !self.state.sessions.iter().any(|s| s.id == session.id) {
                         self.state.sessions.push(session.clone());
+                        self.reconcile_presentations();
                     }
                     if let Some(dock) = self
                         .preferences
@@ -2133,11 +2136,11 @@ impl App {
                 .iter()
                 .any(|s| &s.id == sid && markdown::available(s))
         });
-        self.presentations.get_mut().clear();
         self.sidebar_projects
             .get_mut()
             .retain(|id, _| state.projects.iter().any(|p| &p.id == id));
         self.state = state;
+        self.reconcile_presentations();
         self.migrate_attention();
 
         if self.preferences_writable
@@ -2787,6 +2790,23 @@ impl App {
         self.presentations
             .borrow_mut()
             .get(&self.state, id, now(), self.services.presence_fresh())
+    }
+
+    fn reconcile_presentations(&mut self) {
+        let fresh = self.services.presence_fresh();
+        let moment = now();
+        self.presentations
+            .get_mut()
+            .reconcile(&self.state, moment, fresh);
+    }
+
+    fn cached_tab_attention(&self, session_ids: &[String]) -> agent_presence::AttentionCounts {
+        self.presentations.borrow_mut().attention(
+            &self.state,
+            session_ids,
+            now(),
+            self.services.presence_fresh(),
+        )
     }
 
     /// Global cycle order for attention navigation: distinct live terminals

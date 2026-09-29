@@ -512,17 +512,24 @@ pub fn session_row_spec(ui: &mut egui::Ui, spec: SessionRowSpec<'_>) -> egui::Re
     .inner
 }
 
-/// One turn per second. Repaint on a short interval so a spinning icon does not
-/// redraw the whole window, including terminals, on every frame.
-const STATUS_SPIN_INTERVAL: Duration = Duration::from_millis(100);
+/// One turn per second, sampled at about 30 fps. egui keeps the soonest request,
+/// so several icons share one schedule. A clipped icon, a hidden sidebar, or a
+/// minimized window does not request another frame. An unfocused but visible
+/// window still animates. Keyboard, pointer, and terminal updates are separate.
+const STATUS_SPIN_INTERVAL: Duration = Duration::from_millis(33);
 
 /// Paint an icon, optionally rotating it continuously (one turn per second).
 pub fn paint_status_icon(ui: &egui::Ui, rect: egui::Rect, icon: &str, tint: Color32, spin: bool) {
+    if spin && !ui.is_rect_visible(rect) {
+        return;
+    }
     let mut image = egui::Image::new(crate::icons::source(icon)).tint(tint);
     if spin {
         let angle = (ui.input(|i| i.time) % 1.0) as f32 * std::f32::consts::TAU;
         image = image.rotate(angle, egui::Vec2::splat(0.5));
-        ui.ctx().request_repaint_after(STATUS_SPIN_INTERVAL);
+        if !ui.input(|input| input.viewport().minimized.unwrap_or(false)) {
+            ui.ctx().request_repaint_after(STATUS_SPIN_INTERVAL);
+        }
     }
     image.paint_at(ui, rect);
 }
@@ -1489,6 +1496,39 @@ mod row_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn clipped_status_icon_does_not_schedule_spin() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let icon = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(16.0, 16.0));
+        let run = |clip: egui::Rect| {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_clip_rect(clip);
+                paint_status_icon(ui, icon, "LoaderCircle", Color32::GREEN, true);
+            });
+            output.textures_delta.clear();
+            output
+                .viewport_output
+                .values()
+                .map(|viewport| viewport.repaint_delay)
+                .min()
+        };
+        let visible = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(80.0, 80.0));
+        for _ in 0..3 {
+            let _ = run(visible);
+        }
+        let scheduled = run(visible).expect("visible spinner schedules a repaint");
+        assert!(!scheduled.is_zero() && scheduled <= super::STATUS_SPIN_INTERVAL);
+        let hidden = run(egui::Rect::from_min_size(
+            egui::pos2(400.0, 400.0),
+            egui::vec2(10.0, 10.0),
+        ));
+        assert!(
+            hidden.is_none_or(|delay| delay > super::STATUS_SPIN_INTERVAL),
+            "clipped spinner repaint delay {hidden:?}"
+        );
     }
 
     #[test]

@@ -201,7 +201,7 @@ pub enum SessionKind {
     Shell,
     Editor,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     /// App-owned, read-only Neovim Git review (independent of editor settings).
     #[serde(default)]
@@ -283,7 +283,7 @@ pub struct HookEvent {
     #[serde(default)]
     pub process: Option<agents::ProcessIdentity>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Resume {
     pub program: String,
     pub args: Vec<String>,
@@ -298,7 +298,7 @@ impl Resume {
             .join(" ")
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Agent {
     pub invocation_id: String,
     pub session_id: String,

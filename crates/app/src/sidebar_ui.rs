@@ -782,7 +782,6 @@ impl App {
 
     fn session_row(&mut self, ui: &mut egui::Ui, session: &Session) {
         let presented = self.present_session(&session.id);
-        let summary = session_summary(&self.state.notifications, &session.id, presented.lifecycle);
         let terminal_note = self
             .state
             .terminal_notices
@@ -833,7 +832,7 @@ impl App {
                     .lifecycle
                     .map(|state| state_color(state, &self.theme)),
                 spin: presented.spin,
-                subtitle: summary.as_deref().filter(|_| !editing),
+                subtitle: presented.notice_preview.as_deref().filter(|_| !editing),
                 brand: presented.brand_icon,
             },
         )
@@ -1751,9 +1750,7 @@ impl App {
         })
     }
     pub(super) fn apply_notice_action(&mut self, id: String, action: AttentionAction) {
-        if !matches!(action, AttentionAction::None) {
-            self.presentations.get_mut().clear();
-        }
+        let mut presentation_changed = false;
         match action {
             AttentionAction::None => {}
             AttentionAction::Go => {
@@ -1782,6 +1779,7 @@ impl App {
                 {
                     // Read state only: never resolve, dismiss, or touch lifecycle.
                     notice.read = true;
+                    presentation_changed = true;
                 }
                 self.unread_selected = Some(id);
             }
@@ -1797,6 +1795,7 @@ impl App {
                     .find(|notice| notice.id == id)
                 {
                     notice.snoozed_until = now() + 600;
+                    presentation_changed = true;
                 }
                 if self.detail.as_ref() == Some(&id) {
                     self.detail = None;
@@ -1814,6 +1813,7 @@ impl App {
                     .find(|notice| notice.id == id)
                 {
                     notice.dismissed = true;
+                    presentation_changed = true;
                 }
                 if self.unread_selected.as_deref() == Some(id.as_str()) {
                     self.unread_selected = None;
@@ -1822,6 +1822,9 @@ impl App {
                     self.detail = None;
                 }
             }
+        }
+        if presentation_changed {
+            self.reconcile_presentations();
         }
     }
     pub(super) fn sidebar(&mut self, ui: &mut egui::Ui) {
@@ -2498,42 +2501,12 @@ fn attention_badge_label(waiting: usize, unread: usize) -> String {
 }
 
 fn notice_preview(markdown: &str) -> String {
-    use pulldown_cmark::{Event, Parser, TagEnd};
-    let mut text = String::new();
-    for event in Parser::new(markdown) {
-        match event {
-            Event::Text(value) | Event::Code(value) => text.push_str(&value),
-            Event::SoftBreak
-            | Event::HardBreak
-            | Event::End(
-                TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item | TagEnd::CodeBlock,
-            ) => text.push(' '),
-            _ => {}
-        }
-    }
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    super::agent_presence::notice_preview(markdown)
 }
 
 const ATTENTION_ACTION_SIZE: f32 = 22.0;
 const ATTENTION_ACTION_COUNT: f32 = 3.0;
 const ATTENTION_ACTION_READ_COUNT: f32 = 4.0;
-
-/// Latest agent sentence for a session row. Hooks fall back to the state
-/// label ("Completed") when no message was sent; the icon already says that,
-/// so a bare state word is not repeated as a subtitle.
-fn session_summary(
-    notifications: &[Notification],
-    session: &str,
-    state: Option<AgentState>,
-) -> Option<String> {
-    state?;
-    let notice = notifications
-        .iter()
-        .filter(|n| n.session_id == session && !n.dismissed)
-        .max_by_key(|n| n.created)?;
-    let text = notice_preview(&notice.summary);
-    (!text.is_empty() && text != notice.state.label()).then_some(text)
-}
 
 pub(super) use super::agent_presence::attention_status_icon;
 

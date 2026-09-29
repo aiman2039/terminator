@@ -71,10 +71,17 @@ pub fn select_session_agent<'a>(
     agents: &'a [crate::Agent],
     session_id: &str,
 ) -> Option<&'a crate::Agent> {
-    let matched: Vec<_> = agents
-        .iter()
-        .filter(|agent| agent.session_id == session_id)
-        .collect();
+    select_matched_agent(agents.iter().filter(|agent| agent.session_id == session_id))
+}
+
+/// Select the lifecycle record from agents that already belong to one session.
+///
+/// `matched` must be in the original slice order. Equal `updated` values keep
+/// the later record. Muse tool and subagent ids never outrank a conversation id.
+pub fn select_matched_agent<'a>(
+    matched: impl IntoIterator<Item = &'a crate::Agent>,
+) -> Option<&'a crate::Agent> {
+    let matched: Vec<_> = matched.into_iter().collect();
     let has_conversation = matched.iter().any(|agent| {
         agent.kind == "muse"
             && agent

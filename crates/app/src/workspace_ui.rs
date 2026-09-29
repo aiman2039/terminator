@@ -800,8 +800,7 @@ impl App {
         ui.painter()
             .rect_filled(strip_rect, 0, appearance::color(&self.theme.surface));
         ui.horizontal(|ui| {
-            let moment = now();
-            let tab_widths: Vec<f32> = workspace
+            let tab_layout: Vec<(f32, super::agent_presence::AttentionCounts)> = workspace
                 .tabs
                 .iter()
                 .map(|group| {
@@ -812,21 +811,20 @@ impl App {
                         .or_else(|| group.layout.iter_all_tabs().next().map(|(_, tab)| tab));
                     let face = self.tab_face(primary);
                     let width = workspace_tab_width(tab_label_width(ui, &face.label));
-                    let attention = super::agent_presence::tab_attention(
-                        &self.state,
-                        &group_terminal_ids(&group.layout),
-                        moment,
-                    );
-                    width
-                        + if tab_attention_text(attention).is_some() {
-                            22.0
-                        } else {
-                            0.0
-                        }
+                    let attention = self.cached_tab_attention(&group_terminal_ids(&group.layout));
+                    (
+                        width
+                            + if tab_attention_text(attention).is_some() {
+                                22.0
+                            } else {
+                                0.0
+                            },
+                        attention,
+                    )
                 })
                 .collect();
-            let content_width =
-                tab_widths.iter().sum::<f32>() + tab_widths.len().saturating_sub(1) as f32;
+            let content_width = tab_layout.iter().map(|(width, _)| *width).sum::<f32>()
+                + tab_layout.len().saturating_sub(1) as f32;
             let width = (ui.available_width() - 38.0).max(40.0);
             let overflow = content_width > width;
             let width = (width - if overflow { 58.0 } else { 0.0 }).max(1.0);
@@ -886,15 +884,11 @@ impl App {
                                     group.layout.iter_all_tabs().next().map(|(_, tab)| tab)
                                 });
                             let face = self.tab_face(primary);
-                            let attention = super::agent_presence::tab_attention(
-                                &self.state,
-                                &group_terminal_ids(&group.layout),
-                                moment,
-                            );
+                            let (width, attention) = tab_layout[index];
                             let badge = tab_attention_text(attention);
                             let active = workspace.active == group.id;
                             let (rect, response) = ui.allocate_exact_size(
-                                egui::vec2(tab_widths[index], 32.0),
+                                egui::vec2(width, 32.0),
                                 egui::Sense::click_and_drag(),
                             );
                             strip_rects.push((group.id.clone(), rect));

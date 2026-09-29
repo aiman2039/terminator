@@ -53,7 +53,8 @@ pub fn notice_pending(notice: &terminator_core::Notification, now: u64) -> bool 
     !notice.dismissed && !notice.resolved && notice.snoozed_until <= now
 }
 
-/// Aggregate pending attention over a set of terminal sessions.
+/// Spec for one tab's attention. The GUI uses [`PresentationCache::attention`].
+#[cfg(test)]
 #[must_use]
 pub fn tab_attention(state: &State, session_ids: &[String], now: u64) -> AttentionCounts {
     let live: std::collections::HashSet<_> = state
@@ -88,6 +89,7 @@ pub struct OwnerSupport {
     pub available: bool,
 }
 
+#[cfg(test)]
 #[must_use]
 pub fn owner_support(state: &State, session: &Session) -> OwnerSupport {
     match state
@@ -137,6 +139,9 @@ pub struct AgentPresentation {
     pub spin: bool,
     pub unread: usize,
     pub attention: AttentionCounts,
+    /// Latest non-dismissed notice sentence. Absent when there is no hook
+    /// lifecycle, or when the text only repeats the state label.
+    pub notice_preview: Option<String>,
     /// Deferred tooltip inputs. Never contain command arguments.
     diagnostics: Option<Diagnostics>,
 }
@@ -173,16 +178,71 @@ impl AgentPresentation {
 
 /// Rebuilt on snapshot/local mutation, freshness changes, and snooze expiry.
 /// Time alone does not rebuild stable presentations on every frame.
+///
+/// Indexes are built once per reconciliation. Unchanged sessions keep their
+/// `Arc`. Lookup does not scan sessions, agents, or notifications.
 #[derive(Default)]
 pub struct PresentationCache {
-    entries: std::collections::HashMap<String, std::sync::Arc<AgentPresentation>>,
+    entries: std::collections::HashMap<String, CacheEntry>,
+    attention: std::collections::HashMap<String, AttentionCounts>,
     fresh: Option<bool>,
     expires: u64,
+    /// Address, length, and capacity of the collections that feed the index.
+    /// Lookup compares this in constant time. A replaced snapshot cannot keep
+    /// a warm empty cache. In-place edits still go through `reconcile`.
+    inputs: InputStamp,
+    ready: bool,
+    missing: Option<std::sync::Arc<AgentPresentation>>,
+    indexes_built: u64,
+    notifications_visited: u64,
+    presentations_rebuilt: u64,
+    presentations_reused: u64,
 }
+
+struct CacheEntry {
+    deps: PresentationDeps,
+    presentation: std::sync::Arc<AgentPresentation>,
+}
+
+struct PresentationDeps {
+    session: Session,
+    support: OwnerSupport,
+    presence: Option<agents::TerminalPresence>,
+    hook: Option<terminator_core::Agent>,
+    attention: AttentionCounts,
+    unread: usize,
+    fresh: Option<bool>,
+    /// `fresh` when the connection reports it. Otherwise the observation is
+    /// still inside the legacy staleness window. This is what makes a deadline
+    /// replace the presentation instead of reusing a stale `verified` flag.
+    presence_current: bool,
+    notice_preview: Option<String>,
+}
+
+#[derive(Default)]
+struct NoticeFold {
+    attention: AttentionCounts,
+    unread: usize,
+    preview_at: u64,
+    preview_index: Option<usize>,
+}
+
 impl PresentationCache {
+    #[cfg(test)]
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.attention.clear();
+        self.fresh = None;
+        self.expires = 0;
+        self.inputs = InputStamp::default();
+        self.ready = false;
     }
+
+    /// Rebuild indexes once and replace only the presentations whose inputs changed.
+    pub fn reconcile(&mut self, state: &State, now: u64, fresh: Option<bool>) {
+        self.rebuild(state, now, fresh);
+    }
+
     pub fn get(
         &mut self,
         state: &State,
@@ -190,38 +250,319 @@ impl PresentationCache {
         now: u64,
         fresh: Option<bool>,
     ) -> std::sync::Arc<AgentPresentation> {
-        if self.entries.is_empty() || self.fresh != fresh || now >= self.expires {
-            self.entries = state
-                .sessions
-                .iter()
-                .map(|s| {
-                    (
-                        s.id.clone(),
-                        std::sync::Arc::new(present_session_with_freshness(
-                            state, &s.id, now, fresh,
-                        )),
-                    )
-                })
-                .collect();
-            self.fresh = fresh;
-            self.expires = state
-                .notifications
-                .iter()
-                .map(|n| n.snoozed_until)
-                .chain(
-                    state
-                        .presence
-                        .iter()
-                        .filter(|_| fresh.is_none())
-                        .map(|p| p.observed_at.saturating_add(agents::STALE_AFTER_SECS + 1)),
-                )
-                .filter(|at| *at > now)
-                .min()
-                .unwrap_or(u64::MAX);
+        self.ensure(state, now, fresh);
+        self.entries
+            .get(id)
+            .map(|entry| entry.presentation.clone())
+            .unwrap_or_else(|| self.missing())
+    }
+
+    /// Sum precomputed attention. Duplicate session ids count once.
+    /// Ended sessions contribute nothing. Pending input, permission, and
+    /// failure stay distinct.
+    pub fn attention(
+        &mut self,
+        state: &State,
+        session_ids: &[String],
+        now: u64,
+        fresh: Option<bool>,
+    ) -> AttentionCounts {
+        self.ensure(state, now, fresh);
+        let mut seen = std::collections::HashSet::with_capacity(session_ids.len());
+        let mut counts = AttentionCounts::default();
+        for id in session_ids {
+            if !seen.insert(id.as_str()) {
+                continue;
+            }
+            if let Some(item) = self.attention.get(id.as_str()) {
+                counts.input += item.input;
+                counts.permission += item.permission;
+                counts.failed += item.failed;
+            }
         }
-        self.entries.get(id).cloned().unwrap_or_else(|| {
-            std::sync::Arc::new(present_session_with_freshness(state, id, now, fresh))
-        })
+        counts
+    }
+
+    fn ensure(&mut self, state: &State, now: u64, fresh: Option<bool>) {
+        if !self.ready
+            || self.fresh != fresh
+            || now >= self.expires
+            || self.inputs != InputStamp::from_state(state)
+        {
+            self.rebuild(state, now, fresh);
+        }
+    }
+
+    fn missing(&mut self) -> std::sync::Arc<AgentPresentation> {
+        self.missing
+            .get_or_insert_with(|| std::sync::Arc::new(unknown_presentation()))
+            .clone()
+    }
+
+    fn rebuild(&mut self, state: &State, now: u64, fresh: Option<bool>) {
+        self.indexes_built += 1;
+        self.notifications_visited += state.notifications.len() as u64;
+        let mut live = std::collections::HashSet::with_capacity(state.sessions.len());
+        for session in &state.sessions {
+            if session.lifecycle.live() {
+                live.insert(session.id.as_str());
+            }
+        }
+        let generations_empty = state.generations.is_empty();
+        let legacy = OwnerSupport {
+            supported: state
+                .capabilities
+                .iter()
+                .any(|c| c == AGENT_PRESENCE_CAPABILITY),
+            available: true,
+        };
+        let mut owners = std::collections::HashMap::with_capacity(state.generations.len());
+        if !generations_empty {
+            for health in &state.generations {
+                owners
+                    .entry(health.owner.id.as_str())
+                    .or_insert(OwnerSupport {
+                        supported: health
+                            .capabilities
+                            .iter()
+                            .any(|c| c == AGENT_PRESENCE_CAPABILITY),
+                        available: health.error.is_none(),
+                    });
+            }
+        }
+        let mut presence_by_id = std::collections::HashMap::with_capacity(state.presence.len());
+        for item in &state.presence {
+            presence_by_id
+                .entry(item.session_id.as_str())
+                .or_insert(item);
+        }
+        let mut grouped: std::collections::HashMap<&str, Vec<&terminator_core::Agent>> =
+            std::collections::HashMap::new();
+        for agent in &state.agents {
+            grouped
+                .entry(agent.session_id.as_str())
+                .or_default()
+                .push(agent);
+        }
+        let mut selected = std::collections::HashMap::with_capacity(grouped.len());
+        for (id, group) in &grouped {
+            if let Some(agent) = agents::select_matched_agent(group.iter().copied()) {
+                selected.insert(*id, agent);
+            }
+        }
+        let mut folds: std::collections::HashMap<&str, NoticeFold> =
+            std::collections::HashMap::new();
+        let mut expires = u64::MAX;
+        for (index, notice) in state.notifications.iter().enumerate() {
+            if notice.snoozed_until > now {
+                expires = expires.min(notice.snoozed_until);
+            }
+            let fold = folds.entry(notice.session_id.as_str()).or_default();
+            if live.contains(notice.session_id.as_str()) && notice_pending(notice, now) {
+                match notice.state {
+                    AgentState::WaitingInput => fold.attention.input += 1,
+                    AgentState::WaitingPermission => fold.attention.permission += 1,
+                    AgentState::Failed => fold.attention.failed += 1,
+                    _ => {}
+                }
+            }
+            if !notice.read && notice_pending(notice, now) {
+                fold.unread += 1;
+            }
+            if !notice.dismissed
+                && (fold.preview_index.is_none() || notice.created >= fold.preview_at)
+            {
+                fold.preview_at = notice.created;
+                fold.preview_index = Some(index);
+            }
+        }
+        if fresh.is_none() {
+            for item in &state.presence {
+                let at = item
+                    .observed_at
+                    .saturating_add(agents::STALE_AFTER_SECS + 1);
+                if at > now {
+                    expires = expires.min(at);
+                }
+            }
+        }
+        self.attention.clear();
+        for (id, fold) in &folds {
+            if !fold.attention.is_empty() {
+                self.attention.insert((*id).to_string(), fold.attention);
+            }
+        }
+        let mut seen = std::collections::HashSet::with_capacity(state.sessions.len());
+        for session in &state.sessions {
+            if !seen.insert(session.id.as_str()) {
+                continue;
+            }
+            let support = if generations_empty {
+                legacy
+            } else {
+                owners
+                    .get(session.generation.as_str())
+                    .copied()
+                    .unwrap_or(OwnerSupport {
+                        supported: false,
+                        available: false,
+                    })
+            };
+            let presence = presence_by_id.get(session.id.as_str()).copied().cloned();
+            let hook = selected.get(session.id.as_str()).copied().cloned();
+            let fold = folds.get(session.id.as_str());
+            let attention = fold.map(|item| item.attention).unwrap_or_default();
+            let unread = fold.map(|item| item.unread).unwrap_or(0);
+            let presence_current =
+                fresh.unwrap_or_else(|| agents::presence_verified(presence.as_ref(), now));
+            let notice_preview = hook.as_ref().and_then(|_| {
+                fold.and_then(|item| item.preview_index).and_then(|index| {
+                    let notice = &state.notifications[index];
+                    let text = notice_preview(&notice.summary);
+                    (!text.is_empty() && text != notice.state.label()).then_some(text)
+                })
+            });
+            let (unchanged, presentation) = {
+                let view = SessionView {
+                    session,
+                    support,
+                    presence: presence.as_ref(),
+                    hook: hook.as_ref(),
+                    attention,
+                    unread,
+                    fresh,
+                    presence_current,
+                    notice_preview: &notice_preview,
+                };
+                let unchanged = self
+                    .entries
+                    .get(&session.id)
+                    .is_some_and(|entry| entry.deps.matches(&view));
+                let presentation =
+                    (!unchanged).then(|| std::sync::Arc::new(build_presentation(&view, now)));
+                (unchanged, presentation)
+            };
+            if unchanged {
+                self.presentations_reused += 1;
+                continue;
+            }
+            let presentation = presentation.expect("changed session builds a presentation");
+            self.entries.insert(
+                session.id.clone(),
+                CacheEntry {
+                    deps: PresentationDeps {
+                        session: session.clone(),
+                        support,
+                        presence,
+                        hook,
+                        attention,
+                        unread,
+                        fresh,
+                        presence_current,
+                        notice_preview,
+                    },
+                    presentation,
+                },
+            );
+            self.presentations_rebuilt += 1;
+        }
+        self.entries.retain(|id, _| seen.contains(id.as_str()));
+        self.fresh = fresh;
+        self.expires = expires;
+        self.inputs = InputStamp::from_state(state);
+        self.ready = true;
+    }
+}
+
+/// Constant-time identity of one `Vec`: allocation, length, and capacity.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct CollectionId {
+    address: usize,
+    len: usize,
+    capacity: usize,
+}
+
+impl CollectionId {
+    fn new(address: usize, len: usize, capacity: usize) -> Self {
+        Self {
+            address,
+            len,
+            capacity,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct InputStamp {
+    sessions: CollectionId,
+    agents: CollectionId,
+    notifications: CollectionId,
+    presence: CollectionId,
+    generations: CollectionId,
+    capabilities: CollectionId,
+}
+
+impl InputStamp {
+    fn from_state(state: &State) -> Self {
+        Self {
+            sessions: CollectionId::new(
+                state.sessions.as_ptr().addr(),
+                state.sessions.len(),
+                state.sessions.capacity(),
+            ),
+            agents: CollectionId::new(
+                state.agents.as_ptr().addr(),
+                state.agents.len(),
+                state.agents.capacity(),
+            ),
+            notifications: CollectionId::new(
+                state.notifications.as_ptr().addr(),
+                state.notifications.len(),
+                state.notifications.capacity(),
+            ),
+            presence: CollectionId::new(
+                state.presence.as_ptr().addr(),
+                state.presence.len(),
+                state.presence.capacity(),
+            ),
+            generations: CollectionId::new(
+                state.generations.as_ptr().addr(),
+                state.generations.len(),
+                state.generations.capacity(),
+            ),
+            capabilities: CollectionId::new(
+                state.capabilities.as_ptr().addr(),
+                state.capabilities.len(),
+                state.capabilities.capacity(),
+            ),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SessionView<'a> {
+    session: &'a Session,
+    support: OwnerSupport,
+    presence: Option<&'a agents::TerminalPresence>,
+    hook: Option<&'a terminator_core::Agent>,
+    attention: AttentionCounts,
+    unread: usize,
+    fresh: Option<bool>,
+    presence_current: bool,
+    notice_preview: &'a Option<String>,
+}
+
+impl PresentationDeps {
+    fn matches(&self, view: &SessionView<'_>) -> bool {
+        &self.session == view.session
+            && self.support == view.support
+            && self.presence.as_ref() == view.presence
+            && self.hook.as_ref() == view.hook
+            && self.attention == view.attention
+            && self.unread == view.unread
+            && self.fresh == view.fresh
+            && self.presence_current == view.presence_current
+            && &self.notice_preview == view.notice_preview
     }
 }
 
@@ -241,16 +582,12 @@ fn ago(timestamp: u64, now: u64) -> String {
 #[cfg(test)]
 #[must_use]
 pub fn present_session(state: &State, session_id: &str, now: u64) -> AgentPresentation {
-    present_session_with_freshness(state, session_id, now, None)
+    let mut cache = PresentationCache::default();
+    (*cache.get(state, session_id, now, None)).clone()
 }
 
-fn present_session_with_freshness(
-    state: &State,
-    session_id: &str,
-    now: u64,
-    fresh: Option<bool>,
-) -> AgentPresentation {
-    let empty = || AgentPresentation {
+fn unknown_presentation() -> AgentPresentation {
+    AgentPresentation {
         brand_icon: None,
         brand_label: None,
         detected_kinds: Vec::new(),
@@ -262,25 +599,34 @@ fn present_session_with_freshness(
         spin: false,
         unread: 0,
         attention: AttentionCounts::default(),
+        notice_preview: None,
         diagnostics: None,
-    };
-    let Some(session) = state.sessions.iter().find(|s| s.id == session_id) else {
-        return empty();
-    };
-    let support = owner_support(state, session);
-    let presence = state.presence.iter().find(|p| p.session_id == session_id);
+    }
+}
+
+fn build_presentation(view: &SessionView<'_>, now: u64) -> AgentPresentation {
+    let SessionView {
+        session,
+        support,
+        presence,
+        hook,
+        attention,
+        unread,
+        fresh,
+        notice_preview,
+        ..
+    } = *view;
     let verified = session.lifecycle.live()
         && support.supported
         && support.available
-        && presence.is_some_and(|p| p.outcome == PresenceOutcome::Verified)
+        && presence.is_some_and(|item| item.outcome == PresenceOutcome::Verified)
         && fresh.unwrap_or_else(|| agents::presence_verified(presence, now));
     let detected: Vec<_> = if verified {
-        presence.map(|p| p.agents.clone()).unwrap_or_default()
+        presence.map(|item| item.agents.clone()).unwrap_or_default()
     } else {
         Vec::new()
     };
-    let detected_kinds: Vec<String> = detected.iter().map(|a| a.kind.clone()).collect();
-    let hook = agents::select_session_agent(&state.agents, session_id);
+    let detected_kinds: Vec<String> = detected.iter().map(|agent| agent.kind.clone()).collect();
     let (brand_icon, brand_label) = if !detected.is_empty() {
         match agents::preferred_agent(&detected) {
             Some(agent) => (
@@ -300,33 +646,18 @@ fn present_session_with_freshness(
     } else {
         (None, None)
     };
-    let lifecycle = hook.map(|a| a.state);
+    let lifecycle = hook.map(|agent| agent.state);
     let status_label = match lifecycle {
         Some(status) if status != AgentState::Unknown => status.label().to_string(),
         _ => "Status unavailable".to_string(),
     };
     let status_icon = attention_status_icon(lifecycle.unwrap_or(AgentState::Unknown));
-    let hook_linked = match (hook, hook.and_then(|h| h.process.as_ref())) {
+    let hook_linked = match (hook, hook.and_then(|agent| agent.process.as_ref())) {
         (Some(current), Some(identity)) => detected
             .iter()
-            .any(|a| a.kind == current.kind && a.process == *identity),
+            .any(|agent| agent.kind == current.kind && agent.process == *identity),
         _ => false,
     };
-    let owned = [session_id.to_string()];
-    let attention = tab_attention(state, &owned, now);
-    let unread = state
-        .notifications
-        .iter()
-        .filter(|n| n.session_id == session_id && !n.read && notice_pending(n, now))
-        .count();
-    let diagnostics = Some(Diagnostics {
-        session: session.clone(),
-        presence: presence.cloned(),
-        detected: detected.clone(),
-        hook: hook.cloned(),
-        support,
-        hook_linked,
-    });
     AgentPresentation {
         brand_icon,
         brand_label,
@@ -339,8 +670,34 @@ fn present_session_with_freshness(
         spin: lifecycle == Some(AgentState::Running),
         unread,
         attention,
-        diagnostics,
+        notice_preview: notice_preview.clone(),
+        diagnostics: Some(Diagnostics {
+            session: session.clone(),
+            presence: presence.cloned(),
+            detected,
+            hook: hook.cloned(),
+            support,
+            hook_linked,
+        }),
     }
+}
+
+/// Plain-text sentence from a hook summary. Markdown markers are dropped.
+pub(crate) fn notice_preview(markdown: &str) -> String {
+    use pulldown_cmark::{Event, Parser, TagEnd};
+    let mut text = String::new();
+    for event in Parser::new(markdown) {
+        match event {
+            Event::Text(value) | Event::Code(value) => text.push_str(&value),
+            Event::SoftBreak
+            | Event::HardBreak
+            | Event::End(
+                TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::Item | TagEnd::CodeBlock,
+            ) => text.push(' '),
+            _ => {}
+        }
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -837,5 +1194,303 @@ mod tests {
         let unverified = unverified_sessions(&state, now());
         assert_eq!(unverified.len(), 1);
         assert_eq!(unverified[0].id, "plain");
+    }
+
+    fn notice(id: &str, session: &str, lifecycle: AgentState, created: u64) -> Notification {
+        Notification {
+            id: id.into(),
+            session_id: session.into(),
+            invocation_id: "a".into(),
+            request_id: None,
+            state: lifecycle,
+            summary: format!("note {id}"),
+            details: String::new(),
+            created,
+            read: false,
+            dismissed: false,
+            resolved: false,
+            snoozed_until: 0,
+        }
+    }
+
+    #[test]
+    fn indexed_reconcile_scans_notifications_once_and_reuses_arcs() {
+        let mut state = State::default();
+        let sessions = 8usize;
+        let notices = 20usize;
+        for index in 0..sessions {
+            state.sessions.push(session(&format!("s{index}")));
+        }
+        for index in 0..notices {
+            state.notifications.push(notice(
+                &format!("n{index}"),
+                &format!("s{}", index % sessions),
+                AgentState::WaitingInput,
+                index as u64,
+            ));
+        }
+        let mut ended = session("ended");
+        ended.lifecycle = Lifecycle::Ended;
+        state.sessions.push(ended);
+        state.notifications.push(notice(
+            "ended-note",
+            "ended",
+            AgentState::WaitingPermission,
+            100,
+        ));
+        let mut cache = PresentationCache::default();
+        cache.reconcile(&state, 50, Some(true));
+        assert_eq!(cache.indexes_built, 1);
+        assert_eq!(cache.notifications_visited, (notices + 1) as u64);
+        assert_eq!(cache.presentations_rebuilt, (sessions + 1) as u64);
+        let kept = cache.get(&state, "s0", 50, Some(true));
+        let stable = cache.get(&state, "s1", 50, Some(true));
+        for index in 0..sessions {
+            let _ = cache.get(&state, &format!("s{index}"), 50, Some(true));
+        }
+        assert_eq!(cache.indexes_built, 1);
+        assert_eq!(cache.notifications_visited, (notices + 1) as u64);
+        let ids = vec!["s0".into(), "s0".into(), "s1".into(), "ended".into()];
+        assert_eq!(
+            cache.attention(&state, &ids, 50, Some(true)),
+            tab_attention(&state, &ids, 50)
+        );
+        assert!(cache.attention(&state, &ids, 50, Some(true)).input > 0);
+        assert_eq!(cache.indexes_built, 1);
+        state.projects.push(terminator_core::Project {
+            id: "p".into(),
+            name: "One".into(),
+            path: "/tmp".into(),
+            layout: serde_json::json!({}),
+        });
+        state.sessions[0].label = "renamed".into();
+        cache.reconcile(&state, 50, Some(true));
+        assert!(!std::sync::Arc::ptr_eq(
+            &kept,
+            &cache.get(&state, "s0", 50, Some(true))
+        ));
+        assert!(std::sync::Arc::ptr_eq(
+            &stable,
+            &cache.get(&state, "s1", 50, Some(true))
+        ));
+        let other = cache.get(&state, "s1", 50, Some(true));
+        state.sessions.retain(|item| item.id != "s0");
+        cache.reconcile(&state, 50, Some(true));
+        assert_eq!(
+            cache.get(&state, "s0", 50, Some(true)).diagnostics(50),
+            "Unknown session"
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &other,
+            &cache.get(&state, "s1", 50, Some(true))
+        ));
+        assert_eq!(cache.notifications_visited, (notices + 1) as u64 * 3);
+    }
+
+    #[test]
+    fn one_session_change_leaves_unrelated_arcs_in_place() {
+        let mut state = State::default();
+        state.sessions.push(session("a"));
+        state.sessions.push(session("b"));
+        capable(&mut state);
+        state.presence.push(agents::TerminalPresence {
+            session_id: "a".into(),
+            generation: "g".into(),
+            agents: vec![],
+            outcome: PresenceOutcome::Verified,
+            observed_at: 1,
+        });
+        state
+            .notifications
+            .push(notice("na", "a", AgentState::Failed, 1));
+        state
+            .notifications
+            .push(notice("nb", "b", AgentState::WaitingInput, 2));
+        let mut cache = PresentationCache::default();
+        cache.reconcile(&state, 10, Some(true));
+        let left = cache.get(&state, "a", 10, Some(true));
+        let right = cache.get(&state, "b", 10, Some(true));
+        state.presence[0].observed_at = 9;
+        state.notifications[0].read = true;
+        cache.reconcile(&state, 10, Some(true));
+        let next = cache.get(&state, "a", 10, Some(true));
+        assert!(!std::sync::Arc::ptr_eq(&left, &next));
+        assert!(next.verified);
+        assert_eq!(next.unread, 0);
+        assert_eq!(next.attention.failed, 1);
+        assert!(std::sync::Arc::ptr_eq(
+            &right,
+            &cache.get(&state, "b", 10, Some(true))
+        ));
+        assert_eq!(cache.presentations_rebuilt, 3);
+        assert_eq!(cache.presentations_reused, 1);
+    }
+
+    #[test]
+    fn changed_generation_drops_stale_verification() {
+        let mut state = State::default();
+        state.sessions.push(session("s"));
+        state
+            .generations
+            .push(terminator_core::generations::Health {
+                owner: terminator_core::generations::Generation {
+                    id: "g".into(),
+                    data: "/tmp".into(),
+                    runtime: "/tmp".into(),
+                    version: "0".into(),
+                    build: "0".into(),
+                    protocol: 1,
+                    catalog: 1,
+                    status: terminator_core::generations::Status::Active,
+                    pid: None,
+                },
+                revision: 1,
+                live_sessions: 1,
+                error: None,
+                capabilities: vec![AGENT_PRESENCE_CAPABILITY.into()],
+                helper: None,
+            });
+        observe(&mut state, &["codex"], 10);
+        let mut cache = PresentationCache::default();
+        cache.reconcile(&state, 10, Some(true));
+        let first = cache.get(&state, "s", 10, Some(true));
+        assert!(first.verified);
+        assert_eq!(
+            owner_support(&state, &state.sessions[0]),
+            OwnerSupport {
+                supported: true,
+                available: true,
+            }
+        );
+        state.sessions[0].generation = "missing".into();
+        cache.reconcile(&state, 10, Some(true));
+        let next = cache.get(&state, "s", 10, Some(true));
+        assert!(!std::sync::Arc::ptr_eq(&first, &next));
+        assert!(!next.verified && !next.live);
+        assert_eq!(
+            owner_support(&state, &state.sessions[0]),
+            OwnerSupport {
+                supported: false,
+                available: false,
+            }
+        );
+    }
+
+    #[test]
+    fn fresh_connection_ignores_observation_age_until_the_timestamp_changes() {
+        let mut state = State::default();
+        state.sessions.push(session("s"));
+        capable(&mut state);
+        observe(&mut state, &["codex"], 100);
+        let mut cache = PresentationCache::default();
+        let fresh = cache.get(&state, "s", 105, Some(true));
+        assert!(fresh.verified);
+        let later = cache.get(&state, "s", 10_000, Some(true));
+        assert!(std::sync::Arc::ptr_eq(&fresh, &later));
+        assert!(later.verified);
+        assert_eq!(cache.indexes_built, 1);
+    }
+
+    #[test]
+    fn legacy_expiry_changes_verification_at_the_deadline() {
+        let mut state = State::default();
+        state.sessions.push(session("s"));
+        capable(&mut state);
+        observe(&mut state, &["codex"], 100);
+        let mut cache = PresentationCache::default();
+        let current = cache.get(&state, "s", 105, None);
+        assert!(current.verified);
+        assert!(std::sync::Arc::ptr_eq(
+            &current,
+            &cache.get(&state, "s", 105, None)
+        ));
+        assert_eq!(cache.indexes_built, 1);
+        let expired = cache.get(&state, "s", 106, None);
+        assert!(!expired.verified);
+        assert_eq!(cache.indexes_built, 2);
+    }
+
+    #[test]
+    fn due_snoozes_and_reads_update_in_one_pass() {
+        let mut state = State::default();
+        state.sessions.push(session("s"));
+        state.sessions.push(session("other"));
+        let mut early = notice("early", "s", AgentState::WaitingInput, 1);
+        early.snoozed_until = 20;
+        let mut later = notice("later", "s", AgentState::WaitingPermission, 2);
+        later.snoozed_until = 30;
+        state.notifications.push(early);
+        state.notifications.push(later);
+        hook(&mut state, "codex", AgentState::Running, false);
+        let mut cache = PresentationCache::default();
+        cache.reconcile(&state, 10, Some(true));
+        assert!(cache.get(&state, "s", 10, Some(true)).attention.is_empty());
+        assert_eq!(
+            cache
+                .get(&state, "s", 10, Some(true))
+                .notice_preview
+                .as_deref(),
+            Some("note later")
+        );
+        let other = cache.get(&state, "other", 10, Some(true));
+        let built = cache.indexes_built;
+        let at_deadline = cache.get(&state, "s", 30, Some(true));
+        assert_eq!(cache.indexes_built, built + 1);
+        assert_eq!(
+            at_deadline.attention,
+            AttentionCounts {
+                input: 1,
+                permission: 1,
+                failed: 0,
+            }
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &other,
+            &cache.get(&state, "other", 30, Some(true))
+        ));
+        state.notifications[0].read = true;
+        state.notifications[1].dismissed = true;
+        cache.reconcile(&state, 30, Some(true));
+        let updated = cache.get(&state, "s", 30, Some(true));
+        assert_eq!(updated.unread, 0);
+        assert_eq!(updated.attention.input, 1);
+        assert_eq!(updated.attention.permission, 0);
+        assert_eq!(updated.notice_preview.as_deref(), Some("note early"));
+    }
+
+    #[test]
+    fn empty_and_unknown_lookups_do_not_rebuild() {
+        let state = State::default();
+        let mut cache = PresentationCache::default();
+        let missing = cache.get(&state, "missing", 10, Some(true));
+        let again = cache.get(&state, "other", 10, Some(true));
+        assert!(std::sync::Arc::ptr_eq(&missing, &again));
+        assert_eq!(cache.indexes_built, 1);
+        assert_eq!(cache.notifications_visited, 0);
+        assert_eq!(missing.diagnostics(10), "Unknown session");
+        let mut state = State::default();
+        state.sessions.push(session("s"));
+        cache.reconcile(&state, 10, Some(true));
+        let _ = cache.get(&state, "nope", 10, Some(true));
+        let _ = cache.get(&state, "nope", 11, Some(true));
+        assert_eq!(cache.indexes_built, 2);
+    }
+
+    #[test]
+    fn replaced_collections_refresh_a_warm_cache_on_lookup() {
+        let mut cache = PresentationCache::default();
+        let empty = State::default();
+        cache.reconcile(&empty, 10, Some(true));
+        assert_eq!(cache.indexes_built, 1);
+        let mut state = State::default();
+        state.sessions.push(session("s"));
+        hook(&mut state, "codex", AgentState::Running, false);
+        let presented = cache.get(&state, "s", 10, Some(true));
+        assert_eq!(presented.brand_icon, Some("AgentCodex"));
+        assert_eq!(presented.status_icon, "LoaderCircle");
+        assert_eq!(cache.indexes_built, 2);
+        let again = cache.get(&state, "s", 10, Some(true));
+        assert!(std::sync::Arc::ptr_eq(&presented, &again));
+        assert_eq!(cache.indexes_built, 2);
     }
 }
