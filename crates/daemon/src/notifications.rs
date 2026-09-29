@@ -5,7 +5,6 @@ use std::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Sender},
     },
-    time::Duration,
 };
 use terminator_core::{Paths, atomic_write};
 
@@ -13,7 +12,7 @@ use terminator_core::{Paths, atomic_write};
 /// a notification awaits an action. Kept short so a pending notification does
 /// not burn measurable CPU; the dismiss poll only needs to run every 0.5 s.
 #[cfg(target_os = "macos")]
-const PUMP_INTERVAL: Duration = Duration::from_millis(1);
+const PUMP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1);
 
 /// Notifications that are shown but not yet acted on. A single long-lived
 /// worker owns every wait, so at most one waiter exists at a time. A newer
@@ -297,7 +296,7 @@ mod tests {
     use std::{
         collections::HashSet,
         sync::{Arc, Condvar, Mutex as StdMutex},
-        time::Instant,
+        time::{Duration, Instant},
     };
 
     fn temp_alert() -> DesktopAlert {
