@@ -484,20 +484,17 @@ mod macos {
             return;
         }
         let content = unsafe { &*content };
-        let button_class = NSButton::class();
         let subviews = content.subviews();
-        let mut held = None;
+        let mut button = None;
         for index in 0..subviews.count() {
-            let view = subviews.objectAtIndex(index);
-            if view.isKindOfClass(button_class) {
-                held = Some(view);
+            if let Ok(found) = subviews.objectAtIndex(index).downcast::<NSButton>() {
+                button = Some(found);
                 break;
             }
         }
-        let Some(view) = held else {
+        let Some(button) = button else {
             return;
         };
-        let button = unsafe { &*(objc2::rc::Retained::as_ptr(&view) as *const NSButton) };
         unsafe {
             button.setTarget((!target.is_null()).then(|| &*target));
             button.setAction(action);
@@ -510,7 +507,7 @@ mod macos {
         button.setKeyEquivalent(key);
         if !identifier.is_null() {
             let identifier = unsafe { &*identifier };
-            let _: () = unsafe { msg_send![button, setAccessibilityIdentifier: identifier] };
+            let _: () = unsafe { msg_send![&*button, setAccessibilityIdentifier: identifier] };
         }
         button.setEnabled(!target.is_null());
         content.layoutSubtreeIfNeeded();
