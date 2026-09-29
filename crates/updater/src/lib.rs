@@ -466,24 +466,24 @@ mod macos {
         is_default: Bool,
         identifier: *const NSString,
     ) {
-        use objc2_app_kit::{NSButton, NSView};
+        use objc2_app_kit::{NSAccessibility, NSButton, NSWindowController};
         if this.is_null() {
             return;
         }
         let this = unsafe { &*this };
         if !title.is_null() {
             let title = unsafe { &*title };
+            // Private Sparkle property. The button title is bound to it.
             let _: () = unsafe { msg_send![this, setButtonTitle: title] };
         }
-        let window: *mut AnyObject = unsafe { msg_send![this, window] };
-        if window.is_null() {
+        // Sparkle 2.10: SUStatusController is an NSWindowController.
+        let Some(content) = this
+            .downcast_ref::<NSWindowController>()
+            .and_then(|controller| controller.window())
+            .and_then(|window| window.contentView())
+        else {
             return;
-        }
-        let content: *mut NSView = unsafe { msg_send![window, contentView] };
-        if content.is_null() {
-            return;
-        }
-        let content = unsafe { &*content };
+        };
         let subviews = content.subviews();
         let mut button = None;
         for index in 0..subviews.count() {
@@ -507,7 +507,7 @@ mod macos {
         button.setKeyEquivalent(key);
         if !identifier.is_null() {
             let identifier = unsafe { &*identifier };
-            let _: () = unsafe { msg_send![&*button, setAccessibilityIdentifier: identifier] };
+            button.setAccessibilityIdentifier(Some(identifier));
         }
         button.setEnabled(!target.is_null());
         content.layoutSubtreeIfNeeded();
@@ -543,8 +543,8 @@ mod macos {
         };
         unsafe {
             item.setTarget(Some(target));
-            menu.insertItem_atIndex(&item, isize::from(menu.numberOfItems() > 0));
         }
+        menu.insertItem_atIndex(&item, isize::from(menu.numberOfItems() > 0));
         true
     }
 }

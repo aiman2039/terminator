@@ -147,14 +147,8 @@ fn menu_key(items: &[StatusMenuItem]) -> String {
 fn rebuild_menu(mtm: MainThreadMarker, bar: &Bar, items: &[StatusMenuItem]) {
     let menu = NSMenu::new(mtm);
     if items.is_empty() {
-        let none = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                NSMenuItem::alloc(mtm),
-                ns_string!("No pending notifications"),
-                None,
-                &NSString::new(),
-            )
-        };
+        let none = NSMenuItem::new(mtm);
+        none.setTitle(ns_string!("No pending notifications"));
         none.setEnabled(false);
         menu.addItem(&none);
     } else {
