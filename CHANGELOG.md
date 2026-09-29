@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- ntfy phone pushes are time-gated: repeats from one agent run and state
+  are held back for 60s, and any push holds back every other push for 15s,
+  so bursts buzz once. The Agents inbox still records every notification.
+- Agents inbox rows fold all pending notices from one agent run into a
+  single card ("Terminal 3 · 3 events", hover lists each). Read, snooze,
+  and dismiss apply to the whole row; Go navigates once.
+
 - macOS menu-bar item opens a pending-notifications menu: each entry jumps
   straight to its waiting agent's terminal (same as the inbox Go button),
   with Show Terminator below and a "No pending notifications" placeholder

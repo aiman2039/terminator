@@ -78,6 +78,7 @@ struct Shared {
     history: SyncSender<HistoryJob>,
     alerts: SyncSender<String>,
     ntfy: SyncSender<ntfy::Ping>,
+    ntfy_cooldown: Mutex<ntfy::Cooldown>,
 }
 impl Shared {
     fn forward_input(&self, runtime: &Arc<Mutex<Runtime>>, bytes: &[u8]) -> Result<()> {
@@ -900,10 +901,12 @@ impl Shared {
                     .contains(&event.state);
                 let mut state = self.state.lock().unwrap();
                 let ping = ntfy::Ping::from_event(&state.settings, &event);
+                let key = format!("{}:{}", event.agent_invocation_id, event.state as u8);
                 let nid = state.apply_hook(event)?;
                 drop(state);
                 if nid.is_some()
                     && let Some(ping) = ping
+                    && self.ntfy_cooldown.lock().unwrap().allow(&key, now())
                 {
                     let _ = self.ntfy.try_send(ping);
                 }
@@ -1355,6 +1358,7 @@ fn main() -> Result<()> {
         history,
         alerts,
         ntfy: ntfy::start(),
+        ntfy_cooldown: Mutex::new(ntfy::Cooldown::default()),
     });
     let weak = Arc::downgrade(&shared);
     thread::spawn(move || {

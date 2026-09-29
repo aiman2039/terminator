@@ -1229,30 +1229,37 @@ impl App {
             if notices.is_empty() && terminal_notices.is_empty() {
                 self.agents_empty(ui);
             }
-            for notice in notices {
+            for group in group_notices(notices) {
+                let Some(notice) = group.notices.first() else {
+                    continue;
+                };
                 let session = self
                     .state
                     .sessions
                     .iter()
                     .find(|session| session.id == notice.session_id)
                     .cloned();
-                let highlight = self.detail.as_ref() == Some(&notice.id);
+                let highlight = group
+                    .notices
+                    .iter()
+                    .any(|n| self.detail.as_ref() == Some(&n.id));
                 let selected = self.active_session.as_ref() == Some(&notice.session_id);
                 let presented = self.present_session(&notice.session_id);
                 let action = attention_card(
                     ui,
                     AttentionCard {
                         theme: &self.theme,
-                        notice: &notice,
+                        notice,
                         session: session.as_ref(),
                         selected,
                         highlight,
                         brand_icon: presented.brand_icon,
                         brand_label: presented.brand_label.as_deref(),
                         show_read: false,
+                        group_extra: &group.notices[1..],
                     },
                 );
-                self.apply_notice_action(notice.id, action);
+                self.apply_group_action(&group, action);
             }
             for notice in terminal_notices {
                 let row = ui.group(|ui| {
@@ -1331,31 +1338,37 @@ impl App {
                 ui.weak("No unread agent events");
                 return;
             }
-            for notice in notices {
+            for group in group_notices(notices) {
+                let Some(notice) = group.notices.first() else {
+                    continue;
+                };
                 let session = self
                     .state
                     .sessions
                     .iter()
                     .find(|session| session.id == notice.session_id)
                     .cloned();
-                let highlight = self.detail.as_ref() == Some(&notice.id)
-                    || self.unread_selected.as_deref() == Some(notice.id.as_str());
+                let highlight = group.notices.iter().any(|n| {
+                    self.detail.as_ref() == Some(&n.id)
+                        || self.unread_selected.as_deref() == Some(n.id.as_str())
+                });
                 let selected = self.active_session.as_ref() == Some(&notice.session_id);
                 let presented = self.present_session(&notice.session_id);
                 let action = attention_card(
                     ui,
                     AttentionCard {
                         theme: &self.theme,
-                        notice: &notice,
+                        notice,
                         session: session.as_ref(),
                         selected,
                         highlight,
                         brand_icon: presented.brand_icon,
                         brand_label: presented.brand_label.as_deref(),
                         show_read: true,
+                        group_extra: &group.notices[1..],
                     },
                 );
-                self.apply_notice_action(notice.id, action);
+                self.apply_group_action(&group, action);
             }
         });
     }
@@ -1749,6 +1762,22 @@ impl App {
                     .preferences
                     .includes_project(&session.project_id, selected)
         })
+    }
+    /// One row acts as one unit: navigation needs a single target, while
+    /// read/snooze/dismiss apply to every notice folded into the row.
+    fn apply_group_action(&mut self, group: &NoticeGroup, action: AttentionAction) {
+        match action {
+            AttentionAction::Go => {
+                if let Some(first) = group.notices.first() {
+                    self.apply_notice_action(first.id.clone(), action);
+                }
+            }
+            _ => {
+                for notice in &group.notices {
+                    self.apply_notice_action(notice.id.clone(), action);
+                }
+            }
+        }
     }
     pub(super) fn apply_notice_action(&mut self, id: String, action: AttentionAction) {
         let mut presentation_changed = false;
@@ -2509,6 +2538,8 @@ pub(super) struct AttentionCard<'a> {
     pub brand_label: Option<&'a str>,
     /// Show the mark-read button (Unread view only).
     pub show_read: bool,
+    /// Further notices from the same agent run folded into this row.
+    pub group_extra: &'a [Notification],
 }
 
 fn notice_waiting(notice: &Notification) -> bool {
@@ -2526,6 +2557,33 @@ fn notice_rank(state: AgentState) -> u8 {
         AgentState::Completed => 2,
         _ => 3,
     }
+}
+
+/// One inbox row: every pending notice from a single agent run. Focus
+/// dismissal already clears the whole session at once, so the row acts as
+/// one unit while the inbox keeps each underlying notice.
+struct NoticeGroup {
+    notices: Vec<Notification>,
+}
+
+/// Groups by agent run, preserving input order; the first notice of each
+/// group is its representative. Callers pass urgency/newest-sorted input.
+fn group_notices(notices: Vec<Notification>) -> Vec<NoticeGroup> {
+    let mut groups: Vec<NoticeGroup> = Vec::new();
+    for notice in notices {
+        if let Some(group) = groups.iter_mut().find(|group| {
+            group.notices.first().is_some_and(|first| {
+                first.session_id == notice.session_id && first.invocation_id == notice.invocation_id
+            })
+        }) {
+            group.notices.push(notice);
+        } else {
+            groups.push(NoticeGroup {
+                notices: vec![notice],
+            });
+        }
+    }
+    groups
 }
 
 fn notice_pending(notice: &Notification, timestamp: u64) -> bool {
@@ -2603,6 +2661,7 @@ fn attention_status_glyph(
 fn attention_title(
     ui: &mut egui::Ui,
     notice: &Notification,
+    group_extra: &[Notification],
     session: Option<&Session>,
     theme: &AppearanceConfig,
     brand: Option<(&'static str, &str)>,
@@ -2625,7 +2684,12 @@ fn attention_title(
         &format!("agent-status:{}", notice.session_id),
         icon.rect,
     );
-    let text = session.map_or("Unknown session", |session| session.label.as_str());
+    let session_label = session.map_or("Unknown session", |session| session.label.as_str());
+    let text = if group_extra.is_empty() {
+        session_label.to_string()
+    } else {
+        format!("{session_label} · {} events", group_extra.len() + 1)
+    };
     // Measure after the leading icons so a brand glyph cannot push the
     // actions onto a second row.
     let label_width = attention_label_width(ui.available_width(), spacing, show_read);
@@ -2642,6 +2706,16 @@ fn attention_title(
                 ui.weak(session.cwd.display().to_string());
             }
             ui.label(notice_preview(&notice.summary));
+            for extra in group_extra.iter().take(8) {
+                ui.label(format!(
+                    "{}: {}",
+                    extra.state.label(),
+                    notice_preview(&extra.summary)
+                ));
+            }
+            if group_extra.len() > 8 {
+                ui.weak(format!("…and {} more", group_extra.len() - 8));
+            }
         });
     match brand_response {
         Some(brand) => brand.union(icon).union(label),
@@ -2715,6 +2789,7 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
         brand_icon,
         brand_label,
         show_read,
+        group_extra,
     } = input;
     let brand = match (brand_icon, brand_label) {
         (Some(icon), Some(label)) => Some((icon, label)),
@@ -2739,7 +2814,8 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
             let action = ui
                 .horizontal(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
-                    let header = attention_title(ui, notice, session, theme, brand, show_read);
+                    let header =
+                        attention_title(ui, notice, group_extra, session, theme, brand, show_read);
                     #[cfg(feature = "test-support")]
                     diagnostics::record(
                         ui.ctx(),
@@ -2778,6 +2854,40 @@ mod tests {
         assert_eq!(attention_badge_label(0, 2), "2 unread");
         assert_eq!(attention_badge_label(3, 0), "3 waiting");
         assert_eq!(attention_badge_label(3, 2), "3 waiting · 2 unread");
+    }
+
+    #[test]
+    fn inbox_rows_fold_notices_from_the_same_agent_run() {
+        fn notice(id: &str, session: &str, invocation: &str, created: u64) -> Notification {
+            Notification {
+                id: id.into(),
+                session_id: session.into(),
+                invocation_id: invocation.into(),
+                request_id: None,
+                state: AgentState::WaitingInput,
+                summary: String::new(),
+                details: String::new(),
+                created,
+                read: false,
+                dismissed: false,
+                resolved: false,
+                snoozed_until: 0,
+            }
+        }
+        let groups = group_notices(vec![
+            notice("n1", "s", "a", 3),
+            notice("n2", "s", "a", 2),
+            notice("n3", "s", "b", 1),
+            notice("n4", "t", "a", 0),
+        ]);
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0].notices.len(), 2);
+        assert_eq!(groups[0].notices[0].id, "n1");
+        assert_eq!(groups[0].notices[1].id, "n2");
+        assert_eq!(groups[1].notices[0].id, "n3");
+        // The same invocation id in another session is a different run.
+        assert_eq!(groups[2].notices[0].id, "n4");
+        assert!(group_notices(vec![]).is_empty());
     }
 
     #[test]

@@ -244,6 +244,7 @@ impl App {
                             brand_icon: presented.brand_icon,
                             brand_label: presented.brand_label.as_deref(),
                             show_read: false,
+                            group_extra: &[],
                         },
                     );
                 });

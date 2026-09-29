@@ -87,6 +87,13 @@ pings rather than blocking hooks. Failures log a generic daemon message and do
 not affect lifecycle tracking. `TERMINATOR_NO_NOTIFICATIONS` suppresses delivery
 for fixtures. This option currently supports public ntfy.sh topics without auth.
 
+Pushes are time-gated while the inbox keeps every notification: repeats
+from one agent run and state are held back for 60s, and any push holds
+back every other push for 15s, so a burst buzzes once. A state change
+from the same run (waiting, then completed) is its own budget. The
+Agents inbox likewise folds one agent run's pending notices into a
+single row; row actions apply to the whole group.
+
 ## Notification self-tests
 
 Settings → Notifications → Send test posts directly to ntfy.sh with the draft

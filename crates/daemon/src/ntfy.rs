@@ -1,5 +1,5 @@
 //! Best-effort hook notifications; a bounded worker never holds daemon locks.
-use std::{process::Command, sync::mpsc, thread, time::Duration};
+use std::{collections::HashMap, process::Command, sync::mpsc, thread, time::Duration};
 use terminator_core::{
     HookEvent, Settings,
     process::{CommandOptions, run_command},
@@ -75,6 +75,46 @@ impl Ping {
     }
 }
 
+/// Repeat pushes from one agent run and state are dropped for a minute;
+/// any push also holds back every other push for a few seconds so a
+/// multi-agent burst buzzes the phone once instead of once per agent.
+pub const PER_AGENT_WINDOW_SECS: u64 = 60;
+pub const GLOBAL_WINDOW_SECS: u64 = 15;
+
+/// In-memory dispatch gate. The Agents inbox keeps every notification; this
+/// only decides which ones also buzz the phone.
+#[derive(Default)]
+pub struct Cooldown {
+    last_global: Option<u64>,
+    last_per_key: HashMap<String, u64>,
+}
+
+impl Cooldown {
+    /// Key by agent invocation plus state, e.g. from the hook event.
+    pub fn allow(&mut self, key: &str, now: u64) -> bool {
+        if self
+            .last_global
+            .is_some_and(|last| now.saturating_sub(last) < GLOBAL_WINDOW_SECS)
+        {
+            return false;
+        }
+        if self
+            .last_per_key
+            .get(key)
+            .is_some_and(|last| now.saturating_sub(*last) < PER_AGENT_WINDOW_SECS)
+        {
+            return false;
+        }
+        self.last_global = Some(now);
+        self.last_per_key.insert(key.to_string(), now);
+        if self.last_per_key.len() > 1024 {
+            self.last_per_key
+                .retain(|_, last| now.saturating_sub(*last) < PER_AGENT_WINDOW_SECS);
+        }
+        true
+    }
+}
+
 pub fn start() -> mpsc::SyncSender<Ping> {
     let (tx, rx) = mpsc::sync_channel::<Ping>(64);
     thread::spawn(move || {
@@ -131,6 +171,23 @@ mod tests {
         assert!(!String::from_utf8(ping.payload).unwrap().contains("private"));
         settings.ntfy_channel.clear();
         assert!(Ping::from_event(&settings, &event()).is_none());
+    }
+
+    #[test]
+    fn cooldown_holds_back_same_agent_repeats_and_global_bursts() {
+        let mut gate = Cooldown::default();
+        assert!(gate.allow("a:waiting", 1000));
+        // Same agent run and state inside the per-agent window: silent.
+        assert!(!gate.allow("a:waiting", 1001));
+        assert!(!gate.allow("a:waiting", 1059));
+        // A different agent inside the global window: silent too.
+        assert!(!gate.allow("b:waiting", 1001));
+        // Global window elapsed, fresh key: push.
+        assert!(gate.allow("b:waiting", 1015));
+        // A state change from the same run is its own key once global clears.
+        assert!(gate.allow("a:completed", 1031));
+        // Per-agent window elapsed: push again.
+        assert!(gate.allow("a:waiting", 1100));
     }
 
     #[test]
