@@ -61,6 +61,7 @@ mod gui_services;
 #[cfg(any(test, target_os = "macos"))]
 mod menu_bar;
 mod native_jobs;
+mod search;
 mod services;
 use anyhow::{Context, Result};
 use eframe::egui::{self, Color32, RichText};
@@ -255,6 +256,12 @@ enum Job {
     External(PathBuf),
     TestExternal(PathBuf, String, Vec<String>),
     Workspace(PathBuf, workspace_ops::Op),
+    Search {
+        id: u64,
+        root: PathBuf,
+        query: search::Query,
+        show_ignored: bool,
+    },
 }
 impl Job {
     fn rpc(request: Request, after: After) -> Self {
@@ -321,6 +328,7 @@ enum Update {
     Text(String, String),
     Diff(String, Result<diff::DiffDocument, String>),
     Workspace(workspace_ops::Op, Result<workspace_ops::Report, String>),
+    Search(u64, Result<Vec<search::Hit>, String>),
     Refresh(
         u64,
         services::ContextData,
@@ -505,6 +513,18 @@ pub struct App {
     git_log: Vec<(String, String)>,
     git_list_root: Option<PathBuf>,
     git_collapse: u64,
+    /// Branch comparison for the current Git root (upstream, ahead/behind,
+    /// and files committed since the base ref).
+    git_compare: Option<workspace_ops::CompareData>,
+    git_compare_root: Option<PathBuf>,
+    /// User-picked base ref; falls back to the upstream branch when `None`.
+    git_base_ref: Option<String>,
+    /// Explorer search results (Contents mode) and the query that produced them.
+    explorer_search: Vec<search::Hit>,
+    explorer_search_error: Option<String>,
+    explorer_search_generation: u64,
+    explorer_search_pending: bool,
+    explorer_search_last: Option<search::Query>,
     explorer_query: String,
     name_prompt: Option<workspace_ops::NamePrompt>,
     pending_delete: Option<PathBuf>,
@@ -837,6 +857,14 @@ impl App {
             git_log: Vec::new(),
             git_list_root: None,
             git_collapse: 0,
+            git_compare: None,
+            git_compare_root: None,
+            git_base_ref: None,
+            explorer_search: Vec::new(),
+            explorer_search_error: None,
+            explorer_search_generation: 0,
+            explorer_search_pending: false,
+            explorer_search_last: None,
             explorer_query: String::new(),
             name_prompt: None,
             pending_delete: None,
@@ -1859,8 +1887,27 @@ impl App {
                     }
                     Ok(workspace_ops::Report::Branches(names)) => self.git_branches = names,
                     Ok(workspace_ops::Report::Log(rows)) => self.git_log = rows,
+                    Ok(workspace_ops::Report::Compare(data)) => {
+                        self.git_compare_root = data.root.clone();
+                        self.git_compare = Some(data);
+                    }
                     Err(error) => self.report_status_error(error),
                 },
+                Update::Search(id, result) => {
+                    if id == self.explorer_search_generation {
+                        self.explorer_search_pending = false;
+                        match result {
+                            Ok(hits) => {
+                                self.explorer_search = hits;
+                                self.explorer_search_error = None;
+                            }
+                            Err(error) => {
+                                self.explorer_search.clear();
+                                self.explorer_search_error = Some(error);
+                            }
+                        }
+                    }
+                }
             }
         }
         let mut budget = native_jobs::ResultBudget::new();
@@ -3656,6 +3703,39 @@ impl App {
         for path in outcome.stage {
             self.queue_workspace(workspace_ops::Op::Stage(path));
         }
+        if outcome.stage_all {
+            let paths: Vec<PathBuf> = self
+                .context
+                .as_ref()
+                .map(|context| {
+                    context
+                        .changes
+                        .iter()
+                        .filter(|change| !change.conflict())
+                        .map(|change| change.path.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            for path in paths {
+                self.queue_workspace(workspace_ops::Op::Stage(path));
+            }
+        }
+        if outcome.toggle_list {
+            self.preferences.git_view_list = !self.preferences.git_view_list;
+        }
+        if outcome.clear_base {
+            self.git_base_ref = None;
+            self.queue_workspace(workspace_ops::Op::Compare { base: None });
+        }
+        if let Some(base) = outcome.set_base {
+            self.git_base_ref = Some(base.clone());
+            self.queue_workspace(workspace_ops::Op::Compare { base: Some(base) });
+        }
+        if outcome.refresh_compare {
+            self.queue_workspace(workspace_ops::Op::Compare {
+                base: self.git_base_ref.clone(),
+            });
+        }
         for path in outcome.unstage {
             self.queue_workspace(workspace_ops::Op::Unstage(path));
         }
@@ -4708,6 +4788,11 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.popups.begin_frame(&ctx);
+        // Clear before the exit early return too, so the last-painted terminals
+        // stop scheduling repaints while the exit screen is shown.
+        for backend in self.backends.values() {
+            backend.set_painted(false);
+        }
         if self.exit.active() {
             self.browser_host.hide_all();
             ui.centered_and_justified(|ui| {
@@ -4719,9 +4804,6 @@ impl eframe::App for App {
         self.visible_sessions.clear();
         self.visible_images.clear();
         self.visible_browsers.clear();
-        for backend in self.backends.values() {
-            backend.set_painted(false);
-        }
         self.markdown.begin_frame();
         #[cfg(feature = "test-support")]
         self.diagnostics.frame(&ctx);
@@ -7033,6 +7115,7 @@ mod navigation_tests {
             branch: "main".into(),
             changes: vec![],
             decorations: Default::default(),
+            stats: Default::default(),
             error: None,
         });
         let (jobs, requests) = mpsc::channel();
@@ -7091,6 +7174,7 @@ mod navigation_tests {
             branch: "main".into(),
             changes: vec![],
             decorations: Default::default(),
+            stats: Default::default(),
             error: None,
         });
         let (jobs, requests) = mpsc::channel();
@@ -7147,6 +7231,7 @@ mod navigation_tests {
             branch: "main".into(),
             changes: vec![],
             decorations: Default::default(),
+            stats: Default::default(),
             error: None,
         });
         app.selected = Some("a".into());
@@ -7185,6 +7270,7 @@ mod navigation_tests {
                 status: " M".into(),
             }],
             decorations: Default::default(),
+            stats: Default::default(),
             error: None,
         });
         app.selected = Some("a".into());
@@ -7213,11 +7299,14 @@ mod navigation_tests {
                             neovim_review: false,
                             theme: &app.theme,
                             history: false,
+                            view_list: false,
                             commits: &[],
                             branches: &[],
                             commit_draft: &mut draft,
                             collapse_generation: 0,
                             open_shortcut: "",
+                            compare: None,
+                            base_ref: None,
                         };
                         sidebar_ui::git_panel(ui, &mut { input })
                     };
@@ -7276,6 +7365,7 @@ mod navigation_tests {
                 status: " M".into(),
             }],
             decorations: std::collections::HashMap::from([(path.clone(), 'M')]),
+            stats: Default::default(),
             error: None,
         });
         let (jobs, requests) = mpsc::channel();
@@ -7334,6 +7424,7 @@ mod navigation_tests {
             branch: "main".into(),
             changes: vec![],
             decorations: Default::default(),
+            stats: Default::default(),
             error: None,
         });
         for staged in [false, true] {
@@ -8149,6 +8240,7 @@ mod navigation_tests {
             branch: String::new(),
             changes: vec![],
             decorations: Default::default(),
+            stats: Default::default(),
             error: None,
         };
         app.update_tx
@@ -8201,6 +8293,7 @@ mod navigation_tests {
                     branch: "stale".into(),
                     changes: vec![],
                     decorations: Default::default(),
+                    stats: Default::default(),
                     error: None,
                 },
                 vec![],

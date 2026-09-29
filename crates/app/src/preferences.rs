@@ -276,6 +276,7 @@ fn session_name_order(left: &Session, right: &Session) -> Ordering {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SidebarTool {
     #[default]
     Explorer,
@@ -283,6 +284,16 @@ pub enum SidebarTool {
     Git,
     History,
     Info,
+}
+
+/// Explorer search behavior: filter the visible tree by name, or search file
+/// contents and show a result list.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExplorerSearchMode {
+    #[default]
+    Names,
+    Contents,
 }
 
 /// Agents sidebar views. Needs attention preserves the existing inbox;
@@ -456,6 +467,23 @@ pub struct UiPreferences {
     #[serde(default)]
     pub agents_collapsed: HashSet<String>,
     pub show_ignored: bool,
+    /// Explorer search mode and Options kebab (`Aa`, whole word, regex) plus
+    /// the Contents include/exclude globs.
+    #[serde(default)]
+    pub explorer_search_mode: ExplorerSearchMode,
+    #[serde(default)]
+    pub explorer_include: String,
+    #[serde(default)]
+    pub explorer_exclude: String,
+    #[serde(default)]
+    pub explorer_match_case: bool,
+    #[serde(default)]
+    pub explorer_whole_word: bool,
+    #[serde(default)]
+    pub explorer_regex: bool,
+    /// Git sidebar "View as list": flat file list instead of grouped sections.
+    #[serde(default)]
+    pub git_view_list: bool,
     /// Info sidebar sections and the host-resource block. Missing prefs stay open.
     #[serde(default = "default_true")]
     pub info_process_open: bool,
@@ -513,6 +541,13 @@ impl Default for UiPreferences {
             agents_filter: String::new(),
             agents_collapsed: HashSet::new(),
             show_ignored: false,
+            explorer_search_mode: ExplorerSearchMode::Names,
+            explorer_include: String::new(),
+            explorer_exclude: String::new(),
+            explorer_match_case: false,
+            explorer_whole_word: false,
+            explorer_regex: false,
+            git_view_list: false,
             info_process_open: true,
             info_resources_open: true,
             info_show_system: true,

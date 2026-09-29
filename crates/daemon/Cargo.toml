@@ -24,7 +24,7 @@ tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSUserNotification"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSUserNotification"] }
 
 [build-dependencies]
 cc = "1"

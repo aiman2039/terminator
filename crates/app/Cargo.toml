@@ -57,6 +57,9 @@ syntect = { version = "5", default-features = false, features = [
     "yaml-load",
     "regex-fancy",
 ] }
+regex = "1.13.1"
+globset = "0.4.20"
+ignore = { version = "0.4.33", default-features = false }
 
 [features]
 test-support = ["dep:egui-winit", "egui-winit/test-support", "terminator-updater/test-support"]

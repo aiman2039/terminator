@@ -4,26 +4,39 @@
 
 - Daemon: `notifications::send` no longer spawns a thread per alert. One
   long-lived `desktop-notifications` worker serializes every wait, so at most
-  one waiter exists. A 60 s deadline clears delivered notifications on the
-  daemon main thread (`NSUserNotificationCenter::removeAllDeliveredNotifications`),
-  ending a waiter that the user never acted on. The run loop is still pumped
-  only while a waiter exists.
+  one waiter exists. Every alert carries a submission generation; when a newer
+  alert arrives the main thread removes **only that waiter's** delivered
+  notification (matched by an invisible per-waiter marker) so the ObjC
+  dismiss poll releases it and the worker presents the replacement right away.
+  `removeAllDeliveredNotifications` is gone, so other Terminator
+  notifications (GUI or other daemon generations) stay in Notification Center.
+- Behavior change: an unread alert is no longer removed from Notification
+  Center after 60 s; it stays until the user acts on it or a newer alert
+  replaces it. The waiter and run-loop pump therefore last as long as a
+  notification is pending, which is why the pump is now a 1 ms slice on a
+  100 ms `poll` timeout (down from a 5 ms slice every 10 ms).
 - Daemon accept loop is event-driven: the main thread blocks in `poll` with no
   timeout while no notification waiter exists, and a socketpair wakes it when
-  a waiter starts or ends or when a shutdown request arrives. The previous
-  non-blocking `accept` + 10 ms sleep did ~100 wakeups/s even when idle.
-  Isolated smoke: idle CPU 0.0–0.2%, a `Snapshot` request answered, and a
-  `Shutdown` request exits the daemon.
-- Regression `notification_waiters_are_bounded` queues 32 alerts against a
-  blocked presenter and asserts the waiter count never exceeds one; a burst of
-  queued alerts coalesces to the newest after the active one ends.
-- GUI/vendor: `egui_term` coalesces PTY-driven repaints to 33 ms and only wakes
-  the UI for a terminal painted in the current frame; hidden terminals mark the
-  grid dirty and skip the wake. The host clears `set_painted(false)` for every
-  backend at frame start and sets it when the terminal is drawn.
-- `cargo test -p terminator-daemon -p terminator --all-features --locked`
-  passed (454 app, 36 daemon). Strict workspace Clippy and `cargo fmt --all
-  --check` passed; the daemon binary links `objc2-foundation` and starts.
+  a waiter starts or ends, when a newer alert preempts the active one, or when
+  a shutdown request arrives. The previous non-blocking `accept` + 10 ms sleep
+  did ~100 wakeups/s even when idle. Isolated smoke: idle CPU 0.0–0.2%, a
+  `Snapshot` request answered, and a `Shutdown` request exits the daemon.
+- Regressions: `notification_waiters_are_bounded_and_coalesce` queues a burst
+  behind a blocked presenter and asserts only one waiter is live, that a burst
+  coalesces to the newest alert, and that waiters never exceed one.
+  `newer_alert_supersedes_the_waiting_one` asserts a queued alert supersedes
+  the waiting one, releases the earlier waiter, and still keeps one live
+  waiter. `marker_is_hidden_and_unique_per_generation` covers the marker.
+- GUI/vendor: `egui_term` uses a leading-edge 33 ms throttle: an echo after an
+  idle period repaints at once (no added input latency) while a sustained
+  burst stays capped near 30 fps. Only terminals painted in the current frame
+  wake the UI; hidden terminals mark the grid dirty and skip the wake. The host
+  clears `set_painted(false)` for every backend before the exit-screen early
+  return and sets it when the terminal is drawn.
+- `cargo test -p terminator-daemon --all-features --locked` passed (daemon;
+  app not run because unrelated in-progress app work did not compile in this
+  tree). Strict workspace Clippy and `cargo fmt --all --check` passed; the
+  daemon binary links `objc2-foundation` and starts.
 - Not run: before/after native `sample` of the rebuilt package, GUI smoke, or
   replacement of a running installed daemon/GUI.
 

@@ -8,9 +8,10 @@ use crate::{
     file_actions::{self, FileAction},
     icons,
     preferences::{
-        AgentsTab, HistoryInput, HistorySort, ProjectSort, SidebarTool, VisibleProjects,
-        sort_history, sort_visible_projects,
+        AgentsTab, ExplorerSearchMode, HistoryInput, HistorySort, ProjectSort, SidebarTool,
+        VisibleProjects, sort_history, sort_visible_projects,
     },
+    search,
     services::ContextData,
     session_info,
     settings_ui::SettingsSection,
@@ -329,8 +330,12 @@ impl App {
         self.git_list_root = Some(root);
         self.git_branches.clear();
         self.git_log.clear();
+        self.git_compare = None;
+        self.git_compare_root = None;
+        self.git_base_ref = None;
         self.queue_workspace(workspace_ops::Op::Branches);
         self.queue_workspace(workspace_ops::Op::Log);
+        self.queue_workspace(workspace_ops::Op::Compare { base: None });
     }
 
     fn explorer_local(&mut self, path: &std::path::Path, local: ExplorerLocal, ui: &egui::Ui) {
@@ -380,91 +385,287 @@ impl App {
         let mut focus_find = false;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            let new_file = appearance::sidebar_action(ui, "File", "New file");
-            let new_folder = appearance::sidebar_action(ui, "Folder", "New folder");
-            let collapse = appearance::sidebar_action(ui, "ChevronDown", "Collapse all");
-            let refresh = appearance::sidebar_action(ui, "RefreshCw", "Refresh");
-            let ignored_icon = if self.preferences.show_ignored {
-                "Eye"
-            } else {
-                "EyeOff"
-            };
-            let ignored = appearance::selectable_icon(
-                ui,
-                ignored_icon,
-                "Show ignored files (excluded by Git ignore rules and Git metadata)",
-                self.preferences.show_ignored,
+            let name = cwd
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| cwd.display().to_string());
+            ui.add(egui::Label::new(RichText::new(name).strong()).truncate())
+                .on_hover_text(cwd.display().to_string());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let cwd = cwd.to_path_buf();
+                let more = appearance::menu_button(ui, "…", |ui| {
+                    if appearance::menu_item(ui, "Reveal in file manager", "FolderOpen", "")
+                        .clicked()
+                    {
+                        self.queue_workspace(workspace_ops::Op::Reveal(cwd.clone()));
+                        ui.close();
+                    }
+                    if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
+                        ui.ctx().copy_text(cwd.display().to_string());
+                        ui.close();
+                    }
+                    if appearance::menu_item(ui, "Copy relative path", "Copy", "").clicked() {
+                        let root = self.op_root().unwrap_or_else(|| cwd.clone());
+                        ui.ctx()
+                            .copy_text(workspace_ops::relative_display(&root, &cwd));
+                        ui.close();
+                    }
+                    ui.separator();
+                    if appearance::menu_item(ui, "Find in folder", "Search", "").clicked() {
+                        focus_find = true;
+                        ui.close();
+                    }
+                    if appearance::menu_item(ui, "Collapse all", "ChevronsDownUp", "").clicked() {
+                        self.expanded_dirs.clear();
+                        ui.close();
+                    }
+                })
+                .response
+                .on_hover_text("Folder actions");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "explorer-more", more.rect);
+                let _ = more;
+                let ignored_icon = if self.preferences.show_ignored {
+                    "Eye"
+                } else {
+                    "EyeOff"
+                };
+                let ignored = appearance::selectable_icon(
+                    ui,
+                    ignored_icon,
+                    "Show ignored files (excluded by Git ignore rules and Git metadata)",
+                    self.preferences.show_ignored,
+                );
+                let refresh = appearance::sidebar_action(ui, "RefreshCw", "Refresh");
+                let collapse = appearance::sidebar_action(ui, "ChevronsDownUp", "Collapse all");
+                let new_folder = appearance::sidebar_action(ui, "Folder", "New folder");
+                let new_file = appearance::sidebar_action(ui, "File", "New file");
+                #[cfg(feature = "test-support")]
+                {
+                    diagnostics::record(ui.ctx(), "explorer-new-file", new_file.rect);
+                    diagnostics::record(ui.ctx(), "explorer-new-folder", new_folder.rect);
+                    diagnostics::record(ui.ctx(), "explorer-collapse", collapse.rect);
+                    diagnostics::record(ui.ctx(), "explorer-refresh", refresh.rect);
+                    diagnostics::record(ui.ctx(), "explorer-show-ignored", ignored.rect);
+                }
+                if ignored.clicked() {
+                    self.preferences.show_ignored = !self.preferences.show_ignored;
+                    self.explorer_search_last = None;
+                }
+                if new_file.clicked() {
+                    self.name_prompt = Some(workspace_ops::NamePrompt::File {
+                        dir: cwd.clone(),
+                        name: String::new(),
+                    });
+                }
+                if new_folder.clicked() {
+                    self.name_prompt = Some(workspace_ops::NamePrompt::Folder {
+                        dir: cwd.clone(),
+                        name: String::new(),
+                    });
+                }
+                if collapse.clicked() {
+                    self.expanded_dirs.clear();
+                }
+                if refresh.clicked() {
+                    self.refresh_request = None;
+                }
+            });
+        });
+        let contents = self.preferences.explorer_search_mode == ExplorerSearchMode::Contents;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let icon = 18.0;
+            ui.add_sized(
+                [icon, icon],
+                egui::Image::new(icons::source("Search"))
+                    .tint(appearance::color(&self.theme.secondary)),
+            );
+            let toggles = if contents { 78.0 } else { 0.0 };
+            let find = ui.add_sized(
+                [ui.available_width() - toggles, 24.0],
+                egui::TextEdit::singleline(&mut self.explorer_query).hint_text(if contents {
+                    "Search"
+                } else {
+                    "Find in folder"
+                }),
+            );
+            if focus_find {
+                find.request_focus();
+            }
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "explorer-search", find.rect);
+            if contents {
+                let case = explorer_toggle(
+                    ui,
+                    "Aa",
+                    "Match case",
+                    self.preferences.explorer_match_case,
+                    "explorer-match-case",
+                );
+                let word = explorer_toggle(
+                    ui,
+                    "ab",
+                    "Match whole word",
+                    self.preferences.explorer_whole_word,
+                    "explorer-whole-word",
+                );
+                let regex = explorer_toggle(
+                    ui,
+                    ".*",
+                    "Use regular expression",
+                    self.preferences.explorer_regex,
+                    "explorer-regex",
+                );
+                if case.clicked() {
+                    self.preferences.explorer_match_case = !self.preferences.explorer_match_case;
+                }
+                if word.clicked() {
+                    self.preferences.explorer_whole_word = !self.preferences.explorer_whole_word;
+                }
+                if regex.clicked() {
+                    self.preferences.explorer_regex = !self.preferences.explorer_regex;
+                }
+            }
+        });
+        ui.add_space(2.0);
+        explorer_segmented(ui, &mut self.preferences.explorer_search_mode);
+        if contents {
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("FILES TO INCLUDE")
+                    .small()
+                    .color(appearance::color(&self.theme.secondary)),
+            );
+            let include = ui.add_sized(
+                [ui.available_width(), 24.0],
+                egui::TextEdit::singleline(&mut self.preferences.explorer_include)
+                    .hint_text("files to include (e.g. *.ts, src/**)"),
             );
             #[cfg(feature = "test-support")]
-            {
-                diagnostics::record(ui.ctx(), "explorer-new-file", new_file.rect);
-                diagnostics::record(ui.ctx(), "explorer-new-folder", new_folder.rect);
-                diagnostics::record(ui.ctx(), "explorer-collapse", collapse.rect);
-                diagnostics::record(ui.ctx(), "explorer-refresh", refresh.rect);
-                diagnostics::record(ui.ctx(), "explorer-show-ignored", ignored.rect);
-            }
-            if ignored.clicked() {
-                self.preferences.show_ignored = !self.preferences.show_ignored;
-            }
-            if new_file.clicked() {
-                self.name_prompt = Some(workspace_ops::NamePrompt::File {
-                    dir: cwd.into(),
-                    name: String::new(),
-                });
-            }
-            if new_folder.clicked() {
-                self.name_prompt = Some(workspace_ops::NamePrompt::Folder {
-                    dir: cwd.into(),
-                    name: String::new(),
-                });
-            }
-            if collapse.clicked() {
-                self.expanded_dirs.clear();
-            }
-            if refresh.clicked() {
-                self.refresh_request = None;
-            }
-            let cwd = cwd.to_path_buf();
-            let more = appearance::menu_button(ui, "…", |ui| {
-                if appearance::menu_item(ui, "Reveal in file manager", "FolderOpen", "").clicked() {
-                    self.queue_workspace(workspace_ops::Op::Reveal(cwd.clone()));
-                    ui.close();
-                }
-                if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
-                    ui.ctx().copy_text(cwd.display().to_string());
-                    ui.close();
-                }
-                if appearance::menu_item(ui, "Copy relative path", "Copy", "").clicked() {
-                    let root = self.op_root().unwrap_or_else(|| cwd.clone());
-                    ui.ctx()
-                        .copy_text(workspace_ops::relative_display(&root, &cwd));
-                    ui.close();
-                }
-                ui.separator();
-                if appearance::menu_item(ui, "Find in folder", "Search", "").clicked() {
-                    focus_find = true;
-                    ui.close();
-                }
-                if appearance::menu_item(ui, "Collapse all", "ChevronDown", "").clicked() {
-                    self.expanded_dirs.clear();
-                    ui.close();
-                }
-            })
-            .response
-            .on_hover_text("Folder actions");
+            diagnostics::record(ui.ctx(), "explorer-include", include.rect);
+            #[cfg(not(feature = "test-support"))]
+            let _ = &include;
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new("FILES TO EXCLUDE")
+                    .small()
+                    .color(appearance::color(&self.theme.secondary)),
+            );
+            let exclude = ui.add_sized(
+                [ui.available_width(), 24.0],
+                egui::TextEdit::singleline(&mut self.preferences.explorer_exclude)
+                    .hint_text("files to exclude (e.g. *.min.js, dist/**)"),
+            );
             #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "explorer-more", more.rect);
-            let _ = more;
-        });
-        let find = ui.add(
-            egui::TextEdit::singleline(&mut self.explorer_query)
-                .hint_text("Find in folder")
-                .desired_width(f32::INFINITY),
-        );
-        if focus_find {
-            find.request_focus();
+            diagnostics::record(ui.ctx(), "explorer-exclude", exclude.rect);
+            #[cfg(not(feature = "test-support"))]
+            let _ = &exclude;
         }
+        self.refresh_explorer_search(cwd);
         self.name_prompt_bar(ui);
+    }
+
+    /// Queue a Contents search when the query or filters changed. Results are
+    /// tagged with a generation so stale workers are dropped.
+    fn refresh_explorer_search(&mut self, cwd: &std::path::Path) {
+        if self.preferences.explorer_search_mode != ExplorerSearchMode::Contents {
+            return;
+        }
+        let query = search::Query {
+            text: self.explorer_query.clone(),
+            match_case: self.preferences.explorer_match_case,
+            whole_word: self.preferences.explorer_whole_word,
+            use_regex: self.preferences.explorer_regex,
+            include: self.preferences.explorer_include.clone(),
+            exclude: self.preferences.explorer_exclude.clone(),
+        };
+        if self.explorer_search_last.as_ref() == Some(&query) {
+            return;
+        }
+        self.explorer_search_last = Some(query.clone());
+        self.explorer_search_generation = self.explorer_search_generation.wrapping_add(1);
+        if query.is_empty() {
+            self.explorer_search.clear();
+            self.explorer_search_error = None;
+            self.explorer_search_pending = false;
+            return;
+        }
+        self.explorer_search_pending = true;
+        let id = self.explorer_search_generation;
+        let show_ignored = self.preferences.show_ignored;
+        let _ = self.jobs.send(Job::Search {
+            id,
+            root: cwd.to_path_buf(),
+            query,
+            show_ignored,
+        });
+    }
+
+    /// Contents search results, grouped by file. Clicking a hit opens that file.
+    fn explorer_results(&mut self, ui: &mut egui::Ui, cwd: &std::path::Path) {
+        if let Some(error) = &self.explorer_search_error {
+            ui.colored_label(appearance::color(&self.theme.status_failed), error);
+            return;
+        }
+        if self.explorer_search.is_empty() {
+            ui.weak(if self.explorer_search_pending {
+                "Searching…"
+            } else if self.explorer_query.trim().is_empty() {
+                "Type to search in files"
+            } else {
+                "No results"
+            });
+            return;
+        }
+        if self.explorer_search_pending {
+            ui.weak("Searching…");
+        }
+        let root = self.op_root().unwrap_or_else(|| cwd.to_path_buf());
+        let mut open: Option<PathBuf> = None;
+        let mut last: Option<&Path> = None;
+        for hit in &self.explorer_search {
+            if skip_clipped_git_row(ui) {
+                continue;
+            }
+            if last != Some(hit.path.as_path()) {
+                let relative = workspace_ops::relative_display(&root, &hit.path);
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(relative)
+                            .small()
+                            .color(appearance::color(&self.theme.secondary)),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(hit.path.display().to_string());
+                last = Some(hit.path.as_path());
+            }
+            let response = appearance::file_row(
+                ui,
+                &hit.text,
+                icons::file_icon(&hit.path),
+                false,
+                20.0,
+                &hit.line.to_string(),
+                appearance::color(&self.theme.text),
+            )
+            .on_hover_text(format!("{}:{}", hit.path.display(), hit.line));
+            #[cfg(feature = "test-support")]
+            diagnostics::record(
+                ui.ctx(),
+                &format!("search-hit:{}:{}", hit.path.display(), hit.line),
+                response.rect,
+            );
+            if response.clicked() {
+                open = Some(hit.path.clone());
+            }
+        }
+        if let Some(path) = open {
+            self.activate_file_action(ui, &path, FileAction::Open);
+        }
     }
 
     fn name_prompt_bar(&mut self, ui: &mut egui::Ui) {
@@ -2038,9 +2239,17 @@ impl App {
             self.pending_delete_bar(ui);
             if let Some(cwd) = self.cwd() {
                 self.explorer_toolbar(ui, &cwd);
-                appearance::sidebar_scroll("files")
-                    .max_height(ui.available_height())
-                    .show(ui, |ui| self.tree(ui, &cwd, 0));
+                let contents =
+                    self.preferences.explorer_search_mode == ExplorerSearchMode::Contents;
+                if contents {
+                    appearance::sidebar_scroll("files-search")
+                        .max_height(ui.available_height())
+                        .show(ui, |ui| self.explorer_results(ui, &cwd));
+                } else {
+                    appearance::sidebar_scroll("files")
+                        .max_height(ui.available_height())
+                        .show(ui, |ui| self.tree(ui, &cwd, 0));
+                }
             }
             return;
         }
@@ -2068,11 +2277,17 @@ impl App {
                         .any(|c| c == NVIM_REVIEW_CAPABILITY),
                     theme: &self.theme,
                     history: self.git_history,
+                    view_list: self.preferences.git_view_list,
                     commits: &self.git_log,
                     branches: &self.git_branches,
                     commit_draft: &mut draft,
                     collapse_generation: self.git_collapse,
                     open_shortcut: &open_shortcut,
+                    compare: self
+                        .git_compare
+                        .as_ref()
+                        .filter(|_| self.git_compare_root == context.root),
+                    base_ref: self.git_base_ref.as_deref(),
                 },
             );
             self.git_commit = draft;
@@ -2101,11 +2316,16 @@ pub struct GitPanelInput<'a> {
     pub neovim_review: bool,
     pub theme: &'a AppearanceConfig,
     pub history: bool,
+    pub view_list: bool,
     pub commits: &'a [(String, String)],
     pub branches: &'a [String],
     pub commit_draft: &'a mut String,
     pub collapse_generation: u64,
     pub open_shortcut: &'a str,
+    /// Branch comparison for the current root, when available.
+    pub compare: Option<&'a workspace_ops::CompareData>,
+    /// User-picked base ref; `None` means the upstream branch is used.
+    pub base_ref: Option<&'a str>,
 }
 
 /// A concrete file action with its target, ready for `App` to perform.
@@ -2134,6 +2354,14 @@ pub struct GitPanelOutcome {
     pub discard: Vec<(PathBuf, bool)>,
     pub delete: Vec<PathBuf>,
     pub copy: Vec<String>,
+    /// Stage every working-tree and untracked change.
+    pub stage_all: bool,
+    /// Switch between grouped sections and one flat list.
+    pub toggle_list: bool,
+    /// Store a user-picked base ref; `clear_base` restores the upstream.
+    pub set_base: Option<String>,
+    pub clear_base: bool,
+    pub refresh_compare: bool,
 }
 
 /// Map a Git row click to the concrete action `App` performs. Conflicts open
@@ -2177,75 +2405,47 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
     let root = input.context.root.clone();
     let changes = input.context.changes.clone();
     let error = input.context.error.clone();
+    let stats = input.context.stats.clone();
     if root.is_none() {
         ui.weak("Not a Git repository");
     } else {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            let collapse = appearance::sidebar_action(ui, "ChevronDown", "Collapse all");
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "git-collapse", collapse.rect);
-            if collapse.clicked() {
-                outcome.collapse = true;
-            }
-            let changes = ui.selectable_label(!input.history, "Changes");
-            let history = ui.selectable_label(input.history, "History");
-            #[cfg(feature = "test-support")]
-            {
-                diagnostics::record(ui.ctx(), "git-changes", changes.rect);
-                diagnostics::record(ui.ctx(), "git-history", history.rect);
-            }
-            if changes.clicked() {
-                outcome.history = Some(false);
-            }
-            if history.clicked() {
-                outcome.history = Some(true);
-            }
-            let branch = appearance::menu_button(ui, &branch_name, |ui| {
-                if input.branches.is_empty() {
-                    ui.weak("No branches");
-                }
-                for name in input.branches {
-                    let mark = if name == &branch_name { "✓" } else { "" };
-                    if appearance::menu_item(ui, name, "GitBranch", mark).clicked() {
-                        outcome.switch = Some(name.clone());
-                        ui.close();
-                    }
-                }
-            })
-            .response
-            .on_hover_text("Switch branch");
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "git-branch", branch.rect);
-            let _ = branch;
-            let refresh = appearance::sidebar_action(ui, "RefreshCw", "Refresh");
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "git-refresh", refresh.rect);
-            if refresh.clicked() {
-                outcome.refresh = true;
-            }
-            if ui.small_button("Log").clicked() {
-                outcome.view_log = true;
-            }
-        });
+        git_toolbar(ui, input, &branch_name, &mut outcome);
+        if !input.history
+            && let Some(compare) = input.compare
+        {
+            git_compare_row(ui, input.theme, &branch_name, compare, input.base_ref);
+        }
         let staged = changes
             .iter()
             .any(|change| change.in_group(terminator_git::GitGroup::Staged));
-        if staged && !input.history {
+        if !input.history {
             ui.add(
                 egui::TextEdit::multiline(input.commit_draft)
-                    .hint_text("Commit message")
-                    .desired_rows(2),
+                    .hint_text("Message")
+                    .desired_rows(3),
             );
-            if ui
-                .add_enabled(
-                    !input.commit_draft.trim().is_empty(),
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let stage_all = ui
+                    .add_enabled(!changes.is_empty(), egui::Button::new("Stage All"))
+                    .on_hover_text("Stage every change");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "git-stage-all", stage_all.rect);
+                #[cfg(not(feature = "test-support"))]
+                let _ = &stage_all;
+                if stage_all.clicked() {
+                    outcome.stage_all = true;
+                }
+                let commit = ui.add_enabled(
+                    staged && !input.commit_draft.trim().is_empty(),
                     egui::Button::new("Commit"),
-                )
-                .clicked()
-            {
-                outcome.commit = true;
-            }
+                );
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "git-commit", commit.rect);
+                if commit.clicked() {
+                    outcome.commit = true;
+                }
+            });
         }
         if input.history {
             appearance::sidebar_scroll("git-log").show(ui, |ui| {
@@ -2273,145 +2473,60 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
             ui.weak("Working tree clean");
         }
         appearance::sidebar_scroll("git").show(ui, |ui| {
-            for group in terminator_git::GitGroup::ALL {
-                let entries: Vec<_> = changes.iter().filter(|c| c.in_group(group)).collect();
-                if entries.is_empty() {
-                    continue;
+            let row_ctx = GitRowCtx {
+                theme: input.theme,
+                root: root.as_deref(),
+                review_mode: input.review_mode,
+                neovim_review: input.neovim_review,
+                open_shortcut: input.open_shortcut,
+                stats: &stats,
+            };
+            if input.view_list {
+                let mut any = false;
+                for group in terminator_git::GitGroup::ALL {
+                    for change in changes.iter().filter(|change| change.in_group(group)) {
+                        any = true;
+                        let label = workspace_ops::relative_display(
+                            root.as_deref().unwrap_or(&change.path),
+                            &change.path,
+                        );
+                        git_change_row(ui, &row_ctx, &mut outcome, change, group, &label);
+                    }
                 }
-                egui::CollapsingHeader::new(format!("{}  {}", group.label(), entries.len()))
-                    .id_salt((root.clone(), group.label(), input.collapse_generation))
-                    .default_open(input.collapse_generation == 0)
-                    .show(ui, |ui| {
-                        for change in entries {
-                            // Keep layout height without constructing thousands of off-screen
-                            // buttons, labels, tooltips, and context menus on every frame.
-                            if skip_clipped_git_row(ui) {
-                                continue;
-                            }
-                            let name = change
-                                .path
-                                .strip_prefix(root.as_ref().unwrap())
-                                .unwrap_or(&change.path)
-                                .display()
-                                .to_string();
-                            let letter = change.letter(group);
-                            let response = appearance::file_row(
-                                ui,
-                                &name,
-                                icons::file_icon(&change.path),
-                                false,
-                                24.0,
-                                &letter.to_string(),
-                                git_color(input.theme, letter),
-                            )
-                            .on_hover_text(format!(
-                                "{}\n{} ({})",
-                                change.path.display(),
-                                terminator_git::status_description(letter),
-                                group.label()
-                            ));
-                            #[cfg(feature = "test-support")]
-                            diagnostics::record(
-                                ui.ctx(),
-                                &format!(
-                                    "git-file-{}",
-                                    change
-                                        .path
-                                        .file_name()
-                                        .unwrap_or_default()
-                                        .to_string_lossy()
-                                ),
-                                response.rect,
-                            );
-                            let staged = (!change.conflict())
-                                .then_some(group == terminator_git::GitGroup::Staged);
-                            if let Some(action) = git_click_action(
-                                letter == 'D',
-                                staged,
-                                response.clicked() || response.double_clicked(),
-                                input.review_mode,
-                                input.neovim_review,
-                            ) {
-                                outcome.clicked.push(GitFileAction {
-                                    action,
-                                    path: change.path.clone(),
-                                });
-                            }
-                            appearance::context_menu(&response, |ui| {
-                                let open_changes = git_click_action(
-                                    letter == 'D',
-                                    staged,
-                                    true,
-                                    input.review_mode,
-                                    input.neovim_review,
-                                );
-                                if let Some(action) = open_changes
-                                    && appearance::menu_item(ui, "Open changes", "FileDiff", "")
-                                        .clicked()
-                                {
-                                    outcome.menu.push(GitFileAction {
-                                        action,
-                                        path: change.path.clone(),
-                                    });
-                                    ui.close();
-                                }
-                                if appearance::menu_item(
-                                    ui,
-                                    "Open file",
-                                    "FileCode",
-                                    input.open_shortcut,
-                                )
-                                .clicked()
-                                {
-                                    outcome.menu.push(GitFileAction {
-                                        action: FileAction::Open,
-                                        path: change.path.clone(),
-                                    });
-                                    ui.close();
-                                }
-                                ui.separator();
-                                if group == terminator_git::GitGroup::Staged {
-                                    if appearance::menu_item(ui, "Unstage", "ArrowLeft", "")
-                                        .clicked()
-                                    {
-                                        outcome.unstage.push(change.path.clone());
-                                        ui.close();
-                                    }
-                                } else if appearance::menu_item(ui, "Stage", "Plus", "").clicked() {
-                                    outcome.stage.push(change.path.clone());
-                                    ui.close();
-                                }
-                                if appearance::menu_item(ui, "Discard changes", "Eraser", "")
-                                    .clicked()
-                                {
-                                    outcome.discard.push((
-                                        change.path.clone(),
-                                        group == terminator_git::GitGroup::Untracked,
-                                    ));
-                                    ui.close();
-                                }
-                                ui.separator();
-                                if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
-                                    outcome.copy.push(change.path.display().to_string());
-                                    ui.close();
-                                }
-                                if let Some(root) = &root
-                                    && appearance::menu_item(ui, "Copy relative path", "Copy", "")
-                                        .clicked()
-                                {
-                                    outcome
-                                        .copy
-                                        .push(workspace_ops::relative_display(root, &change.path));
-                                    ui.close();
-                                }
-                                ui.separator();
-                                if appearance::menu_item(ui, "Delete file", "X", "").clicked() {
-                                    outcome.delete.push(change.path.clone());
-                                    ui.close();
-                                }
-                            });
-                        }
-                    });
+                if !any {
+                    ui.weak("Working tree clean");
+                }
+            } else {
+                for group in terminator_git::GitGroup::ALL {
+                    let entries: Vec<_> = changes
+                        .iter()
+                        .filter(|change| change.in_group(group))
+                        .collect();
+                    if entries.is_empty() {
+                        continue;
+                    }
+                    git_group_section(
+                        ui,
+                        &row_ctx,
+                        &mut outcome,
+                        root.as_deref(),
+                        group,
+                        &entries,
+                        input.collapse_generation,
+                    );
+                }
+                if let Some(compare) = input.compare
+                    && !compare.files.is_empty()
+                {
+                    git_committed_section(
+                        ui,
+                        &row_ctx,
+                        &mut outcome,
+                        root.as_deref(),
+                        &compare.files,
+                        input.collapse_generation,
+                    );
+                }
             }
         });
     }
@@ -2424,6 +2539,675 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
         });
     }
     outcome
+}
+
+/// Shared view references for a Git file row.
+struct GitRowCtx<'a> {
+    theme: &'a AppearanceConfig,
+    root: Option<&'a Path>,
+    review_mode: ReviewMode,
+    neovim_review: bool,
+    open_shortcut: &'a str,
+    stats: &'a std::collections::HashMap<PathBuf, (u32, u32)>,
+}
+
+fn git_group_label(group: terminator_git::GitGroup) -> &'static str {
+    use terminator_git::GitGroup;
+    match group {
+        GitGroup::Conflicts => "CONFLICTS",
+        GitGroup::Staged => "STAGED",
+        GitGroup::Changes => "CHANGES",
+        GitGroup::Untracked => "UNTRACKED FILES",
+    }
+}
+
+/// Icon toolbar: collapse, Changes/History, branch switcher, refresh, log, and
+/// the overflow menu (View as list / Change Base Ref / Refresh branch compare).
+fn git_toolbar(
+    ui: &mut egui::Ui,
+    input: &GitPanelInput<'_>,
+    branch_name: &str,
+    outcome: &mut GitPanelOutcome,
+) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let collapse = appearance::sidebar_action(ui, "ChevronsDownUp", "Collapse all");
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "git-collapse", collapse.rect);
+        if collapse.clicked() {
+            outcome.collapse = true;
+        }
+        let changes = appearance::selectable_icon(ui, "FileDiff", "Changes", !input.history);
+        let history = appearance::selectable_icon(ui, "History", "History", input.history);
+        #[cfg(feature = "test-support")]
+        {
+            diagnostics::record(ui.ctx(), "git-changes", changes.rect);
+            diagnostics::record(ui.ctx(), "git-history", history.rect);
+        }
+        if changes.clicked() {
+            outcome.history = Some(false);
+        }
+        if history.clicked() {
+            outcome.history = Some(true);
+        }
+        let branch = appearance::menu_button(ui, branch_name, |ui| {
+            if input.branches.is_empty() {
+                ui.weak("No branches");
+            }
+            for name in input.branches {
+                let mark = if name == branch_name { "✓" } else { "" };
+                if appearance::menu_item(ui, name, "GitBranch", mark).clicked() {
+                    outcome.switch = Some(name.clone());
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Switch branch");
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "git-branch", branch.rect);
+        let _ = branch;
+        let refresh = appearance::sidebar_action(ui, "RefreshCw", "Refresh");
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "git-refresh", refresh.rect);
+        if refresh.clicked() {
+            outcome.refresh = true;
+        }
+        let log = appearance::sidebar_action(ui, "ListTree", "View commit log");
+        if log.clicked() {
+            outcome.view_log = true;
+        }
+        let more = appearance::menu_button(ui, "…", |ui| {
+            let mark = if input.view_list { "✓" } else { "" };
+            if appearance::menu_item(ui, "View as list", "List", mark).clicked() {
+                outcome.toggle_list = true;
+                ui.close();
+            }
+            let base = appearance::menu_button(ui, "Change Base Ref…", |ui| {
+                let auto = if input.base_ref.is_none() { "✓" } else { "" };
+                if appearance::menu_item(ui, "Automatic (upstream)", "GitCompareArrows", auto)
+                    .clicked()
+                {
+                    outcome.clear_base = true;
+                    ui.close();
+                }
+                ui.separator();
+                if input.branches.is_empty() {
+                    ui.weak("No branches");
+                }
+                for name in input.branches {
+                    let mark = if input.base_ref == Some(name.as_str()) {
+                        "✓"
+                    } else {
+                        ""
+                    };
+                    if appearance::menu_item(ui, name, "GitBranch", mark).clicked() {
+                        outcome.set_base = Some(name.clone());
+                        ui.close();
+                    }
+                }
+            });
+            let _ = base;
+            ui.separator();
+            if appearance::menu_item(ui, "Refresh branch compare", "RefreshCw", "").clicked() {
+                outcome.refresh_compare = true;
+                ui.close();
+            }
+        })
+        .response
+        .on_hover_text("More Git actions");
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "git-more", more.rect);
+        let _ = more;
+    });
+}
+
+/// `branch → base` with ahead/behind counts, the Orca branch compare line.
+fn git_compare_row(
+    ui: &mut egui::Ui,
+    theme: &AppearanceConfig,
+    branch: &str,
+    compare: &workspace_ops::CompareData,
+    base_ref: Option<&str>,
+) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.add(egui::Label::new(RichText::new(branch).monospace().strong()).truncate());
+        let target = base_ref
+            .or(compare.base.as_deref())
+            .or(compare.upstream.as_deref());
+        if let Some(target) = target {
+            ui.add(
+                egui::Label::new(RichText::new(format!("→ {target}")).monospace().weak())
+                    .truncate(),
+            )
+            .on_hover_text("Base ref for the branch comparison");
+        }
+        if compare.ahead > 0 {
+            ui.label(
+                RichText::new(format!("↑{}", compare.ahead))
+                    .color(appearance::color(&theme.git_added)),
+            )
+            .on_hover_text("Commits ahead of the base ref");
+        }
+        if compare.behind > 0 {
+            ui.label(RichText::new(format!("↓{}", compare.behind)).weak())
+                .on_hover_text("Commits behind the base ref");
+        }
+    });
+}
+
+/// One changed file: diffstat, status letter, click-to-diff, and context menu.
+fn git_change_row(
+    ui: &mut egui::Ui,
+    ctx: &GitRowCtx<'_>,
+    outcome: &mut GitPanelOutcome,
+    change: &terminator_git::Change,
+    group: terminator_git::GitGroup,
+    label: &str,
+) {
+    // Keep layout height without constructing thousands of off-screen widgets.
+    if skip_clipped_git_row(ui) {
+        return;
+    }
+    let letter = change.letter(group);
+    let trailing = match ctx.stats.get(&change.path).copied() {
+        Some((added, deleted)) if deleted > 0 => format!("+{added} -{deleted} {letter}"),
+        Some((added, _)) => format!("+{added} {letter}"),
+        None => letter.to_string(),
+    };
+    let response = appearance::file_row(
+        ui,
+        label,
+        icons::file_icon(&change.path),
+        false,
+        24.0,
+        &trailing,
+        git_color(ctx.theme, letter),
+    )
+    .on_hover_text(format!(
+        "{}\n{} ({})",
+        change.path.display(),
+        terminator_git::status_description(letter),
+        group.label()
+    ));
+    #[cfg(feature = "test-support")]
+    diagnostics::record(
+        ui.ctx(),
+        &format!(
+            "git-file-{}",
+            change
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+        ),
+        response.rect,
+    );
+    let staged = (!change.conflict()).then_some(group == terminator_git::GitGroup::Staged);
+    if let Some(action) = git_click_action(
+        letter == 'D',
+        staged,
+        response.clicked() || response.double_clicked(),
+        ctx.review_mode,
+        ctx.neovim_review,
+    ) {
+        outcome.clicked.push(GitFileAction {
+            action,
+            path: change.path.clone(),
+        });
+    }
+    appearance::context_menu(&response, |ui| {
+        let open_changes = git_click_action(
+            letter == 'D',
+            staged,
+            true,
+            ctx.review_mode,
+            ctx.neovim_review,
+        );
+        if let Some(action) = open_changes
+            && appearance::menu_item(ui, "Open changes", "FileDiff", "").clicked()
+        {
+            outcome.menu.push(GitFileAction {
+                action,
+                path: change.path.clone(),
+            });
+            ui.close();
+        }
+        if appearance::menu_item(ui, "Open file", "FileCode", ctx.open_shortcut).clicked() {
+            outcome.menu.push(GitFileAction {
+                action: FileAction::Open,
+                path: change.path.clone(),
+            });
+            ui.close();
+        }
+        ui.separator();
+        if group == terminator_git::GitGroup::Staged {
+            if appearance::menu_item(ui, "Unstage", "ArrowLeft", "").clicked() {
+                outcome.unstage.push(change.path.clone());
+                ui.close();
+            }
+        } else if appearance::menu_item(ui, "Stage", "Plus", "").clicked() {
+            outcome.stage.push(change.path.clone());
+            ui.close();
+        }
+        if appearance::menu_item(ui, "Discard changes", "Eraser", "").clicked() {
+            outcome.discard.push((
+                change.path.clone(),
+                group == terminator_git::GitGroup::Untracked,
+            ));
+            ui.close();
+        }
+        ui.separator();
+        if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
+            outcome.copy.push(change.path.display().to_string());
+            ui.close();
+        }
+        if let Some(root) = ctx.root
+            && appearance::menu_item(ui, "Copy relative path", "Copy", "").clicked()
+        {
+            outcome
+                .copy
+                .push(workspace_ops::relative_display(root, &change.path));
+            ui.close();
+        }
+        ui.separator();
+        if appearance::menu_item(ui, "Delete file", "X", "").clicked() {
+            outcome.delete.push(change.path.clone());
+            ui.close();
+        }
+    });
+}
+
+const GIT_SECTION_LIMIT: usize = 8;
+
+/// Orca-style section header with per-section stage/unstage all. The body is a
+/// directory tree (JetBrains-style), collapsible per folder.
+#[allow(clippy::too_many_arguments)]
+fn git_group_section(
+    ui: &mut egui::Ui,
+    ctx: &GitRowCtx<'_>,
+    outcome: &mut GitPanelOutcome,
+    root: Option<&Path>,
+    group: terminator_git::GitGroup,
+    entries: &[&terminator_git::Change],
+    collapse_generation: u64,
+) {
+    let label = git_group_label(group);
+    let total = entries.len();
+    let id = ui.make_persistent_id(("git-section", root, label, collapse_generation));
+    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        id,
+        collapse_generation == 0,
+    );
+    let _ = state
+        .show_header(ui, |ui| {
+            ui.add(
+                egui::Label::new(RichText::new(format!("{label} {total}")).small().strong())
+                    .selectable(false),
+            );
+            ui.with_layout(
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| match group {
+                    terminator_git::GitGroup::Staged => {
+                        let action = appearance::sidebar_action(ui, "ArrowLeft", "Unstage all");
+                        if action.clicked() {
+                            for change in entries {
+                                outcome.unstage.push(change.path.clone());
+                            }
+                        }
+                    }
+                    terminator_git::GitGroup::Changes | terminator_git::GitGroup::Untracked => {
+                        let action = appearance::sidebar_action(ui, "Plus", "Stage all");
+                        if action.clicked() {
+                            for change in entries {
+                                outcome.stage.push(change.path.clone());
+                            }
+                        }
+                    }
+                    terminator_git::GitGroup::Conflicts => {}
+                },
+            );
+        })
+        .body(|ui| {
+            let tree = build_change_tree(entries, root);
+            git_change_tree(ui, ctx, outcome, &tree, "", group);
+        });
+}
+
+/// Directory tree of changed files, built once per section paint.
+#[derive(Default)]
+struct ChangeTree<'a> {
+    dirs: std::collections::BTreeMap<String, ChangeTree<'a>>,
+    files: Vec<&'a terminator_git::Change>,
+}
+
+impl<'a> ChangeTree<'a> {
+    fn count_files(&self) -> usize {
+        self.files.len()
+            + self
+                .dirs
+                .values()
+                .map(ChangeTree::count_files)
+                .sum::<usize>()
+    }
+
+    fn collect(&self, out: &mut Vec<&'a terminator_git::Change>) {
+        out.extend(self.files.iter().copied());
+        for dir in self.dirs.values() {
+            dir.collect(out);
+        }
+    }
+}
+
+fn build_change_tree<'a>(
+    entries: &[&'a terminator_git::Change],
+    root: Option<&Path>,
+) -> ChangeTree<'a> {
+    fn insert<'a>(node: &mut ChangeTree<'a>, dirs: &[String], change: &'a terminator_git::Change) {
+        match dirs.split_first() {
+            None => node.files.push(change),
+            Some((dir, rest)) => insert(node.dirs.entry(dir.clone()).or_default(), rest, change),
+        }
+    }
+    let mut tree = ChangeTree::default();
+    for change in entries {
+        let relative = root
+            .and_then(|root| change.path.strip_prefix(root).ok())
+            .unwrap_or(&change.path);
+        let components: Vec<String> = relative
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect();
+        if components.is_empty() {
+            continue;
+        }
+        insert(&mut tree, &components[..components.len() - 1], change);
+    }
+    tree
+}
+
+fn git_change_tree(
+    ui: &mut egui::Ui,
+    ctx: &GitRowCtx<'_>,
+    outcome: &mut GitPanelOutcome,
+    node: &ChangeTree<'_>,
+    prefix: &str,
+    group: terminator_git::GitGroup,
+) {
+    for (name, child) in &node.dirs {
+        let key = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let id = ui.make_persistent_id(("git-tree", key.clone(), group.label()));
+        let count = child.count_files();
+        let mut folder_response = None;
+        let mut header =
+            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
+                .show_header(ui, |ui| {
+                    let trailing = count.to_string();
+                    folder_response = Some(appearance::file_row(
+                        ui,
+                        name,
+                        "Folder",
+                        false,
+                        22.0,
+                        &trailing,
+                        appearance::color(&ctx.theme.secondary),
+                    ));
+                });
+        if folder_response
+            .as_ref()
+            .is_some_and(|response| response.clicked())
+        {
+            header.toggle();
+        }
+        let _ = header.body(|ui| git_change_tree(ui, ctx, outcome, child, &key, group));
+        if let Some(response) = folder_response {
+            let response = response.on_hover_text(format!("{key} ({count} changed)"));
+            appearance::context_menu(&response, |ui| match group {
+                terminator_git::GitGroup::Staged => {
+                    if appearance::menu_item(ui, "Unstage folder", "ArrowLeft", "").clicked() {
+                        let mut files = Vec::new();
+                        child.collect(&mut files);
+                        for change in files {
+                            outcome.unstage.push(change.path.clone());
+                        }
+                        ui.close();
+                    }
+                }
+                terminator_git::GitGroup::Changes | terminator_git::GitGroup::Untracked => {
+                    if appearance::menu_item(ui, "Stage folder", "Plus", "").clicked() {
+                        let mut files = Vec::new();
+                        child.collect(&mut files);
+                        for change in files {
+                            outcome.stage.push(change.path.clone());
+                        }
+                        ui.close();
+                    }
+                }
+                terminator_git::GitGroup::Conflicts => {}
+            });
+        }
+    }
+    for change in &node.files {
+        let label = change
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        git_change_row(ui, ctx, outcome, change, group, &label);
+    }
+}
+
+/// Files changed since the base ref, grouped under "COMMITTED ON BRANCH".
+fn git_committed_section(
+    ui: &mut egui::Ui,
+    ctx: &GitRowCtx<'_>,
+    outcome: &mut GitPanelOutcome,
+    root: Option<&Path>,
+    files: &[workspace_ops::CommittedFile],
+    collapse_generation: u64,
+) {
+    let total = files.len();
+    let id = ui.make_persistent_id(("git-committed", root, total, collapse_generation));
+    let view_all_id =
+        ui.make_persistent_id(("git-committed-all", root, total, collapse_generation));
+    let mut expanded = ui
+        .ctx()
+        .data_mut(|data| data.get_temp::<bool>(view_all_id).unwrap_or(false));
+    let state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        id,
+        collapse_generation == 0,
+    );
+    let _ = state
+        .show_header(ui, |ui| {
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!("COMMITTED ON BRANCH {total}"))
+                        .small()
+                        .strong(),
+                )
+                .selectable(false),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if total > GIT_SECTION_LIMIT {
+                    let text = if expanded { "Show less" } else { "View all" };
+                    if ui.small_button(text).clicked() {
+                        expanded = !expanded;
+                        ui.ctx()
+                            .data_mut(|data| data.insert_temp(view_all_id, expanded));
+                    }
+                }
+            });
+        })
+        .body(|ui| {
+            let shown = if expanded {
+                total
+            } else {
+                total.min(GIT_SECTION_LIMIT)
+            };
+            for file in files.iter().take(shown) {
+                git_committed_row(ui, ctx, outcome, file);
+            }
+        });
+}
+
+/// One file changed since the base ref. It has no index/worktree side, so the
+/// only useful actions are open and copy.
+fn git_committed_row(
+    ui: &mut egui::Ui,
+    ctx: &GitRowCtx<'_>,
+    outcome: &mut GitPanelOutcome,
+    file: &workspace_ops::CommittedFile,
+) {
+    if skip_clipped_git_row(ui) {
+        return;
+    }
+    let name = file
+        .path
+        .strip_prefix(ctx.root.unwrap_or(&file.path))
+        .unwrap_or(&file.path)
+        .display()
+        .to_string();
+    let trailing = if file.deleted > 0 {
+        format!("+{} -{} {}", file.added, file.deleted, file.letter)
+    } else {
+        format!("+{} {}", file.added, file.letter)
+    };
+    let response = appearance::file_row(
+        ui,
+        &name,
+        icons::file_icon(&file.path),
+        false,
+        24.0,
+        &trailing,
+        git_color(ctx.theme, file.letter),
+    )
+    .on_hover_text(file.path.display().to_string());
+    #[cfg(feature = "test-support")]
+    diagnostics::record(
+        ui.ctx(),
+        &format!(
+            "git-committed-{}",
+            file.path.file_name().unwrap_or_default().to_string_lossy()
+        ),
+        response.rect,
+    );
+    if response.clicked() || response.double_clicked() {
+        outcome.menu.push(GitFileAction {
+            action: FileAction::Open,
+            path: file.path.clone(),
+        });
+    }
+    appearance::context_menu(&response, |ui| {
+        if appearance::menu_item(ui, "Open file", "FileCode", ctx.open_shortcut).clicked() {
+            outcome.menu.push(GitFileAction {
+                action: FileAction::Open,
+                path: file.path.clone(),
+            });
+            ui.close();
+        }
+        if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
+            outcome.copy.push(file.path.display().to_string());
+            ui.close();
+        }
+    });
+}
+
+/// Small text toggle used by the Contents search bar (`Aa`, whole word, `.*`).
+fn explorer_toggle(
+    ui: &mut egui::Ui,
+    text: &str,
+    tip: &str,
+    selected: bool,
+    target: &str,
+) -> egui::Response {
+    let response = ui
+        .add_sized(
+            [22.0, 22.0],
+            egui::Button::new(RichText::new(text).small()).frame(false),
+        )
+        .on_hover_text(tip);
+    if selected || response.hovered() {
+        ui.painter().rect_filled(
+            response.rect,
+            4,
+            if selected {
+                ui.visuals().selection.bg_fill
+            } else {
+                ui.visuals().widgets.hovered.bg_fill
+            },
+        );
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, tip)
+    });
+    #[cfg(feature = "test-support")]
+    diagnostics::record(ui.ctx(), target, response.rect);
+    let _ = target;
+    response
+}
+
+/// Names | Contents segmented control for the Explorer search bar.
+fn explorer_segmented(ui: &mut egui::Ui, mode: &mut ExplorerSearchMode) {
+    let width = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::hover());
+    let base_id = response.id;
+    ui.painter()
+        .rect_filled(rect, 6, ui.visuals().faint_bg_color);
+    let half = rect.width() / 2.0;
+    for (index, (label, value, target)) in [
+        ("Names", ExplorerSearchMode::Names, "explorer-mode-names"),
+        (
+            "Contents",
+            ExplorerSearchMode::Contents,
+            "explorer-mode-contents",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let cell = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + half * index as f32, rect.top()),
+            egui::vec2(half, rect.height()),
+        );
+        let response = ui
+            .interact(cell, base_id.with(label), egui::Sense::click())
+            .on_hover_text(label);
+        let selected = *mode == value;
+        if selected {
+            ui.painter()
+                .rect_filled(cell.shrink(3.0), 5, ui.visuals().widgets.active.bg_fill);
+        } else if response.hovered() {
+            ui.painter()
+                .rect_filled(cell.shrink(3.0), 5, ui.visuals().widgets.hovered.bg_fill);
+        }
+        ui.painter().text(
+            cell.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(12.0),
+            if selected {
+                ui.visuals().text_color()
+            } else {
+                ui.visuals().weak_text_color()
+            },
+        );
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)
+        });
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), target, cell);
+        let _ = target;
+        if response.clicked() {
+            *mode = value;
+        }
+    }
 }
 
 /// What an explorer file row asks `App` to do after painting.
@@ -3091,5 +3875,160 @@ mod tests {
         assert!(read < width);
         let read_used = read + spacing + ATTENTION_ACTION_SIZE * ATTENTION_ACTION_READ_COUNT;
         assert!((read_used - remaining).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn change_tree_nests_directories_and_counts_files() {
+        let a = terminator_git::Change {
+            path: "/repo/src/a.rs".into(),
+            status: " M".into(),
+        };
+        let b = terminator_git::Change {
+            path: "/repo/src/deep/b.rs".into(),
+            status: "??".into(),
+        };
+        let c = terminator_git::Change {
+            path: "/repo/root.rs".into(),
+            status: " M".into(),
+        };
+        let entries = vec![&a, &b, &c];
+        let tree = build_change_tree(&entries, Some(Path::new("/repo")));
+        assert_eq!(tree.files.len(), 1);
+        assert_eq!(tree.dirs["src"].files.len(), 1);
+        assert_eq!(tree.dirs["src"].dirs["deep"].files.len(), 1);
+        assert_eq!(tree.dirs["src"].count_files(), 2);
+        assert_eq!(tree.count_files(), 3);
+        let mut all = Vec::new();
+        tree.collect(&mut all);
+        assert_eq!(all.len(), 3);
+    }
+
+    #[cfg(feature = "test-support")]
+    fn recorded_target(ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
+        ctx.data(|data| data.get_temp(egui::Id::new(("fixture-target", name))))
+    }
+
+    #[cfg(feature = "test-support")]
+    fn click(rect: egui::Rect, mut draw: impl FnMut(Vec<egui::Event>)) {
+        let pos = rect.center();
+        draw(vec![egui::Event::PointerMoved(pos)]);
+        for pressed in [true, false] {
+            draw(vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn git_panel_renders_icon_controls_stats_and_committed_section() {
+        let ctx = egui::Context::default();
+        crate::appearance::install(&ctx);
+        let context = ContextData {
+            cwd: "/repo".into(),
+            root: Some("/repo".into()),
+            git_dirs: vec![],
+            branch: "main".into(),
+            changes: vec![
+                terminator_git::Change {
+                    path: "/repo/a.rs".into(),
+                    status: " M".into(),
+                },
+                terminator_git::Change {
+                    path: "/repo/new.rs".into(),
+                    status: "??".into(),
+                },
+            ],
+            decorations: Default::default(),
+            stats: std::collections::HashMap::from([(PathBuf::from("/repo/a.rs"), (4, 2))]),
+            error: None,
+        };
+        let compare = workspace_ops::CompareData {
+            root: Some("/repo".into()),
+            upstream: Some("origin/main".into()),
+            ahead: 1,
+            behind: 0,
+            base: Some("origin/main".into()),
+            files: vec![workspace_ops::CommittedFile {
+                path: "/repo/lib.rs".into(),
+                letter: 'M',
+                added: 3,
+                deleted: 1,
+            }],
+        };
+        let branches = vec!["main".to_string(), "dev".to_string()];
+        let theme = AppearanceConfig::default();
+        let mut outcome = GitPanelOutcome::default();
+        let draw = |events: Vec<egui::Event>, outcome: &mut GitPanelOutcome| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(360.0, 700.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut draft = String::new();
+                    let mut input = GitPanelInput {
+                        context: &context,
+                        review_mode: ReviewMode::Native,
+                        neovim_review: false,
+                        theme: &theme,
+                        history: false,
+                        view_list: false,
+                        commits: &[],
+                        branches: &branches,
+                        commit_draft: &mut draft,
+                        collapse_generation: 0,
+                        open_shortcut: "",
+                        compare: Some(&compare),
+                        base_ref: None,
+                    };
+                    *outcome = git_panel(ui, &mut input);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        draw(vec![], &mut outcome);
+        assert!(recorded_target(&ctx, "git-changes").is_some());
+        assert!(recorded_target(&ctx, "git-history").is_some());
+        assert!(recorded_target(&ctx, "git-collapse").is_some());
+        assert!(recorded_target(&ctx, "git-file-a.rs").is_some());
+        assert!(recorded_target(&ctx, "git-file-new.rs").is_some());
+        assert!(recorded_target(&ctx, "git-committed-lib.rs").is_some());
+        let stage_all = recorded_target(&ctx, "git-stage-all").expect("stage all is painted");
+        click(stage_all, |events| draw(events, &mut outcome));
+        assert!(outcome.stage_all);
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn explorer_segmented_switches_to_contents_mode() {
+        let ctx = egui::Context::default();
+        crate::appearance::install(&ctx);
+        let mut mode = ExplorerSearchMode::Names;
+        let draw = |events: Vec<egui::Event>, mode: &mut ExplorerSearchMode| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(320.0, 80.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| explorer_segmented(ui, mode),
+            );
+            output.textures_delta.clear();
+        };
+        draw(vec![], &mut mode);
+        let contents = recorded_target(&ctx, "explorer-mode-contents").expect("contents cell");
+        click(contents, |events| draw(events, &mut mode));
+        assert_eq!(mode, ExplorerSearchMode::Contents);
     }
 }

@@ -22,6 +22,9 @@ pub enum Op {
     Branches,
     Switch(String),
     Log,
+    Compare {
+        base: Option<String>,
+    },
     CreateFile(PathBuf),
     CreateDir(PathBuf),
     Duplicate(PathBuf),
@@ -37,6 +40,27 @@ pub enum Report {
     Message(String),
     Branches(Vec<String>),
     Log(Vec<(String, String)>),
+    Compare(CompareData),
+}
+
+/// Branch comparison for the Git sidebar: upstream tracking, ahead/behind,
+/// the base ref used for "committed on branch", and the files it changed.
+#[derive(Clone, Debug, Default)]
+pub struct CompareData {
+    pub root: Option<PathBuf>,
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    pub base: Option<String>,
+    pub files: Vec<CommittedFile>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CommittedFile {
+    pub path: PathBuf,
+    pub letter: char,
+    pub added: u32,
+    pub deleted: u32,
 }
 
 pub fn perform(root: &Path, op: Op) -> Result<Report> {
@@ -60,6 +84,7 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
         Op::Branches => Ok(Report::Branches(branches(root)?)),
         Op::Switch(name) => switch(root, &name),
         Op::Log => Ok(Report::Log(log(root)?)),
+        Op::Compare { base } => Ok(Report::Compare(compare(root, base.as_deref())?)),
         Op::CreateFile(path) => {
             let path = new_path(root, &path)?;
             ensure!(!link_exists(&path), "{} already exists", path.display());
@@ -175,6 +200,110 @@ fn log(root: &Path) -> Result<Vec<(String, String)>> {
             Some((hash.to_owned(), subject.to_owned()))
         })
         .collect())
+}
+
+fn git_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    Ok(run_command(git::command(root, args), git_options())?.stdout)
+}
+
+/// A base ref must not look like a flag and must resolve to a commit.
+fn valid_ref(root: &Path, base: &str) -> bool {
+    !base.is_empty()
+        && !base.starts_with('-')
+        && !base.contains("..")
+        && !base.chars().any(char::is_whitespace)
+        && base
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/' | '.' | '@'))
+        && git_text(
+            root,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{base}^{{commit}}"),
+            ],
+        )
+        .is_ok_and(|out| !out.is_empty())
+}
+
+/// Parse `git diff --name-status -z`. Rename/copy records carry `old\0new`; the
+/// destination path wins.
+fn parse_name_status(root: &Path, raw: &[u8]) -> Vec<(PathBuf, char)> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut result = Vec::new();
+    let mut parts = raw.split(|b| *b == 0).filter(|part| !part.is_empty());
+    while let Some(status) = parts.next() {
+        let letter = *status.first().unwrap_or(&b' ') as char;
+        let Some(first) = parts.next() else {
+            break;
+        };
+        let path = if matches!(letter, 'R' | 'C') {
+            match parts.next() {
+                Some(new) => new,
+                None => first,
+            }
+        } else {
+            first
+        };
+        result.push((root.join(std::ffi::OsStr::from_bytes(path)), letter));
+    }
+    result
+}
+
+fn compare(root: &Path, base_override: Option<&str>) -> Result<CompareData> {
+    let mut data = CompareData {
+        root: Some(root.to_path_buf()),
+        ..Default::default()
+    };
+    if let Ok(upstream) = git_text(
+        root,
+        &[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+    ) && !upstream.is_empty()
+    {
+        data.upstream = Some(upstream);
+    }
+    if let Some(upstream) = &data.upstream
+        && let Ok(counts) = git_text(
+            root,
+            &[
+                "rev-list",
+                "--left-right",
+                "--count",
+                &format!("{upstream}...HEAD"),
+            ],
+        )
+    {
+        let mut parts = counts.split_whitespace();
+        data.behind = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+        data.ahead = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    }
+    let base = base_override
+        .map(str::to_owned)
+        .or_else(|| data.upstream.clone());
+    let Some(base) = base.filter(|base| valid_ref(root, base)) else {
+        return Ok(data);
+    };
+    let range = format!("{base}...HEAD");
+    let name_status = git_bytes(root, &["diff", "--name-status", "-z", &range]).unwrap_or_default();
+    let numstat = git_bytes(root, &["diff", "--numstat", "-z", &range]).unwrap_or_default();
+    let mut stats = terminator_git::parse_numstat(root, &numstat);
+    data.base = Some(base);
+    for (path, letter) in parse_name_status(root, &name_status) {
+        let (added, deleted) = stats.remove(&path).unwrap_or((0, 0));
+        data.files.push(CommittedFile {
+            path,
+            letter,
+            added,
+            deleted,
+        });
+    }
+    Ok(data)
 }
 
 fn delete(root: &Path, path: &Path) -> Result<Report> {
@@ -386,6 +515,36 @@ mod tests {
         assert!(!root.join("scratch.txt").exists());
         let outside = dir.path().join("../nope.txt");
         assert!(perform(root, Op::Stage(outside)).is_err());
+    }
+
+    #[test]
+    fn name_status_rename_uses_the_destination_path() {
+        let root = Path::new("/repo");
+        let parsed = parse_name_status(root, b"R100\0old.rs\0new.rs\0M\0keep.rs\0");
+        assert_eq!(
+            parsed,
+            vec![(root.join("new.rs"), 'R'), (root.join("keep.rs"), 'M'),]
+        );
+    }
+
+    #[test]
+    fn base_refs_reject_flags_ranges_and_missing_refs() {
+        let dir = repo();
+        let root = dir.path();
+        assert!(valid_ref(root, "main"));
+        assert!(!valid_ref(root, "--all"));
+        assert!(!valid_ref(root, "a..b"));
+        assert!(!valid_ref(root, "missing-ref"));
+    }
+
+    #[test]
+    fn compare_without_an_upstream_reports_root_only() {
+        let dir = repo();
+        let data = compare(dir.path(), None).unwrap();
+        assert_eq!(data.root.as_deref(), Some(dir.path()));
+        assert!(data.upstream.is_none());
+        assert!(data.base.is_none());
+        assert!(data.files.is_empty());
     }
 
     #[test]

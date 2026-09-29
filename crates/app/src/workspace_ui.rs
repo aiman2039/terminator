@@ -4235,6 +4235,7 @@ mod tests {
             branch: "main".into(),
             changes: vec![],
             decorations: Default::default(),
+            stats: Default::default(),
             error: None,
         });
         let open_native = |app: &mut App| {

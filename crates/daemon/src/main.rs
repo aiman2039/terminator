@@ -1591,9 +1591,12 @@ fn main() -> Result<()> {
     });
     while !shared.shutdown.load(Ordering::Relaxed) {
         let waiting = notifications::waiting();
+        // While a waiter exists, service the Cocoa run loop often enough that
+        // click callbacks and the 0.5 s dismiss poll are not starved, without
+        // the previous ~100 wakeups/s. The pump itself is a 1 ms slice.
         let timeout = waiting.then_some(Timespec {
             tv_sec: 0,
-            tv_nsec: 10_000_000,
+            tv_nsec: 100_000_000,
         });
         let mut fds = [
             PollFd::new(&listener, PollFlags::IN),

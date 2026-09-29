@@ -315,6 +315,13 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
             egui::include_image!("../assets/icons/arrow-down-wide-narrow.svg")
         }
         "Archive" => egui::include_image!("../assets/icons/archive.svg"),
+        "ListTree" => egui::include_image!("../assets/icons/list-tree.svg"),
+        "ChevronsDownUp" => egui::include_image!("../assets/icons/chevrons-down-up.svg"),
+        "CaseSensitive" => egui::include_image!("../assets/icons/case-sensitive.svg"),
+        "WholeWord" => egui::include_image!("../assets/icons/whole-word.svg"),
+        "Regex" => egui::include_image!("../assets/icons/regex.svg"),
+        "GitCompareArrows" => egui::include_image!("../assets/icons/git-compare-arrows.svg"),
+        "List" => egui::include_image!("../assets/icons/list.svg"),
         "ArrowLeft" => egui::include_image!("../assets/icons/arrow-left.svg"),
         "ArrowRight" => egui::include_image!("../assets/icons/arrow-right.svg"),
         "FileKey" => egui::include_image!("../assets/icons/file-key.svg"),

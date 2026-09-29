@@ -23,7 +23,12 @@ use std::ops::{Index, RangeInclusive};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+/// Upper bound on PTY-driven repaints: a sustained burst stays near 30 fps. An
+/// echo arriving after an idle period repaints immediately (leading edge), so
+/// keystrokes are not delayed by the frame budget.
+const REPAINT_FRAME: Duration = Duration::from_millis(33);
 
 pub type TerminalMode = TermMode;
 pub type PtyEvent = Event;
@@ -228,29 +233,45 @@ impl TerminalBackend {
         let _pty_event_loop_thread = pty_event_loop.spawn();
         let _pty_event_subscription = std::thread::Builder::new()
             .name(format!("pty_event_subscription_{}", id))
-            .spawn(move || loop {
-                if let Ok(event) = event_receiver.recv() {
-                    grid_dirty_for_events.store(true, Ordering::Relaxed);
-                    if pty_event_proxy_sender.send((id, event.clone())).is_err() {
+            .spawn(move || {
+                // Start one frame in the past so the first event after an idle
+                // period repaints immediately rather than waiting a frame.
+                let mut last_wake = Instant::now()
+                    .checked_sub(REPAINT_FRAME)
+                    .unwrap_or_else(Instant::now);
+                loop {
+                    if let Ok(event) = event_receiver.recv() {
+                        grid_dirty_for_events.store(true, Ordering::Relaxed);
+                        if pty_event_proxy_sender.send((id, event.clone())).is_err() {
+                            break;
+                        }
+                        // Leading-edge throttle: coalesce a burst of PTY events
+                        // into at most one frame per 33 ms instead of waking the
+                        // UI thread per event, but repaint at once when the
+                        // previous wake is already a frame old. Hidden terminals
+                        // only mark the grid dirty: an agent streaming in a
+                        // background tab must not force frames.
+                        if painted_for_events.load(Ordering::Relaxed) {
+                            let now = Instant::now();
+                            let since = now.duration_since(last_wake);
+                            if since >= REPAINT_FRAME {
+                                app_context.clone().request_repaint();
+                                last_wake = now;
+                            } else {
+                                app_context
+                                    .clone()
+                                    .request_repaint_after(REPAINT_FRAME - since);
+                            }
+                        }
+                        match event {
+                            Event::Exit => break,
+                            // The owning daemon answers terminal queries, including when detached.
+                            Event::PtyWrite(_) => {}
+                            _ => {}
+                        }
+                    } else {
                         break;
                     }
-                    // Coalesce a burst of PTY events into at most one frame
-                    // every 33 ms instead of waking the UI thread per event.
-                    // Hidden terminals only mark the grid dirty: an agent
-                    // streaming in a background tab must not force frames.
-                    if painted_for_events.load(Ordering::Relaxed) {
-                        app_context
-                            .clone()
-                            .request_repaint_after(Duration::from_millis(33));
-                    }
-                    match event {
-                        Event::Exit => break,
-                        // The owning daemon answers terminal queries, including when detached.
-                        Event::PtyWrite(_) => {}
-                        _ => {}
-                    }
-                } else {
-                    break;
                 }
             })?;
 

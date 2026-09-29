@@ -9,10 +9,12 @@
 //! [`terminator_core::CommandOptions`] so timeouts and limits stay per caller.
 #![forbid(unsafe_code)]
 
+pub mod diffstat;
 pub mod ignore;
 pub mod snapshot;
 pub mod status;
 
+pub use diffstat::{Stat, parse_numstat};
 pub use ignore::{Entry, entries, entries_known};
 pub use snapshot::{
     SNAPSHOT_LIMIT, blob, check_text, find_record, relative_path, snapshots, worktree_file,

@@ -3,7 +3,7 @@
 use crate::nvim_rpc;
 use crate::{
     After, Job, Tab, Update, clipboard, daemon_connection, diff, editor_close, external_editor,
-    image_preview, installation, notify_test, player, services, workspace_ops,
+    image_preview, installation, notify_test, player, search, services, workspace_ops,
 };
 use anyhow::{Context, Result};
 use eframe::egui;
@@ -796,6 +796,24 @@ impl Services {
                     .await
                     .map_err(|error| format!("{error:#}"));
                 updates.push(Update::Workspace(reply, result));
+            }
+            Job::Search {
+                id,
+                root,
+                query,
+                show_ignored,
+            } => {
+                let result = self
+                    .fs()
+                    .run(&cancel, move || {
+                        Ok(search::run(&root, &query, show_ignored))
+                    })
+                    .await;
+                let result = match result {
+                    Ok(inner) => inner,
+                    Err(error) => Err(format!("{error:#}")),
+                };
+                updates.push(Update::Search(id, result));
             }
             Job::StartSessionService => {
                 let paths = client.paths.clone();

@@ -150,10 +150,13 @@ the application already drops backends for terminals it is not painting.
 
 Terminal output still forced 60 fps full-window frames, including for a
 terminal an agent was animating while it was not on screen. The subscription
-thread now wakes the UI at most every 33 ms (about 30 fps), and only when the
-backend was painted in the current frame: `TerminalBackend::set_painted` is
-cleared for every backend at frame start and set by the host when the terminal
-is drawn. A hidden terminal records `grid_dirty` but does not wake the UI, so
-its next paint picks up the new grid instead of driving frames the user cannot
-see.
+thread now uses a leading-edge 33 ms throttle (about 30 fps): an event after an
+idle period calls `request_repaint()` immediately, so the first echo after a
+keystroke is not delayed, while a sustained burst keeps a pending
+`request_repaint_after` cap. It only wakes the UI when the backend was painted
+in the current frame: `TerminalBackend::set_painted` is cleared for every
+backend at frame start (including before the host's exit-screen early return)
+and set by the host when the terminal is drawn. A hidden terminal records
+`grid_dirty` but does not wake the UI, so its next paint picks up the new grid
+instead of driving frames the user cannot see.
 

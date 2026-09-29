@@ -24,7 +24,59 @@ pub struct ContextData {
     pub branch: String,
     pub changes: Vec<Change>,
     pub decorations: std::collections::HashMap<PathBuf, char>,
+    /// Added/deleted line counts per changed path (index plus worktree).
+    pub stats: std::collections::HashMap<PathBuf, (u32, u32)>,
     pub error: Option<String>,
+}
+
+/// Merge `--numstat` output for the index and worktree, then add line counts
+/// for untracked files. Paths match the porcelain records so the Git rows can
+/// look stats up directly.
+pub fn merge_stats(
+    root: &Path,
+    working: &[u8],
+    staged: &[u8],
+    changes: &[Change],
+) -> std::collections::HashMap<PathBuf, (u32, u32)> {
+    let mut stats = terminator_git::parse_numstat(root, staged);
+    for (path, (added, deleted)) in terminator_git::parse_numstat(root, working) {
+        let entry = stats.entry(path).or_insert((0, 0));
+        entry.0 += added;
+        entry.1 += deleted;
+    }
+    for change in changes.iter().filter(|change| change.status == "??") {
+        let Ok(bytes) = fs::read(&change.path) else {
+            continue;
+        };
+        if bytes.len() > 2 * 1024 * 1024 || bytes.contains(&0) {
+            continue;
+        }
+        let mut lines = bytes.iter().filter(|byte| **byte == b'\n').count() as u32;
+        if !bytes.is_empty() && bytes.last() != Some(&b'\n') {
+            lines += 1;
+        }
+        stats.entry(change.path.clone()).or_insert((0, 0)).0 += lines;
+    }
+    stats
+}
+
+/// Parsed `git --numstat` stats for the worktree and index. Missing paths are
+/// empty, which is normal for binary files and ignored directories.
+#[cfg(test)]
+pub fn context_stats(
+    cwd: &Path,
+    root: &Path,
+    changes: &[Change],
+) -> std::collections::HashMap<PathBuf, (u32, u32)> {
+    let options = || CommandOptions {
+        stdout_limit: 4 * 1024 * 1024,
+        ..Default::default()
+    };
+    let git =
+        |args: &[&str]| terminator_git::run_blocking(cwd, args, options()).unwrap_or_default();
+    let working = git(&["diff", "--numstat", "-z"]);
+    let staged = git(&["diff", "--cached", "--numstat", "-z"]);
+    merge_stats(root, &working, &staged, changes)
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +134,7 @@ pub fn context_cached(
         branch: String::new(),
         changes: vec![],
         decorations: Default::default(),
+        stats: Default::default(),
         error: None,
     };
     let options = || CommandOptions {
@@ -125,6 +178,7 @@ pub fn context_cached(
         Err(e) => result.error = Some(e.to_string()),
     }
     result.decorations = terminator_git::decorations(&root, &result.changes);
+    result.stats = context_stats(&result.cwd, &root, &result.changes);
     result
 }
 
@@ -259,6 +313,7 @@ pub async fn context_async(
         branch: String::new(),
         changes: vec![],
         decorations: Default::default(),
+        stats: Default::default(),
         error: None,
     };
     let options = || CommandOptions {
@@ -317,6 +372,26 @@ pub async fn context_async(
         Err(error) => result.error = Some(error.to_string()),
     }
     result.decorations = terminator_git::decorations(&root, &result.changes);
+    if !result.changes.is_empty() {
+        let working = git(
+            root.clone(),
+            vec!["diff".into(), "--numstat".into(), "-z".into()],
+        )
+        .await
+        .unwrap_or_default();
+        let staged = git(
+            root.clone(),
+            vec![
+                "diff".into(),
+                "--cached".into(),
+                "--numstat".into(),
+                "-z".into(),
+            ],
+        )
+        .await
+        .unwrap_or_default();
+        result.stats = merge_stats(&root, &working, &staged, &result.changes);
+    }
     result
 }
 
@@ -369,6 +444,28 @@ pub async fn directory_async(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn merge_stats_adds_index_worktree_and_untracked_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let tracked = root.join("a.txt");
+        fs::write(&tracked, "one\ntwo\nthree\n").unwrap();
+        fs::write(root.join("new.txt"), "x\ny\n").unwrap();
+        let changes = vec![
+            Change {
+                path: tracked.clone(),
+                status: "MM".into(),
+            },
+            Change {
+                path: root.join("new.txt"),
+                status: "??".into(),
+            },
+        ];
+        let stats = merge_stats(root, b"1\t1\ta.txt\0", b"3\t0\ta.txt\0", &changes);
+        assert_eq!(stats[&tracked], (4, 1));
+        assert_eq!(stats[&root.join("new.txt")], (2, 0));
+    }
+
     #[test]
     fn reopening_a_project_through_a_path_alias_preserves_its_identity() {
         let dir = tempfile::tempdir().unwrap();
