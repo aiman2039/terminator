@@ -251,6 +251,7 @@ pub fn tool_button(
         SidebarTool::Agents => "PanelsTopLeft",
         SidebarTool::Git => "GitBranch",
         SidebarTool::History => "History",
+        SidebarTool::Info => "Info",
     };
     egui::Image::new(crate::icons::source(icon))
         .tint(tint)

@@ -1,11 +1,14 @@
-//! OS calls that still need `unsafe`: `pre_exec`, macOS `proc_pidinfo`, and Accessibility.
+//! OS calls that still need `unsafe`: `pre_exec`, macOS `proc_pidinfo`, macOS memory
+//! pressure (`host_statistics64`, `sysctlbyname`), and Accessibility.
 //! Sparkle stays in `terminator-updater`. Every other Terminator crate forbids `unsafe`.
 
+mod pressure;
 mod session;
 
 #[cfg(target_os = "macos")]
 mod threads;
 
+pub use pressure::{MemoryPressure, PressureLevel, memory_pressure};
 pub use session::{detach_session, double_fork_setsid};
 
 #[cfg(target_os = "macos")]

@@ -169,11 +169,12 @@ enum HeaderAction {
     Palette,
 }
 
-const HEADER_ACTIONS: [HeaderAction; 7] = [
+const HEADER_ACTIONS: [HeaderAction; 8] = [
     HeaderAction::Tool(SidebarTool::Explorer),
     HeaderAction::Tool(SidebarTool::Agents),
     HeaderAction::Tool(SidebarTool::Git),
     HeaderAction::Tool(SidebarTool::History),
+    HeaderAction::Tool(SidebarTool::Info),
     HeaderAction::Settings,
     HeaderAction::Palette,
     HeaderAction::IdeMode,
@@ -249,6 +250,12 @@ fn header_action_view(action: HeaderAction) -> HeaderActionView {
             icon: "History",
             #[cfg(feature = "test-support")]
             target: "tool-History",
+        },
+        HeaderAction::Tool(SidebarTool::Info) => HeaderActionView {
+            label: "Info",
+            icon: "Info",
+            #[cfg(feature = "test-support")]
+            target: "tool-Info",
         },
         HeaderAction::IdeMode => HeaderActionView {
             label: "IDE mode",
@@ -370,7 +377,7 @@ impl App {
             .then(|| appearance::color(&theme.status_running))
     }
 
-    fn branch_at(&self, cwd: &std::path::Path) -> Option<String> {
+    pub(super) fn branch_at(&self, cwd: &std::path::Path) -> Option<String> {
         if let Some(metadata) = &self.metadata
             && metadata.cwd == cwd
         {

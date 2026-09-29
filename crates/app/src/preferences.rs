@@ -282,6 +282,7 @@ pub enum SidebarTool {
     Agents,
     Git,
     History,
+    Info,
 }
 
 /// Agents sidebar views. Needs attention preserves the existing inbox;
@@ -451,6 +452,13 @@ pub struct UiPreferences {
     #[serde(default)]
     pub agents_collapsed: HashSet<String>,
     pub show_ignored: bool,
+    /// Info sidebar sections and the host-resource block. Missing prefs stay open.
+    #[serde(default = "default_true")]
+    pub info_process_open: bool,
+    #[serde(default = "default_true")]
+    pub info_resources_open: bool,
+    #[serde(default = "default_true")]
+    pub info_show_system: bool,
     pub typography_migrated: bool,
     pub attention_migrated: bool,
     pub markdown_modes: HashMap<String, crate::markdown::Mode>,
@@ -501,6 +509,9 @@ impl Default for UiPreferences {
             agents_filter: String::new(),
             agents_collapsed: HashSet::new(),
             show_ignored: false,
+            info_process_open: true,
+            info_resources_open: true,
+            info_show_system: true,
             typography_migrated: false,
             attention_migrated: false,
             markdown_modes: HashMap::new(),
@@ -912,6 +923,9 @@ mod tests {
         assert!(old.project_activity.is_empty());
         assert_eq!(old.history_sort, HistorySort::LatestActivity);
         assert!(old.history_filter.is_empty());
+        assert!(old.info_process_open);
+        assert!(old.info_resources_open);
+        assert!(old.info_show_system);
     }
     #[test]
     fn restart_preserves_independent_expansion_sidebar_and_migration() {

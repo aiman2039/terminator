@@ -1,4 +1,4 @@
-//! Project, file, Git, and notification sidebar rendering.
+//! Project, file, Git, notification, and session-info sidebar rendering.
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
 #[cfg(any(test, target_os = "macos"))]
@@ -12,6 +12,7 @@ use crate::{
         sort_history, sort_visible_projects,
     },
     services::ContextData,
+    session_info,
     settings_ui::SettingsSection,
     workspace_ops,
 };
@@ -1827,7 +1828,47 @@ impl App {
             self.reconcile_presentations();
         }
     }
+    fn info_panel(&mut self, ui: &mut egui::Ui) {
+        let session = self.context_session();
+        let live = session.is_some_and(|session| session.lifecycle.live() && session.pid.is_some());
+        let pid = session.and_then(|session| session.pid);
+        let created = session.map(|session| session.created).unwrap_or(0);
+        let sample = self
+            .resources
+            .as_ref()
+            .filter(|sample| sample.pid == pid && sample.started == created);
+        let input = session_info::Input {
+            label: session.map(|session| session.label.clone()),
+            cwd: session.map(|session| crate::services::compact_path(&session.cwd)),
+            cwd_full: session.map(|session| session.cwd.display().to_string()),
+            branch: session.and_then(|session| self.branch_at(&session.cwd)),
+            started: session_info::started_label(created, now(), live),
+            unconfirmed: session.is_some_and(|session| !session.cwd_confirmed),
+            session_cpu: sample
+                .and_then(|sample| sample.session)
+                .map(|stats| stats.cpu),
+            session_memory: sample
+                .and_then(|sample| sample.session)
+                .map(|stats| stats.memory),
+            system: self.resources.as_ref().map(|sample| sample.system.clone()),
+        };
+        let mut toggles = session_info::Toggles {
+            process_open: self.preferences.info_process_open,
+            resources_open: self.preferences.info_resources_open,
+            show_system: self.preferences.info_show_system,
+        };
+        let model = session_info::model(&input);
+        session_info::show(ui, &model, &mut toggles, &self.theme);
+        self.preferences.info_process_open = toggles.process_open;
+        self.preferences.info_resources_open = toggles.resources_open;
+        self.preferences.info_show_system = toggles.show_system;
+    }
+
     pub(super) fn sidebar(&mut self, ui: &mut egui::Ui) {
+        if self.preferences.tool == SidebarTool::Info {
+            self.info_panel(ui);
+            return;
+        }
         if self.preferences.tool == SidebarTool::History {
             let ended: Vec<_> = self
                 .state

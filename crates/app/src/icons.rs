@@ -352,6 +352,7 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         "Bell" => egui::include_image!("../assets/icons/bell.svg"),
         "CircleCheck" => egui::include_image!("../assets/icons/circle-check.svg"),
         "CircleAlert" => egui::include_image!("../assets/icons/circle-alert.svg"),
+        "Info" => egui::include_image!("../assets/icons/info.svg"),
         "CircleStop" => egui::include_image!("../assets/icons/circle-stop.svg"),
         "CircleQuestion" => egui::include_image!("../assets/icons/circle-question.svg"),
         "LoaderCircle" => egui::include_image!("../assets/icons/loader-circle.svg"),

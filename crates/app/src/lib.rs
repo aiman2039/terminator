@@ -31,7 +31,9 @@ mod notify_test;
 mod nvim_rpc;
 mod player;
 mod refresh;
+mod resource_sample;
 mod retry_budget;
+mod session_info;
 mod settings_ui;
 use settings_ui::{BrowseTarget, SettingsSection};
 mod palette;
@@ -286,6 +288,7 @@ enum Update {
         Instant,
     ),
     Metadata(u64, metadata::Metadata),
+    Resources(resource_sample::Sample),
     OpenImage(String, PathBuf, After),
     OpenNativeEditor(String, PathBuf, After),
     OpenBrowser(String, BrowserTarget, After),
@@ -640,6 +643,9 @@ pub struct App {
     metadata_jobs: tokio::sync::watch::Sender<Option<metadata_refresh::Request>>,
     metadata_request: Option<metadata_refresh::Request>,
     metadata_generation: u64,
+    resources: Option<resource_sample::Sample>,
+    resource_tx: std::sync::mpsc::Sender<Option<resource_sample::Request>>,
+    resource_request: Option<resource_sample::Request>,
     context_path: Option<PathBuf>,
     error: Option<String>,
     /// Same status text the user dismissed. Identical reports stay hidden.
@@ -808,6 +814,10 @@ impl App {
         let jobs = exit::JobQueue::supervised(services.clone());
         let refresh = refresh::spawn_async(services.clone());
         let metadata_jobs = metadata_refresh::spawn(services.clone());
+        let resource_tx = resource_sample::spawn(tx.clone(), {
+            let ctx = ctx.clone();
+            move || ctx.request_repaint()
+        });
         let update_tx = tx.clone();
         let image_jobs = gui_services::ImageJobs(services.clone());
         let _ = jobs.send(Job::HookStatus);
@@ -925,6 +935,9 @@ impl App {
             metadata_jobs,
             metadata_request: None,
             metadata_generation: 0,
+            resources: None,
+            resource_tx,
+            resource_request: None,
             context_path: None,
             error: preference_error.or(upgrade_error),
             dismissed_error: None,
@@ -1406,6 +1419,7 @@ impl App {
                         self.metadata = Some(data);
                     }
                 }
+                Update::Resources(sample) => self.resources = Some(sample),
                 Update::OpenImage(project, path, after) => {
                     self.place_gui_tab(project, Tab::Image { path }, after);
                 }
@@ -2270,6 +2284,23 @@ impl App {
         self.context_session()
             .map(|s| s.cwd.clone())
             .or_else(|| self.selected_project().map(|p| p.path.clone()))
+    }
+    fn sync_resource_sample(&mut self) {
+        let open = (self.preferences.visible || self.preferences.ide_mode)
+            && self.preferences.tool == SidebarTool::Info;
+        let next = open.then(|| {
+            let session = self
+                .context_session()
+                .filter(|session| session.lifecycle.live());
+            resource_sample::Request {
+                pid: session.and_then(|session| session.pid),
+                started: session.map(|session| session.created).unwrap_or(0),
+            }
+        });
+        if next != self.resource_request {
+            self.resource_request = next.clone();
+            let _ = self.resource_tx.send(next);
+        }
     }
     fn report_status_error(&mut self, error: String) {
         let cwd = self.cwd();
@@ -4883,6 +4914,7 @@ impl eframe::App for App {
             });
             let _ = self.metadata_jobs.send(self.metadata_request.clone());
         }
+        self.sync_resource_sample();
         self.visible_dirs.sort();
         self.visible_dirs.dedup();
         let wants_files = self.preferences.visible
@@ -9511,6 +9543,7 @@ mod navigation_tests {
             SidebarTool::Git,
             SidebarTool::Explorer,
             SidebarTool::Agents,
+            SidebarTool::Info,
         ] {
             app.preferences.tool = tool;
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -9528,6 +9561,152 @@ mod navigation_tests {
         });
         output.textures_delta.clear();
         assert!(target("left-agent-bar").is_some());
+    }
+
+    /// Info paints the focused session and host meters, and hides a block when
+    /// its section or the SYSTEM toggle is closed. A sample for another pid
+    /// does not fill THIS SESSION.
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn info_sidebar_paints_process_and_system_meters() {
+        let (mut app, _ctx, _dir) = fixture();
+        let mut session = session_fixture("term-3", SessionKind::Shell);
+        session.label = "Terminal 3".into();
+        session.cwd = "/Users/ohaddahan/RustroverProjects/terminator".into();
+        session.created = now().saturating_sub(120);
+        session.pid = Some(42);
+        session.lifecycle = Lifecycle::Running;
+        app.active_session = Some(session.id.clone());
+        app.selected = Some("a".into());
+        app.metadata = Some(metadata::Metadata {
+            cwd: session.cwd.clone(),
+            branch: Some("master".into()),
+            ..Default::default()
+        });
+        app.state.sessions = vec![session.clone()];
+        app.preferences.visible = true;
+        app.preferences.tool = SidebarTool::Info;
+        app.preferences.info_process_open = true;
+        app.preferences.info_resources_open = true;
+        app.preferences.info_show_system = true;
+        let system = resource_sample::SystemStats {
+            cpu: 29.0,
+            memory_used: (43.9 * 1024.0 * 1024.0 * 1024.0) as u64,
+            memory_total: 128 * 1024 * 1024 * 1024,
+            pressure: Some(terminator_sys::MemoryPressure {
+                percent: 10.0,
+                level: terminator_sys::PressureLevel::Normal,
+            }),
+            load_one: 6.70,
+            load_five: 5.43,
+            load_fifteen: 6.15,
+            cpus: 10,
+        };
+        app.resources = Some(resource_sample::Sample {
+            pid: Some(42),
+            started: session.created,
+            session: None,
+            system: system.clone(),
+        });
+
+        fn painted(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+            fn walk(out: &mut Vec<String>, shape: &egui::Shape) {
+                match shape {
+                    egui::Shape::Vec(shapes) => {
+                        for shape in shapes {
+                            walk(out, shape);
+                        }
+                    }
+                    egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+                    _ => {}
+                }
+            }
+            let mut out = Vec::new();
+            for clipped in shapes {
+                walk(&mut out, &clipped.shape);
+            }
+            out
+        }
+        let paint = |app: &mut App| {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(420.0, 720.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.sidebar(ui),
+            );
+            let text = painted(&output.shapes);
+            output.textures_delta.clear();
+            (text, ctx)
+        };
+        let contains =
+            |text: &[String], needle: &str| text.iter().any(|line| line.contains(needle));
+        let marked = |ctx: &egui::Context, name: &str| {
+            ctx.data(|data| {
+                data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name)))
+                    .is_some()
+            })
+        };
+
+        let (text, ctx) = paint(&mut app);
+        for name in [
+            session_info::SESSION,
+            session_info::CWD,
+            session_info::BRANCH,
+            session_info::STARTED,
+            session_info::SESSION_CPU,
+            session_info::SESSION_MEMORY,
+            session_info::SYSTEM_CPU,
+            session_info::SYSTEM_MEMORY,
+            session_info::PRESSURE,
+            session_info::LOAD,
+            session_info::SYSTEM_TOGGLE,
+        ] {
+            assert!(marked(&ctx, name), "missing {name}");
+        }
+        assert!(contains(&text, "Terminal 3"));
+        assert!(contains(&text, "RustroverProjects"));
+        assert!(contains(&text, "master"));
+        assert!(contains(&text, "2m ago"));
+        assert!(contains(&text, "29%"));
+        assert!(contains(&text, "128.0 GB"));
+        assert!(contains(&text, "10% · normal"));
+        assert!(contains(&text, "6.70 5.43 6.15"));
+        assert!(contains(&text, "THIS SESSION"));
+
+        app.resources = Some(resource_sample::Sample {
+            pid: Some(99),
+            started: session.created,
+            session: Some(resource_sample::SessionStats {
+                cpu: 12.0,
+                memory: 50 * 1024 * 1024,
+            }),
+            system: system.clone(),
+        });
+        let (text, ctx) = paint(&mut app);
+        assert!(marked(&ctx, session_info::SESSION_CPU));
+        assert!(!contains(&text, "12%"));
+        assert!(!contains(&text, "50 MB"));
+        assert!(contains(&text, "29%"));
+
+        app.preferences.info_show_system = false;
+        let (text, ctx) = paint(&mut app);
+        assert!(!marked(&ctx, session_info::LOAD));
+        assert!(marked(&ctx, session_info::SESSION));
+        assert!(contains(&text, "Terminal 3"));
+        assert!(!contains(&text, "6.70 5.43 6.15"));
+
+        app.preferences.info_process_open = false;
+        app.preferences.info_show_system = true;
+        let (text, ctx) = paint(&mut app);
+        assert!(!marked(&ctx, session_info::SESSION));
+        assert!(marked(&ctx, session_info::LOAD));
+        assert!(!contains(&text, "Terminal 3"));
+        assert!(contains(&text, "6.70 5.43 6.15"));
     }
 
     #[test]

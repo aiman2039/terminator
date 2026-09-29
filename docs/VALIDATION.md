@@ -1,5 +1,13 @@
 # Validation evidence — 2026-09-08
 
+## Presentation cache and bounded status spin (2026-09-29)
+
+- Row lookup uses one index over sessions, presence, generations, hooks, and notifications. Unchanged sessions keep their `Arc`. Accepted snapshots reconcile once. `Go` does not invalidate. Replacing those collections refreshes a warm cache on the next lookup; in-place notice edits still reconcile explicitly. Tooltip age is computed at hover from `observed_at`.
+- A visible running status asks for another frame after 33 ms. A clipped icon or a minimized window does not. Rotation follows elapsed time.
+- `cargo test -p terminator --lib --offline --all-features`: 438 passed, 3 ignored.
+- `cargo clippy -p terminator -p terminator-core --all-targets --all-features --offline -- -D warnings` passed. `cargo fmt --all --check` passed.
+- Not run: before/after `sample`, native GUI smoke, optimized-build CPU/GPU comparison, sidebar virtualization, catalog caching, package install, or replacing the running GUI/daemon.
+
 ## Grok decoder and inspector expiry follow-up (2026-09-28)
 
 - Enabled egui_extras' image loader for the bundled Grok PNG; the existing image
