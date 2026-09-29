@@ -3342,36 +3342,8 @@ impl App {
             ui.weak("Select a project to use the terminal strip.");
             return;
         };
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new("Terminal")
-                        .size(11.0)
-                        .color(appearance::color(&self.theme.secondary)),
-                )
-                .selectable(false),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let hide = ui
-                    .add_sized(
-                        [18.0, 18.0],
-                        egui::Button::image(
-                            egui::Image::new(crate::icons::source("PanelBottomClose"))
-                                .tint(appearance::ICON_COLOR)
-                                .fit_to_exact_size(egui::vec2(12.0, 12.0)),
-                        )
-                        .frame(false),
-                    )
-                    .on_hover_text("Hide terminal strip");
-                if hide.clicked() {
-                    self.preferences.ide_terminal_collapsed = true;
-                    self.resync_active_from_dock();
-                }
-                #[cfg(feature = "test-support")]
-                diagnostics::record(ui.ctx(), "ide-terminal-strip", ui.min_rect());
-            });
-        });
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "ide-terminal-strip", ui.max_rect());
         let mut strip = self
             .preferences
             .ide_strip_docks
@@ -4831,15 +4803,6 @@ impl eframe::App for App {
         if !self.state.settings.notifications_side {
             egui::Panel::top("attention").show(ui, |ui| self.notifications(ui));
         }
-        if self.preferences.ide_mode && !self.preferences.ide_terminal_collapsed {
-            egui::Panel::bottom("ide-terminal")
-                .resizable(true)
-                .default_size(220.0)
-                .size_range(80.0..=600.0)
-                .show(ui, |ui| {
-                    self.ide_terminal_strip(ui);
-                });
-        }
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.colored_label(
@@ -4993,17 +4956,44 @@ impl eframe::App for App {
                     ui.separator();
                     self.player_status_row(ui);
                     self.notification_status_badge(ui);
-                    if self.preferences.ide_terminal_collapsed
-                        && ui
+                    if self.preferences.ide_terminal_collapsed {
+                        if ui
                             .small_button("Terminal")
                             .on_hover_text("Show IDE terminal strip")
                             .clicked()
-                    {
-                        self.preferences.ide_terminal_collapsed = false;
+                        {
+                            self.preferences.ide_terminal_collapsed = false;
+                        }
+                    } else {
+                        let hide = ui
+                            .add_sized(
+                                [18.0, 18.0],
+                                egui::Button::image(
+                                    egui::Image::new(crate::icons::source("PanelBottomClose"))
+                                        .tint(appearance::ICON_COLOR)
+                                        .fit_to_exact_size(egui::vec2(12.0, 12.0)),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_text("Hide terminal strip");
+                        if hide.clicked() {
+                            self.preferences.ide_terminal_collapsed = true;
+                            self.resync_active_from_dock();
+                        }
                     }
                 }
             });
         });
+        if self.preferences.ide_mode && !self.preferences.ide_terminal_collapsed {
+            let max_height = (ui.available_height() * 0.8).max(80.0);
+            egui::Panel::bottom("ide-terminal")
+                .resizable(true)
+                .default_size(220.0)
+                .size_range(80.0..=max_height)
+                .show(ui, |ui| {
+                    self.ide_terminal_strip(ui);
+                });
+        }
         if self.preferences.left_visible || self.preferences.ide_mode {
             let projects_response = egui::Panel::left("projects")
                 .resizable(true)

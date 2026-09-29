@@ -462,7 +462,10 @@ fn history_burst() -> Result<()> {
     let project = h.project("history-burst")?;
     let shell = h.shell(&project)?;
     let mut stream = h.attach(&shell)?;
-    h.write(&mut stream, "stty -echo; printf 'BURST_READY\\n'\n")?;
+    // Markers are assembled at runtime (`printf '%s' ...`) so the echoed command
+    // line never contains the literal token. Otherwise the readiness wait is
+    // satisfied by the echo before `stty -echo` or the pipeline has run.
+    h.write(&mut stream, "stty -echo; printf 'BURST%s\\n' _READY\n")?;
     h.wait(
         |_| {
             h.history(id(&shell))
@@ -473,7 +476,7 @@ fn history_burst() -> Result<()> {
     // Six MiB exceeds the entire queue capacity. Octal avoids echoing any payload Xs.
     h.write(
         &mut stream,
-        "head -c 6291456 /dev/zero | tr '\\000' '\\130'; printf '\\nHISTORY_BURST_DONE\\n'\n",
+        "head -c 6291456 /dev/zero | tr '\\000' '\\130'; printf '\\nHISTORY_%s\\n' BURST_DONE\n",
     )?;
     h.wait(
         |_| {

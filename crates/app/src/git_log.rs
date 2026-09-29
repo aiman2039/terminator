@@ -328,3 +328,121 @@ pub fn fetch_blame(cwd: &Path, path: &Path) -> Result<BlameData, String> {
         error: None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    fn git_cmd(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        git_cmd(dir.path(), &["init", "-q", "-b", "main"]);
+        git_cmd(
+            dir.path(),
+            &["config", "user.email", "fixture@example.invalid"],
+        );
+        git_cmd(dir.path(), &["config", "user.name", "Fixture"]);
+        dir
+    }
+
+    #[test]
+    fn fetch_log_reads_commits_refs_and_the_active_branch() {
+        let dir = repo();
+        let root = dir.path();
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        git_cmd(root, &["add", "."]);
+        git_cmd(root, &["commit", "-qm", "first commit"]);
+        git_cmd(root, &["branch", "feature"]);
+        git_cmd(root, &["tag", "v1"]);
+        std::fs::write(root.join("a.txt"), "two\n").unwrap();
+        git_cmd(root, &["commit", "-qam", "second commit"]);
+
+        let log = fetch_log(root).expect("log should load");
+        assert!(log.error.is_none());
+        assert_eq!(log.active_branch, "main");
+        assert!(log.commits.iter().any(|c| c.subject == "second commit"));
+        assert!(log.commits.iter().any(|c| c.subject == "first commit"));
+        assert!(log.commits.iter().all(|c| !c.short_hash.is_empty()));
+        assert!(log.commits.iter().all(|c| c.author == "Fixture"));
+        assert!(
+            log.refs.iter().any(|r| r.name == "feature"),
+            "branch ref missing: {:?}",
+            log.refs
+        );
+        assert!(
+            log.refs
+                .iter()
+                .any(|r| r.name == "v1" && r.kind == RefKind::Tag),
+            "tag ref missing: {:?}",
+            log.refs
+        );
+    }
+
+    #[test]
+    fn fetch_log_reports_a_directory_outside_a_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = fetch_log(dir.path());
+        assert!(log.is_err(), "non-repository should error: {log:?}");
+    }
+
+    #[test]
+    fn parse_log_keeps_multi_line_messages_parents_and_refs() {
+        let hash = "1111111111111111111111111111111111111111";
+        let parent = "2222222222222222222222222222222222222222";
+        let text = format!(
+            "{hash}\n1111111\nJane\njane@example.invalid\n1700000000\n{parent}\nHEAD -> main, tag: v1\nsubject line\n\nbody line one\nbody line two\n>>>>>END<<<<<\n"
+        );
+        let commits = parse_log(&text);
+        assert_eq!(commits.len(), 1);
+        let commit = &commits[0];
+        assert_eq!(commit.hash, hash);
+        assert_eq!(commit.short_hash, "1111111");
+        assert_eq!(commit.author, "Jane");
+        assert_eq!(commit.subject, "subject line");
+        assert_eq!(
+            commit.message,
+            "subject line\n\nbody line one\nbody line two"
+        );
+        assert_eq!(commit.parents, vec![parent.to_string()]);
+        assert_eq!(commit.refs, vec!["HEAD -> main", "tag: v1"]);
+        assert_eq!(commit.timestamp, 1_700_000_000);
+    }
+
+    #[test]
+    fn parse_log_ignores_empty_entries() {
+        assert!(parse_log("").is_empty());
+        assert!(parse_log(">>>>>END<<<<<\n").is_empty());
+    }
+
+    #[test]
+    fn fetch_blame_annotates_every_line() {
+        let dir = repo();
+        let root = dir.path();
+        std::fs::write(root.join("blame.txt"), "alpha\nbeta\n").unwrap();
+        git_cmd(root, &["add", "."]);
+        git_cmd(root, &["commit", "-qm", "base"]);
+
+        let blame = fetch_blame(root, Path::new("blame.txt")).expect("blame should load");
+        assert!(blame.error.is_none());
+        assert_eq!(blame.entries.len(), 2);
+        assert_eq!(blame.entries[0].line, 0);
+        assert_eq!(blame.entries[1].line, 1);
+        assert!(blame.entries.iter().all(|e| e.author == "Fixture"));
+        assert!(blame.entries[0].code.contains("alpha"));
+        assert!(blame.entries[1].code.contains("beta"));
+    }
+}

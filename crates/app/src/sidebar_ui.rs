@@ -389,8 +389,6 @@ impl App {
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| cwd.display().to_string());
-            ui.add(egui::Label::new(RichText::new(name).strong()).truncate())
-                .on_hover_text(cwd.display().to_string());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let cwd = cwd.to_path_buf();
@@ -471,6 +469,8 @@ impl App {
                 if refresh.clicked() {
                     self.refresh_request = None;
                 }
+                ui.add(egui::Label::new(RichText::new(name).strong()).truncate())
+                    .on_hover_text(cwd.display().to_string());
             });
         });
         let contents = self.preferences.explorer_search_mode == ExplorerSearchMode::Contents;

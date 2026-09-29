@@ -279,10 +279,15 @@ fn session_name_order(left: &Session, right: &Session) -> Ordering {
 #[serde(rename_all = "snake_case")]
 pub enum SidebarTool {
     #[default]
+    #[serde(alias = "Explorer")]
     Explorer,
+    #[serde(alias = "Agents")]
     Agents,
+    #[serde(alias = "Git")]
     Git,
+    #[serde(alias = "History")]
     History,
+    #[serde(alias = "Info")]
     Info,
 }
 
@@ -596,9 +601,11 @@ impl UiPreferences {
             prefs.version == 1 || prefs.version == 2,
             "Unsupported UI preference version"
         );
-        // Version 1 never persisted ide_mode; ignore any stray value.
+        // Version 1 never persisted ide_mode; ignore any stray value once, then
+        // migrate so the rule does not re-fire on every launch.
         if prefs.version == 1 {
             prefs.ide_mode = false;
+            prefs.version = 2;
         }
         prefs.width = if prefs.width.is_finite() {
             prefs.width.clamp(220.0, 480.0)
@@ -922,13 +929,24 @@ mod tests {
                 .unwrap()
                 .ide_terminal_collapsed
         );
-        // Stale version-1 files written before version-2 still open with IDE mode off.
+        // Stale version-1 files written before version-2 still open with IDE mode off,
+        // and the load migrates them so the reset does not re-fire.
         fs::write(
             dir.path().join("ui-preferences.json"),
             r#"{"version":1,"ide_mode":true}"#,
         )
         .unwrap();
-        assert!(!UiPreferences::load(dir.path()).unwrap().ide_mode);
+        let migrated = UiPreferences::load(dir.path()).unwrap();
+        assert!(!migrated.ide_mode);
+        assert_eq!(migrated.version, 2);
+        migrated.save(dir.path()).unwrap();
+        let raw = fs::read_to_string(dir.path().join("ui-preferences.json")).unwrap();
+        assert!(raw.contains(r#""version": 2"#));
+        let mut reopened = UiPreferences::load(dir.path()).unwrap();
+        assert_eq!(reopened.version, 2);
+        reopened.ide_mode = true;
+        reopened.save(dir.path()).unwrap();
+        assert!(UiPreferences::load(dir.path()).unwrap().ide_mode);
     }
 
     #[test]
@@ -1003,6 +1021,18 @@ mod tests {
         assert!(UiPreferences::load(dir.path()).is_err());
         fs::write(dir.path().join("ui-preferences.json"), r#"{"width":900}"#).unwrap();
         assert_eq!(UiPreferences::load(dir.path()).unwrap().width, 480.0);
+    }
+    #[test]
+    fn legacy_pascal_case_tool_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("ui-preferences.json"),
+            r#"{"version":2,"tool":"Git","visible":true}"#,
+        )
+        .unwrap();
+        let prefs = UiPreferences::load(dir.path()).unwrap();
+        assert_eq!(prefs.tool, SidebarTool::Git);
+        assert!(prefs.visible);
     }
     #[test]
     fn setup_waits_for_inventory_and_counts_hidden_projects() {

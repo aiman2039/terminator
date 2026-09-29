@@ -203,6 +203,7 @@ fn main() -> Result<()> {
         Task::Integration => {
             integration::run()?;
             integration::controls()?;
+            integration::hook_controls()?;
             regressions::run()
         }
         Task::Gui {
