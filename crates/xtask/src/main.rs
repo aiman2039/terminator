@@ -8,6 +8,7 @@ mod integration;
 mod launch;
 mod linux;
 mod native;
+mod notification_perf;
 mod package;
 mod regressions;
 use anyhow::{Context, Result};
@@ -114,6 +115,27 @@ enum Task {
     CompareLoad {
         before: PathBuf,
         after: PathBuf,
+    },
+    /// Isolated A/B benchmark of the daemon notification path.
+    NotificationPerf {
+        /// Baseline daemon binary (defaults to the built debug daemon).
+        #[arg(long)]
+        baseline_bin: Option<PathBuf>,
+        /// Candidate daemon binary (defaults to the built debug daemon).
+        #[arg(long)]
+        candidate_bin: Option<PathBuf>,
+        #[arg(long, default_value = "60")]
+        seconds: u64,
+        #[arg(long, default_value = "10")]
+        warmup: u64,
+        #[arg(long, default_value = "3")]
+        repetitions: u32,
+        #[arg(long, default_value = "20")]
+        burst: usize,
+        #[arg(long, default_value = "all")]
+        cases: String,
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
     /// Count Git/PR subprocesses in an isolated native refresh fixture.
     CommandCounts {
@@ -244,6 +266,25 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&comparison)?);
             Ok(())
         }
+        Task::NotificationPerf {
+            baseline_bin,
+            candidate_bin,
+            seconds,
+            warmup,
+            repetitions,
+            burst,
+            cases,
+            output,
+        } => notification_perf::run(notification_perf::Options {
+            baseline_bin,
+            candidate_bin,
+            seconds,
+            warmup,
+            repetitions,
+            burst,
+            cases,
+            output,
+        }),
         Task::CommandCounts { seconds, output } => integration::command_counts(seconds, output),
         Task::MuseEcho { muse } => integration::muse(&muse),
     }

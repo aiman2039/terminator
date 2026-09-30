@@ -8045,6 +8045,7 @@ dependencies = [
  "plist",
  "resvg",
  "rustix 1.1.4",
+ "serde",
  "serde_json",
  "tar",
  "tempfile",
