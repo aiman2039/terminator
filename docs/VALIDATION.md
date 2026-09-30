@@ -3014,3 +3014,17 @@ renders the actual sidebar panels, toggles each side off through the shortcut
 handlers shared by the buttons, verifies reclaimed center width, and toggles both
 back on. Native mouse interaction with the installed app has not been exercised;
 no app/daemon restart or installation was performed.
+
+## Sidebar text field focus (2026-09-30)
+
+`focus_terminal` in vendored `egui_term` requested keyboard focus every frame a
+pane was the active session. Since terminals repaint after the sidebars, clicking
+a sidebar text field focused it and the terminal reclaimed focus in the same
+frame, so fields like Explorer "Find in folder" never held focus and keystrokes
+reached the shell. Focus is now requested only when no widget is focused or the
+terminal itself already holds it; egui's press-based focus surrender returns
+focus to the terminal on a click.
+
+Regression `terminal_focus_does_not_steal_from_another_widget` (egui_term) covers
+the steal; `cargo test -p egui_term --locked --offline` passed 63. No native mouse
+validation against the installed app was performed.

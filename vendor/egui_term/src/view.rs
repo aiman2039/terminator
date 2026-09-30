@@ -496,6 +496,18 @@ fn flush_text_run(painter: &Painter, shapes: &mut Vec<Shape>, run: &mut TextRun)
 }
 
 fn focus_terminal(layout: &Response) {
+    // A terminal that is the active session stays "focused" for as long as the
+    // app says so, but it must not yank keyboard focus back from another widget
+    // every frame. Otherwise a sidebar search field can never keep focus: the
+    // click focuses it, then the terminal repaints later in the same frame and
+    // steals it back, so keystrokes land in the shell.
+    if layout
+        .ctx
+        .memory(|memory| memory.focused())
+        .is_some_and(|id| id != layout.id)
+    {
+        return;
+    }
     layout.request_focus();
     // These keys belong to the shell/editor, not egui's widget navigation.
     // Otherwise Tab can briefly focus and highlight a dock separator.
@@ -558,6 +570,21 @@ mod focus_tests {
                 output.textures_delta.clear();
             }
         }
+    }
+
+    #[test]
+    fn terminal_focus_does_not_steal_from_another_widget() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let terminal = ui.allocate_response(Vec2::splat(100.0), egui::Sense::click());
+            let field = ui.allocate_response(Vec2::splat(100.0), egui::Sense::click());
+            field.request_focus();
+            assert!(field.has_focus());
+            focus_terminal(&terminal);
+            assert!(field.has_focus(), "terminal stole focus from the field");
+            assert!(!terminal.has_focus());
+        });
+        output.textures_delta.clear();
     }
 }
 

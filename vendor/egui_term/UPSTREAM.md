@@ -177,3 +177,13 @@ table, avoiding rebuilding a discarded default table on every widget creation.
 The host caches its configured theme until foreground/background changes.
 Regressions cover shared frame deadlines, idle wakeups, separate contexts,
 indexed colors, custom colors, bright-foreground fallback, and theme sharing.
+
+## Terminal focus no longer steals from other widgets (2026-09-30)
+
+`focus_terminal` unconditionally called `request_focus` every frame a pane was
+the active session. Because the terminal repaints after the sidebars, clicking a
+sidebar text field focused it and the terminal pulled focus back in the same
+frame, so the field never kept focus and keystrokes reached the shell. Focus is
+now requested only when nothing is focused or the terminal itself already holds
+focus; egui's press-based focus surrender hands focus to the terminal when the
+user clicks it. Regression: `terminal_focus_does_not_steal_from_another_widget`.
