@@ -257,6 +257,11 @@ impl PresentationCache {
             .unwrap_or_else(|| self.missing())
     }
 
+    pub fn generation(&mut self, state: &State, now: u64, fresh: Option<bool>) -> u64 {
+        self.ensure(state, now, fresh);
+        self.indexes_built
+    }
+
     /// Sum precomputed attention. Duplicate session ids count once.
     /// Ended sessions contribute nothing. Pending input, permission, and
     /// failure stay distinct.

@@ -11,6 +11,7 @@ mod updater {
 mod workspace_ui;
 use workspace_ui::Viewer;
 mod dialogs_ui;
+mod sidebar_cache;
 mod sidebar_ui;
 use sidebar_ui::{AttentionAction, AttentionCard, attention_card};
 mod agent_presence;
@@ -771,6 +772,7 @@ pub struct App {
     /// Shared render data, invalidated by snapshots and local notice changes.
     presentations: std::cell::RefCell<agent_presence::PresentationCache>,
     sidebar_projects: std::cell::RefCell<HashMap<String, std::sync::Arc<Project>>>,
+    sidebar_cache: std::cell::RefCell<sidebar_cache::Cache>,
     /// Unread-view row retained after marking read, until selection/filter changes.
     unread_selected: Option<String>,
     connected: bool,
@@ -1078,6 +1080,7 @@ impl App {
             highlight_since: Instant::now(),
             presentations: Default::default(),
             sidebar_projects: Default::default(),
+            sidebar_cache: Default::default(),
             unread_selected: None,
             connected: false,
             control_server: None,
@@ -1820,6 +1823,7 @@ impl App {
                             }
                             _ => context,
                         };
+                        self.sidebar_cache.get_mut().clear_files();
                         self.context = Some(context);
                         self.watch_fallback = fallback;
                         for (path, entries) in directories {
@@ -3290,8 +3294,7 @@ impl App {
                         if self.preferences.left_agents {
                             self.agents_view(ui);
                         } else {
-                            appearance::sidebar_scroll("left-projects")
-                                .show(ui, |ui| self.projects(ui));
+                            self.projects(ui);
                         }
                     });
                 });
@@ -7519,6 +7522,203 @@ mod navigation_tests {
     }
 
     #[test]
+    fn sidebar_models_reuse_data_until_snapshot_or_filter_changes() {
+        let (mut app, _, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.reconcile_presentations();
+        let index = app.sidebar_index();
+        let projects = app.cached_projects();
+        let history = app.cached_history();
+        let live = app.cached_live_rows();
+        app.active_session = Some("shell".into());
+        app.preferences.expanded.insert("a".into(), false);
+        assert!(std::sync::Arc::ptr_eq(&index, &app.sidebar_index()));
+        assert!(std::sync::Arc::ptr_eq(&projects, &app.cached_projects()));
+        assert!(std::sync::Arc::ptr_eq(&history, &app.cached_history()));
+        assert!(std::sync::Arc::ptr_eq(&live, &app.cached_live_rows()));
+        app.preferences.history_filter = "changed".into();
+        assert!(!std::sync::Arc::ptr_eq(&history, &app.cached_history()));
+        app.preferences.hidden_projects.insert("a".into());
+        assert_eq!(
+            app.cached_projects()
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect::<Vec<_>>(),
+            ["b"]
+        );
+        let mut state = app.state.clone();
+        state.sessions[0].label = "renamed".into();
+        app.apply_state(state);
+        let next = app.sidebar_index();
+        assert!(!std::sync::Arc::ptr_eq(&index, &next));
+        assert_eq!(next.sessions["shell"].label, "renamed");
+    }
+
+    #[test]
+    fn sidebar_notice_cache_updates_on_read_dismiss_and_snooze_expiry() {
+        let (mut app, _, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.state.notifications.push(notice_fixture(
+            "notice",
+            "shell",
+            AgentState::WaitingInput,
+            1,
+        ));
+        app.reconcile_presentations();
+        assert_eq!(app.attention_counts(), (1, 1));
+        let unread = app.cached_unread_groups();
+        app.apply_notice_action("notice".into(), AttentionAction::Read);
+        assert_eq!(app.attention_counts(), (1, 0));
+        assert_eq!(app.cached_unread_groups().len(), 1);
+        assert!(!std::sync::Arc::ptr_eq(
+            &unread,
+            &app.cached_unread_groups()
+        ));
+        app.unread_selected = None;
+        assert!(app.cached_unread_groups().is_empty());
+        app.apply_notice_action("notice".into(), AttentionAction::Snooze);
+        assert_eq!(app.attention_counts(), (0, 0));
+        let deadline = app.state.notifications[0].snoozed_until;
+        assert!(app.sidebar_index_at(deadline - 1).pending.is_empty());
+        assert_eq!(app.sidebar_index_at(deadline).pending.len(), 1);
+        app.apply_notice_action("notice".into(), AttentionAction::Dismiss);
+        assert!(app.sidebar_index().pending.is_empty());
+    }
+
+    #[test]
+    fn explorer_prepared_rows_reuse_listings_and_refresh_expansion_and_content() {
+        let (mut app, _, _dir) = fixture();
+        let root = PathBuf::from("/a");
+        let folder = root.join("folder");
+        app.dirs.insert(
+            root.clone(),
+            vec![
+                terminator_git::Entry {
+                    path: folder.clone(),
+                    directory: true,
+                    ignored: false,
+                },
+                terminator_git::Entry {
+                    path: root.join("ignored.rs"),
+                    directory: false,
+                    ignored: true,
+                },
+            ],
+        );
+        app.dirs.insert(
+            folder.clone(),
+            vec![terminator_git::Entry {
+                path: folder.join("file.rs"),
+                directory: false,
+                ignored: false,
+            }],
+        );
+        let rows = app.explorer_rows(&root);
+        assert_eq!(rows.len(), 1);
+        assert!(std::sync::Arc::ptr_eq(&rows, &app.explorer_rows(&root)));
+        app.expanded_dirs.insert(folder.clone());
+        let expanded = app.explorer_rows(&root);
+        assert_eq!(expanded.len(), 2);
+        assert_eq!(expanded[1].depth, 1);
+        app.visible_dirs.clear();
+        assert!(std::sync::Arc::ptr_eq(&expanded, &app.explorer_rows(&root)));
+        assert_eq!(app.visible_dirs, [root.clone(), folder.clone()]);
+        app.preferences.show_ignored = true;
+        assert_eq!(app.explorer_rows(&root).len(), 3);
+        app.explorer_query = "missing".into();
+        assert_eq!(app.explorer_rows(&root).len(), 1); // folders remain navigable
+        app.explorer_query.clear();
+        app.dirs.get_mut(&folder).unwrap()[0].path = folder.join("changed.rs");
+        app.sidebar_cache.get_mut().clear_files();
+        assert_eq!(app.explorer_rows(&root)[1].label, "changed.rs");
+    }
+
+    #[test]
+    fn search_results_preserve_headers_and_row_heights_when_clipped() {
+        let (mut app, ctx, _dir) = fixture();
+        app.explorer_search = (0..50)
+            .map(|i| search::Hit {
+                path: PathBuf::from(format!("/a/{}.rs", i / 5)),
+                line: i + 1,
+                text: format!("hit {i}"),
+            })
+            .collect();
+        let mut heights = Vec::new();
+        for clipped in [false, true] {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_width(300.0);
+                ui.set_clip_rect(if clipped {
+                    egui::Rect::NOTHING
+                } else {
+                    egui::Rect::EVERYTHING
+                });
+                let start = ui.next_widget_position().y;
+                app.explorer_results(ui, Path::new("/a"));
+                heights.push(ui.next_widget_position().y - start);
+            });
+            output.textures_delta.clear();
+        }
+        assert_eq!(heights[0], heights[1]);
+        assert!(heights[0] > 50.0 * 20.0); // includes all ten file headers
+    }
+
+    #[test]
+    fn accepted_filesystem_refresh_replaces_prepared_git_and_explorer_data() {
+        let (mut app, ctx, _dir) = fixture();
+        let root = PathBuf::from("/a");
+        let context = services::ContextData {
+            cwd: root.clone(),
+            root: Some(root.clone()),
+            git_dirs: vec![],
+            branch: "main".into(),
+            changes: vec![],
+            decorations: Default::default(),
+            stats: Default::default(),
+            error: None,
+        };
+        app.dirs.insert(root.clone(), vec![]);
+        let rows = app.explorer_rows(&root);
+        app.sidebar_cache.get_mut().git =
+            Some(std::sync::Arc::new(sidebar_ui::PreparedGit::new(&context)));
+        app.refresh_generation = 7;
+        app.refresh_request = Some(refresh::Request {
+            cwd: root.clone(),
+            generation: 7,
+            directories: vec![root.clone()],
+        });
+        app.update_tx
+            .send(Update::Refresh(6, context.clone(), vec![], false))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(std::sync::Arc::ptr_eq(&rows, &app.explorer_rows(&root)));
+        assert!(app.sidebar_cache.borrow().git.is_some());
+        app.update_tx
+            .send(Update::Refresh(
+                7,
+                context,
+                vec![(
+                    root.clone(),
+                    Ok(vec![terminator_git::Entry {
+                        path: root.join("new.rs"),
+                        directory: false,
+                        ignored: false,
+                    }]),
+                )],
+                false,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert!(app.sidebar_cache.borrow().git.is_none());
+        let updated = app.explorer_rows(&root);
+        assert!(!std::sync::Arc::ptr_eq(&rows, &updated));
+        assert_eq!(updated[0].label, "new.rs");
+    }
+
+    #[test]
     fn project_sidebar_sorts_by_name_and_latest_activity() {
         let (mut app, _, _) = fixture();
         app.state.projects[0].name = "zeta".into();
@@ -8266,6 +8466,7 @@ mod navigation_tests {
                         let mut draft = String::new();
                         let input = sidebar_ui::GitPanelInput {
                             context: &context,
+                            prepared: None,
                             review_mode: app.state.settings.review_mode,
                             neovim_review: false,
                             theme: &app.theme,
@@ -11488,6 +11689,11 @@ mod navigation_tests {
 
     #[test]
     fn waiting_badge_matches_pending_notices_not_live_agents() {
+        fn update_notice(app: &mut App, edit: impl FnOnce(&mut Notification)) {
+            let mut state = app.state.clone();
+            edit(&mut state.notifications[0]);
+            app.apply_state(state);
+        }
         let (mut app, _, _dir) = fixture();
         app.selected = Some("a".into());
         app.state.sessions = vec![session_fixture("s", SessionKind::Shell)];
@@ -11518,18 +11724,20 @@ mod navigation_tests {
             snoozed_until: 0,
         }];
         assert_eq!(app.waiting_notice_count(), 1);
-        app.state.notifications[0].state = AgentState::WaitingPermission;
+        update_notice(&mut app, |notice| {
+            notice.state = AgentState::WaitingPermission
+        });
         assert_eq!(app.waiting_notice_count(), 1);
-        app.state.notifications[0].dismissed = true;
+        update_notice(&mut app, |notice| notice.dismissed = true);
         assert_eq!(app.waiting_notice_count(), 0);
-        app.state.notifications[0].dismissed = false;
-        app.state.notifications[0].snoozed_until = now() + 600;
+        update_notice(&mut app, |notice| notice.dismissed = false);
+        update_notice(&mut app, |notice| notice.snoozed_until = now() + 600);
         assert_eq!(app.waiting_notice_count(), 0);
-        app.state.notifications[0].snoozed_until = 0;
+        update_notice(&mut app, |notice| notice.snoozed_until = 0);
         // The inbox spans all projects: switching projects keeps the badge.
         app.selected = Some("b".into());
         assert_eq!(app.waiting_notice_count(), 1);
-        app.state.notifications[0].resolved = true;
+        update_notice(&mut app, |notice| notice.resolved = true);
         assert_eq!(app.waiting_notice_count(), 0);
     }
 

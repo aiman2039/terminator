@@ -72,13 +72,17 @@ pub fn sort_visible_projects<'a>(input: VisibleProjects<'a>) -> Vec<&'a Project>
         .iter()
         .filter(|project| !hidden.contains(&project.id))
         .collect();
-    let times = project_times(ProjectTimes {
-        sessions,
-        agents,
-        notifications,
-        terminal_notices,
-        activity,
-    });
+    let times = if sort == ProjectSort::LatestActivity {
+        project_times(ProjectTimes {
+            sessions,
+            agents,
+            notifications,
+            terminal_notices,
+            activity,
+        })
+    } else {
+        HashMap::new()
+    };
     apply_sort(sort, &mut projects, &times);
     projects
 }
@@ -182,14 +186,43 @@ pub fn sort_history(input: HistoryInput<'_>) -> Vec<HistoryGroup> {
         filter,
     } = input;
     let query = filter.trim().to_lowercase();
+    let mut activity = HashMap::new();
+    for session in sessions {
+        activity.insert(session.id.as_str(), session.created);
+    }
+    for agent in agents {
+        if let Some(value) = activity.get_mut(agent.session_id.as_str()) {
+            *value = (*value).max(agent.updated);
+        }
+    }
+    for notice in notifications {
+        if let Some(value) = activity.get_mut(notice.session_id.as_str()) {
+            *value = (*value).max(notice.created);
+        }
+    }
+    for notice in terminal_notices {
+        if let Some(value) = activity.get_mut(notice.session_id.as_str()) {
+            *value = (*value).max(notice.created);
+        }
+    }
+    let mut by_project: HashMap<&str, Vec<&Session>> = HashMap::new();
+    for session in sessions {
+        by_project
+            .entry(session.project_id.as_str())
+            .or_default()
+            .push(session);
+    }
     let mut groups = Vec::new();
     for project in projects {
-        let mut with_activity: Vec<(Session, u64)> = sessions
-            .iter()
-            .filter(|s| s.project_id == project.id)
+        let mut with_activity: Vec<(Session, u64)> = by_project
+            .remove(project.id.as_str())
+            .unwrap_or_default()
+            .into_iter()
             .map(|s| {
-                let activity = history_session_activity(s, agents, notifications, terminal_notices);
-                (s.clone(), activity)
+                (
+                    s.clone(),
+                    activity.get(s.id.as_str()).copied().unwrap_or(s.created),
+                )
             })
             .collect();
         if with_activity.is_empty() {
@@ -239,28 +272,6 @@ pub fn sort_history(input: HistoryInput<'_>) -> Vec<HistoryGroup> {
         }
     }
     groups
-}
-
-fn history_session_activity(
-    session: &Session,
-    agents: &[Agent],
-    notifications: &[Notification],
-    terminal_notices: &[TerminalNotice],
-) -> u64 {
-    let mut activity = session.created;
-    for agent in agents.iter().filter(|a| a.session_id == session.id) {
-        activity = activity.max(agent.updated);
-    }
-    for notice in notifications.iter().filter(|n| n.session_id == session.id) {
-        activity = activity.max(notice.created);
-    }
-    for notice in terminal_notices
-        .iter()
-        .filter(|n| n.session_id == session.id)
-    {
-        activity = activity.max(notice.created);
-    }
-    activity
 }
 
 fn default_true() -> bool {

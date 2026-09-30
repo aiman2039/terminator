@@ -735,10 +735,21 @@ fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
     // whether or not this row paints a brand glyph.
     let reserved = reserve_brand || brand.is_some();
     let label_left = if reserved { 36.0 } else { 26.0 };
+    let previous_height = ui.spacing().interact_size.y;
+    ui.spacing_mut().interact_size.y = height;
     let response = ui.add_sized(
         [ui.available_width(), height],
         egui::Button::new("").frame(false),
     );
+    ui.spacing_mut().interact_size.y = previous_height;
+    // Keep geometry and interaction IDs stable while avoiding text layout and
+    // image loading for rows outside the sidebar viewport.
+    if !ui.is_rect_visible(response.rect) {
+        response.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)
+        });
+        return response;
+    }
     if response.hovered() || selected {
         ui.painter().rect_filled(
             response.rect,
@@ -1540,6 +1551,36 @@ mod row_tests {
         output.textures_delta.clear();
         response.unwrap()
     }
+    #[test]
+    fn clipped_session_row_preserves_height_without_painting_text() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_clip_rect(egui::Rect::NOTHING);
+            let response = session_row_spec(
+                ui,
+                SessionRowSpec {
+                    label: "Offscreen agent",
+                    icon: "LoaderCircle",
+                    selected: true,
+                    trailing: "background",
+                    tint: Color32::GRAY,
+                    icon_tint: None,
+                    spin: true,
+                    subtitle: Some("Waiting for a response"),
+                    brand: Some("Terminal"),
+                },
+            );
+            assert_eq!(response.rect.height(), SESSION_ROW_DETAIL_HEIGHT);
+        });
+        output.textures_delta.clear();
+        assert!(
+            output
+                .shapes
+                .iter()
+                .all(|shape| !matches!(shape.shape, egui::Shape::Text(_)))
+        );
+    }
+
     #[test]
     fn navigation_row_and_close_icons_render_bright_without_hover() {
         for surface in ["tool", "row", "close"] {

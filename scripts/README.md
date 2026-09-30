@@ -158,6 +158,10 @@ helper executable, original session identities and new terminal creation intact.
 - `cargo xtask gui scrolling` exercises unfocused hover scrolling with sample history.
   Input fixtures support `wheel_unit` (`point`, `line`, `page`), `wheel_phase`
   (`start`, `move`, `end`, `cancel`), `scroll`, `scroll_x`, `shift`, and hover-only actions.
+- `cargo xtask gui agent-wheel` checks wheel input reaches a full-screen SGR-mouse
+  agent as mouse reports (covers the reattach snapshot path); `agent-wheel-legacy`
+  covers legacy non-SGR reports and `agent-wheel-live` covers an agent that starts
+  while the GUI is attached.
 - After a test-support build, `cargo xtask gui launch` captures public sample scenes;
   `cargo xtask launch-assets` composes `launch/product-hunt/` images and checks copy
   lengths and dimensions. No provider is launched and nothing is posted.

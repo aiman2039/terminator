@@ -3088,3 +3088,40 @@ still reports failures in socket/HTTP/radio/nvim/timing tests (sandbox
 `Operation not permitted`, unrelated UI code untouched) plus one
 `explorer_query` failure from a concurrent in-progress sidebar refactor.
 Native rendering was not exercised.
+
+## Sidebar scrolling CPU fixes (2026-09-30)
+
+Installed GUI 0.78.0 (PID 75593) showed 16–27% CPU during a 15-second
+observation; scroll timing was not confirmed. A five-second sample saved to
+`/private/tmp/terminator-sidebar.sample.txt` included project sorting and
+project/session row rendering, but mostly idle main-thread samples. This
+does not establish the cause of prolonged CPU after scrolling.
+
+Projects, History, notification groups and live-agent lists now reuse prepared
+models and shared session/notice indexes. Invalidation follows presentation
+reconciliation, snapshot replacement, local notice actions, snooze expiry and
+presence freshness, plus the relevant sort/filter preferences. Project name
+sorting avoids activity scans; History folds activity records once. Worktree
+relationships, counts and faces are indexed, and Projects has one scroll area.
+
+Explorer caches a flattened expanded tree, labels and directory watch targets;
+refresh, root, expansion, ignored-file visibility and query changes invalidate
+it. Git borrows its context instead of deep-cloning it per frame, reuses grouped
+trees and labels, and stores subtree counts. Accepted filesystem results
+invalidate file models; stale results do not. Off-screen session/live-agent
+rows and notification cards skip widgets; variable-height terminal cards reuse
+measured heights until content, width or style changes. Shared row heights no
+longer grow with ambient interaction size. Search reserves every file header
+and the actual 20-point hit rows, including when clipped. Git uses its actual
+20-point rows for clipped geometry as well.
+
+Focused all-feature suites cover sidebar rendering, agent inbox actions and
+live grouping, unread selection, Explorer, History, appearance, presence,
+search geometry and refresh invalidation. New regressions check model reuse,
+snapshot/filter/local-action invalidation, snooze deadlines, directory refresh,
+clipped card height and terminal-card resizing. App all-target/all-feature
+strict Clippy, formatting and diff checks passed. The waiting-badge fixture now
+applies notification changes as snapshots, matching the production cache
+invalidation boundary rather than bypassing it with direct state writes.
+Native scrolling and before/after CPU with the changed binary have not been
+verified. The installed GUI and daemon were not replaced or restarted.

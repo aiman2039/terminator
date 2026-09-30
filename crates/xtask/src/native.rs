@@ -169,6 +169,9 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "folder-access" => folder_access::run(&opts)?,
             "idle-close" => idle_close::run(&opts)?,
             "scrolling" => scrolling(&opts)?,
+            "agent-wheel" => agent_wheel(&opts)?,
+            "agent-wheel-legacy" => agent_wheel_legacy(&opts)?,
+            "agent-wheel-live" => agent_wheel_live(&opts)?,
             "control" => control(&opts)?,
             "workspace-tabs" => workspace_tabs(&opts)?,
             "split-file-opening" => split_file_opening(&opts)?,
@@ -1310,4 +1313,134 @@ fn scrolling(opts: &Options) -> Result<()> {
     );
     h.assert_pids(&[left, right])?;
     Ok(())
+}
+
+/// Shared driver for the agent-wheel fixtures. The fake agent switches to
+/// the alternate screen, enables `init` mouse modes, then records every
+/// input byte it receives. `start_before_attach` covers the reattach
+/// snapshot path; otherwise the agent starts while the GUI is attached
+/// (live-bytes path). Pass the SGR (or legacy) report markers to expect.
+#[allow(clippy::too_many_arguments)]
+fn agent_wheel_case(
+    opts: &Options,
+    name: &str,
+    init: &str,
+    up_marker: &str,
+    down_marker: &str,
+    start_before_attach: bool,
+    wheel_at_ms: u64,
+    after_ms: u64,
+) -> Result<()> {
+    let h = Harness::new()?;
+    h.setup()?;
+    let project = h.project(&format!("{name}-sample"))?;
+    let session = h.shell(&project)?;
+    h.layout(&project, std::slice::from_ref(&session))?;
+    let sid = id(&session).to_string();
+    let log = std::env::temp_dir().join(format!(
+        "terminator-{name}-{}-{}.bin",
+        std::process::id(),
+        sid.chars().take(8).collect::<String>()
+    ));
+    let _ = fs::remove_file(&log);
+    let command = format!(
+        "stty raw -echo; printf '{init}\\033[Hagent-ready\\n'; dd bs=1 count=512 > {} 2>/dev/null\n",
+        log.display()
+    );
+    if start_before_attach {
+        let mut stream = h.attach(&session)?;
+        h.write(&mut stream, &command)?;
+        thread::sleep(Duration::from_secs(1));
+    }
+    let target = format!("terminal:{sid}");
+    let wheel = |at_ms: u64, delta: f64, phase: &str| serde_json::json!({"at_ms":at_ms,"target":target,"scroll":delta,"wheel_unit":"line","wheel_phase":phase});
+    let logs = capture(
+        &h,
+        opts,
+        name,
+        json!([
+            {"at_ms":900,"target":target},
+            {"at_ms":1300,"target":target,"hover":true},
+            wheel(wheel_at_ms, 2.0, "start"),
+            wheel(wheel_at_ms + 200, 2.0, "move"),
+            wheel(wheel_at_ms + 400, -1.0, "move"),
+            wheel(wheel_at_ms + 600, 0.0, "cancel"),
+        ]),
+        after_ms,
+        |_| {
+            if !start_before_attach {
+                thread::sleep(Duration::from_millis(500));
+                h.write(&mut h.attach(&session)?, &command)?;
+            }
+            Ok(())
+        },
+    )?;
+    let bytes = fs::read(&log).with_context(|| format!("missing agent log {log:?}; {logs}"))?;
+    let text = String::from_utf8_lossy(&bytes);
+    ensure!(
+        text.contains(up_marker),
+        "Agent never received wheel-up reports: {text:?}; {logs}"
+    );
+    ensure!(
+        text.contains(down_marker),
+        "Agent never received wheel-down reports: {text:?}; {logs}"
+    );
+    let prefix = format!("Scroll evidence: session={sid} focused=true offset=");
+    ensure!(
+        logs.lines()
+            .filter_map(|l| l.strip_prefix(&prefix))
+            .next()
+            .is_some(),
+        "Missing scroll evidence for agent session: {logs}"
+    );
+    h.assert_pids(&[session])?;
+    let _ = fs::remove_file(&log);
+    Ok(())
+}
+
+/// Wheel input over a full-screen SGR-mouse agent must reach the agent as
+/// mouse reports, not local scrollback. The fake agent enables the same
+/// modes as real agent TUIs (alt-screen plus SGR mouse) before the GUI
+/// attaches, so this also covers the reattach snapshot path.
+fn agent_wheel(opts: &Options) -> Result<()> {
+    agent_wheel_case(
+        opts,
+        "agent-wheel",
+        "\\033[?1049h\\033[?1000h\\033[?1006h",
+        "[<64;",
+        "[<65;",
+        true,
+        1500,
+        4500,
+    )
+}
+
+/// A legacy (non-SGR) mouse agent must receive `ESC [ M` reports with the
+/// single-byte coordinates instead of local scrollback or arrow keys.
+fn agent_wheel_legacy(opts: &Options) -> Result<()> {
+    agent_wheel_case(
+        opts,
+        "agent-wheel-legacy",
+        "\\033[?1049h\\033[?1000h",
+        "\u{1b}[M`",
+        "\u{1b}[Ma",
+        true,
+        1500,
+        4500,
+    )
+}
+
+/// An agent that starts while the GUI is already attached exercises the
+/// live-bytes path instead of the reattach snapshot.
+fn agent_wheel_live(opts: &Options) -> Result<()> {
+    agent_wheel_case(
+        opts,
+        "agent-wheel-live",
+        "\\033[?1049h\\033[?1000h\\033[?1006h",
+        "[<64;",
+        "[<65;",
+        false,
+        3000,
+        6500,
+    )
 }

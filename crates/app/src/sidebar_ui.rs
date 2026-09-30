@@ -7,10 +7,7 @@ use crate::{
     App, Job, RenameSurface, Tab, appearance,
     file_actions::{self, FileAction},
     icons,
-    preferences::{
-        AgentsTab, ExplorerSearchMode, HistoryInput, HistorySort, ProjectSort, SidebarTool,
-        VisibleProjects, sort_history, sort_visible_projects,
-    },
+    preferences::{AgentsTab, ExplorerSearchMode, HistorySort, ProjectSort, SidebarTool},
     search,
     services::ContextData,
     session_info,
@@ -18,10 +15,7 @@ use crate::{
     workspace_ops,
 };
 use eframe::egui::{self, Color32, RichText};
-use std::{
-    cmp::Reverse,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 use terminator_core::appearance::AppearanceConfig;
 use terminator_core::{
     AgentState, NVIM_REVIEW_CAPABILITY, Notification, Project, Request, ReviewMode, Session,
@@ -29,9 +23,13 @@ use terminator_core::{
 };
 
 fn skip_clipped_git_row(ui: &mut egui::Ui) -> bool {
+    skip_clipped_row(ui, GIT_TREE_ROW_HEIGHT)
+}
+
+fn skip_clipped_row(ui: &mut egui::Ui, height: f32) -> bool {
     let rect = egui::Rect::from_min_size(
         ui.next_widget_position(),
-        egui::vec2(ui.available_width(), 24.0),
+        egui::vec2(ui.available_width(), height),
     );
     if ui.is_rect_visible(rect) {
         false
@@ -40,6 +38,48 @@ fn skip_clipped_git_row(ui: &mut egui::Ui) -> bool {
         ui.allocate_space(rect.size());
         true
     }
+}
+
+#[derive(Clone)]
+struct CardLayout {
+    width: f32,
+    style: std::sync::Arc<egui::Style>,
+    height: f32,
+}
+
+/// Variable-height terminal messages are measured once per content/style/width.
+/// A stable outer ID keeps subsequent row controls unchanged when clipped.
+fn cached_variable_card(
+    ui: &mut egui::Ui,
+    key: u64,
+    draw: impl FnOnce(&mut egui::Ui) -> egui::Rect,
+) -> Option<egui::Rect> {
+    ui.push_id(("terminal-card", key), |ui| {
+        let id = ui.make_persistent_id("height");
+        let width = ui.available_width();
+        let style = ui.style().clone();
+        let previous = ui.ctx().data_mut(|data| data.get_temp::<CardLayout>(id));
+        if let Some(previous) = previous
+            && previous.width == width
+            && (std::sync::Arc::ptr_eq(&previous.style, &style) || previous.style == style)
+            && skip_clipped_row(ui, previous.height)
+        {
+            return None;
+        }
+        let rect = draw(ui);
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(
+                id,
+                CardLayout {
+                    width,
+                    style,
+                    height: rect.height(),
+                },
+            )
+        });
+        Some(rect)
+    })
+    .inner
 }
 
 impl App {
@@ -280,7 +320,7 @@ impl App {
         let _ = menu;
     }
 
-    fn sidebar_project(&self, project: &Project) -> std::sync::Arc<Project> {
+    pub(super) fn sidebar_project(&self, project: &Project) -> std::sync::Arc<Project> {
         let mut cached = self.sidebar_projects.borrow_mut();
         let entry = cached
             .entry(project.id.clone())
@@ -292,19 +332,7 @@ impl App {
     }
 
     pub(super) fn visible_projects(&self) -> Vec<std::sync::Arc<Project>> {
-        sort_visible_projects(VisibleProjects {
-            projects: &self.state.projects,
-            hidden: &self.preferences.hidden_projects,
-            sort: self.preferences.project_sort,
-            activity: &self.preferences.project_activity,
-            sessions: &self.state.sessions,
-            agents: &self.state.agents,
-            notifications: &self.state.notifications,
-            terminal_notices: &self.state.terminal_notices,
-        })
-        .into_iter()
-        .map(|project| self.sidebar_project(project))
-        .collect()
+        self.cached_projects().as_ref().clone()
     }
     fn op_root(&self) -> Option<std::path::PathBuf> {
         self.git_root()
@@ -601,7 +629,7 @@ impl App {
     }
 
     /// Contents search results, grouped by file. Clicking a hit opens that file.
-    fn explorer_results(&mut self, ui: &mut egui::Ui, cwd: &std::path::Path) {
+    pub(super) fn explorer_results(&mut self, ui: &mut egui::Ui, cwd: &std::path::Path) {
         if let Some(error) = &self.explorer_search_error {
             ui.colored_label(appearance::color(&self.theme.status_failed), error);
             return;
@@ -623,22 +651,28 @@ impl App {
         let mut open: Option<PathBuf> = None;
         let mut last: Option<&Path> = None;
         for hit in &self.explorer_search {
-            if skip_clipped_git_row(ui) {
-                continue;
-            }
             if last != Some(hit.path.as_path()) {
-                let relative = workspace_ops::relative_display(&root, &hit.path);
                 ui.spacing_mut().item_spacing.y = 2.0;
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(relative)
-                            .small()
-                            .color(appearance::color(&self.theme.secondary)),
+                let header_height = ui
+                    .text_style_height(&egui::TextStyle::Small)
+                    .max(ui.spacing().interact_size.y);
+                if !skip_clipped_row(ui, header_height) {
+                    let relative = workspace_ops::relative_display(&root, &hit.path);
+                    ui.add_sized(
+                        [ui.available_width(), header_height],
+                        egui::Label::new(
+                            RichText::new(relative)
+                                .small()
+                                .color(appearance::color(&self.theme.secondary)),
+                        )
+                        .truncate(),
                     )
-                    .truncate(),
-                )
-                .on_hover_text(hit.path.display().to_string());
+                    .on_hover_text(hit.path.display().to_string());
+                }
                 last = Some(hit.path.as_path());
+            }
+            if skip_clipped_row(ui, 20.0) {
+                continue;
             }
             let response = appearance::file_row(
                 ui,
@@ -775,38 +809,25 @@ impl App {
             });
         });
         ui.spacing_mut().item_spacing.y = 0.0;
-        let live = self
-            .state
-            .sessions
-            .iter()
-            .filter(|s| s.lifecycle.live() && s.kind != SessionKind::Editor)
-            .count();
+        let index = self.sidebar_index();
+        let live = index.live;
         let footer = 28.0;
-        let projects = self.visible_projects();
+        let projects = self.cached_projects();
+        let visible_ids: std::collections::HashSet<_> =
+            projects.iter().map(|p| p.id.as_str()).collect();
         appearance::sidebar_scroll("projects")
             .max_height((ui.available_height() - footer).max(0.0))
             .show(ui, |ui| {
-                for p in &projects {
-                    if self.managed_worktree(&p.id).is_some()
-                        && projects.iter().any(|parent| {
-                            self.worktree_children(parent)
-                                .iter()
-                                .any(|worktree| worktree.project_id == p.id)
-                        })
-                    {
+                for p in projects.iter() {
+                    if index.parents.get(&p.id).is_some_and(|parents| {
+                        parents
+                            .iter()
+                            .any(|parent| visible_ids.contains(parent.as_str()))
+                    }) {
                         continue;
                     }
                     ui.add_space(6.0);
-                    let count = self
-                        .state
-                        .sessions
-                        .iter()
-                        .filter(|s| {
-                            s.project_id == p.id
-                                && s.lifecycle.live()
-                                && s.kind != SessionKind::Editor
-                        })
-                        .count();
+                    let count = index.live_counts.get(&p.id).copied().unwrap_or(0);
                     let selected = self.selected.as_ref() == Some(&p.id);
                     let mut expanded = *self
                         .preferences
@@ -926,47 +947,23 @@ impl App {
                             // Indent from the project row, past its separate expand button.
                             ui.spacing_mut().indent += project_left - ui.next_widget_position().x;
                             ui.indent(&p.id, |ui| {
-                                let sessions: Vec<_> = self
-                                    .state
-                                    .sessions
-                                    .iter()
-                                    .filter(|s| {
-                                        s.project_id == p.id && s.kind != SessionKind::Editor
-                                    })
-                                    .cloned()
-                                    .collect();
-                                for session in sessions
-                                    .iter()
-                                    .filter(|s| s.lifecycle.live() && s.kind != SessionKind::Editor)
-                                {
-                                    self.session_row(ui, session);
+                                if let Some(sessions) = index.by_project.get(&p.id) {
+                                    for session in sessions.iter().filter(|s| {
+                                        s.lifecycle.live() && s.kind != SessionKind::Editor
+                                    }) {
+                                        self.session_row(ui, session);
+                                    }
                                 }
-                                let children: Vec<_> = self
-                                    .worktree_children(p)
-                                    .into_iter()
-                                    .map(|worktree| worktree.project_id.clone())
-                                    .collect();
-                                for child_id in children {
-                                    if let Some(child) = self
-                                        .state
-                                        .projects
-                                        .iter()
-                                        .find(|project| project.id == child_id)
-                                        .cloned()
-                                    {
-                                        self.worktree_card(ui, &child);
+                                if let Some(children) = index.children.get(&p.id) {
+                                    for child in children {
+                                        self.worktree_card(ui, child);
                                     }
                                 }
                             });
                         });
                     }
                 }
-                if self
-                    .state
-                    .projects
-                    .iter()
-                    .all(|p| self.preferences.hidden_projects.contains(&p.id))
-                {
+                if projects.is_empty() {
                     ui.weak(if self.state.projects.is_empty() {
                         "Add a folder to begin."
                     } else {
@@ -981,39 +978,22 @@ impl App {
     /// Brand plus status for a project row when one of its live sessions has an agent.
     /// A running agent wins over a finished one, so a working logo is not replaced by a folder.
     fn project_agent_face(&self, project_id: &str) -> Option<(&'static str, AgentState)> {
-        let mut best: Option<(&'static str, AgentState, u8)> = None;
-        for session in self.state.sessions.iter().filter(|session| {
-            session.project_id == project_id
-                && session.lifecycle.live()
-                && session.kind != SessionKind::Editor
-        }) {
-            let presented = self.present_session(&session.id);
-            let Some(brand) = presented.brand_icon else {
-                continue;
-            };
-            let state = presented.lifecycle.unwrap_or(AgentState::Unknown);
-            let rank = match state {
-                AgentState::Running => 0,
-                AgentState::WaitingInput | AgentState::WaitingPermission => 1,
-                AgentState::Failed => 2,
-                AgentState::Completed => 3,
-                _ => 4,
-            };
-            if best.is_none_or(|(_, _, previous)| rank < previous) {
-                best = Some((brand, state, rank));
-            }
-        }
-        best.map(|(brand, state, _)| (brand, state))
+        self.sidebar_index().faces.get(project_id).copied()
     }
 
     fn session_row(&mut self, ui: &mut egui::Ui, session: &Session) {
         let presented = self.present_session(&session.id);
-        let terminal_note = self
-            .state
-            .terminal_notices
-            .iter()
-            .rev()
-            .find(|n| n.session_id == session.id);
+        let editing = self.renaming(&session.id, RenameSurface::Sidebar);
+        let height = if !editing && presented.notice_preview.is_some() {
+            appearance::SESSION_ROW_DETAIL_HEIGHT
+        } else {
+            appearance::SESSION_ROW_HEIGHT
+        };
+        if !editing && skip_clipped_row(ui, height) {
+            return;
+        }
+        let index = self.sidebar_index();
+        let terminal_note = index.terminal_notes.get(&session.id);
         let unread_terminal = terminal_note.is_some_and(|n| !n.dismissed);
         let color = appearance::color(if unread_terminal {
             &self.theme.accent
@@ -1031,7 +1011,6 @@ impl App {
         } else {
             ""
         };
-        let editing = self.renaming(&session.id, RenameSurface::Sidebar);
         // The status icon carries agent state; the dot is for terminal notices.
         let trailing = if editing {
             ""
@@ -1126,30 +1105,13 @@ impl App {
         });
     }
     fn worktree_card(&mut self, ui: &mut egui::Ui, project: &Project) {
-        let live = self
-            .state
-            .sessions
-            .iter()
-            .filter(|session| {
-                session.project_id == project.id
-                    && session.lifecycle.live()
-                    && session.kind != SessionKind::Editor
-            })
-            .count();
-        let mut waiting = false;
-        let mut running = false;
-        for session in self
-            .state
-            .sessions
-            .iter()
-            .filter(|session| session.project_id == project.id && session.lifecycle.live())
-        {
-            match self.present_session(&session.id).lifecycle {
-                Some(AgentState::WaitingInput | AgentState::WaitingPermission) => waiting = true,
-                Some(AgentState::Running) => running = true,
-                _ => {}
-            }
-        }
+        let index = self.sidebar_index();
+        let live = index.live_counts.get(&project.id).copied().unwrap_or(0);
+        let (waiting, running) = index
+            .worktree_states
+            .get(&project.id)
+            .copied()
+            .unwrap_or_default();
         let tint = appearance::color(if waiting {
             &self.theme.status_waiting
         } else if running {
@@ -1206,13 +1168,31 @@ impl App {
             }
         });
     }
-    pub(super) fn tree(&mut self, ui: &mut egui::Ui, path: &std::path::Path, depth: usize) {
+    pub(super) fn tree(&mut self, ui: &mut egui::Ui, path: &std::path::Path, _depth: usize) {
         ui.spacing_mut().interact_size.y = 24.0;
         ui.spacing_mut().item_spacing.y = 0.0;
-        if depth > 20 {
-            return;
+        let rows = self.explorer_rows(path);
+        let open_shortcut = self.shortcut_label("open_file");
+        let split_shortcut = self.shortcut_label("split_right");
+        for row in rows.iter() {
+            let mut rect = ui.available_rect_before_wrap();
+            rect.min.x += row.depth as f32 * ui.spacing().indent;
+            ui.push_id(&row.path, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    if let Some(entry) = &row.entry {
+                        let height = 24.0;
+                        if skip_clipped_row(ui, height) {
+                            return;
+                        }
+                        self.explorer_entry(ui, entry, &row.label, &open_shortcut, &split_shortcut);
+                    } else {
+                        self.explorer_directory_status(ui, &row.path);
+                    }
+                });
+            });
         }
-        self.visible_dirs.push(path.into());
+    }
+    fn explorer_directory_status(&mut self, ui: &mut egui::Ui, path: &Path) {
         if let Some(error) = self.directory_errors.get(path).cloned() {
             ui.colored_label(
                 ui.visuals().error_fg_color,
@@ -1241,134 +1221,118 @@ impl App {
                 ui.weak("Check System Settings → Privacy & Security → Files and Folders. Full Disk Access is optional troubleshooting; this error may have another cause. Shells and editors can have separate access.");
             }
         }
-        let entries = self.dirs.get(path).cloned();
-        let query_filter =
-            (!self.explorer_query.is_empty()).then(|| self.explorer_query.to_lowercase());
-        let open_shortcut = self.shortcut_label("open_file");
-        let split_shortcut = self.shortcut_label("split_right");
-        if let Some(entries) = entries {
-            for entry in entries {
-                if entry.ignored && !self.preferences.show_ignored {
-                    continue;
-                }
-                let label = entry
-                    .path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                if !explorer_query_keeps_file(&label, entry.directory, query_filter.as_deref()) {
-                    continue;
-                }
-                if entry.directory {
-                    let expanded = self.expanded_dirs.contains(&entry.path);
-                    let status = self
-                        .context
-                        .as_ref()
-                        .and_then(|c| c.decorations.get(&entry.path))
-                        .copied()
-                        .unwrap_or(' ');
-                    let color = if entry.ignored {
-                        appearance::color(&self.theme.git_ignored)
+        if !self.dirs.contains_key(path) && !self.directory_errors.contains_key(path) {
+            ui.weak("Loading…");
+        }
+    }
+    fn explorer_entry(
+        &mut self,
+        ui: &mut egui::Ui,
+        entry: &terminator_git::Entry,
+        label: &str,
+        open_shortcut: &str,
+        split_shortcut: &str,
+    ) {
+        if entry.directory {
+            let expanded = self.expanded_dirs.contains(&entry.path);
+            let status = self
+                .context
+                .as_ref()
+                .and_then(|c| c.decorations.get(&entry.path))
+                .copied()
+                .unwrap_or(' ');
+            let color = if entry.ignored {
+                appearance::color(&self.theme.git_ignored)
+            } else {
+                git_color(&self.theme, status)
+            };
+            let folder = appearance::file_row(
+                ui,
+                label,
+                if expanded { "FolderOpen" } else { "Folder" },
+                false,
+                22.0,
+                &status.to_string(),
+                color,
+            );
+            // Build the tooltip lazily: `format!` per visible row per
+            // frame showed up as scroll-time allocations.
+            let folder = if folder.hovered() {
+                folder.on_hover_text(format!(
+                    "{}\n{}",
+                    entry.path.display(),
+                    if entry.ignored {
+                        "Ignored"
                     } else {
-                        git_color(&self.theme, status)
-                    };
-                    let folder = appearance::file_row(
-                        ui,
-                        &label,
-                        if expanded { "FolderOpen" } else { "Folder" },
-                        false,
-                        22.0,
-                        &status.to_string(),
-                        color,
-                    );
-                    // Build the tooltip lazily: `format!` per visible row per
-                    // frame showed up as scroll-time allocations.
-                    let folder = if folder.hovered() {
-                        folder.on_hover_text(format!(
-                            "{}\n{}",
-                            entry.path.display(),
-                            if entry.ignored {
-                                "Ignored"
-                            } else {
-                                terminator_git::status_description(status)
-                            }
-                        ))
-                    } else {
-                        folder
-                    };
-                    if folder.clicked() {
-                        if expanded {
-                            self.expanded_dirs.remove(&entry.path);
-                        } else {
-                            self.expanded_dirs.insert(entry.path.clone());
-                        }
+                        terminator_git::status_description(status)
                     }
-                    let folder_path = entry.path.clone();
-                    appearance::context_menu(&folder, |ui| {
-                        if appearance::menu_item(ui, "New file", "File", "").clicked() {
-                            self.open_name_prompt(workspace_ops::NamePrompt::File {
-                                dir: folder_path.clone(),
-                                name: String::new(),
-                            });
-                            ui.close();
-                        }
-                        if appearance::menu_item(ui, "New folder", "Folder", "").clicked() {
-                            self.open_name_prompt(workspace_ops::NamePrompt::Folder {
-                                dir: folder_path.clone(),
-                                name: String::new(),
-                            });
-                            ui.close();
-                        }
-                        if appearance::menu_item(ui, "Reveal in file manager", "FolderOpen", "")
-                            .clicked()
-                        {
-                            self.queue_workspace(workspace_ops::Op::Reveal(folder_path.clone()));
-                            ui.close();
-                        }
-                        if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
-                            ui.ctx().copy_text(folder_path.display().to_string());
-                            ui.close();
-                        }
-                        ui.separator();
-                        if appearance::menu_item(ui, "Collapse all", "ChevronDown", "").clicked() {
-                            self.expanded_dirs.clear();
-                            ui.close();
-                        }
-                    });
-                    if expanded {
-                        ui.indent(&entry.path, |ui| self.tree(ui, &entry.path, depth + 1));
-                    }
+                ))
+            } else {
+                folder
+            };
+            if folder.clicked() {
+                if expanded {
+                    self.expanded_dirs.remove(&entry.path);
                 } else {
-                    let status = self
-                        .context
-                        .as_ref()
-                        .and_then(|c| c.decorations.get(&entry.path))
-                        .copied()
-                        .unwrap_or(' ');
-                    let outcome = explorer_file_row(
-                        ui,
-                        &entry.path,
-                        &label,
-                        status,
-                        entry.ignored,
-                        &self.theme,
-                        &open_shortcut,
-                        &split_shortcut,
-                    );
-                    if let Some(action) = outcome.clicked {
-                        self.activate_file_action(ui, &entry.path, action);
-                    }
-                    if let Some(action) = outcome.menu {
-                        self.file_action(ui, action, &entry.path, None);
-                    }
-                    if let Some(local) = outcome.local {
-                        self.explorer_local(&entry.path, local, ui);
-                    }
+                    self.expanded_dirs.insert(entry.path.clone());
                 }
             }
-        } else if !self.directory_errors.contains_key(path) {
-            ui.weak("Loading…");
+            let folder_path = entry.path.clone();
+            appearance::context_menu(&folder, |ui| {
+                if appearance::menu_item(ui, "New file", "File", "").clicked() {
+                    self.open_name_prompt(workspace_ops::NamePrompt::File {
+                        dir: folder_path.clone(),
+                        name: String::new(),
+                    });
+                    ui.close();
+                }
+                if appearance::menu_item(ui, "New folder", "Folder", "").clicked() {
+                    self.open_name_prompt(workspace_ops::NamePrompt::Folder {
+                        dir: folder_path.clone(),
+                        name: String::new(),
+                    });
+                    ui.close();
+                }
+                if appearance::menu_item(ui, "Reveal in file manager", "FolderOpen", "").clicked() {
+                    self.queue_workspace(workspace_ops::Op::Reveal(folder_path.clone()));
+                    ui.close();
+                }
+                if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
+                    ui.ctx().copy_text(folder_path.display().to_string());
+                    ui.close();
+                }
+                ui.separator();
+                if appearance::menu_item(ui, "Collapse all", "ChevronDown", "").clicked() {
+                    self.expanded_dirs.clear();
+                    ui.close();
+                }
+            });
+        } else {
+            let status = self
+                .context
+                .as_ref()
+                .and_then(|c| c.decorations.get(&entry.path))
+                .copied()
+                .unwrap_or(' ');
+            let outcome = explorer_file_row(
+                ui,
+                &entry.path,
+                label,
+                status,
+                entry.ignored,
+                &self.theme,
+                open_shortcut,
+                split_shortcut,
+            );
+            if let Some(action) = outcome.clicked {
+                self.activate_file_action(ui, &entry.path, action);
+            }
+            if let Some(action) = outcome.menu {
+                self.file_action(ui, action, &entry.path, None);
+            }
+            if let Some(local) = outcome.local {
+                self.explorer_local(&entry.path, local, ui);
+            }
         }
     }
     pub(super) fn agents_inbox_open(&self) -> bool {
@@ -1400,18 +1364,10 @@ impl App {
         &self,
         notice: &Notification,
     ) -> Option<(&'static str, String)> {
-        self.state
-            .agents
-            .iter()
-            .find(|agent| {
-                agent.session_id == notice.session_id && agent.invocation_id == notice.invocation_id
-            })
-            .map(|agent| {
-                (
-                    terminator_core::agents::icon_key(&agent.kind),
-                    terminator_core::agents::display_name(&agent.kind).to_string(),
-                )
-            })
+        self.sidebar_index()
+            .history_brands
+            .get(&(notice.session_id.clone(), notice.invocation_id.clone()))
+            .cloned()
     }
 
     pub(super) fn agents_view(&mut self, ui: &mut egui::Ui) {
@@ -1454,36 +1410,18 @@ impl App {
 
     /// The existing inbox: pending notifications plus terminal notices.
     fn agents_needs_attention(&mut self, ui: &mut egui::Ui) {
-        let notices = self.pending_notices();
-        let terminal_notices: Vec<_> = self
-            .state
-            .terminal_notices
-            .iter()
-            .filter(|notice| {
-                !notice.dismissed
-                    && self
-                        .state
-                        .sessions
-                        .iter()
-                        .any(|session| session.id == notice.session_id)
-            })
-            .rev()
-            .cloned()
-            .collect();
+        let index = self.sidebar_index();
+        let notices = &index.pending_groups;
+        let terminal_notices = &index.terminal_pending;
         appearance::sidebar_scroll("agents").show(ui, |ui| {
             if notices.is_empty() && terminal_notices.is_empty() {
                 self.agents_empty(ui);
             }
-            for group in group_notices(notices) {
+            for group in notices.iter() {
                 let Some(notice) = group.notices.first() else {
                     continue;
                 };
-                let session = self
-                    .state
-                    .sessions
-                    .iter()
-                    .find(|session| session.id == notice.session_id)
-                    .cloned();
+                let session = index.sessions.get(&notice.session_id);
                 let highlight = group
                     .notices
                     .iter()
@@ -1504,7 +1442,7 @@ impl App {
                     AttentionCard {
                         theme: &self.theme,
                         notice,
-                        session: session.as_ref(),
+                        session: session.map(|s| s.as_ref()),
                         selected,
                         highlight,
                         brand_icon,
@@ -1513,88 +1451,85 @@ impl App {
                         group_extra: &group.notices[1..],
                     },
                 );
-                self.apply_group_action(&group, action);
+                self.apply_group_action(group, action);
             }
             for notice in terminal_notices {
-                let row = ui.group(|ui| {
-                    ui.label(if notice.title.is_empty() {
-                        "Terminal"
-                    } else {
-                        &notice.title
-                    });
-                    ui.label(&notice.body);
-                    ui.horizontal(|ui| {
-                        let go = ui.button("Go to terminal");
-                        #[cfg(feature = "test-support")]
-                        diagnostics::record(
-                            ui.ctx(),
-                            &format!("terminal-go:{}", notice.session_id),
-                            go.rect,
-                        );
-                        if go.clicked() {
-                            self.go_session(&notice.session_id);
-                        }
-                        if self
-                            .state
-                            .capabilities
-                            .iter()
-                            .any(|c| c == TERMINAL_NOTICES_CAPABILITY)
-                            && ui.button("Dismiss").clicked()
-                        {
-                            self.send(Request::DismissTerminalNotice {
-                                id: notice.id.clone(),
-                            });
-                        }
-                    });
+                let row = cached_variable_card(ui, index.terminal_layout_keys[&notice.id], |ui| {
+                    ui.group(|ui| {
+                        ui.label(if notice.title.is_empty() {
+                            "Terminal"
+                        } else {
+                            &notice.title
+                        });
+                        ui.label(&notice.body);
+                        ui.horizontal(|ui| {
+                            let go = ui.button("Go to terminal");
+                            #[cfg(feature = "test-support")]
+                            diagnostics::record(
+                                ui.ctx(),
+                                &format!("terminal-go:{}", notice.session_id),
+                                go.rect,
+                            );
+                            if go.clicked() {
+                                self.go_session(&notice.session_id);
+                            }
+                            if self
+                                .state
+                                .capabilities
+                                .iter()
+                                .any(|c| c == TERMINAL_NOTICES_CAPABILITY)
+                                && ui.button("Dismiss").clicked()
+                            {
+                                self.send(Request::DismissTerminalNotice {
+                                    id: notice.id.clone(),
+                                });
+                            }
+                        });
+                    })
+                    .response
+                    .rect
                 });
                 #[cfg(feature = "test-support")]
-                diagnostics::record(
-                    ui.ctx(),
-                    &format!("terminal-row:{}", notice.session_id),
-                    row.response.rect,
-                );
+                if let Some(rect) = row {
+                    diagnostics::record(
+                        ui.ctx(),
+                        &format!("terminal-row:{}", notice.session_id),
+                        rect,
+                    );
+                }
                 let _ = row;
             }
         });
     }
 
+    #[cfg(test)]
     pub(super) fn unread_notices(&self) -> Vec<Notification> {
-        let mut notices: Vec<_> = self
-            .state
-            .notifications
+        let index = self.sidebar_index();
+        let mut notices: Vec<_> = index
+            .pending
             .iter()
-            .filter(|notice| {
-                !notice.dismissed
-                    && !notice.resolved
-                    && notice.snoozed_until <= now()
-                    && self.notice_in_scope(notice)
-                    && (!notice.read || self.unread_selected.as_deref() == Some(notice.id.as_str()))
-            })
+            .filter(|n| !n.read || self.unread_selected.as_deref() == Some(n.id.as_str()))
             .cloned()
             .collect();
-        notices.sort_by_key(|notice| Reverse(notice.created));
+        notices.sort_by_key(|n| std::cmp::Reverse(n.created));
         notices
     }
 
     /// Read-state inbox. Marking read never resolves, dismisses, or changes
     /// lifecycle; the selected row stays until selection or filter changes.
     fn agents_unread(&mut self, ui: &mut egui::Ui) {
-        let notices = self.unread_notices();
+        let index = self.sidebar_index();
+        let notices = self.cached_unread_groups();
         appearance::sidebar_scroll("agents-unread").show(ui, |ui| {
             if notices.is_empty() {
                 ui.weak("No unread agent events");
                 return;
             }
-            for group in group_notices(notices) {
+            for group in notices.iter() {
                 let Some(notice) = group.notices.first() else {
                     continue;
                 };
-                let session = self
-                    .state
-                    .sessions
-                    .iter()
-                    .find(|session| session.id == notice.session_id)
-                    .cloned();
+                let session = index.sessions.get(&notice.session_id);
                 let highlight = group.notices.iter().any(|n| {
                     self.detail.as_ref() == Some(&n.id)
                         || self.unread_selected.as_deref() == Some(n.id.as_str())
@@ -1615,7 +1550,7 @@ impl App {
                     AttentionCard {
                         theme: &self.theme,
                         notice,
-                        session: session.as_ref(),
+                        session: session.map(|s| s.as_ref()),
                         selected,
                         highlight,
                         brand_icon,
@@ -1624,7 +1559,7 @@ impl App {
                         group_extra: &group.notices[1..],
                     },
                 );
-                self.apply_group_action(&group, action);
+                self.apply_group_action(group, action);
             }
         });
     }
@@ -1652,95 +1587,20 @@ impl App {
             }
             self.agents_filter_menu(ui);
         });
-        let query = self.preferences.agents_search.trim().to_lowercase();
+        let rows = self.cached_live_rows();
+        let query_empty = self.preferences.agents_search.trim().is_empty();
         let kind_filter = self.preferences.agents_filter.clone();
-        let live: Vec<_> = self
-            .state
-            .sessions
-            .iter()
-            .filter(|s| s.lifecycle.live())
-            .filter_map(|s| {
-                let p = self.present_session(&s.id);
-                p.live.then(|| (s, p.detected_kinds.clone()))
-            })
-            .collect();
-        let unverified: Vec<_> = self
-            .state
-            .sessions
-            .iter()
-            .filter(|s| s.lifecycle.live())
-            .filter(|s| {
-                let presented = self.present_session(&s.id);
-                !presented.live && presented.lifecycle.is_some()
-            })
-            .collect();
-        let matches = |session: &Session, kinds: &[String]| -> bool {
-            if !kind_filter.is_empty() && !kinds.iter().any(|k| k == &kind_filter) {
-                return false;
-            }
-            if query.is_empty() {
-                return true;
-            }
-            let project = self
-                .state
-                .projects
-                .iter()
-                .find(|p| p.id == session.project_id)
-                .map(|p| p.name.to_lowercase())
-                .unwrap_or_default();
-            let presented = self.present_session(&session.id);
-            let mut haystack = format!(
-                "{} {project} {}",
-                session.label.to_lowercase(),
-                presented.status_label.to_lowercase()
-            );
-            for kind in kinds {
-                haystack.push(' ');
-                haystack.push_str(&terminator_core::agents::display_name(kind).to_lowercase());
-            }
-            query.split_whitespace().all(|word| haystack.contains(word))
-        };
-        let live: Vec<(Session, Vec<String>)> = live
-            .into_iter()
-            .filter(|(session, kinds)| matches(session, kinds))
-            .map(|(session, kinds)| (session.clone(), kinds))
-            .collect();
-        let unverified: Vec<Session> = unverified
-            .into_iter()
-            .filter(|session| {
-                let kinds: Vec<String> = self
-                    .state
-                    .agents
-                    .iter()
-                    .filter(|a| a.session_id == session.id)
-                    .map(|a| a.kind.clone())
-                    .collect();
-                matches(session, &kinds)
-            })
-            .cloned()
-            .collect();
+        let unverified = &rows.unverified;
         appearance::sidebar_scroll("agents-live").show(ui, |ui| {
-            if live.is_empty() && unverified.is_empty() {
-                ui.weak(if query.is_empty() && kind_filter.is_empty() {
+            if rows.groups.is_empty() && unverified.is_empty() {
+                ui.weak(if query_empty && kind_filter.is_empty() {
                     "No live agents"
                 } else {
                     "No matching agents"
                 });
                 return;
             }
-            // Stable project order; worktree checkouts are their own groups.
-            let groups: Vec<_> = self.state.projects.iter()
-                .filter(|p| live.iter().any(|(s, _)| s.project_id == p.id))
-                .map(|p| self.sidebar_project(p))
-                .collect();
-            for project in groups {
-                let sessions: Vec<_> = live
-                    .iter()
-                    .filter(|(session, _)| session.project_id == project.id)
-                    .collect();
-                if sessions.is_empty() {
-                    continue;
-                }
+            for (project, sessions) in &rows.groups {
                 let collapsed = self.preferences.agents_collapsed.contains(&project.id);
                 let header = appearance::row(
                     ui,
@@ -1780,7 +1640,7 @@ impl App {
                 }
                 if !collapsed {
                     ui.indent(("live-project", &project.id), |ui| {
-                        for (session, _) in sessions {
+                        for session in sessions {
                             self.live_agent_row(ui, session, "live-row");
                         }
                     });
@@ -1816,7 +1676,7 @@ impl App {
                 }
                 if !collapsed {
                     ui.indent("live-unverified", |ui| {
-                        for session in &unverified {
+                        for session in unverified {
                             self.live_agent_row(ui, session, "unverified-row");
                         }
                     });
@@ -1826,6 +1686,9 @@ impl App {
     }
 
     fn live_agent_row(&mut self, ui: &mut egui::Ui, session: &Session, target: &str) {
+        if skip_clipped_row(ui, appearance::SESSION_ROW_DETAIL_HEIGHT) {
+            return;
+        }
         let presented = self.present_session(&session.id);
         let mut subtitle = match (&presented.brand_label, presented.status_label.as_str()) {
             (Some(brand), status) => format!("{brand} · {status}"),
@@ -1939,22 +1802,13 @@ impl App {
         ui.weak("No pending agent events");
     }
     pub(super) fn waiting_notice_count(&self) -> usize {
-        self.pending_notices()
-            .iter()
-            .filter(|notice| notice_waiting(notice))
-            .count()
+        self.sidebar_index().waiting_count
     }
     /// Single source for the waiting/unread counts rendered as bells in
     /// the left agent bar and the IDE status-bar mirror.
     pub(super) fn attention_counts(&self) -> (usize, usize) {
-        let waiting = self.waiting_notice_count();
-        let unread = self
-            .state
-            .notifications
-            .iter()
-            .filter(|notice| !notice.read && notice_pending(notice, now()))
-            .count();
-        (waiting, unread)
+        let index = self.sidebar_index();
+        (index.waiting_count, index.unread_count)
     }
     /// Pending agent notices as menu-bar items, in inbox order (waiting
     /// first). Titles are single-line and capped so the native menu stays
@@ -1963,15 +1817,15 @@ impl App {
     pub(super) fn status_menu_items(&self) -> Vec<updater::StatusMenuItem> {
         const MAX_ITEMS: usize = 12;
         const MAX_TITLE: usize = 90;
-        self.pending_notices()
-            .into_iter()
+        let index = self.sidebar_index();
+        index
+            .pending
+            .iter()
             .take(MAX_ITEMS)
             .map(|notice| {
-                let session = self
-                    .state
+                let session = index
                     .sessions
-                    .iter()
-                    .find(|session| session.id == notice.session_id)
+                    .get(&notice.session_id)
                     .map(|session| session.label.as_str())
                     .unwrap_or("Terminal");
                 let title = format!("{} — {}: {}", session, notice.state.label(), notice.summary);
@@ -1982,41 +1836,18 @@ impl App {
                     title
                 };
                 updater::StatusMenuItem {
-                    id: notice.id,
+                    id: notice.id.clone(),
                     title,
                 }
             })
             .collect()
     }
-    fn pending_notices(&self) -> Vec<Notification> {
-        let mut notices: Vec<_> = self
-            .state
-            .notifications
-            .iter()
-            .filter(|notice| {
-                !notice.dismissed
-                    && !notice.resolved
-                    && notice.snoozed_until <= now()
-                    && self.notice_in_scope(notice)
-            })
-            .cloned()
-            .collect();
-        notices.sort_by_key(|notice| {
-            (
-                notice.resolved,
-                notice_rank(notice.state),
-                Reverse(notice.created),
-            )
-        });
-        notices
-    }
     /// A notice is in scope while its session exists. The inbox always
     /// spans all projects; there is no per-project filter.
     fn notice_in_scope(&self, notice: &Notification) -> bool {
-        self.state
+        self.sidebar_index()
             .sessions
-            .iter()
-            .any(|session| session.id == notice.session_id)
+            .contains_key(&notice.session_id)
     }
     /// One row acts as one unit: navigation needs a single target, while
     /// read/snooze/dismiss apply to every notice folded into the row.
@@ -2154,22 +1985,8 @@ impl App {
             return;
         }
         if self.preferences.tool == SidebarTool::History {
-            let ended: Vec<_> = self
-                .state
-                .sessions
-                .iter()
-                .filter(|s| !s.lifecycle.live() && self.state.session_has_resume(&s.id))
-                .cloned()
-                .collect();
-            let groups = sort_history(HistoryInput {
-                projects: self.state.projects.clone(),
-                sessions: &ended,
-                agents: &self.state.agents,
-                notifications: &self.state.notifications,
-                terminal_notices: &self.state.terminal_notices,
-                sort: self.preferences.history_sort,
-                filter: &self.preferences.history_filter.clone(),
-            });
+            let index = self.sidebar_index();
+            let groups = self.cached_history();
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let width = (ui.available_width() - 160.0).max(60.0);
@@ -2209,7 +2026,7 @@ impl App {
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "history-toggle-all", toggle.rect);
                 if toggle.clicked() {
-                    for group in &groups {
+                    for group in groups.iter() {
                         self.preferences
                             .history_expanded
                             .insert(group.project.id.clone(), !all_expanded);
@@ -2219,12 +2036,12 @@ impl App {
             });
             ui.add_space(4.0);
             appearance::sidebar_scroll("global-history").show(ui, |ui| {
-                if ended.is_empty() {
+                if index.resumable.is_empty() {
                     ui.weak("No resumable sessions.");
                 } else if groups.is_empty() {
                     ui.weak("No matching sessions.");
                 }
-                for group in groups {
+                for group in groups.iter() {
                     let expanded = *self
                         .preferences
                         .history_expanded
@@ -2297,7 +2114,14 @@ impl App {
             ui.weak("Filesystem watch unavailable; refreshing every 3 seconds");
         }
         self.pending_delete_bar(ui);
-        if let Some(context) = self.context.clone() {
+        if let Some(context) = self.context.take() {
+            let prepared = {
+                let cache = self.sidebar_cache.get_mut();
+                cache
+                    .git
+                    .get_or_insert_with(|| std::sync::Arc::new(PreparedGit::new(&context)))
+                    .clone()
+            };
             self.ensure_git_lists(context.root.clone());
             let open_shortcut = self.shortcut_label("open_file");
             let mut draft = std::mem::take(&mut self.git_commit);
@@ -2305,6 +2129,7 @@ impl App {
                 ui,
                 &mut GitPanelInput {
                     context: &context,
+                    prepared: Some(&prepared),
                     review_mode: self.state.settings.review_mode,
                     neovim_review: self
                         .state
@@ -2327,6 +2152,7 @@ impl App {
                 },
             );
             self.git_commit = draft;
+            self.context = Some(context);
             self.perform_git_outcome(ui, outcome);
         } else {
             ui.weak("Select a terminal to inspect its context.");
@@ -2348,6 +2174,7 @@ pub fn git_color(theme: &AppearanceConfig, status: char) -> Color32 {
 /// panel paints it and returns actions without touching `App` or `Services`.
 pub struct GitPanelInput<'a> {
     pub context: &'a ContextData,
+    pub(super) prepared: Option<&'a PreparedGit>,
     pub review_mode: ReviewMode,
     pub neovim_review: bool,
     pub theme: &'a AppearanceConfig,
@@ -2439,9 +2266,18 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
     let mut outcome = GitPanelOutcome::default();
     let branch_name = input.context.branch.clone();
     let root = input.context.root.clone();
-    let changes = input.context.changes.clone();
+    let context = input.context;
+    let changes = &context.changes;
     let error = input.context.error.clone();
-    let stats = input.context.stats.clone();
+    let owned_prepared;
+    let prepared = match input.prepared {
+        Some(prepared) => prepared,
+        None => {
+            owned_prepared = PreparedGit::new(context);
+            &owned_prepared
+        }
+    };
+    let stats = &context.stats;
     if root.is_none() {
         ui.weak("Not a Git repository");
     } else {
@@ -2451,9 +2287,10 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
         {
             git_compare_row(ui, input.theme, &branch_name, compare, input.base_ref);
         }
-        let staged = changes
+        let staged = prepared
+            .groups
             .iter()
-            .any(|change| change.in_group(terminator_git::GitGroup::Staged));
+            .any(|group| group.group == terminator_git::GitGroup::Staged);
         if !input.history {
             ui.add(
                 egui::TextEdit::multiline(input.commit_draft)
@@ -2516,39 +2353,27 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
                 review_mode: input.review_mode,
                 neovim_review: input.neovim_review,
                 open_shortcut: input.open_shortcut,
-                stats: &stats,
+                stats,
             };
             if input.view_list {
                 let mut any = false;
-                for group in terminator_git::GitGroup::ALL {
-                    for change in changes.iter().filter(|change| change.in_group(group)) {
+                for prepared in &prepared.groups {
+                    for (change, label) in prepared.entries.iter().zip(&prepared.labels) {
                         any = true;
-                        let label = workspace_ops::relative_display(
-                            root.as_deref().unwrap_or(&change.path),
-                            &change.path,
-                        );
-                        git_change_row(ui, &row_ctx, &mut outcome, change, group, &label);
+                        git_change_row(ui, &row_ctx, &mut outcome, change, prepared.group, label);
                     }
                 }
                 if !any {
                     ui.weak("Working tree clean");
                 }
             } else {
-                for group in terminator_git::GitGroup::ALL {
-                    let entries: Vec<_> = changes
-                        .iter()
-                        .filter(|change| change.in_group(group))
-                        .collect();
-                    if entries.is_empty() {
-                        continue;
-                    }
+                for group in &prepared.groups {
                     git_group_section(
                         ui,
                         &row_ctx,
                         &mut outcome,
                         root.as_deref(),
                         group,
-                        &entries,
                         input.collapse_generation,
                     );
                 }
@@ -2920,10 +2745,11 @@ fn git_group_section(
     ctx: &GitRowCtx<'_>,
     outcome: &mut GitPanelOutcome,
     root: Option<&Path>,
-    group: terminator_git::GitGroup,
-    entries: &[&terminator_git::Change],
+    prepared: &PreparedGroup,
     collapse_generation: u64,
 ) {
+    let group = prepared.group;
+    let entries = &prepared.entries;
     let label = git_group_label(group);
     let total = entries.len();
     let id = ui.make_persistent_id(("git-section", root, label, collapse_generation));
@@ -2962,45 +2788,91 @@ fn git_group_section(
             );
         })
         .body(|ui| {
-            let tree = build_change_tree(entries, root);
+            let tree = &prepared.tree;
             ui.spacing_mut().indent = GIT_TREE_INDENT;
             ui.spacing_mut().item_spacing.y = 0.0;
-            git_change_tree(ui, ctx, outcome, &tree, "", group);
+            git_change_tree(ui, ctx, outcome, tree, "", group);
         });
 }
 
-/// Directory tree of changed files, built once per section paint.
-#[derive(Default)]
-struct ChangeTree<'a> {
-    dirs: std::collections::BTreeMap<String, ChangeTree<'a>>,
-    files: Vec<&'a terminator_git::Change>,
+/// Prepared once per accepted filesystem/Git result, reused while scrolling.
+pub(super) struct PreparedGit {
+    groups: Vec<PreparedGroup>,
 }
-
-impl<'a> ChangeTree<'a> {
-    fn count_files(&self) -> usize {
-        self.files.len()
-            + self
-                .dirs
-                .values()
-                .map(ChangeTree::count_files)
-                .sum::<usize>()
+struct PreparedGroup {
+    group: terminator_git::GitGroup,
+    entries: Vec<terminator_git::Change>,
+    labels: Vec<String>,
+    tree: ChangeTree,
+}
+impl PreparedGit {
+    pub fn new(context: &ContextData) -> Self {
+        let groups = terminator_git::GitGroup::ALL
+            .into_iter()
+            .filter_map(|group| {
+                let entries: Vec<_> = context
+                    .changes
+                    .iter()
+                    .filter(|c| c.in_group(group))
+                    .cloned()
+                    .collect();
+                if entries.is_empty() {
+                    return None;
+                }
+                let labels = entries
+                    .iter()
+                    .map(|c| {
+                        workspace_ops::relative_display(
+                            context.root.as_deref().unwrap_or(&c.path),
+                            &c.path,
+                        )
+                    })
+                    .collect();
+                let tree =
+                    build_change_tree(&entries.iter().collect::<Vec<_>>(), context.root.as_deref());
+                Some(PreparedGroup {
+                    group,
+                    entries,
+                    labels,
+                    tree,
+                })
+            })
+            .collect();
+        Self { groups }
     }
-
-    fn collect(&self, out: &mut Vec<&'a terminator_git::Change>) {
-        out.extend(self.files.iter().copied());
+}
+#[derive(Default)]
+struct ChangeTree {
+    dirs: std::collections::BTreeMap<String, ChangeTree>,
+    files: Vec<terminator_git::Change>,
+    labels: Vec<String>,
+    count: usize,
+}
+impl ChangeTree {
+    fn count_files(&self) -> usize {
+        self.count
+    }
+    fn collect<'a>(&'a self, out: &mut Vec<&'a terminator_git::Change>) {
+        out.extend(self.files.iter());
         for dir in self.dirs.values() {
             dir.collect(out);
         }
     }
 }
-
-fn build_change_tree<'a>(
-    entries: &[&'a terminator_git::Change],
-    root: Option<&Path>,
-) -> ChangeTree<'a> {
-    fn insert<'a>(node: &mut ChangeTree<'a>, dirs: &[String], change: &'a terminator_git::Change) {
+fn build_change_tree(entries: &[&terminator_git::Change], root: Option<&Path>) -> ChangeTree {
+    fn insert(node: &mut ChangeTree, dirs: &[String], change: &terminator_git::Change) {
+        node.count += 1;
         match dirs.split_first() {
-            None => node.files.push(change),
+            None => {
+                node.files.push(change.clone());
+                node.labels.push(
+                    change
+                        .path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                );
+            }
             Some((dir, rest)) => insert(node.dirs.entry(dir.clone()).or_default(), rest, change),
         }
     }
@@ -3013,10 +2885,9 @@ fn build_change_tree<'a>(
             .components()
             .map(|part| part.as_os_str().to_string_lossy().into_owned())
             .collect();
-        if components.is_empty() {
-            continue;
+        if !components.is_empty() {
+            insert(&mut tree, &components[..components.len() - 1], change);
         }
-        insert(&mut tree, &components[..components.len() - 1], change);
     }
     tree
 }
@@ -3025,7 +2896,7 @@ fn git_change_tree(
     ui: &mut egui::Ui,
     ctx: &GitRowCtx<'_>,
     outcome: &mut GitPanelOutcome,
-    node: &ChangeTree<'_>,
+    node: &ChangeTree,
     prefix: &str,
     group: terminator_git::GitGroup,
 ) {
@@ -3086,13 +2957,8 @@ fn git_change_tree(
             });
         }
     }
-    for change in &node.files {
-        let label = change
-            .path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        git_change_row(ui, ctx, outcome, change, group, &label);
+    for (change, label) in node.files.iter().zip(&node.labels) {
+        git_change_row(ui, ctx, outcome, change, group, label);
     }
 }
 
@@ -3323,7 +3189,11 @@ pub struct ExplorerRowOutcome {
 /// always pass; files pass when the needle is absent or contained. Hoisting
 /// the lowercased query out of the per-file loop avoids one `to_lowercase`
 /// allocation per file per scroll frame.
-fn explorer_query_keeps_file(label: &str, directory: bool, needle: Option<&str>) -> bool {
+pub(super) fn explorer_query_keeps_file(
+    label: &str,
+    directory: bool,
+    needle: Option<&str>,
+) -> bool {
     if directory {
         return true;
     }
@@ -3452,7 +3322,7 @@ pub(super) struct AttentionCard<'a> {
     pub group_extra: &'a [Notification],
 }
 
-fn notice_waiting(notice: &Notification) -> bool {
+pub(super) fn notice_waiting(notice: &Notification) -> bool {
     !notice.resolved
         && matches!(
             notice.state,
@@ -3460,7 +3330,7 @@ fn notice_waiting(notice: &Notification) -> bool {
         )
 }
 
-fn notice_rank(state: AgentState) -> u8 {
+pub(super) fn notice_rank(state: AgentState) -> u8 {
     match state {
         AgentState::WaitingInput | AgentState::WaitingPermission => 0,
         AgentState::Failed => 1,
@@ -3472,13 +3342,13 @@ fn notice_rank(state: AgentState) -> u8 {
 /// One inbox row: every pending notice from a single session. Focus
 /// dismissal already clears the whole session at once, so the row acts as
 /// one unit while the inbox keeps each underlying notice.
-struct NoticeGroup {
-    notices: Vec<Notification>,
+pub(super) struct NoticeGroup {
+    pub(super) notices: Vec<Notification>,
 }
 
 /// Groups by session, preserving input order; the first notice of each
 /// group is its representative. Callers pass urgency/newest-sorted input.
-fn group_notices(notices: Vec<Notification>) -> Vec<NoticeGroup> {
+pub(super) fn group_notices(notices: Vec<Notification>) -> Vec<NoticeGroup> {
     let mut groups: Vec<NoticeGroup> = Vec::new();
     for notice in notices {
         if let Some(group) = groups.iter_mut().find(|group| {
@@ -3497,7 +3367,7 @@ fn group_notices(notices: Vec<Notification>) -> Vec<NoticeGroup> {
     groups
 }
 
-fn notice_pending(notice: &Notification, timestamp: u64) -> bool {
+pub(super) fn notice_pending(notice: &Notification, timestamp: u64) -> bool {
     !notice.dismissed && !notice.resolved && notice.snoozed_until <= timestamp
 }
 
@@ -3601,6 +3471,7 @@ fn attention_title(
         .add_sized(
             [label_width, ATTENTION_ACTION_SIZE],
             egui::Label::new(RichText::new(text).size(12.0))
+                .halign(egui::Align::LEFT)
                 .truncate()
                 .sense(egui::Sense::click()),
         )
@@ -3684,6 +3555,13 @@ fn attention_actions(ui: &mut egui::Ui, session_id: &str, show_read: bool) -> At
 }
 
 pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> AttentionAction {
+    ui.push_id(("attention-card", &input.notice.session_id), |ui| {
+        attention_card_contents(ui, input)
+    })
+    .inner
+}
+
+fn attention_card_contents(ui: &mut egui::Ui, input: AttentionCard<'_>) -> AttentionAction {
     let AttentionCard {
         theme,
         notice,
@@ -3707,42 +3585,47 @@ pub(super) fn attention_card(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Att
     } else {
         egui::Stroke::new(theme.border_width, appearance::color(&theme.border))
     };
-    let inner = egui::Frame::group(ui.style())
+    let frame = egui::Frame::group(ui.style())
         .stroke(stroke)
         .corner_radius(6)
         .fill(appearance::color(&theme.window))
-        .inner_margin(egui::Margin::symmetric(6, 2))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing = egui::vec2(4.0, 2.0);
-            let action = ui
-                .horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
-                    let header =
-                        attention_title(ui, notice, group_extra, session, theme, brand, show_read);
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(
-                        ui.ctx(),
-                        &format!("agent-row:{}", notice.session_id),
-                        header.rect,
-                    );
-                    let mut action = if header.clicked() {
-                        AttentionAction::Go
-                    } else {
-                        AttentionAction::None
-                    };
-                    let buttons = attention_actions(ui, &notice.session_id, show_read);
-                    if buttons != AttentionAction::None {
-                        action = buttons;
-                    }
-                    action
-                })
-                .inner;
-            if notice.resolved {
-                ui.weak("This event has resolved.");
-            }
-            action
-        });
+        .inner_margin(egui::Margin::symmetric(6, 2));
+    let height = ATTENTION_ACTION_SIZE + frame.total_margin().sum().y;
+    if !notice.resolved && skip_clipped_row(ui, height) {
+        return AttentionAction::None;
+    }
+    let inner = frame.show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing = egui::vec2(4.0, 2.0);
+        ui.spacing_mut().interact_size.y = ATTENTION_ACTION_SIZE;
+        let action = ui
+            .horizontal(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                let header =
+                    attention_title(ui, notice, group_extra, session, theme, brand, show_read);
+                #[cfg(feature = "test-support")]
+                diagnostics::record(
+                    ui.ctx(),
+                    &format!("agent-row:{}", notice.session_id),
+                    header.rect,
+                );
+                let mut action = if header.clicked() {
+                    AttentionAction::Go
+                } else {
+                    AttentionAction::None
+                };
+                let buttons = attention_actions(ui, &notice.session_id, show_read);
+                if buttons != AttentionAction::None {
+                    action = buttons;
+                }
+                action
+            })
+            .inner;
+        if notice.resolved {
+            ui.weak("This event has resolved.");
+        }
+        action
+    });
     // Header and action buttons own clicks. A later frame-wide click target
     // sits on top of those buttons in egui and would steal Dismiss/Snooze as Go.
     inner.inner
@@ -3881,6 +3764,95 @@ mod tests {
     }
 
     #[test]
+    fn clipped_attention_cards_keep_the_same_height_as_visible_cards() {
+        let notice = Notification {
+            id: "notice".into(),
+            session_id: "session".into(),
+            invocation_id: "agent".into(),
+            request_id: None,
+            state: AgentState::WaitingInput,
+            summary: "waiting".into(),
+            details: String::new(),
+            created: 1,
+            read: false,
+            dismissed: false,
+            resolved: false,
+            snoozed_until: 0,
+        };
+        let theme = AppearanceConfig::default();
+        for selected in [false, true] {
+            let measure = |clipped: bool| {
+                let ctx = egui::Context::default();
+                appearance::install(&ctx);
+                let mut height = 0.0;
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    if clipped {
+                        ui.set_clip_rect(egui::Rect::NOTHING);
+                    }
+                    let start = ui.next_widget_position().y;
+                    attention_card(
+                        ui,
+                        AttentionCard {
+                            theme: &theme,
+                            notice: &notice,
+                            session: None,
+                            selected,
+                            highlight: false,
+                            brand_icon: None,
+                            brand_label: None,
+                            show_read: true,
+                            group_extra: &[],
+                        },
+                    );
+                    height = ui.next_widget_position().y - start;
+                });
+                output.textures_delta.clear();
+                if clipped {
+                    assert!(
+                        output
+                            .shapes
+                            .iter()
+                            .all(|s| !matches!(s.shape, egui::Shape::Text(_)))
+                    );
+                }
+                height
+            };
+            assert_eq!(measure(false), measure(true));
+        }
+    }
+
+    #[test]
+    fn variable_cards_reuse_measured_height_but_remeasure_after_resize() {
+        let ctx = egui::Context::default();
+        let mut draws = 0;
+        let mut heights = Vec::new();
+        for (width, clipped) in [(300.0, false), (300.0, true), (150.0, true)] {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_width(width);
+                if clipped {
+                    ui.set_clip_rect(egui::Rect::NOTHING);
+                }
+                let start = ui.next_widget_position().y;
+                cached_variable_card(ui, 42, |ui| {
+                    draws += 1;
+                    ui.group(|ui| {
+                        ui.label(
+                            "A long terminal message that wraps to multiple lines when resized",
+                        );
+                    })
+                    .response
+                    .rect
+                });
+                heights.push(ui.next_widget_position().y - start);
+            });
+            output.textures_delta.clear();
+        }
+        assert_eq!(draws, 2);
+        assert_eq!(heights[0], heights[1]);
+        assert!(heights[2] > heights[1]);
+    }
+
+    #[test]
     fn large_git_sidebar_only_builds_visible_rows() {
         let ctx = egui::Context::default();
         let mut rendered = 0;
@@ -3891,7 +3863,7 @@ mod tests {
                     egui::vec2(300.0, 400.0),
                 ));
                 let start = ui.next_widget_position().y;
-                let stride = 24.0 + ui.spacing().item_spacing.y;
+                let stride = GIT_TREE_ROW_HEIGHT + ui.spacing().item_spacing.y;
                 for _ in 0..23_315 {
                     if skip_clipped_git_row(ui) {
                         continue;
@@ -3902,7 +3874,7 @@ mod tests {
                         "file.rs",
                         icons::file_icon(std::path::Path::new("file.rs")),
                         false,
-                        24.0,
+                        GIT_TREE_ROW_HEIGHT,
                         "M",
                         egui::Color32::WHITE,
                     );
@@ -4092,6 +4064,7 @@ mod tests {
                     let mut draft = String::new();
                     let mut input = GitPanelInput {
                         context: &context,
+                        prepared: None,
                         review_mode: ReviewMode::Native,
                         neovim_review: false,
                         theme: &theme,
@@ -4163,6 +4136,7 @@ mod tests {
                     let mut draft = String::new();
                     let mut input = GitPanelInput {
                         context: &context,
+                        prepared: None,
                         review_mode: ReviewMode::Native,
                         neovim_review: false,
                         theme: &theme,

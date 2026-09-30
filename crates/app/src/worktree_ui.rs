@@ -85,25 +85,6 @@ impl App {
             .find(|worktree| worktree.project_id == project_id && !worktree.removed)
     }
 
-    pub(super) fn worktree_children<'a>(
-        &'a self,
-        project: &Project,
-    ) -> Vec<&'a terminator_core::worktrees::Registration> {
-        if self.managed_worktree(&project.id).is_some() {
-            return Vec::new();
-        }
-        self.state
-            .worktrees
-            .iter()
-            .filter(|worktree| {
-                !worktree.removed
-                    && worktree.project_id != project.id
-                    && (worktree.common_dir.starts_with(&project.path)
-                        || worktree.common_dir.parent() == Some(project.path.as_path()))
-            })
-            .collect()
-    }
-
     pub(super) fn open_worktree_wizard(&mut self) {
         if !self.has_worktrees() {
             self.info = Some(

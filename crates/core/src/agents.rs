@@ -204,15 +204,48 @@ pub fn icon_key(kind: &str) -> &'static str {
     catalog(kind).map_or(GENERIC_ICON, |info| info.icon)
 }
 
-/// Match one process by exact executable file name, or by known Node/Bun
-/// entrypoint. `argv` is the full command line; only the first non-flag
-/// argument after a `node`/`bun` executable is considered, so arbitrary
-/// arguments, titles, output, and working directories never match.
+/// Exact exe name or a `-<digit>...` version suffix after a known exe.
+fn match_exe(basename: &str) -> Option<&'static str> {
+    CATALOG
+        .iter()
+        .find(|info| {
+            info.exes.contains(&basename)
+                || info.exes.iter().any(|known| {
+                    basename.len() > known.len() + 1
+                        && basename.starts_with(*known)
+                        && basename.as_bytes()[known.len()] == b'-'
+                        && basename.as_bytes()[known.len() + 1].is_ascii_digit()
+                })
+        })
+        .map(|info| info.kind)
+}
+
+/// Match one process by executable file name, or by known Node/Bun
+/// entrypoint. `argv` is the full command line; only `argv[0]` (the invoked
+/// program) and the first non-flag argument after a `node`/`bun` executable
+/// are considered, so arbitrary arguments, titles, output, and working
+/// directories never match.
+///
+/// Launcher-managed binaries carry a version suffix (e.g.
+/// `muse-bin-1.4.1-R4503.1`, `grok-1.0.44-macos-aarch64`). A trailing
+/// `-<digit>...` after a known exe also matches, so `codex-helper` and
+/// similar names still do not match. Symlink-resolved executables whose file
+/// name is a bare version (e.g. Claude's `versions/2.1.283`) match through
+/// the `argv[0]` invocation instead.
 #[must_use]
 pub fn match_agent(exe_file_name: &str, argv: &[&str]) -> Option<&'static str> {
     let exe = exe_file_name.rsplit('/').next().unwrap_or(exe_file_name);
-    if let Some(info) = CATALOG.iter().find(|info| info.exes.contains(&exe)) {
-        return Some(info.kind);
+    if let Some(kind) = match_exe(exe) {
+        return Some(kind);
+    }
+    // Version-resolved `exe` (e.g. `2.1.283`) with a recognizable invocation.
+    if let Some(invoked) = argv.first() {
+        let invoked = invoked.rsplit('/').next().unwrap_or(invoked);
+        if invoked != exe
+            && let Some(kind) = match_exe(invoked)
+        {
+            return Some(kind);
+        }
     }
     if !SCRIPT_RUNTIMES.contains(&exe) {
         return None;
@@ -522,6 +555,67 @@ mod tests {
             match_agent("node", &["node", "/opt/opencode.mjs"]),
             Some("opencode")
         );
+    }
+
+    #[test]
+    fn versioned_launcher_binaries_match_but_helpers_do_not() {
+        assert_eq!(
+            match_agent(
+                "muse-bin-1.4.1-R4503.1",
+                &["/Users/test/.local/bin/muse-bin-1.4.1-R4503.1"]
+            ),
+            Some("muse")
+        );
+        assert_eq!(
+            match_agent(
+                "/Users/test/.local/bin/muse-bin-1.4.1-R4503.1",
+                &["muse-bin-1.4.1-R4503.1"]
+            ),
+            Some("muse")
+        );
+        assert_eq!(match_agent("muse-1.4.1", &["muse-1.4.1"]), Some("muse"));
+        assert_eq!(
+            match_agent("grok-1.0.44-macos-aarch64", &["/Users/test/.grok/bin/grok"]),
+            Some("grok")
+        );
+        // Claude's symlink resolves the exe to a bare version number, so the
+        // `argv[0]` invocation carries the identity.
+        assert_eq!(
+            match_agent("2.1.283", &["/Users/test/.local/bin/claude"]),
+            Some("claude")
+        );
+        assert_eq!(match_agent("2.1.283", &["claude"]), Some("claude"));
+        // A bare version invoked directly carries no agent identity.
+        assert_eq!(match_agent("2.1.283", &["2.1.283"]), None);
+        assert_eq!(
+            match_agent("codex-helper", &["codex-helper"]),
+            None,
+            "helper suffix still rejected"
+        );
+        assert_eq!(match_agent("muse-beta", &["muse-beta"]), None);
+        let procs = vec![
+            proc(100, None, "zsh"),
+            proc(200, Some(100), "muse-bin-1.4.1-R4503.1"),
+        ];
+        let found = detect_agents(&procs, 100, 1100, None);
+        assert_eq!(found.outcome, PresenceOutcome::Verified);
+        assert_eq!(found.agents.len(), 1);
+        assert_eq!(found.agents[0].kind, "muse");
+        let resolved = vec![
+            proc(100, None, "zsh"),
+            ProcView {
+                pid: 200,
+                parent: Some(100),
+                start_time: 1300,
+                exe_name: "2.1.283".into(),
+                argv: vec!["/Users/test/.local/bin/claude".into()],
+                live: true,
+            },
+        ];
+        let found = detect_agents(&resolved, 100, 1100, None);
+        assert_eq!(found.outcome, PresenceOutcome::Verified);
+        assert_eq!(found.agents.len(), 1);
+        assert_eq!(found.agents[0].kind, "claude");
     }
 
     #[test]
