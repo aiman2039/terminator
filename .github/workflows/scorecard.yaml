@@ -4,7 +4,10 @@ on:
   # Release is the only trigger; no push, schedule, or branch runs.
   workflow_call:
 
-permissions: read-all
+# Keep this explicit. `read-all` grows with every new GitHub read scope,
+# and release.yaml must grant each scope this file requests.
+permissions:
+  contents: read
 
 jobs:
   analysis:
