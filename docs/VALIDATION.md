@@ -3028,3 +3028,21 @@ focus to the terminal on a click.
 Regression `terminal_focus_does_not_steal_from_another_widget` (egui_term) covers
 the steal; `cargo test -p egui_term --locked --offline` passed 63. No native mouse
 validation against the installed app was performed.
+
+## Release-gated CI and pruned non-resumable sessions (2026-09-30)
+
+The failing `master` E2E run came from the daemon change that drops ended
+sessions without an agent resume command (plain shells, file editors) together
+with their scrollback. The xtask fixtures still asserted that ended sessions
+persist, so `harness::session` panicked with "session exists". Fixtures now
+assert the pruned behavior (`session_present`), and fixtures that specifically
+measure history storage or cross-restart notification persistence attach a
+resumable agent so pruning keeps the record.
+
+CI is now release-gated: `ci.yaml`, `security.yaml`, and `scorecard.yaml` expose
+only `workflow_call`, with no push, pull_request, merge_group, or schedule
+triggers. `release.yaml` calls all three as reusable workflows on the release
+revision, and the macOS/Linux builds depend on the checks job. Local validation:
+`cargo xtask integration` and `cargo xtask idle-close` passed end to end; xtask
+fmt, clippy `-D warnings`, and tests passed. No GitHub-hosted run was triggered
+from this checkout.

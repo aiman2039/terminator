@@ -1,9 +1,8 @@
 name: CI
 
 on:
-  push:
-    branches: [master]
-  workflow_dispatch:
+  # Release is the only trigger; no PR, push, or branch runs.
+  workflow_call:
 
 permissions:
   contents: read

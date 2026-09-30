@@ -1,5 +1,5 @@
 //! Review regressions use fresh daemons, PTYs and temporary files only.
-use crate::harness::{Harness, bin, id, session, sessions, wait_child};
+use crate::harness::{Harness, bin, id, session, session_present, sessions, wait_child};
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 use std::{
@@ -91,12 +91,12 @@ fn clean_shutdown() -> Result<()> {
     h.start()?;
     let state = h.state()?;
     ensure!(
-        sessions(&state).len() == 2 && sessions(&state).iter().all(|s| s["lifecycle"] == "ended"),
-        "Cleanup must retain ended records without relaunch"
+        sessions(&state).is_empty(),
+        "Cleanup retained records for non-resumable exited sessions"
     );
     ensure!(
-        h.history(id(&first))?.contains("CLEANUP_HISTORY_MARKER"),
-        "Cleanup lost saved terminal history"
+        h.history(id(&first)).is_err(),
+        "Cleanup kept pruned terminal history"
     );
     // A process that ignores the normal stop signal must not cause a fake success.
     let stubborn = h.shell(&project)?;
@@ -114,7 +114,7 @@ fn clean_shutdown() -> Result<()> {
         .output()?;
     // Always release the fixture's HUP-ignoring shell before checking assertions.
     h.write(&mut stream, "exit\n")?;
-    h.wait(|s| session(s, id(&stubborn))["lifecycle"] == "ended", 5)?;
+    h.wait(|s| !session_present(s, id(&stubborn)), 5)?;
     ensure!(
         !output.status.success()
             && String::from_utf8_lossy(&output.stderr).contains("did not stop"),
@@ -126,7 +126,7 @@ fn clean_shutdown() -> Result<()> {
     );
     println!(
         "{}",
-        json!({"stop_all_cleanup":true,"default_and_self_shutdown_refused":true,"history_preserved":true,"timeout_preserves_daemon":true})
+        json!({"stop_all_cleanup":true,"default_and_self_shutdown_refused":true,"history_pruned":true,"timeout_preserves_daemon":true})
     );
     Ok(())
 }
@@ -207,12 +207,12 @@ fn relaunch_shutdown() -> Result<()> {
     h.start()?;
     let state = h.state()?;
     ensure!(
-        sessions(&state).len() == 2 && sessions(&state).iter().all(|s| s["lifecycle"] == "ended"),
-        "Relaunch must retain ended records without relaunch"
+        sessions(&state).is_empty(),
+        "Relaunch retained records for non-resumable exited sessions"
     );
     ensure!(
-        h.history(id(&first))?.contains("RELAUNCH_HISTORY_MARKER"),
-        "Relaunch lost saved terminal history"
+        h.history(id(&first)).is_err(),
+        "Relaunch kept pruned terminal history"
     );
     let stubborn = h.shell(&project)?;
     let mut stream = h.attach(&stubborn)?;
@@ -238,7 +238,7 @@ fn relaunch_shutdown() -> Result<()> {
         .arg(&stub)
         .output()?;
     h.write(&mut stream, "exit\n")?;
-    h.wait(|s| session(s, id(&stubborn))["lifecycle"] == "ended", 5)?;
+    h.wait(|s| !session_present(s, id(&stubborn)), 5)?;
     ensure!(
         !output.status.success()
             && String::from_utf8_lossy(&output.stderr).contains("did not stop"),
@@ -254,7 +254,7 @@ fn relaunch_shutdown() -> Result<()> {
     );
     println!(
         "{}",
-        json!({"relaunch_cleanup":true,"history_preserved":true,"timeout_preserves_daemon":true,"stub_relaunched":true})
+        json!({"relaunch_cleanup":true,"history_pruned":true,"timeout_preserves_daemon":true,"stub_relaunched":true})
     );
     Ok(())
 }
@@ -271,7 +271,8 @@ fn large_snapshots() -> Result<()> {
             "terminal_session_id":id(&shell),"agent_invocation_id":format!("fixture-{n}"),
             "agent_kind":"custom","provider_session_id":"fixture",
             "state":"waiting_input","request_id":format!("request-{n}"),
-            "sequence":n,"summary":"Pending fixture request","details":details,"resume":null
+            "sequence":n,"summary":"Pending fixture request","details":details,
+            "resume":{"program":"codex","args":["resume","fixture"]}
         }}))?;
     }
     let check = |state: &Value| -> Result<()> {
@@ -388,7 +389,7 @@ fn terminal_editors() -> Result<()> {
             "project":id(&project),"cwd":null,"file":file,"line":12,"column":3,"editor":true
         }}))?["Created"]
             .clone();
-        h.wait(|st| session(st, id(&editor))["lifecycle"] == "ended", 5)?;
+        h.wait(|st| !session_present(st, id(&editor)), 5)?;
         let args = fs::read_to_string(&capture)?;
         let expected = format!(
             "{}{}\n",
@@ -485,6 +486,16 @@ fn history_burst() -> Result<()> {
         },
         30,
     )?;
+    // Give the shell an agent resume handle so it is not pruned with its
+    // scrollback: this fixture measures storage capacity, not retention policy.
+    h.rpc(json!({"Hook":{
+        "protocol_version":1,"event_id":"burst-resume",
+        "terminal_session_id":id(&shell),"agent_invocation_id":"burst-agent",
+        "agent_kind":"custom","provider_session_id":"burst",
+        "state":"waiting_input","request_id":"burst","sequence":1,
+        "summary":"Burst fixture","details":"",
+        "resume":{"program":"codex","args":["resume","burst"]}
+    }}))?;
     h.rpc(json!({"Stop":{"session":id(&shell)}}))?;
     let state = h.wait(|s| session(s, id(&shell))["lifecycle"] == "ended", 5)?;
     ensure!(
@@ -604,10 +615,7 @@ fn missing_helper_health() -> Result<()> {
     h.rpc(json!({"Stop":{"session":id(&shell)}}))?;
     h.rpc(json!({"Stop":{"session":id(&second)}}))?;
     h.wait(
-        |s| {
-            session(s, id(&shell))["lifecycle"] == "ended"
-                && session(s, id(&second))["lifecycle"] == "ended"
-        },
+        |s| !session_present(s, id(&shell)) && !session_present(s, id(&second)),
         5,
     )?;
     h.rpc(json!("ShutdownIfIdle"))?;

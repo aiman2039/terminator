@@ -75,8 +75,35 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-  build-macos:
+  # Release is the only trigger for the rest of CI: no PR, push, or branch runs.
+  # These reusable workflows exercise the exact revision being released.
+  checks:
     needs: prepare
+    uses: ./.github/workflows/ci.yaml
+    permissions:
+      contents: read
+
+  security:
+    needs: prepare
+    uses: ./.github/workflows/security.yaml
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+      issues: write
+      pull-requests: write
+    secrets: inherit
+
+  scorecard:
+    needs: prepare
+    uses: ./.github/workflows/scorecard.yaml
+    permissions:
+      contents: read
+      security-events: write
+      id-token: write
+
+  build-macos:
+    needs: [prepare, checks]
     name: Build aarch64-apple-darwin
     runs-on: macos-15
     timeout-minutes: 90
@@ -93,7 +120,7 @@ jobs:
           tag: ${{ needs.prepare.outputs.tag }}
 
   build-linux:
-    needs: prepare
+    needs: [prepare, checks]
     strategy:
       fail-fast: false
       matrix:

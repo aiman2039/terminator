@@ -1,4 +1,6 @@
-use crate::harness::{Harness, artifacts, bin, git, id, output, session, sessions};
+use crate::harness::{
+    Harness, artifacts, bin, git, id, output, session, session_present, sessions,
+};
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use serde_json::{Value, json};
@@ -126,17 +128,19 @@ pub fn run() -> Result<()> {
         start.elapsed() < Duration::from_secs(2),
         "Blocked paste prevented Stop"
     );
-    h.wait(|st| session(st, id(&s))["lifecycle"] == "ended", 5)?;
+    // A plain shell has no agent resume handle, so ending it drops the record
+    // and its scrollback instead of leaving a dead History entry.
+    h.wait(|st| !session_present(st, id(&s)), 5)?;
     ensure!(
-        h.history(id(&s))?.contains("RECONNECT_PROOF_123"),
-        "History lost"
+        h.history(id(&s)).is_err(),
+        "Pruned session kept a History record"
     );
     drop(stream);
     h.restart()?;
     let state = h.state()?;
     ensure!(
-        sessions(&state).len() == 1 && session(&state, id(&s))["lifecycle"] == "ended",
-        "Recovery relaunched a session"
+        sessions(&state).is_empty(),
+        "Recovery resurrected a pruned session"
     );
     ensure!(state["projects"][0]["layout"] == layout, "Layout lost");
     let hint = json!({"generation":state["generation"],"revision":state["revision"]});
@@ -586,7 +590,7 @@ pub fn controls() -> Result<()> {
     );
     drop(stream);
     h.rpc(json!({"Stop":{"session":id(&s)}}))?;
-    h.wait(|st| session(st, id(&s))["lifecycle"] == "ended", 5)?;
+    h.wait(|st| !session_present(st, id(&s)), 5)?;
     fs::write(destination.join("dirty"), "keep")?;
     ensure!(
         h.rpc(json!({"WorktreeRemove":{"project":id(&p)}})).is_err(),
@@ -669,7 +673,7 @@ pub fn controls() -> Result<()> {
         "Removed checkout used by another project's recorded cwd"
     );
     h.rpc(json!({"Stop":{"session":id(&recorded)}}))?;
-    h.wait(|st| session(st, id(&recorded))["lifecycle"] == "ended", 5)?;
+    h.wait(|st| !session_present(st, id(&recorded)), 5)?;
     let branch = git(&repo, &["rev-parse", "refs/heads/fixture-task"])?;
     ensure!(
         git(&destination, &["status", "--porcelain"])?.is_empty(),
@@ -713,7 +717,7 @@ pub fn controls() -> Result<()> {
         "Refusal marked checkout removed"
     );
     ensure!(
-        session(&state, id(&s))["lifecycle"] == "ended",
+        !session_present(&state, id(&s)),
         "Lock refusal depended on a live session"
     );
     git(

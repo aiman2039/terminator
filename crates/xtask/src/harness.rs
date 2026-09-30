@@ -45,6 +45,11 @@ pub fn session<'a>(state: &'a Value, sid: &str) -> &'a Value {
         .find(|s| id(s) == sid)
         .expect("session exists")
 }
+/// True when the daemon still tracks this session. Ended shells and editors
+/// without an agent resume command are pruned from state entirely.
+pub fn session_present(state: &Value, sid: &str) -> bool {
+    sessions(state).iter().any(|s| id(s) == sid)
+}
 fn session_summary(state: &Value) -> String {
     let Some(list) = state["sessions"].as_array() else {
         return "no session inventory".into();
