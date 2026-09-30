@@ -701,6 +701,7 @@ pub struct App {
     worktree_draft: Option<worktree_ui::WorktreeDraft>,
     worktree_remove: Option<String>,
     theme: AppearanceConfig,
+    terminal_theme: Option<(String, String, egui_term::TerminalTheme)>,
     theme_committed: AppearanceConfig,
     theme_draft: AppearanceConfig,
     theme_source: String,
@@ -1005,6 +1006,7 @@ impl App {
             worktree_draft: None,
             worktree_remove: None,
             theme: AppearanceConfig::default(),
+            terminal_theme: None,
             theme_committed: AppearanceConfig::default(),
             theme_draft: AppearanceConfig::default(),
             theme_source: String::new(),
@@ -2359,8 +2361,7 @@ impl App {
             .or_else(|| self.selected_project().map(|p| p.path.clone()))
     }
     fn sync_resource_sample(&mut self) {
-        let open = (self.preferences.visible || self.preferences.ide_mode)
-            && self.preferences.tool == SidebarTool::Info;
+        let open = self.preferences.visible && self.preferences.tool == SidebarTool::Info;
         let next = open.then(|| {
             let session = self
                 .context_session()
@@ -3104,6 +3105,37 @@ impl App {
         self.send(Request::EditorCompare { session: sid });
     }
 
+    fn workspace_sidebars(&mut self, ui: &mut egui::Ui) {
+        if self.preferences.left_visible {
+            let projects_response = egui::Panel::left("projects")
+                .resizable(true)
+                .default_size(225.0)
+                .size_range(170.0..=420.0)
+                .show(ui, |ui| {
+                    self.agent_bar(ui);
+                    ui.push_id("left-sidebar-content", |ui| {
+                        if self.preferences.left_agents {
+                            self.agents_view(ui);
+                        } else {
+                            appearance::sidebar_scroll("left-projects")
+                                .show(ui, |ui| self.projects(ui));
+                        }
+                    });
+                });
+            self.project_width = projects_response.response.rect.width();
+        }
+        if self.preferences.visible {
+            let response = egui::Panel::right("context")
+                .resizable(true)
+                .default_size(self.preferences.width)
+                .size_range(220.0..=480.0)
+                .show(ui, |ui| {
+                    self.sidebar(ui);
+                });
+            self.preferences.width = response.response.rect.width().clamp(220.0, 480.0);
+        }
+    }
+
     fn toggle_left_sidebar(&mut self) {
         self.preferences.left_visible = !self.preferences.left_visible;
     }
@@ -3115,8 +3147,8 @@ impl App {
     fn toggle_ide_mode(&mut self) {
         self.preferences.ide_mode = !self.preferences.ide_mode;
         if self.preferences.ide_mode {
-            // Sidebars paint from `visible || ide_mode`. Leave the saved
-            // flags alone so leaving IDE mode restores the prior chrome.
+            // Sidebar visibility is user-controlled in both modes.
+            // Switching modes must not overwrite the saved flags.
             self.preferences.ide_terminal_collapsed = false;
         } else {
             self.resync_active_from_dock();
@@ -4412,15 +4444,14 @@ impl App {
                 column: None,
                 editor: false,
             },
-            match split {
-                None => After::Strip,
-                Some(split) => After::StripAt(
-                    dock.leaf(path)
-                        .map(|leaf| leaf.tabs.clone())
-                        .unwrap_or_default(),
-                    Some(split),
-                ),
-            },
+            // Anchor even plain "new tab" on the clicked pane; otherwise the
+            // tab lands in whichever strip leaf happened to be focused.
+            After::StripAt(
+                dock.leaf(path)
+                    .map(|leaf| leaf.tabs.clone())
+                    .unwrap_or_default(),
+                split,
+            ),
         ));
     }
 
@@ -5012,34 +5043,7 @@ impl eframe::App for App {
                     self.ide_terminal_strip(ui);
                 });
         }
-        if self.preferences.left_visible || self.preferences.ide_mode {
-            let projects_response = egui::Panel::left("projects")
-                .resizable(true)
-                .default_size(225.0)
-                .size_range(170.0..=420.0)
-                .show(ui, |ui| {
-                    self.agent_bar(ui);
-                    ui.push_id("left-sidebar-content", |ui| {
-                        if self.preferences.left_agents {
-                            self.agents_view(ui);
-                        } else {
-                            appearance::sidebar_scroll("left-projects")
-                                .show(ui, |ui| self.projects(ui));
-                        }
-                    });
-                });
-            self.project_width = projects_response.response.rect.width();
-        }
-        if self.preferences.visible || self.preferences.ide_mode {
-            let response = egui::Panel::right("context")
-                .resizable(true)
-                .default_size(self.preferences.width)
-                .size_range(220.0..=480.0)
-                .show(ui, |ui| {
-                    self.sidebar(ui);
-                });
-            self.preferences.width = response.response.rect.width().clamp(220.0, 480.0);
-        }
+        self.workspace_sidebars(ui);
         // Center-only: shown after the sidebars so the strip sits beside
         // them instead of pushing them down.
         egui::Panel::top("workspace-tabs")
@@ -5294,6 +5298,42 @@ mod navigation_tests {
     }
 
     #[test]
+    fn ide_sidebar_toggles_reclaim_layout_space_and_restore_it() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.ide_mode = true;
+        let draw = |app: &mut App| {
+            let mut width = 0.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.workspace_sidebars(ui);
+                    width = ui.available_width();
+                },
+            );
+            output.textures_delta.clear();
+            width
+        };
+        draw(&mut app);
+        let both = draw(&mut app);
+        app.run_shortcut(&ctx, "toggle_left_sidebar");
+        let right_only = draw(&mut app);
+        assert!(right_only > both + 100.0);
+        app.run_shortcut(&ctx, "toggle_right_sidebar");
+        let neither = draw(&mut app);
+        assert!(neither > right_only + 100.0);
+        app.run_shortcut(&ctx, "toggle_left_sidebar");
+        app.run_shortcut(&ctx, "toggle_right_sidebar");
+        assert!((draw(&mut app) - both).abs() < 1.0);
+        assert!(app.preferences.ide_mode);
+    }
+
+    #[test]
     fn toggle_ide_mode_keeps_sidebar_visibility_and_widths() {
         let (mut app, ctx, _dir) = fixture();
         app.preferences.left_visible = false;
@@ -5376,6 +5416,49 @@ mod navigation_tests {
                 .get("a")
                 .is_some_and(|dock| dock.contains(&Tab::Terminal("two".into())))
         );
+    }
+
+    #[test]
+    fn strip_plus_adds_the_tab_to_the_clicked_pane() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        app.state.sessions = vec![
+            session_fixture("left", SessionKind::Shell),
+            session_fixture("right", SessionKind::Shell),
+        ];
+        let mut dock = egui_dock::DockState::new(vec![Tab::Terminal("left".into())]);
+        let [left, right] = dock.main_surface_mut().split_right(
+            NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("right".into())],
+        );
+        dock.main_surface_mut().set_focused_node(left);
+        let right_path = egui_dock::NodePath {
+            surface: egui_dock::SurfaceIndex::main(),
+            node: right,
+        };
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.add_strip_tab = Some((right_path, None));
+        app.apply_add_strip_tab("a", &mut dock);
+        app.preferences.ide_strip_docks.0.insert("a".into(), dock);
+        let Job::Control(_, After::StripAt(anchors, None)) = requests.try_recv().unwrap() else {
+            panic!("Plain strip + anchors on the clicked pane");
+        };
+        let (updates, rx) = mpsc::channel();
+        app.updates = rx;
+        updates
+            .send(Update::StripCreated(
+                session_fixture("new", SessionKind::Shell),
+                None,
+                anchors,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        let dock = app.preferences.ide_strip_docks.0.get("a").unwrap();
+        let path = dock.find_tab(&Tab::Terminal("new".into())).unwrap();
+        assert_eq!(path.node_path().node, right);
     }
 
     #[test]

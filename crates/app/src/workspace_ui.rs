@@ -2,6 +2,29 @@
 use super::*;
 use egui_term::TerminalBackend;
 
+fn terminal_theme(theme: &AppearanceConfig) -> (String, String, egui_term::TerminalTheme) {
+    (
+        theme.terminal_background.clone(),
+        theme.terminal_foreground.clone(),
+        egui_term::TerminalTheme::new(Box::new(egui_term::ColorPalette {
+            background: theme.terminal_background.clone(),
+            foreground: theme.terminal_foreground.clone(),
+            ..Default::default()
+        })),
+    )
+}
+
+fn cached_terminal_theme(
+    cache: &mut Option<(String, String, egui_term::TerminalTheme)>,
+    theme: &AppearanceConfig,
+) -> egui_term::TerminalTheme {
+    let cached = cache.get_or_insert_with(|| terminal_theme(theme));
+    if cached.0 != theme.terminal_background || cached.1 != theme.terminal_foreground {
+        *cached = terminal_theme(theme);
+    }
+    cached.2.clone()
+}
+
 /// Last non-blank grid rows of a live terminal for the drag ghost, oldest
 /// first. Bounded so the floating preview stays small.
 /// Longest label before a workspace tab ellipsizes. Chrome around it is fixed.
@@ -2943,7 +2966,7 @@ impl TabViewer for Viewer<'_> {
                 rect.translate(egui::vec2(-24.0, 0.0)),
             );
         }
-        let response = appearance::menu_button(ui, "⌄", |ui| {
+        let response = appearance::icon_menu_button(ui, "ChevronDown", |ui| {
             for (label, direction) in [
                 ("New tab", None),
                 ("Split up", Some("up")),
@@ -3919,15 +3942,10 @@ impl Viewer<'_> {
         let font = egui_term::TerminalFont::new(egui_term::FontSettings {
             font_type: egui::FontId::monospace(self.app.state.settings.font_size),
         });
+        let theme = cached_terminal_theme(&mut self.app.terminal_theme, &self.app.theme);
         let view = TerminalView::new(ui, backend)
             .external_links(true)
-            .set_theme(egui_term::TerminalTheme::new(Box::new(
-                egui_term::ColorPalette {
-                    background: self.app.theme.terminal_background.clone(),
-                    foreground: self.app.theme.terminal_foreground.clone(),
-                    ..Default::default()
-                },
-            )))
+            .set_theme(theme)
             .set_focus(focused)
             .set_font(font)
             .set_size(ui.available_size())
@@ -4238,6 +4256,24 @@ impl Viewer<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn terminal_theme_cache_tracks_preview_and_revert() {
+        let mut cache = None;
+        let original = AppearanceConfig::default();
+        let mut preview = original.clone();
+        preview.terminal_foreground = "#123456".into();
+        preview.terminal_background = "#abcdef".into();
+        cached_terminal_theme(&mut cache, &original);
+        cached_terminal_theme(&mut cache, &preview);
+        let cached = cache.as_ref().unwrap();
+        assert_eq!(cached.0, preview.terminal_background);
+        assert_eq!(cached.1, preview.terminal_foreground);
+        cached_terminal_theme(&mut cache, &original);
+        let cached = cache.as_ref().unwrap();
+        assert_eq!(cached.0, original.terminal_background);
+        assert_eq!(cached.1, original.terminal_foreground);
+    }
+
     use super::*;
 
     fn span(text: &str) -> diff::DiffSpan {

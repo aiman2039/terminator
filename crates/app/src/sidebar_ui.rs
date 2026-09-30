@@ -2422,6 +2422,7 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
             ui.add(
                 egui::TextEdit::multiline(input.commit_draft)
                     .hint_text("Message")
+                    .desired_width(ui.available_width())
                     .desired_rows(3),
             );
             ui.horizontal(|ui| {
@@ -2590,7 +2591,7 @@ fn git_toolbar(
         if history.clicked() {
             outcome.history = Some(true);
         }
-        let branch = appearance::menu_button(ui, branch_name, |ui| {
+        let branch = appearance::text_menu_button(ui, branch_name, |ui| {
             if input.branches.is_empty() {
                 ui.weak("No branches");
             }
@@ -2721,7 +2722,7 @@ fn git_change_row(
         label,
         icons::file_icon(&change.path),
         false,
-        24.0,
+        GIT_TREE_ROW_HEIGHT,
         &trailing,
         git_color(ctx.theme, letter),
     )
@@ -2820,6 +2821,10 @@ fn git_change_row(
 }
 
 const GIT_SECTION_LIMIT: usize = 8;
+/// Per-level indent and row height for the changed-file tree. Kept tight so a
+/// deep path stays legible in the narrow sidebar.
+const GIT_TREE_INDENT: f32 = 12.0;
+const GIT_TREE_ROW_HEIGHT: f32 = 20.0;
 
 /// Orca-style section header with per-section stage/unstage all. The body is a
 /// directory tree (JetBrains-style), collapsible per folder.
@@ -2872,6 +2877,8 @@ fn git_group_section(
         })
         .body(|ui| {
             let tree = build_change_tree(entries, root);
+            ui.spacing_mut().indent = GIT_TREE_INDENT;
+            ui.spacing_mut().item_spacing.y = 0.0;
             git_change_tree(ui, ctx, outcome, &tree, "", group);
         });
 }
@@ -2954,7 +2961,7 @@ fn git_change_tree(
                         name,
                         "Folder",
                         false,
-                        22.0,
+                        GIT_TREE_ROW_HEIGHT,
                         &trailing,
                         appearance::color(&ctx.theme.secondary),
                     ));

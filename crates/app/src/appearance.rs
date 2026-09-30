@@ -211,16 +211,41 @@ pub fn framed_icon(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
 }
 
 pub fn sidebar_action(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
-    ui.add_sized(
-        [22.0, 22.0],
-        egui::Button::image(
-            egui::Image::new(crate::icons::source(icon))
-                .tint(ICON_COLOR)
-                .fit_to_exact_size(egui::vec2(14.0, 14.0)),
-        )
-        .frame(false),
-    )
-    .on_hover_text(tip)
+    let response = ui.add_sized([22.0, 22.0], egui::Button::new("").frame(false));
+    paint_action_icon(ui, &response, icon);
+    response.on_hover_text(tip)
+}
+
+/// Hover fill plus a pixel-snapped 14pt icon, so adjacent actions line up.
+fn paint_action_icon(ui: &egui::Ui, response: &egui::Response, icon: &str) {
+    use egui::emath::GuiRounding;
+    let rect = response.rect;
+    if response.hovered() || response.is_pointer_button_down_on() {
+        ui.painter()
+            .rect_filled(rect, 4.0, ui.visuals().widgets.hovered.bg_fill);
+    }
+    let icon_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(14.0, 14.0))
+        .round_to_pixels(ui.pixels_per_point());
+    egui::Image::new(crate::icons::source(icon))
+        .tint(ICON_COLOR)
+        .paint_at(ui, icon_rect);
+}
+
+/// Frameless icon button that opens a menu, matching `sidebar_action`.
+pub fn icon_menu_button<R>(
+    ui: &mut egui::Ui,
+    icon: &str,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let config = egui::menu::MenuConfig::new().style(menu_style);
+    let button = egui::Button::new("")
+        .frame(false)
+        .min_size(egui::vec2(22.0, 22.0));
+    let (response, inner) = egui::menu::MenuButton::from_button(button)
+        .config(config)
+        .ui(ui, add_contents);
+    paint_action_icon(ui, &response, icon);
+    egui::InnerResponse::new(inner.map(|shown| shown.inner), response)
 }
 
 /// Icon-only selectable control (tabs, toggles). The hover overlay carries the
@@ -361,6 +386,28 @@ pub fn menu_button<R>(
             .ui(ui, add_contents)
     };
     egui::InnerResponse::new(inner.map(|shown| shown.inner), response)
+}
+
+/// Frameless text menu button for the flat sidebar toolbar. Unlike
+/// [`menu_button`], it draws no border or background at rest, so it lines up
+/// with the icon actions beside it.
+pub fn text_menu_button<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    ui.scope(|ui| {
+        let visuals = ui.visuals_mut();
+        for widget in [&mut visuals.widgets.inactive, &mut visuals.widgets.active] {
+            widget.bg_fill = Color32::TRANSPARENT;
+            widget.weak_bg_fill = Color32::TRANSPARENT;
+            widget.bg_stroke = egui::Stroke::NONE;
+        }
+        visuals.widgets.hovered.bg_stroke = egui::Stroke::NONE;
+        visuals.widgets.open.bg_stroke = egui::Stroke::NONE;
+        menu_button(ui, title, add_contents)
+    })
+    .inner
 }
 
 /// Flat full-width action row with a fixed icon column and optional shortcut.
