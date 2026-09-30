@@ -8037,7 +8037,9 @@ mod navigation_tests {
         let (mut app, ctx, directory) = fixture();
         let (jobs, requests) = mpsc::channel();
         app.jobs = jobs.into();
-        ctx.options_mut(|options| options.input_options.max_double_click_delay = 0.01);
+        // Wider than one click on a slow runner. A later click is aged past
+        // this window instead of sleeping through it.
+        ctx.options_mut(|options| options.input_options.max_double_click_delay = 60.0);
         let path = directory.path().join("file.rs");
         let click = |app: &mut App, ctx: &egui::Context| {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
@@ -8045,12 +8047,24 @@ mod navigation_tests {
             });
             output.textures_delta.clear();
         };
+        let creates = || {
+            requests
+                .try_iter()
+                .filter(|job| {
+                    matches!(
+                        job,
+                        Job::Control(request, _)
+                            if matches!(request.as_ref(), Request::Create { .. })
+                    )
+                })
+                .count()
+        };
         click(&mut app, &ctx);
         click(&mut app, &ctx);
-        assert_eq!(requests.try_iter().filter(|job| matches!(job, Job::Control(request, _) if matches!(request.as_ref(), Request::Create { .. }))).count(), 1);
-        thread::sleep(Duration::from_millis(15));
+        assert_eq!(creates(), 1);
+        app.file_activation.as_mut().unwrap().at = Instant::now() - Duration::from_secs(120);
         click(&mut app, &ctx);
-        assert_eq!(requests.try_iter().filter(|job| matches!(job, Job::Control(request, _) if matches!(request.as_ref(), Request::Create { .. }))).count(), 1);
+        assert_eq!(creates(), 1);
     }
 
     #[test]
