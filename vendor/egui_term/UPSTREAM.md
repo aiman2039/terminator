@@ -160,3 +160,20 @@ and set by the host when the terminal is drawn. A hidden terminal records
 `grid_dirty` but does not wake the UI, so its next paint picks up the new grid
 instead of driving frames the user cannot see.
 
+
+## Shared output repaint budget and parsed colors (2026-09-30)
+
+Visible terminal panes now share a context-local repaint budget. The budget is
+reset by actual paints (`set_painted(true)`), not by independent subscription
+threads' last immediate wakeups. This avoids staggered panes multiplying output
+frames and a scheduled frame being immediately followed by another leading-edge
+wake. Hidden panes still only mark their grids dirty. Output after an idle period
+can wake immediately; input events remain independent of the output budget.
+
+TerminalTheme parses palette strings once into an immutable, Arc-shared color
+array. Named/indexed colors use direct lookup, including the xterm cube and
+grayscale ramp; truecolor stays direct RGB. Default themes share one initialized
+table, avoiding rebuilding a discarded default table on every widget creation.
+The host caches its configured theme until foreground/background changes.
+Regressions cover shared frame deadlines, idle wakeups, separate contexts,
+indexed colors, custom colors, bright-foreground fallback, and theme sharing.

@@ -22,13 +22,49 @@ use std::io::Result;
 use std::ops::{Index, RangeInclusive};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Upper bound on PTY-driven repaints: a sustained burst stays near 30 fps. An
 /// echo arriving after an idle period repaints immediately (leading edge), so
-/// keystrokes are not delayed by the frame budget.
+/// input handling itself remains independent of the output repaint budget.
 const REPAINT_FRAME: Duration = Duration::from_millis(33);
+
+/// Shared across panes in one GUI context. Budget from actual paints, not from
+/// each PTY's independent event stream; a delayed wake must not be followed by
+/// a second leading-edge wake immediately after that frame.
+#[derive(Default)]
+struct RepaintBudget {
+    last_paint: Option<Instant>,
+    pending: Option<Instant>,
+}
+
+impl RepaintBudget {
+    fn painted(&mut self, now: Instant) {
+        self.last_paint = Some(now);
+        self.pending = None;
+    }
+
+    fn request(&mut self, now: Instant) -> Option<Duration> {
+        let deadline = self
+            .last_paint
+            .map_or(now, |last| (last + REPAINT_FRAME).max(now));
+        if self.pending.is_some_and(|pending| pending <= deadline) {
+            return None;
+        }
+        self.pending = Some(deadline);
+        Some(deadline.saturating_duration_since(now))
+    }
+}
+
+fn repaint_budget(ctx: &egui::Context) -> Arc<Mutex<RepaintBudget>> {
+    ctx.data_mut(|data| {
+        data.get_temp_mut_or_default::<Arc<Mutex<RepaintBudget>>>(egui::Id::new(
+            "egui_term::repaint_budget",
+        ))
+        .clone()
+    })
+}
 
 pub type TerminalMode = TermMode;
 pub type PtyEvent = Event;
@@ -180,6 +216,7 @@ pub struct TerminalBackend {
     last_content: RenderableContent,
     grid_dirty: Arc<AtomicBool>,
     painted: Arc<AtomicBool>,
+    repaint_budget: Arc<Mutex<RepaintBudget>>,
 }
 
 impl TerminalBackend {
@@ -230,37 +267,27 @@ impl TerminalBackend {
         let grid_dirty_for_events = grid_dirty.clone();
         let painted = Arc::new(AtomicBool::new(false));
         let painted_for_events = painted.clone();
+        let repaint_budget = repaint_budget(&app_context);
+        let budget_for_events = repaint_budget.clone();
         let _pty_event_loop_thread = pty_event_loop.spawn();
         let _pty_event_subscription = std::thread::Builder::new()
             .name(format!("pty_event_subscription_{}", id))
             .spawn(move || {
-                // Start one frame in the past so the first event after an idle
-                // period repaints immediately rather than waiting a frame.
-                let mut last_wake = Instant::now()
-                    .checked_sub(REPAINT_FRAME)
-                    .unwrap_or_else(Instant::now);
                 loop {
                     if let Ok(event) = event_receiver.recv() {
                         grid_dirty_for_events.store(true, Ordering::Relaxed);
                         if pty_event_proxy_sender.send((id, event.clone())).is_err() {
                             break;
                         }
-                        // Leading-edge throttle: coalesce a burst of PTY events
-                        // into at most one frame per 33 ms instead of waking the
-                        // UI thread per event, but repaint at once when the
-                        // previous wake is already a frame old. Hidden terminals
-                        // only mark the grid dirty: an agent streaming in a
-                        // background tab must not force frames.
+                        // Hidden terminals update their grid without waking the GUI.
+                        // All visible panes share a budget based on actual paints.
                         if painted_for_events.load(Ordering::Relaxed) {
-                            let now = Instant::now();
-                            let since = now.duration_since(last_wake);
-                            if since >= REPAINT_FRAME {
-                                app_context.clone().request_repaint();
-                                last_wake = now;
-                            } else {
-                                app_context
-                                    .clone()
-                                    .request_repaint_after(REPAINT_FRAME - since);
+                            let delay = budget_for_events
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .request(Instant::now());
+                            if let Some(delay) = delay {
+                                app_context.request_repaint_after(delay);
                             }
                         }
                         match event {
@@ -285,6 +312,7 @@ impl TerminalBackend {
             last_content: initial_content,
             grid_dirty,
             painted,
+            repaint_budget,
         })
     }
 
@@ -515,6 +543,12 @@ impl TerminalBackend {
     /// terminals still record grid changes but do not wake the UI.
     pub fn set_painted(&self, painted: bool) {
         self.painted.store(painted, Ordering::Relaxed);
+        if painted {
+            self.repaint_budget
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .painted(Instant::now());
+        }
     }
 
     pub fn pty_id(&self) -> u32 {
@@ -1271,5 +1305,57 @@ mod target_tests {
             let range = token_range(&chars, 8).unwrap();
             assert_eq!(chars[range].iter().collect::<String>(), expected);
         }
+    }
+}
+
+#[cfg(test)]
+mod repaint_tests {
+    use super::*;
+
+    #[test]
+    fn split_panes_share_one_output_frame_deadline() {
+        let ctx = egui::Context::default();
+        let left = repaint_budget(&ctx);
+        let right = repaint_budget(&ctx);
+        assert!(Arc::ptr_eq(&left, &right));
+        let now = Instant::now();
+        left.lock().unwrap().painted(now);
+        assert_eq!(
+            left.lock().unwrap().request(now + Duration::from_millis(5)),
+            Some(Duration::from_millis(28))
+        );
+        assert_eq!(
+            right
+                .lock()
+                .unwrap()
+                .request(now + Duration::from_millis(20)),
+            None
+        );
+        // A second producer at the deadline must not queue an immediate extra frame.
+        assert_eq!(right.lock().unwrap().request(now + REPAINT_FRAME), None);
+        left.lock().unwrap().painted(now + REPAINT_FRAME);
+        assert_eq!(
+            right
+                .lock()
+                .unwrap()
+                .request(now + Duration::from_millis(34)),
+            Some(Duration::from_millis(32))
+        );
+    }
+
+    #[test]
+    fn first_output_after_idle_is_immediate_and_contexts_are_independent() {
+        let now = Instant::now();
+        let mut budget = RepaintBudget::default();
+        assert_eq!(budget.request(now), Some(Duration::ZERO));
+        budget.painted(now);
+        assert_eq!(
+            budget.request(now + Duration::from_secs(1)),
+            Some(Duration::ZERO)
+        );
+        assert!(!Arc::ptr_eq(
+            &repaint_budget(&egui::Context::default()),
+            &repaint_budget(&egui::Context::default())
+        ));
     }
 }

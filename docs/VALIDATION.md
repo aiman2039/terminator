@@ -2972,3 +2972,45 @@ clamp fix reverted, the first three fail; with `settle_cursor` no-op'd, the
 ESC and paste tests fail. Evidence: native-edit 55/55, workspace clippy
 `-D warnings` and fmt clean, full workspace tests green (same pre-existing
 navigation flake as the entry above).
+
+## Terminal rendering CPU follow-up (2026-09-30)
+
+A five-second sample of the installed GUI 0.69.0 (PID 64314) showed terminal
+painting, palette/hash-table construction, color parsing, and OpenGL submission.
+Separate process snapshots reported GUI CPU of 20.8% and 28.3%, with daemon CPU
+of 4–5%. Sampling includes display/XPC waits: stack proportions are not CPU
+percentages and do not establish the exact repaint trigger. These are baseline
+observations, not before/after measurements of this change.
+
+The checkout now shares a PTY-output repaint budget across visible panes, tied
+to actual paints rather than each subscription's independent immediate wake.
+It also caches the configured terminal theme, shares the default theme, and
+resolves named/indexed colors through a pre-parsed array instead of per-cell hex
+parsing and per-frame ANSI hash-table construction. Palette preview/revert still
+invalidates the host cache; hidden panes retain their no-wakeup behavior.
+
+Validation: `cargo test -p egui_term --locked --offline` passed 62 tests;
+`cargo test -p terminator --lib --all-features --locked --offline` passed 484
+with three ignored. App/widget all-target/all-feature clippy with `-D warnings`,
+workspace formatting, explicit vendored-source formatting, and diff whitespace
+checks passed. Tests cover shared repaint deadlines, avoiding an extra immediate
+wake after a scheduled frame, immediate output after idle, context isolation,
+color values/fallbacks, and theme preview/revert.
+
+No native GUI comparison or post-change CPU measurement was performed. The
+installed GUI and live daemon were not replaced or restarted. Remaining full-window
+rendering costs and animation-driven repaints have not been eliminated; measure
+the same visible terminal workload on the new build before claiming a CPU target.
+
+## IDE sidebar visibility (2026-09-30)
+
+IDE mode previously rendered both sidebars with `visible || ide_mode`, overriding
+visibility flags changed by toolbar buttons and shortcuts. Sidebar rendering now
+honors the saved flags in either mode; switching IDE mode still preserves those
+flags and widths. Hidden Info sidebars also stop requesting resource samples.
+
+The headless `ide_sidebar_toggles_reclaim_layout_space_and_restore_it` regression
+renders the actual sidebar panels, toggles each side off through the shortcut
+handlers shared by the buttons, verifies reclaimed center width, and toggles both
+back on. Native mouse interaction with the installed app has not been exercised;
+no app/daemon restart or installation was performed.
