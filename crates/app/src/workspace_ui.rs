@@ -2509,12 +2509,26 @@ fn paint_diff_split(
         scroll_key,
         frame_sync,
     );
-    for area in [&left, &right] {
-        if (area.state.offset.y - frame_sync).abs() > 0.5 {
-            *sync = area.state.offset.y;
-            break;
+    // Adopt the pane the pointer is over so sub-pixel input accumulates there
+    // and an inactive pane's clamp cannot override the active pane. With the
+    // pointer elsewhere (keyboard, divider drag), fall back to whichever pane
+    // moved further from the frame-start offset.
+    let pointer = ui.ctx().input(|input| input.pointer.hover_pos());
+    let over_left = pointer.is_some_and(|pos| left_rect.contains(pos));
+    let over_right = pointer.is_some_and(|pos| right_rect.contains(pos));
+    let left_offset = left.state.offset.y;
+    let right_offset = right.state.offset.y;
+    *sync = match (over_left, over_right) {
+        (true, false) => left_offset,
+        (false, true) => right_offset,
+        _ => {
+            if (left_offset - frame_sync).abs() >= (right_offset - frame_sync).abs() {
+                left_offset
+            } else {
+                right_offset
+            }
         }
-    }
+    };
     ui.allocate_rect(full, egui::Sense::hover());
     let response = ui.interact(
         gap_rect,
@@ -5039,5 +5053,154 @@ mod tests {
         assert_eq!(header_visible_count(three, count), 3);
         assert_eq!(header_visible_count(three - 1.0, count), 2);
         assert_eq!(header_visible_count(0.0, count), 0);
+    }
+
+    fn split_frame(
+        ctx: &egui::Context,
+        doc: &diff::DiffDocument,
+        sync: &mut f32,
+        events: Vec<egui::Event>,
+    ) -> Vec<(egui::Pos2, String)> {
+        let colors = DiffColors {
+            added: Color32::GREEN,
+            deleted: Color32::RED,
+            accent: Color32::BLUE,
+            text: Color32::WHITE,
+        };
+        let mut ratio = 0.5;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 300.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                paint_diff_document(ui, doc, true, colors, "sync-regression", &mut ratio, sync);
+            },
+        );
+        output.textures_delta.clear();
+        painted_text(&output.shapes)
+    }
+
+    fn wheel(delta_y: f32) -> egui::Event {
+        egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            phase: egui::TouchPhase::Move,
+            delta: egui::vec2(0.0, delta_y),
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    /// Every distinct painted text must appear at the same y in both panes, so
+    /// corresponding split rows stay aligned.
+    fn assert_split_rows_aligned(painted: &[(egui::Pos2, String)]) {
+        use std::collections::HashMap;
+        let mut ys: HashMap<&str, Vec<f32>> = HashMap::new();
+        for (pos, text) in painted {
+            ys.entry(text.as_str()).or_default().push(pos.y);
+        }
+        let mut compared = 0;
+        for (text, values) in &ys {
+            if values.len() == 2 {
+                compared += 1;
+                assert!(
+                    (values[0] - values[1]).abs() <= 1.0,
+                    "row {text:?} is misaligned across panes: {values:?}"
+                );
+            }
+        }
+        assert!(compared > 0, "no corresponding rows were painted");
+    }
+
+    #[test]
+    fn split_wheel_over_a_pane_moves_both_panes_in_step() {
+        let ctx = egui::Context::default();
+        let doc = long_doc();
+        let mut sync = 0.0;
+        let over_left = egui::pos2(150.0, 150.0);
+        split_frame(&ctx, &doc, &mut sync, vec![]);
+        split_frame(
+            &ctx,
+            &doc,
+            &mut sync,
+            vec![egui::Event::PointerMoved(over_left)],
+        );
+        for _ in 0..4 {
+            split_frame(
+                &ctx,
+                &doc,
+                &mut sync,
+                vec![egui::Event::PointerMoved(over_left), wheel(-60.0)],
+            );
+        }
+        assert!(
+            sync > 0.0,
+            "wheel over the left pane must move the shared offset: {sync}"
+        );
+        let painted = split_frame(
+            &ctx,
+            &doc,
+            &mut sync,
+            vec![egui::Event::PointerMoved(over_left)],
+        );
+        assert_split_rows_aligned(&painted);
+    }
+
+    #[test]
+    fn split_fractional_wheel_input_accumulates() {
+        let ctx = egui::Context::default();
+        let doc = long_doc();
+        let mut sync = 0.0;
+        let over_left = egui::pos2(150.0, 150.0);
+        split_frame(
+            &ctx,
+            &doc,
+            &mut sync,
+            vec![egui::Event::PointerMoved(over_left)],
+        );
+        for _ in 0..8 {
+            split_frame(
+                &ctx,
+                &doc,
+                &mut sync,
+                vec![egui::Event::PointerMoved(over_left), wheel(-0.2)],
+            );
+        }
+        assert!(
+            sync > 0.0,
+            "sub-half-point wheel input must accumulate instead of being dropped: {sync}"
+        );
+    }
+
+    #[test]
+    fn closing_a_diff_forgets_its_split_scroll() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        let tab = Tab::Diff {
+            cwd: dir.path().into(),
+            path: dir.path().join("file.rs"),
+            staged: false,
+        };
+        let key = tab.key();
+        app.layouts.insert(
+            "project".into(),
+            Workspace::from_layout(DockState::new(vec![tab])),
+        );
+        app.diff_split_scroll.insert(key.clone(), 42.0);
+        app.prune_diff_docs();
+        assert!(
+            app.diff_split_scroll.contains_key(&key),
+            "an open diff keeps its cached scroll"
+        );
+        app.layouts.clear();
+        app.prune_diff_docs();
+        assert!(
+            !app.diff_split_scroll.contains_key(&key),
+            "closing the diff tab must forget its cached split scroll"
+        );
     }
 }
