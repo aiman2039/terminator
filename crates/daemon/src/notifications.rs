@@ -1,3 +1,5 @@
+#[cfg(target_os = "macos")]
+use std::sync::Mutex;
 use std::{
     process::{Command, Stdio},
     sync::{
@@ -13,6 +15,25 @@ use terminator_core::{Paths, atomic_write};
 /// not burn measurable CPU; the dismiss poll only needs to run every 0.5 s.
 #[cfg(target_os = "macos")]
 const PUMP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1);
+
+/// How often the expensive dismiss poll may run. The run loop is serviced far
+/// more often so a click is handled promptly, but finding the waiting alert
+/// calls `deliveredNotifications`, a synchronous XPC into `usernoted`, so it is
+/// throttled instead of repeating on every pump. Without this, a notification
+/// that stays unanswered while a newer one queues behind it makes the main
+/// loop enumerate Notification Center ~10x/s forever.
+#[cfg(target_os = "macos")]
+const DISMISS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// When the dismiss poll last ran, so [`pump`] can throttle it.
+#[cfg(target_os = "macos")]
+static LAST_DISMISS_POLL: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// The generation whose waiting notification has already been removed. Once the
+/// alert is out of Notification Center there is nothing left to poll for, so
+/// the dismiss poll stops until a different alert starts waiting.
+#[cfg(target_os = "macos")]
+static DISMISSED: AtomicU64 = AtomicU64::new(0);
 
 /// Notifications that are shown but not yet acted on. A single long-lived
 /// worker owns every wait, so at most one waiter exists at a time. A newer
@@ -188,25 +209,29 @@ fn process_nonce() -> u64 {
 
 /// Remove only the waiting notification from Notification Center. Its
 /// disappearance makes the ObjC dismiss poll resolve an auto-dismiss, releasing
-/// the waiter so the worker can present the alert that superseded it.
+/// the waiter so the worker can present the alert that superseded it. Returns
+/// whether a matching delivered notification was found and removed.
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
-fn remove_active_notification() {
+fn remove_active_notification() -> bool {
     let generation = PRESENTING.load(Ordering::Relaxed);
     if generation == 0 {
-        return;
+        return false;
     }
     let marker = marker_for(generation);
     use objc2_foundation::NSUserNotificationCenter;
     let center = NSUserNotificationCenter::defaultUserNotificationCenter();
+    let mut removed = false;
     for notification in center.deliveredNotifications().iter() {
         let matches = notification
             .informativeText()
             .is_some_and(|text| text.to_string().ends_with(marker.as_str()));
         if matches {
             center.removeDeliveredNotification(&notification);
+            removed = true;
         }
     }
+    removed
 }
 
 fn launch_gui(paths: &Paths) {
@@ -272,6 +297,22 @@ pub fn waiting() -> bool {
     cfg!(target_os = "macos") && ACTIVE.load(Ordering::Relaxed) > 0
 }
 
+/// Whether the throttled dismiss poll may run now, updating its timestamp.
+#[cfg(target_os = "macos")]
+fn dismiss_poll_due() -> bool {
+    let now = std::time::Instant::now();
+    let mut last = LAST_DISMISS_POLL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    match *last {
+        Some(previous) if now.duration_since(previous) < DISMISS_POLL_INTERVAL => false,
+        _ => {
+            *last = Some(now);
+            true
+        }
+    }
+}
+
 /// Service the Cocoa run loop once. Cocoa delivers notification callbacks on
 /// the daemon main thread, so this must be called there while a waiter exists.
 /// A newer alert first removes the waiting notification so its waiter ends and
@@ -282,7 +323,13 @@ pub fn pump() {
         use core_foundation::{base::TCFType, runloop::CFRunLoop, string::CFString};
         if ACTIVE.load(Ordering::Relaxed) > 0 {
             if superseded() {
-                remove_active_notification();
+                let generation = PRESENTING.load(Ordering::Relaxed);
+                if DISMISSED.load(Ordering::Relaxed) != generation
+                    && dismiss_poll_due()
+                    && remove_active_notification()
+                {
+                    DISMISSED.store(generation, Ordering::Relaxed);
+                }
             }
             let mode = CFString::new("kCFRunLoopDefaultMode");
             let _ = CFRunLoop::run_in_mode(mode.as_concrete_TypeRef(), PUMP_INTERVAL, true);
@@ -314,6 +361,19 @@ mod tests {
             assert!(Instant::now() < deadline, "{message}");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dismiss_poll_is_throttled_between_pumps() {
+        *LAST_DISMISS_POLL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        assert!(dismiss_poll_due(), "the first dismiss poll runs");
+        assert!(
+            !dismiss_poll_due(),
+            "an immediate second poll is throttled to the interval"
+        );
     }
 
     #[test]
