@@ -23,7 +23,7 @@ pub fn run(o: &Options) -> Result<()> {
     h.rpc(json!({"SelectProject":{"project":id(&second)}}))?;
     save_prefs(
         &h,
-        &json!({"version":1,"all_projects":true,"attention_migrated":true,"tool":"Git","visible":true}),
+        &json!({"version":1,"attention_migrated":true,"tool":"Git","visible":true}),
     )?;
     let event = json!({"protocol_version":1,"event_id":"bell-waiting","terminal_session_id":id(&agent),"agent_invocation_id":"bell-agent","agent_kind":"custom","provider_session_id":"bell-provider","state":"waiting_permission","request_id":"bell-request","sequence":1,"summary":"Agent needs permission","details":"Isolated bell fixture","resume":null});
     h.rpc(json!({"Hook":event}))?;

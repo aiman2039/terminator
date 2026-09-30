@@ -232,20 +232,30 @@ pub fn sidebar_action(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Respons
     response.on_hover_text(tip)
 }
 
+/// Exact-size frameless button for toolbar icons with custom paint, such as
+/// tinted status glyphs. Shares the action size so it centers on their row.
+pub fn toolbar_button(ui: &mut egui::Ui) -> egui::Response {
+    exact_button(ui, egui::Vec2::splat(TOOLBAR_BUTTON))
+}
+
+/// Pixel-snapped centered icon paint, so adjacent icons share one center line.
+pub fn paint_centered_icon(ui: &egui::Ui, rect: egui::Rect, icon: &str, size: f32, tint: Color32) {
+    use egui::emath::GuiRounding;
+    let icon_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(size, size))
+        .round_to_pixels(ui.pixels_per_point());
+    egui::Image::new(crate::icons::source(icon))
+        .tint(tint)
+        .paint_at(ui, icon_rect);
+}
+
 /// Hover fill plus a pixel-snapped 14pt icon, so adjacent actions line up.
 fn paint_action_icon(ui: &egui::Ui, response: &egui::Response, icon: &str) {
-    use egui::emath::GuiRounding;
     let rect = response.rect;
     if response.hovered() || response.is_pointer_button_down_on() {
         ui.painter()
             .rect_filled(rect, 4.0, ui.visuals().widgets.hovered.bg_fill);
     }
-    let icon_rect =
-        egui::Rect::from_center_size(rect.center(), egui::vec2(TOOLBAR_ICON, TOOLBAR_ICON))
-            .round_to_pixels(ui.pixels_per_point());
-    egui::Image::new(crate::icons::source(icon))
-        .tint(ICON_COLOR)
-        .paint_at(ui, icon_rect);
+    paint_centered_icon(ui, rect, icon, TOOLBAR_ICON, ICON_COLOR);
 }
 
 /// Frameless icon button that opens a menu, matching `sidebar_action`.
@@ -284,12 +294,7 @@ pub fn selectable_icon(ui: &mut egui::Ui, icon: &str, tip: &str, selected: bool)
             },
         );
     }
-    egui::Image::new(crate::icons::source(icon))
-        .tint(ICON_COLOR)
-        .paint_at(
-            ui,
-            egui::Rect::from_center_size(response.rect.center(), egui::Vec2::splat(TOOLBAR_ICON)),
-        );
+    paint_centered_icon(ui, response.rect, icon, TOOLBAR_ICON, ICON_COLOR);
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, tip)
     });
@@ -638,10 +643,11 @@ pub fn session_row_spec(ui: &mut egui::Ui, spec: SessionRowSpec<'_>) -> egui::Re
     .inner
 }
 
-/// One turn per second, sampled at about 30 fps. egui keeps the soonest request,
-/// so several icons share one schedule. A clipped icon, a hidden sidebar, or a
-/// minimized window does not request another frame. An unfocused but visible
-/// window still animates. Keyboard, pointer, and terminal updates are separate.
+/// One turn per second. egui keeps the soonest request, so several icons share
+/// one schedule. A clipped icon, a hidden sidebar, a minimized window, or an
+/// unfocused window (`focused == Some(false)`) does not request another frame.
+/// Unknown focus still schedules. Keyboard, pointer, and terminal updates are
+/// separate.
 const STATUS_SPIN_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Paint an icon, optionally rotating it continuously (one turn per second).
@@ -651,9 +657,14 @@ pub fn paint_status_icon(ui: &egui::Ui, rect: egui::Rect, icon: &str, tint: Colo
     }
     let mut image = egui::Image::new(crate::icons::source(icon)).tint(tint);
     if spin {
-        let angle = (ui.input(|i| i.time) % 1.0) as f32 * std::f32::consts::TAU;
+        let (angle, animate) = ui.input(|input| {
+            let viewport = input.viewport();
+            let angle = (input.time % 1.0) as f32 * std::f32::consts::TAU;
+            let animate = viewport.focused != Some(false) && !viewport.minimized.unwrap_or(false);
+            (angle, animate)
+        });
         image = image.rotate(angle, egui::Vec2::splat(0.5));
-        if !ui.input(|input| input.viewport().minimized.unwrap_or(false)) {
+        if animate {
             ui.ctx().request_repaint_after(STATUS_SPIN_INTERVAL);
         }
     }
@@ -1654,6 +1665,40 @@ mod row_tests {
         assert!(
             hidden.is_none_or(|delay| delay > super::STATUS_SPIN_INTERVAL),
             "clipped spinner repaint delay {hidden:?}"
+        );
+    }
+
+    #[test]
+    fn unfocused_status_icon_does_not_schedule_spin() {
+        let ctx = egui::Context::default();
+        install(&ctx);
+        let icon = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(16.0, 16.0));
+        let run = |focused: Option<bool>| {
+            let mut input = egui::RawInput::default();
+            input
+                .viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .expect("root viewport")
+                .focused = focused;
+            let mut output = ctx.run_ui(input, |ui| {
+                paint_status_icon(ui, icon, "LoaderCircle", Color32::GREEN, true);
+            });
+            output.textures_delta.clear();
+            output
+                .viewport_output
+                .values()
+                .map(|viewport| viewport.repaint_delay)
+                .min()
+        };
+        for _ in 0..3 {
+            let _ = run(None);
+        }
+        let scheduled = run(None).expect("unknown focus still schedules a repaint");
+        assert!(!scheduled.is_zero() && scheduled <= super::STATUS_SPIN_INTERVAL);
+        let hidden = run(Some(false));
+        assert!(
+            hidden.is_none_or(|delay| delay > super::STATUS_SPIN_INTERVAL),
+            "unfocused spinner repaint delay {hidden:?}"
         );
     }
 

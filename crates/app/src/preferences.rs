@@ -458,7 +458,6 @@ pub struct UiPreferences {
     pub left_visible: bool,
     pub left_agents: bool,
     pub width: f32,
-    pub all_projects: bool,
     /// Selected Agents sidebar view.
     #[serde(default)]
     pub agents_tab: AgentsTab,
@@ -540,7 +539,6 @@ impl Default for UiPreferences {
             left_visible: true,
             left_agents: false,
             width: DEFAULT_SIDEBAR_WIDTH,
-            all_projects: false,
             agents_tab: AgentsTab::NeedsAttention,
             agents_search: String::new(),
             agents_filter: String::new(),
@@ -713,9 +711,6 @@ impl UiPreferences {
             &serde_json::to_vec_pretty(self)?,
         )?;
         Ok(())
-    }
-    pub fn includes_project(&self, owner: &str, selected: Option<&str>) -> bool {
-        self.all_projects || selected == Some(owner)
     }
     pub fn toggle(&mut self, tool: SidebarTool) {
         self.visible = self.tool != tool || !self.visible;
@@ -997,7 +992,6 @@ mod tests {
         p.setup_completed = true;
         p.left_agents = true;
         p.width = 410.0;
-        p.all_projects = true;
         p.typography_migrated = true;
         p.attention_migrated = true;
         p.hidden_projects.insert("hidden-project".into());

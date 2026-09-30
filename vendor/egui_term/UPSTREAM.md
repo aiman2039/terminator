@@ -178,6 +178,14 @@ The host caches its configured theme until foreground/background changes.
 Regressions cover shared frame deadlines, idle wakeups, separate contexts,
 indexed colors, custom colors, bright-foreground fallback, and theme sharing.
 
+## Cached default keymap (2026-09-30)
+
+`TerminalView::new` used to call `BindingsLayout::new()` on every frame. The
+default keymap now lives in a `OnceLock` behind `Arc`. `new` clones that
+`Arc`. `add_bindings` uses `Arc::make_mut`, so a custom layout copies once
+and does not mutate the shared default. `sync` is unchanged: an idle PTY
+still skips the viewport copy unless the grid is dirty.
+
 ## Terminal focus no longer steals from other widgets (2026-09-30)
 
 `focus_terminal` unconditionally called `request_focus` every frame a pane was

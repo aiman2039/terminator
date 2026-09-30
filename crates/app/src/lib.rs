@@ -527,6 +527,8 @@ pub struct App {
     explorer_search_last: Option<search::Query>,
     explorer_query: String,
     name_prompt: Option<workspace_ops::NamePrompt>,
+    /// The name field takes keyboard focus on its next paint, then this clears.
+    name_prompt_focus: bool,
     pending_delete: Option<PathBuf>,
     services: gui_services::Services,
     service_owner: gui_services::Owner,
@@ -718,6 +720,16 @@ pub struct App {
     rename_session: Option<(String, String)>,
     rename_focus: bool,
     rename_surface: RenameSurface,
+    /// The menu starts a rename after that row's field slot, so the first
+    /// frame has no field. This skips the "field was not drawn" check once.
+    rename_seen: bool,
+    /// `inline_rename` painted during this frame.
+    rename_painted: bool,
+    /// The field was expected and was not drawn. Terminals stay live until it
+    /// paints again.
+    rename_missed: bool,
+    /// Last painted rename field, so a hidden field can drop keyboard focus.
+    rename_field_id: Option<egui::Id>,
     editor_origins: HashMap<String, Vec<Tab>>,
     search: String,
     search_session: Option<String>,
@@ -870,6 +882,7 @@ impl App {
             explorer_search_last: None,
             explorer_query: String::new(),
             name_prompt: None,
+            name_prompt_focus: false,
             pending_delete: None,
             services: services.clone(),
             service_owner,
@@ -1021,6 +1034,10 @@ impl App {
             rename_session: None,
             rename_focus: false,
             rename_surface: RenameSurface::Sidebar,
+            rename_seen: false,
+            rename_painted: false,
+            rename_missed: false,
+            rename_field_id: None,
             editor_origins: HashMap::new(),
             search: String::new(),
             search_session: None,
@@ -2585,7 +2602,151 @@ impl App {
             self.rename_session = Some((sid.into(), session.label.clone()));
             self.rename_focus = true;
             self.rename_surface = surface;
+            self.rename_seen = false;
+            self.rename_painted = false;
+            self.rename_missed = false;
+            self.rename_field_id = None;
         }
+    }
+    /// Terminals, shortcuts, and browser panes stay live unless the rename
+    /// field is actually going to paint. The field strips keys only once it
+    /// paints, and the IDE strip paints first, so a visible field still has
+    /// to block input up front.
+    fn rename_blocks_input(&self) -> bool {
+        self.rename_session.is_some() && self.rename_field_can_show() && !self.rename_missed
+    }
+    fn rename_field_can_show(&self) -> bool {
+        let Some((sid, _)) = &self.rename_session else {
+            return false;
+        };
+        let sid = sid.clone();
+        match self.rename_surface {
+            // The workspace tab strip stays up over center panes. A tab that
+            // scrolls out of view is caught by `rename_missed`.
+            RenameSurface::Workspace => true,
+            RenameSurface::Pane => self.pane_rename_can_show(&sid),
+            RenameSurface::Sidebar => self.sidebar_rename_can_show(&sid),
+        }
+    }
+    fn pane_rename_can_show(&self, sid: &str) -> bool {
+        let Some(project_id) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == sid)
+            .map(|session| session.project_id.clone())
+        else {
+            return false;
+        };
+        if self.is_strip_session(&project_id, sid) {
+            return self.preferences.ide_mode && !self.preferences.ide_terminal_collapsed;
+        }
+        !self.center_covers_workspace()
+    }
+    fn center_covers_workspace(&self) -> bool {
+        self.settings_open
+            || self.player_open
+            || self.palette_open
+            || self.worktree_open
+            || self.worktree_draft.is_some()
+            || self.search_open
+    }
+    fn sidebar_rename_can_show(&self, sid: &str) -> bool {
+        let Some((project_id, label, live, kind)) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == sid)
+            .map(|session| {
+                (
+                    session.project_id.clone(),
+                    session.label.clone(),
+                    session.lifecycle.live(),
+                    session.kind.clone(),
+                )
+            })
+        else {
+            return false;
+        };
+        if live && kind != SessionKind::Editor {
+            return self.live_session_row_can_show(&project_id);
+        }
+        self.history_session_row_can_show(sid, &project_id, &label, live)
+    }
+    fn live_session_row_can_show(&self, project_id: &str) -> bool {
+        self.preferences.left_visible
+            && !self.preferences.left_agents
+            && self.preferences.expanded.get(project_id) != Some(&false)
+            && !self.preferences.hidden_projects.contains(project_id)
+    }
+    fn history_session_row_can_show(
+        &self,
+        session_id: &str,
+        project_id: &str,
+        label: &str,
+        live: bool,
+    ) -> bool {
+        if !self.preferences.visible || self.preferences.tool != SidebarTool::History {
+            return false;
+        }
+        if live || !self.state.session_has_resume(session_id) {
+            return false;
+        }
+        if self.preferences.history_expanded.get(project_id) == Some(&false) {
+            return false;
+        }
+        let query = self.preferences.history_filter.trim().to_lowercase();
+        if query.is_empty() {
+            return true;
+        }
+        let project_name = self
+            .state
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .map(|project| project.name.to_lowercase())
+            .unwrap_or_default();
+        project_name.contains(&query) || label.to_lowercase().contains(&query)
+    }
+    /// A hidden field must not keep egui focus, or the terminal will not take
+    /// keys. The draft stays; the next paint focuses the field instead of
+    /// treating the gap as a blur commit.
+    fn suspend_hidden_rename(&mut self, ctx: &egui::Context) {
+        if self.rename_session.is_none() {
+            self.rename_seen = false;
+            self.rename_painted = false;
+            self.rename_missed = false;
+            self.rename_field_id = None;
+            return;
+        }
+        if self.rename_field_can_show() {
+            return;
+        }
+        self.rename_missed = false;
+        if let Some(id) = self.rename_field_id.take() {
+            ctx.memory_mut(|memory| memory.surrender_focus(id));
+        }
+        self.rename_focus = true;
+    }
+    fn note_rename_frame(&mut self, ctx: &egui::Context) {
+        if self.rename_session.is_none() {
+            return;
+        }
+        if !self.rename_seen {
+            self.rename_seen = true;
+            self.rename_painted = false;
+            return;
+        }
+        if self.rename_painted {
+            self.rename_missed = false;
+        } else if self.rename_field_can_show() {
+            self.rename_missed = true;
+            if let Some(id) = self.rename_field_id.take() {
+                ctx.memory_mut(|memory| memory.surrender_focus(id));
+            }
+            self.rename_focus = true;
+        }
+        self.rename_painted = false;
     }
     fn finish_rename(&mut self, save: bool) {
         if let Some((sid, title)) = self.rename_session.take()
@@ -2699,7 +2860,7 @@ impl App {
             || self.notice_detail_modal_open()
             || self.open_path
             || self.add_project
-            || self.rename_session.is_some()
+            || self.rename_blocks_input()
     }
 
     fn sync_browsers(&mut self, frame: &eframe::Frame) {
@@ -2841,15 +3002,23 @@ impl App {
         }
         self.settings_open = false;
         self.player_open = false;
-        self.search_open = false;
+        self.close_scrollback_search();
         self.worktree_open = false;
         self.shortcut_capture = None;
+    }
+
+    /// Drop the scrollback-search pane. `search_session` only names the query;
+    /// leaving it set used to keep every main terminal disabled after the pane
+    /// was gone.
+    fn close_scrollback_search(&mut self) {
+        self.search_open = false;
+        self.search_session = None;
     }
 
     fn shortcut_allowed(&self, action: &str) -> bool {
         if self.command_dialog_open()
             || self.shortcut_capture.is_some()
-            || self.rename_session.is_some()
+            || self.rename_blocks_input()
             || self.picker_active
         {
             return false;
@@ -4056,7 +4225,7 @@ impl App {
 
     fn search_history_center(&mut self, ui: &mut egui::Ui) {
         let Some(sid) = self.search_session.clone() else {
-            self.search_open = false;
+            self.close_scrollback_search();
             return;
         };
         ui.set_min_size(ui.available_size());
@@ -4064,7 +4233,7 @@ impl App {
             ui.strong("Search session history");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if appearance::sidebar_action(ui, "X", "Close").clicked() {
-                    self.search_open = false;
+                    self.close_scrollback_search();
                 }
             });
         });
@@ -4841,6 +5010,7 @@ impl eframe::App for App {
             }
             self.run_shortcut(&ctx, action);
         }
+        self.suspend_hidden_rename(&ctx);
         if self.state_loaded {
             self.migrate_attention();
         }
@@ -5067,6 +5237,7 @@ impl eframe::App for App {
                     .inner_margin(2),
             )
             .show(ui, |ui| self.center_pane(ui));
+        self.note_rename_frame(&ctx);
         self.preview_appearance(&ctx);
         self.images
             .retain(|path, _| self.visible_images.contains(path));
@@ -6372,6 +6543,402 @@ mod navigation_tests {
     }
 
     #[test]
+    fn closing_scrollback_search_restores_terminal_input() {
+        let (mut app, _, _dir) = fixture();
+        app.active_session = Some("live".into());
+        app.search_active_scrollback();
+        assert!(app.search_open);
+        assert_eq!(app.search_session.as_deref(), Some("live"));
+        assert!(!app.terminal_input_enabled("live"));
+        assert!(app.strip_terminal_input_enabled("live"));
+
+        app.hide_center_overlay();
+        assert!(!app.search_open);
+        assert!(app.search_session.is_none());
+        assert!(app.terminal_input_enabled("live"));
+        assert!(app.strip_terminal_input_enabled("live"));
+
+        // The session id is not itself a lock. A close that only cleared
+        // `search_open` used to leave every main terminal disabled.
+        app.search_session = Some("live".into());
+        assert!(app.terminal_input_enabled("live"));
+        app.search_open = true;
+        assert!(!app.terminal_input_enabled("live"));
+        app.close_scrollback_search();
+        assert!(app.search_session.is_none());
+        assert!(app.terminal_input_enabled("live"));
+    }
+
+    fn prompt_name(app: &App) -> Option<&str> {
+        match &app.name_prompt {
+            Some(
+                workspace_ops::NamePrompt::File { name, .. }
+                | workspace_ops::NamePrompt::Folder { name, .. }
+                | workspace_ops::NamePrompt::Rename { name, .. },
+            ) => Some(name),
+            None => None,
+        }
+    }
+
+    fn paint_explorer(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let cwd = PathBuf::from("/a");
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(420.0, 320.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| app.explorer_toolbar(ui, &cwd),
+        );
+        output.textures_delta.clear();
+    }
+
+    fn key_press(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn assert_no_workspace_job(requests: &Receiver<Job>) {
+        while let Ok(job) = requests.try_recv() {
+            assert!(
+                !matches!(job, Job::Workspace(..)),
+                "explorer prompt must not submit"
+            );
+        }
+    }
+
+    #[test]
+    fn explorer_prompts_do_not_suspend_terminal_input() {
+        let (mut app, _, _dir) = fixture();
+        app.open_name_prompt(workspace_ops::NamePrompt::File {
+            dir: PathBuf::from("/a"),
+            name: "a.txt".into(),
+        });
+        app.pending_delete = Some(PathBuf::from("/a/old"));
+        assert!(app.terminal_input_enabled("shell"));
+        assert!(app.strip_terminal_input_enabled("shell"));
+        app.settings_open = true;
+        assert!(!app.terminal_input_enabled("shell"));
+        assert!(app.strip_terminal_input_enabled("shell"));
+        app.settings_open = false;
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.rename_session = Some(("shell".into(), "shell".into()));
+        assert!(!app.terminal_input_enabled("shell"));
+        assert!(!app.strip_terminal_input_enabled("shell"));
+    }
+
+    fn assert_rename_blocks(app: &App) {
+        assert!(app.rename_session.is_some());
+        assert!(!app.terminal_input_enabled("named"));
+        assert!(!app.strip_terminal_input_enabled("named"));
+        assert!(!app.shortcut_allowed("new_terminal"));
+        assert!(app.browser_covered());
+    }
+
+    fn assert_rename_draft_stays_live(app: &App) {
+        assert_eq!(
+            app.rename_session.as_ref().map(|(_, title)| title.as_str()),
+            Some("Draft")
+        );
+        assert!(app.terminal_input_enabled("named"));
+        assert!(app.strip_terminal_input_enabled("named"));
+        assert!(app.shortcut_allowed("new_terminal"));
+        assert!(!app.browser_covered());
+    }
+
+    #[test]
+    fn hidden_rename_field_releases_terminal_input() {
+        let (mut app, ctx, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state.sessions = vec![session_fixture("named", SessionKind::Shell)];
+        app.preferences.expanded.insert("a".into(), true);
+        app.begin_rename("named", RenameSurface::Sidebar);
+        app.rename_session.as_mut().unwrap().1 = "Draft".into();
+        assert_rename_blocks(&app);
+
+        app.preferences.left_visible = false;
+        app.suspend_hidden_rename(&ctx);
+        assert_rename_draft_stays_live(&app);
+        app.preferences.left_visible = true;
+        assert_rename_blocks(&app);
+
+        app.preferences.left_agents = true;
+        assert_rename_draft_stays_live(&app);
+        app.preferences.left_agents = false;
+        assert_rename_blocks(&app);
+
+        app.preferences.expanded.insert("a".into(), false);
+        assert_rename_draft_stays_live(&app);
+        app.preferences.expanded.insert("a".into(), true);
+        assert_rename_blocks(&app);
+
+        app.preferences.hidden_projects.insert("a".into());
+        assert_rename_draft_stays_live(&app);
+        app.preferences.hidden_projects.remove("a");
+        assert_rename_blocks(&app);
+
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.projects(ui));
+        output.textures_delta.clear();
+        assert!(app.rename_painted);
+        assert!(ctx.memory(|memory| memory.focused().is_some()));
+        app.preferences.left_visible = false;
+        app.suspend_hidden_rename(&ctx);
+        assert!(ctx.memory(|memory| memory.focused().is_none()));
+        assert_rename_draft_stays_live(&app);
+        app.preferences.left_visible = true;
+
+        app.begin_rename("named", RenameSurface::Pane);
+        app.rename_session.as_mut().unwrap().1 = "Draft".into();
+        assert_rename_blocks(&app);
+        let covers: [fn(&mut App); 5] = [
+            |app| app.settings_open = true,
+            |app| app.player_open = true,
+            |app| app.palette_open = true,
+            |app| app.worktree_open = true,
+            |app| app.search_open = true,
+        ];
+        for cover in covers {
+            cover(&mut app);
+            app.suspend_hidden_rename(&ctx);
+            assert_eq!(
+                app.rename_session.as_ref().map(|(_, title)| title.as_str()),
+                Some("Draft")
+            );
+            assert!(app.strip_terminal_input_enabled("named"));
+            app.settings_open = false;
+            app.player_open = false;
+            app.palette_open = false;
+            app.worktree_open = false;
+            app.search_open = false;
+            assert_rename_blocks(&app);
+        }
+        app.worktree_draft = Some(worktree_ui::WorktreeDraft {
+            source: "a".into(),
+            start: "HEAD".into(),
+            branch: "task".into(),
+            dest: "/tmp/task".into(),
+            open_terminal: true,
+        });
+        assert!(app.strip_terminal_input_enabled("named"));
+        app.worktree_draft = None;
+        assert_rename_blocks(&app);
+
+        app.preferences.ide_mode = true;
+        app.preferences.ide_strip_docks.0.insert(
+            "a".into(),
+            egui_dock::DockState::new(vec![Tab::Terminal("named".into())]),
+        );
+        app.settings_open = true;
+        assert!(!app.strip_terminal_input_enabled("named"));
+        app.preferences.ide_terminal_collapsed = true;
+        assert!(app.strip_terminal_input_enabled("named"));
+        app.settings_open = false;
+        app.preferences.ide_mode = false;
+        app.preferences.ide_terminal_collapsed = false;
+        app.preferences.ide_strip_docks.0.clear();
+
+        let mut ended = session_fixture("named", SessionKind::Shell);
+        ended.lifecycle = Lifecycle::Ended;
+        app.state.sessions = vec![ended];
+        app.state.agents = vec![Agent {
+            invocation_id: "agent-1".into(),
+            session_id: "named".into(),
+            kind: "codex".into(),
+            provider_session_id: Some("provider-1".into()),
+            state: AgentState::Stopped,
+            sequence: None,
+            updated: 0,
+            resume: Some(Resume {
+                program: "codex".into(),
+                args: vec!["resume".into(), "provider-1".into()],
+            }),
+            process: None,
+        }];
+        app.preferences.tool = SidebarTool::History;
+        app.preferences.visible = true;
+        app.begin_rename("named", RenameSurface::Sidebar);
+        app.rename_session.as_mut().unwrap().1 = "Draft".into();
+        assert_rename_blocks(&app);
+        app.preferences.visible = false;
+        assert_rename_draft_stays_live(&app);
+        app.preferences.visible = true;
+        assert_rename_blocks(&app);
+        app.preferences.tool = SidebarTool::Agents;
+        assert_rename_draft_stays_live(&app);
+        app.preferences.tool = SidebarTool::History;
+        assert_rename_blocks(&app);
+        app.preferences.history_expanded.insert("a".into(), false);
+        assert_rename_draft_stays_live(&app);
+        app.preferences.history_expanded.insert("a".into(), true);
+        assert_rename_blocks(&app);
+        app.preferences.history_filter = "zzz".into();
+        assert_rename_draft_stays_live(&app);
+        app.preferences.history_filter.clear();
+        assert_rename_blocks(&app);
+
+        app.state.sessions = vec![session_fixture("named", SessionKind::Shell)];
+        app.begin_rename("named", RenameSurface::Workspace);
+        app.rename_session.as_mut().unwrap().1 = "Draft".into();
+        assert_rename_blocks(&app);
+        app.note_rename_frame(&ctx);
+        assert_rename_blocks(&app);
+        app.note_rename_frame(&ctx);
+        assert_rename_draft_stays_live(&app);
+        while requests.try_recv().is_ok() {}
+        let rect = egui::Rect::from_min_size(egui::pos2(8.0, 8.0), egui::vec2(220.0, 24.0));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(260.0, 80.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.inline_rename(ui, "named", RenameSurface::Workspace, rect),
+        );
+        output.textures_delta.clear();
+        app.note_rename_frame(&ctx);
+        assert_rename_blocks(&app);
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn name_prompt_takes_keys_until_a_terminal_press() {
+        let (mut app, ctx, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.name_prompt = Some(workspace_ops::NamePrompt::File {
+            dir: PathBuf::from("/a"),
+            name: String::new(),
+        });
+        paint_explorer(&mut app, &ctx, vec![egui::Event::Text("nope".into())]);
+        assert_eq!(prompt_name(&app), Some(""));
+        assert_no_workspace_job(&requests);
+
+        app.open_name_prompt(workspace_ops::NamePrompt::File {
+            dir: PathBuf::from("/a"),
+            name: String::new(),
+        });
+        paint_explorer(&mut app, &ctx, vec![]);
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            Some(App::explorer_name_prompt_id())
+        );
+        paint_explorer(&mut app, &ctx, vec![egui::Event::Text("a.txt".into())]);
+        assert_eq!(prompt_name(&app), Some("a.txt"));
+        assert_no_workspace_job(&requests);
+
+        app.terminal_pressed(&ctx, "shell");
+        assert_eq!(app.active_session.as_deref(), Some("shell"));
+        assert_eq!(prompt_name(&app), Some("a.txt"));
+        assert!(!app.name_prompt_focus);
+        assert_ne!(
+            ctx.memory(|memory| memory.focused()),
+            Some(App::explorer_name_prompt_id())
+        );
+        paint_explorer(&mut app, &ctx, vec![egui::Event::Text("more".into())]);
+        assert_eq!(prompt_name(&app), Some("a.txt"));
+        assert_no_workspace_job(&requests);
+    }
+
+    #[test]
+    fn name_prompt_enter_submits_and_cancel_clears() {
+        let (mut app, ctx, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.open_name_prompt(workspace_ops::NamePrompt::File {
+            dir: PathBuf::from("/a"),
+            name: String::new(),
+        });
+        paint_explorer(&mut app, &ctx, vec![]);
+        paint_explorer(
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::Text("a.txt".into()),
+                key_press(egui::Key::Enter),
+            ],
+        );
+        assert!(app.name_prompt.is_none());
+        let job = requests.try_recv().expect("enter submits the name");
+        match job {
+            Job::Workspace(root, workspace_ops::Op::CreateFile(path)) => {
+                assert_eq!(root, PathBuf::from("/a"));
+                assert_eq!(path, PathBuf::from("/a/a.txt"));
+            }
+            _ => panic!("enter did not queue a file create"),
+        }
+
+        app.open_name_prompt(workspace_ops::NamePrompt::Folder {
+            dir: PathBuf::from("/a"),
+            name: "dir".into(),
+        });
+        paint_explorer(&mut app, &ctx, vec![]);
+        paint_explorer(&mut app, &ctx, vec![key_press(egui::Key::Tab)]);
+        paint_explorer(&mut app, &ctx, vec![key_press(egui::Key::Tab)]);
+        paint_explorer(&mut app, &ctx, vec![key_press(egui::Key::Space)]);
+        assert!(app.name_prompt.is_none());
+        assert_no_workspace_job(&requests);
+    }
+
+    #[test]
+    fn hidden_sidebar_keeps_explorer_prompts() {
+        let (mut app, ctx, _dir) = fixture();
+        app.name_prompt = Some(workspace_ops::NamePrompt::Rename {
+            from: PathBuf::from("/a/old"),
+            name: "kept".into(),
+        });
+        app.pending_delete = Some(PathBuf::from("/a/old"));
+        for tool in [
+            SidebarTool::Agents,
+            SidebarTool::History,
+            SidebarTool::Info,
+            SidebarTool::Git,
+        ] {
+            app.preferences.tool = tool;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(360.0, 480.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.sidebar(ui),
+            );
+            output.textures_delta.clear();
+            assert_eq!(prompt_name(&app), Some("kept"));
+            assert_eq!(app.pending_delete, Some(PathBuf::from("/a/old")));
+            assert!(app.terminal_input_enabled("shell"));
+        }
+        app.preferences.visible = false;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.workspace_sidebars(ui),
+        );
+        output.textures_delta.clear();
+        assert_eq!(prompt_name(&app), Some("kept"));
+        assert_eq!(app.pending_delete, Some(PathBuf::from("/a/old")));
+    }
+
+    #[test]
     fn hide_center_overlay_when_settings_dirty_sets_pending_close() {
         let (mut app, _, _dir) = fixture();
         app.open_settings();
@@ -7111,7 +7678,6 @@ mod navigation_tests {
         assert!(target("session-row:open-file").is_none());
         assert!(target("session-row:ended-other").is_none());
         app.preferences.tool = SidebarTool::History;
-        app.preferences.all_projects = false;
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.sidebar(ui));
         output.textures_delta.clear();
         assert!(target("session-row:ended-other").is_none());
@@ -9930,15 +10496,6 @@ mod navigation_tests {
             cwd_confirmed: true,
         });
         app.select_project("b".into());
-        assert!(
-            !app.preferences
-                .includes_project("a", app.selected.as_deref())
-        );
-        app.preferences.all_projects = true;
-        assert!(
-            app.preferences
-                .includes_project("a", app.selected.as_deref())
-        );
         app.go_session("hidden");
         assert_eq!(app.selected.as_deref(), Some("a"));
         assert_eq!(app.cwd(), Some(PathBuf::from("/b")));
@@ -9951,11 +10508,6 @@ mod navigation_tests {
         app.terminal_context.insert("a".into(), "hidden".into());
         app.active_session = None; // diff/editor focus retains the preceding shell.
         assert_eq!(app.cwd(), Some(PathBuf::from("/b")));
-        app.preferences.all_projects = false;
-        assert!(
-            app.preferences
-                .includes_project("a", app.selected.as_deref())
-        );
     }
 
     fn notice_fixture(id: &str, session: &str, state: AgentState, created: u64) -> Notification {
@@ -9998,10 +10550,9 @@ mod navigation_tests {
 
     #[test]
     #[cfg(feature = "test-support")]
-    fn inline_attention_preserves_input_but_out_of_scope_details_remain_modal() {
+    fn inline_attention_preserves_input_but_missing_session_details_remain_modal() {
         let (mut app, _, _dir) = fixture();
         app.preferences.left_agents = true;
-        app.preferences.all_projects = true;
         app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
         app.state.notifications = vec![notice_fixture(
             "wait",
@@ -10015,10 +10566,14 @@ mod navigation_tests {
         app.preferences.visible = false;
         assert!(app.notice_detail_modal_open());
         app.preferences.left_agents = true;
-        app.preferences.all_projects = false;
         app.selected = Some("different-project".into());
+        // The inbox spans all projects, so switching projects keeps inline detail.
+        assert!(!app.notice_detail_modal_open());
+        app.selected = None;
+        // Only a missing session drops the notice out of scope.
+        let sessions = std::mem::take(&mut app.state.sessions);
         assert!(app.notice_detail_modal_open());
-        app.preferences.all_projects = true;
+        app.state.sessions = sessions;
         app.state.notifications[0].snoozed_until = now() + 600;
         assert!(app.notice_detail_modal_open());
         app.state.notifications[0].snoozed_until = 0;
@@ -10035,7 +10590,6 @@ mod navigation_tests {
         let (mut app, ctx, _dir) = fixture();
         app.state.settings.notifications_side = true;
         app.preferences.visible = true;
-        app.preferences.all_projects = true;
         app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
         app.state.notifications = vec![notice_fixture(
             "wait",
@@ -10559,7 +11113,6 @@ mod navigation_tests {
         for width in [170.0, 220.0, 320.0] {
             let (mut app, ctx, _dir) = fixture();
             appearance::install(&ctx);
-            app.preferences.all_projects = true;
             app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
             app.state.agents = vec![Agent {
                 invocation_id: "agent".into(),
@@ -10651,10 +11204,9 @@ mod navigation_tests {
 
     #[test]
     #[cfg(feature = "test-support")]
-    fn attention_row_label_centers_on_action_icons() {
+    fn attention_row_glyphs_share_one_center_line() {
         let (mut app, ctx, _dir) = fixture();
         appearance::install(&ctx);
-        app.preferences.all_projects = true;
         app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
         app.state.agents = vec![Agent {
             invocation_id: "agent".into(),
@@ -10687,6 +11239,19 @@ mod navigation_tests {
         );
         output.textures_delta.clear();
         let action = agent_target(&ctx, "agent-go:live-shell").unwrap();
+        let status = agent_target(&ctx, "agent-status:live-shell").unwrap();
+        assert!(
+            (status.height() - action.height()).abs() < 1.0,
+            "status {} should match action height {}",
+            status.height(),
+            action.height()
+        );
+        assert!(
+            (status.center().y - action.center().y).abs() < 1.0,
+            "status center {} should match action center {}",
+            status.center().y,
+            action.center().y
+        );
         fn label_centers(out: &mut Vec<f32>, shape: &egui::Shape, needle: &str) {
             match shape {
                 egui::Shape::Vec(shapes) => {
@@ -10785,7 +11350,6 @@ mod navigation_tests {
     #[test]
     fn waiting_badge_matches_pending_notices_not_live_agents() {
         let (mut app, _, _dir) = fixture();
-        app.preferences.all_projects = true;
         app.selected = Some("a".into());
         app.state.sessions = vec![session_fixture("s", SessionKind::Shell)];
         app.state.agents = vec![Agent {
@@ -10823,10 +11387,9 @@ mod navigation_tests {
         app.state.notifications[0].snoozed_until = now() + 600;
         assert_eq!(app.waiting_notice_count(), 0);
         app.state.notifications[0].snoozed_until = 0;
-        app.preferences.all_projects = false;
+        // The inbox spans all projects: switching projects keeps the badge.
         app.selected = Some("b".into());
-        assert_eq!(app.waiting_notice_count(), 0);
-        app.preferences.all_projects = true;
+        assert_eq!(app.waiting_notice_count(), 1);
         app.state.notifications[0].resolved = true;
         assert_eq!(app.waiting_notice_count(), 0);
     }
@@ -10835,7 +11398,6 @@ mod navigation_tests {
     #[cfg(feature = "test-support")]
     fn resolved_waiting_notice_is_not_listed() {
         let (mut app, ctx, _dir) = fixture();
-        app.preferences.all_projects = true;
         app.state.sessions = vec![
             session_fixture("done", SessionKind::Shell),
             session_fixture("resolved", SessionKind::Shell),
@@ -10856,7 +11418,6 @@ mod navigation_tests {
     #[cfg(feature = "test-support")]
     fn agents_inbox_lists_terminal_notices() {
         let (mut app, ctx, _dir) = fixture();
-        app.preferences.all_projects = true;
         app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
         app.state.terminal_notices = vec![TerminalNotice {
             id: "tn".into(),
@@ -10875,7 +11436,6 @@ mod navigation_tests {
     #[cfg(feature = "test-support")]
     fn agents_inbox_lists_pending_notices_not_stopped_agents() {
         let (mut app, ctx, _dir) = fixture();
-        app.preferences.all_projects = true;
         app.state.sessions = vec![
             session_fixture("stopped-shell", SessionKind::Shell),
             session_fixture("live-shell", SessionKind::Shell),
@@ -10909,7 +11469,6 @@ mod navigation_tests {
     #[cfg(feature = "test-support")]
     fn agents_inbox_puts_waiting_above_completed() {
         let (mut app, ctx, _dir) = fixture();
-        app.preferences.all_projects = true;
         app.state.sessions = vec![
             session_fixture("done-shell", SessionKind::Shell),
             session_fixture("live-shell", SessionKind::Shell),
@@ -10928,7 +11487,6 @@ mod navigation_tests {
     #[cfg(feature = "test-support")]
     fn agents_inbox_go_focuses_session_and_dismiss_hides_card() {
         let (mut app, ctx, _dir) = fixture();
-        app.preferences.all_projects = true;
         app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
         app.state.notifications = vec![notice_fixture(
             "wait",
@@ -10969,7 +11527,6 @@ mod navigation_tests {
     #[test]
     fn status_menu_lists_pending_notices_in_inbox_order() {
         let (mut app, _ctx, _dir) = fixture();
-        app.preferences.all_projects = true;
         app.state.sessions = vec![
             session_fixture("done-shell", SessionKind::Shell),
             session_fixture("live-shell", SessionKind::Shell),
@@ -10989,7 +11546,6 @@ mod navigation_tests {
     #[test]
     fn status_menu_skips_settled_notices_and_caps_single_line_titles() {
         let (mut app, _ctx, _dir) = fixture();
-        app.preferences.all_projects = true;
         app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
         let mut long = notice_fixture("long", "live-shell", AgentState::WaitingInput, now());
         long.summary = "line one\nline two ".to_string() + &"word ".repeat(40);
@@ -11027,7 +11583,6 @@ mod navigation_tests {
     #[test]
     fn status_menu_pick_focuses_the_waiting_agent() {
         let (mut app, ctx, _dir) = fixture();
-        app.preferences.all_projects = true;
         app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
         app.state.notifications = vec![notice_fixture(
             "wait",
@@ -11063,7 +11618,6 @@ mod navigation_tests {
     #[test]
     fn attention_counts_share_waiting_and_unread_with_both_bells() {
         let (mut app, _ctx, _dir) = fixture();
-        app.preferences.all_projects = true;
         app.state.sessions = vec![
             session_fixture("one", SessionKind::Shell),
             session_fixture("two", SessionKind::Shell),
@@ -11138,7 +11692,6 @@ mod navigation_tests {
     #[test]
     fn reading_newest_unread_row_keeps_its_position() {
         let (mut app, _ctx, _dir) = fixture();
-        app.preferences.all_projects = true;
         app.state.sessions = vec![session_fixture("s", SessionKind::Shell)];
         app.state.notifications = vec![
             notice_fixture("old", "s", AgentState::WaitingInput, 1),
@@ -11157,7 +11710,6 @@ mod navigation_tests {
     #[test]
     fn unread_selection_survives_marking_read_without_touching_lifecycle() {
         let (mut app, _ctx, _dir) = fixture();
-        app.preferences.all_projects = true;
         app.state.sessions = vec![session_fixture("s", SessionKind::Shell)];
         app.state.agents = vec![Agent {
             invocation_id: "agent".into(),
@@ -11191,10 +11743,9 @@ mod navigation_tests {
         assert_eq!(app.unread_notices().first().unwrap().id, "n2");
         assert!(!app.unread_notices().iter().any(|n| n.id == "n1"));
         assert!(app.unread_notices().iter().any(|n| n.id == "n2"));
-        // Scope changes drop retained rows.
-        app.preferences.all_projects = false;
+        // Switching projects keeps retained rows: the inbox spans all projects.
         app.selected = Some("b".into());
-        assert!(app.unread_notices().is_empty());
+        assert!(app.unread_notices().iter().any(|n| n.id == "n2"));
     }
 
     #[test]
@@ -11202,7 +11753,6 @@ mod navigation_tests {
     fn all_live_groups_verified_agents_with_an_unverified_section() {
         use terminator_core::agents::{DetectedAgent, PresenceOutcome, ProcessIdentity};
         let (mut app, ctx, _dir) = fixture();
-        app.preferences.all_projects = true;
         app.preferences.agents_tab = AgentsTab::AllLive;
         let mut live_b = session_fixture("live-b", SessionKind::Shell);
         live_b.project_id = "b".into();
@@ -11323,7 +11873,6 @@ mod navigation_tests {
     #[cfg(feature = "test-support")]
     fn waiting_inbox() -> (App, egui::Context, tempfile::TempDir, mpsc::Receiver<Job>) {
         let (mut app, ctx, dir) = fixture();
-        app.preferences.all_projects = true;
         app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
         app.state.notifications = vec![notice_fixture(
             "wait",

@@ -76,10 +76,10 @@ impl Ping {
 }
 
 /// Repeat pushes from one agent run and state are dropped for a minute;
-/// any push also holds back every other push for a few seconds so a
+/// any push also holds back every other push for a minute so a
 /// multi-agent burst buzzes the phone once instead of once per agent.
 pub const PER_AGENT_WINDOW_SECS: u64 = 60;
-pub const GLOBAL_WINDOW_SECS: u64 = 15;
+pub const GLOBAL_WINDOW_SECS: u64 = 60;
 
 /// In-memory dispatch gate. The Agents inbox keeps every notification; this
 /// only decides which ones also buzz the phone.
@@ -182,12 +182,15 @@ mod tests {
         assert!(!gate.allow("a:waiting", 1059));
         // A different agent inside the global window: silent too.
         assert!(!gate.allow("b:waiting", 1001));
+        assert!(!gate.allow("b:waiting", 1059));
         // Global window elapsed, fresh key: push.
-        assert!(gate.allow("b:waiting", 1015));
+        assert!(gate.allow("b:waiting", 1060));
         // A state change from the same run is its own key once global clears.
-        assert!(gate.allow("a:completed", 1031));
-        // Per-agent window elapsed: push again.
-        assert!(gate.allow("a:waiting", 1100));
+        assert!(!gate.allow("a:completed", 1061));
+        assert!(gate.allow("a:completed", 1120));
+        // Per-agent window elapsed: push again once global clears.
+        assert!(!gate.allow("a:waiting", 1121));
+        assert!(gate.allow("a:waiting", 1180));
     }
 
     #[test]

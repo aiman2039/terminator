@@ -1,3 +1,5 @@
+use std::sync::{Arc, OnceLock};
+
 use crate::TerminalMode;
 use egui::{Key, Modifiers, PointerButton};
 
@@ -96,6 +98,13 @@ impl BindingsLayout {
         layout.add_bindings(platform_keyboard_bindings());
         layout.add_bindings(mouse_default_bindings());
         layout
+    }
+
+    /// Process-wide default keymap. [`crate::TerminalView::new`] clones this
+    /// `Arc` instead of rebuilding the binding list on every frame.
+    pub fn shared() -> Arc<Self> {
+        static SHARED: OnceLock<Arc<BindingsLayout>> = OnceLock::new();
+        Arc::clone(SHARED.get_or_init(|| Arc::new(Self::new())))
     }
 
     pub fn add_bindings(&mut self, bindings: Vec<(Binding<InputKind>, BindingAction)>) {
@@ -343,10 +352,44 @@ fn mouse_default_bindings() -> Vec<(Binding<InputKind>, BindingAction)> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{BindingAction, BindingsLayout, InputKind, KeyboardBinding};
     use crate::bindings::MouseBinding;
     use crate::TerminalMode;
     use egui::{Key, Modifiers, PointerButton};
+
+    #[test]
+    fn shared_default_layout_is_one_allocation() {
+        let first = BindingsLayout::shared();
+        let second = BindingsLayout::shared();
+        assert!(Arc::ptr_eq(&first, &second));
+        let before = first.layout.len();
+        let mut custom = Arc::clone(&first);
+        let extra = generate_bindings!(
+            KeyboardBinding;
+            C, Modifiers::SHIFT | Modifiers::ALT; BindingAction::Copy;
+        );
+        Arc::make_mut(&mut custom).add_bindings(extra);
+        assert!(!Arc::ptr_eq(&first, &custom));
+        assert_eq!(first.layout.len(), before);
+        assert_eq!(
+            first.get_action(
+                InputKind::KeyCode(Key::C),
+                Modifiers::SHIFT | Modifiers::ALT,
+                TerminalMode::empty(),
+            ),
+            BindingAction::Ignore
+        );
+        assert_eq!(
+            custom.get_action(
+                InputKind::KeyCode(Key::C),
+                Modifiers::SHIFT | Modifiers::ALT,
+                TerminalMode::empty(),
+            ),
+            BindingAction::Copy
+        );
+    }
 
     #[test]
     fn add_new_custom_keyboard_binding() {

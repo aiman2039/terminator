@@ -347,7 +347,7 @@ impl App {
                     .copy_text(workspace_ops::relative_display(&root, path));
             }
             ExplorerLocal::Rename => {
-                self.name_prompt = Some(workspace_ops::NamePrompt::Rename {
+                self.open_name_prompt(workspace_ops::NamePrompt::Rename {
                     from: path.into(),
                     name: path
                         .file_name()
@@ -451,13 +451,13 @@ impl App {
                     self.explorer_search_last = None;
                 }
                 if new_file.clicked() {
-                    self.name_prompt = Some(workspace_ops::NamePrompt::File {
+                    self.open_name_prompt(workspace_ops::NamePrompt::File {
                         dir: cwd.clone(),
                         name: String::new(),
                     });
                 }
                 if new_folder.clicked() {
-                    self.name_prompt = Some(workspace_ops::NamePrompt::Folder {
+                    self.open_name_prompt(workspace_ops::NamePrompt::Folder {
                         dir: cwd.clone(),
                         name: String::new(),
                     });
@@ -665,6 +665,15 @@ impl App {
         }
     }
 
+    pub(super) fn explorer_name_prompt_id() -> egui::Id {
+        egui::Id::new("explorer-name-prompt")
+    }
+
+    pub(super) fn open_name_prompt(&mut self, prompt: workspace_ops::NamePrompt) {
+        self.name_prompt = Some(prompt);
+        self.name_prompt_focus = true;
+    }
+
     fn name_prompt_bar(&mut self, ui: &mut egui::Ui) {
         let Some(prompt) = self.name_prompt.clone() else {
             return;
@@ -685,9 +694,14 @@ impl App {
             ui.label(title);
             let field = ui.add(
                 egui::TextEdit::singleline(&mut name)
+                    .id(Self::explorer_name_prompt_id())
                     .hint_text("Name")
                     .desired_width(140.0),
             );
+            if self.name_prompt_focus {
+                field.request_focus();
+                self.name_prompt_focus = false;
+            }
             submit = ui.button("Save").clicked()
                 || (field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)));
             cancel = ui.button("Cancel").clicked();
@@ -1288,14 +1302,14 @@ impl App {
                     let folder_path = entry.path.clone();
                     appearance::context_menu(&folder, |ui| {
                         if appearance::menu_item(ui, "New file", "File", "").clicked() {
-                            self.name_prompt = Some(workspace_ops::NamePrompt::File {
+                            self.open_name_prompt(workspace_ops::NamePrompt::File {
                                 dir: folder_path.clone(),
                                 name: String::new(),
                             });
                             ui.close();
                         }
                         if appearance::menu_item(ui, "New folder", "Folder", "").clicked() {
-                            self.name_prompt = Some(workspace_ops::NamePrompt::Folder {
+                            self.open_name_prompt(workspace_ops::NamePrompt::Folder {
                                 dir: folder_path.clone(),
                                 name: String::new(),
                             });
@@ -1371,9 +1385,30 @@ impl App {
                         || notice.dismissed
                         || notice.resolved
                         || notice.snoozed_until > now()
-                        || !self.notice_in_scope(notice, self.selected.as_deref())
+                        || !self.notice_in_scope(notice)
                 })
         })
+    }
+
+    /// Brand for a historical notice. Terminal chrome hides the hook brand
+    /// once presence verifies the agent exited, but inbox cards still name
+    /// the agent that raised the event.
+    pub(crate) fn notice_history_brand(
+        &self,
+        notice: &Notification,
+    ) -> Option<(&'static str, String)> {
+        self.state
+            .agents
+            .iter()
+            .find(|agent| {
+                agent.session_id == notice.session_id && agent.invocation_id == notice.invocation_id
+            })
+            .map(|agent| {
+                (
+                    terminator_core::agents::icon_key(&agent.kind),
+                    terminator_core::agents::display_name(&agent.kind).to_string(),
+                )
+            })
     }
 
     pub(super) fn agents_view(&mut self, ui: &mut egui::Ui) {
@@ -1416,7 +1451,6 @@ impl App {
 
     /// The existing inbox: pending notifications plus terminal notices.
     fn agents_needs_attention(&mut self, ui: &mut egui::Ui) {
-        ui.checkbox(&mut self.preferences.all_projects, "All projects");
         let notices = self.pending_notices();
         let terminal_notices: Vec<_> = self
             .state
@@ -1424,23 +1458,15 @@ impl App {
             .iter()
             .filter(|notice| {
                 !notice.dismissed
-                    && self.state.sessions.iter().any(|session| {
-                        session.id == notice.session_id
-                            && self
-                                .preferences
-                                .includes_project(&session.project_id, self.selected.as_deref())
-                    })
+                    && self
+                        .state
+                        .sessions
+                        .iter()
+                        .any(|session| session.id == notice.session_id)
             })
             .rev()
             .cloned()
             .collect();
-        let waiting = self.waiting_notice_count();
-        if waiting > 0 {
-            ui.label(
-                RichText::new(format!("{waiting} waiting for action"))
-                    .color(appearance::color(&self.theme.status_waiting)),
-            );
-        }
         appearance::sidebar_scroll("agents").show(ui, |ui| {
             if notices.is_empty() && terminal_notices.is_empty() {
                 self.agents_empty(ui);
@@ -1461,6 +1487,15 @@ impl App {
                     .any(|n| self.detail.as_ref() == Some(&n.id));
                 let selected = self.active_session.as_ref() == Some(&notice.session_id);
                 let presented = self.present_session(&notice.session_id);
+                let history = self.notice_history_brand(notice);
+                let brand_icon = history
+                    .as_ref()
+                    .map(|(icon, _)| *icon)
+                    .or(presented.brand_icon);
+                let history_label = history.map(|(_, label)| label);
+                let brand_label = history_label
+                    .as_deref()
+                    .or(presented.brand_label.as_deref());
                 let action = attention_card(
                     ui,
                     AttentionCard {
@@ -1469,8 +1504,8 @@ impl App {
                         session: session.as_ref(),
                         selected,
                         highlight,
-                        brand_icon: presented.brand_icon,
-                        brand_label: presented.brand_label.as_deref(),
+                        brand_icon,
+                        brand_label,
                         show_read: false,
                         group_extra: &group.notices[1..],
                     },
@@ -1521,7 +1556,6 @@ impl App {
     }
 
     pub(super) fn unread_notices(&self) -> Vec<Notification> {
-        let selected = self.selected.as_deref();
         let mut notices: Vec<_> = self
             .state
             .notifications
@@ -1530,7 +1564,7 @@ impl App {
                 !notice.dismissed
                     && !notice.resolved
                     && notice.snoozed_until <= now()
-                    && self.notice_in_scope(notice, selected)
+                    && self.notice_in_scope(notice)
                     && (!notice.read || self.unread_selected.as_deref() == Some(notice.id.as_str()))
             })
             .cloned()
@@ -1542,12 +1576,6 @@ impl App {
     /// Read-state inbox. Marking read never resolves, dismisses, or changes
     /// lifecycle; the selected row stays until selection or filter changes.
     fn agents_unread(&mut self, ui: &mut egui::Ui) {
-        if ui
-            .checkbox(&mut self.preferences.all_projects, "All projects")
-            .changed()
-        {
-            self.unread_selected = None;
-        }
         let notices = self.unread_notices();
         appearance::sidebar_scroll("agents-unread").show(ui, |ui| {
             if notices.is_empty() {
@@ -1570,6 +1598,15 @@ impl App {
                 });
                 let selected = self.active_session.as_ref() == Some(&notice.session_id);
                 let presented = self.present_session(&notice.session_id);
+                let history = self.notice_history_brand(notice);
+                let brand_icon = history
+                    .as_ref()
+                    .map(|(icon, _)| *icon)
+                    .or(presented.brand_icon);
+                let history_label = history.map(|(_, label)| label);
+                let brand_label = history_label
+                    .as_deref()
+                    .or(presented.brand_label.as_deref());
                 let action = attention_card(
                     ui,
                     AttentionCard {
@@ -1578,8 +1615,8 @@ impl App {
                         session: session.as_ref(),
                         selected,
                         highlight,
-                        brand_icon: presented.brand_icon,
-                        brand_label: presented.brand_label.as_deref(),
+                        brand_icon,
+                        brand_label,
                         show_read: true,
                         group_extra: &group.notices[1..],
                     },
@@ -1949,7 +1986,6 @@ impl App {
             .collect()
     }
     fn pending_notices(&self) -> Vec<Notification> {
-        let selected = self.selected.as_deref();
         let mut notices: Vec<_> = self
             .state
             .notifications
@@ -1958,7 +1994,7 @@ impl App {
                 !notice.dismissed
                     && !notice.resolved
                     && notice.snoozed_until <= now()
-                    && self.notice_in_scope(notice, selected)
+                    && self.notice_in_scope(notice)
             })
             .cloned()
             .collect();
@@ -1971,13 +2007,13 @@ impl App {
         });
         notices
     }
-    fn notice_in_scope(&self, notice: &Notification, selected: Option<&str>) -> bool {
-        self.state.sessions.iter().any(|session| {
-            session.id == notice.session_id
-                && self
-                    .preferences
-                    .includes_project(&session.project_id, selected)
-        })
+    /// A notice is in scope while its session exists. The inbox always
+    /// spans all projects; there is no per-project filter.
+    fn notice_in_scope(&self, notice: &Notification) -> bool {
+        self.state
+            .sessions
+            .iter()
+            .any(|session| session.id == notice.session_id)
     }
     /// One row acts as one unit: navigation needs a single target, while
     /// read/snooze/dismiss apply to every notice folded into the row.
@@ -3364,22 +3400,23 @@ fn notice_rank(state: AgentState) -> u8 {
     }
 }
 
-/// One inbox row: every pending notice from a single agent run. Focus
+/// One inbox row: every pending notice from a single session. Focus
 /// dismissal already clears the whole session at once, so the row acts as
 /// one unit while the inbox keeps each underlying notice.
 struct NoticeGroup {
     notices: Vec<Notification>,
 }
 
-/// Groups by agent run, preserving input order; the first notice of each
+/// Groups by session, preserving input order; the first notice of each
 /// group is its representative. Callers pass urgency/newest-sorted input.
 fn group_notices(notices: Vec<Notification>) -> Vec<NoticeGroup> {
     let mut groups: Vec<NoticeGroup> = Vec::new();
     for notice in notices {
         if let Some(group) = groups.iter_mut().find(|group| {
-            group.notices.first().is_some_and(|first| {
-                first.session_id == notice.session_id && first.invocation_id == notice.invocation_id
-            })
+            group
+                .notices
+                .first()
+                .is_some_and(|first| first.session_id == notice.session_id)
         }) {
             group.notices.push(notice);
         } else {
@@ -3443,21 +3480,15 @@ fn attention_status_glyph(
     theme: &AppearanceConfig,
 ) -> egui::Response {
     let tint = state_color(state, theme);
-    let response = ui
-        .add_sized(
-            [ATTENTION_ACTION_SIZE, ATTENTION_ACTION_SIZE],
-            egui::Button::image(
-                egui::Image::new(crate::icons::source(attention_status_icon(state)))
-                    .tint(tint)
-                    .fit_to_exact_size(egui::vec2(14.0, 14.0)),
-            )
-            .frame(false),
-        )
-        .on_hover_ui(|ui| {
-            ui.set_max_width(240.0);
-            ui.colored_label(tint, state.label());
-            ui.label(attention_status_detail(state));
-        });
+    // An exact button, not `Button::image`: the button minimum follows
+    // `interact_size` and inflated this glyph past the 22px row, pushing its
+    // center below the label and action icons.
+    let response = appearance::toolbar_button(ui).on_hover_ui(|ui| {
+        ui.set_max_width(240.0);
+        ui.colored_label(tint, state.label());
+        ui.label(attention_status_detail(state));
+    });
+    appearance::paint_centered_icon(ui, response.rect, attention_status_icon(state), 14.0, tint);
     response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, state.label()));
     response
@@ -3474,13 +3505,12 @@ fn attention_title(
 ) -> egui::Response {
     let spacing = ui.spacing().item_spacing.x;
     let brand_response = brand.map(|(icon, label)| {
-        ui.add_sized(
-            [18.0, ATTENTION_ACTION_SIZE],
-            egui::Image::new(crate::icons::source(icon))
-                .fit_to_exact_size(egui::vec2(14.0, 14.0))
-                .sense(egui::Sense::hover()),
-        )
-        .on_hover_text(label)
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2(18.0, ATTENTION_ACTION_SIZE),
+            egui::Sense::hover(),
+        );
+        appearance::paint_centered_icon(ui, rect, icon, 14.0, Color32::WHITE);
+        response.on_hover_text(label)
     });
     let icon = attention_status_glyph(ui, notice.state, theme);
     #[cfg(feature = "test-support")]
@@ -3662,7 +3692,7 @@ mod tests {
     }
 
     #[test]
-    fn inbox_rows_fold_notices_from_the_same_agent_run() {
+    fn inbox_rows_fold_notices_per_session() {
         fn notice(id: &str, session: &str, invocation: &str, created: u64) -> Notification {
             Notification {
                 id: id.into(),
@@ -3685,13 +3715,13 @@ mod tests {
             notice("n3", "s", "b", 1),
             notice("n4", "t", "a", 0),
         ]);
-        assert_eq!(groups.len(), 3);
-        assert_eq!(groups[0].notices.len(), 2);
+        // Repeated agent runs in one session fold into a single row.
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].notices.len(), 3);
         assert_eq!(groups[0].notices[0].id, "n1");
         assert_eq!(groups[0].notices[1].id, "n2");
-        assert_eq!(groups[1].notices[0].id, "n3");
-        // The same invocation id in another session is a different run.
-        assert_eq!(groups[2].notices[0].id, "n4");
+        assert_eq!(groups[0].notices[2].id, "n3");
+        assert_eq!(groups[1].notices[0].id, "n4");
         assert!(group_notices(vec![]).is_empty());
     }
 

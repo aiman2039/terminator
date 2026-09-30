@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use alacritty_terminal::index::Line;
 use alacritty_terminal::index::Point as TerminalGridPoint;
 use alacritty_terminal::term::cell;
@@ -57,7 +59,7 @@ pub struct TerminalView<'a> {
     font: TerminalFont,
     theme: TerminalTheme,
     external_links: bool,
-    bindings_layout: BindingsLayout,
+    bindings_layout: Arc<BindingsLayout>,
     find: Option<FindPaint>,
 }
 
@@ -95,7 +97,7 @@ impl<'a> TerminalView<'a> {
             font: TerminalFont::default(),
             theme: TerminalTheme::default(),
             external_links: false,
-            bindings_layout: BindingsLayout::new(),
+            bindings_layout: BindingsLayout::shared(),
             find: None,
         }
     }
@@ -138,7 +140,7 @@ impl<'a> TerminalView<'a> {
 
     #[inline]
     pub fn add_bindings(mut self, bindings: Vec<(Binding<InputKind>, BindingAction)>) -> Self {
-        self.bindings_layout.add_bindings(bindings);
+        Arc::make_mut(&mut self.bindings_layout).add_bindings(bindings);
         self
     }
 

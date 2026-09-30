@@ -239,6 +239,9 @@ pub fn show(ui: &mut egui::Ui, model: &Model, toggles: &mut Toggles, theme: &App
                         value: text,
                         label: secondary,
                     };
+                    // One shared value column: without it each bar hugs its
+                    // own value and the bars scatter across the panel.
+                    let value_width = meter_value_width(ui, system);
                     meter_row(
                         ui,
                         "cpu",
@@ -246,6 +249,7 @@ pub fn show(ui: &mut egui::Ui, model: &Model, toggles: &mut Toggles, theme: &App
                         system.cpu_fraction,
                         meter,
                         SYSTEM_CPU,
+                        value_width,
                     );
                     meter_row(
                         ui,
@@ -254,6 +258,7 @@ pub fn show(ui: &mut egui::Ui, model: &Model, toggles: &mut Toggles, theme: &App
                         system.memory_fraction,
                         meter,
                         SYSTEM_MEMORY,
+                        value_width,
                     );
                     let pressure_color = pressure_color(system.pressure_level, theme, text);
                     meter_row(
@@ -267,8 +272,17 @@ pub fn show(ui: &mut egui::Ui, model: &Model, toggles: &mut Toggles, theme: &App
                             label: secondary,
                         },
                         PRESSURE,
+                        value_width,
                     );
-                    meter_row(ui, "load", &system.load, system.load_fraction, meter, LOAD);
+                    meter_row(
+                        ui,
+                        "load",
+                        &system.load,
+                        system.load_fraction,
+                        meter,
+                        LOAD,
+                        value_width,
+                    );
                 } else {
                     value_row(ui, "cpu", DASH, text, secondary, SYSTEM_CPU);
                     value_row(ui, "memory", DASH, text, secondary, SYSTEM_MEMORY);
@@ -377,6 +391,31 @@ struct MeterColors {
     label: Color32,
 }
 
+/// Widest system value, so every meter row reserves the same value cell and
+/// the bars form one column. Clamped to leave room for the bar and label.
+fn meter_value_width(ui: &egui::Ui, system: &SystemRows) -> f32 {
+    let measured = [
+        system.cpu.as_str(),
+        system.memory.as_str(),
+        system.pressure.as_str(),
+        system.load.as_str(),
+    ]
+    .iter()
+    .map(|value| {
+        ui.painter()
+            .layout_no_wrap(
+                (*value).into(),
+                egui::FontId::proportional(12.0),
+                Color32::WHITE,
+            )
+            .size()
+            .x
+    })
+    .fold(0.0, f32::max);
+    let max_value = (ui.available_width() - 56.0 - 12.0 - 64.0).max(48.0);
+    measured.min(max_value).max(28.0)
+}
+
 fn meter_row(
     ui: &mut egui::Ui,
     label: &str,
@@ -384,16 +423,32 @@ fn meter_row(
     fraction: f32,
     colors: MeterColors,
     target: &str,
+    value_width: f32,
 ) {
     ui.horizontal(|ui| {
         ui.set_min_height(18.0);
         ui.label(RichText::new(label).color(colors.label).size(12.0));
         let response = ui
             .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let response = ui.add(
-                    egui::Label::new(RichText::new(value).color(colors.value).size(12.0))
-                        .truncate(),
-                );
+                let response = ui
+                    .allocate_ui_with_layout(
+                        egui::vec2(value_width, 18.0),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            let response = ui.add(
+                                egui::Label::new(
+                                    RichText::new(value).color(colors.value).size(12.0),
+                                )
+                                .truncate(),
+                            );
+                            // The scope only advances by used space, so claim
+                            // the rest of the cell to hold the column width.
+                            let rest = (value_width - response.rect.width()).max(0.0);
+                            ui.allocate_space(egui::vec2(rest, 18.0));
+                            response
+                        },
+                    )
+                    .inner;
                 let bar = meter_bar(ui, fraction, colors.bar);
                 mark_bar(ui, target, bar);
                 response

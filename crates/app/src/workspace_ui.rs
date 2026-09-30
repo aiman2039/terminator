@@ -340,6 +340,25 @@ fn should_replace_hover_popup(
     ready || other_popup
 }
 
+/// One wake for the remaining hover delay. An open popup for this key needs
+/// no further frame; pointer motion already repaints when the pointer leaves.
+fn hover_popup_wake(
+    hover: &Option<(String, Instant)>,
+    key: &str,
+    popup_key: Option<&str>,
+    delay: Duration,
+) -> Option<Duration> {
+    if popup_key == Some(key) {
+        return None;
+    }
+    let elapsed = hover
+        .as_ref()
+        .filter(|(stored, _)| stored == key)
+        .map(|(_, since)| since.elapsed())
+        .unwrap_or(Duration::ZERO);
+    Some(delay.saturating_sub(elapsed))
+}
+
 /// Case-insensitive substring filter for the saved-scrollback viewer.
 /// An empty query returns every line.
 pub fn filter_history_lines<'a>(text: &'a str, query: &str) -> Vec<&'a str> {
@@ -374,12 +393,9 @@ impl App {
             && (self.close_session.is_none() || self.idle_close_pending.is_some())
             && !self.editor_close_sessions.contains(sid)
             && (self.close_workspace.is_none() || self.idle_close_pending.is_some())
-            && self.rename_session.is_none()
-            && self.name_prompt.is_none()
-            && self.pending_delete.is_none()
+            && !self.rename_blocks_input()
             && !self.open_path
             && !self.search_open
-            && self.search_session.is_none()
     }
 
     /// Terminals docked in the IDE strip stay interactive while a center-only
@@ -392,11 +408,23 @@ impl App {
             && (self.close_session.is_none() || self.idle_close_pending.is_some())
             && !self.editor_close_sessions.contains(sid)
             && (self.close_workspace.is_none() || self.idle_close_pending.is_some())
-            && self.rename_session.is_none()
-            && self.name_prompt.is_none()
-            && self.pending_delete.is_none()
+            && !self.rename_blocks_input()
             && !self.open_path
             && self.worktree_remove.is_none()
+    }
+
+    /// A pointer press on a terminal. Drops the Explorer name field's keyboard
+    /// focus without saving or cancelling that prompt.
+    pub(super) fn terminal_pressed(&mut self, ctx: &egui::Context, sid: &str) {
+        self.name_prompt_focus = false;
+        ctx.memory_mut(|memory| memory.surrender_focus(Self::explorer_name_prompt_id()));
+        if let Some(preview) = self.markdown.entries.get_mut(sid) {
+            preview.editor_focused = true;
+        }
+        self.active_session = Some(sid.to_owned());
+        self.send(Request::Focus {
+            session: sid.to_owned(),
+        });
     }
 
     fn terminal_status_color(&self, session: &Session) -> Option<egui::Color32> {
@@ -1823,6 +1851,8 @@ impl App {
         );
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "rename-input", response.rect);
+        self.rename_painted = true;
+        self.rename_field_id = Some(response.id);
         if starting {
             response.request_focus();
             self.rename_focus = false;
@@ -3982,13 +4012,7 @@ impl Viewer<'_> {
             }
         }
         if response.contains_pointer() && ui.input(|i| i.pointer.any_pressed()) {
-            if let Some(preview) = self.app.markdown.entries.get_mut(sid) {
-                preview.editor_focused = true;
-            }
-            self.app.active_session = Some(sid.clone());
-            self.app.send(Request::Focus {
-                session: sid.clone(),
-            });
+            self.app.terminal_pressed(ui.ctx(), sid);
         }
         let dragging = ui.input(|i| i.pointer.any_down());
         let (mouse_reporting, target) = {
@@ -4066,7 +4090,17 @@ impl Viewer<'_> {
                         rect,
                     });
                 }
-                ui.ctx().request_repaint_after(Duration::from_millis(50));
+                if let Some(wake) = hover_popup_wake(
+                    &self.app.hover,
+                    &key,
+                    self.app
+                        .hover_popup
+                        .as_ref()
+                        .map(|popup| popup.key.as_str()),
+                    HOVER_POPUP_DELAY,
+                ) {
+                    ui.ctx().request_repaint_after(wake);
+                }
             }
         } else if response.contains_pointer() {
             self.app.hover = None;
@@ -5079,6 +5113,15 @@ mod tests {
             None,
             HOVER_POPUP_DELAY
         ));
+    }
+
+    #[test]
+    fn hover_popup_wake_rests_once_the_popup_is_open() {
+        let hover = Some(("a".to_owned(), Instant::now()));
+        assert!(hover_popup_wake(&hover, "a", Some("a"), HOVER_POPUP_DELAY).is_none());
+        let wake = hover_popup_wake(&hover, "a", None, HOVER_POPUP_DELAY)
+            .expect("a fresh hover wakes once");
+        assert!(wake > Duration::from_millis(50) && wake <= HOVER_POPUP_DELAY);
     }
 
     #[test]

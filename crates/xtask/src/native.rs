@@ -298,7 +298,6 @@ fn smoke(opts: &Options) -> Result<()> {
     pref["tool"] = json!("Git");
     pref["visible"] = json!(false);
     pref["width"] = json!(370.0);
-    pref["all_projects"] = json!(true);
     pref["expanded"] = json!({id(&p):false});
     save_prefs(&h, &pref)?;
     plain(&h, opts, "restart", json!([]), opts.seconds * 1000)?;

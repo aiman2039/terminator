@@ -227,6 +227,15 @@ impl App {
             let mut open = true;
             let mut action = AttentionAction::None;
             let presented = self.present_session(&n.session_id);
+            let history = self.notice_history_brand(&n);
+            let brand_icon = history
+                .as_ref()
+                .map(|(icon, _)| *icon)
+                .or(presented.brand_icon);
+            let history_label = history.map(|(_, label)| label);
+            let brand_label = history_label
+                .as_deref()
+                .or(presented.brand_label.as_deref());
             self.popups
                 .window(ctx, "Agent needs attention")
                 .id(egui::Id::new("notice-detail"))
@@ -241,8 +250,8 @@ impl App {
                             session: session.as_ref(),
                             selected: self.active_session.as_ref() == Some(&n.session_id),
                             highlight: true,
-                            brand_icon: presented.brand_icon,
-                            brand_label: presented.brand_label.as_deref(),
+                            brand_icon,
+                            brand_label,
                             show_read: false,
                             group_extra: &[],
                         },

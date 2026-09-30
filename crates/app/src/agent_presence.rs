@@ -627,6 +627,10 @@ fn build_presentation(view: &SessionView<'_>, now: u64) -> AgentPresentation {
         Vec::new()
     };
     let detected_kinds: Vec<String> = detected.iter().map(|agent| agent.kind.clone()).collect();
+    // A fresh verified-empty observation means the agent exited and the
+    // terminal is a plain shell again. Hook history stays for the inbox,
+    // but terminal chrome must not keep the brand or lifecycle status.
+    let plain_shell = verified && detected.is_empty();
     let (brand_icon, brand_label) = if !detected.is_empty() {
         match agents::preferred_agent(&detected) {
             Some(agent) => (
@@ -638,7 +642,9 @@ fn build_presentation(view: &SessionView<'_>, now: u64) -> AgentPresentation {
                 Some(format!("{} agents", detected.len())),
             ),
         }
-    } else if let Some(hook) = hook {
+    } else if let Some(hook) = hook
+        && !plain_shell
+    {
         (
             Some(agents::icon_key(&hook.kind)),
             Some(agents::display_name(&hook.kind).to_string()),
@@ -646,7 +652,11 @@ fn build_presentation(view: &SessionView<'_>, now: u64) -> AgentPresentation {
     } else {
         (None, None)
     };
-    let lifecycle = hook.map(|agent| agent.state);
+    let lifecycle = if plain_shell {
+        None
+    } else {
+        hook.map(|agent| agent.state)
+    };
     let status_label = match lifecycle {
         Some(status) if status != AgentState::Unknown => status.label().to_string(),
         _ => "Status unavailable".to_string(),
@@ -755,8 +765,8 @@ fn diagnostics_text(
     }
     lines.push(if detected.is_empty() {
         match hook {
-            Some(_) => "Identity source: hook event".into(),
-            None => "Identity source: none".into(),
+            Some(_) if !verified => "Identity source: hook event".into(),
+            _ => "Identity source: none".into(),
         }
     } else {
         "Identity source: process inspection".into()
@@ -803,8 +813,9 @@ pub fn live_sessions(state: &State, now: u64) -> Vec<(&Session, Vec<String>)> {
 }
 
 /// Live sessions with hook records but no verified live agent. Covers older
-/// daemons, unavailable owners, stale observations, detection failures, and
-/// agents that already exited: all render as presence unverified.
+/// daemons, unavailable owners, stale observations, and detection failures.
+/// A verified-empty observation means the agent exited: the terminal is a
+/// plain shell and is excluded.
 #[cfg(test)]
 #[must_use]
 pub fn unverified_sessions(state: &State, now: u64) -> Vec<&Session> {
@@ -812,9 +823,11 @@ pub fn unverified_sessions(state: &State, now: u64) -> Vec<&Session> {
         .sessions
         .iter()
         .filter(|s| {
-            s.lifecycle.live()
-                && !present_session(state, &s.id, now).live
-                && state.agents.iter().any(|a| a.session_id == s.id)
+            if !s.lifecycle.live() {
+                return false;
+            }
+            let presentation = present_session(state, &s.id, now);
+            !presentation.live && !presentation.verified && presentation.lifecycle.is_some()
         })
         .collect()
 }
@@ -1492,5 +1505,34 @@ mod tests {
         let again = cache.get(&state, "s", 10, Some(true));
         assert!(std::sync::Arc::ptr_eq(&presented, &again));
         assert_eq!(cache.indexes_built, 2);
+    }
+
+    #[test]
+    fn verified_empty_presence_returns_terminal_to_plain_shell() {
+        let mut state = State::default();
+        state.sessions.push(session("s"));
+        capable(&mut state);
+        observe(&mut state, &[], now());
+        hook(&mut state, "codex", AgentState::Running, false);
+        let presented = present_session(&state, "s", now());
+        assert!(presented.verified);
+        assert!(!presented.live);
+        assert_eq!(presented.brand_icon, None);
+        assert_eq!(presented.brand_label, None);
+        assert_eq!(presented.lifecycle, None);
+        assert_eq!(presented.status_label, "Status unavailable");
+        assert!(!presented.spin);
+        assert!(
+            presented
+                .diagnostics(now())
+                .contains("No live agent detected")
+        );
+        assert!(
+            presented
+                .diagnostics(now())
+                .contains("Identity source: none")
+        );
+        assert!(unverified_sessions(&state, now()).is_empty());
+        assert!(live_sessions(&state, now()).is_empty());
     }
 }

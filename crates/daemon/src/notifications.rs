@@ -29,11 +29,24 @@ const DISMISS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_mil
 #[cfg(target_os = "macos")]
 static LAST_DISMISS_POLL: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
-/// The generation whose waiting notification has already been removed. Once the
-/// alert is out of Notification Center there is nothing left to poll for, so
-/// the dismiss poll stops until a different alert starts waiting.
+/// The generation whose dismiss poll has stopped. A successful remove or
+/// [`DISMISS_ATTEMPTS`] misses both latch it. A different alert starts over.
 #[cfg(target_os = "macos")]
 static DISMISSED: AtomicU64 = AtomicU64::new(0);
+
+/// How many times one generation may miss its delivered alert before the
+/// dismiss poll stops. One miss keeps polling so a banner that is not
+/// registered yet can still be preempted. Four misses is two seconds.
+#[cfg(target_os = "macos")]
+const DISMISS_ATTEMPTS: u64 = 4;
+
+/// Misses recorded for [`DISMISS_GENERATION`].
+#[cfg(target_os = "macos")]
+static DISMISS_MISSES: AtomicU64 = AtomicU64::new(0);
+
+/// Generation the miss count belongs to. A different generation starts at one.
+#[cfg(target_os = "macos")]
+static DISMISS_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Notifications that are shown but not yet acted on. A single long-lived
 /// worker owns every wait, so at most one waiter exists at a time. A newer
@@ -297,6 +310,23 @@ pub fn waiting() -> bool {
     cfg!(target_os = "macos") && ACTIVE.load(Ordering::Relaxed) > 0
 }
 
+/// `true` when this generation should stop polling. A remove stops at once.
+/// Misses stop only at [`DISMISS_ATTEMPTS`]. A new generation starts at one.
+#[cfg(target_os = "macos")]
+fn record_dismiss_attempt(generation: u64, removed: bool) -> bool {
+    if removed {
+        DISMISS_MISSES.store(0, Ordering::Relaxed);
+        return true;
+    }
+    let misses = if DISMISS_GENERATION.swap(generation, Ordering::Relaxed) != generation {
+        DISMISS_MISSES.store(1, Ordering::Relaxed);
+        1
+    } else {
+        DISMISS_MISSES.fetch_add(1, Ordering::Relaxed) + 1
+    };
+    misses >= DISMISS_ATTEMPTS
+}
+
 /// Whether the throttled dismiss poll may run now, updating its timestamp.
 #[cfg(target_os = "macos")]
 fn dismiss_poll_due() -> bool {
@@ -324,11 +354,14 @@ pub fn pump() {
         if ACTIVE.load(Ordering::Relaxed) > 0 {
             if superseded() {
                 let generation = PRESENTING.load(Ordering::Relaxed);
-                if DISMISSED.load(Ordering::Relaxed) != generation
-                    && dismiss_poll_due()
-                    && remove_active_notification()
-                {
-                    DISMISSED.store(generation, Ordering::Relaxed);
+                if DISMISSED.load(Ordering::Relaxed) != generation && dismiss_poll_due() {
+                    // `deliveredNotifications` autoreleases the decoded list.
+                    // Drain it here so a miss does not retain that list for
+                    // the life of the process.
+                    let removed = objc2::rc::autoreleasepool(|_| remove_active_notification());
+                    if record_dismiss_attempt(generation, removed) {
+                        DISMISSED.store(generation, Ordering::Relaxed);
+                    }
                 }
             }
             let mode = CFString::new("kCFRunLoopDefaultMode");
@@ -374,6 +407,18 @@ mod tests {
             !dismiss_poll_due(),
             "an immediate second poll is throttled to the interval"
         );
+
+        DISMISS_MISSES.store(0, Ordering::Relaxed);
+        DISMISS_GENERATION.store(0, Ordering::Relaxed);
+        assert!(!record_dismiss_attempt(1, false), "one miss keeps polling");
+        assert!(!record_dismiss_attempt(1, false));
+        assert!(!record_dismiss_attempt(1, false));
+        assert!(record_dismiss_attempt(1, false), "the fourth miss stops");
+        assert!(
+            !record_dismiss_attempt(2, false),
+            "a new generation starts again at one miss"
+        );
+        assert!(record_dismiss_attempt(3, true), "a hit stops");
     }
 
     #[test]
