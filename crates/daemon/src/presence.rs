@@ -220,13 +220,44 @@ mod tests {
         std::thread::sleep(Duration::from_secs(60));
     }
 
+    /// Serializes the real-process fixture tests. Each poll does full-system
+    /// exe+cmd scans; two concurrent scanners on a loaded CI runner starve
+    /// each other, which flaked ubuntu-24.04. Poison-tolerant so a panicked
+    /// holder cannot block the next test.
+    static FIXTURE_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
+        FIXTURE_SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn fixture_refresh_kind() -> sysinfo::ProcessRefreshKind {
+        sysinfo::ProcessRefreshKind::nothing()
+            .with_exe(sysinfo::UpdateKind::Always)
+            .with_cmd(sysinfo::UpdateKind::Always)
+    }
+
+    fn fixture_system() -> sysinfo::System {
+        sysinfo::System::new_with_specifics(
+            sysinfo::RefreshKind::nothing().with_processes(fixture_refresh_kind()),
+        )
+    }
+
     /// Fake agent executables: renamed test-binary copies running the sleeper.
     struct Fixture {
         dir: tempfile::TempDir,
         shell: std::process::Child,
+        /// Held for the fixture lifetime so real-process tests never scan
+        /// the system process table concurrently.
+        _serial: std::sync::MutexGuard<'static, ()>,
+        system: sysinfo::System,
+        shell_start_time: u64,
     }
     impl Fixture {
         fn spawn(agents: &[&str]) -> Self {
+            // First: concurrent full-system scanners starve each other.
+            let serial = serial_guard();
             let dir = tempfile::tempdir().unwrap();
             let current = std::env::current_exe().unwrap();
             let mut launches = Vec::new();
@@ -254,42 +285,85 @@ mod tests {
             // Own process group so teardown kills shell and agents together.
             command.process_group(0);
             let shell = command.spawn().unwrap();
-            Self { dir, shell }
+            // One reused inventory: a fresh full-system scan per poll is
+            // needlessly expensive next to the whole workspace suite, and the
+            // shell may need a refresh before it appears on a loaded runner.
+            let mut system = fixture_system();
+            let shell_start_time = {
+                let start = Instant::now();
+                loop {
+                    system.refresh_processes_specifics(
+                        sysinfo::ProcessesToUpdate::All,
+                        true,
+                        fixture_refresh_kind(),
+                    );
+                    if let Some(process) = system.process(sysinfo::Pid::from_u32(shell.id())) {
+                        break process.start_time();
+                    }
+                    assert!(
+                        start.elapsed() < Duration::from_secs(5),
+                        "spawned shell {} never entered the process inventory",
+                        shell.id()
+                    );
+                    thread::sleep(Duration::from_millis(50));
+                }
+            };
+            Self {
+                dir,
+                shell,
+                _serial: serial,
+                system,
+                shell_start_time,
+            }
         }
         fn target(&self) -> agents::ShellTarget {
-            let pid = self.shell.id();
-            let system = sysinfo::System::new_with_specifics(
-                sysinfo::RefreshKind::nothing().with_processes(
-                    sysinfo::ProcessRefreshKind::nothing()
-                        .with_exe(sysinfo::UpdateKind::Always)
-                        .with_cmd(sysinfo::UpdateKind::Always),
-                ),
-            );
-            let start_time = system
-                .process(sysinfo::Pid::from_u32(pid))
-                .map(|p| p.start_time())
-                .unwrap();
             agents::ShellTarget {
                 session_id: "fixture".into(),
                 generation: "generation".into(),
-                pid,
-                start_time,
+                pid: self.shell.id(),
+                start_time: self.shell_start_time,
                 foreground_pgid: None,
             }
         }
-        fn inspect(&self) -> Vec<agents::TerminalPresence> {
-            let system = sysinfo::System::new_with_specifics(
-                sysinfo::RefreshKind::nothing().with_processes(
-                    sysinfo::ProcessRefreshKind::nothing()
-                        .with_exe(sysinfo::UpdateKind::Always)
-                        .with_cmd(sysinfo::UpdateKind::Always),
-                ),
+        fn inspect(&mut self) -> Vec<agents::TerminalPresence> {
+            self.system.refresh_processes_specifics(
+                sysinfo::ProcessesToUpdate::All,
+                true,
+                fixture_refresh_kind(),
             );
             agents::inspect_shells(
-                &agents::snapshot_processes(&system),
+                &agents::snapshot_processes(&self.system),
                 &[self.target()],
                 now(),
             )
+        }
+        /// Direct children of the shell for timeout diagnostics: pid, exe
+        /// name, and argv[0] only, so command lines never leak into logs.
+        fn children_debug(&mut self) -> String {
+            self.system.refresh_processes_specifics(
+                sysinfo::ProcessesToUpdate::All,
+                true,
+                fixture_refresh_kind(),
+            );
+            let shell = self.shell.id();
+            let mut children: Vec<String> = agents::snapshot_processes(&self.system)
+                .iter()
+                .filter(|proc| proc.parent == Some(shell))
+                .map(|proc| {
+                    format!(
+                        "{} exe={} argv0={}",
+                        proc.pid,
+                        proc.exe_name,
+                        proc.argv.first().map_or("?", String::as_str)
+                    )
+                })
+                .collect();
+            children.sort_unstable();
+            if children.is_empty() {
+                format!("<shell {shell} has no visible children>")
+            } else {
+                children.join(", ")
+            }
         }
     }
     impl Drop for Fixture {
@@ -300,10 +374,10 @@ mod tests {
         }
     }
 
-    fn poll_kinds(fixture: &Fixture, wanted: &[&str]) -> agents::TerminalPresence {
+    fn poll_kinds(fixture: &mut Fixture, wanted: &[&str]) -> agents::TerminalPresence {
         let start = Instant::now();
         loop {
-            let presence = &fixture.inspect()[0];
+            let presence = fixture.inspect()[0].clone();
             let mut kinds: Vec<_> = presence.agents.iter().map(|a| a.kind.as_str()).collect();
             kinds.sort_unstable();
             let mut expected = wanted.to_vec();
@@ -312,32 +386,34 @@ mod tests {
                 && presence.outcome == agents::PresenceOutcome::Verified
                 && start.elapsed() > Duration::from_millis(50)
             {
-                return presence.clone();
+                return presence;
             }
-            assert!(
-                start.elapsed() < Duration::from_secs(10),
-                "presence never became {wanted:?}: {presence:?}"
-            );
+            if start.elapsed() >= Duration::from_secs(30) {
+                panic!(
+                    "presence never became {wanted:?} within 30s: {presence:?}; shell children: {}",
+                    fixture.children_debug()
+                );
+            }
             thread::sleep(Duration::from_millis(50));
         }
     }
 
     #[test]
     fn real_processes_appear_and_remove_without_launching_agents() {
-        let fixture = Fixture::spawn(&["codex"]);
-        let presence = poll_kinds(&fixture, &["codex"]);
+        let mut fixture = Fixture::spawn(&["codex"]);
+        let presence = poll_kinds(&mut fixture, &["codex"]);
         let agent = &presence.agents[0];
         assert_eq!(agent.kind, "codex");
         assert!(!agent.foreground);
         // Exit removes live identity on the next successful inspection.
         signals::signal_process(agent.process.pid, signals::ProcSignal::Kill).unwrap();
-        poll_kinds(&fixture, &[]);
+        poll_kinds(&mut fixture, &[]);
     }
 
     #[test]
     fn sibling_agents_share_one_shell_without_merging() {
-        let fixture = Fixture::spawn(&["claude", "pi"]);
-        let presence = poll_kinds(&fixture, &["claude", "pi"]);
+        let mut fixture = Fixture::spawn(&["claude", "pi"]);
+        let presence = poll_kinds(&mut fixture, &["claude", "pi"]);
         assert_eq!(presence.agents.len(), 2);
         assert!(agents::preferred_agent(&presence.agents).is_none());
     }
