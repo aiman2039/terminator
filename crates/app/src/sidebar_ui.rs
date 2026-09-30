@@ -1801,6 +1801,7 @@ impl App {
         }
         ui.weak("No pending agent events");
     }
+    #[cfg(any(test, target_os = "macos"))]
     pub(super) fn waiting_notice_count(&self) -> usize {
         self.sidebar_index().waiting_count
     }
