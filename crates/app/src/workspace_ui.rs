@@ -2107,7 +2107,17 @@ impl App {
                         text: appearance::color(&self.theme.text),
                     };
                     let doc = doc.clone();
-                    paint_diff_document(ui, &doc, split, colors, &key);
+                    let mut sync = self.diff_split_scroll.get(&key).copied().unwrap_or(0.0);
+                    paint_diff_document(
+                        ui,
+                        &doc,
+                        split,
+                        colors,
+                        &key,
+                        &mut self.diff_split_ratio,
+                        &mut sync,
+                    );
+                    self.diff_split_scroll.insert(key.clone(), sync);
                 }
             }
             Some(Err(error)) => {
@@ -2398,38 +2408,200 @@ fn paint_diff_document(
     split: bool,
     colors: DiffColors,
     scroll_key: &str,
-) -> egui::scroll_area::ScrollAreaOutput<()> {
+    ratio: &mut f32,
+    sync: &mut f32,
+) -> Vec<egui::scroll_area::ScrollAreaOutput<()>> {
     let rows = diff_row_count(doc, split);
     let digits = diff_doc_digits(doc, split);
     let metrics = DiffMetrics::measure(ui, digits);
     let content = diff_content_width(ui, doc, split, &metrics, scroll_key);
-    let columns = if split { 2.0 } else { 1.0 };
-    let column_width = content.max(ui.available_width() / columns);
-    ui.scope(|ui| {
-        ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-        egui::ScrollArea::both()
-            .id_salt((scroll_key, split))
-            .auto_shrink([false, false])
-            .show_rows(ui, metrics.row_h, rows, |ui, range| {
-                ui.set_min_width(column_width * columns);
-                for index in range {
-                    if split {
-                        paint_diff_split_row(ui, &doc.split[index], colors, &metrics, column_width);
-                    } else {
-                        paint_diff_line(
+    if split {
+        paint_diff_split(
+            ui, doc, colors, &metrics, content, rows, scroll_key, ratio, sync,
+        )
+    } else {
+        let width = content.max(ui.available_width());
+        let output = ui
+            .scope(|ui| {
+                ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+                egui::ScrollArea::both()
+                    .id_salt((scroll_key, false))
+                    .auto_shrink([false, false])
+                    .show_rows(ui, metrics.row_h, rows, |ui, range| {
+                        ui.set_min_width(width);
+                        for index in range {
+                            paint_diff_line(
+                                ui,
+                                DiffPaint {
+                                    width,
+                                    line: &doc.unified[index],
+                                    gutter: DiffGutter::Unified,
+                                    colors,
+                                    metrics: &metrics,
+                                },
+                            );
+                        }
+                    })
+            })
+            .inner;
+        vec![output]
+    }
+}
+
+const DIFF_SPLIT_GAP: f32 = 6.0;
+const DIFF_SPLIT_MIN_PANE: f32 = 40.0;
+
+#[derive(Clone, Copy)]
+enum SplitPane {
+    Left,
+    Right,
+}
+
+// Each side owns its horizontal scroll so the divider can resize them without
+// clipping long lines; the vertical offset is mirrored so both sides stay in step.
+#[allow(clippy::too_many_arguments)]
+fn paint_diff_split(
+    ui: &mut egui::Ui,
+    doc: &diff::DiffDocument,
+    colors: DiffColors,
+    metrics: &DiffMetrics,
+    content: f32,
+    rows: usize,
+    scroll_key: &str,
+    ratio: &mut f32,
+    sync: &mut f32,
+) -> Vec<egui::scroll_area::ScrollAreaOutput<()>> {
+    let full = ui.available_rect_before_wrap();
+    let usable = (full.width() - DIFF_SPLIT_GAP).max(1.0);
+    let min_pane = DIFF_SPLIT_MIN_PANE.min(usable / 2.0);
+    let left_width = (*ratio * usable).clamp(min_pane, usable - min_pane);
+    let left_rect = egui::Rect::from_min_size(full.min, egui::vec2(left_width, full.height()));
+    let gap_rect = egui::Rect::from_min_size(
+        egui::pos2(full.left() + left_width, full.top()),
+        egui::vec2(DIFF_SPLIT_GAP, full.height()),
+    );
+    let right_rect = egui::Rect::from_min_max(egui::pos2(gap_rect.right(), full.top()), full.max);
+    // Paint both panes at the same frame-start offset so corresponding lines
+    // stay aligned; whichever pane the user scrolled becomes next frame's shared
+    // offset.
+    let frame_sync = *sync;
+    let left = paint_diff_pane(
+        ui,
+        left_rect,
+        doc,
+        SplitPane::Left,
+        colors,
+        metrics,
+        content,
+        rows,
+        scroll_key,
+        frame_sync,
+    );
+    let right = paint_diff_pane(
+        ui,
+        right_rect,
+        doc,
+        SplitPane::Right,
+        colors,
+        metrics,
+        content,
+        rows,
+        scroll_key,
+        frame_sync,
+    );
+    // Adopt the pane the pointer is over so sub-pixel input accumulates there
+    // and an inactive pane's clamp cannot override the active pane. With the
+    // pointer elsewhere (keyboard, divider drag), fall back to whichever pane
+    // moved further from the frame-start offset.
+    let pointer = ui.ctx().input(|input| input.pointer.hover_pos());
+    let over_left = pointer.is_some_and(|pos| left_rect.contains(pos));
+    let over_right = pointer.is_some_and(|pos| right_rect.contains(pos));
+    let left_offset = left.state.offset.y;
+    let right_offset = right.state.offset.y;
+    *sync = match (over_left, over_right) {
+        (true, false) => left_offset,
+        (false, true) => right_offset,
+        _ => {
+            if (left_offset - frame_sync).abs() >= (right_offset - frame_sync).abs() {
+                left_offset
+            } else {
+                right_offset
+            }
+        }
+    };
+    ui.allocate_rect(full, egui::Sense::hover());
+    let response = ui.interact(
+        gap_rect,
+        ui.id().with(("diff-split-drag", scroll_key)),
+        egui::Sense::drag(),
+    );
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    if response.dragged()
+        && let Some(pos) = response.interact_pointer_pos()
+    {
+        *ratio = ((pos.x - full.left()) / usable).clamp(min_pane / usable, 1.0 - min_pane / usable);
+    }
+    let stroke = if response.hovered() || response.dragged() {
+        egui::Stroke::new(1.5, colors.accent)
+    } else {
+        egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color)
+    };
+    ui.painter()
+        .vline(gap_rect.center().x, full.y_range(), stroke);
+    #[cfg(feature = "test-support")]
+    diagnostics::record(ui.ctx(), "diff-split-handle", gap_rect);
+    vec![left, right]
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_diff_pane(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    doc: &diff::DiffDocument,
+    pane: SplitPane,
+    colors: DiffColors,
+    metrics: &DiffMetrics,
+    content: f32,
+    rows: usize,
+    scroll_key: &str,
+    sync: f32,
+) -> egui::scroll_area::ScrollAreaOutput<()> {
+    let side = matches!(pane, SplitPane::Left) as u8;
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+        |ui| {
+            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+            egui::ScrollArea::both()
+                .id_salt((scroll_key, "split", side))
+                .auto_shrink([false, false])
+                .vertical_scroll_offset(sync)
+                .show_rows(ui, metrics.row_h, rows, |ui, range| {
+                    ui.set_min_width(content);
+                    for index in range {
+                        paint_diff_side(
                             ui,
-                            DiffPaint {
-                                width: column_width,
-                                line: &doc.unified[index],
-                                gutter: DiffGutter::Unified,
+                            DiffSidePaint {
+                                size: egui::vec2(content, metrics.row_h),
+                                line: match pane {
+                                    SplitPane::Left => doc.split[index].left.as_ref(),
+                                    SplitPane::Right => doc.split[index].right.as_ref(),
+                                },
+                                gutter: match pane {
+                                    SplitPane::Left => DiffGutter::Old,
+                                    SplitPane::Right => DiffGutter::New,
+                                },
                                 colors,
-                                metrics: &metrics,
+                                metrics,
                             },
                         );
                     }
-                }
-            })
-    })
+                })
+        },
+    )
     .inner
 }
 fn paint_markdown_diff_preview(
@@ -2460,43 +2632,6 @@ fn paint_markdown_diff_preview(
     });
     link
 }
-fn paint_diff_split_row(
-    ui: &mut egui::Ui,
-    row: &diff::SplitRow,
-    colors: DiffColors,
-    metrics: &DiffMetrics,
-    width: f32,
-) {
-    let size = egui::vec2(width, metrics.row_h);
-    ui.allocate_ui_with_layout(
-        egui::vec2(width * 2.0, metrics.row_h),
-        egui::Layout::left_to_right(egui::Align::Min),
-        |ui| {
-            ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-            paint_diff_side(
-                ui,
-                DiffSidePaint {
-                    size,
-                    line: row.left.as_ref(),
-                    gutter: DiffGutter::Old,
-                    colors,
-                    metrics,
-                },
-            );
-            paint_diff_side(
-                ui,
-                DiffSidePaint {
-                    size,
-                    line: row.right.as_ref(),
-                    gutter: DiffGutter::New,
-                    colors,
-                    metrics,
-                },
-            );
-        },
-    );
-}
-
 fn diff_row_count(doc: &diff::DiffDocument, split: bool) -> usize {
     if split {
         doc.split.len()
@@ -4583,10 +4718,12 @@ mod tests {
         doc: &diff::DiffDocument,
         split: bool,
     ) -> (
-        egui::scroll_area::ScrollAreaOutput<()>,
+        Vec<egui::scroll_area::ScrollAreaOutput<()>>,
         Vec<egui::epaint::ClippedShape>,
     ) {
         let mut scroll = None;
+        let mut ratio = 0.5;
+        let mut sync = 0.0;
         let mut output = ctx.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -4607,6 +4744,8 @@ mod tests {
                         text: Color32::WHITE,
                     },
                     "scroll-regression",
+                    &mut ratio,
+                    &mut sync,
                 ));
             },
         );
@@ -4651,14 +4790,16 @@ mod tests {
         let ctx = egui::Context::default();
         let doc = long_doc();
         scroll_doc(&ctx, &doc, true);
-        let (scroll, _) = scroll_doc(&ctx, &doc, true);
-        assert!(scroll.content_size.x > 3000.0);
-        // Bring the end of the left column and beginning of the right into view.
-        let mut state = scroll.state;
-        state.offset.x = scroll.content_size.x / 2.0 - 400.0;
-        state.store(&ctx, scroll.id);
+        let (areas, _) = scroll_doc(&ctx, &doc, true);
+        assert_eq!(areas.len(), 2);
+        for area in &areas {
+            assert!(area.content_size.x > 1000.0);
+            let mut state = area.state;
+            state.offset.x = area.content_size.x - area.inner_rect.width();
+            state.store(&ctx, area.id);
+        }
         let (_, shapes) = scroll_doc(&ctx, &doc, true);
-        let long: Vec<_> = shapes
+        let mut long: Vec<_> = shapes
             .iter()
             .filter_map(|shape| {
                 if let egui::Shape::Text(text) = &shape.shape
@@ -4671,11 +4812,14 @@ mod tests {
             })
             .collect();
         assert_eq!(long.len(), 2);
+        long.sort_by(|a, b| a.0.left().total_cmp(&b.0.left()));
         assert!(long[0].0.right() <= long[1].0.left() + 1.0);
         for (clip, text) in long {
             assert!(
-                text.pos.x + text.galley.size().x <= clip.right() + 1.0
-                    || clip.right() == scroll.inner_rect.right()
+                text.pos.x + text.galley.size().x <= clip.right() + 1.0,
+                "split line escaped its pane: {:?} vs {:?}",
+                text.pos,
+                clip
             );
         }
     }
@@ -4699,11 +4843,13 @@ mod tests {
         let ctx = egui::Context::default();
         let doc = long_doc();
         scroll_doc(&ctx, &doc, true);
-        let (scroll, _) = scroll_doc(&ctx, &doc, true);
-        let mut state = scroll.state;
-        state.offset.x = scroll.content_size.x - scroll.inner_rect.width();
-        state.store(&ctx, scroll.id);
-        let (scroll, shapes) = scroll_doc(&ctx, &doc, true);
+        let (areas, _) = scroll_doc(&ctx, &doc, true);
+        for area in &areas {
+            let mut state = area.state;
+            state.offset.x = area.content_size.x - area.inner_rect.width();
+            state.store(&ctx, area.id);
+        }
+        let (areas, shapes) = scroll_doc(&ctx, &doc, true);
         let end = shapes
             .iter()
             .filter_map(|shape| match &shape.shape {
@@ -4713,33 +4859,34 @@ mod tests {
                 _ => None,
             })
             .fold(f32::NEG_INFINITY, f32::max);
-        assert!((end - scroll.inner_rect.right()).abs() <= 1.0);
+        assert!((end - areas[1].inner_rect.right()).abs() <= 1.0);
     }
 
     #[test]
-    fn horizontal_scroll_survives_vertical_virtualization_and_mode_switches() {
+    fn split_panes_keep_independent_offsets_and_ids() {
         let ctx = egui::Context::default();
         let doc = long_doc();
-        for split in [false, true] {
-            scroll_doc(&ctx, &doc, split);
-            let (before, _) = scroll_doc(&ctx, &doc, split);
-            let width = before.content_size.x;
-            let mut state = before.state;
-            state.offset = egui::vec2(250.0, 900.0);
-            state.store(&ctx, before.id);
-            let (after, _) = scroll_doc(&ctx, &doc, split);
-            assert_eq!(after.content_size.x, width);
-            assert_eq!(after.state.offset, egui::vec2(250.0, 900.0));
-        }
-        let (unified, _) = scroll_doc(&ctx, &doc, false);
-        let mut state = unified.state;
-        state.offset = egui::vec2(100.0, 300.0);
-        state.store(&ctx, unified.id);
-        let (split, _) = scroll_doc(&ctx, &doc, true);
-        assert_ne!(unified.id, split.id);
-        assert_eq!(split.state.offset, egui::vec2(250.0, 900.0));
-        let (unified, _) = scroll_doc(&ctx, &doc, false);
-        assert_eq!(unified.state.offset, egui::vec2(100.0, 300.0));
+        // Unified keeps its own offset while rows virtualize.
+        scroll_doc(&ctx, &doc, false);
+        let (before, _) = scroll_doc(&ctx, &doc, false);
+        let width = before[0].content_size.x;
+        let mut state = before[0].state;
+        state.offset = egui::vec2(250.0, 900.0);
+        state.store(&ctx, before[0].id);
+        let (after, _) = scroll_doc(&ctx, &doc, false);
+        assert_eq!(after[0].content_size.x, width);
+        assert_eq!(after[0].state.offset, egui::vec2(250.0, 900.0));
+        // Each split pane scrolls horizontally on its own.
+        scroll_doc(&ctx, &doc, true);
+        let (areas, _) = scroll_doc(&ctx, &doc, true);
+        assert_ne!(before[0].id, areas[0].id);
+        assert_ne!(areas[0].id, areas[1].id);
+        let mut left_state = areas[0].state;
+        left_state.offset.x = 200.0;
+        left_state.store(&ctx, areas[0].id);
+        let (areas, _) = scroll_doc(&ctx, &doc, true);
+        assert_eq!(areas[0].state.offset.x, 200.0);
+        assert_ne!(areas[1].state.offset.x, 200.0);
     }
 
     #[test]
@@ -4748,7 +4895,60 @@ mod tests {
         let doc = long_doc();
         let (long, _) = scroll_doc(&ctx, &doc, false);
         let (short, _) = scroll_doc(&ctx, &sample_doc(), false);
-        assert!(long.content_size.x > short.content_size.x * 2.0);
+        assert!(long[0].content_size.x > short[0].content_size.x * 2.0);
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn split_divider_drag_rebalances_panes() {
+        let ctx = egui::Context::default();
+        let doc = long_doc();
+        let colors = DiffColors {
+            added: Color32::GREEN,
+            deleted: Color32::RED,
+            accent: Color32::BLUE,
+            text: Color32::WHITE,
+        };
+        let mut ratio = 0.5;
+        let frame = |events: Vec<egui::Event>, ratio: &mut f32| {
+            let mut sync = 0.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 300.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    paint_diff_document(ui, &doc, true, colors, "drag-test", ratio, &mut sync);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        frame(Vec::new(), &mut ratio);
+        let handle = ctx
+            .data(|d| {
+                d.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", "diff-split-handle")))
+            })
+            .expect("split handle must be recorded");
+        let start = handle.center();
+        let dest = start + egui::vec2(150.0, 0.0);
+        let press = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        frame(vec![egui::Event::PointerMoved(start)], &mut ratio);
+        frame(vec![press(start, true)], &mut ratio);
+        frame(vec![egui::Event::PointerMoved(dest)], &mut ratio);
+        frame(vec![press(dest, false)], &mut ratio);
+        assert!(
+            ratio > 0.5,
+            "divider drag should widen the left pane: {ratio}"
+        );
     }
 
     #[test]
@@ -4853,5 +5053,154 @@ mod tests {
         assert_eq!(header_visible_count(three, count), 3);
         assert_eq!(header_visible_count(three - 1.0, count), 2);
         assert_eq!(header_visible_count(0.0, count), 0);
+    }
+
+    fn split_frame(
+        ctx: &egui::Context,
+        doc: &diff::DiffDocument,
+        sync: &mut f32,
+        events: Vec<egui::Event>,
+    ) -> Vec<(egui::Pos2, String)> {
+        let colors = DiffColors {
+            added: Color32::GREEN,
+            deleted: Color32::RED,
+            accent: Color32::BLUE,
+            text: Color32::WHITE,
+        };
+        let mut ratio = 0.5;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 300.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                paint_diff_document(ui, doc, true, colors, "sync-regression", &mut ratio, sync);
+            },
+        );
+        output.textures_delta.clear();
+        painted_text(&output.shapes)
+    }
+
+    fn wheel(delta_y: f32) -> egui::Event {
+        egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            phase: egui::TouchPhase::Move,
+            delta: egui::vec2(0.0, delta_y),
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    /// Every distinct painted text must appear at the same y in both panes, so
+    /// corresponding split rows stay aligned.
+    fn assert_split_rows_aligned(painted: &[(egui::Pos2, String)]) {
+        use std::collections::HashMap;
+        let mut ys: HashMap<&str, Vec<f32>> = HashMap::new();
+        for (pos, text) in painted {
+            ys.entry(text.as_str()).or_default().push(pos.y);
+        }
+        let mut compared = 0;
+        for (text, values) in &ys {
+            if values.len() == 2 {
+                compared += 1;
+                assert!(
+                    (values[0] - values[1]).abs() <= 1.0,
+                    "row {text:?} is misaligned across panes: {values:?}"
+                );
+            }
+        }
+        assert!(compared > 0, "no corresponding rows were painted");
+    }
+
+    #[test]
+    fn split_wheel_over_a_pane_moves_both_panes_in_step() {
+        let ctx = egui::Context::default();
+        let doc = long_doc();
+        let mut sync = 0.0;
+        let over_left = egui::pos2(150.0, 150.0);
+        split_frame(&ctx, &doc, &mut sync, vec![]);
+        split_frame(
+            &ctx,
+            &doc,
+            &mut sync,
+            vec![egui::Event::PointerMoved(over_left)],
+        );
+        for _ in 0..4 {
+            split_frame(
+                &ctx,
+                &doc,
+                &mut sync,
+                vec![egui::Event::PointerMoved(over_left), wheel(-60.0)],
+            );
+        }
+        assert!(
+            sync > 0.0,
+            "wheel over the left pane must move the shared offset: {sync}"
+        );
+        let painted = split_frame(
+            &ctx,
+            &doc,
+            &mut sync,
+            vec![egui::Event::PointerMoved(over_left)],
+        );
+        assert_split_rows_aligned(&painted);
+    }
+
+    #[test]
+    fn split_fractional_wheel_input_accumulates() {
+        let ctx = egui::Context::default();
+        let doc = long_doc();
+        let mut sync = 0.0;
+        let over_left = egui::pos2(150.0, 150.0);
+        split_frame(
+            &ctx,
+            &doc,
+            &mut sync,
+            vec![egui::Event::PointerMoved(over_left)],
+        );
+        for _ in 0..8 {
+            split_frame(
+                &ctx,
+                &doc,
+                &mut sync,
+                vec![egui::Event::PointerMoved(over_left), wheel(-0.2)],
+            );
+        }
+        assert!(
+            sync > 0.0,
+            "sub-half-point wheel input must accumulate instead of being dropped: {sync}"
+        );
+    }
+
+    #[test]
+    fn closing_a_diff_forgets_its_split_scroll() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        let tab = Tab::Diff {
+            cwd: dir.path().into(),
+            path: dir.path().join("file.rs"),
+            staged: false,
+        };
+        let key = tab.key();
+        app.layouts.insert(
+            "project".into(),
+            Workspace::from_layout(DockState::new(vec![tab])),
+        );
+        app.diff_split_scroll.insert(key.clone(), 42.0);
+        app.prune_diff_docs();
+        assert!(
+            app.diff_split_scroll.contains_key(&key),
+            "an open diff keeps its cached scroll"
+        );
+        app.layouts.clear();
+        app.prune_diff_docs();
+        assert!(
+            !app.diff_split_scroll.contains_key(&key),
+            "closing the diff tab must forget its cached split scroll"
+        );
     }
 }

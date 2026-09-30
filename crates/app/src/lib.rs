@@ -656,6 +656,8 @@ pub struct App {
     texts: HashMap<String, String>,
     diffs: HashMap<String, Result<std::sync::Arc<diff::DiffDocument>, String>>,
     diff_split: HashSet<String>,
+    diff_split_ratio: f32,
+    diff_split_scroll: HashMap<String, f32>,
     diff_preview: HashSet<String>,
     diff_ignore_ws: HashSet<String>,
     loading: HashSet<String>,
@@ -960,6 +962,8 @@ impl App {
             texts: HashMap::new(),
             diffs: HashMap::new(),
             diff_split: HashSet::new(),
+            diff_split_ratio: 0.5,
+            diff_split_scroll: HashMap::new(),
             diff_preview: HashSet::new(),
             diff_ignore_ws: HashSet::new(),
             loading: HashSet::new(),
@@ -2465,7 +2469,21 @@ impl App {
             workspace.close(tab_id);
         }
         self.prune_native_docs();
+        self.prune_diff_docs();
         self.advance_workspace_close(project);
+    }
+    /// Drop cached split-pane scroll for diffs with no live tab. Data-level tab
+    /// removal bypasses per-document cleanup, so call it after tabs close.
+    fn prune_diff_docs(&mut self) {
+        let live: HashSet<String> = self
+            .layouts
+            .values()
+            .flat_map(|workspace| &workspace.tabs)
+            .flat_map(|tab| tab.layout.iter_all_tabs())
+            .filter(|(_, tab)| matches!(tab, Tab::Diff { .. }))
+            .map(|(_, tab)| tab.key())
+            .collect();
+        self.diff_split_scroll.retain(|key, _| live.contains(key));
     }
     fn advance_workspace_close(&mut self, project: &str) {
         let existing: HashSet<String> = self

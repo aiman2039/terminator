@@ -124,6 +124,12 @@ pub struct Harness {
 }
 impl Harness {
     pub fn new() -> Result<Self> {
+        Self::configured(None, false)
+    }
+    /// Isolated daemon harness with an optional explicit daemon executable and
+    /// OS notifications enabled. Notification benchmarks need the real
+    /// notification path, so they opt out of the quiet default.
+    pub fn configured(daemon: Option<PathBuf>, notifications: bool) -> Result<Self> {
         let temp = tempfile::Builder::new()
             .prefix("term-")
             .tempdir_in("/tmp")?;
@@ -139,7 +145,20 @@ impl Harness {
         ] {
             env.insert(key.into(), path.to_string_lossy().into_owned());
         }
-        env.insert("TERMINATOR_NO_NOTIFICATIONS".into(), "1".into());
+        if !notifications {
+            env.insert("TERMINATOR_NO_NOTIFICATIONS".into(), "1".into());
+        }
+        if let Some(daemon) = daemon {
+            ensure!(
+                daemon.is_file(),
+                "daemon binary missing: {}",
+                daemon.display()
+            );
+            env.insert(
+                "TERMINATOR_FIXTURE_DAEMON".into(),
+                daemon.to_string_lossy().into_owned(),
+            );
+        }
         let mut harness = Self {
             _temp: temp,
             root,
@@ -299,6 +318,20 @@ impl Harness {
         let mut settings = self.state()?["settings"].clone();
         settings["shell"] = json!("/bin/sh");
         self.rpc(json!({"Settings":settings}))?;
+        Ok(())
+    }
+    /// Route terminal notices to the OS so the daemon exercises its real
+    /// notification path (Cocoa pump + Notification Center enumeration).
+    pub fn enable_os_notifications(&self) -> Result<()> {
+        let mut settings = self.state()?["settings"].clone();
+        settings["terminal_notifications_os"] = json!(true);
+        self.rpc(json!({"Settings":settings}))?;
+        Ok(())
+    }
+    pub fn terminal_notify(&self, session: &str, title: &str, body: &str) -> Result<()> {
+        self.rpc(json!({
+            "TerminalNotify": {"session": session, "title": title, "body": body}
+        }))?;
         Ok(())
     }
     pub fn layout(&self, project: &Value, sessions: &[Value]) -> Result<Value> {
