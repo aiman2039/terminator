@@ -4769,6 +4769,9 @@ impl eframe::App for App {
         // eframe calls logic even while hidden/minimized; ui is rendering-only.
         // IPC and exit checkpoints must not depend on a visible window.
         self.process_updates(ctx);
+        // A terminal tab whose session record was pruned (an ended shell or
+        // editor with no resume handle) should disappear on its own.
+        self.prune_unavailable_tabs();
         if updater::termination_cancelled() {
             self.native_installation_cancelled();
         }
@@ -5843,6 +5846,164 @@ mod navigation_tests {
 
     #[test]
     #[cfg(feature = "test-support")]
+    fn ide_strip_trailing_controls_share_one_row() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.state
+            .sessions
+            .push(session_fixture("s1", SessionKind::Shell));
+        app.active_session = Some("s1".into());
+        app.metadata = Some(metadata::Metadata {
+            cwd: "/a".into(),
+            branch: Some("master".into()),
+            ..Default::default()
+        });
+        app.preferences.ide_strip_docks.0.insert(
+            "a".into(),
+            egui_dock::DockState::new(vec![Tab::Terminal("s1".into())]),
+        );
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 300.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.ide_terminal_strip(ui),
+        );
+        output.textures_delta.clear();
+        let mut centers = Vec::new();
+        for name in [
+            "pane-git:s1",
+            "pane-split-vertical:s1",
+            "pane-split-horizontal:s1",
+            "pane-dropdown",
+        ] {
+            let rect = app
+                .fixture_rect(&ctx, name)
+                .unwrap_or_else(|| panic!("missing {name}"));
+            centers.push((name, rect[1] + rect[3] / 2.0, rect[2], rect[3]));
+        }
+        eprintln!("{centers:#?}");
+        let (_, base, _, _) = centers[0];
+        for (name, center, _, _) in &centers {
+            assert!(
+                (center - base).abs() < 1.0,
+                "{name} center {center} should equal {base}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn explorer_toolbar_controls_share_one_row() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.tool = SidebarTool::Explorer;
+        app.preferences.explorer_search_mode = crate::preferences::ExplorerSearchMode::Contents;
+        let cwd = std::path::PathBuf::from("/a");
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(360.0, 220.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.explorer_toolbar(ui, &cwd),
+        );
+        output.textures_delta.clear();
+        for names in [
+            [
+                "explorer-new-file",
+                "explorer-new-folder",
+                "explorer-collapse",
+                "explorer-refresh",
+                "explorer-show-ignored",
+                "explorer-more",
+            ]
+            .as_slice(),
+            [
+                "explorer-search",
+                "explorer-match-case",
+                "explorer-whole-word",
+                "explorer-regex",
+            ]
+            .as_slice(),
+        ] {
+            let mut centers = Vec::new();
+            for name in names {
+                let rect = app
+                    .fixture_rect(&ctx, name)
+                    .unwrap_or_else(|| panic!("missing {name}"));
+                centers.push((name, rect[1] + rect[3] / 2.0, rect[3]));
+            }
+            let (_, base, base_h) = centers[0];
+            for (name, center, height) in &centers {
+                assert!(
+                    (center - base).abs() < 1.0,
+                    "{name} center {center} should equal {base}"
+                );
+                assert!(
+                    (height - base_h).abs() < 1.0,
+                    "{name} height {height} should equal {base_h}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn contents_search_queues_a_query() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.tool = SidebarTool::Explorer;
+        app.preferences.explorer_search_mode = crate::preferences::ExplorerSearchMode::Contents;
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        let cwd = std::path::PathBuf::from("/a");
+        let draw = |app: &mut App| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(360.0, 220.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.explorer_toolbar(ui, &cwd),
+            );
+            output.textures_delta.clear();
+        };
+        draw(&mut app);
+        assert!(requests.try_recv().is_err(), "empty query queued a search");
+        app.explorer_query = "needle".into();
+        draw(&mut app);
+        let job = requests
+            .try_recv()
+            .expect("non-empty query queues a search");
+        assert!(matches!(job, Job::Search { .. }));
+    }
+
+    #[test]
+    fn strip_input_stays_enabled_under_center_views() {
+        let (mut app, _ctx, _dir) = fixture();
+        assert!(app.strip_terminal_input_enabled("shell"));
+        app.settings_open = true;
+        assert!(app.strip_terminal_input_enabled("shell"));
+        app.player_open = true;
+        assert!(app.strip_terminal_input_enabled("shell"));
+        app.palette_open = true;
+        assert!(app.strip_terminal_input_enabled("shell"));
+        app.palette_open = false;
+        app.player_open = false;
+        app.settings_open = false;
+        // True modals still suspend the strip.
+        app.add_project = true;
+        assert!(!app.strip_terminal_input_enabled("shell"));
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
     fn ide_terminal_strip_renders_without_sessions() {
         let (mut app, ctx, _dir) = fixture();
         app.selected = Some("a".into());
@@ -6620,6 +6781,20 @@ mod navigation_tests {
         assert!(!app.layouts["a"].contains(&Tab::Terminal("ghost".into())));
         assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
         assert!(app.unavailable_tabs().is_empty());
+    }
+
+    #[test]
+    fn exited_non_resumable_session_closes_its_tab() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.connected = true;
+        app.insert("a", Tab::Terminal("ghost".into()), None);
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        app.prune_unavailable_tabs();
+        assert!(!app.layouts["a"].contains(&Tab::Terminal("ghost".into())));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("shell".into())));
     }
 
     #[test]
@@ -10441,6 +10616,169 @@ mod navigation_tests {
                 },
             );
             output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn agent_tabs_share_one_row() {
+        let (mut app, ctx, _dir) = fixture();
+        appearance::install(&ctx);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                app.agents_view(ui);
+            },
+        );
+        output.textures_delta.clear();
+        let tabs: Vec<_> = ["needs", "live", "unread"]
+            .into_iter()
+            .map(|name| agent_target(&ctx, &format!("agent-tab:{name}")).unwrap())
+            .collect();
+        for tab in &tabs[1..] {
+            assert!(
+                (tab.center().y - tabs[0].center().y).abs() < 1.0,
+                "tab centers should share one row: {tabs:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn attention_row_label_centers_on_action_icons() {
+        let (mut app, ctx, _dir) = fixture();
+        appearance::install(&ctx);
+        app.preferences.all_projects = true;
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        app.state.agents = vec![Agent {
+            invocation_id: "agent".into(),
+            session_id: "live-shell".into(),
+            kind: "codex".into(),
+            provider_session_id: None,
+            state: AgentState::WaitingPermission,
+            sequence: None,
+            updated: 0,
+            resume: None,
+            process: None,
+        }];
+        app.state.notifications = vec![notice_fixture(
+            "wait",
+            "live-shell",
+            AgentState::WaitingPermission,
+            now(),
+        )];
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(320.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                app.agents_view(ui);
+            },
+        );
+        output.textures_delta.clear();
+        let action = agent_target(&ctx, "agent-go:live-shell").unwrap();
+        fn label_centers(out: &mut Vec<f32>, shape: &egui::Shape, needle: &str) {
+            match shape {
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        label_centers(out, shape, needle);
+                    }
+                }
+                egui::Shape::Text(text) if text.galley.text() == needle => {
+                    out.push(text.visual_bounding_rect().center().y);
+                }
+                _ => {}
+            }
+        }
+        let mut centers = Vec::new();
+        for clipped in &output.shapes {
+            label_centers(&mut centers, &clipped.shape, "live-shell");
+        }
+        assert_eq!(
+            centers.len(),
+            1,
+            "expected one painted row label, got {centers:?}"
+        );
+        assert!(
+            (centers[0] - action.center().y).abs() < 2.0,
+            "label center {} should match action center {}",
+            centers[0],
+            action.center().y
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn system_meter_bars_share_one_column() {
+        let (app, ctx, _dir) = fixture();
+        appearance::install(&ctx);
+        let input = session_info::Input {
+            label: Some("Terminal 3".into()),
+            cwd: Some("~/proj".into()),
+            cwd_full: Some("/Users/x/proj".into()),
+            branch: Some("master".into()),
+            started: "2m ago".into(),
+            unconfirmed: false,
+            session_cpu: Some(1.9),
+            session_memory: Some(357 * 1024 * 1024),
+            system: Some(resource_sample::SystemStats {
+                cpu: 14.0,
+                memory_used: (55.5 * 1024.0 * 1024.0 * 1024.0) as u64,
+                memory_total: 128 * 1024 * 1024 * 1024,
+                pressure: Some(terminator_sys::MemoryPressure {
+                    percent: 0.0,
+                    level: terminator_sys::PressureLevel::Normal,
+                }),
+                load_one: 2.89,
+                load_five: 2.98,
+                load_fifteen: 3.17,
+                cpus: 10,
+            }),
+        };
+        let model = session_info::model(&input);
+        let mut toggles = session_info::Toggles {
+            process_open: false,
+            resources_open: true,
+            show_system: true,
+        };
+        let theme = app.theme.clone();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(300.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                session_info::show(ui, &model, &mut toggles, &theme);
+            },
+        );
+        output.textures_delta.clear();
+        let bars: Vec<_> = [
+            "info-system-cpu-bar",
+            "info-system-memory-bar",
+            "info-pressure-bar",
+            "info-load-bar",
+        ]
+        .into_iter()
+        .map(|name| agent_target(&ctx, name).unwrap())
+        .collect();
+        for bar in &bars[1..] {
+            assert!(
+                (bar.min.x - bars[0].min.x).abs() < 1.0,
+                "meter bars should share one column: {bars:?}"
+            );
         }
     }
 

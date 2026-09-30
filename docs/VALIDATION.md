@@ -3046,3 +3046,21 @@ revision, and the macOS/Linux builds depend on the checks job. Local validation:
 `cargo xtask integration` and `cargo xtask idle-close` passed end to end; xtask
 fmt, clippy `-D warnings`, and tests passed. No GitHub-hosted run was triggered
 from this checkout.
+
+## Sidebar and tab-strip polish (2026-09-30)
+
+Ended non-resumable sessions are pruned by the daemon; the GUI now drops their
+stale terminal tabs automatically (`App::prune_unavailable_tabs` each frame while
+connected, plus the painted-pane fallback) instead of showing a "Session record
+unavailable" placeholder. Summary lost its project-name label, and the Explorer
+toolbar's text toggles/search row and the Git/IDE-strip controls now pin their
+`interact_size` so all icons resolve to a shared 22pt square. The strip keeps
+accepting input while Settings, Player, palette, or search cover the main
+workspace; true modals still suspend it.
+
+Regressions: `ide_strip_trailing_controls_share_one_row`,
+`explorer_toolbar_controls_share_one_row`, `contents_search_queues_a_query`,
+`strip_input_stays_enabled_under_center_views`,
+`exited_non_resumable_session_closes_its_tab`. `cargo test -p terminator
+--features test-support --lib` passed 491; app clippy `-D warnings` and
+workspace `cargo fmt --all --check` passed. Native rendering was not exercised.

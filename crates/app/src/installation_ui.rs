@@ -196,6 +196,20 @@ impl App {
         });
     }
 
+    /// Drop terminal tabs whose session record is gone, without a message.
+    ///
+    /// Runs after state updates so a tab left behind by a pruned (ended,
+    /// non-resumable) session disappears on its own. The explicit
+    /// [`Self::close_unavailable_tabs`] remains for the Info action.
+    pub(super) fn prune_unavailable_tabs(&mut self) {
+        if !self.connected {
+            return;
+        }
+        for sid in self.unavailable_tabs() {
+            self.remove_tab(&sid);
+        }
+    }
+
     pub(super) fn installation_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading("Installation");
         if !self.connected {

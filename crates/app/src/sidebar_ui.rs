@@ -381,18 +381,17 @@ impl App {
         });
     }
 
-    fn explorer_toolbar(&mut self, ui: &mut egui::Ui, cwd: &std::path::Path) {
+    pub(super) fn explorer_toolbar(&mut self, ui: &mut egui::Ui, cwd: &std::path::Path) {
         let mut focus_find = false;
+        // Pin the row height so the icon buttons, search field, and text
+        // toggles all share one baseline.
+        ui.spacing_mut().interact_size.y = appearance::TOOLBAR_BUTTON;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            let name = cwd
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| cwd.display().to_string());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let cwd = cwd.to_path_buf();
-                let more = appearance::menu_button(ui, "…", |ui| {
+                let more = appearance::compact_menu_button(ui, "…", |ui| {
                     if appearance::menu_item(ui, "Reveal in file manager", "FolderOpen", "")
                         .clicked()
                     {
@@ -469,8 +468,6 @@ impl App {
                 if refresh.clicked() {
                     self.refresh_request = None;
                 }
-                ui.add(egui::Label::new(RichText::new(name).strong()).truncate())
-                    .on_hover_text(cwd.display().to_string());
             });
         });
         let contents = self.preferences.explorer_search_mode == ExplorerSearchMode::Contents;
@@ -484,7 +481,7 @@ impl App {
             );
             let toggles = if contents { 78.0 } else { 0.0 };
             let find = ui.add_sized(
-                [ui.available_width() - toggles, 24.0],
+                [ui.available_width() - toggles, appearance::TOOLBAR_BUTTON],
                 egui::TextEdit::singleline(&mut self.explorer_query).hint_text(if contents {
                     "Search"
                 } else {
@@ -2572,6 +2569,7 @@ fn git_toolbar(
 ) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
+        ui.spacing_mut().interact_size.y = appearance::TOOLBAR_BUTTON;
         let collapse = appearance::sidebar_action(ui, "ChevronsDownUp", "Collapse all");
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "git-collapse", collapse.rect);
@@ -2618,7 +2616,7 @@ fn git_toolbar(
         if log.clicked() {
             outcome.view_log = true;
         }
-        let more = appearance::menu_button(ui, "…", |ui| {
+        let more = appearance::compact_menu_button(ui, "…", |ui| {
             let mark = if input.view_list { "✓" } else { "" };
             if appearance::menu_item(ui, "View as list", "List", mark).clicked() {
                 outcome.toggle_list = true;

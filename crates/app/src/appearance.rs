@@ -210,8 +210,24 @@ pub fn framed_icon(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
     response
 }
 
+/// Sidebar toolbar glyph size. Every frameless icon control shares it so the
+/// icons sit on one row regardless of the ambient [`egui::Style`] spacing.
+pub const TOOLBAR_BUTTON: f32 = 22.0;
+const TOOLBAR_ICON: f32 = 14.0;
+
+/// Allocate a frameless control at an exact size. `Ui::add_sized` still lets
+/// `spacing.interact_size` inflate the response, which is what pushed toolbar
+/// icons to different heights; pin the spacing for the allocation.
+fn exact_button(ui: &mut egui::Ui, size: egui::Vec2) -> egui::Response {
+    ui.scope(|ui| {
+        ui.spacing_mut().interact_size = size;
+        ui.add_sized(size, egui::Button::new("").frame(false))
+    })
+    .inner
+}
+
 pub fn sidebar_action(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
-    let response = ui.add_sized([22.0, 22.0], egui::Button::new("").frame(false));
+    let response = exact_button(ui, egui::Vec2::splat(TOOLBAR_BUTTON));
     paint_action_icon(ui, &response, icon);
     response.on_hover_text(tip)
 }
@@ -224,8 +240,9 @@ fn paint_action_icon(ui: &egui::Ui, response: &egui::Response, icon: &str) {
         ui.painter()
             .rect_filled(rect, 4.0, ui.visuals().widgets.hovered.bg_fill);
     }
-    let icon_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(14.0, 14.0))
-        .round_to_pixels(ui.pixels_per_point());
+    let icon_rect =
+        egui::Rect::from_center_size(rect.center(), egui::vec2(TOOLBAR_ICON, TOOLBAR_ICON))
+            .round_to_pixels(ui.pixels_per_point());
     egui::Image::new(crate::icons::source(icon))
         .tint(ICON_COLOR)
         .paint_at(ui, icon_rect);
@@ -238,12 +255,16 @@ pub fn icon_menu_button<R>(
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
     let config = egui::menu::MenuConfig::new().style(menu_style);
-    let button = egui::Button::new("")
-        .frame(false)
-        .min_size(egui::vec2(22.0, 22.0));
-    let (response, inner) = egui::menu::MenuButton::from_button(button)
-        .config(config)
-        .ui(ui, add_contents);
+    let size = egui::Vec2::splat(TOOLBAR_BUTTON);
+    let (response, inner) = ui
+        .scope(|ui| {
+            ui.spacing_mut().interact_size = size;
+            let button = egui::Button::new("").frame(false).min_size(size);
+            egui::menu::MenuButton::from_button(button)
+                .config(config)
+                .ui(ui, add_contents)
+        })
+        .inner;
     paint_action_icon(ui, &response, icon);
     egui::InnerResponse::new(inner.map(|shown| shown.inner), response)
 }
@@ -251,13 +272,11 @@ pub fn icon_menu_button<R>(
 /// Icon-only selectable control (tabs, toggles). The hover overlay carries the
 /// text label and the selected state fills the frame.
 pub fn selectable_icon(ui: &mut egui::Ui, icon: &str, tip: &str, selected: bool) -> egui::Response {
-    let response = ui
-        .add_sized([30.0, 24.0], egui::Button::new("").frame(false))
-        .on_hover_text(tip);
+    let response = exact_button(ui, egui::Vec2::splat(TOOLBAR_BUTTON)).on_hover_text(tip);
     if response.hovered() || selected {
         ui.painter().rect_filled(
             response.rect,
-            5,
+            4,
             if selected {
                 ui.visuals().selection.bg_fill
             } else {
@@ -269,7 +288,7 @@ pub fn selectable_icon(ui: &mut egui::Ui, icon: &str, tip: &str, selected: bool)
         .tint(ICON_COLOR)
         .paint_at(
             ui,
-            egui::Rect::from_center_size(response.rect.center(), egui::vec2(15.0, 15.0)),
+            egui::Rect::from_center_size(response.rect.center(), egui::Vec2::splat(TOOLBAR_ICON)),
         );
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, tip)
@@ -397,6 +416,7 @@ pub fn text_menu_button<R>(
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
     ui.scope(|ui| {
+        ui.spacing_mut().interact_size.y = TOOLBAR_BUTTON;
         let visuals = ui.visuals_mut();
         for widget in [&mut visuals.widgets.inactive, &mut visuals.widgets.active] {
             widget.bg_fill = Color32::TRANSPARENT;
@@ -408,6 +428,35 @@ pub fn text_menu_button<R>(
         menu_button(ui, title, add_contents)
     })
     .inner
+}
+
+/// Frameless square menu button holding a short text glyph (for example `…`),
+/// matching the icon actions beside it.
+pub fn compact_menu_button<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let size = egui::Vec2::splat(TOOLBAR_BUTTON);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    if response.hovered() || response.is_pointer_button_down_on() {
+        ui.painter()
+            .rect_filled(rect, 4.0, ui.visuals().widgets.hovered.bg_fill);
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(14.0),
+        ICON_COLOR,
+    );
+    let popup = egui::Popup::menu(&response)
+        .style(menu_style)
+        .show(add_contents);
+    egui::InnerResponse::new(popup.map(|shown| shown.inner), response)
 }
 
 /// Flat full-width action row with a fixed icon column and optional shortcut.

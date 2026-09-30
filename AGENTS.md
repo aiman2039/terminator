@@ -44,6 +44,8 @@ After the test-support build, use `cargo xtask gui CASE` with `workspace-tabs`, 
 
 Use rustfmt defaults, four-space indentation, `snake_case` functions/modules, and `PascalCase` types. Keep IPC and lifecycle models in `core`; keep blocking work outside GUI rendering. Prefer existing native packages over custom rendering infrastructure. No Electron, Chromium, CEF, or Servo. GUI-only OS webview tabs (WKWebView / WebKitGTK via wry) are allowed. They die with the GUI, persist path/URL in layout, use an isolated data-dir profile, and load local HTML files plus http(s) only. Hide the native view when the pane is covered. No JS bridge into the app.
 
+Keep every toolbar icon on one row and one size. Use the shared `appearance` helpers (`sidebar_action`, `selectable_icon`, `icon_menu_button`, `compact_menu_button`, `text_menu_button`) so frameless controls keep a fixed square regardless of ambient `interact_size`; never mix a framed or differently sized button beside them.
+
 ## Architecture & Behavior Constraints
 
 - The daemon owns persistent PTYs, shells, and editors; the GUI attaches to them. Closing the GUI must leave sessions running. Historical sessions are not automatically restarted.

@@ -394,7 +394,8 @@ fn meter_row(
                     egui::Label::new(RichText::new(value).color(colors.value).size(12.0))
                         .truncate(),
                 );
-                meter_bar(ui, fraction, colors.bar);
+                let bar = meter_bar(ui, fraction, colors.bar);
+                mark_bar(ui, target, bar);
                 response
             })
             .inner;
@@ -402,7 +403,7 @@ fn meter_row(
     });
 }
 
-fn meter_bar(ui: &mut egui::Ui, fraction: f32, color: Color32) {
+fn meter_bar(ui: &mut egui::Ui, fraction: f32, color: Color32) -> egui::Rect {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(56.0, 14.0), egui::Sense::hover());
     let bar = egui::Rect::from_center_size(rect.center(), egui::vec2(56.0, 4.0));
     ui.painter()
@@ -415,6 +416,7 @@ fn meter_bar(ui: &mut egui::Ui, fraction: f32, color: Color32) {
             color,
         );
     }
+    rect
 }
 
 fn mark(ui: &egui::Ui, target: &str, response: &egui::Response) {
@@ -423,6 +425,15 @@ fn mark(ui: &egui::Ui, target: &str, response: &egui::Response) {
     #[cfg(not(feature = "test-support"))]
     {
         let _ = (ui, target, response);
+    }
+}
+
+fn mark_bar(ui: &egui::Ui, target: &str, rect: egui::Rect) {
+    #[cfg(feature = "test-support")]
+    diagnostics::record(ui.ctx(), &format!("{target}-bar"), rect);
+    #[cfg(not(feature = "test-support"))]
+    {
+        let _ = (ui, target, rect);
     }
 }
 

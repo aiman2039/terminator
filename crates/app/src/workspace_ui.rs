@@ -382,6 +382,23 @@ impl App {
             && self.search_session.is_none()
     }
 
+    /// Terminals docked in the IDE strip stay interactive while a center-only
+    /// view (Settings, Player, palette, or search) covers the main workspace.
+    /// True modals still suspend them.
+    pub(super) fn strip_terminal_input_enabled(&self, sid: &str) -> bool {
+        !self.picker_active
+            && !self.add_project
+            && !self.notice_detail_modal_open()
+            && (self.close_session.is_none() || self.idle_close_pending.is_some())
+            && !self.editor_close_sessions.contains(sid)
+            && (self.close_workspace.is_none() || self.idle_close_pending.is_some())
+            && self.rename_session.is_none()
+            && self.name_prompt.is_none()
+            && self.pending_delete.is_none()
+            && !self.open_path
+            && self.worktree_remove.is_none()
+    }
+
     fn terminal_status_color(&self, session: &Session) -> Option<egui::Color32> {
         let presented = self.present_session(&session.id);
         let theme = &self.theme;
@@ -2952,6 +2969,10 @@ impl TabViewer for Viewer<'_> {
         actions + 28.0
     }
     fn trailing_controls(&mut self, ui: &mut egui::Ui, path: egui_dock::NodePath) {
+        // The dock's own style can set a taller interact size; pin it so every
+        // toolbar control resolves to the same square and centers share a row.
+        ui.spacing_mut().interact_size =
+            egui::vec2(appearance::TERMINAL_BUTTON, appearance::TERMINAL_BUTTON);
         ui.spacing_mut().item_spacing.x = 4.0;
         if self.strip {
             self.strip_terminal_actions(ui, path);
@@ -3175,15 +3196,10 @@ impl TabViewer for Viewer<'_> {
                     .find(|s| s.id == *sid)
                     .cloned()
                 else {
-                    ui.horizontal(|ui| {
-                        ui.weak("Session record unavailable");
-                        let close = ui.small_button("Close tab");
-                        #[cfg(feature = "test-support")]
-                        diagnostics::record(ui.ctx(), &format!("pane-close:{sid}"), close.rect);
-                        if close.clicked() {
-                            self.app.queue_unavailable_tab_close(sid);
-                        }
-                    });
+                    // The daemon pruned the record (a plain shell or editor
+                    // without an agent resume handle). Drop the stale tab
+                    // instead of leaving a dead placeholder behind.
+                    self.app.queue_unavailable_tab_close(sid);
                     return;
                 };
                 let editing = self.app.renaming(sid, RenameSurface::Pane);
@@ -3918,7 +3934,11 @@ impl Viewer<'_> {
             }
         }
         self.terminal_find_bar(ui, sid);
-        let input_enabled = self.app.terminal_input_enabled(sid);
+        let input_enabled = if self.strip {
+            self.app.strip_terminal_input_enabled(sid)
+        } else {
+            self.app.terminal_input_enabled(sid)
+        };
         let find_open = self.app.terminal_find.contains_key(sid);
         let focused = input_enabled
             && !find_open
