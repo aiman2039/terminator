@@ -565,8 +565,28 @@ impl Shared {
                     }
                 }
                 s.revision += 1;
+                // Sessions without an agent resume command (plain shells,
+                // file editors) are not worth keeping: reopening them
+                // restores nothing actionable.
+                if !s.session_has_resume(&sid) {
+                    s.sessions.retain(|r| r.id != sid);
+                    s.agents.retain(|a| a.session_id != sid);
+                    s.notifications.retain(|n| n.session_id != sid);
+                    s.terminal_notices.retain(|n| n.session_id != sid);
+                    s.revision += 1;
+                }
             }
             let _ = shared.persist();
+            if !shared
+                .state
+                .lock()
+                .unwrap()
+                .sessions
+                .iter()
+                .any(|r| r.id == sid)
+            {
+                let _ = shared.history_clear(Some(sid.clone()), true);
+            }
             shared.sessions.lock().unwrap().remove(&sid);
             drop(review_files);
         });
@@ -1321,6 +1341,17 @@ fn main() -> Result<()> {
     atomic_write(&paths.auth(), auth.as_bytes())?;
     let (mut store, mut state) = storage::Store::open(&paths)?;
     state.recover();
+    // Migrate existing stores: drop historical sessions without an agent
+    // resume command so old plain shells/editors stop filling History.
+    let removed = state.prune_non_resumable_ended();
+    if !removed.is_empty()
+        && let Ok(mut history) = storage::History::new(paths.clone())
+    {
+        for id in &removed {
+            let _ = history.clear(Some(id), true);
+        }
+        let _ = history.flush();
+    }
     if let Some(root) = &catalog_paths {
         let owner = std::env::var("TERMINATOR_GENERATION")?;
         ensure!(
