@@ -1,4 +1,4 @@
-use egui::{Id, Ui, WidgetText};
+use egui::{Id, Rect, Ui, WidgetText};
 
 use crate::{NodePath, TabStyle};
 
@@ -16,6 +16,18 @@ pub trait TabViewer {
 
     /// The title to be displayed in the tab bar.
     fn title(&mut self, tab: &mut Self::Tab) -> WidgetText;
+
+    /// Width in points reserved before the tab title for viewer-painted
+    /// leading icons (e.g. agent brand plus lifecycle status). Zero hides
+    /// the slot entirely, which is the default.
+    fn tab_leading_width(&self, _tab: &Self::Tab) -> f32 {
+        0.0
+    }
+
+    /// Paint leading icons into `rect`: full tab height,
+    /// [`Self::tab_leading_width`] wide, tucked against the tab's left edge.
+    /// No-op by default.
+    fn paint_tab_leading(&mut self, _ui: &mut Ui, _rect: Rect, _tab: &mut Self::Tab) {}
 
     /// Actual tab content.
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab);

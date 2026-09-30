@@ -1088,7 +1088,7 @@ impl App {
                 &session.id,
                 RenameSurface::Sidebar,
                 egui::Rect::from_min_max(
-                    response.rect.min + egui::vec2(26.0, 4.0),
+                    response.rect.min + egui::vec2(36.0, 4.0),
                     response.rect.max - egui::vec2(6.0, 3.0),
                 ),
             );
@@ -1242,6 +1242,10 @@ impl App {
             }
         }
         let entries = self.dirs.get(path).cloned();
+        let query_filter =
+            (!self.explorer_query.is_empty()).then(|| self.explorer_query.to_lowercase());
+        let open_shortcut = self.shortcut_label("open_file");
+        let split_shortcut = self.shortcut_label("split_right");
         if let Some(entries) = entries {
             for entry in entries {
                 if entry.ignored && !self.preferences.show_ignored {
@@ -1253,12 +1257,7 @@ impl App {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
-                if !entry.directory
-                    && !self.explorer_query.is_empty()
-                    && !label
-                        .to_lowercase()
-                        .contains(&self.explorer_query.to_lowercase())
-                {
+                if !explorer_query_keeps_file(&label, entry.directory, query_filter.as_deref()) {
                     continue;
                 }
                 if entry.directory {
@@ -1282,16 +1281,22 @@ impl App {
                         22.0,
                         &status.to_string(),
                         color,
-                    )
-                    .on_hover_text(format!(
-                        "{}\n{}",
-                        entry.path.display(),
-                        if entry.ignored {
-                            "Ignored"
-                        } else {
-                            terminator_git::status_description(status)
-                        }
-                    ));
+                    );
+                    // Build the tooltip lazily: `format!` per visible row per
+                    // frame showed up as scroll-time allocations.
+                    let folder = if folder.hovered() {
+                        folder.on_hover_text(format!(
+                            "{}\n{}",
+                            entry.path.display(),
+                            if entry.ignored {
+                                "Ignored"
+                            } else {
+                                terminator_git::status_description(status)
+                            }
+                        ))
+                    } else {
+                        folder
+                    };
                     if folder.clicked() {
                         if expanded {
                             self.expanded_dirs.remove(&entry.path);
@@ -1341,8 +1346,6 @@ impl App {
                         .and_then(|c| c.decorations.get(&entry.path))
                         .copied()
                         .unwrap_or(' ');
-                    let open_shortcut = self.shortcut_label("open_file");
-                    let split_shortcut = self.shortcut_label("split_right");
                     let outcome = explorer_file_row(
                         ui,
                         &entry.path,
@@ -2595,8 +2598,94 @@ fn git_group_label(group: terminator_git::GitGroup) -> &'static str {
     }
 }
 
-/// Icon toolbar: collapse, Changes/History, branch switcher, refresh, log, and
-/// the overflow menu (View as list / Change Base Ref / Refresh branch compare).
+/// Inline width of the trailing compare/view actions (list toggle, base-ref
+/// picker, compare refresh) when they sit beside the log button: three icon
+/// slots plus their gaps.
+const GIT_MORE_INLINE_WIDTH: f32 = 3.0 * appearance::TOOLBAR_BUTTON + 2.0 * 4.0;
+
+/// Base-ref picker shared by the inline toolbar button and the overflow menu:
+/// automatic upstream plus every known branch.
+fn git_base_ref_contents(
+    ui: &mut egui::Ui,
+    input: &GitPanelInput<'_>,
+    outcome: &mut GitPanelOutcome,
+) {
+    let auto = if input.base_ref.is_none() { "✓" } else { "" };
+    if appearance::menu_item(ui, "Automatic (upstream)", "GitCompareArrows", auto).clicked() {
+        outcome.clear_base = true;
+        ui.close();
+    }
+    ui.separator();
+    if input.branches.is_empty() {
+        ui.weak("No branches");
+    }
+    for name in input.branches {
+        let mark = if input.base_ref == Some(name.as_str()) {
+            "✓"
+        } else {
+            ""
+        };
+        if appearance::menu_item(ui, name, "GitBranch", mark).clicked() {
+            outcome.set_base = Some(name.clone());
+            ui.close();
+        }
+    }
+}
+
+/// Trailing compare/view actions as inline toolbar icons, used when the
+/// sidebar has room. Falls back to [`git_overflow_more`] when narrow.
+fn git_inline_more(ui: &mut egui::Ui, input: &GitPanelInput<'_>, outcome: &mut GitPanelOutcome) {
+    let list = appearance::selectable_icon(ui, "List", "View as list", input.view_list);
+    #[cfg(feature = "test-support")]
+    diagnostics::record(ui.ctx(), "git-view-list", list.rect);
+    if list.clicked() {
+        outcome.toggle_list = true;
+    }
+    let base = appearance::icon_menu_button(ui, "GitCompareArrows", |ui| {
+        git_base_ref_contents(ui, input, outcome);
+    })
+    .response
+    .on_hover_text("Change base ref");
+    #[cfg(feature = "test-support")]
+    diagnostics::record(ui.ctx(), "git-base-ref", base.rect);
+    let _ = base;
+    let compare = appearance::sidebar_action(ui, "RefreshCw", "Refresh branch compare");
+    #[cfg(feature = "test-support")]
+    diagnostics::record(ui.ctx(), "git-compare-refresh", compare.rect);
+    if compare.clicked() {
+        outcome.refresh_compare = true;
+    }
+}
+
+/// Trailing compare/view actions behind the `…` menu, used when the sidebar
+/// is too narrow for the inline icons.
+fn git_overflow_more(ui: &mut egui::Ui, input: &GitPanelInput<'_>, outcome: &mut GitPanelOutcome) {
+    let more = appearance::compact_menu_button(ui, "…", |ui| {
+        let mark = if input.view_list { "✓" } else { "" };
+        if appearance::menu_item(ui, "View as list", "List", mark).clicked() {
+            outcome.toggle_list = true;
+            ui.close();
+        }
+        let base = appearance::menu_button(ui, "Change Base Ref…", |ui| {
+            git_base_ref_contents(ui, input, outcome);
+        });
+        let _ = base;
+        ui.separator();
+        if appearance::menu_item(ui, "Refresh branch compare", "RefreshCw", "").clicked() {
+            outcome.refresh_compare = true;
+            ui.close();
+        }
+    })
+    .response
+    .on_hover_text("More Git actions");
+    #[cfg(feature = "test-support")]
+    diagnostics::record(ui.ctx(), "git-more", more.rect);
+    let _ = more;
+}
+
+/// Icon toolbar: collapse, Changes/History, branch switcher, refresh, log,
+/// then the compare/view actions inline when the sidebar has room, or behind
+/// the overflow menu when narrow.
 fn git_toolbar(
     ui: &mut egui::Ui,
     input: &GitPanelInput<'_>,
@@ -2652,48 +2741,11 @@ fn git_toolbar(
         if log.clicked() {
             outcome.view_log = true;
         }
-        let more = appearance::compact_menu_button(ui, "…", |ui| {
-            let mark = if input.view_list { "✓" } else { "" };
-            if appearance::menu_item(ui, "View as list", "List", mark).clicked() {
-                outcome.toggle_list = true;
-                ui.close();
-            }
-            let base = appearance::menu_button(ui, "Change Base Ref…", |ui| {
-                let auto = if input.base_ref.is_none() { "✓" } else { "" };
-                if appearance::menu_item(ui, "Automatic (upstream)", "GitCompareArrows", auto)
-                    .clicked()
-                {
-                    outcome.clear_base = true;
-                    ui.close();
-                }
-                ui.separator();
-                if input.branches.is_empty() {
-                    ui.weak("No branches");
-                }
-                for name in input.branches {
-                    let mark = if input.base_ref == Some(name.as_str()) {
-                        "✓"
-                    } else {
-                        ""
-                    };
-                    if appearance::menu_item(ui, name, "GitBranch", mark).clicked() {
-                        outcome.set_base = Some(name.clone());
-                        ui.close();
-                    }
-                }
-            });
-            let _ = base;
-            ui.separator();
-            if appearance::menu_item(ui, "Refresh branch compare", "RefreshCw", "").clicked() {
-                outcome.refresh_compare = true;
-                ui.close();
-            }
-        })
-        .response
-        .on_hover_text("More Git actions");
-        #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "git-more", more.rect);
-        let _ = more;
+        if ui.available_width() >= GIT_MORE_INLINE_WIDTH {
+            git_inline_more(ui, input, outcome);
+        } else {
+            git_overflow_more(ui, input, outcome);
+        }
     });
 }
 
@@ -3267,6 +3319,17 @@ pub struct ExplorerRowOutcome {
     pub local: Option<ExplorerLocal>,
 }
 
+/// Case-insensitive explorer filter over a pre-lowercased query. Directories
+/// always pass; files pass when the needle is absent or contained. Hoisting
+/// the lowercased query out of the per-file loop avoids one `to_lowercase`
+/// allocation per file per scroll frame.
+fn explorer_query_keeps_file(label: &str, directory: bool, needle: Option<&str>) -> bool {
+    if directory {
+        return true;
+    }
+    needle.is_none_or(|needle| label.to_lowercase().contains(needle))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn explorer_file_row(
     ui: &mut egui::Ui,
@@ -3292,16 +3355,22 @@ pub fn explorer_file_row(
         24.0,
         &status.to_string(),
         color,
-    )
-    .on_hover_text(format!(
-        "{}\n{}",
-        path.display(),
-        if ignored {
-            "Ignored"
-        } else {
-            terminator_git::status_description(status)
-        }
-    ));
+    );
+    // Tooltip text is only needed for the hovered row; formatting it for
+    // every row on every scroll frame allocates heavily.
+    let r = if r.hovered() {
+        r.on_hover_text(format!(
+            "{}\n{}",
+            path.display(),
+            if ignored {
+                "Ignored"
+            } else {
+                terminator_git::status_description(status)
+            }
+        ))
+    } else {
+        r
+    };
     #[cfg(feature = "test-support")]
     diagnostics::record(ui.ctx(), &format!("explorer-file:{label}"), r.rect);
     if r.clicked() || r.double_clicked() {
@@ -3692,6 +3761,18 @@ mod tests {
     }
 
     #[test]
+    fn explorer_query_filter_is_case_insensitive_and_keeps_directories() {
+        // The needle is the pre-lowercased query hoisted out of the per-file
+        // loop; labels may use any case.
+        assert!(explorer_query_keeps_file("README.md", false, None));
+        assert!(explorer_query_keeps_file("README.md", false, Some("read")));
+        assert!(explorer_query_keeps_file("MAIN.RS", false, Some("main")));
+        assert!(!explorer_query_keeps_file("main.rs", false, Some("test")));
+        assert!(explorer_query_keeps_file("src", true, Some("test")));
+        assert!(explorer_query_keeps_file("src", true, None));
+    }
+
+    #[test]
     fn inbox_rows_fold_notices_per_session() {
         fn notice(id: &str, session: &str, invocation: &str, created: u64) -> Notification {
             Notification {
@@ -4039,6 +4120,105 @@ mod tests {
         let stage_all = recorded_target(&ctx, "git-stage-all").expect("stage all is painted");
         click(stage_all, |events| draw(events, &mut outcome));
         assert!(outcome.stage_all);
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn git_toolbar_shows_inline_actions_when_wide_and_overflow_when_narrow() {
+        let make_context = || ContextData {
+            cwd: "/repo".into(),
+            root: Some("/repo".into()),
+            git_dirs: vec![],
+            branch: "main".into(),
+            changes: vec![],
+            decorations: Default::default(),
+            stats: Default::default(),
+            error: None,
+        };
+        let compare = workspace_ops::CompareData {
+            root: Some("/repo".into()),
+            upstream: Some("origin/main".into()),
+            ahead: 1,
+            behind: 0,
+            base: Some("origin/main".into()),
+            files: vec![],
+        };
+        let branches = vec!["main".to_string(), "dev".to_string()];
+        let theme = AppearanceConfig::default();
+        let context = make_context();
+        let draw = |ctx: &egui::Context,
+                    width: f32,
+                    events: Vec<egui::Event>,
+                    outcome: &mut GitPanelOutcome| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 700.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut draft = String::new();
+                    let mut input = GitPanelInput {
+                        context: &context,
+                        review_mode: ReviewMode::Native,
+                        neovim_review: false,
+                        theme: &theme,
+                        history: false,
+                        view_list: false,
+                        commits: &[],
+                        branches: &branches,
+                        commit_draft: &mut draft,
+                        collapse_generation: 0,
+                        open_shortcut: "",
+                        compare: Some(&compare),
+                        base_ref: None,
+                    };
+                    *outcome = git_panel(ui, &mut input);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        let wide = egui::Context::default();
+        crate::appearance::install(&wide);
+        let mut outcome = GitPanelOutcome::default();
+        draw(&wide, 360.0, vec![], &mut outcome);
+        assert!(recorded_target(&wide, "git-view-list").is_some());
+        assert!(recorded_target(&wide, "git-base-ref").is_some());
+        assert!(recorded_target(&wide, "git-compare-refresh").is_some());
+        assert!(recorded_target(&wide, "git-more").is_none());
+        let list = recorded_target(&wide, "git-view-list").expect("list toggle");
+        let pos = list.center();
+        draw(
+            &wide,
+            360.0,
+            vec![egui::Event::PointerMoved(pos)],
+            &mut outcome,
+        );
+        for pressed in [true, false] {
+            draw(
+                &wide,
+                360.0,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                &mut outcome,
+            );
+        }
+        assert!(outcome.toggle_list);
+        let narrow = egui::Context::default();
+        crate::appearance::install(&narrow);
+        let mut outcome = GitPanelOutcome::default();
+        draw(&narrow, 200.0, vec![], &mut outcome);
+        assert!(recorded_target(&narrow, "git-more").is_some());
+        assert!(recorded_target(&narrow, "git-view-list").is_none());
+        assert!(recorded_target(&narrow, "git-base-ref").is_none());
+        assert!(recorded_target(&narrow, "git-compare-refresh").is_none());
     }
 
     #[cfg(feature = "test-support")]

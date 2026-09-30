@@ -1,9 +1,10 @@
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, params};
 use std::{
     fs,
     io::{Read, Write},
     path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use terminator_core::*;
 pub struct Store {
@@ -12,21 +13,73 @@ pub struct Store {
 }
 impl Store {
     pub fn open(paths: &Paths) -> Result<(Self, State)> {
+        // Probe the version first: a newer database must fail loudly and
+        // must never be clobbered by the quarantine path below. An
+        // unreadable probe (missing or garbage file) falls through to a
+        // fresh or quarantined open.
+        if let Ok(conn) = Connection::open(paths.data.join("state.sqlite3")) {
+            let version: u32 = conn
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap_or(0);
+            ensure!(version <= 1, "Database is newer than this application");
+        }
+        match Self::read(paths) {
+            Ok(opened) => Ok(opened),
+            Err(error) => {
+                // A damaged store must never prevent startup: quarantine the
+                // files for forensics and start from defaults. If the
+                // directory itself is unusable the fresh open fails too and
+                // that error propagates, as before.
+                let stamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                for suffix in ["", "-wal", "-shm", "-journal"] {
+                    let from = paths.data.join(format!("state.sqlite3{suffix}"));
+                    if from.exists() {
+                        let _ = fs::rename(
+                            &from,
+                            paths
+                                .data
+                                .join(format!("state.corrupt-{stamp}.sqlite3{suffix}")),
+                        );
+                    }
+                }
+                let (store, mut state) = Self::read(paths).context(
+                    "Saved state was unreadable and quarantine did not produce a fresh store",
+                )?;
+                state.degraded = Some(format!(
+                    "Saved state was unreadable and was quarantined; started with defaults: {error:#}"
+                ));
+                Ok((store, state))
+            }
+        }
+    }
+    fn read(paths: &Paths) -> Result<(Self, State)> {
         let conn = Connection::open(paths.data.join("state.sqlite3"))?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=3000;",
         )?;
-        let version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        ensure!(version <= 1, "Database is newer than this application");
         conn.execute_batch("CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL); PRAGMA user_version=1;")?;
         let mut state: State =
             match conn.query_row::<String, _, _>("SELECT json FROM app_state WHERE id=1", [], |r| {
                 r.get(0)
             }) {
-                Ok(json) => serde_json::from_str(&json)?,
+                Ok(json) => {
+                    serde_json::from_str(&json).context("Stored state is not valid JSON")?
+                }
                 Err(rusqlite::Error::QueryReturnedNoRows) => State::default(),
                 Err(e) => return Err(e.into()),
             };
+        if state.settings.validate().is_err() {
+            // Persisted settings that fail current validation could never
+            // have been saved by this build (saves are validated), so they
+            // come from corruption or hand edits. Reset rather than running
+            // with values no code path accepts.
+            state.settings = Settings::default();
+            state.degraded =
+                Some("Stored settings failed validation and were reset to defaults.".into());
+        }
         // Presence is live-only; nothing persisted may claim it.
         state.presence.clear();
         Ok((Self { conn, owner: None }, state))
@@ -439,5 +492,94 @@ mod tests {
         let t = text(&p, &s).unwrap();
         assert!(t.contains("safe"));
         assert!(!t.contains('\x1b'));
+    }
+    fn corrupt_names(data: &std::path::Path) -> Vec<String> {
+        fs::read_dir(data)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("state.corrupt-") && n.ends_with(".sqlite3"))
+            .collect()
+    }
+    #[test]
+    fn unreadable_store_is_quarantined_and_starts_with_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = Paths::at(tmp.path().into());
+        p.init().unwrap();
+        fs::write(p.data.join("state.sqlite3"), b"not a database at all").unwrap();
+        let (store, state) = Store::open(&p).unwrap();
+        assert_eq!(state.settings, Settings::default());
+        assert!(
+            state.degraded.as_deref().unwrap().contains("quarantined"),
+            "startup must report the quarantine: {:?}",
+            state.degraded
+        );
+        assert_eq!(corrupt_names(&p.data).len(), 1);
+        // The fresh store is fully usable: saves land and reload.
+        let mut fresh = State::default();
+        fresh.settings.font_size = 16.0;
+        store.save(&fresh).unwrap();
+        drop(store);
+        let (_, reloaded) = Store::open(&p).unwrap();
+        assert_eq!(reloaded.settings.font_size, 16.0);
+        assert!(reloaded.degraded.is_none());
+    }
+    #[test]
+    fn invalid_json_row_is_quarantined_not_loaded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = Paths::at(tmp.path().into());
+        p.init().unwrap();
+        let (db, _) = Store::open(&p).unwrap();
+        db.conn
+            .execute("INSERT INTO app_state(id,json) VALUES(1,'{truncated')", [])
+            .unwrap();
+        drop(db);
+        let (_, state) = Store::open(&p).unwrap();
+        assert_eq!(state.settings, Settings::default());
+        assert!(
+            state.degraded.as_deref().unwrap().contains("quarantined"),
+            "a half-written row must not fail startup: {:?}",
+            state.degraded
+        );
+        assert_eq!(corrupt_names(&p.data).len(), 1);
+    }
+    #[test]
+    fn invalid_settings_are_reset_to_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = Paths::at(tmp.path().into());
+        p.init().unwrap();
+        let (db, _) = Store::open(&p).unwrap();
+        let mut damaged = State::default();
+        damaged.settings.history_days = 0;
+        assert!(damaged.settings.validate().is_err());
+        db.save(&damaged).unwrap();
+        drop(db);
+        let (_, state) = Store::open(&p).unwrap();
+        assert_eq!(state.settings, Settings::default());
+        assert!(
+            state.degraded.as_deref().unwrap().contains("validation"),
+            "settings reset must be reported: {:?}",
+            state.degraded
+        );
+        assert!(corrupt_names(&p.data).is_empty());
+    }
+    #[test]
+    fn newer_database_still_fails_without_quarantine() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = Paths::at(tmp.path().into());
+        p.init().unwrap();
+        let (db, _) = Store::open(&p).unwrap();
+        db.conn.execute_batch("PRAGMA user_version=99").unwrap();
+        drop(db);
+        match Store::open(&p) {
+            Err(error) => assert!(
+                format!("{error:#}").contains("newer than this application"),
+                "unexpected error: {error:#}"
+            ),
+            Ok(_) => panic!("a newer database must fail instead of opening"),
+        }
+        assert!(
+            corrupt_names(&p.data).is_empty(),
+            "a newer database must never be clobbered"
+        );
     }
 }

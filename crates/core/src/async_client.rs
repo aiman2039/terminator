@@ -59,6 +59,13 @@ impl Client {
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
             + 1;
     }
+    /// Drop one retired owner's cached snapshot so the next poll re-reads it
+    /// from disk. Retired state is otherwise served from [`Self::historical`]
+    /// for the life of the client, which would resurrect a just-dismissed,
+    /// read, or snoozed historical notice on the next full snapshot.
+    fn evict_historical(&self, generation: &str) {
+        self.historical.lock().unwrap().remove(generation);
+    }
     async fn generations(&self) -> Result<bool> {
         let paths = self.paths.clone();
         self.catalog
@@ -110,6 +117,11 @@ impl Client {
                     Ok(targets)
                 })
                 .await?;
+            let retired = targets
+                .iter()
+                .filter_map(|(_, request)| archived_mutation(request))
+                .map(str::to_string)
+                .collect::<Vec<_>>();
             let mut responses =
                 stream::iter(targets.into_iter().map(|(paths, request)| async move {
                     self.direct(paths, request, None).await?.checked()
@@ -117,6 +129,9 @@ impl Client {
                 .buffer_unordered(4);
             while let Some(result) = responses.next().await {
                 result?;
+            }
+            for generation in retired {
+                self.evict_historical(&generation);
             }
             return Ok(Response::Ok);
         }
@@ -167,7 +182,11 @@ impl Client {
                     .await?;
                 continue;
             }
-            return response.checked();
+            let response = response.checked()?;
+            if let Some(generation) = archived_mutation(&request) {
+                self.evict_historical(generation);
+            }
+            return Ok(response);
         }
         bail!("Active service changed repeatedly before execution; retry the operation")
     }
@@ -474,6 +493,22 @@ impl Client {
             .await
     }
 }
+/// The retired generation an archived request mutates, if any. Reads served
+/// from a retired owner's disk state (history text) leave the snapshot cache
+/// valid; everything else the retired owner accepts changes what the next
+/// snapshot must re-read.
+fn archived_mutation(request: &Request) -> Option<&str> {
+    if let Request::Archived {
+        generation,
+        request,
+    } = request
+        && !matches!(**request, Request::History { .. })
+    {
+        return Some(generation);
+    }
+    None
+}
+
 #[must_use]
 pub fn read_only(request: &Request) -> bool {
     matches!(
@@ -643,6 +678,250 @@ mod tests {
             client.snapshot(Some(first.snapshot_hint())).await.unwrap(),
             Response::Unchanged
         ));
+        server.abort();
+    }
+
+    #[test]
+    fn archived_mutation_marks_only_retired_writes_for_cache_eviction() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::at(dir.path().into());
+        paths.init().unwrap();
+        let client = Client::new(
+            paths,
+            NativePool::new("evict-test", 1).unwrap(),
+            NativePool::new("evict-cpu-test", 1).unwrap(),
+        );
+        client
+            .historical
+            .lock()
+            .unwrap()
+            .insert("retired".to_string(), std::sync::Arc::new(State::default()));
+        // Plain (non-archived) requests never touch the retired cache.
+        assert!(
+            archived_mutation(&Request::Notice {
+                id: "n".into(),
+                action: "dismiss".into(),
+            })
+            .is_none()
+        );
+        // Archived history reads are served from disk without changing it.
+        assert!(
+            archived_mutation(&Request::Archived {
+                generation: "retired".into(),
+                request: Box::new(Request::History {
+                    session: "s".into()
+                }),
+            })
+            .is_none()
+        );
+        assert_eq!(
+            archived_mutation(&Request::Archived {
+                generation: "retired".into(),
+                request: Box::new(Request::Notice {
+                    id: "n".into(),
+                    action: "dismiss".into(),
+                }),
+            }),
+            Some("retired")
+        );
+        client.evict_historical("retired");
+        assert!(
+            client.historical.lock().unwrap().is_empty(),
+            "eviction must drop the touched retired snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn archived_notice_dismissal_is_visible_to_the_next_snapshot() {
+        use crate::generations::{self, Catalog, Generation, Status};
+        let dir = tempfile::Builder::new()
+            .prefix("archived-notice-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let root = Paths::at(dir.path().into());
+        root.init().unwrap();
+        generations::migrate_idle(&root).unwrap();
+        fn test_owner(root: &Paths, catalog: &Catalog) -> Generation {
+            let id = crate::id();
+            let owner = Generation {
+                data: root.data.join("generations").join(&id),
+                runtime: root.runtime.join(&id[..8]),
+                id,
+                version: "1.0.0".into(),
+                build: "fixture".into(),
+                protocol: PROTOCOL_VERSION,
+                catalog: generations::CATALOG_VERSION,
+                status: Status::Prepared,
+                pid: None,
+            };
+            owner.paths().init().unwrap();
+            let db = rusqlite::Connection::open(owner.data.join("state.sqlite3")).unwrap();
+            db.execute_batch(
+                "CREATE TABLE app_state(id INTEGER PRIMARY KEY,json TEXT NOT NULL); PRAGMA user_version=1;",
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO app_state VALUES(1,?1)",
+                [serde_json::to_string(&State {
+                    generation: owner.id.clone(),
+                    ..Default::default()
+                })
+                .unwrap()],
+            )
+            .unwrap();
+            catalog.register(&owner).unwrap();
+            owner
+        }
+        fn save_state(owner: &Generation, state: &State) {
+            rusqlite::Connection::open(owner.data.join("state.sqlite3"))
+                .unwrap()
+                .execute(
+                    "UPDATE app_state SET json=?1",
+                    [serde_json::to_string(state).unwrap()],
+                )
+                .unwrap();
+        }
+        let mut catalog = Catalog::open(&root).unwrap();
+        let retired = test_owner(&root, &catalog);
+        let active = test_owner(&root, &catalog);
+        let notice_id = crate::id();
+        let stale_session = crate::Session {
+            id: crate::id(),
+            project_id: crate::id(),
+            label: "old terminal".into(),
+            cwd: "/tmp".into(),
+            kind: crate::SessionKind::Shell,
+            file: None,
+            lifecycle: crate::Lifecycle::Interrupted,
+            created: crate::now(),
+            exit_code: None,
+            rows: 24,
+            cols: 80,
+            generation: retired.id.clone(),
+            pid: None,
+            truncated: false,
+            cwd_confirmed: false,
+            review: false,
+        };
+        save_state(
+            &retired,
+            &State {
+                generation: retired.id.clone(),
+                revision: 1,
+                sessions: vec![stale_session.clone()],
+                notifications: vec![crate::Notification {
+                    id: notice_id.clone(),
+                    session_id: stale_session.id.clone(),
+                    invocation_id: crate::id(),
+                    request_id: None,
+                    state: crate::AgentState::WaitingInput,
+                    summary: "waiting".into(),
+                    details: String::new(),
+                    created: crate::now(),
+                    read: false,
+                    dismissed: false,
+                    resolved: false,
+                    snoozed_until: 0,
+                }],
+                ..Default::default()
+            },
+        );
+        catalog.activate(&active.id).unwrap();
+        catalog.retire(&retired.id).unwrap();
+        std::fs::write(active.paths().auth(), "fixture").unwrap();
+        let served = State {
+            generation: active.id.clone(),
+            revision: 1,
+            ..Default::default()
+        };
+        let retired_id = retired.id.clone();
+        let evicted_id = retired_id.clone();
+        let expected_notice = notice_id.clone();
+        let listener = tokio::net::UnixListener::bind(active.paths().socket()).unwrap();
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let request = envelope(&mut socket).await;
+                match request.request {
+                    Request::Snapshot => {
+                        let mut bytes = Vec::new();
+                        snapshot::write_response(
+                            &mut bytes,
+                            &Response::State(Box::new(served.clone())),
+                            request.snapshot_chunks,
+                        )
+                        .unwrap();
+                        if socket.write_all(&bytes).await.is_err() {
+                            break;
+                        }
+                    }
+                    Request::Archived {
+                        generation,
+                        request,
+                    } if generation == retired_id => {
+                        let Request::Notice { id, action } = *request else {
+                            panic!("expected an archived notice action");
+                        };
+                        assert_eq!(id, expected_notice);
+                        assert_eq!(action, "dismiss");
+                        // Mimic the daemon's archived handler: the retired
+                        // owner's disk state carries the dismissal.
+                        let mut state = generations::saved(&retired.paths()).unwrap();
+                        let notice = state
+                            .notifications
+                            .iter_mut()
+                            .find(|notice| notice.id == id)
+                            .unwrap();
+                        notice.dismissed = true;
+                        state.revision += 1;
+                        save_state(&retired, &state);
+                        let mut bytes = Vec::new();
+                        write_frame(&mut bytes, &Response::Ok).unwrap();
+                        if socket.write_all(&bytes).await.is_err() {
+                            break;
+                        }
+                    }
+                    other => panic!("unexpected request: {other:?}"),
+                }
+            }
+        });
+        let client = Client::new(
+            root,
+            NativePool::new("catalog-dismiss", 1).unwrap(),
+            NativePool::new("cpu-dismiss", 1).unwrap(),
+        );
+        let Response::State(first) = client.snapshot(None).await.unwrap() else {
+            panic!("expected a built state");
+        };
+        assert!(
+            first
+                .notifications
+                .iter()
+                .any(|notice| notice.id == notice_id && !notice.dismissed),
+            "the retired notice is pending before dismissal"
+        );
+        client
+            .rpc(Request::Notice {
+                id: notice_id.clone(),
+                action: "dismiss".into(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            !client.historical.lock().unwrap().contains_key(&evicted_id),
+            "the archived dismissal must drop the cached retired snapshot"
+        );
+        let Response::State(second) = client.snapshot(Some(first.snapshot_hint())).await.unwrap()
+        else {
+            panic!("the dismissal must change the next snapshot");
+        };
+        assert!(
+            second
+                .notifications
+                .iter()
+                .find(|notice| notice.id == notice_id)
+                .is_some_and(|notice| notice.dismissed),
+            "the dismissed retired notice must stay gone"
+        );
         server.abort();
     }
 }

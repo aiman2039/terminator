@@ -322,6 +322,7 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         "Regex" => egui::include_image!("../assets/icons/regex.svg"),
         "GitCompareArrows" => egui::include_image!("../assets/icons/git-compare-arrows.svg"),
         "List" => egui::include_image!("../assets/icons/list.svg"),
+        "LayoutDashboard" => egui::include_image!("../assets/icons/layout-dashboard.svg"),
         "ArrowLeft" => egui::include_image!("../assets/icons/arrow-left.svg"),
         "ArrowRight" => egui::include_image!("../assets/icons/arrow-right.svg"),
         "FileKey" => egui::include_image!("../assets/icons/file-key.svg"),

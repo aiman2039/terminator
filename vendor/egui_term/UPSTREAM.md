@@ -186,6 +186,13 @@ default keymap now lives in a `OnceLock` behind `Arc`. `new` clones that
 and does not mutate the shared default. `sync` is unchanged: an idle PTY
 still skips the viewport copy unless the grid is dirty.
 
+## Scroll-frame font-measurement costs (2026-09-30)
+
+Wheel handling measured the cell font twice per scroll frame and paint took
+two separate font-atlas locks (bold-family probe plus glyph width). The wheel
+path now measures once and paint reads both values under one lock. No
+behavior change; existing scroll unit tests cover the path.
+
 ## Terminal focus no longer steals from other widgets (2026-09-30)
 
 `focus_terminal` unconditionally called `request_focus` every frame a pane was

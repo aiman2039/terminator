@@ -423,7 +423,7 @@ impl<Tab> DockArea<'_, Tab> {
                 tabs_ui.output_mut(|o| o.cursor_icon = CursorIcon::Grabbing);
             }
 
-            let (is_active, label, tab_style, closeable) = {
+            let (is_active, label, tab_style, closeable, leading_width) = {
                 let leaf = self.dock_state[path]
                     .get_leaf_mut()
                     .expect("This node must be a leaf");
@@ -434,6 +434,7 @@ impl<Tab> DockArea<'_, Tab> {
                     tab_viewer.title(&mut leaf.tabs[tab_index.0]),
                     tab_style.unwrap_or(style.tab.clone()),
                     tab_viewer.is_closeable(&leaf.tabs[tab_index.0]),
+                    tab_viewer.tab_leading_width(&leaf.tabs[tab_index.0]),
                 )
             };
 
@@ -443,7 +444,7 @@ impl<Tab> DockArea<'_, Tab> {
                 let layer_id = LayerId::new(Order::Tooltip, id);
                 let response = tabs_ui
                     .scope_builder(UiBuilder::new().layer_id(layer_id), |ui| {
-                        self.tab_title(
+                        let (_, _, leading) = self.tab_title(
                             ui,
                             &tab_style,
                             id,
@@ -453,8 +454,15 @@ impl<Tab> DockArea<'_, Tab> {
                             is_being_dragged,
                             preferred_width,
                             show_close_button,
+                            leading_width,
                             fade,
-                        )
+                        );
+                        if leading_width > 0.0 {
+                            let leaf = self.dock_state[path]
+                                .get_leaf_mut()
+                                .expect("This node must be a leaf");
+                            tab_viewer.paint_tab_leading(ui, leading, &mut leaf.tabs[tab_index.0]);
+                        }
                     })
                     .response;
                 let title_id = response.id;
@@ -473,7 +481,7 @@ impl<Tab> DockArea<'_, Tab> {
                 if tab_index.0 != 0 {
                     tabs_ui.allocate_space(vec2(tab_style.spacing, 0.0));
                 }
-                let (mut response, close_response) = self.tab_title(
+                let (mut response, close_response, leading) = self.tab_title(
                     tabs_ui,
                     &tab_style,
                     id,
@@ -483,8 +491,15 @@ impl<Tab> DockArea<'_, Tab> {
                     is_being_dragged,
                     preferred_width,
                     show_close_button,
+                    leading_width,
                     fade,
                 );
+                if leading_width > 0.0 {
+                    let tabs = self.dock_state[path]
+                        .tabs_mut()
+                        .expect("This node must be a leaf");
+                    tab_viewer.paint_tab_leading(tabs_ui, leading, &mut tabs[tab_index.0]);
+                }
                 let title_id = response.id;
                 let close_clicked = close_response.is_some_and(|res| res.clicked());
                 let is_lonely_tab = self.dock_state[path.surface].num_tabs() == 1;
@@ -1096,8 +1111,9 @@ impl<Tab> DockArea<'_, Tab> {
         is_being_dragged: bool,
         preferred_width: Option<f32>,
         show_close_button: bool,
+        leading_width: f32,
         fade: Option<&Style>,
-    ) -> (Response, Option<Response>) {
+    ) -> (Response, Option<Response>, Rect) {
         let style = fade.unwrap_or_else(|| self.style.as_ref().unwrap());
         let galley = label.into_galley(ui, None, f32::INFINITY, TextStyle::Button);
         let x_spacing = 8.0;
@@ -1112,7 +1128,7 @@ impl<Tab> DockArea<'_, Tab> {
         let minimum_width = tab_style
             .minimum_width
             .unwrap_or(0.0)
-            .at_least(text_width + close_button_size);
+            .at_least(text_width + close_button_size + leading_width);
         let tab_width = preferred_width.unwrap_or(0.0).at_least(minimum_width);
 
         let (_, tab_rect) = ui.allocate_space(vec2(tab_width, ui.available_height()));
@@ -1166,6 +1182,17 @@ impl<Tab> DockArea<'_, Tab> {
 
         let mut text_rect = tab_rect;
         text_rect.set_width(text_rect.width() - close_button_size);
+        text_rect.min.x += leading_width;
+        // Viewer-painted leading icons (brand, lifecycle status) live here;
+        // the caller paints them after this returns.
+        let leading_rect = if leading_width > 0.0 {
+            Rect::from_min_max(
+                pos2(tab_rect.left() + 2.0, tab_rect.top()),
+                pos2(tab_rect.left() + 2.0 + leading_width, tab_rect.bottom()),
+            )
+        } else {
+            Rect::NOTHING
+        };
         let text_pos = {
             let pos = Align2::CENTER_CENTER.pos_in_rect(&text_rect.shrink2(vec2(x_spacing, 0.0)));
             pos - galley.size() / 2.0
@@ -1216,7 +1243,7 @@ impl<Tab> DockArea<'_, Tab> {
             close_response
         });
 
-        (response, close_response)
+        (response, close_response, leading_rect)
     }
 
     #[allow(clippy::too_many_arguments)]

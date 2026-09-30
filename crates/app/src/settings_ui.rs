@@ -937,6 +937,12 @@ impl App {
                 });
         }
         if self.field_visible("ntfy", "channel machine phone push") {
+            // Clearing the channel is the removal gesture: an enabled toggle
+            // with no channel can never validate, so switch the toggle off
+            // instead of trapping Apply behind an error.
+            if self.settings_draft.ntfy_channel.is_empty() {
+                self.settings_draft.ntfy_enabled = false;
+            }
             ui.add_enabled_ui(
                 self.state.capabilities.iter().any(|c| c == NTFY_CAPABILITY),
                 |ui| {
@@ -1380,6 +1386,42 @@ mod tests {
             );
             output.textures_delta.clear();
         }
+    }
+
+    #[test]
+    fn clearing_the_ntfy_channel_switches_the_toggle_off() {
+        let (mut app, ctx, _dir) = app();
+        app.settings_section = SettingsSection::Notifications;
+        app.settings_draft.ntfy_enabled = true;
+        app.settings_draft.ntfy_channel = "phone".into();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 820.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.settings_center(ui),
+        );
+        output.textures_delta.clear();
+        assert!(app.settings_draft.ntfy_enabled);
+        // Clearing the channel is the removal gesture: the toggle must
+        // switch off so the draft stays valid and Apply keeps working.
+        app.settings_draft.ntfy_channel.clear();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 820.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.settings_center(ui),
+        );
+        output.textures_delta.clear();
+        assert!(!app.settings_draft.ntfy_enabled);
+        assert!(app.settings_validation().is_ok());
     }
 
     #[test]

@@ -762,6 +762,9 @@ pub struct App {
     hover_popup: Option<HoverPopup>,
     pending_target_action: Option<(String, Session)>,
     last_heartbeat: Instant,
+    /// Env-gated (`TERMINATOR_REPAINT_LOG`) idle-CPU probe. `None` unless the
+    /// variable is set, so release builds pay nothing for it.
+    repaint_probe: Option<RepaintProbe>,
     last_focus: Option<String>,
     highlight_session: Option<String>,
     highlight_since: Instant,
@@ -1069,6 +1072,7 @@ impl App {
             hover_popup: None,
             pending_target_action: None,
             last_heartbeat: Instant::now(),
+            repaint_probe: RepaintProbe::enabled(),
             last_focus: None,
             highlight_session: None,
             highlight_since: Instant::now(),
@@ -4925,6 +4929,39 @@ impl App {
         }
     }
 }
+/// Env-gated idle-CPU probe. Set `TERMINATOR_REPAINT_LOG=1` and watch stderr:
+/// one line per second with the frame count plus egui's own repaint causes
+/// (`file:line reason`), which names the exact call site keeping the UI awake.
+struct RepaintProbe {
+    frames: u64,
+    last: Instant,
+}
+
+impl RepaintProbe {
+    fn enabled() -> Option<Self> {
+        std::env::var_os("TERMINATOR_REPAINT_LOG").map(|_| Self {
+            frames: 0,
+            last: Instant::now(),
+        })
+    }
+
+    /// Count one frame; about once per second render a one-line summary.
+    fn sample(&mut self, now: Instant, causes: &[String]) -> Option<String> {
+        self.frames += 1;
+        if now.duration_since(self.last) < Duration::from_secs(1) {
+            return None;
+        }
+        let line = format!(
+            "terminator repaint-log: {} frames/s causes=[{}]",
+            self.frames,
+            causes.join(", ")
+        );
+        self.frames = 0;
+        self.last = now;
+        Some(line)
+    }
+}
+
 impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         appearance::cap_max_texture_side(input);
@@ -4937,6 +4974,16 @@ impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // eframe calls logic even while hidden/minimized; ui is rendering-only.
         // IPC and exit checkpoints must not depend on a visible window.
+        if let Some(probe) = self.repaint_probe.as_mut() {
+            let causes: Vec<String> = ctx
+                .repaint_causes()
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+            if let Some(line) = probe.sample(Instant::now(), &causes) {
+                eprintln!("{line}");
+            }
+        }
         self.process_updates(ctx);
         // A terminal tab whose session record was pruned (an ended shell or
         // editor with no resume handle) should disappear on its own.
@@ -5026,7 +5073,9 @@ impl eframe::App for App {
             egui::Panel::top("attention").show(ui, |ui| self.notifications(ui));
         }
         egui::Panel::bottom("status").show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.with_layout(
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
                 ui.colored_label(
                     appearance::color(if self.connected {
                         &self.theme.status_running
@@ -5178,31 +5227,31 @@ impl eframe::App for App {
                     ui.separator();
                     self.player_status_row(ui);
                     self.notification_status_badge(ui);
-                    if self.preferences.ide_terminal_collapsed {
-                        if ui
-                            .small_button("Terminal")
-                            .on_hover_text("Show IDE terminal strip")
-                            .clicked()
-                        {
-                            self.preferences.ide_terminal_collapsed = false;
-                        }
-                    } else {
-                        let hide = ui
-                            .add_sized(
-                                [18.0, 18.0],
-                                egui::Button::image(
-                                    egui::Image::new(crate::icons::source("PanelBottomClose"))
-                                        .tint(appearance::ICON_COLOR)
-                                        .fit_to_exact_size(egui::vec2(12.0, 12.0)),
-                                )
-                                .frame(false),
-                            )
-                            .on_hover_text("Hide terminal strip");
-                        if hide.clicked() {
-                            self.preferences.ide_terminal_collapsed = true;
-                            self.resync_active_from_dock();
-                        }
-                    }
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            if self.preferences.ide_terminal_collapsed {
+                                if ui
+                                    .small_button("Terminal")
+                                    .on_hover_text("Show IDE terminal strip")
+                                    .clicked()
+                                {
+                                    self.preferences.ide_terminal_collapsed = false;
+                                }
+                            } else {
+                                let hide = appearance::sidebar_action(
+                                    ui,
+                                    "PanelBottomClose",
+                                    "Hide terminal strip",
+                                );
+                                if hide.clicked() {
+                                    self.preferences.ide_terminal_collapsed = true;
+                                    self.resync_active_from_dock();
+                                }
+                            }
+                            ui.separator();
+                        },
+                    );
                 }
             });
         });
@@ -5419,6 +5468,37 @@ mod terminal_find_tests {
         let mut find = TerminalFind::default();
         find.step(1);
         assert_eq!(find.current, 0);
+    }
+}
+
+#[cfg(test)]
+mod repaint_probe_tests {
+    use super::*;
+    #[test]
+    fn probe_stays_quiet_within_the_first_second() {
+        let start = Instant::now();
+        let mut probe = RepaintProbe {
+            frames: 0,
+            last: start,
+        };
+        assert!(probe.sample(start, &[]).is_none());
+        assert_eq!(probe.frames, 1);
+    }
+    #[test]
+    fn probe_reports_frames_and_causes_once_per_second() {
+        let start = Instant::now();
+        let mut probe = RepaintProbe {
+            frames: 0,
+            last: start,
+        };
+        let later = start + Duration::from_millis(1001);
+        let line = probe
+            .sample(later, &["crates/app/src/lib.rs:4978 1s".into()])
+            .expect("a second has elapsed");
+        assert!(line.contains("1 frames/s"), "{line}");
+        assert!(line.contains("crates/app/src/lib.rs:4978"), "{line}");
+        assert_eq!(probe.frames, 0);
+        assert!(probe.sample(later, &[]).is_none());
     }
 }
 
@@ -7736,6 +7816,51 @@ mod navigation_tests {
         assert!(
             marks >= 2,
             "a working agent must paint its brand icon and status icon, got {marks}"
+        );
+    }
+
+    #[test]
+    fn strip_tabs_reserve_leading_icons_for_every_terminal() {
+        use egui_dock::TabViewer;
+        let (mut app, _ctx, _dir) = fixture();
+        app.state.sessions = vec![
+            session_fixture("agent", SessionKind::Shell),
+            session_fixture("plain", SessionKind::Shell),
+        ];
+        app.state.agents = vec![Agent {
+            invocation_id: "agent".into(),
+            session_id: "agent".into(),
+            kind: "codex".into(),
+            provider_session_id: None,
+            state: AgentState::Running,
+            sequence: None,
+            updated: 1,
+            resume: None,
+            process: None,
+        }];
+        let viewer = Viewer {
+            app: &mut app,
+            strip: true,
+        };
+        let agent_width = viewer.tab_leading_width(&Tab::Terminal("agent".into()));
+        let plain_width = viewer.tab_leading_width(&Tab::Terminal("plain".into()));
+        assert!(
+            agent_width > plain_width,
+            "an agent tab carries brand plus status, a plain shell only its kind glyph"
+        );
+        assert!(
+            plain_width > 0.0,
+            "even a plain shell reserves a kind icon on strip tabs"
+        );
+        assert_eq!(
+            viewer.tab_leading_width(&Tab::Terminal("missing".into())),
+            0.0,
+            "unknown sessions reserve no icon slot"
+        );
+        assert_eq!(
+            viewer.tab_leading_width(&Tab::Player),
+            0.0,
+            "non-terminal tabs reserve no icon slot"
         );
     }
 

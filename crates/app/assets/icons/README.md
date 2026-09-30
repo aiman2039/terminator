@@ -33,6 +33,10 @@ player.
 `menu.svg` comes from Lucide 0.577.0 with the same license and white-stroke
 adaptation, for the header overflow menu.
 
+`layout-dashboard.svg` comes from Lucide 0.577.0 with the same license and
+white-stroke adaptation, for the IDE mode header action. Its four-pane grid
+stays distinct from the single-divider sidebar toggles at 16px.
+
 `archive.svg` comes from Lucide 0.577.0 with the same license and white-stroke
 adaptation, for the removed-projects control.
 

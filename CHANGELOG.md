@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Removing ntfy settings no longer traps Apply: clearing the channel
+  switches the toggle off, and a disabled toggle saves regardless of
+  leftover field contents. Re-enabling still requires a valid channel.
+- Settings survive damage: an unreadable store is quarantined
+  (`state.corrupt-*`) and the daemon starts with defaults instead of dying;
+  stored settings that fail validation reset to defaults with a degraded
+  notice. A panicking request kills at most its own connection, and shared
+  locks recover from poisoning instead of cascading the failure.
 - ntfy phone pushes are time-gated: repeats from one agent run and state
   are held back for 60s, and any push holds back every other push for 15s,
   so bursts buzz once. The Agents inbox still records every notification.

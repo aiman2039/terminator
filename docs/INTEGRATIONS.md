@@ -72,7 +72,9 @@ Settings → Notifications includes an opt-in ntfy toggle, channel (topic on
 `ntfy.sh`), and optional machine name. Subscribe to that channel in ntfy. The
 machine prefixes titles, for example `[laptop] codex: Needs permission`.
 Only agent name and status are sent; hook summaries, details, paths and prompts
-are excluded. Delivery uses ntfy's [JSON publishing API](https://docs.ntfy.sh/publish/#publish-as-json).
+are excluded. To remove it, clear the channel (the toggle switches off) or
+turn the toggle off; Apply stays available either way. Delivery uses ntfy's
+[JSON publishing API](https://docs.ntfy.sh/publish/#publish-as-json).
 
 The daemon queues pings after accepting and deduplicating a hook notification.
 The selected **In app** events control which states send; desktop focus and OS

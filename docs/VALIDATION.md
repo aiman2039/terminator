@@ -3068,3 +3068,23 @@ Regressions: `ide_strip_trailing_controls_share_one_row`,
 `exited_non_resumable_session_closes_its_tab`. `cargo test -p terminator
 --features test-support --lib` passed 491; app clippy `-D warnings` and
 workspace `cargo fmt --all --check` passed. Native rendering was not exercised.
+
+## Terminal tab icons on every surface (2026-09-30)
+
+Agent brand plus hook lifecycle status now paint on all terminal tabs. The
+workspace strip already had them. Main-canvas split-pane captions gained them
+via new `TerminalBarSpec::brand/status_icon/status_tint/spin` fields with a
+session-kind glyph fallback for plain shells, and IDE lower-pane native dock
+tabs gained them via new vendored `TabViewer::tab_leading_width` /
+`paint_tab_leading` hooks (`tab_title` reserves the width, shifts the title,
+and returns the icon rect; the leaf paints it, including the drag ghost).
+Vendored change documented in `vendor/egui_dock/UPSTREAM.md`.
+
+Regressions: `terminal_bar_leading_icons_shift_the_title_right`,
+`strip_tabs_reserve_leading_icons_for_every_terminal`. `cargo build
+--workspace --locked` and workspace clippy `-D warnings` passed; both new
+tests and the surrounding tab/caption suites pass. The full workspace suite
+still reports failures in socket/HTTP/radio/nvim/timing tests (sandbox
+`Operation not permitted`, unrelated UI code untouched) plus one
+`explorer_query` failure from a concurrent in-progress sidebar refactor.
+Native rendering was not exercised.

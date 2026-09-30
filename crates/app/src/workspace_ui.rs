@@ -68,6 +68,25 @@ struct TabFace {
     status: Option<(AgentState, &'static str, Color32)>,
 }
 
+/// Leading icons for one terminal tab, shared by the main-canvas caption,
+/// the IDE strip's native tabs, and their width reservations. Stable brand
+/// plus hook lifecycle status; the session-kind glyph fills in for plain
+/// shells so every terminal tab carries an icon.
+struct TabLeading {
+    brand: Option<&'static str>,
+    status: Option<(&'static str, Color32, bool)>,
+    kind: Option<&'static str>,
+}
+
+impl TabLeading {
+    fn width(&self) -> f32 {
+        // Status and the kind fallback never co-occur: one slot covers both.
+        let icons = usize::from(self.brand.is_some())
+            + usize::from(self.status.is_some() || self.kind.is_some());
+        icons as f32 * appearance::TERMINAL_LEADING_SLOT
+    }
+}
+
 /// Terminal sessions in a top-level tab's split layout.
 fn group_terminal_ids(layout: &egui_dock::DockState<Tab>) -> Vec<String> {
     layout
@@ -258,7 +277,7 @@ fn header_action_view(action: HeaderAction) -> HeaderActionView {
         },
         HeaderAction::Tool(SidebarTool::Agents) => HeaderActionView {
             label: "Agents",
-            icon: "PanelsTopLeft",
+            icon: "Bell",
             #[cfg(feature = "test-support")]
             target: "tool-Agents",
         },
@@ -282,7 +301,7 @@ fn header_action_view(action: HeaderAction) -> HeaderActionView {
         },
         HeaderAction::IdeMode => HeaderActionView {
             label: "IDE mode",
-            icon: "Columns2",
+            icon: "LayoutDashboard",
             #[cfg(feature = "test-support")]
             target: "tool-ide-mode",
         },
@@ -847,6 +866,36 @@ impl App {
                 sid: None,
                 brand: None,
                 status: None,
+            },
+        }
+    }
+
+    /// Resolved leading icons for a terminal tab: stable brand plus hook
+    /// lifecycle status (spinning while running), or the session-kind glyph
+    /// when no lifecycle is known. Unknown sessions resolve to no icons.
+    fn tab_leading(&self, sid: &str) -> TabLeading {
+        let presented = self.present_session(sid);
+        let kind = self.state.sessions.iter().find(|s| s.id == sid).map(|s| {
+            if s.kind == SessionKind::Editor {
+                "FileCode"
+            } else {
+                "Terminal"
+            }
+        });
+        match presented.lifecycle {
+            Some(lifecycle) => TabLeading {
+                brand: presented.brand_icon,
+                status: Some((
+                    presented.status_icon,
+                    super::sidebar_ui::state_color(lifecycle, &self.theme),
+                    lifecycle == AgentState::Running,
+                )),
+                kind: None,
+            },
+            None => TabLeading {
+                brand: None,
+                status: None,
+                kind,
             },
         }
     }
@@ -3112,6 +3161,45 @@ impl TabViewer for Viewer<'_> {
             .into(),
         }
     }
+    fn tab_leading_width(&self, tab: &Tab) -> f32 {
+        match tab {
+            Tab::Terminal(sid) => self.app.tab_leading(sid).width(),
+            _ => 0.0,
+        }
+    }
+    fn paint_tab_leading(&mut self, ui: &mut egui::Ui, rect: egui::Rect, tab: &mut Tab) {
+        let Tab::Terminal(sid) = tab else {
+            return;
+        };
+        let leading = self.app.tab_leading(sid);
+        let mut cursor = rect.left();
+        let mut paint = |icon: &str, tint: egui::Color32, spin: bool| {
+            appearance::paint_status_icon(
+                ui,
+                egui::Rect::from_center_size(
+                    egui::pos2(
+                        cursor + appearance::TERMINAL_LEADING_SLOT / 2.0,
+                        rect.center().y,
+                    ),
+                    egui::vec2(13.0, 13.0),
+                ),
+                icon,
+                tint,
+                spin,
+            );
+            cursor += appearance::TERMINAL_LEADING_SLOT;
+        };
+        if let Some(brand) = leading.brand {
+            paint(brand, appearance::ICON_COLOR, false);
+        }
+        if let Some((icon, tint, spin)) = leading.status {
+            paint(icon, tint, spin);
+        } else if let Some(kind) = leading.kind {
+            paint(kind, appearance::ICON_COLOR, false);
+        }
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), &format!("strip-tab-icon:{sid}"), rect);
+    }
     fn allowed_in_windows(&self, _: &mut Tab) -> bool {
         false
     }
@@ -3271,6 +3359,7 @@ impl TabViewer for Viewer<'_> {
                         let header = self.markdown_header(ui, &session, editing);
                         (header.0, header.1, None)
                     } else {
+                        let leading = self.app.tab_leading(sid);
                         let bar = appearance::terminal_bar(
                             ui,
                             appearance::TerminalBarSpec {
@@ -3281,6 +3370,15 @@ impl TabViewer for Viewer<'_> {
                                 git_tip: &git_tip,
                                 vertical_tip: &vertical_tip,
                                 horizontal_tip: &horizontal_tip,
+                                brand: leading.brand,
+                                status_icon: leading.status.map(|(icon, _, _)| icon),
+                                status_tint: leading.status.map(|(_, tint, _)| tint),
+                                spin: leading.status.is_some_and(|(_, _, spin)| spin),
+                                kind: if leading.status.is_none() {
+                                    leading.kind
+                                } else {
+                                    None
+                                },
                             },
                         );
                         (
@@ -4310,6 +4408,19 @@ impl Viewer<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ide_mode_icon_differs_from_sidebar_toggles() {
+        let ide = header_action_view(HeaderAction::IdeMode).icon;
+        assert_ne!(ide, "PanelRight");
+        assert_ne!(ide, "PanelLeft");
+    }
+
+    #[test]
+    fn agents_header_uses_the_bell() {
+        let agents = header_action_view(HeaderAction::Tool(SidebarTool::Agents)).icon;
+        assert_eq!(agents, "Bell");
+    }
+
     #[test]
     fn terminal_theme_cache_tracks_preview_and_revert() {
         let mut cache = None;

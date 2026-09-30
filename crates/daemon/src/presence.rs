@@ -7,10 +7,7 @@ use terminator_core::agents;
 
 /// One target per owned live shell session, with its PTY foreground group.
 fn targets(shared: &Shared) -> Vec<agents::ShellTarget> {
-    let live: Vec<(String, String, u32, u64)> = shared
-        .state
-        .lock()
-        .unwrap()
+    let live: Vec<(String, String, u32, u64)> = relock(&shared.state)
         .sessions
         .iter()
         .filter(|s| s.lifecycle.live() && s.kind == SessionKind::Shell)
@@ -19,12 +16,12 @@ fn targets(shared: &Shared) -> Vec<agents::ShellTarget> {
                 .map(|pid| (s.id.clone(), s.generation.clone(), pid, s.created))
         })
         .collect();
-    let runtimes = shared.sessions.lock().unwrap();
+    let runtimes = relock(&shared.sessions);
     live.into_iter()
         .map(|(id, generation, pid, created)| {
             let foreground_pgid = runtimes
                 .get(&id)
-                .and_then(|runtime| runtime.lock().unwrap().master.process_group_leader())
+                .and_then(|runtime| relock(runtime).master.process_group_leader())
                 .and_then(|pgid| u32::try_from(pgid).ok())
                 .filter(|pgid| *pgid > 1);
             agents::ShellTarget {
@@ -43,7 +40,7 @@ fn targets(shared: &Shared) -> Vec<agents::ShellTarget> {
 fn inspect_once(shared: &Shared, system: &mut sysinfo::System) {
     let targets = targets(shared);
     if targets.is_empty() {
-        let mut state = shared.state.lock().unwrap();
+        let mut state = relock(&shared.state);
         if !state.presence.is_empty() {
             state.presence.clear();
             state.revision += 1;
@@ -59,7 +56,7 @@ fn inspect_once(shared: &Shared, system: &mut sysinfo::System) {
     );
     let procs = agents::snapshot_processes(system);
     let presence = agents::inspect_shells(&procs, &targets, now());
-    let mut state = shared.state.lock().unwrap();
+    let mut state = relock(&shared.state);
     update_presence(&mut state, presence);
     // Deliberately no persist: presence never touches SQLite.
 }

@@ -326,7 +326,7 @@ pub fn tool_button(
     let tint = ICON_COLOR;
     let icon = match tool {
         SidebarTool::Explorer => "Files",
-        SidebarTool::Agents => "PanelsTopLeft",
+        SidebarTool::Agents => "Bell",
         SidebarTool::Git => "GitBranch",
         SidebarTool::History => "History",
         SidebarTool::Info => "Info",
@@ -637,6 +637,7 @@ pub fn session_row_spec(ui: &mut egui::Ui, spec: SessionRowSpec<'_>) -> egui::Re
                 spin: spec.spin,
                 subtitle: spec.subtitle,
                 brand: spec.brand,
+                reserve_brand: true,
             },
         )
     })
@@ -682,6 +683,10 @@ struct RowSpec<'a> {
     spin: bool,
     subtitle: Option<&'a str>,
     brand: Option<&'a str>,
+    /// Reserve the brand slot even when `brand` is absent so the status icon
+    /// stays in one column across rows. Session rows reserve it; plain rows
+    /// (project folders, settings, headers) stay compact.
+    reserve_brand: bool,
 }
 
 /// Consistent full-width native sidebar row with fixed icon and status columns.
@@ -707,6 +712,7 @@ pub fn row(
             spin: false,
             subtitle: None,
             brand: None,
+            reserve_brand: false,
         },
     )
 }
@@ -723,8 +729,12 @@ fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
         spin,
         subtitle,
         brand,
+        reserve_brand,
     } = spec;
-    let label_left = if brand.is_some() { 36.0 } else { 26.0 };
+    // A reserved brand slot keeps the status icon and the label in one column
+    // whether or not this row paints a brand glyph.
+    let reserved = reserve_brand || brand.is_some();
+    let label_left = if reserved { 36.0 } else { 26.0 };
     let response = ui.add_sized(
         [ui.available_width(), height],
         egui::Button::new("").frame(false),
@@ -796,7 +806,7 @@ fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
     let size = if brand.is_some() { 14.0 } else { 16.0 };
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(
-            response.rect.left() + if brand.is_some() { 25.0 } else { 12.0 },
+            response.rect.left() + if reserved { 25.0 } else { 12.0 },
             label_center,
         ),
         egui::vec2(size, size),
@@ -1102,7 +1112,19 @@ pub struct TerminalBarSpec<'a> {
     pub git_tip: &'a str,
     pub vertical_tip: &'a str,
     pub horizontal_tip: &'a str,
+    /// Stable agent brand glyph, painted bright at the caption's left edge.
+    pub brand: Option<&'a str>,
+    /// Hook lifecycle status glyph and its tint. Spins while running.
+    pub status_icon: Option<&'a str>,
+    pub status_tint: Option<Color32>,
+    pub spin: bool,
+    /// Session-kind glyph shown when no lifecycle status is known, so every
+    /// terminal caption carries an icon like the workspace strip does.
+    pub kind: Option<&'a str>,
 }
+
+/// Width of one leading caption icon slot; the glyph itself is 13pt.
+pub(crate) const TERMINAL_LEADING_SLOT: f32 = 17.0;
 
 const TERMINAL_BAR_HEIGHT: f32 = 26.0;
 pub(crate) const TERMINAL_BUTTON: f32 = 22.0;
@@ -1129,6 +1151,11 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
         git_tip,
         vertical_tip,
         horizontal_tip,
+        brand,
+        status_icon,
+        status_tint,
+        spin,
+        kind,
     } = spec;
     let (rect, bar) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), TERMINAL_BAR_HEIGHT),
@@ -1163,14 +1190,38 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
     } else {
         ui.visuals().weak_text_color()
     };
+    // Leading identity icons mirror the workspace strip: stable brand plus
+    // hook lifecycle status, or the session-kind glyph for plain shells.
+    let mut lead = rect.left() + 8.0;
+    let mut paint_lead = |ui: &mut egui::Ui, icon: &str, tint: Color32, spin: bool| {
+        paint_status_icon(
+            ui,
+            egui::Rect::from_center_size(
+                egui::pos2(lead + 6.5, rect.center().y),
+                egui::vec2(13.0, 13.0),
+            ),
+            icon,
+            tint,
+            spin,
+        );
+        lead += TERMINAL_LEADING_SLOT;
+    };
+    if let Some(brand) = brand {
+        paint_lead(ui, brand, ICON_COLOR, false);
+    }
+    if let Some(icon) = status_icon {
+        paint_lead(ui, icon, status_tint.unwrap_or(ICON_COLOR), spin);
+    } else if let Some(kind) = kind {
+        paint_lead(ui, kind, ICON_COLOR, false);
+    }
     let dot_gap = if status.is_some() { 14.0 } else { 0.0 };
-    let title_width = (git_rect.left() - dot_gap - rect.left() - 12.0).max(0.0);
+    let title_width = (git_rect.left() - dot_gap - lead - 4.0).max(0.0);
     let mut job =
         egui::text::LayoutJob::simple(title.into(), FontId::proportional(12.0), tint, title_width);
     job.wrap.max_rows = 1;
     job.wrap.break_anywhere = true;
     let galley = ui.painter().layout_job(job);
-    let position = egui::pos2(rect.left() + 8.0, rect.center().y - galley.size().y * 0.5);
+    let position = egui::pos2(lead, rect.center().y - galley.size().y * 0.5);
     ui.painter()
         .with_clip_rect(egui::Rect::from_min_max(
             rect.min,
@@ -1513,6 +1564,11 @@ mod row_tests {
                                 git_tip: "Open Git",
                                 vertical_tip: "Split vertically",
                                 horizontal_tip: "Split horizontally",
+                                brand: None,
+                                status_icon: None,
+                                status_tint: None,
+                                spin: false,
+                                kind: None,
                             },
                         );
                     }
@@ -1537,6 +1593,80 @@ mod row_tests {
                 "The {surface} icon must remain bright even when its text is muted"
             );
         }
+    }
+
+    #[test]
+    fn terminal_bar_leading_icons_shift_the_title_right() {
+        fn title_left(
+            ctx: &egui::Context,
+            brand: Option<&str>,
+            status_icon: Option<&str>,
+            kind: Option<&str>,
+        ) -> (f32, usize) {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                terminal_bar(
+                    ui,
+                    TerminalBarSpec {
+                        title: "Terminal",
+                        active: false,
+                        branch: None,
+                        status: None,
+                        git_tip: "Open Git",
+                        vertical_tip: "Split vertically",
+                        horizontal_tip: "Split horizontally",
+                        brand,
+                        status_icon,
+                        status_tint: Some(Color32::GREEN),
+                        spin: false,
+                        kind,
+                    },
+                );
+            });
+            output.textures_delta.clear();
+            // Icons paint as textured meshes once loaded, or tinted rect
+            // placeholders while the loader finishes.
+            let meshes = output
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(&shape.shape, egui::Shape::Mesh(_))
+                        || matches!(
+                            &shape.shape,
+                            egui::Shape::Rect(rect) if rect.brush.is_some()
+                        )
+                })
+                .count();
+            let left = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Terminal" => Some(text.pos.x),
+                    _ => None,
+                })
+                .next()
+                .expect("caption title");
+            (left, meshes)
+        }
+        let ctx = egui::Context::default();
+        install(&ctx);
+        // Allow the image loader to finish before inspecting painted images.
+        title_left(&ctx, None, None, None);
+        let (plain, plain_meshes) = title_left(&ctx, None, None, None);
+        let (branded, branded_meshes) =
+            title_left(&ctx, Some("AgentCodex"), Some("LoaderCircle"), None);
+        let (kinded, _) = title_left(&ctx, None, None, Some("Terminal"));
+        assert!(
+            branded > plain + TERMINAL_LEADING_SLOT,
+            "brand + status must move the title right: {plain} vs {branded}"
+        );
+        assert!(
+            branded_meshes > plain_meshes,
+            "brand + status must paint extra icons"
+        );
+        assert!(
+            kinded > plain,
+            "the kind fallback must move the title right for plain shells"
+        );
     }
 
     #[test]
@@ -1595,6 +1725,49 @@ mod row_tests {
             texts[1]
         );
         assert!(texts[0].left() == texts[1].left());
+    }
+
+    #[test]
+    fn session_rows_share_one_icon_column_with_and_without_brand() {
+        fn label_left(ctx: &egui::Context, brand: Option<&str>) -> f32 {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                session_row_spec(
+                    ui,
+                    SessionRowSpec {
+                        label: "Terminal 2",
+                        icon: "Terminal",
+                        selected: false,
+                        trailing: "background",
+                        tint: Color32::GRAY,
+                        icon_tint: None,
+                        spin: false,
+                        subtitle: None,
+                        brand,
+                    },
+                );
+            });
+            output.textures_delta.clear();
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "Terminal 2" => {
+                        Some(text.pos.x)
+                    }
+                    _ => None,
+                })
+                .next()
+                .expect("session label")
+        }
+        let ctx = egui::Context::default();
+        install(&ctx);
+        // Settle fonts/image loaders before measuring.
+        label_left(&ctx, None);
+        assert_eq!(
+            label_left(&ctx, None),
+            label_left(&ctx, Some("AgentCodex")),
+            "plain and branded session rows must start the label in one column"
+        );
     }
 
     #[test]

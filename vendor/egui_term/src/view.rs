@@ -235,11 +235,11 @@ impl<'a> TerminalView<'a> {
                     if phase == egui::TouchPhase::Cancel {
                         continue;
                     }
+                    let cell_height = self.font.font_measure(&layout.ctx).height;
                     input_actions.extend(process_mouse_wheel(
                         state,
-                        self.font.font_measure(&layout.ctx).height,
-                        (layout.rect.height() / self.font.font_measure(&layout.ctx).height.max(1.0))
-                            as usize,
+                        cell_height,
+                        (layout.rect.height() / cell_height.max(1.0)) as usize,
                         unit,
                         delta,
                         self.backend.last_content().terminal_mode,
@@ -326,10 +326,13 @@ fn paint_terminal(
     let cell_width = content.terminal_size.cell_width as f32;
     let global_bg = theme.get_color(Color::Named(NamedColor::Background));
     let selection_bg = layout.ctx.global_style().visuals.selection.bg_fill;
-    let bold = layout.ctx.fonts_mut(|fonts| {
-        fonts
-            .families()
-            .contains(&FontFamily::Name("Terminal Bold".into()))
+    let (bold, glyph_width) = layout.ctx.fonts_mut(|fonts| {
+        (
+            fonts
+                .families()
+                .contains(&FontFamily::Name("Terminal Bold".into())),
+            fonts.glyph_width(&regular, 'm'),
+        )
     });
     let bold_font = FontId::new(regular.size, FontFamily::Name("Terminal Bold".into()));
     let app_cursor = content.terminal_mode.contains(TermMode::APP_CURSOR);
@@ -338,10 +341,7 @@ fn paint_terminal(
         CornerRadius::ZERO,
         global_bg,
     ))];
-    let tracking = cell_width
-        - layout
-            .ctx
-            .fonts_mut(|fonts| fonts.glyph_width(&regular, 'm'));
+    let tracking = cell_width - glyph_width;
     let mut run = TextRun {
         origin: Pos2::ZERO,
         end_x: f32::NAN,

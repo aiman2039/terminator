@@ -3,7 +3,7 @@ use terminator_core::idle_close::{Outcome, Status};
 
 impl Shared {
     fn idle_preflight(&self, session: &str) -> Result<Option<u32>> {
-        let state = self.state.lock().unwrap();
+        let state = relock(&self.state);
         let record = state
             .sessions
             .iter()
@@ -22,7 +22,7 @@ impl Shared {
             "An agent is active or its lifecycle is unknown"
         );
         let runtime = self.runtime(session)?;
-        let runtime = runtime.lock().unwrap();
+        let runtime = relock(&runtime);
         let expected = runtime
             .shell_executable
             .as_deref()
@@ -57,8 +57,8 @@ impl Shared {
         let mut outcomes = Vec::new();
         {
             // All input forwarding and close decisions share this lock.
-            let _operation = self.terminal_operations.lock().unwrap();
-            if self.state.lock().unwrap().generation != generation {
+            let _operation = relock(&self.terminal_operations);
+            if relock(&self.state).generation != generation {
                 return Ok(Response::IdleSessionsClosed(
                     sessions
                         .into_iter()
@@ -113,9 +113,9 @@ impl Shared {
                         .is_ok()
                         {
                             if let Ok(runtime) = self.runtime(&session) {
-                                runtime.lock().unwrap().closing = true;
+                                relock(&runtime).closing = true;
                             }
-                            let mut state = self.state.lock().unwrap();
+                            let mut state = relock(&self.state);
                             if let Some(record) = state
                                 .sessions
                                 .iter_mut()
@@ -148,10 +148,7 @@ impl Shared {
             if outcome.status != Status::Closed {
                 continue;
             }
-            while self
-                .state
-                .lock()
-                .unwrap()
+            while relock(&self.state)
                 .sessions
                 .iter()
                 .any(|s| s.id == outcome.session && s.lifecycle.live())
@@ -159,10 +156,7 @@ impl Shared {
             {
                 thread::sleep(Duration::from_millis(10));
             }
-            if self
-                .state
-                .lock()
-                .unwrap()
+            if relock(&self.state)
                 .sessions
                 .iter()
                 .any(|s| s.id == outcome.session && s.lifecycle.live())

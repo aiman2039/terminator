@@ -470,19 +470,23 @@ impl Default for Settings {
 }
 impl Settings {
     pub fn validate(&self) -> Result<()> {
-        ensure!(
-            self.ntfy_channel.len() <= 128
-                && self
-                    .ntfy_channel
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                && (!self.ntfy_enabled || !self.ntfy_channel.is_empty()),
-            "ntfy channel must contain 1–128 letters, digits, underscores or hyphens when enabled"
-        );
-        ensure!(
-            self.ntfy_machine.len() <= 128 && !self.ntfy_machine.chars().any(char::is_control),
-            "ntfy machine name must be at most 128 bytes without control characters"
-        );
+        // Disabled ntfy accepts any channel/machine contents (including
+        // leftovers) so turning the toggle off always saves. Enabling
+        // requires a usable channel again, and delivery still re-validates.
+        if self.ntfy_enabled {
+            ensure!(
+                (1..=128).contains(&self.ntfy_channel.len())
+                    && self
+                        .ntfy_channel
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
+                "ntfy channel must contain 1–128 letters, digits, underscores or hyphens when enabled"
+            );
+            ensure!(
+                self.ntfy_machine.len() <= 128 && !self.ntfy_machine.chars().any(char::is_control),
+                "ntfy machine name must be at most 128 bytes without control characters"
+            );
+        }
         ensure!(
             (1..=3650).contains(&self.history_days),
             "History age must be 1–3650 days"
@@ -1692,6 +1696,25 @@ mod snapshot_tests {
         settings.ntfy_channel = "valid".into();
         settings.ntfy_machine = "bad\nheader".into();
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn disabled_ntfy_accepts_any_channel_and_machine_contents() {
+        // Turning the toggle off must always save, even with leftover or
+        // cleared field contents. Re-enabling still requires valid values.
+        let mut settings = Settings::default();
+        settings.validate().unwrap();
+        settings.ntfy_channel = "has space!".into();
+        settings.ntfy_machine = "bad\nheader".into();
+        settings.validate().unwrap();
+        settings.ntfy_channel.clear();
+        settings.ntfy_machine.clear();
+        settings.validate().unwrap();
+        settings.ntfy_enabled = true;
+        assert!(settings.validate().is_err());
+        settings.ntfy_channel = "ok-channel_1".into();
+        settings.ntfy_machine = "My laptop".into();
+        settings.validate().unwrap();
     }
 
     #[test]
