@@ -47,11 +47,15 @@
   dismiss poll releases it and the worker presents the replacement right away.
   `removeAllDeliveredNotifications` is gone, so other Terminator
   notifications (GUI or other daemon generations) stay in Notification Center.
-- Behavior change: an unread alert is no longer removed from Notification
-  Center after 60 s; it stays until the user acts on it or a newer alert
-  replaces it. The waiter and run-loop pump therefore last as long as a
-  notification is pending, which is why the pump is now a 1 ms slice on a
-  100 ms `poll` timeout (down from a 5 ms slice every 10 ms).
+- A newer alert still replaces the waiting one immediately. An unanswered
+  alert is removed after 10 s (`ALERT_WAIT`) so `wait_for_action` returns
+  and the 0.5 s `deliveredNotifications` poll stops. macOS ignores
+  `Notification::timeout`. A click during those 10 s still focuses the
+  session. The pump stays a 1 ms slice on a 100 ms `poll` timeout.
+- `unanswered_alert_ends_the_waiter_after_ten_seconds` covers the deadline.
+  `release_keeps_other_banners_when_the_marker_is_intact` and
+  `release_falls_back_to_the_title_when_the_marker_was_stripped` cover which
+  banner is removed.
 - Daemon accept loop is event-driven: the main thread blocks in `poll` with no
   timeout while no notification waiter exists, and a socketpair wakes it when
   a waiter starts or ends, when a newer alert preempts the active one, or when

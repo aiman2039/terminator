@@ -54,6 +54,27 @@ static DISMISS_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// ObjC dismiss poll treats as an auto-dismiss and releases the waiter.
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
+/// How long one alert may keep the worker blocked. macOS ignores
+/// [`notify_rust::Notification::timeout`], and `wait_for_action` polls
+/// Notification Center every 0.5 s until the banner disappears. Capping the
+/// wait is what stops that poll.
+const ALERT_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Stable lead-in of every alert body. The per-waiter marker is appended, but
+/// Notification Center may strip those zero-width characters, so a timed-out
+/// remove can fall back to this sentence plus the alert title.
+const BODY_LEAD: &str = "Open the notification to view the session context.";
+
+/// When the current waiter started blocking, so [`pump`] can end it at
+/// [`ALERT_WAIT`] even if nothing newer is queued.
+#[cfg(target_os = "macos")]
+static PRESENTED_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// Title of the alert the worker is waiting on. Used only when the invisible
+/// marker is no longer in the delivered text.
+#[cfg(target_os = "macos")]
+static PRESENTING_SUMMARY: Mutex<String> = Mutex::new(String::new());
+
 /// Monotonic submission order. Every [`send`] claims the next value.
 static SUBMITTED: AtomicU64 = AtomicU64::new(0);
 
@@ -136,6 +157,9 @@ fn spawn_worker(present: impl Fn(Queued) + Send + 'static) -> Sender<Queued> {
 fn present(Queued { generation, alert }: Queued) {
     ACTIVE.fetch_add(1, Ordering::Relaxed);
     PRESENTING.store(generation, Ordering::Relaxed);
+    // Dropped after the wait so a panic still clears the deadline. The guard
+    // outlives `ACTIVE` going back to zero, which stops [`pump`] first.
+    let _waiter = Waiter::start(&alert.summary);
     // Wake the daemon's event loop so it starts pumping the Cocoa run loop
     // that delivers this notification's action.
     wake();
@@ -144,6 +168,41 @@ fn present(Queued { generation, alert }: Queued) {
     ACTIVE.fetch_sub(1, Ordering::Relaxed);
     // Wake again so the loop can stop pumping and block for connections.
     wake();
+}
+
+/// Arms the macOS wait deadline for the alert currently blocking the worker.
+struct Waiter;
+
+impl Waiter {
+    fn start(summary: &str) -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            *PRESENTED_AT
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(std::time::Instant::now());
+            *PRESENTING_SUMMARY
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = summary.to_owned();
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = summary;
+        Self
+    }
+}
+
+impl Drop for Waiter {
+    fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            *PRESENTED_AT
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+            PRESENTING_SUMMARY
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clear();
+        }
+    }
 }
 
 fn show_and_wait(
@@ -158,17 +217,16 @@ fn show_and_wait(
     // The trailing marker is invisible but lets the main thread find exactly
     // this notification in Notification Center without touching another
     // generation's delivered alerts.
-    let body = format!(
-        "Open the notification to view the session context.{}",
-        marker_for(generation)
-    );
+    let body = format!("{BODY_LEAD}{}", marker_for(generation));
     let mut notification = notify_rust::Notification::new();
     notification
         .summary(&summary)
         .body(&body)
         .appname("Terminator")
         .action("default", "Open context")
-        .timeout(10000);
+        // Honored on Linux. macOS ignores it; [`pump`] removes the banner at
+        // [`ALERT_WAIT`] so `wait_for_action` returns and the 0.5 s poll stops.
+        .timeout(ALERT_WAIT);
     if sound {
         notification.sound_name(sound_name());
     }
@@ -232,19 +290,44 @@ fn remove_active_notification() -> bool {
         return false;
     }
     let marker = marker_for(generation);
+    let summary = PRESENTING_SUMMARY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
     use objc2_foundation::NSUserNotificationCenter;
     let center = NSUserNotificationCenter::defaultUserNotificationCenter();
-    let mut removed = false;
-    for notification in center.deliveredNotifications().iter() {
-        let matches = notification
-            .informativeText()
-            .is_some_and(|text| text.to_string().ends_with(marker.as_str()));
-        if matches {
+    // One fetch. Marker hits are preferred so a match cannot also clear
+    // another generation's banner via the title fallback.
+    let delivered = center.deliveredNotifications();
+    let snapshots = delivered
+        .iter()
+        .map(|notification| {
+            (
+                notification
+                    .title()
+                    .map(|title| title.to_string())
+                    .unwrap_or_default(),
+                notification
+                    .informativeText()
+                    .map(|text| text.to_string())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let banners = snapshots
+        .iter()
+        .map(|(title, text)| Banner { title, text })
+        .collect::<Vec<_>>();
+    let indexes = banners_to_remove(&banners, &marker, &summary);
+    if indexes.is_empty() {
+        return false;
+    }
+    for (index, notification) in delivered.iter().enumerate() {
+        if indexes.contains(&index) {
             center.removeDeliveredNotification(&notification);
-            removed = true;
         }
     }
-    removed
+    true
 }
 
 fn launch_gui(paths: &Paths) {
@@ -343,16 +426,64 @@ fn dismiss_poll_due() -> bool {
     }
 }
 
+/// `true` when the main thread should remove the delivered banner. A newer
+/// alert does so immediately. An unanswered alert does so at [`ALERT_WAIT`],
+/// which is the only way to stop `mac-notification-sys` polling Notification
+/// Center for the rest of the process lifetime.
+#[cfg(any(target_os = "macos", test))]
+fn waiter_should_end(
+    superseded: bool,
+    presented_at: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> bool {
+    superseded
+        || presented_at.is_some_and(|started| now.saturating_duration_since(started) >= ALERT_WAIT)
+}
+
+/// Which delivered banners to remove. Marker hits win, so a banner that still
+/// carries this waiter's marker is the only one cleared. The title fallback
+/// runs only when Notification Center kept the sentence and dropped the marker.
+#[cfg(any(target_os = "macos", test))]
+fn banners_to_remove(banners: &[Banner<'_>], marker: &str, summary: &str) -> Vec<usize> {
+    let marked = banners
+        .iter()
+        .enumerate()
+        .filter(|(_, banner)| banner.text.contains(marker))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if !marked.is_empty() {
+        return marked;
+    }
+    if summary.is_empty() {
+        return Vec::new();
+    }
+    banners
+        .iter()
+        .enumerate()
+        .filter(|(_, banner)| banner.title == summary && banner.text.starts_with(BODY_LEAD))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+#[cfg(any(target_os = "macos", test))]
+struct Banner<'a> {
+    title: &'a str,
+    text: &'a str,
+}
+
 /// Service the Cocoa run loop once. Cocoa delivers notification callbacks on
 /// the daemon main thread, so this must be called there while a waiter exists.
-/// A newer alert first removes the waiting notification so its waiter ends and
-/// the worker can show the replacement.
+/// A newer alert, or one that has been waiting for [`ALERT_WAIT`], is removed
+/// so the ObjC dismiss poll releases the worker.
 pub fn pump() {
     #[cfg(target_os = "macos")]
     {
         use core_foundation::{base::TCFType, runloop::CFRunLoop, string::CFString};
         if ACTIVE.load(Ordering::Relaxed) > 0 {
-            if superseded() {
+            let presented_at = *PRESENTED_AT
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if waiter_should_end(superseded(), presented_at, std::time::Instant::now()) {
                 let generation = PRESENTING.load(Ordering::Relaxed);
                 if DISMISSED.load(Ordering::Relaxed) != generation && dismiss_poll_due() {
                     // `deliveredNotifications` autoreleases the decoded list.
@@ -430,6 +561,73 @@ mod tests {
         } else {
             assert_eq!(name, "message-new-instant");
         }
+    }
+
+    #[test]
+    fn unanswered_alert_ends_the_waiter_after_ten_seconds() {
+        let start = Instant::now();
+        assert!(
+            !waiter_should_end(false, Some(start), start),
+            "a fresh alert stays until the wait elapses"
+        );
+        assert!(
+            !waiter_should_end(false, Some(start), start + Duration::from_secs(9)),
+            "a click is still delivered during the wait"
+        );
+        assert!(
+            waiter_should_end(false, Some(start), start + ALERT_WAIT),
+            "an unanswered alert is removed at the wait"
+        );
+        assert!(
+            waiter_should_end(true, Some(start), start),
+            "a newer alert still replaces the waiting one immediately"
+        );
+        assert!(
+            !waiter_should_end(false, None, start + ALERT_WAIT),
+            "no armed waiter is not timed out"
+        );
+    }
+
+    #[test]
+    fn release_keeps_other_banners_when_the_marker_is_intact() {
+        let marker = "MARKER-1";
+        let banners = [
+            Banner {
+                title: "Agent: Waiting",
+                text: "Open the notification to view the session context.MARKER-1",
+            },
+            Banner {
+                title: "Agent: Waiting",
+                text: "Open the notification to view the session context.",
+            },
+        ];
+        assert_eq!(
+            banners_to_remove(&banners, marker, "Agent: Waiting"),
+            vec![0],
+            "a marker hit does not clear another generation's same title"
+        );
+    }
+
+    #[test]
+    fn release_falls_back_to_the_title_when_the_marker_was_stripped() {
+        let banners = [
+            Banner {
+                title: "Agent: Waiting",
+                text: "Open the notification to view the session context.",
+            },
+            Banner {
+                title: "Agent: Done",
+                text: "Open the notification to view the session context.",
+            },
+        ];
+        assert_eq!(
+            banners_to_remove(&banners, "MARKER-1", "Agent: Waiting"),
+            vec![0]
+        );
+        assert!(
+            banners_to_remove(&banners, "MARKER-1", "").is_empty(),
+            "an empty title does not match every banner"
+        );
     }
 
     #[test]
