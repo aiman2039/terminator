@@ -133,9 +133,11 @@ fn clean_shutdown() -> Result<()> {
 
 fn relaunch_stub(h: &Harness) -> Result<PathBuf> {
     let stub = h.root.join("relaunch-stub");
+    // Rename into place. A direct redirect exists before the writes finish,
+    // and the fixture would observe an empty marker.
     fs::write(
         &stub,
-        "#!/bin/sh\n{\n  printf 'data=%s\\n' \"$TERMINATOR_DATA_DIR\"\n  printf 'runtime=%s\\n' \"$TERMINATOR_RUNTIME_DIR\"\n  printf 'session=%s\\n' \"${TERMINATOR_SESSION_ID-}\"\n} > \"$TERMINATOR_DATA_DIR/relaunched\"\n",
+        "#!/bin/sh\n{\n  printf 'data=%s\\n' \"$TERMINATOR_DATA_DIR\"\n  printf 'runtime=%s\\n' \"$TERMINATOR_RUNTIME_DIR\"\n  printf 'session=%s\\n' \"${TERMINATOR_SESSION_ID-}\"\n} > \"$TERMINATOR_DATA_DIR/relaunched.tmp\"\nmv \"$TERMINATOR_DATA_DIR/relaunched.tmp\" \"$TERMINATOR_DATA_DIR/relaunched\"\n",
     )?;
     fs::set_permissions(&stub, fs::Permissions::from_mode(0o700))?;
     Ok(stub)
@@ -144,11 +146,16 @@ fn relaunch_stub(h: &Harness) -> Result<PathBuf> {
 fn wait_relaunch_marker(h: &Harness) -> Result<String> {
     let marker = h.root.join("relaunched");
     let end = Instant::now() + Duration::from_secs(5);
-    while !marker.exists() {
+    loop {
+        if marker.is_file() {
+            let text = fs::read_to_string(&marker)?;
+            if text.contains("session=") {
+                return Ok(text);
+            }
+        }
         ensure!(Instant::now() < end, "Relaunch stub did not run");
         thread::sleep(Duration::from_millis(30));
     }
-    Ok(fs::read_to_string(&marker)?)
 }
 
 fn relaunch_shutdown() -> Result<()> {
@@ -196,11 +203,14 @@ fn relaunch_shutdown() -> Result<()> {
         "Relaunch did not report both sessions"
     );
     let marker = wait_relaunch_marker(&h)?;
+    let socket = h.root.join("run/daemon.sock");
     ensure!(
         marker.contains(&format!("data={}", h.root.display()))
+            && marker.contains(&format!("runtime={}", h.root.join("run").display()))
             && marker.contains("session=\n")
-            && !h.root.join("run/daemon.sock").exists(),
-        "Relaunch stub missed isolated env or ran before teardown"
+            && !socket.exists(),
+        "Relaunch stub missed isolated env or ran before teardown (socket_exists={}, marker={marker:?})",
+        socket.exists()
     );
     wait_child(&mut h.daemon.as_mut().unwrap().0, Duration::from_secs(5))?;
     h.daemon.take();
