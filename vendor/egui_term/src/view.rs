@@ -165,12 +165,15 @@ impl<'a> TerminalView<'a> {
 
     fn process_input(self, layout: &Response, state: &mut TerminalViewState) -> Self {
         let wheel_target = layout.enabled() && layout.contains_pointer();
-        if !wheel_target {
+        // An active selection drag owns the gesture: wheel input extends the
+        // selection even after the pointer leaves the pane.
+        let wheel_active = wheel_target || (layout.enabled() && state.is_dragged);
+        if !wheel_active {
             state.scroll_pixels = 0.0;
             state.scroll_lines = 0.0;
             state.scroll_time = None;
         }
-        if wheel_target {
+        if wheel_active {
             // Egui can smooth a wheel tick over subsequent frames without another raw event.
             layout.ctx.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
         }
@@ -217,11 +220,16 @@ impl<'a> TerminalView<'a> {
                         state.scroll_lines = 0.0;
                     }
                     state.scroll_time = Some(now);
-                    if let Some(pos) = layout.ctx.input(|i| i.pointer.hover_pos()) {
+                    let hover_rel = layout.ctx.input(|i| {
+                        i.pointer
+                            .hover_pos()
+                            .map(|pos| (pos.x - layout.rect.min.x, pos.y - layout.rect.min.y))
+                    });
+                    if let Some((rel_x, rel_y)) = hover_rel {
                         let content = self.backend.last_content();
                         state.current_mouse_position_on_grid = TerminalBackend::selection_point(
-                            pos.x - layout.rect.min.x,
-                            pos.y - layout.rect.min.y,
+                            rel_x,
+                            rel_y,
                             &content.terminal_size,
                             0, // Application mouse reports use viewport coordinates.
                         );
@@ -244,6 +252,7 @@ impl<'a> TerminalView<'a> {
                         delta,
                         self.backend.last_content().terminal_mode,
                         modifiers,
+                        hover_rel,
                     ))
                 }
                 egui::Event::PointerButton {
@@ -684,6 +693,7 @@ fn process_mouse_wheel(
     delta: Vec2,
     terminal_mode: TermMode,
     modifiers: Modifiers,
+    drag_pos: Option<(f32, f32)>,
 ) -> Vec<InputAction> {
     if !delta.is_finite() {
         return vec![];
@@ -711,6 +721,16 @@ fn process_mouse_wheel(
     let lines = lines.clamp(-1000, 1000);
     if lines == 0 {
         return vec![];
+    }
+    // A selection drag owns the gesture: scrolling extends the host selection
+    // instead of driving the application, so selecting inside a mouse-mode
+    // agent no longer feels like scrolling is blocked.
+    if state.is_dragged {
+        let mut actions = vec![InputAction::BackendCall(BackendCommand::ScrollLocal(lines))];
+        if let Some((x, y)) = drag_pos {
+            actions.push(InputAction::BackendCall(BackendCommand::SelectUpdate(x, y)));
+        }
+        return actions;
     }
     // Full-screen agents own their history and expect wheel reports, not
     // alternate-screen arrow keys. Shift retains local terminal scrolling.
@@ -990,7 +1010,9 @@ fn input_event_applies(
         return false;
     }
     match event {
-        egui::Event::MouseWheel { .. } => wheel_target,
+        // A selection drag keeps owning wheel input after the pointer leaves
+        // the pane, so scrolling extends the selection instead of stalling.
+        egui::Event::MouseWheel { .. } => wheel_target || is_dragged,
         egui::Event::PointerButton { pressed, .. } => {
             layout.contains_pointer() || (!pressed && is_dragged)
         }
@@ -1050,6 +1072,7 @@ mod scroll_tests {
                 Vec2::new(0.0, delta),
                 TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE | TermMode::ALT_SCREEN,
                 Modifiers::NONE,
+                None,
             );
             assert_eq!(actions.len(), 2);
             for action in actions {
@@ -1080,7 +1103,8 @@ mod scroll_tests {
                 MouseWheelUnit::Point,
                 Vec2::new(0.0, 4.0),
                 TermMode::empty(),
-                Modifiers::NONE
+                Modifiers::NONE,
+                None
             )
             .is_empty());
         }
@@ -1092,6 +1116,7 @@ mod scroll_tests {
             Vec2::new(0.0, 4.0),
             TermMode::empty(),
             Modifiers::NONE,
+            None,
         );
         assert!(matches!(
             actions.as_slice(),
@@ -1109,7 +1134,8 @@ mod scroll_tests {
             MouseWheelUnit::Line,
             Vec2::new(0.0, 0.25),
             TermMode::empty(),
-            Modifiers::NONE
+            Modifiers::NONE,
+            None
         )
         .is_empty());
         let actions = process_mouse_wheel(
@@ -1120,6 +1146,7 @@ mod scroll_tests {
             Vec2::new(0.0, 0.75),
             TermMode::empty(),
             Modifiers::NONE,
+            None,
         );
         assert!(matches!(
             actions.as_slice(),
@@ -1133,6 +1160,7 @@ mod scroll_tests {
             Vec2::new(0.0, -1.0),
             TermMode::empty(),
             Modifiers::SHIFT,
+            None,
         );
         assert!(matches!(
             actions.as_slice(),
@@ -1150,11 +1178,72 @@ mod scroll_tests {
             Vec2::new(0.0, -1.0),
             TermMode::MOUSE_REPORT_CLICK | TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL,
             Modifiers::SHIFT,
+            None,
         );
         assert!(matches!(
             actions.as_slice(),
             [InputAction::BackendCall(BackendCommand::ScrollLocal(-1))]
         ));
+    }
+
+    #[test]
+    fn wheel_during_drag_extends_selection_instead_of_reporting_to_the_agent() {
+        let mut state = TerminalViewState::default();
+        state.is_dragged = true;
+        let actions = process_mouse_wheel(
+            &mut state,
+            16.0,
+            24,
+            MouseWheelUnit::Line,
+            Vec2::new(0.0, 2.0),
+            TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE | TermMode::ALT_SCREEN,
+            Modifiers::NONE,
+            Some((4.0, 8.0)),
+        );
+        assert!(matches!(
+            actions.as_slice(),
+            [
+                InputAction::BackendCall(BackendCommand::ScrollLocal(2)),
+                InputAction::BackendCall(BackendCommand::SelectUpdate(_, _)),
+            ]
+        ));
+    }
+
+    #[test]
+    fn wheel_during_drag_scrolls_locally_without_a_hover_position() {
+        let mut state = TerminalViewState::default();
+        state.is_dragged = true;
+        let actions = process_mouse_wheel(
+            &mut state,
+            16.0,
+            24,
+            MouseWheelUnit::Line,
+            Vec2::new(0.0, -1.0),
+            TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE | TermMode::ALT_SCREEN,
+            Modifiers::NONE,
+            None,
+        );
+        assert!(matches!(
+            actions.as_slice(),
+            [InputAction::BackendCall(BackendCommand::ScrollLocal(-1))]
+        ));
+    }
+
+    #[test]
+    fn wheel_events_apply_while_dragging_outside_the_pane() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let layout = ui.allocate_response(Vec2::splat(100.0), egui::Sense::click_and_drag());
+            let event = egui::Event::MouseWheel {
+                unit: MouseWheelUnit::Line,
+                delta: Vec2::new(0.0, 1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            };
+            assert!(!input_event_applies(&event, &layout, false, false));
+            assert!(input_event_applies(&event, &layout, true, false));
+        });
+        output.textures_delta.clear();
     }
 }
 

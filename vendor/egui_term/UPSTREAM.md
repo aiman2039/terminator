@@ -202,3 +202,16 @@ frame, so the field never kept focus and keystrokes reached the shell. Focus is
 now requested only when nothing is focused or the terminal itself already holds
 focus; egui's press-based focus surrender hands focus to the terminal when the
 user clicks it. Regression: `terminal_focus_does_not_steal_from_another_widget`.
+
+## Wheel scrolls during a selection drag (2026-10-01)
+
+Left-drag always selects host text, even in mouse-reporting agents, but wheel
+input still went to the application mid-drag (and was dropped once the pointer
+left the pane), so scrolling felt blocked while selecting. The drag now owns
+the gesture: wheel events apply while `is_dragged`, and route to local
+`ScrollLocal` plus a `SelectUpdate` at the hover point instead of mouse
+reports or alternate-scroll keys, matching the existing pointer-outside
+autoscroll. Plain (non-drag) wheel routing is unchanged. Regressions:
+`wheel_during_drag_extends_selection_instead_of_reporting_to_the_agent`,
+`wheel_during_drag_scrolls_locally_without_a_hover_position`,
+`wheel_events_apply_while_dragging_outside_the_pane`.
