@@ -3269,9 +3269,7 @@ impl TabViewer for Viewer<'_> {
             )
             .clicked()
             {
-                self.app.search_session = Some(sid.clone());
-                self.app.search_open = true;
-                self.app.texts.remove(&format!("history:{sid}"));
+                self.app.open_scrollback_search(ui.ctx(), sid);
                 ui.close();
             }
             if appearance::menu_item(
@@ -4317,9 +4315,7 @@ impl Viewer<'_> {
             )
             .clicked()
             {
-                self.app.search_session = Some(sid.clone());
-                self.app.search_open = true;
-                self.app.texts.remove(&format!("history:{sid}"));
+                self.app.open_scrollback_search(ui.ctx(), sid);
                 ui.close();
             }
             if session.kind == SessionKind::Editor && !session.review {

@@ -65,7 +65,7 @@ pub struct NativeDoc {
 }
 
 impl NativeDoc {
-    fn new(path: PathBuf, insert_first: bool) -> Self {
+    pub(crate) fn new(path: PathBuf, insert_first: bool) -> Self {
         Self {
             path,
             doc: None,

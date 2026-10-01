@@ -3072,7 +3072,7 @@ impl App {
             "find_in_terminal" => self.find_in_active_terminal(ctx),
             "next_pane" => self.focus_next_pane(),
             "select_all" => self.select_all_active(),
-            "search_scrollback" => self.search_active_scrollback(),
+            "search_scrollback" => self.search_active_scrollback(ctx),
             "copy_working_directory" => self.copy_active_working_directory(ctx),
             "rename_terminal" => self.rename_active_terminal(),
             "close_session" => self.close_active_session(),
@@ -3221,13 +3221,39 @@ impl App {
         }
     }
 
-    fn search_active_scrollback(&mut self) {
+    /// A focused text field or native editor owns select-all: egui selects
+    /// field text natively, so the global terminal select-all must not
+    /// consume the chord first. This covers every `TextEdit` in the app
+    /// (find bars, searches, palette, dialogs, settings) plus native
+    /// editor panes, which use stable focus ids instead of `TextEdit`.
+    fn text_input_focused(&self, ctx: &egui::Context) -> bool {
+        if ctx.text_edit_focused() {
+            return true;
+        }
+        ctx.memory(|memory| {
+            memory.focused().is_some_and(|focused| {
+                self.native_docs.keys().any(|path| {
+                    terminator_native_edit::view::source_focus_id(&path.to_string_lossy())
+                        == focused
+                })
+            })
+        })
+    }
+
+    fn open_scrollback_search(&mut self, ctx: &egui::Context, sid: &str) {
+        self.search_session = Some(sid.to_string());
+        self.search_open = true;
+        self.texts.remove(&format!("history:{sid}"));
+        ctx.memory_mut(|memory| {
+            memory.request_focus(egui::Id::new("scrollback-search"));
+        });
+    }
+
+    fn search_active_scrollback(&mut self, ctx: &egui::Context) {
         let Some(sid) = self.active_session.clone() else {
             return;
         };
-        self.search_session = Some(sid.clone());
-        self.search_open = true;
-        self.texts.remove(&format!("history:{sid}"));
+        self.open_scrollback_search(ctx, &sid);
     }
 
     fn copy_active_working_directory(&self, ctx: &egui::Context) {
@@ -4250,6 +4276,7 @@ impl App {
         ui.add_space(6.0);
         ui.add(
             egui::TextEdit::singleline(&mut self.search)
+                .id(egui::Id::new("scrollback-search"))
                 .hint_text("Search scrollback…")
                 .desired_width(400.0),
         );
@@ -5055,6 +5082,9 @@ impl eframe::App for App {
         self.diagnostics.frame(&ctx);
         for action in shortcuts::ACTIONS.iter().map(|(action, _)| *action) {
             if !self.shortcut_allowed(action) || !self.shortcut_applies(action) {
+                continue;
+            }
+            if action == "select_all" && self.text_input_focused(&ctx) {
                 continue;
             }
             let key = shortcuts::binding(&self.state.settings.keybindings, action);
@@ -6755,7 +6785,7 @@ mod navigation_tests {
     fn closing_scrollback_search_restores_terminal_input() {
         let (mut app, _, _dir) = fixture();
         app.active_session = Some("live".into());
-        app.search_active_scrollback();
+        app.search_active_scrollback(&egui::Context::default());
         assert!(app.search_open);
         assert_eq!(app.search_session.as_deref(), Some("live"));
         assert!(!app.terminal_input_enabled("live"));
@@ -6776,6 +6806,46 @@ mod navigation_tests {
         app.close_scrollback_search();
         assert!(app.search_session.is_none());
         assert!(app.terminal_input_enabled("live"));
+    }
+
+    #[test]
+    fn select_all_yields_to_focused_text_field() {
+        let (app, ctx, _dir) = fixture();
+        assert!(!app.text_input_focused(&ctx));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut text = String::new();
+            let response =
+                ui.add(egui::TextEdit::singleline(&mut text).id(egui::Id::new("select-all-probe")));
+            response.request_focus();
+        });
+        output.textures_delta.clear();
+        assert!(app.text_input_focused(&ctx));
+    }
+
+    #[test]
+    fn select_all_yields_to_focused_native_editor() {
+        let (mut app, ctx, _dir) = fixture();
+        assert!(!app.text_input_focused(&ctx));
+        let path = PathBuf::from("/a/file.rs");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::new(path.clone(), false),
+        );
+        let id = terminator_native_edit::view::source_focus_id(&path.to_string_lossy());
+        ctx.memory_mut(|memory| memory.request_focus(id));
+        assert!(app.text_input_focused(&ctx));
+    }
+
+    #[test]
+    fn opening_scrollback_search_focuses_query_field() {
+        let (mut app, ctx, _dir) = fixture();
+        app.active_session = Some("live".into());
+        app.open_scrollback_search(&ctx, "live");
+        assert!(app.search_open);
+        assert_eq!(
+            ctx.memory(|memory| memory.focused()),
+            Some(egui::Id::new("scrollback-search"))
+        );
     }
 
     fn prompt_name(app: &App) -> Option<&str> {
@@ -7647,6 +7717,31 @@ mod navigation_tests {
             .collect()
     }
 
+    /// Pump `process_updates` until `project`'s activity stamp reaches
+    /// `at_least`. One pass drains at most 64 updates or 2 ms
+    /// (`ResultBudget`), so on a loaded machine a single pass may service
+    /// background completions first and leave the test's own update queued.
+    /// Production pumps every frame; tests must do the same.
+    fn drain_until_project_activity(
+        app: &mut App,
+        ctx: &egui::Context,
+        project: &str,
+        at_least: u64,
+    ) {
+        for _ in 0..1_000 {
+            app.process_updates(ctx);
+            if app
+                .preferences
+                .project_activity
+                .get(project)
+                .is_some_and(|stamp| *stamp >= at_least)
+            {
+                return;
+            }
+        }
+        panic!("timed out waiting for {project} activity to reach {at_least}");
+    }
+
     #[test]
     fn sidebar_models_reuse_data_until_snapshot_or_filter_changes() {
         let (mut app, _, _dir) = fixture();
@@ -7895,7 +7990,7 @@ mod navigation_tests {
                 app.selection_generation,
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_until_project_activity(&mut app, &ctx, "a", 2);
         assert_eq!(visible_ids(&app), ["a", "b"]);
         assert!(app.preferences.project_activity["a"] >= 2);
         app.preferences.project_activity.insert("a".into(), 1);
@@ -7906,7 +8001,7 @@ mod navigation_tests {
                 false,
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_until_project_activity(&mut app, &ctx, "a", 2);
         assert_eq!(visible_ids(&app), ["a", "b"]);
         assert!(app.preferences.project_activity["a"] >= 2);
     }
