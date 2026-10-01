@@ -8360,6 +8360,44 @@ mod navigation_tests {
     }
 
     #[test]
+    fn strip_tabs_show_a_detected_agent_before_any_hook() {
+        use egui_dock::TabViewer;
+        let (mut app, _ctx, _dir) = fixture();
+        app.state
+            .capabilities
+            .push(AGENT_PRESENCE_CAPABILITY.into());
+        app.state.sessions = vec![
+            session_fixture("muse", SessionKind::Shell),
+            session_fixture("plain", SessionKind::Shell),
+        ];
+        app.state.presence.push(agents::TerminalPresence {
+            session_id: "muse".into(),
+            generation: "fixture".into(),
+            agents: vec![agents::DetectedAgent {
+                kind: "muse".into(),
+                process: agents::ProcessIdentity {
+                    pid: 9,
+                    start_time: 1,
+                },
+                foreground: true,
+            }],
+            outcome: agents::PresenceOutcome::Verified,
+            observed_at: now(),
+        });
+        let viewer = Viewer {
+            app: &mut app,
+            strip: true,
+        };
+        let muse = viewer.tab_leading_width(&Tab::Terminal("muse".into()));
+        let plain = viewer.tab_leading_width(&Tab::Terminal("plain".into()));
+        assert_eq!(
+            muse,
+            plain + appearance::TERMINAL_LEADING_SLOT,
+            "a process-detected agent reserves its brand before any hook"
+        );
+    }
+
+    #[test]
     #[cfg(feature = "test-support")]
     fn project_header_controls_share_height() {
         let (mut app, ctx, _dir) = fixture();

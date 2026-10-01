@@ -188,6 +188,11 @@ pub const MULTIPLE_ICON: &str = "AgentMultiple";
 
 /// JavaScript runtimes whose first script argument may be a known entrypoint.
 const SCRIPT_RUNTIMES: &[&str] = &["node", "bun"];
+/// Shells whose first script argument may be a catalog executable. Muse's
+/// installer is `#!/usr/bin/env bash` and stays `bash` until it execs
+/// `muse-bin-<version>`. The script basename is the agent; command strings
+/// (`sh -c "…"`) are not.
+const SHELL_LAUNCHERS: &[&str] = &["sh", "bash", "zsh", "dash", "fish"];
 
 #[must_use]
 pub fn catalog(kind: &str) -> Option<&'static AgentInfo> {
@@ -220,11 +225,11 @@ fn match_exe(basename: &str) -> Option<&'static str> {
         .map(|info| info.kind)
 }
 
-/// Match one process by executable file name, or by known Node/Bun
-/// entrypoint. `argv` is the full command line; only `argv[0]` (the invoked
-/// program) and the first non-flag argument after a `node`/`bun` executable
-/// are considered, so arbitrary arguments, titles, output, and working
-/// directories never match.
+/// Match one process by executable file name, known Node/Bun entrypoint, or
+/// shell-script basename. `argv` is the full command line; only `argv[0]`
+/// (the invoked program), the first non-flag argument after a `node`/`bun`
+/// executable, and the first script path after a shell are considered, so
+/// arbitrary arguments, titles, output, and working directories never match.
 ///
 /// Launcher-managed binaries carry a version suffix (e.g.
 /// `muse-bin-1.4.1-R4503.1`, `grok-1.0.44-macos-aarch64`). A trailing
@@ -247,6 +252,9 @@ pub fn match_agent(exe_file_name: &str, argv: &[&str]) -> Option<&'static str> {
             return Some(kind);
         }
     }
+    if SHELL_LAUNCHERS.contains(&exe) {
+        return match_shell_script(argv);
+    }
     if !SCRIPT_RUNTIMES.contains(&exe) {
         return None;
     }
@@ -259,6 +267,22 @@ pub fn match_agent(exe_file_name: &str, argv: &[&str]) -> Option<&'static str> {
         .iter()
         .find(|info| info.entrypoints.contains(&entry))
         .map(|info| info.kind)
+}
+
+/// First script path after a shell launcher. Flags and nested interpreters
+/// are skipped. A whitespace command string is a `-c` body, not an executable.
+fn match_shell_script(argv: &[&str]) -> Option<&'static str> {
+    for arg in argv.iter().skip(1).filter(|arg| !arg.starts_with('-')) {
+        if arg.contains(char::is_whitespace) {
+            return None;
+        }
+        let base = arg.rsplit('/').next().unwrap_or(arg);
+        if SHELL_LAUNCHERS.contains(&base) || SCRIPT_RUNTIMES.contains(&base) {
+            continue;
+        }
+        return match_exe(base);
+    }
+    None
 }
 
 /// PID/start-time identity. A reused PID has a different start time and never
@@ -616,6 +640,38 @@ mod tests {
         assert_eq!(found.outcome, PresenceOutcome::Verified);
         assert_eq!(found.agents.len(), 1);
         assert_eq!(found.agents[0].kind, "claude");
+    }
+
+    #[test]
+    fn shell_script_launcher_matches_before_the_real_binary_execs() {
+        assert_eq!(
+            match_agent("bash", &["bash", "/Users/test/.local/bin/muse"]),
+            Some("muse")
+        );
+        assert_eq!(
+            match_agent(
+                "/bin/bash",
+                &["bash", "/Users/test/.local/bin/muse", "--version"]
+            ),
+            Some("muse")
+        );
+        assert_eq!(match_agent("zsh", &["/bin/zsh", "-l", "-i"]), None);
+        assert_eq!(match_agent("bash", &["bash", "-c", "echo muse"]), None);
+        let procs = vec![
+            proc(100, None, "zsh"),
+            ProcView {
+                pid: 200,
+                parent: Some(100),
+                start_time: 1200,
+                exe_name: "bash".into(),
+                argv: vec!["bash".into(), "/Users/test/.local/bin/muse".into()],
+                live: true,
+            },
+        ];
+        let found = detect_agents(&procs, 100, 1100, None);
+        assert_eq!(found.outcome, PresenceOutcome::Verified);
+        assert_eq!(found.agents.len(), 1);
+        assert_eq!(found.agents[0].kind, "muse");
     }
 
     #[test]

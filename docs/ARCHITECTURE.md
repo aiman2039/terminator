@@ -28,10 +28,11 @@ Environment-based session capabilities are the fast path. For agents such as Mus
 
 Live agent identity is observed separately from hook lifecycle. A daemon
 background thread inspects owned live shells every two seconds against one
-batched process inventory (`agent-presence-v1`). Only exact executable names
-and known Node/Bun entrypoints match the shared catalog (Codex, Claude Code,
-Pi, OpenCode, Grok, Muse); arguments, titles, output, and working directories
-never match. Roots keep their PID/start-time identity while running child
+batched process inventory (`agent-presence-v1`). Exact executable names,
+known Node/Bun entrypoints, and a shell script whose basename is a catalog
+executable match the shared catalog (Codex, Claude Code, Pi, OpenCode, Grok,
+Muse). Muse's installer is a bash script until it execs `muse-bin-<version>`.
+Arguments, titles, output, and working directories never match. Roots keep their PID/start-time identity while running child
 tools, nested agents under a recognized root are ignored, and sibling agents
 each report. Observations ride snapshots additively, merge only from live
 capable owners, are never persisted, and never emit lifecycle events,

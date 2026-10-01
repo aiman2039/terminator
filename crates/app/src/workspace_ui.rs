@@ -69,9 +69,10 @@ struct TabFace {
 }
 
 /// Leading icons for one terminal tab, shared by the main-canvas caption,
-/// the IDE strip's native tabs, and their width reservations. Stable brand
-/// plus hook lifecycle status; the session-kind glyph fills in for plain
-/// shells so every terminal tab carries an icon.
+/// the IDE strip's native tabs, and their width reservations. The brand is
+/// the process-inspection identity and shows before any hook. Hook lifecycle
+/// replaces the session-kind glyph once status exists. Plain shells keep the
+/// kind glyph so every terminal tab carries an icon.
 struct TabLeading {
     brand: Option<&'static str>,
     status: Option<(&'static str, Color32, bool)>,
@@ -870,9 +871,10 @@ impl App {
         }
     }
 
-    /// Resolved leading icons for a terminal tab: stable brand plus hook
-    /// lifecycle status (spinning while running), or the session-kind glyph
-    /// when no lifecycle is known. Unknown sessions resolve to no icons.
+    /// Resolved leading icons for a terminal tab. Process inspection supplies
+    /// the brand before a hook exists. Hook lifecycle then replaces the
+    /// session-kind glyph (spinning while running). Unknown sessions resolve
+    /// to no icons.
     fn tab_leading(&self, sid: &str) -> TabLeading {
         let presented = self.present_session(sid);
         let kind = self.state.sessions.iter().find(|s| s.id == sid).map(|s| {
@@ -882,21 +884,17 @@ impl App {
                 "Terminal"
             }
         });
-        match presented.lifecycle {
-            Some(lifecycle) => TabLeading {
-                brand: presented.brand_icon,
-                status: Some((
-                    presented.status_icon,
-                    super::sidebar_ui::state_color(lifecycle, &self.theme),
-                    lifecycle == AgentState::Running,
-                )),
-                kind: None,
-            },
-            None => TabLeading {
-                brand: None,
-                status: None,
-                kind,
-            },
+        let status = presented.lifecycle.map(|lifecycle| {
+            (
+                presented.status_icon,
+                super::sidebar_ui::state_color(lifecycle, &self.theme),
+                lifecycle == AgentState::Running,
+            )
+        });
+        TabLeading {
+            brand: presented.brand_icon,
+            kind: status.is_none().then_some(kind).flatten(),
+            status,
         }
     }
 
