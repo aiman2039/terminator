@@ -205,13 +205,36 @@ user clicks it. Regression: `terminal_focus_does_not_steal_from_another_widget`.
 
 ## Wheel scrolls during a selection drag (2026-10-01)
 
-Left-drag always selects host text, even in mouse-reporting agents, but wheel
-input still went to the application mid-drag (and was dropped once the pointer
-left the pane), so scrolling felt blocked while selecting. The drag now owns
-the gesture: wheel events apply while `is_dragged`, and route to local
-`ScrollLocal` plus a `SelectUpdate` at the hover point instead of mouse
-reports or alternate-scroll keys, matching the existing pointer-outside
-autoscroll. Plain (non-drag) wheel routing is unchanged. Regressions:
-`wheel_during_drag_extends_selection_instead_of_reporting_to_the_agent`,
-`wheel_during_drag_scrolls_locally_without_a_hover_position`,
-`wheel_events_apply_while_dragging_outside_the_pane`.
+Left-drag always selects host text. Pinning the moving end to a stationary
+pointer does not select the line that enters at the far edge of the viewport.
+A drag wheel grows the selection by the lines the viewport actually moved.
+Primary history, including mouse-reporting terminals that are not on the
+alternate screen, uses `ScrollLocal` and extends by the display-offset change.
+That change is zero at a history boundary or when the grid has no scrollback,
+so the selection stays put. The alternate screen reports the wheel to the
+agent and grows by the reported line count. A stationary pointer inside the
+pane does not `SelectUpdate` in that same frame; the extended end stays until
+the pointer moves. Holding the pointer outside the pane keeps scrolling and
+pins the end to that edge. An application clear during the drag restores the
+selection with the original press point still fixed, so an upward drag keeps
+its bottom endpoint when the pointer moves again. A scroll in that moment
+restores the cleared range before extending it. A same-row drag compares
+columns, so a right-to-left selection keeps the press cell. Output scrolling
+rotates the selection's fixed end and leaves the stored anchor coordinate
+behind; a later wheel reads that fixed end from the selection instead of
+matching the stale coordinate. Plain (non-drag)
+wheel routing is unchanged. Regressions:
+`alternate_screen_local_scroll_does_not_move_the_viewport`,
+`drag_scroll_selects_the_history_line_that_enters_the_view`,
+`local_scroll_extends_by_the_lines_the_viewport_moved`,
+`local_scroll_extends_the_selection_to_the_cell_under_the_pointer`,
+`local_scroll_with_no_history_does_not_grow_the_selection`,
+`reviving_a_cleared_selection_keeps_the_dragged_text`,
+`reviving_an_upward_drag_keeps_the_bottom_endpoint`,
+`backward_same_row_drag_keeps_the_press_cell_when_scrolling`,
+`extend_after_clear_keeps_the_previous_selection`,
+`output_during_drag_does_not_swap_fixed_endpoint`,
+`stationary_drag_inside_the_pane_does_not_reset_the_selection`,
+`wheel_during_drag_on_the_alternate_screen_scrolls_the_agent_and_updates_the_selection`,
+`wheel_during_drag_on_the_primary_screen_scrolls_history_and_updates_the_selection`,
+`drag_outside_an_alternate_screen_scrolls_the_agent`.

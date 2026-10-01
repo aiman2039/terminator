@@ -4,7 +4,7 @@ use crate::types::Size;
 use alacritty_terminal::event::{Event, EventListener, Notify, OnResize, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, Msg, Notifier};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Direction, Line, Point, Side};
+use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
 use alacritty_terminal::selection::{
     Selection, SelectionRange, SelectionType as AlacrittySelectionType,
 };
@@ -75,10 +75,17 @@ pub enum BackendCommand {
     Write(Vec<u8>),
     Scroll(i32),
     /// Scroll retained history without translating wheel movement into input.
-    ScrollLocal(i32),
+    /// `extend_selection` grows the active drag by the display-offset change,
+    /// which is zero when the viewport cannot move.
+    ScrollLocal {
+        lines: i32,
+        extend_selection: bool,
+    },
     Resize(Size, Size),
     SelectStart(SelectionType, f32, f32),
     SelectUpdate(f32, f32),
+    /// Grow the active drag by this many lines. Positive grows into history.
+    SelectExtend(i32),
     ProcessLink(LinkAction, Point),
     MouseReport(MouseButton, Modifiers, Point, bool),
 }
@@ -217,6 +224,10 @@ pub struct TerminalBackend {
     grid_dirty: Arc<AtomicBool>,
     painted: Arc<AtomicBool>,
     repaint_budget: Arc<Mutex<RepaintBudget>>,
+    /// While a selection drag is active, an application clear must not drop it.
+    selection_hold: bool,
+    /// Grid point where the current drag started. Survives an application clear.
+    drag_anchor: Option<Point>,
 }
 
 impl TerminalBackend {
@@ -313,7 +324,17 @@ impl TerminalBackend {
             grid_dirty,
             painted,
             repaint_budget,
+            selection_hold: false,
+            drag_anchor: None,
         })
+    }
+
+    /// Keep the in-progress drag if the application clears the screen.
+    pub fn set_selection_hold(&mut self, hold: bool) {
+        if !hold {
+            self.drag_anchor = None;
+        }
+        self.selection_hold = hold;
     }
 
     pub fn process_command(&mut self, cmd: BackendCommand) {
@@ -332,8 +353,16 @@ impl TerminalBackend {
                 self.write(input);
                 term.scroll_display(Scroll::Bottom);
             }
-            BackendCommand::ScrollLocal(delta) => {
-                term.scroll_display(Scroll::Delta(delta));
+            BackendCommand::ScrollLocal {
+                lines,
+                extend_selection,
+            } => {
+                let applied = scroll_display_lines(&mut term, lines);
+                if extend_selection {
+                    let previous = self.last_content.selectable_range;
+                    restore_then_extend(&mut term, &mut self.drag_anchor, previous, applied);
+                    self.capture_selection(&term);
+                }
             }
             BackendCommand::Scroll(delta) => {
                 self.scroll(&mut term, delta);
@@ -347,6 +376,18 @@ impl TerminalBackend {
             }
             BackendCommand::SelectUpdate(x, y) => {
                 self.update_selection(&mut term, x, y);
+                self.capture_selection(&term);
+            }
+            BackendCommand::SelectExtend(delta) => {
+                // The application may have cleared the drag. Extending first
+                // grows a point at the press and `capture_selection` replaces
+                // the cached range with that.
+                if self.selection_hold {
+                    let previous = self.last_content.selectable_range;
+                    restore_then_extend(&mut term, &mut self.drag_anchor, previous, delta);
+                } else {
+                    extend_drag_selection(&mut term, &mut self.drag_anchor, delta);
+                }
                 self.capture_selection(&term);
             }
             BackendCommand::ProcessLink(link_action, point) => {
@@ -369,7 +410,7 @@ impl TerminalBackend {
             cmd,
             BackendCommand::Write(_)
                 | BackendCommand::Scroll(_)
-                | BackendCommand::ScrollLocal(_)
+                | BackendCommand::ScrollLocal { .. }
                 | BackendCommand::Resize(_, _)
         )
     }
@@ -515,6 +556,13 @@ impl TerminalBackend {
         }
         let terminal = self.term.clone();
         let mut terminal = terminal.lock();
+        let previous_range = self.last_content.selectable_range;
+        // Output scrolls selection endpoints and leaves `drag_anchor` behind.
+        // Reattach it to the selection's fixed end before a later extend or revive.
+        refresh_drag_anchor(&terminal, &mut self.drag_anchor);
+        if self.selection_hold && terminal.selection.is_none() {
+            revive_selection(&mut terminal, self.drag_anchor, previous_range);
+        }
         let selectable_range = match &terminal.selection {
             Some(s) => s.to_range(&terminal),
             None => None,
@@ -681,6 +729,7 @@ impl TerminalBackend {
         y: f32,
     ) {
         let location = Self::selection_point(x, y, &self.size, terminal.grid().display_offset());
+        self.drag_anchor = Some(location);
         terminal.selection = Some(Selection::new(
             selection_type,
             location,
@@ -689,6 +738,14 @@ impl TerminalBackend {
     }
 
     fn update_selection(&mut self, terminal: &mut Term<EventProxy>, x: f32, y: f32) {
+        refresh_drag_anchor(terminal, &mut self.drag_anchor);
+        if self.selection_hold && terminal.selection.is_none() {
+            revive_selection(
+                terminal,
+                self.drag_anchor,
+                self.last_content.selectable_range,
+            );
+        }
         let display_offset = terminal.grid().display_offset();
         if let Some(ref mut selection) = terminal.selection {
             let location = Self::selection_point(x, y, &self.size, display_offset);
@@ -761,6 +818,265 @@ impl TerminalBackend {
     }
 }
 
+/// Lines the viewport actually moved. Positive reaches into history.
+fn scroll_display_lines<T: EventListener>(terminal: &mut Term<T>, lines: i32) -> i32 {
+    let before = terminal.grid().display_offset() as i32;
+    terminal.scroll_display(Scroll::Delta(lines));
+    terminal.grid().display_offset() as i32 - before
+}
+
+/// Scroll local history and grow the drag by the offset that changed.
+fn scroll_local_drag<T: EventListener>(
+    terminal: &mut Term<T>,
+    anchor: &mut Option<Point>,
+    lines: i32,
+) -> i32 {
+    let applied = scroll_display_lines(terminal, lines);
+    extend_drag_selection(terminal, anchor, applied);
+    applied
+}
+
+/// Put a cleared drag back, then grow it. Extending while the selection is
+/// empty replaces the cached span with the press point.
+fn restore_then_extend<T>(
+    terminal: &mut Term<T>,
+    anchor: &mut Option<Point>,
+    previous: Option<SelectionRange>,
+    delta: i32,
+) {
+    if terminal.selection.is_none() {
+        revive_selection(terminal, *anchor, previous);
+    }
+    extend_drag_selection(terminal, anchor, delta);
+}
+
+/// Grow a drag by `delta` lines. Positive reaches into history.
+///
+/// Following the stationary pointer instead drops the line that enters at the
+/// far edge of the viewport: that line is outside the anchor-to-pointer span.
+/// The edge opposite the scroll moves, and the press point stays the anchor
+/// unless it is the edge that has to move.
+fn extend_drag_selection<T>(terminal: &mut Term<T>, anchor: &mut Option<Point>, delta: i32) {
+    if delta == 0 {
+        return;
+    }
+    let Some(anchor_point) = *anchor else {
+        return;
+    };
+    let ty = terminal
+        .selection
+        .as_ref()
+        .map(|selection| selection.ty)
+        .unwrap_or(AlacrittySelectionType::Simple);
+    // `Selection::new` stores the press as the fixed end and `update` moves the
+    // other end. Output scrolling rotates both coordinates and does not swap
+    // them. `drag_anchor` is not rotated, so matching it against the endpoints
+    // can pick the moving end and a later pointer update collapses the span.
+    let selection = terminal.selection.clone();
+    let columns = terminal.grid().columns();
+    let (mut anchor_point, mut moving) = match selection.as_ref() {
+        Some(selection) => match selection.to_range(terminal) {
+            Some(range) => match anchored_ends(selection, range, columns) {
+                Some((fixed, moving)) => (fixed, moving),
+                None => ends_from_anchor(range, anchor_point),
+            },
+            None => (anchor_point, anchor_point),
+        },
+        None => (anchor_point, anchor_point),
+    };
+    let last_column = terminal.grid().last_column();
+    if delta > 0 {
+        if moving.line < anchor_point.line {
+            moving.line = Line(moving.line.0 - delta);
+            moving.column = Column(0);
+        } else if anchor_point.line < moving.line {
+            anchor_point.line = Line(anchor_point.line.0 - delta);
+            anchor_point.column = Column(0);
+        } else {
+            moving.line = Line(moving.line.0 - delta);
+            moving.column = Column(0);
+        }
+    } else {
+        let down = -delta;
+        if moving.line > anchor_point.line {
+            moving.line = Line(moving.line.0 + down);
+            moving.column = last_column;
+        } else if anchor_point.line > moving.line {
+            anchor_point.line = Line(anchor_point.line.0 + down);
+            anchor_point.column = last_column;
+        } else {
+            moving.line = Line(moving.line.0 + down);
+            moving.column = last_column;
+        }
+    }
+    let anchor_point = anchor_point.grid_clamp(terminal, Boundary::Grid);
+    let moving = moving.grid_clamp(terminal, Boundary::Grid);
+    let mut selection = Selection::new(ty, anchor_point, Side::Left);
+    selection.update(moving, Side::Right);
+    selection.include_all();
+    terminal.selection = Some(selection);
+    *anchor = Some(anchor_point);
+}
+
+/// Put a cleared drag back. The previous range keeps both ends. The press
+/// point stays the fixed end, so the next pointer move does not replace it.
+/// The anchor alone restarts a drag the application erased before it covered
+/// any cells.
+fn revive_selection<T>(
+    terminal: &mut Term<T>,
+    anchor: Option<Point>,
+    previous: Option<SelectionRange>,
+) -> bool {
+    if terminal.selection.is_some() {
+        return false;
+    }
+    if let Some(range) = previous {
+        reinstall_selection(terminal, range, anchor);
+        return true;
+    }
+    if let Some(anchor) = anchor {
+        terminal.selection = Some(Selection::new(
+            AlacrittySelectionType::Simple,
+            anchor,
+            Side::Left,
+        ));
+        return true;
+    }
+    false
+}
+
+fn reinstall_selection<T>(terminal: &mut Term<T>, range: SelectionRange, anchor: Option<Point>) {
+    let ty = if range.is_block {
+        AlacrittySelectionType::Block
+    } else {
+        AlacrittySelectionType::Simple
+    };
+    // `Selection::update` replaces `region.end`. `SelectionRange` is sorted
+    // top-left to bottom-right, so an upward drag's press point is `range.end`.
+    // Anchoring at `range.start` makes the next move drop that bottom endpoint.
+    let (fixed, moving) = match anchor {
+        Some(anchor) if point_closer(range.end, range.start, anchor) => (range.end, range.start),
+        _ => (range.start, range.end),
+    };
+    let mut selection = Selection::new(ty, fixed, Side::Left);
+    selection.update(moving, Side::Right);
+    selection.include_all();
+    terminal.selection = Some(selection);
+}
+
+fn ends_from_anchor(range: SelectionRange, anchor: Point) -> (Point, Point) {
+    if point_closer(range.end, range.start, anchor) {
+        (range.end, range.start)
+    } else {
+        (range.start, range.end)
+    }
+}
+
+/// The press point is the selection's fixed end. Recover it from the live
+/// selection instead of from `drag_anchor`, which output scrolling does not move.
+fn refresh_drag_anchor<T>(terminal: &Term<T>, anchor: &mut Option<Point>) {
+    if anchor.is_none() {
+        return;
+    }
+    let Some(selection) = terminal.selection.as_ref() else {
+        return;
+    };
+    let Some(range) = selection.to_range(terminal) else {
+        return;
+    };
+    if let Some((fixed, _)) = anchored_ends(selection, range, terminal.grid().columns()) {
+        *anchor = Some(fixed);
+    }
+}
+
+fn anchored_ends(
+    selection: &Selection,
+    range: SelectionRange,
+    columns: usize,
+) -> Option<(Point, Point)> {
+    let starts = point_candidates(range.start, columns);
+    let ends = point_candidates(range.end, columns);
+    for fixed in starts {
+        let Some(fixed) = fixed else {
+            continue;
+        };
+        for moving in ends {
+            let Some(moving) = moving else {
+                continue;
+            };
+            if selection_matches(selection, fixed, moving) {
+                return Some((fixed, moving));
+            }
+        }
+    }
+    for fixed in ends {
+        let Some(fixed) = fixed else {
+            continue;
+        };
+        for moving in starts {
+            let Some(moving) = moving else {
+                continue;
+            };
+            if fixed == moving {
+                continue;
+            }
+            if selection_matches(selection, fixed, moving) {
+                return Some((fixed, moving));
+            }
+        }
+    }
+    None
+}
+
+fn selection_matches(selection: &Selection, fixed: Point, moving: Point) -> bool {
+    for fixed_side in [Side::Left, Side::Right] {
+        for moving_side in [Side::Left, Side::Right] {
+            let mut candidate = Selection::new(selection.ty, fixed, fixed_side);
+            candidate.update(moving, moving_side);
+            if &candidate == selection {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// `to_range` can shift an endpoint by one cell. The selection still stores
+/// the pre-adjustment point.
+fn point_candidates(point: Point, columns: usize) -> [Option<Point>; 5] {
+    let mut out = [None; 5];
+    out[0] = Some(point);
+    let mut count = 1;
+    if point.column.0 > 0 {
+        out[count] = Some(Point::new(point.line, Column(point.column.0 - 1)));
+        count += 1;
+    }
+    if columns > 0 && point.column.0 + 1 < columns {
+        out[count] = Some(Point::new(point.line, Column(point.column.0 + 1)));
+        count += 1;
+    }
+    if columns > 0 {
+        out[count] = Some(Point::new(Line(point.line.0 - 1), Column(columns - 1)));
+        count += 1;
+        if count < out.len() {
+            out[count] = Some(Point::new(Line(point.line.0 + 1), Column(0)));
+        }
+    }
+    out
+}
+
+/// `candidate` is nearer the press point than `other`. Line wins over column.
+fn point_closer(candidate: Point, other: Point, anchor: Point) -> bool {
+    let candidate_line = (candidate.line.0 - anchor.line.0).abs();
+    let other_line = (other.line.0 - anchor.line.0).abs();
+    if candidate_line != other_line {
+        return candidate_line < other_line;
+    }
+    let candidate_col = (candidate.column.0 as i32 - anchor.column.0 as i32).abs();
+    let other_col = (other.column.0 as i32 - anchor.column.0 as i32).abs();
+    candidate_col < other_col
+}
+
 /// Wheel-generated cursor keys for alternate-scroll mode. Honors DECCKM
 /// application-cursor state exactly like the keyboard arrow bindings: CSI
 /// (`ESC [ A/B`) normally, SS3 (`ESC O A/B`) with `APP_CURSOR` set.
@@ -802,6 +1118,352 @@ mod scroll_key_tests {
     fn zero_delta_sends_nothing() {
         assert!(scroll_key_bytes(0, &TermMode::empty()).is_empty());
         assert!(scroll_key_bytes(0, &TermMode::APP_CURSOR).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod selection_scroll_tests {
+    use super::*;
+    use alacritty_terminal::event::VoidListener;
+    use alacritty_terminal::index::Point;
+    use alacritty_terminal::vte::ansi::Handler;
+
+    #[test]
+    fn alternate_screen_local_scroll_does_not_move_the_viewport() {
+        let mut term = Term::new(term::Config::default(), &TermSize::new(8, 6), VoidListener);
+        term.swap_alt();
+        assert!(term.mode().contains(TermMode::ALT_SCREEN));
+        assert_eq!(term.grid().history_size(), 0);
+        term.scroll_display(Scroll::Delta(4));
+        assert_eq!(term.grid().display_offset(), 0);
+        term.scroll_display(Scroll::Delta(-4));
+        assert_eq!(term.grid().display_offset(), 0);
+    }
+
+    #[test]
+    fn local_scroll_extends_the_selection_to_the_cell_under_the_pointer() {
+        let mut term = Term::new(term::Config::default(), &TermSize::new(4, 5), VoidListener);
+        term.grid_mut().scroll_up(&(Line(0)..Line(5)), 2);
+        assert!(term.grid().history_size() >= 2);
+        assert_eq!(term.grid().display_offset(), 0);
+
+        let size = TerminalSize::from_layout(Size::new(32.0, 80.0), Size::new(8.0, 16.0));
+        let bottom = 4.0 * 16.0;
+        let start = TerminalBackend::selection_point(4.0, bottom, &size, 0);
+        term.selection = Some(Selection::new(
+            AlacrittySelectionType::Simple,
+            start,
+            Side::Right,
+        ));
+        term.scroll_display(Scroll::Delta(2));
+        assert_eq!(term.grid().display_offset(), 2);
+        let end =
+            TerminalBackend::selection_point(4.0, bottom, &size, term.grid().display_offset());
+        term.selection.as_mut().unwrap().update(end, Side::Right);
+
+        let range = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        assert!(
+            range.end.line.0 - range.start.line.0 >= 1,
+            "selection did not grow across the local scroll"
+        );
+    }
+
+    #[test]
+    fn reviving_a_cleared_selection_keeps_the_dragged_text() {
+        let mut term = Term::new(term::Config::default(), &TermSize::new(6, 3), VoidListener);
+        for (col, c) in "hello".chars().enumerate() {
+            term.grid_mut()[Line(1)][Column(col)].c = c;
+        }
+        let range = SelectionRange::new(
+            Point::new(Line(1), Column(0)),
+            Point::new(Line(1), Column(4)),
+            false,
+        );
+        reinstall_selection(&mut term, range, None);
+        assert_eq!(term.selection_to_string().as_deref(), Some("hello"));
+        term.selection = None;
+        assert!(revive_selection(&mut term, None, Some(range)));
+        assert_eq!(term.selection_to_string().as_deref(), Some("hello"));
+    }
+
+    /// Press at the bottom, drag to the top, then the application clears the
+    /// selection. The next move is still at the top and must keep the bottom.
+    #[test]
+    fn reviving_an_upward_drag_keeps_the_bottom_endpoint() {
+        let mut term = Term::new(term::Config::default(), &TermSize::new(4, 4), VoidListener);
+        put_line(&mut term, 0, "TOPP");
+        put_line(&mut term, 1, "MMMM");
+        put_line(&mut term, 2, "NNNN");
+        put_line(&mut term, 3, "BOTT");
+        let anchor = Point::new(Line(3), Column(2));
+        let top = Point::new(Line(0), Column(1));
+        let mut selection = Selection::new(AlacrittySelectionType::Simple, anchor, Side::Left);
+        selection.update(top, Side::Right);
+        selection.include_all();
+        term.selection = Some(selection);
+        let range = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        assert_eq!((range.start.line.0, range.end.line.0), (0, 3));
+        term.selection = None;
+        assert!(revive_selection(&mut term, Some(anchor), Some(range)));
+        term.selection
+            .as_mut()
+            .unwrap()
+            .update(Point::new(Line(0), Column(0)), Side::Left);
+        let range = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        let selected = term.selection_to_string().unwrap_or_default();
+        assert_eq!(
+            (range.start.line.0, range.end.line.0),
+            (0, 3),
+            "restored upward drag lost an endpoint: {selected:?}"
+        );
+        assert!(selected.contains("MMMM") && selected.contains('B'));
+    }
+
+    #[test]
+    fn reviving_a_downward_drag_keeps_the_top_endpoint() {
+        let mut term = Term::new(term::Config::default(), &TermSize::new(4, 4), VoidListener);
+        put_line(&mut term, 0, "TOPP");
+        put_line(&mut term, 3, "BOTT");
+        let anchor = Point::new(Line(0), Column(1));
+        let bottom = Point::new(Line(3), Column(2));
+        let mut selection = Selection::new(AlacrittySelectionType::Simple, anchor, Side::Left);
+        selection.update(bottom, Side::Right);
+        selection.include_all();
+        term.selection = Some(selection);
+        let range = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        assert_eq!((range.start.line.0, range.end.line.0), (0, 3));
+        term.selection = None;
+        assert!(revive_selection(&mut term, Some(anchor), Some(range)));
+        term.selection.as_mut().unwrap().update(bottom, Side::Right);
+        let range = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        let selected = term.selection_to_string().unwrap_or_default();
+        assert_eq!(
+            (range.start.line.0, range.end.line.0),
+            (0, 3),
+            "restored downward drag lost an endpoint: {selected:?}"
+        );
+    }
+
+    /// Press on the right, drag left along the row, then scroll up. The press
+    /// cell has to stay selected.
+    #[test]
+    fn backward_same_row_drag_keeps_the_press_cell_when_scrolling() {
+        let mut term = Term::new(term::Config::default(), &TermSize::new(8, 3), VoidListener);
+        put_line(&mut term, 1, "ABCDEFGH");
+        let press = Point::new(Line(1), Column(6));
+        let mut anchor = Some(press);
+        let mut selection = Selection::new(AlacrittySelectionType::Simple, press, Side::Right);
+        selection.update(Point::new(Line(1), Column(1)), Side::Left);
+        term.selection = Some(selection);
+        let before = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        assert_eq!(before.start.line, before.end.line);
+        extend_drag_selection(&mut term, &mut anchor, 1);
+        let after = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        assert!(
+            after.contains(before.end),
+            "backward same-row drag dropped the press cell: {after:?} was {before:?}"
+        );
+    }
+
+    #[test]
+    fn forward_same_row_drag_keeps_the_press_cell_when_scrolling() {
+        let mut term = Term::new(term::Config::default(), &TermSize::new(8, 3), VoidListener);
+        put_line(&mut term, 1, "ABCDEFGH");
+        let press = Point::new(Line(1), Column(1));
+        let mut anchor = Some(press);
+        let mut selection = Selection::new(AlacrittySelectionType::Simple, press, Side::Left);
+        selection.update(Point::new(Line(1), Column(6)), Side::Right);
+        term.selection = Some(selection);
+        let before = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        extend_drag_selection(&mut term, &mut anchor, 1);
+        let after = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        assert!(
+            after.contains(before.start),
+            "forward same-row drag dropped the press cell: {after:?} was {before:?}"
+        );
+    }
+
+    #[test]
+    fn extend_after_clear_keeps_the_previous_selection() {
+        let mut term = Term::new(term::Config::default(), &TermSize::new(4, 4), VoidListener);
+        put_line(&mut term, 0, "AAAA");
+        put_line(&mut term, 1, "BBBB");
+        put_line(&mut term, 2, "CCCC");
+        let anchor_point = Point::new(Line(0), Column(0));
+        let mut anchor = Some(anchor_point);
+        let mut selection =
+            Selection::new(AlacrittySelectionType::Simple, anchor_point, Side::Left);
+        selection.update(Point::new(Line(2), Column(3)), Side::Right);
+        selection.include_all();
+        term.selection = Some(selection);
+        let previous = term.selection.as_ref().unwrap().to_range(&term);
+        assert!(term
+            .selection_to_string()
+            .unwrap_or_default()
+            .contains("CCCC"));
+        term.selection = None;
+        restore_then_extend(&mut term, &mut anchor, previous, 1);
+        let selected = term.selection_to_string().unwrap_or_default();
+        assert!(
+            selected.contains("CCCC"),
+            "scroll after clear dropped the previous selection: {selected:?}"
+        );
+    }
+
+    fn put_line(term: &mut Term<VoidListener>, line: i32, text: &str) {
+        for (col, ch) in text.chars().enumerate() {
+            term.grid_mut()[Line(line)][Column(col)].c = ch;
+        }
+    }
+
+    /// A drag that already reaches the top of the view, then a wheel into
+    /// history. Updating the end to a stationary pointer leaves the line that
+    /// entered at the top unselected.
+    #[test]
+    fn drag_scroll_selects_the_history_line_that_enters_the_view() {
+        let mut term = Term::new(term::Config::default(), &TermSize::new(4, 3), VoidListener);
+        put_line(&mut term, 0, "HIST");
+        put_line(&mut term, 1, "AAAA");
+        put_line(&mut term, 2, "BBBB");
+        term.grid_mut().scroll_up(&(Line(0)..Line(3)), 1);
+        assert_eq!(term.grid()[Line(-1)][Column(0)].c, 'H');
+
+        let mut anchor = Some(Point::new(Line(0), Column(0)));
+        term.selection = Some(Selection::new(
+            AlacrittySelectionType::Simple,
+            anchor.unwrap(),
+            Side::Left,
+        ));
+        term.selection
+            .as_mut()
+            .unwrap()
+            .update(Point::new(Line(2), Column(3)), Side::Right);
+        term.scroll_display(Scroll::Delta(1));
+        extend_drag_selection(&mut term, &mut anchor, 1);
+
+        let selected = term.selection_to_string().unwrap_or_default();
+        assert!(
+            selected.contains("HIST"),
+            "history line that entered the view was not selected: {selected:?}"
+        );
+        let offset = term.grid().display_offset();
+        let range = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        let snap = snapshot_viewport(term.grid());
+        assert_eq!(snap[Line(0)][Column(0)].c, 'H');
+        let live = Point::new(Line(0 - offset as i32), Column(0));
+        assert!(
+            range.contains(live),
+            "top viewport row is not highlighted: {range:?} offset {offset}"
+        );
+    }
+
+    /// One selected row at the bottom, two lines of history, a five-line request.
+    /// Extending by the request would run through rows the viewport never reached.
+    #[test]
+    fn local_scroll_extends_by_the_lines_the_viewport_moved() {
+        let config = term::Config {
+            scrolling_history: 2,
+            ..term::Config::default()
+        };
+        let mut term = Term::new(config, &TermSize::new(4, 4), VoidListener);
+        term.grid_mut().scroll_up(&(Line(0)..Line(4)), 2);
+        assert_eq!(term.grid().history_size(), 2);
+
+        let mut anchor = Some(Point::new(Line(3), Column(0)));
+        term.selection = Some(Selection::new(
+            AlacrittySelectionType::Simple,
+            anchor.unwrap(),
+            Side::Left,
+        ));
+        let applied = scroll_local_drag(&mut term, &mut anchor, 5);
+        assert_eq!(applied, 2);
+        let range = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        assert_eq!(range.end.line.0 - range.start.line.0, applied);
+
+        let stuck = term.selection_to_string().unwrap_or_default();
+        let again = scroll_local_drag(&mut term, &mut anchor, 5);
+        assert_eq!(again, 0);
+        assert_eq!(term.grid().display_offset(), 2);
+        assert_eq!(term.selection_to_string().unwrap_or_default(), stuck);
+    }
+
+    #[test]
+    fn local_scroll_with_no_history_does_not_grow_the_selection() {
+        let mut term = Term::new(term::Config::default(), &TermSize::new(4, 6), VoidListener);
+        term.swap_alt();
+        assert_eq!(term.grid().history_size(), 0);
+        let mut anchor = Some(Point::new(Line(2), Column(0)));
+        term.selection = Some(Selection::new(
+            AlacrittySelectionType::Simple,
+            anchor.unwrap(),
+            Side::Left,
+        ));
+        term.selection
+            .as_mut()
+            .unwrap()
+            .update(Point::new(Line(3), Column(3)), Side::Right);
+        let before = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+
+        for lines in [4, -4] {
+            let applied = scroll_local_drag(&mut term, &mut anchor, lines);
+            assert_eq!(applied, 0);
+            assert_eq!(term.grid().display_offset(), 0);
+            let after = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+            assert_eq!(after.start.line, before.start.line);
+            assert_eq!(after.end.line, before.end.line);
+        }
+    }
+
+    /// Press above the moving end. Output scrolls both endpoints up and leaves
+    /// the stored anchor on the old line, which now belongs to the moving end.
+    #[test]
+    fn output_during_drag_does_not_swap_fixed_endpoint() {
+        let mut term = Term::new(term::Config::default(), &TermSize::new(8, 6), VoidListener);
+        let mut anchor = Some(Point::new(Line(2), Column(0)));
+        let mut selection =
+            Selection::new(AlacrittySelectionType::Simple, anchor.unwrap(), Side::Left);
+        selection.update(Point::new(Line(4), Column(7)), Side::Right);
+        term.selection = Some(selection);
+        Handler::scroll_up(&mut term, 2);
+        let shifted = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        assert_eq!(shifted.start.line, Line(0));
+        extend_drag_selection(&mut term, &mut anchor, 1);
+        term.selection
+            .as_mut()
+            .unwrap()
+            .update(Point::new(Line(1), Column(7)), Side::Right);
+        let after = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        assert!(
+            after.contains(shifted.start),
+            "original fixed endpoint {:?} lost in {:?}",
+            shifted.start,
+            after
+        );
+    }
+
+    #[test]
+    fn output_during_same_column_drag_does_not_swap_fixed_endpoint() {
+        let mut term = Term::new(term::Config::default(), &TermSize::new(8, 6), VoidListener);
+        let mut anchor = Some(Point::new(Line(2), Column(0)));
+        let mut selection =
+            Selection::new(AlacrittySelectionType::Simple, anchor.unwrap(), Side::Left);
+        selection.update(Point::new(Line(4), Column(0)), Side::Right);
+        term.selection = Some(selection);
+        Handler::scroll_up(&mut term, 2);
+        let shifted = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        assert_eq!(shifted.end, anchor.unwrap());
+        extend_drag_selection(&mut term, &mut anchor, 1);
+        term.selection
+            .as_mut()
+            .unwrap()
+            .update(Point::new(Line(1), Column(0)), Side::Right);
+        let after = term.selection.as_ref().unwrap().to_range(&term).unwrap();
+        assert!(
+            after.contains(shifted.start),
+            "original fixed endpoint {:?} lost in {:?}",
+            shifted.start,
+            after
+        );
     }
 }
 

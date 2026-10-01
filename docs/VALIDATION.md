@@ -1,5 +1,45 @@
 # Validation evidence — 2026-09-08
 
+## Selection scroll in agent terminals (2026-10-01)
+
+The same failure happens off the alternate screen. A drag wheel that only
+moved the viewport and pinned the selection to the stationary pointer left
+the line entering at the far edge unselected, so the highlight did not grow.
+Drag wheels now extend the selection by the lines the viewport actually
+moved. Primary history, with or without mouse reporting, still scrolls
+locally; at a history boundary, or with no scrollback, that offset change is
+zero and the selection stays put. The alternate screen has no scrollback, so
+that wheel is reported to the agent and the selection grows by the reported
+count. A stationary pointer inside the pane does not `SelectUpdate` in the
+same frame, which had put the extended end back on the pointer. Holding the
+pointer outside the pane continues the scroll and pins the end to that edge.
+An application clear during the drag does not drop the selection, and the
+original press point stays the fixed end. An upward drag keeps its bottom
+endpoint when the pointer moves again. A same-row right-to-left drag keeps
+its press cell when the selection scrolls. A scroll immediately after an
+application clear restores the previous range before extending it. Output
+that scrolls the screen during a drag does not swap the fixed end, so the
+next wheel and pointer move keep the press point.
+
+`cargo test --manifest-path vendor/egui_term/Cargo.toml --offline --lib`: 85
+passed. `cargo fmt --manifest-path vendor/egui_term/Cargo.toml -- --check`
+passed. `drag_scroll_selects_the_history_line_that_enters_the_view`
+checks that the revealed history row is in the selection and is the highlighted
+top viewport row. `local_scroll_extends_by_the_lines_the_viewport_moved` checks
+a five-line request against two lines of history, then a further request at
+the boundary. `local_scroll_with_no_history_does_not_grow_the_selection` and
+`stationary_drag_inside_the_pane_does_not_reset_the_selection` cover the two
+clamped cases. `reviving_an_upward_drag_keeps_the_bottom_endpoint` clears an
+upward drag and moves the pointer at the top again; the bottom line stays
+selected. `backward_same_row_drag_keeps_the_press_cell_when_scrolling` and
+`extend_after_clear_keeps_the_previous_selection` cover the same-row anchor
+and the clear-then-scroll order. `output_during_drag_does_not_swap_fixed_endpoint`
+scrolls the screen by two lines during a downward drag, then wheels and moves
+the pointer; the original fixed end stays selected. Live nvim/agent dragging
+was not exercised;
+no daemon was
+restarted.
+
 ## E2E regression fix, CI e2e/coverage jobs, and focused coverage (2026-09-29)
 
 - `cargo xtask integration` failed deterministically at `regressions::history_burst`
