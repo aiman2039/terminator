@@ -2386,8 +2386,11 @@ impl App {
             .or_else(|| self.selected_project().map(|p| p.path.clone()))
     }
     fn sync_resource_sample(&mut self) {
-        let open = self.preferences.visible && self.preferences.tool == SidebarTool::Info;
-        let next = open.then(|| {
+        // Always sample: the status strip shows GUI/daemon/hook totals from
+        // every sample, and Info adds the focused session when it is open.
+        // The background cadence stays at one sample every few seconds;
+        // only which session pid to follow changes.
+        let next = Some({
             let session = self
                 .context_session()
                 .filter(|session| session.lifecycle.live());
@@ -5256,6 +5259,14 @@ impl eframe::App for App {
                         },
                     );
                 }
+                // Right-aligned app totals. Pure paint over the background
+                // sample: no extra wakes, updates land with the heartbeat.
+                ui.with_layout(
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        self.app_resource_status(ui);
+                    },
+                );
             });
         });
         if self.preferences.ide_mode && !self.preferences.ide_terminal_collapsed {
@@ -6301,6 +6312,121 @@ mod navigation_tests {
         );
         output.textures_delta.clear();
         assert!(agent_target(&ctx, "status-attention-bell").is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn status_strip_shows_app_totals_and_opens_info() {
+        let (mut app, ctx, _dir) = fixture();
+        fn paint(app: &mut App, ctx: &egui::Context, events: &[egui::Event]) -> Vec<String> {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 30.0),
+                    )),
+                    events: events.to_vec(),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        app.app_resource_status(ui)
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            let mut text = Vec::new();
+            for clipped in &output.shapes {
+                walk_text(&clipped.shape, &mut text);
+            }
+            text
+        }
+        fn walk_text(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk_text(shape, out);
+                    }
+                }
+                egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+                _ => {}
+            }
+        }
+        // No sample yet: nothing painted.
+        paint(&mut app, &ctx, &[]);
+        assert!(agent_target(&ctx, "status-resources").is_none());
+
+        // A sample that matched no app process: still nothing, never a
+        // stuck zero.
+        app.resources = Some(resource_sample::Sample {
+            pid: None,
+            started: 0,
+            session: None,
+            system: resource_sample::SystemStats {
+                cpu: 0.0,
+                memory_used: 0,
+                memory_total: 0,
+                pressure: None,
+                load_one: 0.0,
+                load_five: 0.0,
+                load_fifteen: 0.0,
+                cpus: 1,
+            },
+            app: resource_sample::AppStats::default(),
+        });
+        paint(&mut app, &ctx, &[]);
+        assert!(agent_target(&ctx, "status-resources").is_none());
+
+        app.resources.as_mut().unwrap().app = resource_sample::AppStats {
+            gui: resource_sample::ComponentStats {
+                cpu: 12.0,
+                memory: 50 * 1024 * 1024,
+                processes: 1,
+            },
+            daemon: resource_sample::ComponentStats {
+                cpu: 3.0,
+                memory: 100 * 1024 * 1024,
+                processes: 1,
+            },
+            hooks: resource_sample::ComponentStats {
+                cpu: 0.5,
+                memory: 10 * 1024 * 1024,
+                processes: 2,
+            },
+        };
+        let text = paint(&mut app, &ctx, &[]);
+        let rect = agent_target(&ctx, "status-resources").expect("resource readout");
+        assert!(
+            text.iter().any(|line| line.contains("16%")),
+            "totals cpu {text:?}"
+        );
+        assert!(
+            text.iter().any(|line| line.contains("160 MB")),
+            "totals memory {text:?}"
+        );
+        let pos = rect.center();
+        paint(
+            &mut app,
+            &ctx,
+            &[egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            }],
+        );
+        paint(
+            &mut app,
+            &ctx,
+            &[egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+        assert_eq!(app.preferences.tool, SidebarTool::Info);
+        assert!(app.preferences.visible);
     }
 
     #[test]
@@ -11010,6 +11136,7 @@ mod navigation_tests {
             started: session.created,
             session: None,
             system: system.clone(),
+            app: resource_sample::AppStats::default(),
         });
 
         fn painted(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
@@ -11089,6 +11216,7 @@ mod navigation_tests {
                 memory: 50 * 1024 * 1024,
             }),
             system: system.clone(),
+            app: resource_sample::AppStats::default(),
         });
         let (text, ctx) = paint(&mut app);
         assert!(marked(&ctx, session_info::SESSION_CPU));

@@ -644,38 +644,41 @@ pub fn session_row_spec(ui: &mut egui::Ui, spec: SessionRowSpec<'_>) -> egui::Re
     .inner
 }
 
-/// Working icons pulse (alternate halves of each second) instead of rotating.
-/// The phase comes from the wall clock, so several icons stay in sync, and egui
-/// keeps the soonest request, so they share one schedule of at most two wakes
-/// per second, usually coalesced with the app's one-second heartbeat. A
-/// clipped icon, a hidden sidebar, a minimized window, or an unfocused window
+/// Working icons rotate slowly: one turn per `STATUS_SPIN_PERIOD`, sampled at
+/// `STATUS_SPIN_INTERVAL`. The wake rate dominates the cost — each wake paints
+/// the visible UI — while rotating the paint itself is a cheap transform, so
+/// the slower cadence keeps CPU low however the icon moves. The phase comes
+/// from the wall clock, so several icons stay in sync, and egui keeps the
+/// soonest request, so they share one schedule of at most two wakes per
+/// second, usually coalesced with the app's one-second heartbeat. A clipped
+/// icon, a hidden sidebar, a minimized window, or an unfocused window
 /// (`focused == Some(false)`) does not request another frame. Unknown focus
 /// still schedules. Keyboard, pointer, and terminal updates are separate.
-const STATUS_PULSE_HALF_PERIOD: Duration = Duration::from_millis(500);
+const STATUS_SPIN_INTERVAL: Duration = Duration::from_millis(500);
+/// One full turn takes two seconds, so consecutive 500 ms frames step 90°:
+/// visibly rotating, not flashing.
+const STATUS_SPIN_PERIOD: f64 = 2.0;
 
-/// Paint an icon, optionally pulsing it to signal ongoing work.
+/// Paint an icon, optionally rotating it to signal ongoing work.
 pub fn paint_status_icon(ui: &egui::Ui, rect: egui::Rect, icon: &str, tint: Color32, spin: bool) {
     if spin && !ui.is_rect_visible(rect) {
         return;
     }
-    let mut tint = tint;
+    let mut image = egui::Image::new(crate::icons::source(icon)).tint(tint);
     if spin {
-        let (dim, animate) = ui.input(|input| {
+        let (angle, animate) = ui.input(|input| {
             let viewport = input.viewport();
-            let dim = input.time % 1.0 >= 0.5;
+            let angle = ((input.time % STATUS_SPIN_PERIOD) / STATUS_SPIN_PERIOD) as f32
+                * std::f32::consts::TAU;
             let animate = viewport.focused != Some(false) && !viewport.minimized.unwrap_or(false);
-            (dim, animate)
+            (angle, animate)
         });
-        if dim {
-            tint = tint.gamma_multiply(0.45);
-        }
+        image = image.rotate(angle, egui::Vec2::splat(0.5));
         if animate {
-            ui.ctx().request_repaint_after(STATUS_PULSE_HALF_PERIOD);
+            ui.ctx().request_repaint_after(STATUS_SPIN_INTERVAL);
         }
     }
-    egui::Image::new(crate::icons::source(icon))
-        .tint(tint)
-        .paint_at(ui, rect);
+    image.paint_at(ui, rect);
 }
 
 struct RowSpec<'a> {
@@ -1818,7 +1821,7 @@ mod row_tests {
     }
 
     #[test]
-    fn running_status_icon_pulses_on_a_bounded_interval() {
+    fn running_status_icon_spins_on_a_bounded_interval() {
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(16.0, 16.0));
         for spin in [false, true] {
             let ctx = egui::Context::default();
@@ -1843,7 +1846,7 @@ mod row_tests {
             if spin {
                 let delay = delay.expect("working icon schedules a repaint");
                 assert!(
-                    !delay.is_zero() && delay <= super::STATUS_PULSE_HALF_PERIOD,
+                    !delay.is_zero() && delay <= super::STATUS_SPIN_INTERVAL,
                     "working status icon repaint delay {delay:?}"
                 );
             } else {
@@ -1856,7 +1859,7 @@ mod row_tests {
     }
 
     #[test]
-    fn clipped_status_icon_does_not_schedule_pulse() {
+    fn clipped_status_icon_does_not_schedule_spin() {
         let ctx = egui::Context::default();
         install(&ctx);
         let icon = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(16.0, 16.0));
@@ -1877,19 +1880,19 @@ mod row_tests {
             let _ = run(visible);
         }
         let scheduled = run(visible).expect("visible working icon schedules a repaint");
-        assert!(!scheduled.is_zero() && scheduled <= super::STATUS_PULSE_HALF_PERIOD);
+        assert!(!scheduled.is_zero() && scheduled <= super::STATUS_SPIN_INTERVAL);
         let hidden = run(egui::Rect::from_min_size(
             egui::pos2(400.0, 400.0),
             egui::vec2(10.0, 10.0),
         ));
         assert!(
-            hidden.is_none_or(|delay| delay > super::STATUS_PULSE_HALF_PERIOD),
+            hidden.is_none_or(|delay| delay > super::STATUS_SPIN_INTERVAL),
             "clipped working icon repaint delay {hidden:?}"
         );
     }
 
     #[test]
-    fn unfocused_status_icon_does_not_schedule_pulse() {
+    fn unfocused_status_icon_does_not_schedule_spin() {
         let ctx = egui::Context::default();
         install(&ctx);
         let icon = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(16.0, 16.0));
@@ -1914,10 +1917,10 @@ mod row_tests {
             let _ = run(None);
         }
         let scheduled = run(None).expect("unknown focus still schedules a repaint");
-        assert!(!scheduled.is_zero() && scheduled <= super::STATUS_PULSE_HALF_PERIOD);
+        assert!(!scheduled.is_zero() && scheduled <= super::STATUS_SPIN_INTERVAL);
         let hidden = run(Some(false));
         assert!(
-            hidden.is_none_or(|delay| delay > super::STATUS_PULSE_HALF_PERIOD),
+            hidden.is_none_or(|delay| delay > super::STATUS_SPIN_INTERVAL),
             "unfocused working icon repaint delay {hidden:?}"
         );
     }

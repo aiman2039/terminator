@@ -1,5 +1,7 @@
-//! One background sample of host and session resource use.
-//! The GUI thread only sends which session to follow.
+//! One background sample of host, app, and session resource use.
+//! The GUI thread only sends which session to follow; GUI/daemon/hook totals
+//! ride along every sample so the status strip can show them without an extra
+//! sampler.
 
 use crate::Update;
 use std::{
@@ -44,6 +46,67 @@ pub struct Sample {
     pub started: u64,
     pub session: Option<SessionStats>,
     pub system: SystemStats,
+    pub app: AppStats,
+}
+
+/// CPU and memory of one Terminator component across all its processes.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ComponentStats {
+    pub cpu: f32,
+    pub memory: u64,
+    pub processes: usize,
+}
+
+/// CPU and memory of the app's own processes: the GUI, the session-service
+/// daemon, and hook helpers. Matched by executable name (see `classify`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AppStats {
+    pub gui: ComponentStats,
+    pub daemon: ComponentStats,
+    pub hooks: ComponentStats,
+}
+
+impl AppStats {
+    #[must_use]
+    pub fn total(self) -> ComponentStats {
+        ComponentStats {
+            cpu: finite_cpu(self.gui.cpu + self.daemon.cpu + self.hooks.cpu),
+            memory: self
+                .gui
+                .memory
+                .saturating_add(self.daemon.memory)
+                .saturating_add(self.hooks.memory),
+            processes: self.gui.processes + self.daemon.processes + self.hooks.processes,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Component {
+    Gui,
+    Daemon,
+    Hooks,
+}
+
+/// Which app component a process belongs to, by executable name.
+/// The daemon prefix match also covers the 15-byte Linux `comm` truncation
+/// (`terminator-daem…`); nothing else uses this prefix.
+fn classify(name: &str) -> Option<Component> {
+    if name == "terminator" {
+        Some(Component::Gui)
+    } else if name.strip_prefix("terminator-daem").is_some() {
+        Some(Component::Daemon)
+    } else if name.strip_prefix("terminator-hook").is_some() {
+        Some(Component::Hooks)
+    } else {
+        None
+    }
+}
+
+fn accumulate(stats: &mut ComponentStats, cpu: f32, memory: u64) {
+    stats.cpu = finite_cpu(stats.cpu + finite_cpu(cpu));
+    stats.memory = stats.memory.saturating_add(memory);
+    stats.processes += 1;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -174,25 +237,39 @@ fn take_sample(system: &mut System, request: &Request) -> Option<Sample> {
 fn sample(system: &mut System, request: &Request) -> Sample {
     system.refresh_cpu_usage();
     system.refresh_memory();
-    let session = request.pid.and_then(|pid| {
-        system.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::nothing().with_cpu().with_memory(),
-        );
-        let nodes: Vec<ProcNode> = system
-            .processes()
-            .values()
-            .map(|process| ProcNode {
+    // One process-list read serves both the session tree and the app totals.
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_cpu().with_memory(),
+    );
+    let mut app = AppStats::default();
+    let mut nodes = Vec::new();
+    if request.pid.is_some() {
+        nodes.reserve(system.processes().len());
+    }
+    for process in system.processes().values() {
+        let cpu = process.cpu_usage();
+        let memory = process.memory();
+        match classify(&process.name().to_string_lossy()) {
+            Some(Component::Gui) => accumulate(&mut app.gui, cpu, memory),
+            Some(Component::Daemon) => accumulate(&mut app.daemon, cpu, memory),
+            Some(Component::Hooks) => accumulate(&mut app.hooks, cpu, memory),
+            None => {}
+        }
+        if request.pid.is_some() {
+            nodes.push(ProcNode {
                 pid: process.pid().as_u32(),
                 parent: process.parent().map(Pid::as_u32),
-                cpu: process.cpu_usage(),
-                memory: process.memory(),
+                cpu,
+                memory,
                 started: process.start_time(),
-            })
-            .collect();
-        tree_usage(&nodes, pid, request.started)
-    });
+            });
+        }
+    }
+    let session = request
+        .pid
+        .and_then(|pid| tree_usage(&nodes, pid, request.started));
     let load = System::load_average();
     let cpu = system.global_cpu_usage();
     let counted = system.cpus().len();
@@ -207,6 +284,7 @@ fn sample(system: &mut System, request: &Request) -> Sample {
         pid: request.pid,
         started: request.started,
         session,
+        app,
         system: SystemStats {
             cpu: if cpu.is_finite() {
                 cpu.clamp(0.0, 100.0)
@@ -275,5 +353,30 @@ mod tests {
         let usage = tree_usage(&nodes, 1, 5).unwrap();
         assert!((usage.cpu - 2.0).abs() < f32::EPSILON);
         assert_eq!(usage.memory, 2);
+    }
+
+    #[test]
+    fn app_classify_routes_gui_daemon_and_hooks() {
+        assert_eq!(classify("terminator"), Some(Component::Gui));
+        assert_eq!(classify("terminator-daemon"), Some(Component::Daemon));
+        // 15-byte Linux `comm` truncation of the daemon binary.
+        assert_eq!(classify("terminator-daem"), Some(Component::Daemon));
+        assert_eq!(classify("terminator-hook"), Some(Component::Hooks));
+        assert_eq!(classify("nvim"), None);
+        assert_eq!(classify("terminator-something-else"), None);
+    }
+
+    #[test]
+    fn app_total_sums_components() {
+        let mut app = AppStats::default();
+        accumulate(&mut app.gui, 2.5, 100);
+        accumulate(&mut app.daemon, 1.5, 200);
+        accumulate(&mut app.hooks, 0.5, 50);
+        accumulate(&mut app.hooks, 0.5, 50);
+        let total = app.total();
+        assert!((total.cpu - 5.0).abs() < f32::EPSILON);
+        assert_eq!(total.memory, 400);
+        assert_eq!(total.processes, 4);
+        assert_eq!(app.hooks.processes, 2);
     }
 }
