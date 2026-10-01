@@ -3418,6 +3418,41 @@ impl App {
         self.preferences.ide_mode && !self.preferences.ide_terminal_collapsed
     }
 
+    /// Right end of the bottom status strip. One right-to-left block so the
+    /// Terminal button keeps the far-right corner with the resource readout
+    /// to its left; separate right-anchored blocks paint over each other.
+    fn status_right_end(&mut self, ui: &mut egui::Ui) {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if self.preferences.ide_mode {
+                // Same icon collapsed or expanded: clicking toggles the
+                // strip, so the corner control never changes shape.
+                let collapsed = self.preferences.ide_terminal_collapsed;
+                let toggle = appearance::sidebar_action(
+                    ui,
+                    "PanelBottomClose",
+                    if collapsed {
+                        "Show IDE terminal strip"
+                    } else {
+                        "Hide terminal strip"
+                    },
+                );
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "status-terminal-toggle", toggle.rect);
+                if toggle.clicked() {
+                    self.preferences.ide_terminal_collapsed = !collapsed;
+                    if !collapsed {
+                        self.resync_active_from_dock();
+                    }
+                }
+                ui.separator();
+            }
+            self.app_resource_status(ui);
+            if self.preferences.ide_mode {
+                ui.separator();
+            }
+        });
+    }
+
     /// True when keyboard focus belongs to a strip terminal: IDE mode with a
     /// visible strip and a live strip session active. Pane-relative actions
     /// (splits) follow this; workspace-level "new tab" stays in the main dock.
@@ -5263,40 +5298,12 @@ impl eframe::App for App {
                     ui.separator();
                     self.player_status_row(ui);
                     self.notification_status_badge(ui);
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            if self.preferences.ide_terminal_collapsed {
-                                if ui
-                                    .small_button("Terminal")
-                                    .on_hover_text("Show IDE terminal strip")
-                                    .clicked()
-                                {
-                                    self.preferences.ide_terminal_collapsed = false;
-                                }
-                            } else {
-                                let hide = appearance::sidebar_action(
-                                    ui,
-                                    "PanelBottomClose",
-                                    "Hide terminal strip",
-                                );
-                                if hide.clicked() {
-                                    self.preferences.ide_terminal_collapsed = true;
-                                    self.resync_active_from_dock();
-                                }
-                            }
-                            ui.separator();
-                        },
-                    );
                 }
+                // Single right-aligned block (see status_right_end): resource
+                // readout at the far right, collapse button to its left.
                 // Right-aligned app totals. Pure paint over the background
                 // sample: no extra wakes, updates land with the heartbeat.
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        self.app_resource_status(ui);
-                    },
-                );
+                self.status_right_end(ui);
             });
         });
         if self.preferences.ide_mode && !self.preferences.ide_terminal_collapsed {
@@ -6457,6 +6464,73 @@ mod navigation_tests {
         );
         assert_eq!(app.preferences.tool, SidebarTool::Info);
         assert!(app.preferences.visible);
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn status_resources_do_not_overlap_terminal_toggle() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.ide_mode = true;
+        app.preferences.ide_terminal_collapsed = false;
+        app.resources = Some(resource_sample::Sample {
+            pid: None,
+            started: 0,
+            session: None,
+            system: resource_sample::SystemStats {
+                cpu: 0.0,
+                memory_used: 0,
+                memory_total: 0,
+                pressure: None,
+                load_one: 0.0,
+                load_five: 0.0,
+                load_fifteen: 0.0,
+                cpus: 1,
+            },
+            app: resource_sample::AppStats {
+                gui: resource_sample::ComponentStats {
+                    cpu: 20.0,
+                    memory: 300 * 1024 * 1024,
+                    processes: 1,
+                },
+                daemon: resource_sample::ComponentStats {
+                    cpu: 6.0,
+                    memory: 50 * 1024 * 1024,
+                    processes: 1,
+                },
+                hooks: resource_sample::ComponentStats::default(),
+            },
+        });
+        for collapsed in [false, true] {
+            app.preferences.ide_terminal_collapsed = collapsed;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 30.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.label("status");
+                        app.status_right_end(ui);
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            let resources = agent_target(&ctx, "status-resources").expect("resource readout");
+            let toggle = agent_target(&ctx, "status-terminal-toggle").expect("terminal toggle");
+            assert!(
+                !resources.intersects(toggle),
+                "resources {resources:?} overlap terminal toggle {toggle:?} (collapsed={collapsed})"
+            );
+            // Terminal button keeps the far-right corner; the readout sits
+            // left of it.
+            assert!(
+                resources.right() <= toggle.left(),
+                "resources {resources:?} should sit left of toggle {toggle:?}"
+            );
+        }
     }
 
     #[test]

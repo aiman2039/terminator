@@ -238,3 +238,8 @@ wheel routing is unchanged. Regressions:
 `wheel_during_drag_on_the_alternate_screen_scrolls_the_agent_and_updates_the_selection`,
 `wheel_during_drag_on_the_primary_screen_scrolls_history_and_updates_the_selection`,
 `drag_outside_an_alternate_screen_scrolls_the_agent`.
+
+## Test-only drag helper (2026-10-01)
+
+`scroll_local_drag` is only called from widget unit tests, so it is gated
+with `#[cfg(test)]` to avoid a `dead_code` warning in normal builds.

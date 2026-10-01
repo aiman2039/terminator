@@ -826,6 +826,8 @@ fn scroll_display_lines<T: EventListener>(terminal: &mut Term<T>, lines: i32) ->
 }
 
 /// Scroll local history and grow the drag by the offset that changed.
+/// Test-only helper: the live drag path inlines this via `scroll_display_lines`.
+#[cfg(test)]
 fn scroll_local_drag<T: EventListener>(
     terminal: &mut Term<T>,
     anchor: &mut Option<Point>,
