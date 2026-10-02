@@ -50,6 +50,7 @@ pub struct VisibleProjects<'a> {
     pub projects: &'a [Project],
     pub hidden: &'a HashSet<String>,
     pub sort: ProjectSort,
+    pub filter: &'a str,
     pub activity: &'a HashMap<String, u64>,
     pub sessions: &'a [Session],
     pub agents: &'a [Agent],
@@ -62,15 +63,27 @@ pub fn sort_visible_projects<'a>(input: VisibleProjects<'a>) -> Vec<&'a Project>
         projects,
         hidden,
         sort,
+        filter,
         activity,
         sessions,
         agents,
         notifications,
         terminal_notices,
     } = input;
+    let query = filter.trim().to_lowercase();
     let mut projects: Vec<_> = projects
         .iter()
         .filter(|project| !hidden.contains(&project.id))
+        .filter(|project| {
+            query.is_empty()
+                || project.name.to_lowercase().contains(&query)
+                || project
+                    .path
+                    .display()
+                    .to_string()
+                    .to_lowercase()
+                    .contains(&query)
+        })
         .collect();
     let times = if sort == ProjectSort::LatestActivity {
         project_times(ProjectTimes {
@@ -511,6 +524,8 @@ pub struct UiPreferences {
     pub markdown_modes: HashMap<String, crate::markdown::Mode>,
     pub hidden_projects: HashSet<String>,
     pub project_sort: ProjectSort,
+    #[serde(default)]
+    pub project_filter: String,
     pub project_activity: HashMap<String, u64>,
     pub history_sort: HistorySort,
     #[serde(default)]
@@ -570,6 +585,7 @@ impl Default for UiPreferences {
             markdown_modes: HashMap::new(),
             hidden_projects: HashSet::new(),
             project_sort: ProjectSort::NameAsc,
+            project_filter: String::new(),
             project_activity: HashMap::new(),
             history_sort: HistorySort::LatestActivity,
             history_filter: String::new(),
@@ -1007,6 +1023,7 @@ mod tests {
         p.attention_migrated = true;
         p.hidden_projects.insert("hidden-project".into());
         p.project_sort = ProjectSort::LatestActivity;
+        p.project_filter = "term".into();
         p.project_activity.insert("a".into(), 42);
         p.history_sort = HistorySort::NameDesc;
         p.history_filter = "term".into();
@@ -1101,6 +1118,7 @@ mod tests {
             projects: &projects,
             hidden: &hidden,
             sort,
+            filter: "",
             activity: &empty,
             sessions: &[],
             agents: &[],
@@ -1109,6 +1127,36 @@ mod tests {
         };
         assert_eq!(ids(input(ProjectSort::NameAsc)), ["a", "m", "z"]);
         assert_eq!(ids(input(ProjectSort::NameDesc)), ["z", "m", "a"]);
+    }
+
+    #[test]
+    fn project_filter_matches_name_or_path_case_insensitively() {
+        let hidden = HashSet::new();
+        let projects = vec![
+            project("term", "terminator"),
+            project("fomo", "fomo-rh-fe-sol-be"),
+            project("other", "Other"),
+        ];
+        let empty = HashMap::new();
+        let filtered = |filter: &str| {
+            ids(VisibleProjects {
+                projects: &projects,
+                hidden: &hidden,
+                sort: ProjectSort::NameAsc,
+                filter,
+                activity: &empty,
+                sessions: &[],
+                agents: &[],
+                notifications: &[],
+                terminal_notices: &[],
+            })
+        };
+        assert_eq!(filtered(""), ["fomo", "other", "term"]);
+        assert_eq!(filtered("term"), ["term"]);
+        assert_eq!(filtered("FOMO"), ["fomo"]);
+        assert_eq!(filtered("fomo-rh"), ["fomo"]);
+        assert_eq!(filtered("/fomo"), ["fomo"]);
+        assert_eq!(filtered("zzz"), Vec::<String>::new());
     }
 
     #[test]
@@ -1133,6 +1181,7 @@ mod tests {
                 projects: &projects,
                 hidden: &hidden,
                 sort: ProjectSort::LatestActivity,
+                filter: "",
                 activity,
                 sessions: &sessions,
                 agents,
@@ -1181,6 +1230,7 @@ mod tests {
                 projects: &[project("a", "a"), project("b", "b")],
                 hidden: &hidden,
                 sort: ProjectSort::LatestActivity,
+                filter: "",
                 activity: &empty,
                 sessions: &sessions,
                 agents: &[],

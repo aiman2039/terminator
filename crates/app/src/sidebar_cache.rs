@@ -58,6 +58,7 @@ pub(super) struct Index {
 struct ProjectKey {
     hidden: HashSet<String>,
     sort: ProjectSort,
+    filter: String,
     activity: HashMap<String, u64>,
 }
 #[derive(Default)]
@@ -293,6 +294,7 @@ impl App {
         if let Some((key, rows)) = &cache.projects
             && key.hidden == self.preferences.hidden_projects
             && key.sort == self.preferences.project_sort
+            && key.filter == self.preferences.project_filter
             && key.activity == self.preferences.project_activity
         {
             return rows.clone();
@@ -302,6 +304,7 @@ impl App {
                 projects: &self.state.projects,
                 hidden: &self.preferences.hidden_projects,
                 sort: self.preferences.project_sort,
+                filter: &self.preferences.project_filter,
                 activity: &self.preferences.project_activity,
                 sessions: &self.state.sessions,
                 agents: &self.state.agents,
@@ -316,6 +319,7 @@ impl App {
             ProjectKey {
                 hidden: self.preferences.hidden_projects.clone(),
                 sort: self.preferences.project_sort,
+                filter: self.preferences.project_filter.clone(),
                 activity: self.preferences.project_activity.clone(),
             },
             rows.clone(),

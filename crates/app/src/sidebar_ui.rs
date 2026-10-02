@@ -834,6 +834,9 @@ impl App {
     }
 
     pub(super) fn projects(&mut self, ui: &mut egui::Ui) {
+        // Pin the row height so the filter field shares one baseline with
+        // the icon buttons.
+        ui.spacing_mut().interact_size.y = appearance::TOOLBAR_BUTTON;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -854,6 +857,19 @@ impl App {
                 if add.clicked() {
                     self.add_project = true;
                 }
+                // A standard TextEdit owns its keys natively (typing,
+                // arrows, Cmd/Ctrl+A/C/X/V), and the global select-all
+                // shortcut yields while any TextEdit is focused.
+                let filter = ui.add_sized(
+                    [ui.available_width(), appearance::TOOLBAR_BUTTON],
+                    egui::TextEdit::singleline(&mut self.preferences.project_filter)
+                        .id(egui::Id::new("project-filter"))
+                        .hint_text("Filter projects"),
+                );
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "project-filter", filter.rect);
+                #[cfg(not(feature = "test-support"))]
+                let _ = &filter;
             });
         });
         ui.spacing_mut().item_spacing.y = 0.0;
@@ -1014,6 +1030,8 @@ impl App {
                 if projects.is_empty() {
                     ui.weak(if self.state.projects.is_empty() {
                         "Add a folder to begin."
+                    } else if !self.preferences.project_filter.trim().is_empty() {
+                        "No matching projects."
                     } else {
                         "Restore a project from Removed."
                     });

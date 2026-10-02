@@ -8426,6 +8426,57 @@ mod navigation_tests {
             (add.center().y - sort.center().y).abs() < 4.0,
             "add={add:?} sort={sort:?}"
         );
+        let filter = target("project-filter");
+        assert!(
+            (filter.height() - add.height()).abs() < 8.0,
+            "filter={filter:?} add={add:?}"
+        );
+        assert!(
+            (filter.center().y - add.center().y).abs() < 4.0,
+            "filter={filter:?} add={add:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn project_filter_narrows_visible_projects() {
+        let (mut app, ctx, _dir) = fixture();
+        assert_eq!(app.cached_projects().len(), 2);
+        app.preferences.project_filter = "b".into();
+        let visible = app.cached_projects();
+        assert_eq!(
+            visible.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            ["b"]
+        );
+        app.preferences.project_filter = "zzz".into();
+        assert!(app.cached_projects().is_empty());
+        app.preferences.project_filter.clear();
+        assert_eq!(app.cached_projects().len(), 2);
+        let _ = &ctx;
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn project_filter_field_owns_text_keys() {
+        let (mut app, ctx, _dir) = fixture();
+        assert!(!app.text_input_focused(&ctx));
+        let paint = |app: &mut App| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(320.0, 400.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.projects(ui),
+            );
+            output.textures_delta.clear();
+        };
+        paint(&mut app);
+        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("project-filter")));
+        paint(&mut app);
+        assert!(app.text_input_focused(&ctx));
     }
 
     #[test]
