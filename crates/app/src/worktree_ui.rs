@@ -183,7 +183,7 @@ impl App {
                     }
                 });
                 ui.add(
-                    egui::TextEdit::singleline(&mut draft.start)
+                    appearance::singleline(&mut draft.start)
                         .hint_text("revision")
                         .desired_width(220.0),
                 );
@@ -194,7 +194,7 @@ impl App {
             "Branch name",
             "Created on the new checkout. Git rejects invalid names.",
             |ui| {
-                ui.add(egui::TextEdit::singleline(&mut draft.branch).desired_width(260.0));
+                ui.add(appearance::singleline(&mut draft.branch).desired_width(260.0));
             },
         );
         settings_controls::settings_row(
@@ -203,7 +203,7 @@ impl App {
             "Folder must not already exist.",
             |ui| {
                 let mut dest = draft.dest.display().to_string();
-                let response = ui.add(egui::TextEdit::singleline(&mut dest).desired_width(260.0));
+                let response = ui.add(appearance::singleline(&mut dest).desired_width(260.0));
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "worktree-dest", response.rect);
                 if response.changed() {

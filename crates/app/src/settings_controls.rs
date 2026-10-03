@@ -65,7 +65,7 @@ pub fn path_field(
     ui.horizontal(|ui| {
         let browse_width = 88.0;
         let width = (ui.available_width() - browse_width - ui.spacing().item_spacing.x).max(120.0);
-        let edit = ui.add(egui::TextEdit::singleline(value).desired_width(width));
+        let edit = ui.add(appearance::singleline(value).desired_width(width));
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), browse_id, edit.rect);
         if ui.button("Browse…").clicked() {

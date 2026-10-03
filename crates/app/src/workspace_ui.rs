@@ -261,6 +261,87 @@ fn header_row_width(buttons: usize, menu: bool) -> f32 {
     width
 }
 
+/// Project-header icon, same square as [`appearance::framed_icon`].
+const PROJECT_HEADER_SLOT: f32 = 28.0;
+const PROJECT_HEADER_GAP: f32 = 2.0;
+/// Shortest name kept beside Player, Agents, and hide. Narrower than this, those
+/// icons move into the menu so the name stays readable.
+const PROJECT_HEADER_NAME_MIN: f32 = 36.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ProjectHeaderChrome {
+    /// Name, then Player, Agents, and hide, packed against the sidebar's right edge.
+    Icons { name: f32 },
+    /// Player and Agents are in the menu. `hide` puts the sidebar toggle there too.
+    Menu { name: f32, hide: bool },
+}
+
+fn project_title_width(ui: &egui::Ui, name: &str) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let measured = ui
+        .painter()
+        .layout_no_wrap(name.to_owned(), font, egui::Color32::PLACEHOLDER)
+        .size()
+        .x;
+    // The strong label is a hair wider than the body measure.
+    measured + 2.0
+}
+
+fn project_header_icons(count: u8) -> f32 {
+    match count {
+        0 => 0.0,
+        1 => PROJECT_HEADER_SLOT,
+        2 => PROJECT_HEADER_SLOT + PROJECT_HEADER_GAP + PROJECT_HEADER_SLOT,
+        _ => {
+            PROJECT_HEADER_SLOT
+                + PROJECT_HEADER_GAP
+                + PROJECT_HEADER_SLOT
+                + PROJECT_HEADER_GAP
+                + PROJECT_HEADER_SLOT
+        }
+    }
+}
+
+fn project_header_row(icons: u8, name: f32) -> f32 {
+    let icons = project_header_icons(icons);
+    if name > 0.0 && icons > 0.0 {
+        name + PROJECT_HEADER_GAP + icons
+    } else {
+        name + icons
+    }
+}
+
+/// Fit the project name against the header icons. Icons stay until the name
+/// would shrink below [`PROJECT_HEADER_NAME_MIN`]; then Player and Agents
+/// collapse into a menu, and the hide control follows if it still does not fit.
+fn project_header_chrome(available: f32, natural: f32) -> ProjectHeaderChrome {
+    let available = available.max(0.0);
+    let natural = natural.max(0.0);
+    let name_min = PROJECT_HEADER_NAME_MIN.min(natural);
+    if project_header_row(3, name_min) <= available {
+        let name = if project_header_row(3, natural) <= available {
+            natural
+        } else {
+            (available - project_header_icons(3) - PROJECT_HEADER_GAP).max(name_min)
+        };
+        return ProjectHeaderChrome::Icons { name };
+    }
+    if project_header_row(2, name_min) <= available {
+        let room = (available - project_header_icons(2) - PROJECT_HEADER_GAP).max(0.0);
+        return ProjectHeaderChrome::Menu {
+            name: natural.min(room),
+            hide: false,
+        };
+    }
+    let menu = project_header_icons(1);
+    let name = if menu + PROJECT_HEADER_GAP >= available {
+        0.0
+    } else {
+        natural.min(available - menu - PROJECT_HEADER_GAP)
+    };
+    ProjectHeaderChrome::Menu { name, hide: true }
+}
+
 /// How many leading header actions fit. The rest go behind the overflow menu.
 fn header_visible_count(budget: f32, count: usize) -> usize {
     if header_row_width(count, false) <= budget {
@@ -538,6 +619,89 @@ impl App {
         }
     }
 
+    fn project_header_name(&self) -> String {
+        self.selected_project()
+            .map_or_else(|| "Terminator".to_string(), |project| project.name.clone())
+    }
+
+    /// Right-align the project name against Player, Agents, and hide.
+    /// A narrow sidebar folds Player and Agents into the menu.
+    fn project_header_cluster(&mut self, ui: &mut egui::Ui) {
+        self.note_agent_bar_badge(ui);
+        let name = self.project_header_name();
+        let natural = project_title_width(ui, &name);
+        let chrome = project_header_chrome(ui.available_width(), natural);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = PROJECT_HEADER_GAP;
+            match chrome {
+                ProjectHeaderChrome::Icons { name: width } => {
+                    self.sidebar_toggle(ui, false);
+                    self.header_agents_button(ui);
+                    self.header_player_button(ui);
+                    self.project_header_title(ui, &name, width);
+                }
+                ProjectHeaderChrome::Menu { name: width, hide } => {
+                    if !hide {
+                        self.sidebar_toggle(ui, false);
+                    }
+                    self.project_header_menu(ui, hide);
+                    self.project_header_title(ui, &name, width);
+                }
+            }
+            header_drag_space(ui);
+        });
+    }
+
+    fn project_header_title(&mut self, ui: &mut egui::Ui, name: &str, width: f32) {
+        if width <= 0.0 || name.is_empty() {
+            return;
+        }
+        let response = ui.add_sized(
+            [width, PROJECT_HEADER_SLOT],
+            egui::Label::new(RichText::new(name).strong())
+                .truncate()
+                .sense(egui::Sense::drag()),
+        );
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "project-header-name", response.rect);
+        if response.drag_started() {
+            begin_native_window_gesture(ui.ctx(), egui::ViewportCommand::StartDrag);
+        }
+    }
+
+    fn project_header_menu(&mut self, ui: &mut egui::Ui, hide: bool) {
+        let response = appearance::framed_icon(ui, "Menu", "More");
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "project-header-menu", response.rect);
+        egui::Popup::menu(&response)
+            .style(appearance::menu_style)
+            .show(|ui| {
+                if self.header_player_menu(ui) {
+                    ui.close();
+                }
+                if self.header_agents_menu(ui) {
+                    ui.close();
+                }
+                if hide && self.header_sidebar_menu(ui) {
+                    ui.close();
+                }
+            });
+    }
+
+    fn header_sidebar_menu(&mut self, ui: &mut egui::Ui) -> bool {
+        let label = if self.preferences.left_visible {
+            "Hide sidebar"
+        } else {
+            "Show sidebar"
+        };
+        let shortcut = self.shortcut_label("toggle_left_sidebar");
+        let clicked = appearance::menu_item(ui, label, "PanelLeft", &shortcut).clicked();
+        if clicked {
+            self.toggle_left_sidebar();
+        }
+        clicked
+    }
+
     /// Single drag-band row: traffic lights, project label, and tools.
     /// The tab strip is a separate center panel below the sidebars' top
     /// edge so the sidebars run full height.
@@ -561,7 +725,7 @@ impl App {
         );
         ui.scope_builder(
             egui::UiBuilder::new()
-                .max_rect(left_rect.shrink2(egui::vec2(8.0, 4.0)))
+                .max_rect(left_rect.shrink2(egui::vec2(4.0, 4.0)))
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
             |ui| {
                 if cfg!(target_os = "macos") {
@@ -585,22 +749,7 @@ impl App {
                         }
                     }
                 }
-                let response = ui.add(
-                    egui::Label::new(
-                        RichText::new(
-                            self.selected_project()
-                                .map_or("Terminator", |p| p.name.as_str()),
-                        )
-                        .strong(),
-                    )
-                    .truncate()
-                    .sense(egui::Sense::drag()),
-                );
-                if response.drag_started() {
-                    begin_native_window_gesture(ui.ctx(), egui::ViewportCommand::StartDrag);
-                }
-                self.sidebar_toggle(ui, false);
-                header_drag_space(ui);
+                self.project_header_cluster(ui);
             },
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
@@ -1939,7 +2088,7 @@ impl App {
         let starting = self.rename_focus;
         let response = ui.put(
             rect,
-            egui::TextEdit::singleline(&mut title)
+            appearance::singleline(&mut title)
                 .id_salt(("inline-terminal-title", sid, surface))
                 .frame(egui::Frame::NONE)
                 .margin(egui::Margin::ZERO)
@@ -2088,7 +2237,7 @@ impl App {
             back = ui.button("Back").clicked();
             forward = ui.button("Forward").clicked();
             let url = ui.add(
-                egui::TextEdit::singleline(&mut draft)
+                appearance::singleline(&mut draft)
                     .desired_width(240.0)
                     .hint_text("https://"),
             );
@@ -3705,7 +3854,7 @@ impl TabViewer for Viewer<'_> {
                         .clone();
                     ui.horizontal(|ui| {
                         ui.add(
-                            egui::TextEdit::singleline(
+                            appearance::singleline(
                                 self.app.history_filter.entry(sid_key.clone()).or_default(),
                             )
                             .id(egui::Id::new(("history-filter", sid_key)))
@@ -4017,7 +4166,7 @@ impl Viewer<'_> {
             let id = egui::Id::new(("terminal-find", sid));
             ui.horizontal(|ui| {
                 let response = ui.add(
-                    egui::TextEdit::singleline(&mut find.query)
+                    appearance::singleline(&mut find.query)
                         .id(id)
                         .hint_text("Find in terminal")
                         .desired_width(220.0),
@@ -5391,6 +5540,54 @@ mod tests {
             Some("b"),
             HOVER_POPUP_DELAY
         ));
+    }
+
+    #[test]
+    fn wide_project_header_keeps_icons_and_the_natural_name() {
+        assert_eq!(
+            project_header_chrome(400.0, 52.0),
+            ProjectHeaderChrome::Icons { name: 52.0 }
+        );
+    }
+
+    #[test]
+    fn medium_project_header_truncates_the_name_before_the_menu() {
+        // Three icons are 88px. A 140px row leaves 50px for an 80px name.
+        assert_eq!(
+            project_header_chrome(140.0, 80.0),
+            ProjectHeaderChrome::Icons { name: 50.0 }
+        );
+    }
+
+    #[test]
+    fn narrow_project_header_moves_player_and_agents_into_the_menu() {
+        // 110px cannot keep a 36px name plus three icons (126px).
+        // The menu and hide control still fit, and the name gets the leftover 50px.
+        assert_eq!(
+            project_header_chrome(110.0, 80.0),
+            ProjectHeaderChrome::Menu {
+                name: 50.0,
+                hide: false
+            }
+        );
+    }
+
+    #[test]
+    fn tighter_project_header_puts_hide_in_the_menu() {
+        assert_eq!(
+            project_header_chrome(50.0, 80.0),
+            ProjectHeaderChrome::Menu {
+                name: 20.0,
+                hide: true
+            }
+        );
+        assert_eq!(
+            project_header_chrome(20.0, 80.0),
+            ProjectHeaderChrome::Menu {
+                name: 0.0,
+                hide: true
+            }
+        );
     }
 
     #[test]

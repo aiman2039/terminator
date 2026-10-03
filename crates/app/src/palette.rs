@@ -130,7 +130,7 @@ impl App {
         ui.add_space(8.0);
         ui.label("Jump to a project, session, file, or setting.");
         let search = ui.add(
-            egui::TextEdit::singleline(&mut self.palette_query)
+            appearance::singleline(&mut self.palette_query)
                 .hint_text("Filter…")
                 .desired_width(f32::INFINITY),
         );

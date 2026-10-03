@@ -274,7 +274,7 @@ impl App {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.add(
-                egui::TextEdit::singleline(&mut self.settings_search)
+                appearance::singleline(&mut self.settings_search)
                     .hint_text("Search settings")
                     .desired_width(280.0),
             );
@@ -600,7 +600,7 @@ impl App {
                                     }
                                     ui.add_sized(
                                         [108.0, 28.0],
-                                        egui::TextEdit::singleline(value)
+                                        appearance::singleline(value)
                                             .font(egui::TextStyle::Monospace),
                                     );
                                     if terminator_core::appearance::rgb(value).is_err() {

@@ -216,57 +216,97 @@ impl App {
         }
     }
 
+    /// Expanded playback controls stay at the top of the project sidebar.
+    /// The Player and Agents icons live in the project header.
     pub(super) fn agent_bar(&mut self, ui: &mut egui::Ui) {
-        let spacing = ui.spacing().item_spacing.y;
-        ui.spacing_mut().item_spacing.y = 0.0;
-        ui.allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), 28.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                self.player_activity_row(ui);
-            },
-        );
-        if self.player_chrome_expanded() {
-            ui.spacing_mut().item_spacing.y = 4.0;
-            self.player_live_controls(ui);
+        if !self.player_chrome_expanded() {
+            return;
         }
+        let spacing = ui.spacing().item_spacing.y;
+        ui.spacing_mut().item_spacing.y = 4.0;
+        self.player_live_controls(ui);
         ui.spacing_mut().item_spacing.y = 0.0;
         ui.add(egui::Separator::default().spacing(4.0));
         ui.spacing_mut().item_spacing.y = spacing;
     }
 
-    fn player_activity_row(&mut self, ui: &mut egui::Ui) {
-        self.player_toggle_button(ui);
+    pub(super) fn agent_bar_badge(&self) -> String {
+        let (waiting, unread) = self.attention_counts();
+        attention_badge_label(waiting, unread)
+    }
+
+    pub(super) fn note_agent_bar_badge(&self, ui: &egui::Ui) {
+        let badge = self.agent_bar_badge();
+        #[cfg(feature = "test-support")]
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(egui::Id::new("agent-bar-badge"), badge);
+        });
+        #[cfg(not(feature = "test-support"))]
+        let _ = (ui, badge);
+    }
+
+    pub(super) fn toggle_left_agents(&mut self) {
+        if !self.preferences.left_agents {
+            self.preferences.agents_tab = AgentsTab::NeedsAttention;
+        }
+        self.preferences.left_agents = !self.preferences.left_agents;
+    }
+
+    /// Header bell. Same square as the hide-sidebar control, with a corner count.
+    pub(super) fn header_agents_button(&mut self, ui: &mut egui::Ui) {
         let (waiting, unread) = self.attention_counts();
         let badge = attention_badge_label(waiting, unread);
-        #[cfg(feature = "test-support")]
-        ui.ctx()
-            .data_mut(|data| data.insert_temp(egui::Id::new("agent-bar-badge"), badge.clone()));
-        let response = appearance::row(
+        let tip = if badge.is_empty() {
+            "Pending agent notifications. Click to switch between Agents and Projects.".to_string()
+        } else {
+            format!("{badge}. Click to switch between Agents and Projects.")
+        };
+        let response = appearance::framed_icon_button(
             ui,
-            "",
             "Bell",
+            &tip,
             self.preferences.left_agents,
-            28.0,
-            &badge,
-            appearance::color(if waiting > 0 {
-                &self.theme.status_waiting
-            } else {
-                &self.theme.text
-            }),
-        )
-        .on_hover_text("Pending agent notifications. Click to switch between Agents and Projects.");
+            appearance::ICON_COLOR,
+        );
         response
             .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Agents"));
+        let count = waiting.saturating_add(unread);
+        if count > 0 {
+            paint_header_count(
+                ui,
+                response.rect,
+                count,
+                appearance::color(if waiting > 0 {
+                    &self.theme.status_waiting
+                } else {
+                    &self.theme.text
+                }),
+            );
+        }
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "left-agent-bar", response.rect);
         if response.clicked() {
-            if !self.preferences.left_agents {
-                self.preferences.agents_tab = AgentsTab::NeedsAttention;
-            }
-            self.preferences.left_agents = !self.preferences.left_agents;
+            self.toggle_left_agents();
         }
+    }
+
+    pub(super) fn header_agents_menu(&mut self, ui: &mut egui::Ui) -> bool {
+        let badge = self.agent_bar_badge();
+        let label = if badge.is_empty() {
+            "Agents".to_string()
+        } else {
+            format!("Agents · {badge}")
+        };
+        let mark = if self.preferences.left_agents {
+            "✓"
+        } else {
+            ""
+        };
+        let clicked = appearance::menu_item(ui, &label, "Bell", mark).clicked();
+        if clicked {
+            self.toggle_left_agents();
+        }
+        clicked
     }
 
     fn project_sort_menu(&mut self, ui: &mut egui::Ui) {
@@ -559,7 +599,7 @@ impl App {
             let toggles = if contents { 78.0 } else { 0.0 };
             let find = ui.add_sized(
                 [ui.available_width() - toggles, appearance::TOOLBAR_BUTTON],
-                egui::TextEdit::singleline(&mut self.explorer_query).hint_text(if contents {
+                appearance::singleline(&mut self.explorer_query).hint_text(if contents {
                     "Search"
                 } else {
                     "Find in folder"
@@ -614,7 +654,7 @@ impl App {
             );
             let include = ui.add_sized(
                 [ui.available_width(), 24.0],
-                egui::TextEdit::singleline(&mut self.preferences.explorer_include)
+                appearance::singleline(&mut self.preferences.explorer_include)
                     .hint_text("files to include (e.g. *.ts, src/**)"),
             );
             #[cfg(feature = "test-support")]
@@ -629,7 +669,7 @@ impl App {
             );
             let exclude = ui.add_sized(
                 [ui.available_width(), 24.0],
-                egui::TextEdit::singleline(&mut self.preferences.explorer_exclude)
+                appearance::singleline(&mut self.preferences.explorer_exclude)
                     .hint_text("files to exclude (e.g. *.min.js, dist/**)"),
             );
             #[cfg(feature = "test-support")]
@@ -773,21 +813,52 @@ impl App {
         };
         let mut cancel = false;
         let mut submit = false;
-        ui.horizontal(|ui| {
-            ui.label(title);
+        let focus = self.name_prompt_focus;
+        self.name_prompt_focus = false;
+        let save_w = prompt_button_width(ui, "Save");
+        let cancel_w = prompt_button_width(ui, "Cancel");
+        let gap = ui.spacing().item_spacing.x;
+        let reserve = save_w + cancel_w + gap + gap;
+        let min_field = 96.0;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.y = 4.0;
+            let title_response = ui.label(title);
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "explorer-name-title", title_response.rect);
+            #[cfg(not(feature = "test-support"))]
+            let _ = &title_response;
+            // `available_width` is the whole row in a wrapping layout. The
+            // space left beside the title is `available_size_before_wrap`.
+            let row_left = ui.available_size_before_wrap().x;
+            let row_full = ui.available_width();
+            let field_w = if row_left >= reserve + min_field {
+                row_left - reserve
+            } else if row_left >= min_field {
+                row_left
+            } else {
+                row_full.max(min_field)
+            };
             let field = ui.add(
-                egui::TextEdit::singleline(&mut name)
+                appearance::singleline(&mut name)
                     .id(Self::explorer_name_prompt_id())
                     .hint_text("Name")
-                    .desired_width(140.0),
+                    .desired_width(field_w),
             );
-            if self.name_prompt_focus {
+            if focus {
                 field.request_focus();
-                self.name_prompt_focus = false;
             }
-            submit = ui.button("Save").clicked()
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "explorer-name-field", field.rect);
+            let save = ui.button("Save");
+            let cancel_button = ui.button("Cancel");
+            #[cfg(feature = "test-support")]
+            {
+                diagnostics::record(ui.ctx(), "explorer-name-save", save.rect);
+                diagnostics::record(ui.ctx(), "explorer-name-cancel", cancel_button.rect);
+            }
+            submit = save.clicked()
                 || (field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)));
-            cancel = ui.button("Cancel").clicked();
+            cancel = cancel_button.clicked();
         });
         if cancel {
             self.name_prompt = None;
@@ -863,7 +934,7 @@ impl App {
                 // shortcut yields while any TextEdit is focused.
                 let filter = ui.add_sized(
                     [ui.available_width(), appearance::TOOLBAR_BUTTON],
-                    egui::TextEdit::singleline(&mut self.preferences.project_filter)
+                    appearance::singleline(&mut self.preferences.project_filter)
                         .id(egui::Id::new("project-filter"))
                         .hint_text("Filter projects"),
                 );
@@ -1633,7 +1704,7 @@ impl App {
             let width = (ui.available_width() - 132.0).max(80.0);
             let response = ui.add_sized(
                 egui::vec2(width, 22.0),
-                egui::TextEdit::singleline(&mut self.preferences.agents_search)
+                appearance::singleline(&mut self.preferences.agents_search)
                     .id(egui::Id::new("agents-search"))
                     .hint_text("Search agents"),
             );
@@ -2054,7 +2125,7 @@ impl App {
                 let width = (ui.available_width() - 160.0).max(60.0);
                 let response = ui.add_sized(
                     egui::vec2(width, 22.0),
-                    egui::TextEdit::singleline(&mut self.preferences.history_filter)
+                    appearance::singleline(&mut self.preferences.history_filter)
                         .id(egui::Id::new("history-filter"))
                         .hint_text("Filter by name"),
                 );
@@ -3436,6 +3507,43 @@ pub(super) fn group_notices(notices: Vec<Notification>) -> Vec<NoticeGroup> {
 
 pub(super) fn notice_pending(notice: &Notification, timestamp: u64) -> bool {
     !notice.dismissed && !notice.resolved && notice.snoozed_until <= timestamp
+}
+
+fn prompt_button_width(ui: &egui::Ui, label: &str) -> f32 {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let text = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER)
+        .size()
+        .x;
+    let padded = text + ui.spacing().button_padding.x + ui.spacing().button_padding.x;
+    padded.max(ui.spacing().interact_size.x) + 6.0
+}
+
+fn paint_header_count(ui: &egui::Ui, rect: egui::Rect, count: usize, color: Color32) {
+    let label = if count > 9 {
+        "9+".to_string()
+    } else {
+        count.to_string()
+    };
+    let galley =
+        ui.painter()
+            .layout_no_wrap(label, egui::FontId::proportional(9.0), Color32::WHITE);
+    let text = galley.size();
+    let badge = egui::Rect::from_center_size(
+        egui::pos2(rect.right() - 6.0, rect.top() + 7.0),
+        egui::vec2(text.x + 4.0, text.y),
+    );
+    ui.painter().rect_filled(badge, 6.0, color);
+    // Waiting gold and the text color are both light, so the digit stays dark.
+    ui.painter().galley(
+        egui::pos2(
+            badge.center().x - text.x * 0.5,
+            badge.center().y - text.y * 0.5,
+        ),
+        galley,
+        Color32::from_rgb(20, 20, 22),
+    );
 }
 
 fn attention_badge_label(waiting: usize, unread: usize) -> String {

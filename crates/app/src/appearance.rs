@@ -194,20 +194,45 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
 
 /// Title-bar sidebar glyph. Resting state has no frame; hover fills only.
 pub fn framed_icon(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
+    framed_icon_button(ui, icon, tip, false, ICON_COLOR)
+}
+
+/// Same square as [`framed_icon`], with a selected fill and a custom glyph tint.
+/// The project header uses one size for hide, Player, Agents, and the overflow menu.
+pub fn framed_icon_button(
+    ui: &mut egui::Ui,
+    icon: &str,
+    tip: &str,
+    selected: bool,
+    tint: Color32,
+) -> egui::Response {
     let response = ui
         .allocate_response(egui::vec2(28.0, 28.0), egui::Sense::click())
         .on_hover_text(tip);
-    if response.hovered() {
-        ui.painter()
-            .rect_filled(response.rect, 7.0, ui.visuals().widgets.hovered.bg_fill);
+    if response.hovered() || selected {
+        ui.painter().rect_filled(
+            response.rect,
+            7.0,
+            if selected {
+                ui.visuals().selection.bg_fill
+            } else {
+                ui.visuals().widgets.hovered.bg_fill
+            },
+        );
     }
     egui::Image::new(crate::icons::source(icon))
-        .tint(ICON_COLOR)
+        .tint(tint)
         .paint_at(
             ui,
             egui::Rect::from_center_size(response.rect.center(), egui::vec2(14.0, 14.0)),
         );
     response
+}
+
+/// Single-line field. Placeholder and typed text share a vertical center,
+/// including when the field is stretched to a toolbar row.
+pub fn singleline(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(text).vertical_align(egui::Align::Center)
 }
 
 /// Sidebar toolbar glyph size. Every frameless icon control shares it so the

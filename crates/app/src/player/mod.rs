@@ -649,6 +649,22 @@ impl App {
         self.player_active() && !self.preferences.player_chrome_collapsed
     }
 
+    fn player_chrome_tip(&self) -> &'static str {
+        if self.preferences.player_chrome_collapsed && self.player_active() {
+            "Show player"
+        } else {
+            "Player"
+        }
+    }
+
+    fn open_player_from_chrome(&mut self) {
+        if self.preferences.player_chrome_collapsed && self.player_active() {
+            self.preferences.player_chrome_collapsed = false;
+        } else {
+            self.open_player();
+        }
+    }
+
     pub(super) fn player_toggle_button(&mut self, ui: &mut egui::Ui) {
         // Only playback needs a steady frame cadence for the now-playing stamp.
         // Requesting this unconditionally pinned the window to 5 fps even with
@@ -660,11 +676,7 @@ impl App {
             ui,
             PlayerIconButton {
                 name: "AudioLines",
-                tip: if self.preferences.player_chrome_collapsed && self.player_active() {
-                    "Show player"
-                } else {
-                    "Player"
-                },
+                tip: self.player_chrome_tip(),
                 lit: self.player_active(),
                 size: 28.0,
                 glyph: 16.0,
@@ -673,12 +685,42 @@ impl App {
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "player-chrome", icon.rect);
         if icon.clicked() {
-            if self.preferences.player_chrome_collapsed && self.player_active() {
-                self.preferences.player_chrome_collapsed = false;
-            } else {
-                self.open_player();
-            }
+            self.open_player_from_chrome();
         }
+    }
+
+    /// Project-header Player control. Matches the hide-sidebar square.
+    pub(super) fn header_player_button(&mut self, ui: &mut egui::Ui) {
+        if matches!(self.player.status, Status::Playing { .. }) {
+            ui.ctx().request_repaint_after(Duration::from_millis(200));
+        }
+        let active = self.player_active();
+        let tint = if active {
+            ui.visuals().selection.stroke.color
+        } else {
+            appearance::ICON_COLOR
+        };
+        let response = appearance::framed_icon_button(
+            ui,
+            "AudioLines",
+            self.player_chrome_tip(),
+            active,
+            tint,
+        );
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "player-chrome", response.rect);
+        if response.clicked() {
+            self.open_player_from_chrome();
+        }
+    }
+
+    pub(super) fn header_player_menu(&mut self, ui: &mut egui::Ui) -> bool {
+        let mark = if self.player_active() { "✓" } else { "" };
+        let clicked = appearance::menu_item(ui, "Player", "AudioLines", mark).clicked();
+        if clicked {
+            self.open_player_from_chrome();
+        }
+        clicked
     }
 
     /// Compact IDE status-bar row: icon (opens the Player view),

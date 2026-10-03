@@ -397,7 +397,7 @@ fn playlist_footer(app: &mut App, ui: &mut Ui, project: &str) {
     }
     if app.player.stack == Some(Stack::List) {
         ui.add(
-            egui::TextEdit::singleline(&mut app.player.playlist_draft)
+            appearance::singleline(&mut app.player.playlist_draft)
                 .hint_text("Name")
                 .desired_width(160.0)
                 .id(egui::Id::new("player-playlist-name")),
@@ -415,7 +415,7 @@ fn playlist_footer(app: &mut App, ui: &mut Ui, project: &str) {
 fn url_row(app: &mut App, ui: &mut Ui, project: &str) {
     ui.horizontal(|ui| {
         ui.add(
-            egui::TextEdit::singleline(&mut app.player.station_draft)
+            appearance::singleline(&mut app.player.station_draft)
                 .hint_text("https://host/stream")
                 .desired_width(260.0)
                 .id(egui::Id::new("player-station-url")),
@@ -597,7 +597,7 @@ fn radio_panel(app: &mut App, ui: &mut Ui, project: &str) {
     ui.set_max_width(width);
     ui.strong("Radio");
     ui.add(
-        egui::TextEdit::singleline(&mut app.player.radio_query)
+        appearance::singleline(&mut app.player.radio_query)
             .hint_text("Search name, category, country…")
             .desired_width(f32::INFINITY)
             .lock_focus(true),
@@ -689,13 +689,13 @@ fn radio_panel(app: &mut App, ui: &mut Ui, project: &str) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add(
-            egui::TextEdit::singleline(&mut app.player.radio_draft_name)
+            appearance::singleline(&mut app.player.radio_draft_name)
                 .hint_text("Name")
                 .desired_width(100.0)
                 .id(egui::Id::new("player-radio-name")),
         );
         ui.add(
-            egui::TextEdit::singleline(&mut app.player.station_draft)
+            appearance::singleline(&mut app.player.station_draft)
                 .hint_text("https://host/stream")
                 .desired_width(180.0)
                 .id(egui::Id::new("player-station-url")),

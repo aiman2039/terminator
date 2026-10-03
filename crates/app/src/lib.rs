@@ -5044,7 +5044,7 @@ impl App {
         });
         ui.add_space(6.0);
         ui.add(
-            egui::TextEdit::singleline(&mut self.search)
+            appearance::singleline(&mut self.search)
                 .id(egui::Id::new("scrollback-search"))
                 .hint_text("Search scrollback…")
                 .desired_width(400.0),
@@ -7279,6 +7279,16 @@ mod navigation_tests {
                 );
             }
         }
+        let icons = app
+            .fixture_rect(&ctx, "explorer-new-file")
+            .expect("new file");
+        let search = app.fixture_rect(&ctx, "explorer-search").expect("search");
+        assert!(
+            search[1] < icons[1] + icons[3] + 12.0,
+            "search row stays under the toolbar, icons={} search={}",
+            icons[1],
+            search[1]
+        );
     }
 
     #[test]
@@ -8013,7 +8023,7 @@ mod navigation_tests {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             let mut text = String::new();
             let response =
-                ui.add(egui::TextEdit::singleline(&mut text).id(egui::Id::new("select-all-probe")));
+                ui.add(appearance::singleline(&mut text).id(egui::Id::new("select-all-probe")));
             response.request_focus();
         });
         output.textures_delta.clear();
@@ -8055,6 +8065,29 @@ mod navigation_tests {
             ) => Some(name),
             None => None,
         }
+    }
+
+    fn placeholder_center(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
+        fn walk(shape: &egui::Shape, needle: &str) -> Option<f32> {
+            match shape {
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        if let Some(center) = walk(shape, needle) {
+                            return Some(center);
+                        }
+                    }
+                    None
+                }
+                egui::Shape::Text(text) if text.galley.text() == needle => {
+                    let bounds = text.galley.mesh_bounds.translate(text.pos.to_vec2());
+                    Some(bounds.center().y)
+                }
+                _ => None,
+            }
+        }
+        shapes
+            .iter()
+            .find_map(|clipped| walk(&clipped.shape, needle))
     }
 
     fn paint_explorer(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
@@ -8327,6 +8360,95 @@ mod navigation_tests {
         paint_explorer(&mut app, &ctx, vec![egui::Event::Text("more".into())]);
         assert_eq!(prompt_name(&app), Some("a.txt"));
         assert_no_workspace_job(&requests);
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn name_prompt_wraps_when_the_sidebar_narrows() {
+        let (mut app, ctx, _dir) = fixture();
+        let cwd = PathBuf::from("/a");
+        let paint = |app: &mut App, width: f32, folder: bool| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 240.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    let prompt = if folder {
+                        workspace_ops::NamePrompt::Folder {
+                            dir: cwd.clone(),
+                            name: String::new(),
+                        }
+                    } else {
+                        workspace_ops::NamePrompt::File {
+                            dir: cwd.clone(),
+                            name: String::new(),
+                        }
+                    };
+                    app.open_name_prompt(prompt);
+                    app.explorer_toolbar(ui, &cwd);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        let top = |app: &App, name: &str| {
+            app.fixture_rect(&ctx, name)
+                .unwrap_or_else(|| panic!("missing {name}"))[1]
+        };
+        paint(&mut app, 480.0, false);
+        let field = top(&app, "explorer-name-field");
+        let save = top(&app, "explorer-name-save");
+        let cancel = top(&app, "explorer-name-cancel");
+        assert!(
+            (field - save).abs() < 2.0 && (field - cancel).abs() < 2.0,
+            "wide sidebar keeps the name prompt on one row, field={field} save={save} cancel={cancel}"
+        );
+        paint(&mut app, 200.0, false);
+        let field = top(&app, "explorer-name-field");
+        let save = top(&app, "explorer-name-save");
+        assert!(
+            save > field + 8.0,
+            "narrow sidebar wraps Save below the name field, field={field} save={save}"
+        );
+
+        paint(&mut app, 200.0, true);
+        let field = top(&app, "explorer-name-field");
+        let save = top(&app, "explorer-name-save");
+        assert!(
+            save > field + 8.0,
+            "narrow sidebar wraps a new-folder prompt, field={field} save={save}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn singleline_placeholder_is_vertically_centered() {
+        let (mut app, ctx, _dir) = fixture();
+        let cwd = PathBuf::from("/a");
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(360.0, 220.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.explorer_toolbar(ui, &cwd),
+        );
+        let field = app
+            .fixture_rect(&ctx, "explorer-search")
+            .expect("search field");
+        let field_center = field[1] + field[3] / 2.0;
+        let glyph = placeholder_center(&output.shapes, "Find in folder")
+            .expect("Find in folder placeholder");
+        output.textures_delta.clear();
+        assert!(
+            (glyph - field_center).abs() < 2.0,
+            "placeholder center {glyph} should match the field center {field_center}"
+        );
     }
 
     #[test]
@@ -12680,11 +12802,9 @@ mod navigation_tests {
             assert!(target("attention-bell").is_none());
         }
         assert!(target("agent-go:live-shell").is_some());
-        // The left sidebar keeps the bell toggle.
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.agent_bar(ui);
-        });
-        output.textures_delta.clear();
+        // The project header keeps the bell, beside the hide control.
+        app.project_width = 360.0;
+        paint_header(&mut app, &ctx, &[]);
         assert!(target("left-agent-bar").is_some());
     }
 
@@ -12845,24 +12965,129 @@ mod navigation_tests {
     #[cfg(feature = "test-support")]
     fn player_chrome_paints_next_to_the_project_bell() {
         let (mut app, ctx, _dir) = fixture();
-        let target = |name: &str| {
-            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
-        };
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            app.agent_bar(ui);
-        });
-        output.textures_delta.clear();
-        let bell = target("left-agent-bar").expect("project bell");
-        let chrome = target("player-chrome").expect("player chrome");
+        app.project_width = 420.0;
+        if let Some(project) = app
+            .state
+            .projects
+            .iter_mut()
+            .find(|project| project.id == "a")
+        {
+            project.name = "ai-proxy".into();
+        }
+        paint_header(&mut app, &ctx, &[]);
+        let rect = header_target(&ctx);
+        let name = rect("project-header-name").expect("project name");
+        let chrome = rect("player-chrome").expect("player chrome");
+        let bell = rect("left-agent-bar").expect("project bell");
+        let toggle = rect("toggle-left-sidebar").expect("hide sidebar");
+        assert!(rect("project-header-menu").is_none());
         assert!(
-            chrome.min.x < bell.min.x,
-            "player icon must sit left of the project bell, chrome={chrome:?} bell={bell:?}"
+            name.right() <= chrome.left() + 1.0 && chrome.left() - name.right() < 8.0,
+            "the name sits against the player, name={name:?} chrome={chrome:?}"
         );
         assert!(
-            (chrome.center().y - bell.center().y).abs() < 1.0,
-            "player and activity icons should share a vertical center, chrome={chrome:?} bell={bell:?}"
+            chrome.right() <= bell.left() + 1.0 && bell.left() - chrome.right() < 8.0,
+            "player sits against the bell, chrome={chrome:?} bell={bell:?}"
+        );
+        assert!(
+            bell.right() <= toggle.left() + 1.0 && toggle.left() - bell.right() < 8.0,
+            "bell sits against hide, bell={bell:?} toggle={toggle:?}"
+        );
+        assert!(
+            (name.center().y - toggle.center().y).abs() < 2.0,
+            "name and hide share a row, name={name:?} toggle={toggle:?}"
+        );
+        assert!(
+            toggle.right() > app.project_width - 16.0,
+            "the group is packed to the sidebar's right edge, toggle={toggle:?}"
         );
         assert!(chrome.height() <= 28.0 && bell.height() <= 28.0);
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn default_sidebar_keeps_player_and_bell_beside_hide() {
+        let (mut app, ctx, _dir) = fixture();
+        app.project_width = 225.0;
+        if let Some(project) = app
+            .state
+            .projects
+            .iter_mut()
+            .find(|project| project.id == "a")
+        {
+            project.name = "ai-proxy".into();
+        }
+        paint_header(&mut app, &ctx, &[]);
+        let rect = header_target(&ctx);
+        assert!(
+            rect("player-chrome").is_some() && rect("left-agent-bar").is_some(),
+            "a default sidebar fits the player and the bell, menu={:?}",
+            rect("project-header-menu")
+        );
+        assert!(rect("project-header-menu").is_none());
+        if let Some(project) = app
+            .state
+            .projects
+            .iter_mut()
+            .find(|project| project.id == "a")
+        {
+            project.name = "other-project".into();
+        }
+        paint_header(&mut app, &ctx, &[]);
+        let rect = header_target(&ctx);
+        assert!(
+            rect("left-agent-bar").is_some(),
+            "the agents fixture name still paints the bell, menu={:?}",
+            rect("project-header-menu")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn narrow_project_header_puts_player_and_bell_in_the_menu() {
+        let (mut app, ctx, _dir) = fixture();
+        app.project_width = 120.0;
+        if let Some(project) = app
+            .state
+            .projects
+            .iter_mut()
+            .find(|project| project.id == "a")
+        {
+            project.name = "ai-proxy".into();
+        }
+        paint_header(&mut app, &ctx, &[]);
+        let rect = header_target(&ctx);
+        assert!(rect("project-header-menu").is_some());
+        assert!(rect("player-chrome").is_none());
+        assert!(rect("left-agent-bar").is_none());
+        assert!(rect("project-header-name").is_some());
+        let menu = rect("project-header-menu").expect("menu");
+        let pos = menu.center();
+        paint_header(&mut app, &ctx, &[egui::Event::PointerMoved(pos)]);
+        paint_header(
+            &mut app,
+            &ctx,
+            &[egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+        paint_header(
+            &mut app,
+            &ctx,
+            &[egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+        paint_header(&mut app, &ctx, &[]);
+        let rect = header_target(&ctx);
+        assert!(rect("Player").is_some(), "menu offers Player");
+        assert!(rect("Agents").is_some(), "menu offers Agents");
     }
 
     fn generation_health(

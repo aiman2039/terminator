@@ -548,7 +548,7 @@ impl App {
                 ui.set_width(280.0);
                 ui.label("Name this layout:");
                 ui.add(
-                    egui::TextEdit::singleline(&mut name)
+                    appearance::singleline(&mut name)
                         .hint_text("My layout")
                         .desired_width(f32::INFINITY),
                 );
