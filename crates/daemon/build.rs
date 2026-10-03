@@ -1,37 +1,49 @@
 //! Build the pinned `CodeDiff` library locally; never download executables at runtime.
 #![forbid(unsafe_code)]
-use std::{env, fs, path::Path};
-fn collect(root: &Path, dir: &Path, entries: &mut Vec<(String, String)>) {
-    let mut paths: Vec<_> = fs::read_dir(dir)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
+use std::{env, error::Error, fs, path::Path, process::Command};
+
+fn fail(error: impl std::fmt::Display) -> ! {
+    eprintln!("daemon build failed: {error}");
+    std::process::exit(1);
+}
+
+fn utf8_path(path: &Path) -> Result<String, String> {
+    path.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{} is not UTF-8", path.display()))
+}
+
+fn collect(
+    root: &Path,
+    dir: &Path,
+    entries: &mut Vec<(String, String)>,
+) -> Result<(), Box<dyn Error>> {
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        paths.push(entry?.path());
+    }
     paths.sort();
     for path in paths {
         if path.is_dir() {
-            collect(root, &path, entries);
+            collect(root, &path, entries)?;
         } else {
-            entries.push((
-                path.strip_prefix(root).unwrap().to_str().unwrap().into(),
-                path.to_str().unwrap().into(),
-            ));
+            entries.push((utf8_path(path.strip_prefix(root)?)?, utf8_path(&path)?));
         }
     }
+    Ok(())
 }
-fn main() {
-    let root = Path::new("../../vendor/codediff.nvim")
-        .canonicalize()
-        .unwrap();
+
+fn run() -> Result<(), Box<dyn Error>> {
+    let root = Path::new("../../vendor/codediff.nvim").canonicalize()?;
     println!("cargo:rerun-if-changed={}", root.display());
-    let out = std::path::PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let out = std::path::PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?);
     let source = root.join("libvscode-diff");
-    let version = fs::read_to_string(root.join("VERSION")).unwrap();
+    let version = fs::read_to_string(root.join("VERSION"))?;
     fs::write(
         out.join("version.h"),
         format!("#define VSCODE_DIFF_VERSION {:?}\n", version.trim()),
-    )
-    .unwrap();
-    let ext = if env::var("CARGO_CFG_TARGET_OS").unwrap() == "macos" {
+    )?;
+    let ext = if env::var("CARGO_CFG_TARGET_OS")? == "macos" {
         "dylib"
     } else {
         "so"
@@ -69,43 +81,43 @@ fn main() {
         cmd.arg(source.join(file));
     }
     cmd.arg("-lm").arg("-o").arg(&library);
-    assert!(
-        cmd.status()
-            .expect("C compiler required for bundled CodeDiff")
-            .success(),
-        "CodeDiff native build failed"
-    );
+    let status = cmd
+        .status()
+        .map_err(|error| format!("C compiler required for bundled CodeDiff: {error}"))?;
+    if !status.success() {
+        return Err("CodeDiff native build failed".into());
+    }
     if ext == "dylib" {
-        let arch = match env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
+        let arch = match env::var("CARGO_CFG_TARGET_ARCH")?.as_str() {
             "aarch64" => "arm64",
             "x86_64" => "x86_64",
-            arch => panic!("Unsupported macOS architecture: {arch}"),
+            arch => return Err(format!("Unsupported macOS architecture: {arch}").into()),
         };
-        assert!(
-            std::process::Command::new("lipo")
-                .arg(&library)
-                .args(["-verify_arch", arch])
-                .status()
-                .expect("lipo is required")
-                .success(),
-            "Embedded CodeDiff must match the daemon architecture"
-        );
+        let status = Command::new("lipo")
+            .arg(&library)
+            .args(["-verify_arch", arch])
+            .status()
+            .map_err(|error| format!("lipo is required: {error}"))?;
+        if !status.success() {
+            return Err("Embedded CodeDiff must match the daemon architecture".into());
+        }
     }
     let mut entries = vec![];
-    collect(&root, &root.join("lua"), &mut entries);
-    collect(&root, &root.join("plugin"), &mut entries);
-    entries.push((
-        "VERSION".into(),
-        root.join("VERSION").to_str().unwrap().into(),
-    ));
-    entries.push((
-        format!("libvscode_diff.{ext}"),
-        library.to_str().unwrap().into(),
-    ));
+    collect(&root, &root.join("lua"), &mut entries)?;
+    collect(&root, &root.join("plugin"), &mut entries)?;
+    entries.push(("VERSION".into(), utf8_path(&root.join("VERSION"))?));
+    entries.push((format!("libvscode_diff.{ext}"), utf8_path(&library)?));
     let mut generated = String::from("const ASSETS: &[(&str, &[u8])] = &[\n");
     for (name, path) in entries {
         generated.push_str(&format!("({name:?}, include_bytes!({path:?})),\n"));
     }
     generated.push_str("];\n");
-    fs::write(out.join("review_assets.rs"), generated).unwrap();
+    fs::write(out.join("review_assets.rs"), generated)?;
+    Ok(())
+}
+
+fn main() {
+    if let Err(error) = run() {
+        fail(error);
+    }
 }

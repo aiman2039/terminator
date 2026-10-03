@@ -179,7 +179,7 @@ pub fn combo_or_custom(
                     data.insert_temp(egui::Id::new((id, option.label.as_str())), response.rect)
                 });
                 if response.clicked() {
-                    *value = option.value.clone();
+                    value.clone_from(&option.value);
                     *custom = false;
                     changed = true;
                 }

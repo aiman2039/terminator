@@ -10,7 +10,8 @@ const CHUNK_BYTES: usize = 512 * 1024;
 pub fn write_response(writer: &mut impl Write, response: &Response, chunks: bool) -> Result<()> {
     let bytes = serde_json::to_vec(response)?;
     if bytes.len() <= MAX_FRAME {
-        writer.write_all(&(bytes.len() as u32).to_be_bytes())?;
+        let len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+        writer.write_all(&len.to_be_bytes())?;
         writer.write_all(&bytes)?;
         writer.flush()?;
     } else if chunks && matches!(response, Response::State(_)) {
@@ -19,7 +20,7 @@ pub fn write_response(writer: &mut impl Write, response: &Response, chunks: bool
                 writer,
                 &Response::SnapshotChunk {
                     data: B64.encode(data),
-                    last: (index + 1) * CHUNK_BYTES >= bytes.len(),
+                    last: index.saturating_add(1).saturating_mul(CHUNK_BYTES) >= bytes.len(),
                 },
             )?;
         }
@@ -55,7 +56,12 @@ pub fn read_response(reader: &mut impl Read) -> Result<Response> {
 
 pub(crate) fn decode(data: &str) -> Result<Vec<u8>> {
     ensure!(
-        data.len() <= CHUNK_BYTES.div_ceil(3) * 4,
+        data.len()
+            <= CHUNK_BYTES
+                .saturating_add(2)
+                .checked_div(3)
+                .unwrap_or(0)
+                .saturating_mul(4),
         "Snapshot chunk too large"
     );
     let bytes = B64.decode(data)?;

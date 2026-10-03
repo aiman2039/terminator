@@ -27,8 +27,11 @@ fn main() -> Result<()> {
             println!("{}:{}", env!("CARGO_PKG_VERSION"), PROTOCOL_VERSION);
             Ok(())
         }
-        Some("ctl") => control::run(&args[1..]),
-        Some("attach") => attach(args.get(1).context("Missing session ID")?, &args[2..]),
+        Some("ctl") => control::run(args.get(1..).unwrap_or_default()),
+        Some("attach") => attach(
+            args.get(1).context("Missing session ID")?,
+            args.get(2..).unwrap_or_default(),
+        ),
         Some("event" | "emit" | "cwd" | "prompt") => {
             // Observational hooks never block or alter an agent's decision.
             let _ = hook(&args);
@@ -45,7 +48,7 @@ fn main() -> Result<()> {
                 .or(std::env::var_os("HOME"))
                 .context("No user directory")?;
             let kind = args.get(1).context("Expected agent kind")?;
-            if args[0] == "inspect" {
+            if args.first().is_some_and(|arg| arg == "inspect") {
                 println!(
                     "{}",
                     terminator_integrations::installed(std::path::Path::new(&home), kind)
@@ -55,7 +58,7 @@ fn main() -> Result<()> {
                     std::path::Path::new(&home),
                     kind,
                     &std::env::current_exe()?,
-                    args[0] == "remove",
+                    args.first().is_some_and(|arg| arg == "remove"),
                 )?;
                 println!("{}", path.display());
             }
@@ -70,22 +73,25 @@ fn main() -> Result<()> {
     }
 }
 fn hook(args: &[String]) -> Result<()> {
+    let command = args.first().context("Missing hook command")?;
     let mut paths = Paths::discover()?;
     if let Some(i) = args.iter().position(|a| a == "--data-dir") {
-        paths.data = args.get(i + 1).context("Missing data path")?.into();
+        let next = i.checked_add(1).context("Missing data path")?;
+        paths.data = args.get(next).context("Missing data path")?.into();
     }
     if let Some(i) = args.iter().position(|a| a == "--runtime-dir") {
-        paths.runtime = args.get(i + 1).context("Missing runtime path")?.into();
+        let next = i.checked_add(1).context("Missing runtime path")?;
+        paths.runtime = args.get(next).context("Missing runtime path")?.into();
     }
-    let (parent, actual, ancestors, process) = if args[0] == "event"
-        || args[0] == "emit"
+    let (parent, actual, ancestors, process) = if command == "event"
+        || command == "emit"
         || std::env::var_os("TERMINATOR_SESSION_ID").is_none()
     {
         agent_parent()
     } else {
         (String::new(), None, vec![], None)
     };
-    if args[0] == "event" && parent.is_empty() {
+    if command == "event" && parent.is_empty() {
         return Ok(());
     }
     let (sid, token) = if let (Ok(sid), Ok(token)) = (
@@ -108,7 +114,10 @@ fn hook(args: &[String]) -> Result<()> {
             matches.len() == 1,
             "Hook ancestry must identify exactly one owned session"
         );
-        let session = matches[0];
+        let session = matches
+            .first()
+            .copied()
+            .context("Hook ancestry must identify exactly one owned session")?;
         paths = generations::owner_for(
             &paths,
             &Request::History {
@@ -117,7 +126,7 @@ fn hook(args: &[String]) -> Result<()> {
         )?;
         (session.id.clone(), paths.token()?)
     };
-    let request = if args[0] == "prompt" {
+    let request = if command == "prompt" {
         if args.get(1).is_some_and(|s| s == "begin") {
             Request::ShellCommand { session: sid }
         } else {
@@ -127,7 +136,7 @@ fn hook(args: &[String]) -> Result<()> {
                 jobs_empty: args.get(2).is_some_and(String::is_empty),
             }
         }
-    } else if args[0] == "cwd" {
+    } else if command == "cwd" {
         Request::Cwd {
             session: sid,
             path: args.get(1).context("Missing cwd")?.into(),
@@ -145,7 +154,7 @@ fn hook(args: &[String]) -> Result<()> {
         if data.len() > 131072 {
             bail!("Payload too large")
         }
-        if args[0] == "emit" {
+        if command == "emit" {
             let mut event: HookEvent = serde_json::from_slice(&data)?;
             event.terminal_session_id = sid;
             // Ancestor-supplied identity; the daemon verifies it against live
@@ -171,7 +180,7 @@ fn hook(args: &[String]) -> Result<()> {
     let mut stream = connect(&paths, request, Some(token))?;
     stream.set_read_timeout(Some(Duration::from_millis(500)))?;
     let response: Response = read_frame(&mut stream)?;
-    if args[0] == "prompt"
+    if command == "prompt"
         && let Response::Text(generation) = response
     {
         println!("{generation}");
@@ -214,7 +223,7 @@ fn agent_parent() -> (
             let kind = terminator_integrations::AGENTS
                 .iter()
                 .find(|kind| executable == **kind || executable.starts_with(&format!("{kind}-bin")))
-                .map(|k| k.to_string());
+                .map(std::string::ToString::to_string);
             selected = Some((pid.as_u32(), process.start_time(), kind));
         }
         let Some(next) = process.parent().filter(|p| p.as_u32() > 1) else {
@@ -265,12 +274,14 @@ fn dimensions() -> (u16, u16) {
         });
     (size.ws_row.max(1), size.ws_col.max(1))
 }
+fn lock_writer<T>(writer: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    writer
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 fn write_winsize(writer: &Mutex<impl Write>) -> Result<()> {
     let (rows, cols) = dimensions();
-    write_frame(
-        &mut *writer.lock().unwrap(),
-        &Request::Resize { rows, cols },
-    )
+    write_frame(&mut *lock_writer(writer), &Request::Resize { rows, cols })
 }
 struct Raw(rustix::termios::Termios);
 impl Drop for Raw {
@@ -297,8 +308,8 @@ fn attach(session: &str, args: &[String]) -> Result<()> {
         });
     let paths = if args.len() >= 2 {
         Paths {
-            data: args[0].clone().into(),
-            runtime: args[1].clone().into(),
+            data: args.first().context("Missing data path")?.clone().into(),
+            runtime: args.get(1).context("Missing runtime path")?.clone().into(),
         }
     } else {
         Paths::discover()?
@@ -315,7 +326,7 @@ fn attach(session: &str, args: &[String]) -> Result<()> {
     )?;
     stream.set_read_timeout(None)?;
     let writer = Arc::new(Mutex::new(stream.try_clone()?));
-    let input_writer = writer.clone();
+    let input_writer = Arc::clone(&writer);
     std::thread::spawn(move || {
         let mut input = std::io::stdin();
         let mut bytes = [0; 8192];
@@ -323,10 +334,13 @@ fn attach(session: &str, args: &[String]) -> Result<()> {
             if n == 0 {
                 break;
             }
+            let Some(chunk) = bytes.get(..n) else {
+                break;
+            };
             if write_frame(
-                &mut *input_writer.lock().unwrap(),
+                &mut *lock_writer(&input_writer),
                 &Request::Input {
-                    data: B64.encode(&bytes[..n]),
+                    data: B64.encode(chunk),
                 },
             )
             .is_err()
@@ -334,13 +348,10 @@ fn attach(session: &str, args: &[String]) -> Result<()> {
                 break;
             }
         }
-        let _ = input_writer
-            .lock()
-            .unwrap()
-            .shutdown(std::net::Shutdown::Both);
+        let _ = lock_writer(&input_writer).shutdown(std::net::Shutdown::Both);
     });
     let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGWINCH])?;
-    let sigwinch_writer = writer.clone();
+    let sigwinch_writer = Arc::clone(&writer);
     std::thread::spawn(move || {
         for _ in signals.forever() {
             if write_winsize(sigwinch_writer.as_ref()).is_err() {
@@ -356,7 +367,7 @@ fn attach(session: &str, args: &[String]) -> Result<()> {
         match frame {
             Response::Data(data) => {
                 output.write_all(&B64.decode(data)?)?;
-                output.flush()?
+                output.flush()?;
             }
             Response::End => break,
             Response::Error(e) => bail!("{e}"),

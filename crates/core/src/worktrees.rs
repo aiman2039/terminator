@@ -44,7 +44,7 @@ pub fn common_dir(cwd: &Path) -> Result<PathBuf> {
         .arg("-C")
         .arg(cwd)
         .args(["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-    let out = run_command(command, Default::default())?.stdout;
+    let out = run_command(command, CommandOptions::default())?.stdout;
     let path = String::from_utf8(out).context("Git directory is not UTF-8")?;
     Ok(PathBuf::from(path.trim_end()).canonicalize()?)
 }
@@ -59,7 +59,7 @@ pub fn resolve_start(cwd: &Path, reference: &str) -> Result<String> {
         .args(["rev-parse", "--verify", "--end-of-options"])
         .arg(format!("{reference}^{{commit}}"));
     Ok(
-        String::from_utf8(run_command(c, Default::default())?.stdout)?
+        String::from_utf8(run_command(c, CommandOptions::default())?.stdout)?
             .trim()
             .into(),
     )

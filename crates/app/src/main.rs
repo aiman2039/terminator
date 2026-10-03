@@ -14,7 +14,11 @@ fn main() -> Result<()> {
     }
     let args = std::env::args().collect::<Vec<_>>();
     let paths = if let Some(i) = args.iter().position(|a| a == "--data-dir") {
-        Paths::at(args.get(i + 1).context("Missing data directory")?.into())
+        Paths::at(
+            args.get(i.checked_add(1).context("Missing data directory")?)
+                .context("Missing data directory")?
+                .into(),
+        )
     } else {
         Paths::discover()?
     };
@@ -60,7 +64,7 @@ fn main() -> Result<()> {
                 eframe::icon_data::from_png_bytes(include_bytes!(
                     "../assets/branding/terminator.png"
                 ))
-                .expect("bundled Terminator icon must be a valid PNG"),
+                .context("bundled Terminator icon must be a valid PNG")?,
             )
             .with_active(
                 !(cfg!(feature = "test-support")

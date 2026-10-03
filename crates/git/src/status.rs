@@ -56,10 +56,13 @@ impl Change {
         if bytes.len() != 2 {
             return ' ';
         }
-        if bytes[1] != b' ' {
-            bytes[1] as char
+        let (Some(&index), Some(&worktree)) = (bytes.first(), bytes.get(1)) else {
+            return ' ';
+        };
+        if worktree == b' ' {
+            index as char
         } else {
-            bytes[0] as char
+            worktree as char
         }
     }
 
@@ -68,10 +71,13 @@ impl Change {
         if bytes.len() != 2 {
             return false;
         }
+        let (Some(&index), Some(&worktree)) = (bytes.first(), bytes.get(1)) else {
+            return false;
+        };
         match group {
             GitGroup::Conflicts => self.conflict(),
-            GitGroup::Staged => !self.conflict() && !matches!(bytes[0], b' ' | b'?' | b'!'),
-            GitGroup::Changes => !self.conflict() && !matches!(bytes[1], b' ' | b'?' | b'!'),
+            GitGroup::Staged => !self.conflict() && !matches!(index, b' ' | b'?' | b'!'),
+            GitGroup::Changes => !self.conflict() && !matches!(worktree, b' ' | b'?' | b'!'),
             GitGroup::Untracked => self.status == "??",
         }
     }
@@ -113,8 +119,11 @@ pub fn parse_porcelain(root: &Path, raw: &[u8]) -> Vec<Change> {
         if part.len() < 4 {
             continue;
         }
-        let status = String::from_utf8_lossy(&part[..2]).into_owned();
-        let path = root.join(std::ffi::OsStr::from_bytes(&part[3..]));
+        let (Some(status_bytes), Some(path_bytes)) = (part.get(..2), part.get(3..)) else {
+            continue;
+        };
+        let status = String::from_utf8_lossy(status_bytes).into_owned();
+        let path = root.join(std::ffi::OsStr::from_bytes(path_bytes));
         if status.contains('R') || status.contains('C') {
             let _ = parts.next();
         }

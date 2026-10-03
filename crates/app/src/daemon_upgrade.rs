@@ -56,7 +56,7 @@ impl Drop for Candidate {
                 .as_mut()
                 .is_some_and(|child| child.try_wait().ok().flatten().is_some());
             if self.child.is_none() || exited {
-                let _ = self.discard_unstarted(self.child.as_ref().map(|c| c.id()));
+                let _ = self.discard_unstarted(self.child.as_ref().map(std::process::Child::id));
             } else {
                 // A running or uncertain candidate may only acknowledge idle shutdown.
                 let _ = rpc(&self.paths, Request::ShutdownIfIdle);
@@ -101,8 +101,11 @@ pub fn same_file_contents(left: &Path, right: &Path) -> Result<bool> {
         if n == 0 {
             return Ok(true);
         }
-        right.read_exact(&mut b[..n])?;
-        if a[..n] != b[..n] {
+        let Some(b_buf) = b.get_mut(..n) else {
+            return Ok(false);
+        };
+        right.read_exact(b_buf)?;
+        if a.get(..n) != b.get(..n) {
             return Ok(false);
         }
     }
@@ -167,7 +170,11 @@ fn activate_candidate(paths: &Paths, executable: &Path, force: bool) -> Result<(
     }
     let generation = id();
     let data = paths.data.join("generations").join(&generation);
-    let runtime = paths.runtime.join(&generation[..8]);
+    let runtime = paths.runtime.join(
+        generation
+            .get(..8)
+            .context("generation id is shorter than 8 bytes")?,
+    );
     let candidate = Paths {
         data: data.clone(),
         runtime: runtime.clone(),
@@ -236,7 +243,9 @@ fn activate_candidate(paths: &Paths, executable: &Path, force: bool) -> Result<(
         let _guard = generations::coordinate(paths)?;
         catalog.set_pid(&generation, pid)?;
     }
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let Some(deadline) = Instant::now().checked_add(Duration::from_secs(10)) else {
+        anyhow::bail!("Candidate verification clock overflow; previous service preserved");
+    };
     loop {
         if let Ok(Response::State(state)) = rpc(&candidate, Request::Snapshot) {
             ensure!(
@@ -275,7 +284,12 @@ fn activate_candidate(paths: &Paths, executable: &Path, force: bool) -> Result<(
             return Ok(());
         }
         ensure!(
-            pending.child.as_mut().unwrap().try_wait()?.is_none(),
+            pending
+                .child
+                .as_mut()
+                .context("candidate process handle missing")?
+                .try_wait()?
+                .is_none(),
             "Candidate exited; previous service preserved. Inspect {}",
             paths
                 .data
@@ -438,7 +452,7 @@ mod tests {
         let project = initial.projects[0].id.clone();
         let settings = Settings {
             shell: "/bin/sh".into(),
-            os_events: Default::default(),
+            os_events: std::collections::BTreeSet::default(),
             ..Default::default()
         };
         rpc(&paths, Request::Settings(settings)).unwrap();
@@ -635,7 +649,7 @@ mod tests {
             .into_iter()
             .find(|g| g.id == b.generation)
             .unwrap();
-        let b_pid = b_owner.pid.unwrap() as i32;
+        let b_pid = b_owner.pid.unwrap().cast_signed();
         assert!(
             signals::signal_process(u32::try_from(b_pid).unwrap(), signals::ProcSignal::Stop)
                 .is_ok()

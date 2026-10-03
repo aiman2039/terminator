@@ -1,10 +1,10 @@
 //! Sparkle is loaded only from a configured app bundle. Development launches
-//! never consult the production feed. NSApplication's delegate remains winit's.
+//! never consult the production feed. `NSApplication`'s delegate remains winit's.
 //! The application menu always has Check for Updates…; Sparkle is not required
 //! for that item to exist. The macOS menu-bar status item lives in this crate
 //! too, because the app crate forbids unsafe.
 //!
-//! AppKit method swizzling keeps `unsafe` in this crate. Other Terminator crates forbid it.
+//! `AppKit` method swizzling keeps `unsafe` in this crate. Other Terminator crates forbid it.
 #[cfg(any(target_os = "macos", test))]
 mod schedule;
 
@@ -72,6 +72,7 @@ mod macos {
         impl UpdateDelegate {
             #[unsafe(method(updater:didFindValidUpdate:))]
             fn found(&self, _: &AnyObject, item: &AnyObject) {
+                // SAFETY: Sparkle calls this with the SUAppcastItem. `versionString` is its NSString.
                 let version: Retained<NSString> = unsafe { msg_send![item, versionString] };
                 self.ivars().schedule.borrow_mut().found(version.to_string());
             }
@@ -97,6 +98,8 @@ mod macos {
         fn request_check(&self) {
             let controller = self.ivars().controller.borrow().clone();
             if let Some(controller) = controller {
+                // SAFETY: `controller` is the SPUStandardUpdaterController we created.
+                // `checkForUpdates:` takes a nil sender.
                 unsafe {
                     let _: () =
                         msg_send![&*controller, checkForUpdates: Option::<&AnyObject>::None];
@@ -118,6 +121,8 @@ mod macos {
             let Some(controller) = self.ivars().controller.borrow().clone() else {
                 return true;
             };
+            // SAFETY: `controller` is our SPUStandardUpdaterController. `updater` is its
+            // SUUpdater, and `canCheckForUpdates` returns a Bool.
             unsafe {
                 let updater: *mut AnyObject = msg_send![&*controller, updater];
                 let can: Bool = msg_send![updater, canCheckForUpdates];
@@ -150,8 +155,10 @@ mod macos {
     #[cfg(feature = "test-support")]
     pub fn fixture_native_quit() {
         dispatch2::DispatchQueue::main().exec_async(|| {
-            NSApplication::sharedApplication(MainThreadMarker::new().expect("GUI main thread"))
-                .terminate(None);
+            let Some(mtm) = MainThreadMarker::new() else {
+                return;
+            };
+            NSApplication::sharedApplication(mtm).terminate(None);
         });
     }
     pub fn termination_requested() -> bool {
@@ -170,20 +177,25 @@ mod macos {
         // AppKit broadcasts applicationWillTerminate synchronously. Dispatch
         // outside the egui/winit callback to avoid re-entering winit's handler.
         dispatch2::DispatchQueue::main().exec_async(|| {
-            let app =
-                NSApplication::sharedApplication(MainThreadMarker::new().expect("GUI main thread"));
+            let Some(mtm) = MainThreadMarker::new() else {
+                return;
+            };
+            let app = NSApplication::sharedApplication(mtm);
             if let Some(original) = ORIGINAL.get() {
                 // Exact ABI of -[NSApplication terminate:]. Calling the saved
                 // implementation preserves AppKit and Sparkle quit observers.
                 // AppKit exits inside that call. Returning means the process
                 // is still alive, so Sparkle's Install and Relaunch waits forever.
+                // SAFETY: `original` is the IMP saved from `-[NSApplication terminate:]`.
+                // The signature matches that method. `app` is the shared application and
+                // outlives the call. `terminate:` accepts a nil sender.
                 unsafe {
                     let original: unsafe extern "C-unwind" fn(
                         *const NSApplication,
                         Sel,
                         *const AnyObject,
                     ) = std::mem::transmute(*original);
-                    original(&*app, sel!(terminate:), std::ptr::null());
+                    original(&raw const *app, sel!(terminate:), std::ptr::null());
                 }
             }
             std::process::exit(0);
@@ -214,15 +226,16 @@ mod macos {
                 return result;
             };
             CONTEXT.get_or_init(|| ctx.clone());
-            ORIGINAL.get_or_init(|| unsafe {
-                let method = NSApplication::class()
-                    .instance_method(sel!(terminate:))
-                    .expect("NSApplication terminate:");
-                method.set_implementation(std::mem::transmute::<
-                    unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject),
-                    Imp,
-                >(terminate))
-            });
+            if let Some(method) = NSApplication::class().instance_method(sel!(terminate:)) {
+                // SAFETY: Runs once on the main thread. Replaces `-[NSApplication terminate:]`
+                // with `terminate`, which has that method's signature, and keeps the previous IMP.
+                ORIGINAL.get_or_init(|| unsafe {
+                    method.set_implementation(std::mem::transmute::<
+                        unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject),
+                        Imp,
+                    >(terminate))
+                });
+            }
             let delegate = new_delegate(mtm);
             match load_sparkle(&delegate) {
                 Ok((controller, framework)) => {
@@ -256,6 +269,8 @@ mod macos {
             };
             let enabled = NSUserDefaults::standardUserDefaults()
                 .boolForKey(ns_string!("TerminatorAutomaticUpdateChecks"));
+            // SAFETY: `controller` is our SPUStandardUpdaterController and `updater` is its
+            // SUUpdater. The selectors match Sparkle and the Bool is only read as a bool.
             unsafe {
                 let updater: *mut AnyObject = msg_send![controller, updater];
                 let available: Bool = msg_send![updater, canCheckForUpdates];
@@ -288,6 +303,8 @@ mod macos {
             ui.heading("Updates");
             if let Some(controller) = &self.controller {
                 ui.weak("Update preferences take effect immediately.");
+                // SAFETY: `controller` is our SPUStandardUpdaterController. `updater` is its
+                // live SUUpdater for this call. The selectors match Sparkle's updater API.
                 unsafe {
                     let updater: *mut AnyObject = msg_send![controller, updater];
                     let updater = &*updater;
@@ -342,6 +359,8 @@ mod macos {
     }
 
     fn new_delegate(mtm: MainThreadMarker) -> Retained<UpdateDelegate> {
+        // SAFETY: The receiver is a freshly allocated UpdateDelegate with ivars set,
+        // on the main thread. `init` is NSObject's initializer and returns a retained object.
         unsafe {
             msg_send![
                 super(UpdateDelegate::alloc(mtm).set_ivars(UpdateIvars {
@@ -398,9 +417,14 @@ mod macos {
         let Some(framework) = NSBundle::bundleWithPath(&path) else {
             return Err(MISSING_UPDATES.into());
         };
+        // SAFETY: `framework` is Sparkle.framework inside the app bundle. `load` initializes it; failure returns false.
         if !unsafe { framework.load() } {
             return Err(MISSING_UPDATES.into());
         }
+        // SAFETY: Sparkle is loaded and `SPUStandardUpdaterController` is its public class.
+        // `alloc` and `initWithStartingUpdater:updaterDelegate:userDriverDelegate:` match that
+        // class. A null controller is discarded. Later selectors are SUUpdater methods.
+        // `delegate` stays retained by the caller.
         unsafe {
             let Some(class) = AnyClass::get(c"SPUStandardUpdaterController") else {
                 return Err(FAILED_UPDATES.into());
@@ -433,6 +457,9 @@ mod macos {
     /// at the action; leave the constraints in place.
     fn keep_sparkle_status_button_in_layout() {
         static INSTALLED: OnceLock<()> = OnceLock::new();
+        // SAFETY: Replaces Sparkle's private
+        // `setButtonTitle:target:action:isDefault:accessibilityIdentifier:` once.
+        // `set_status_button` uses that exact signature.
         INSTALLED.get_or_init(|| unsafe {
             let Some(class) = AnyClass::get(c"SUStatusController") else {
                 return;
@@ -470,16 +497,18 @@ mod macos {
         if this.is_null() {
             return;
         }
+        // SAFETY: `this` was null-checked. Sparkle passes the SUStatusController for this call.
         let this = unsafe { &*this };
         if !title.is_null() {
+            // SAFETY: `title` was null-checked. Sparkle passes the button title NSString.
             let title = unsafe { &*title };
-            // Private Sparkle property. The button title is bound to it.
+            // SAFETY: `setButtonTitle:` is Sparkle's private NSString setter. `title` is valid for the call.
             let _: () = unsafe { msg_send![this, setButtonTitle: title] };
         }
         // Sparkle 2.10: SUStatusController is an NSWindowController.
         let Some(content) = this
             .downcast_ref::<NSWindowController>()
-            .and_then(|controller| controller.window())
+            .and_then(objc2_app_kit::NSWindowController::window)
             .and_then(|window| window.contentView())
         else {
             return;
@@ -495,6 +524,8 @@ mod macos {
         let Some(button) = button else {
             return;
         };
+        // SAFETY: `button` is the first NSButton in the status window. `target` is
+        // null-checked before the dereference. `action` is the selector Sparkle passed.
         unsafe {
             button.setTarget((!target.is_null()).then(|| &*target));
             button.setAction(action);
@@ -506,6 +537,7 @@ mod macos {
         };
         button.setKeyEquivalent(key);
         if !identifier.is_null() {
+            // SAFETY: `identifier` was null-checked. Sparkle passes the accessibility NSString.
             let identifier = unsafe { &*identifier };
             button.setAccessibilityIdentifier(Some(identifier));
         }
@@ -526,6 +558,7 @@ mod macos {
             if let Some(item) = menu.itemAtIndex(index)
                 && item.title().isEqualToString(title)
             {
+                // SAFETY: `item` is a live menu item. `target` is our UpdateDelegate, which implements `checkForUpdates:`.
                 unsafe {
                     item.setTarget(Some(target));
                     item.setAction(Some(sel!(checkForUpdates:)));
@@ -533,6 +566,7 @@ mod macos {
                 return true;
             }
         }
+        // SAFETY: Allocates an NSMenuItem on the main thread. The initializer returns a retained item.
         let item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 NSMenuItem::alloc(mtm),
@@ -541,6 +575,7 @@ mod macos {
                 &NSString::new(),
             )
         };
+        // SAFETY: `item` is the menu item just created. `target` implements `checkForUpdates:`.
         unsafe {
             item.setTarget(Some(target));
         }
@@ -552,7 +587,7 @@ mod macos {
 pub use macos::*;
 
 /// One pending agent notice in the menu-bar status menu. The GUI rebuilds
-/// this list every frame; the status item only rebuilds its NSMenu when the
+/// this list every frame; the status item only rebuilds its `NSMenu` when the
 /// serialized list changes, and reports the picked id back.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatusMenuItem {
@@ -628,45 +663,57 @@ pub fn take_status_selection() -> Option<String> {
 mod tests {
     use super::*;
 
-    fn eligibility(
-        isolated: bool,
-        fixture: bool,
-        debug: bool,
-        bundled: bool,
-        has_keys: bool,
-    ) -> FeedEligibility {
-        FeedEligibility {
-            isolated,
-            fixture,
-            debug,
-            bundled,
-            has_keys,
-        }
-    }
-
     #[test]
     fn development_launches_do_not_use_the_production_feed() {
-        assert!(skip_production_feed(eligibility(
-            true, false, false, true, true
-        )));
-        assert!(skip_production_feed(eligibility(
-            false, false, true, true, true
-        )));
-        assert!(skip_production_feed(eligibility(
-            false, false, false, false, true
-        )));
-        assert!(skip_production_feed(eligibility(
-            false, false, false, true, false
-        )));
-        assert!(!skip_production_feed(eligibility(
-            true, true, true, false, true
-        )));
-        assert!(!skip_production_feed(eligibility(
-            false, false, false, true, true
-        )));
-        assert!(!skip_production_feed(eligibility(
-            true, true, false, false, false
-        )));
+        assert!(skip_production_feed(FeedEligibility {
+            isolated: true,
+            fixture: false,
+            debug: false,
+            bundled: true,
+            has_keys: true,
+        }));
+        assert!(skip_production_feed(FeedEligibility {
+            isolated: false,
+            fixture: false,
+            debug: true,
+            bundled: true,
+            has_keys: true,
+        }));
+        assert!(skip_production_feed(FeedEligibility {
+            isolated: false,
+            fixture: false,
+            debug: false,
+            bundled: false,
+            has_keys: true,
+        }));
+        assert!(skip_production_feed(FeedEligibility {
+            isolated: false,
+            fixture: false,
+            debug: false,
+            bundled: true,
+            has_keys: false,
+        }));
+        assert!(!skip_production_feed(FeedEligibility {
+            isolated: true,
+            fixture: true,
+            debug: true,
+            bundled: false,
+            has_keys: true,
+        }));
+        assert!(!skip_production_feed(FeedEligibility {
+            isolated: false,
+            fixture: false,
+            debug: false,
+            bundled: true,
+            has_keys: true,
+        }));
+        assert!(!skip_production_feed(FeedEligibility {
+            isolated: true,
+            fixture: true,
+            debug: false,
+            bundled: false,
+            has_keys: false,
+        }));
     }
 
     #[test]

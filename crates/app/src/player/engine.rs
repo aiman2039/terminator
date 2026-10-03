@@ -104,13 +104,13 @@ type Channels = (
 impl Handle {
     pub fn spawn(service: crate::gui_services::Services) -> Self {
         let (handle, commands, status, spectrum) = Self::channels();
-        let controls = handle.controls.clone();
+        let controls = Arc::clone(&handle.controls);
         let lifetime = handle.lifetime.clone();
         let mut context = OperationContext::new("audio", "player".into(), Policy::ServiceLifetime);
         context.deadline = None;
         let services = service.clone();
         let errors = status.clone();
-        let error_controls = controls.clone();
+        let error_controls = Arc::clone(&controls);
         if let Err(error) = service
             .handle()
             .submit(context, lifetime.clone(), async move {
@@ -190,7 +190,11 @@ impl Handle {
     }
     pub fn play(&self, source: Playable) {
         self.controls.paused.store(false, Ordering::Release);
-        let generation = self.controls.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let generation = self
+            .controls
+            .generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
         self.desired.send_replace(Desired {
             generation,
             source: Some(source),
@@ -198,7 +202,11 @@ impl Handle {
         });
     }
     pub fn stop(&self) {
-        let generation = self.controls.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let generation = self
+            .controls
+            .generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
         self.desired.send_replace(Desired {
             generation,
             source: None,
@@ -209,7 +217,11 @@ impl Handle {
         self.controls.paused.store(true, Ordering::Release);
         self.desired.send_modify(|desired| {
             if desired.source.as_ref().is_some_and(Playable::radio) {
-                desired.generation = self.controls.generation.fetch_add(1, Ordering::AcqRel) + 1;
+                desired.generation = self
+                    .controls
+                    .generation
+                    .fetch_add(1, Ordering::AcqRel)
+                    .wrapping_add(1);
             }
         });
     }
@@ -217,7 +229,11 @@ impl Handle {
         self.controls.paused.store(false, Ordering::Release);
         self.desired.send_modify(|desired| {
             if desired.source.as_ref().is_some_and(Playable::radio) {
-                desired.generation = self.controls.generation.fetch_add(1, Ordering::AcqRel) + 1;
+                desired.generation = self
+                    .controls
+                    .generation
+                    .fetch_add(1, Ordering::AcqRel)
+                    .wrapping_add(1);
             }
         });
     }
@@ -225,7 +241,11 @@ impl Handle {
         self.desired.send_modify(|desired| {
             if matches!(desired.source, Some(Playable::File { .. })) {
                 desired.offset = position;
-                desired.generation = self.controls.generation.fetch_add(1, Ordering::AcqRel) + 1;
+                desired.generation = self
+                    .controls
+                    .generation
+                    .fetch_add(1, Ordering::AcqRel)
+                    .wrapping_add(1);
             }
         });
     }
@@ -351,7 +371,7 @@ async fn run(
                 finished: false,
             });
             spectrum.send_replace(None);
-            tokio::select! { _ = lifetime.cancelled() => break, result = commands.changed() => if result.is_err() { break } }
+            tokio::select! { () = lifetime.cancelled() => break, result = commands.changed() => if result.is_err() { break } }
             continue;
         };
         if source.radio() && controls.paused.load(Ordering::Acquire) {
@@ -366,7 +386,7 @@ async fn run(
                 finished: false,
             });
             spectrum.send_replace(None);
-            tokio::select! { _ = lifetime.cancelled() => break, result = commands.changed() => if result.is_err() { break } }
+            tokio::select! { () = lifetime.cancelled() => break, result = commands.changed() => if result.is_err() { break } }
             continue;
         }
         let session = CancellationToken::new();
@@ -375,19 +395,19 @@ async fn run(
             &client,
             &decoder,
             desired.clone(),
-            controls.clone(),
+            Arc::clone(&controls),
             status.clone(),
             Analysis {
                 service: service.clone(),
                 sender: spectrum.clone(),
-                controls: controls.clone(),
+                controls: Arc::clone(&controls),
             },
             session.clone(),
         );
         tokio::pin!(work);
         loop {
             tokio::select! {
-                _ = lifetime.cancelled() => { session.cancel(); return Ok(()); }
+                () = lifetime.cancelled() => { session.cancel(); return Ok(()); }
                 result = commands.changed() => {
                     if result.is_err() { return Ok(()); }
                     if commands.borrow().generation != desired.generation { session.cancel(); break; }
@@ -400,7 +420,7 @@ async fn run(
                         };
                         status.send_replace(Event { generation: desired.generation, status: next, finished });
                     }
-                    tokio::select! { _ = lifetime.cancelled() => return Ok(()), result = commands.changed() => if result.is_err() { return Ok(()); } }
+                    tokio::select! { () = lifetime.cancelled() => return Ok(()), result = commands.changed() => if result.is_err() { return Ok(()); } }
                     break;
                 }
             }
@@ -423,7 +443,7 @@ impl Analysis {
         let token = cancel.clone();
         let cpu = self.service.cpu().clone();
         let sender = self.sender.clone();
-        let controls = self.controls.clone();
+        let controls = Arc::clone(&self.controls);
         let _ = self.service.handle().submit(context, cancel, async move {
             let bars = cpu
                 .run(&token, move || Ok(tap::bars_from_samples(&samples, rate)))
@@ -444,8 +464,8 @@ async fn playback(
     spectrum: Analysis,
     cancellation: CancellationToken,
 ) -> Result<()> {
-    let source = desired.source.as_ref().unwrap();
-    let mut retries = 0;
+    let source = desired.source.as_ref().context("audio source missing")?;
+    let mut retries: u8 = 0;
     loop {
         let admission_started = Instant::now();
         while decoder.occupancy() != 0 || decoder.queued() != 0 {
@@ -453,7 +473,7 @@ async fn playback(
                 admission_started.elapsed() < Duration::from_secs(10),
                 "Audio decoder is still completing an earlier operation"
             );
-            tokio::select! { _ = cancellation.cancelled() => anyhow::bail!("Playback cancelled"), _ = tokio::time::sleep(Duration::from_millis(5)) => {} }
+            tokio::select! { () = cancellation.cancelled() => anyhow::bail!("Playback cancelled"), () = tokio::time::sleep(Duration::from_millis(5)) => {} }
         }
         status.send_replace(Event {
             generation: desired.generation,
@@ -467,10 +487,10 @@ async fn playback(
             client,
             decoder,
             desired.clone(),
-            controls.clone(),
+            Arc::clone(&controls),
             status.clone(),
             spectrum.clone(),
-            (cancellation.child_token(), healthy.clone()),
+            (cancellation.child_token(), Arc::clone(&healthy)),
         )
         .await;
         if !source.radio() {
@@ -488,8 +508,8 @@ async fn playback(
         if retries == 3 {
             return Err(error.context("Radio retry limit reached"));
         }
-        let delay = 1 << retries;
-        retries += 1;
+        let delay = 1_u64.checked_shl(u32::from(retries)).unwrap_or(u64::MAX);
+        retries = retries.saturating_add(1);
         status.send_replace(Event {
             generation: desired.generation,
             status: Status::Reconnecting {
@@ -498,7 +518,7 @@ async fn playback(
             },
             finished: false,
         });
-        tokio::select! { _ = cancellation.cancelled() => anyhow::bail!("Playback cancelled"), _ = tokio::time::sleep(Duration::from_secs(delay)) => {} }
+        tokio::select! { () = cancellation.cancelled() => anyhow::bail!("Playback cancelled"), () = tokio::time::sleep(Duration::from_secs(delay)) => {} }
     }
 }
 pub(super) async fn download(
@@ -575,8 +595,8 @@ async fn pipeline(
 ) -> Result<()> {
     let _cancel_on_drop = cancel.clone().drop_guard();
     let (sender, receiver) = mpsc::channel(COMPRESSED_SLOTS);
-    let source = desired.source.as_ref().unwrap().clone();
-    let network_controls = controls.clone();
+    let source = desired.source.clone().context("audio source missing")?;
+    let network_controls = Arc::clone(&controls);
     let network = async {
         if let Playable::Stream { url, .. } = source {
             let _network = PipelineGuard::new(network_controls, true);
@@ -595,12 +615,17 @@ async fn pipeline(
     };
     let ready = Arc::new(AtomicBool::new(false));
     let started = Instant::now();
-    let monitor_ready = ready.clone();
+    let monitor_ready = Arc::clone(&ready);
     let counters = Arc::new(PlaybackCounters::default());
-    let monitored = counters.clone();
+    let monitored = Arc::clone(&counters);
     let monitor_status = status.clone();
-    let monitor_controls = controls.clone();
-    let monitor_title = desired.source.as_ref().unwrap().title().to_owned();
+    let monitor_controls = Arc::clone(&controls);
+    let monitor_title = desired
+        .source
+        .as_ref()
+        .context("audio source missing")?
+        .title()
+        .to_owned();
     let monitor_generation = desired.generation;
     let decode_cancel = cancel.clone();
     let decode = pool.run(&cancel, move || {
@@ -672,7 +697,9 @@ impl Read for StreamReader {
             }
             let n = input.current.read(buf)?;
             if n != 0 {
-                input.position += n as u64;
+                input.position = input
+                    .position
+                    .saturating_add(u64::try_from(n).unwrap_or(u64::MAX));
                 return Ok(n);
             }
             let Some(bytes) = input.receiver.blocking_recv() else {
@@ -731,7 +758,7 @@ impl Iterator for PreparedSource {
                 self.counters.buffering.store(false, Ordering::Relaxed);
                 self.counters.consumed.fetch_add(1, Ordering::Relaxed);
                 self.mix += sample;
-                self.channel += 1;
+                self.channel = self.channel.saturating_add(1);
                 if self.channel == self.channels.get() {
                     let _ = self.tap.push(self.mix / f32::from(self.channels.get()));
                     self.channel = 0;
@@ -822,8 +849,8 @@ fn decode_audio(
     cancel: CancellationToken,
     (ready, counters, healthy): (Arc<AtomicBool>, Arc<PlaybackCounters>, Arc<AtomicBool>),
 ) -> Result<()> {
-    let _decoder = PipelineGuard::new(controls.clone(), false);
-    let source = desired.source.as_ref().unwrap();
+    let _decoder = PipelineGuard::new(Arc::clone(&controls), false);
+    let source = desired.source.as_ref().context("audio source missing")?;
     let mut decoder: Box<dyn Source<Item = f32> + Send> = match source {
         Playable::File { path, .. } => {
             use std::os::unix::fs::OpenOptionsExt;
@@ -875,15 +902,24 @@ fn decode_audio(
     // Resampling/channel conversion stays on this native decoder worker.
     let mut decoder = rodio::source::UniformSourceIterator::new(decoder, channels, rate);
     let output_failed = Arc::new(AtomicBool::new(false));
-    let capacity = (rate.get() as usize * channels.get() as usize * 2).min(MAX_PCM_SAMPLES);
-    let threshold = (rate.get() as usize * channels.get() as usize / 4).min(capacity);
+    let rate_samples = usize::try_from(rate.get()).unwrap_or(usize::MAX);
+    let channel_count = usize::from(channels.get());
+    let capacity = rate_samples
+        .saturating_mul(channel_count)
+        .saturating_mul(2)
+        .min(MAX_PCM_SAMPLES);
+    let threshold = rate_samples
+        .saturating_mul(channel_count)
+        .checked_div(4)
+        .unwrap_or(0)
+        .min(capacity);
     let (mut pcm, consumer) = rtrb::RingBuffer::new(capacity);
     let (tap_producer, mut tap_consumer) = rtrb::RingBuffer::new(tap::FFT_N * 2);
     let mut prepared = Some(PreparedSource {
         pcm: consumer,
         tap: tap_producer,
-        controls: controls.clone(),
-        counters: counters.clone(),
+        controls: Arc::clone(&controls),
+        counters: Arc::clone(&counters),
         generation: desired.generation,
         channels,
         rate,
@@ -891,13 +927,15 @@ fn decode_audio(
         mix: 0.0,
     });
     let mut output = None;
-    let mut produced = 0;
+    let mut produced: usize = 0;
     let mut next = None;
     let mut eof = false;
-    let mut tick = Instant::now() - Duration::from_millis(100);
+    let mut tick = Instant::now()
+        .checked_sub(Duration::from_millis(100))
+        .unwrap_or_else(Instant::now);
     let mut samples = [0.0; tap::FFT_N];
     let mut sample_index = 0;
-    let mut sampled = 0;
+    let mut sampled: usize = 0;
     loop {
         if output_failed.load(Ordering::Acquire) {
             return Err(Permanent("Audio output device disconnected").into());
@@ -918,14 +956,14 @@ fn decode_audio(
             && pcm.push(sample).is_ok()
         {
             next = None;
-            produced += 1;
+            produced = produced.saturating_add(1);
         }
         if output.is_none() && (produced >= threshold || eof) {
             let stream = start_output(
                 &device,
                 &configuration,
-                prepared.take().unwrap(),
-                output_failed.clone(),
+                prepared.take().context("audio output was not prepared")?,
+                Arc::clone(&output_failed),
             )?;
             output = Some(stream);
             ready.store(true, Ordering::Release);
@@ -933,29 +971,43 @@ fn decode_audio(
         if tick.elapsed() >= Duration::from_millis(50) {
             tick = Instant::now();
             while let Ok(sample) = tap_consumer.pop() {
-                samples[sample_index] = sample;
-                sample_index = (sample_index + 1) % tap::FFT_N;
-                sampled += 1;
+                if let Some(slot) = samples.get_mut(sample_index) {
+                    *slot = sample;
+                }
+                sample_index = sample_index
+                    .checked_add(1)
+                    .and_then(|index| index.checked_rem(tap::FFT_N))
+                    .unwrap_or(0);
+                sampled = sampled.saturating_add(1);
             }
             if sampled >= tap::FFT_N {
                 let mut window = [0.0; tap::FFT_N];
                 for (i, sample) in window.iter_mut().enumerate() {
-                    *sample = samples[(sample_index + i) % tap::FFT_N];
+                    if let Some(value) = sample_index
+                        .checked_add(i)
+                        .and_then(|index| index.checked_rem(tap::FFT_N))
+                        .and_then(|index| samples.get(index))
+                    {
+                        *sample = *value;
+                    }
                 }
                 spectrum.submit(window, rate.get(), desired.generation);
             }
             if ready.load(Ordering::Acquire) {
-                if counters.consumed.load(Ordering::Relaxed)
-                    >= u64::from(rate.get()) * u64::from(channels.get()) * 60
-                {
+                let played = counters.consumed.load(Ordering::Relaxed);
+                let frame = u64::from(rate.get()).saturating_mul(u64::from(channels.get()));
+                if played >= frame.saturating_mul(60) {
                     healthy.store(true, Ordering::Release);
                 }
-                let position = desired.offset
-                    + Duration::from_secs_f64(
-                        counters.consumed.load(Ordering::Relaxed) as f64
-                            / f64::from(rate.get())
-                            / f64::from(channels.get()),
-                    );
+                // Playback position. Sample counts above 2^53 do not fit in an f64 mantissa.
+                #[allow(clippy::cast_precision_loss)]
+                let seconds = played as f64 / f64::from(rate.get()) / f64::from(channels.get());
+                let Ok(elapsed) = Duration::try_from_secs_f64(seconds) else {
+                    continue;
+                };
+                let Some(position) = desired.offset.checked_add(elapsed) else {
+                    continue;
+                };
                 let title = source.title().to_owned();
                 let next = if controls.paused.load(Ordering::Acquire) {
                     Status::Paused {
@@ -1157,7 +1209,7 @@ mod tests {
                     Outcome::Status(Status::Playing { position, .. })
                         if position >= Duration::from_millis(250) =>
                     {
-                        first_pcm = Some(start.elapsed())
+                        first_pcm = Some(start.elapsed());
                     }
                     Outcome::Status(Status::Error(error)) => {
                         handle.stop();

@@ -208,7 +208,7 @@ pub fn desktop(backend: &str, browser: bool, case: Option<&str>) -> Result<()> {
     for scale in [1.0, 2.0] {
         let opts = native::Options {
             scale,
-            output: output.join(format!("{}x", scale as u32)),
+            output: output.join(format!("{scale:.0}x")),
             ..Default::default()
         };
         native::run("smoke", opts.clone())?;

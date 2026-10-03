@@ -58,7 +58,7 @@ pub(crate) fn path_missing(path: &Path) -> bool {
 
 /// Failed bridge exits always consume the budget, even after a slow connection.
 pub(crate) fn attach_exit_is_failure(lifetime: Option<Duration>, failed: bool) -> bool {
-    failed || !lifetime.is_some_and(|lifetime| lifetime >= ATTACH_FAILURE_WINDOW)
+    failed || lifetime.is_none_or(|lifetime| lifetime < ATTACH_FAILURE_WINDOW)
 }
 
 #[cfg(test)]

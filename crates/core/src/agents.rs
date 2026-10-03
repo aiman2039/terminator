@@ -1,6 +1,6 @@
 //! Shared agent catalog and live-presence observation types.
 //!
-//! Detection coverage (Codex, Claude Code, Pi, OpenCode, Grok, Muse) is
+//! Detection coverage (Codex, Claude Code, Pi, `OpenCode`, Grok, Muse) is
 //! separate from the five hook installers in `terminator-integrations`: Pi has
 //! identity detection but no installer, and lifecycle reporting still requires
 //! hooks for every agent. Process observations never create lifecycle events,
@@ -216,10 +216,16 @@ fn match_exe(basename: &str) -> Option<&'static str> {
         .find(|info| {
             info.exes.contains(&basename)
                 || info.exes.iter().any(|known| {
-                    basename.len() > known.len() + 1
+                    known
+                        .len()
+                        .checked_add(1)
+                        .is_some_and(|end| basename.len() > end)
                         && basename.starts_with(*known)
-                        && basename.as_bytes()[known.len()] == b'-'
-                        && basename.as_bytes()[known.len() + 1].is_ascii_digit()
+                        && basename.as_bytes().get(known.len()) == Some(&b'-')
+                        && basename
+                            .as_bytes()
+                            .get(known.len().saturating_add(1))
+                            .is_some_and(u8::is_ascii_digit)
                 })
         })
         .map(|info| info.kind)
@@ -495,7 +501,7 @@ pub fn snapshot_processes(system: &sysinfo::System) -> Vec<ProcView> {
             }
             ProcView {
                 pid: pid.as_u32(),
-                parent: process.parent().map(|pid| pid.as_u32()),
+                parent: process.parent().map(sysinfo::Pid::as_u32),
                 start_time: process.start_time(),
                 exe_name,
                 argv,

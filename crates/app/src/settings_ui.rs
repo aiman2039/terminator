@@ -291,7 +291,7 @@ impl App {
             self.paint_settings_nav(ui, body_h);
             let divider = ui.cursor().min;
             ui.painter().line_segment(
-                [divider, divider + egui::vec2(0.0, body_h)],
+                [divider, egui::pos2(divider.x, divider.y + body_h)],
                 ui.visuals().widgets.noninteractive.bg_stroke,
             );
             ui.add_space(12.0);
@@ -580,8 +580,12 @@ impl App {
                                     _ => {
                                         let label = name.replace('_', " ");
                                         let mut chars = label.chars();
-                                        chars.next().unwrap().to_uppercase().to_string()
-                                            + chars.as_str()
+                                        match chars.next() {
+                                            Some(first) => {
+                                                first.to_uppercase().to_string() + chars.as_str()
+                                            }
+                                            None => label,
+                                        }
                                     }
                                 };
                                 ui.label(label);
@@ -814,7 +818,12 @@ impl App {
                 |ui| {
                     egui::ComboBox::from_id_salt("external-preset")
                         .width(ui.available_width().clamp(180.0, 320.0))
-                        .selected_text(external_editor::PRESETS[self.editor_preset])
+                        .selected_text(
+                            external_editor::PRESETS
+                                .get(self.editor_preset)
+                                .copied()
+                                .unwrap_or("Custom"),
+                        )
                         .show_ui(ui, |ui| {
                             for (index, label) in external_editor::PRESETS.iter().enumerate() {
                                 if ui

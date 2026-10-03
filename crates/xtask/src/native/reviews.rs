@@ -15,7 +15,12 @@ use terminator_core::{read_frame, write_frame};
 fn expression(h: &Harness, s: &Value, expression: &str) -> Result<String> {
     let mut cmd = std::process::Command::new("nvim");
     cmd.arg("--server")
-        .arg(h.root.join("run").join(format!("{}.nvim", &id(s)[..8])))
+        .arg(h.root.join("run").join(format!(
+            "{}.nvim",
+            id(s)
+                .get(..8)
+                .ok_or_else(|| anyhow::anyhow!("review socket id is shorter than 8 characters"))?
+        )))
         .args(["--remote-expr", expression]);
     Ok(String::from_utf8(output(cmd)?)?.trim().into())
 }
@@ -33,10 +38,14 @@ fn verify(h: &Harness, s: &Value, left: Value, right: Value) -> Result<()> {
     thread::sleep(Duration::from_millis(150));
     let data = inspect(h, s)?;
     ensure!(
-        data["user_init"] == 0 && data["messages"] == "",
+        data.get("user_init")
+            .is_some_and(|value| *value == json!(0))
+            && data.get("messages").is_some_and(|messages| messages == ""),
         "Isolated review loaded user config or reported error: {data}"
     );
-    let buffers = data["buffers"]
+    let buffers = data
+        .get("buffers")
+        .unwrap_or(&Value::Null)
         .as_array()
         .context("Missing review buffers")?;
     ensure!(
@@ -47,11 +56,20 @@ fn verify(h: &Harness, s: &Value, left: Value, right: Value) -> Result<()> {
         "Review buffers not read-only: {data}"
     );
     ensure!(
-        buffers[0]["lines"] == left && buffers[1]["lines"] == right,
+        buffers
+            .first()
+            .and_then(|buffer| buffer.get("lines"))
+            .is_some_and(|lines| lines == &left)
+            && buffers
+                .get(1)
+                .and_then(|buffer| buffer.get("lines"))
+                .is_some_and(|lines| lines == &right),
         "Review compared wrong snapshots: {data}"
     );
     ensure!(
-        h.rpc(json!({"EditorStatus":{"session":id(s)}}))?["Text"] == "0",
+        h.rpc(json!({"EditorStatus":{"session":id(s)}}))?
+            .get("Text")
+            .is_some_and(|text| text == "0"),
         "Review marked modified"
     );
     Ok(())
@@ -59,12 +77,24 @@ fn verify(h: &Harness, s: &Value, left: Value, right: Value) -> Result<()> {
 pub fn run(o: &Options) -> Result<()> {
     let h = Harness::new()?;
     h.setup()?;
-    let mut settings = h.state()?["settings"].clone();
-    settings["editor_program"] = json!("/missing/user-editor");
-    settings["review_mode"] = json!("native");
+    let mut settings = h
+        .state()?
+        .get("settings")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing settings"))?;
+    let settings_object = settings
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("settings is not an object"))?;
+    settings_object.insert("editor_program".into(), json!("/missing/user-editor"));
+    settings_object.insert("review_mode".into(), json!("native"));
     h.rpc(json!({"Settings":settings}))?;
     let p = h.project("review")?;
-    let root = PathBuf::from(p["path"].as_str().unwrap());
+    let root = PathBuf::from(
+        p.get("path")
+            .ok_or_else(|| anyhow::anyhow!("missing project path"))?
+            .as_str()
+            .unwrap(),
+    );
     let init = h.root.join("config/nvim/init.lua");
     fs::create_dir_all(init.parent().unwrap())?;
     fs::write(init, "vim.g.terminator_user_init = true\n")?;
@@ -83,12 +113,17 @@ pub fn run(o: &Options) -> Result<()> {
     let original_status = git(&root, &["status", "--porcelain=v1", "-z"])?;
     let original_source = fs::read(&source)?;
     for (staged, left, right) in [(true, "base", "staged"), (false, "staged", "working")] {
-        let s = h.rpc(
-            json!({"CreateReview":{"project":id(&p),"cwd":root,"path":source,"staged":staged}}),
-        )?["Created"]
-            .clone();
+        let s = h
+            .rpc(
+                json!({"CreateReview":{"project":id(&p),"cwd":root,"path":source,"staged":staged}}),
+            )?
+            .get("Created")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing Created"))?;
         ensure!(
-            s["review"] == true && s["kind"] == "editor",
+            s.get("review")
+                .is_some_and(|review| review.as_bool() == Some(true))
+                && s.get("kind").is_some_and(|kind| kind == "editor"),
             "Wrong review identity"
         );
         verify(
@@ -101,9 +136,10 @@ pub fn run(o: &Options) -> Result<()> {
         h.write(&mut stream, "t")?;
         thread::sleep(Duration::from_millis(300));
         ensure!(
-            inspect(&h, &s)?["buffers"]
-                .as_array()
-                .unwrap()
+            inspect(&h, &s)?
+                .get("buffers")
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow::anyhow!("missing review buffers"))?
                 .iter()
                 .all(|b| b["modifiable"] == 0 && b["readonly"] == 1),
             "Layout toggle made review writable"
@@ -151,7 +187,12 @@ pub fn run(o: &Options) -> Result<()> {
         json!(["fn main() {", "    working();", "}", "// שלום עולם"]),
     )?;
     ensure!(
-        state["projects"][0]["layout"]["tabs"]
+        state
+            .get("projects")
+            .and_then(|projects| projects.get(0))
+            .and_then(|project| project.get("layout"))
+            .and_then(|layout| layout.get("tabs"))
+            .ok_or_else(|| anyhow::anyhow!("missing projects[0].layout.tabs"))?
             .as_array()
             .unwrap()
             .len()
@@ -167,7 +208,13 @@ pub fn run(o: &Options) -> Result<()> {
     )?;
     h.wait(|s| session(s, id(review))["lifecycle"] == "ended", 5)?;
     ensure!(
-        session_ids(&h.state()?["projects"][0]["layout"]) == [id(&shell)],
+        session_ids(
+            h.state()?
+                .get("projects")
+                .and_then(|projects| projects.get(0))
+                .and_then(|project| project.get("layout"))
+                .ok_or_else(|| anyhow::anyhow!("missing projects[0].layout"))?,
+        ) == [id(&shell)],
         "Closing review affected shell"
     );
     plain(
@@ -208,21 +255,23 @@ pub(super) fn proxy(root: &Path) -> Result<Proxy> {
     listener.set_nonblocking(true)?;
     let target = root.join("run/daemon.sock");
     let stop = Arc::new(AtomicBool::new(false));
-    let running = stop.clone();
+    let running = Arc::clone(&stop);
     let rejected = Arc::new(AtomicUsize::new(0));
-    let counter = rejected.clone();
+    let counter = Arc::clone(&rejected);
     let thread = thread::spawn(move || {
         while !running.load(Ordering::Relaxed) {
             match listener.accept() {
                 Ok((mut client, _)) => {
                     let target = target.clone();
-                    let counter = counter.clone();
+                    let counter = Arc::clone(&counter);
                     thread::spawn(move || {
                         let _ = (|| -> Result<()> {
                             client.set_nonblocking(false)?;
                             client.set_read_timeout(Some(Duration::from_secs(5)))?;
                             let envelope: Value = read_frame(&mut client)?;
-                            let request = &envelope["request"];
+                            let request = envelope
+                                .get("request")
+                                .ok_or_else(|| anyhow::anyhow!("missing request"))?;
                             if request.get("CreateReview").is_some()
                                 || request.get("TerminalNotify").is_some()
                             {
@@ -270,7 +319,12 @@ pub fn legacy(o: &Options) -> Result<()> {
     let mut h = Harness::new()?;
     h.setup()?;
     let p = h.project("legacy-diff")?;
-    let root = PathBuf::from(p["path"].as_str().unwrap());
+    let root = PathBuf::from(
+        p.get("path")
+            .ok_or_else(|| anyhow::anyhow!("missing project path"))?
+            .as_str()
+            .unwrap(),
+    );
     git(&root, &["init", "-q"])?;
     git(&root, &["config", "user.name", "Fixture"])?;
     git(&root, &["config", "user.email", "fixture@example.invalid"])?;
@@ -303,7 +357,12 @@ pub fn legacy(o: &Options) -> Result<()> {
     let state = h.state()?;
     ensure!(
         sessions(&state).len() == 1
-            && state["projects"][0]["layout"]["tabs"]
+            && state
+                .get("projects")
+                .and_then(|projects| projects.get(0))
+                .and_then(|project| project.get("layout"))
+                .and_then(|layout| layout.get("tabs"))
+                .ok_or_else(|| anyhow::anyhow!("missing projects[0].layout.tabs"))?
                 .as_array()
                 .unwrap()
                 .len()

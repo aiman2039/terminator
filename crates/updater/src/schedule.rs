@@ -33,7 +33,9 @@ impl UpdateSchedule {
         if now < self.next {
             return Action::None;
         }
-        self.next = now + Duration::from_secs(60);
+        if let Some(next) = now.checked_add(Duration::from_mins(1)) {
+            self.next = next;
+        }
         self.probing = true;
         Action::Probe
     }

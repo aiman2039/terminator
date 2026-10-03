@@ -45,7 +45,7 @@ impl Popups {
                 // egui 0.36 title-bar dragging restores the previous area position.
                 // Disable it only during placement so current_pos takes effect.
                 .movable(false)
-                .current_pos(*position + egui::vec2(8.0, 8.0));
+                .current_pos(egui::pos2(position.x + 8.0, position.y + 8.0));
         }
         window
     }

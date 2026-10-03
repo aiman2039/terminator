@@ -17,6 +17,15 @@ fn value(dictionary: &CFDictionary, name: &str) -> Option<CFType> {
 fn number(dictionary: &CFDictionary, name: &str) -> Option<f64> {
     value(dictionary, name)?.downcast::<CFNumber>()?.to_f64()
 }
+fn trunc_u32(value: f64) -> u32 {
+    if value.is_nan() || value <= 0.0 {
+        return 0;
+    }
+    if value >= f64::from(u32::MAX) {
+        return u32::MAX;
+    }
+    format!("{:.0}", value.floor()).parse().unwrap_or(u32::MAX)
+}
 impl Desktop {
     pub fn preflight() -> Result<()> {
         ensure!(
@@ -41,8 +50,9 @@ impl Desktop {
             }
         }
         wait(|| Ok(desktop.geometry().is_ok()))?;
-        desktop.window_id = number(&desktop.window()?, "kCGWindowNumber")
-            .context("Missing native window ID")? as u32;
+        desktop.window_id = trunc_u32(
+            number(&desktop.window()?, "kCGWindowNumber").context("Missing native window ID")?,
+        );
         Ok(desktop)
     }
     fn window(&self) -> Result<CFDictionary> {

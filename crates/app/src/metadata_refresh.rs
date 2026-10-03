@@ -23,12 +23,12 @@ pub fn spawn(service: Services) -> tokio::sync::watch::Sender<Option<Request>> {
         loop {
             let request = requests.borrow_and_update().clone();
             let Some(request) = request else {
-                tokio::select! { _ = token.cancelled() => break, result = requests.changed() => if result.is_err() { break } }
+                tokio::select! { () = token.cancelled() => break, result = requests.changed() => if result.is_err() { break } }
                 continue;
             };
             if missing_path.exhausted(&request.cwd, request.generation) {
                 tokio::select! {
-                    _ = token.cancelled() => break,
+                    () = token.cancelled() => break,
                     result = requests.changed() => if result.is_err() { break; },
                 }
                 continue;
@@ -46,16 +46,16 @@ pub fn spawn(service: Services) -> tokio::sync::watch::Sender<Option<Request>> {
             missing_path.record(&request.cwd, request.generation, false);
             let mut collecting = cache.clone();
             let result = tokio::select! {
-                _ = token.cancelled() => break,
+                () = token.cancelled() => break,
                 result = requests.changed() => { if result.is_err() { break; } continue; }
                 result = collecting.collect_async(service.processes(), service.fs(), &request.cwd, request.identity, request.include_pr) => result,
             };
             cache = collecting;
             service.emit_read(Update::Metadata(request.generation, result)).await?;
             tokio::select! {
-                _ = token.cancelled() => break,
+                () = token.cancelled() => break,
                 result = requests.changed() => if result.is_err() { break; },
-                _ = tokio::time::sleep(Duration::from_secs(3)) => {},
+                () = tokio::time::sleep(Duration::from_secs(3)) => {},
             }
         }
         Ok(Vec::new())

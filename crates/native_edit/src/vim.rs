@@ -144,9 +144,10 @@ pub fn parse_vimrc(content: &str) -> VimrcOptions {
         // A `"` after whitespace starts a trailing comment.
         if let Some(pos) = line.find('"')
             && pos > 0
-            && line[..pos].ends_with([' ', '\t'])
+            && let Some(prefix) = line.get(..pos)
+            && prefix.ends_with([' ', '\t'])
         {
-            line = line[..pos].trim_end();
+            line = prefix.trim_end();
         }
         let args = line
             .strip_prefix("set ")
@@ -204,14 +205,20 @@ fn word_forward(text: &[char], mut i: usize, count: usize) -> usize {
         if i >= text.len() {
             break;
         }
-        let cls = word_class(text[i]);
+        let Some(&ch) = text.get(i) else {
+            break;
+        };
+        let cls = word_class(ch);
         if cls != WordClass::Blank {
-            while i < text.len() && word_class(text[i]) == cls {
-                i += 1;
+            while text.get(i).is_some_and(|ch| word_class(*ch) == cls) {
+                i = i.checked_add(1).unwrap_or(text.len());
             }
         }
-        while i < text.len() && word_class(text[i]) == WordClass::Blank {
-            i += 1;
+        while text
+            .get(i)
+            .is_some_and(|ch| word_class(*ch) == WordClass::Blank)
+        {
+            i = i.checked_add(1).unwrap_or(text.len());
         }
     }
     i.min(text.len())
@@ -222,13 +229,21 @@ fn word_backward(text: &[char], mut i: usize, count: usize) -> usize {
         if i == 0 {
             break;
         }
-        let mut j = i - 1;
-        while j > 0 && word_class(text[j]) == WordClass::Blank {
-            j -= 1;
+        let mut j = i.saturating_sub(1);
+        while j > 0
+            && text
+                .get(j)
+                .is_some_and(|ch| word_class(*ch) == WordClass::Blank)
+        {
+            j = j.saturating_sub(1);
         }
-        let cls = word_class(text[j]);
-        while j > 0 && word_class(text[j - 1]) == cls {
-            j -= 1;
+        let cls = word_class(text.get(j).copied().unwrap_or(' '));
+        while j > 0
+            && j.checked_sub(1)
+                .and_then(|prev| text.get(prev).copied())
+                .is_some_and(|ch| word_class(ch) == cls)
+        {
+            j = j.saturating_sub(1);
         }
         i = j;
     }
@@ -240,16 +255,29 @@ fn word_end(text: &[char], mut i: usize, count: usize) -> usize {
         if text.is_empty() {
             break;
         }
-        i = (i + 1).min(text.len().saturating_sub(1));
-        while i < text.len() && word_class(text[i]) == WordClass::Blank {
-            i += 1;
+        i = i
+            .checked_add(1)
+            .unwrap_or(i)
+            .min(text.len().saturating_sub(1));
+        while text
+            .get(i)
+            .is_some_and(|ch| word_class(*ch) == WordClass::Blank)
+        {
+            i = i.checked_add(1).unwrap_or(text.len());
         }
         if i >= text.len() {
             break;
         }
-        let cls = word_class(text[i]);
-        while i + 1 < text.len() && word_class(text[i + 1]) == cls {
-            i += 1;
+        let Some(ch) = text.get(i).copied() else {
+            break;
+        };
+        let cls = word_class(ch);
+        while i
+            .checked_add(1)
+            .and_then(|next| text.get(next).copied())
+            .is_some_and(|ch| word_class(ch) == cls)
+        {
+            i = i.checked_add(1).unwrap_or(i);
         }
     }
     i.min(text.len().saturating_sub(1))
@@ -285,10 +313,11 @@ impl VimEngine {
     /// excluded; every genuine line, empty or not, stays reachable.
     fn last_addressable<B: Buffer>(doc: &B) -> usize {
         let lines = doc.line_count().max(1);
-        if lines > 1 && doc.line_text(lines - 1).is_empty() {
-            lines - 2
+        let prev = lines.saturating_sub(1);
+        if lines > 1 && doc.line_text(prev).is_empty() {
+            lines.saturating_sub(2)
         } else {
-            lines - 1
+            prev
         }
     }
 
@@ -447,8 +476,11 @@ impl VimEngine {
         } else {
             let line = self.cursor.line.min(doc.line_count().saturating_sub(1));
             let from = doc.char_at_line_col(line, 0);
-            let to = if line + 1 < doc.line_count() {
-                doc.char_at_line_col(line + 1, 0)
+            let to = if line
+                .checked_add(1)
+                .is_some_and(|next| next < doc.line_count())
+            {
+                doc.char_at_line_col(line.checked_add(1).unwrap_or(line), 0)
             } else {
                 doc.len_chars()
             };
@@ -477,7 +509,9 @@ impl VimEngine {
         let at = self.char_idx(doc, self.cursor).min(doc.len_chars());
         doc.insert(at, text);
         doc.end_run();
-        let end = at + text.chars().count().min(doc.len_chars().saturating_sub(at));
+        let end = at
+            .checked_add(text.chars().count().min(doc.len_chars().saturating_sub(at)))
+            .unwrap_or(at);
         let (line, col) = doc.line_col_at(end);
         self.cursor = Cursor { line, col };
         self.settle_cursor(doc);
@@ -502,7 +536,7 @@ impl VimEngine {
         for line in 0..doc.line_count() {
             let text = doc.line_text(line);
             for (byte, _) in text.match_indices(pattern) {
-                let col = text[..byte].chars().count();
+                let col = text.get(..byte).map_or(0, |prefix| prefix.chars().count());
                 out.push(doc.char_at_line_col(line, col));
             }
         }
@@ -574,7 +608,9 @@ impl VimEngine {
         let from = self.char_idx(doc, self.cursor);
         let mut to = self.char_idx(doc, target);
         if inclusive {
-            to = (to + 1).min(doc.len_chars());
+            to = to
+                .checked_add(1)
+                .map_or(doc.len_chars(), |next| next.min(doc.len_chars()));
         }
         let (from, to) = (from.min(to), from.max(to));
         match op {
@@ -602,7 +638,7 @@ impl VimEngine {
     fn delete_lines<B: Buffer>(&mut self, doc: &mut B, count: usize) {
         let lines = doc.line_count();
         let start = self.cursor.line.min(lines.saturating_sub(1));
-        let end = (start + count).min(lines);
+        let end = start.checked_add(count).map_or(lines, |end| end.min(lines));
         if lines == 0 {
             return;
         }
@@ -628,7 +664,7 @@ impl VimEngine {
     fn yank_lines<B: Buffer>(&mut self, doc: &mut B, count: usize) {
         let lines = doc.line_count();
         let start = self.cursor.line.min(lines.saturating_sub(1));
-        let end = (start + count).min(lines);
+        let end = start.checked_add(count).map_or(lines, |end| end.min(lines));
         let mut yanked = Vec::new();
         for line in start..end {
             yanked.push(doc.line_text(line));
@@ -643,7 +679,11 @@ impl VimEngine {
             return;
         }
         if self.register.linewise {
-            let line = (self.cursor.line + 1).min(doc.line_count());
+            let line = self
+                .cursor
+                .line
+                .checked_add(1)
+                .map_or(doc.line_count(), |line| line.min(doc.line_count()));
             let at = if line < doc.line_count() {
                 doc.char_at_line_col(line, 0)
             } else {
@@ -660,10 +700,17 @@ impl VimEngine {
             self.cursor.line = line.min(doc.line_count().saturating_sub(1));
             self.cursor.col = Self::first_non_blank(doc, self.cursor.line);
         } else {
-            let at = (self.char_idx(doc, self.cursor) + 1).min(doc.len_chars());
+            let at = self
+                .char_idx(doc, self.cursor)
+                .checked_add(1)
+                .map_or(doc.len_chars(), |at| at.min(doc.len_chars()));
             doc.insert(at, &self.register.text);
             doc.end_run();
-            let (line, col) = doc.line_col_at(at + self.register.text.chars().count() - 1);
+            let landed = at
+                .checked_add(self.register.text.chars().count())
+                .and_then(|sum| sum.checked_sub(1))
+                .unwrap_or(at);
+            let (line, col) = doc.line_col_at(landed);
             self.cursor = Cursor { line, col };
         }
         self.enter_normal(doc);
@@ -672,7 +719,7 @@ impl VimEngine {
     fn change_line<B: Buffer>(&mut self, doc: &mut B, count: usize) {
         let lines = doc.line_count();
         let start = self.cursor.line.min(lines.saturating_sub(1));
-        let end = (start + count).min(lines);
+        let end = start.checked_add(count).map_or(lines, |end| end.min(lines));
         let from = doc.char_at_line_col(start, 0);
         // Full lines including their newlines; deleting every line leaves the
         // single empty final line, so structure is always preserved.
@@ -707,11 +754,12 @@ impl VimEngine {
         let mut line = 0;
         while line < doc.line_count() {
             let len = line_len(doc, line);
-            if rest <= len || line + 1 == doc.line_count() {
+            if rest <= len || line.checked_add(1) == Some(doc.line_count()) {
                 break;
             }
-            rest -= len + 1;
-            line += 1;
+            let step = len.checked_add(1).unwrap_or(len);
+            rest = rest.saturating_sub(step);
+            line = line.checked_add(1).unwrap_or(line);
         }
         (Cursor { line, col: rest }, inclusive)
     }
@@ -800,7 +848,11 @@ impl VimEngine {
                 let from = self.char_idx(doc, self.cursor);
                 let len = line_len(doc, self.cursor.line);
                 if self.cursor.col < len {
-                    let to = (from + count).min(from + (len - self.cursor.col));
+                    let room = len.saturating_sub(self.cursor.col);
+                    let to = from
+                        .checked_add(count)
+                        .unwrap_or(from)
+                        .min(from.checked_add(room).unwrap_or(from));
                     let cursor = self.delete_range(doc, from, to);
                     self.cursor = cursor;
                 }
@@ -830,7 +882,11 @@ impl VimEngine {
             Key::Char('a') => {
                 let len = line_len(doc, self.cursor.line);
                 if len > 0 {
-                    self.cursor.col = (self.cursor.col + 1).min(len);
+                    self.cursor.col = self
+                        .cursor
+                        .col
+                        .checked_add(1)
+                        .map_or(len, |col| col.min(len));
                 }
                 self.preferred_col = self.cursor.col;
                 self.enter_insert();
@@ -851,15 +907,16 @@ impl VimEngine {
             Key::Char('o') => {
                 // Split at the start of the next line (or append): the new
                 // blank line is always `cursor.line + 1`.
-                let insert_at = if self.cursor.line + 1 < doc.line_count() {
-                    doc.char_at_line_col(self.cursor.line + 1, 0)
+                let next_line = self.cursor.line.checked_add(1).unwrap_or(self.cursor.line);
+                let insert_at = if next_line < doc.line_count() {
+                    doc.char_at_line_col(next_line, 0)
                 } else {
                     doc.len_chars()
                 };
                 doc.insert(insert_at, "\n");
                 doc.end_run();
                 self.cursor = Cursor {
-                    line: self.cursor.line + 1,
+                    line: next_line,
                     col: 0,
                 };
                 self.enter_insert();
@@ -1025,7 +1082,11 @@ impl VimEngine {
                 (
                     Cursor {
                         line: self.cursor.line,
-                        col: (self.cursor.col + count).min(len.saturating_sub(1)),
+                        col: self
+                            .cursor
+                            .col
+                            .checked_add(count)
+                            .map_or(len.saturating_sub(1), |col| col.min(len.saturating_sub(1))),
                     },
                     false,
                 )
@@ -1067,13 +1128,13 @@ fn range_text<B: Buffer>(doc: &B, from: usize, to: usize) -> String {
             if idx >= from && idx < to {
                 out.push('\n');
             }
-            idx += 1;
+            idx = idx.checked_add(1).unwrap_or(idx);
         }
         for c in doc.line_text(line).chars() {
             if idx >= from && idx < to {
                 out.push(c);
             }
-            idx += 1;
+            idx = idx.checked_add(1).unwrap_or(idx);
             if idx >= to {
                 return out;
             }
@@ -1125,8 +1186,10 @@ impl ModalEngine for VimEngine {
         }
         let at = self.char_idx(doc, self.cursor);
         doc.insert(at, text);
-        let (line, col) =
-            doc.line_col_at(at + text.chars().count().min(doc.len_chars().saturating_sub(at)));
+        let (line, col) = doc.line_col_at(
+            at.checked_add(text.chars().count().min(doc.len_chars().saturating_sub(at)))
+                .unwrap_or(at),
+        );
         self.cursor = Cursor { line, col };
         self.preferred_col = col;
         self.clamp(doc);
@@ -1143,7 +1206,7 @@ impl VimEngine {
             Key::Enter => {
                 let at = self.char_idx(doc, self.cursor);
                 doc.insert(at, "\n");
-                let (line, col) = doc.line_col_at(at + 1);
+                let (line, col) = doc.line_col_at(at.checked_add(1).unwrap_or(at));
                 self.cursor = Cursor { line, col };
                 self.preferred_col = col;
                 self.clamp(doc);
@@ -1151,8 +1214,9 @@ impl VimEngine {
             Key::Backspace => {
                 let at = self.char_idx(doc, self.cursor);
                 if at > 0 {
-                    doc.delete(at - 1..at);
-                    let (line, col) = doc.line_col_at(at - 1);
+                    let prev = at.saturating_sub(1);
+                    doc.delete(prev..at);
+                    let (line, col) = doc.line_col_at(prev);
                     self.cursor = Cursor { line, col };
                     self.preferred_col = col;
                 }
@@ -1161,7 +1225,7 @@ impl VimEngine {
             Key::Delete => {
                 let at = self.char_idx(doc, self.cursor);
                 if at < doc.len_chars() {
-                    doc.delete(at..at + 1);
+                    doc.delete(at..at.checked_add(1).unwrap_or(at));
                 }
                 self.clamp(doc);
             }
@@ -1256,15 +1320,20 @@ impl VimEngine {
             let (bl, _) = doc.line_col_at(b);
             let (lo, hi) = (al.min(bl), al.max(bl));
             let from = doc.char_at_line_col(lo, 0);
-            b = if hi + 1 < doc.line_count() {
-                doc.char_at_line_col(hi + 1, 0)
+            b = if hi
+                .checked_add(1)
+                .is_some_and(|next| next < doc.line_count())
+            {
+                doc.char_at_line_col(hi.checked_add(1).unwrap_or(hi), 0)
             } else {
                 doc.len_chars()
             };
             return (from, b);
         }
         // Charwise selections include the cursor cell.
-        b = (b + 1).min(doc.len_chars());
+        b = b
+            .checked_add(1)
+            .map_or(doc.len_chars(), |next| next.min(doc.len_chars()));
         (a.min(b), a.max(b))
     }
 
@@ -1296,14 +1365,14 @@ impl VimEngine {
                     // Vim `/pattern`: jump to the next match, wrapping.
                     // An empty pattern repeats the last search.
                     let pattern = if self.command.len() > 1 {
-                        self.command[1..].to_string()
+                        self.command.get(1..).unwrap_or("").to_string()
                     } else {
                         self.search_last.clone()
                     };
                     if pattern.is_empty() {
                         return vec![Effect::Bell];
                     }
-                    self.search_last = pattern.clone();
+                    self.search_last.clone_from(&pattern);
                     let from = self.char_idx(doc, self.cursor);
                     self.command.clear();
                     self.enter_normal(doc);

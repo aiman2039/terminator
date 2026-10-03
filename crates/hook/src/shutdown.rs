@@ -61,7 +61,9 @@ fn close_gui(paths: &Paths, timeout: Duration) -> Result<File> {
     if !try_lock(&lock)? {
         ui_control::rpc(paths, ui_control::Request::Window { action: "close".into() })
             .context("Could not request a normal GUI exit. If Terminator is hidden or minimized, restore its window, quit it completely and retry; sessions have not been stopped")?;
-        let deadline = Instant::now() + timeout;
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(Instant::now);
         while !try_lock(&lock)? {
             ensure!(
                 Instant::now() < deadline,
@@ -177,7 +179,9 @@ fn wait_until_idle(
     targets: &HashSet<String>,
     timeout: Duration,
 ) -> Result<()> {
-    let deadline = Instant::now() + timeout;
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
     loop {
         let remaining = current(paths, generation)?;
         check_scope(&remaining, targets)?;
@@ -201,7 +205,9 @@ fn wait_daemon_exit(paths: &Paths, timeout: Duration) -> Result<()> {
     let lock = OpenOptions::new()
         .write(true)
         .open(paths.runtime.join("daemon.lock"))?;
-    let deadline = Instant::now() + timeout;
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
     loop {
         if !paths.socket().exists() && try_lock(&lock)? {
             return Ok(());

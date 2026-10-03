@@ -42,7 +42,8 @@ pub fn parse(value: &str) -> Option<Chord> {
     let key_token = parts.last()?;
     let key = parse_key(key_token)?;
     let mut modifiers = Modifiers::NONE;
-    for part in &parts[..parts.len().saturating_sub(1)] {
+    let modifier_parts = parts.get(..parts.len().saturating_sub(1))?;
+    for part in modifier_parts {
         match part.as_str() {
             "command" | "cmd" | "super" | "meta" => {
                 if cfg!(target_os = "macos") {
@@ -269,7 +270,10 @@ pub fn conflicts(map: &BTreeMap<String, String>) -> Vec<(String, String)> {
     for actions in by_chord.into_values() {
         if actions.len() > 1 {
             for pair in actions.windows(2) {
-                out.push((pair[0].clone(), pair[1].clone()));
+                let (Some(left), Some(right)) = (pair.first(), pair.get(1)) else {
+                    continue;
+                };
+                out.push((left.clone(), right.clone()));
             }
         }
     }

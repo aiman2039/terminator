@@ -29,7 +29,7 @@ pub fn spawn(tx: Sender<Update>, ctx: eframe::egui::Context) -> Sender<Option<Re
 fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Context) {
     let (events, event_rx) = mpsc::sync_channel(128);
     let overflow = Arc::new(AtomicBool::new(false));
-    let callback_overflow = overflow.clone();
+    let callback_overflow = Arc::clone(&overflow);
     // FSEvents stream restart blocks for seconds and misses the test deadline.
     // This harness only checks coalescing and suspend; production uses FSEvents.
     let mut watcher = notify::PollWatcher::new(
@@ -70,7 +70,11 @@ fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Con
                 if active != request {
                     active = request;
                     refresh_all = true;
-                    pending = Some(Instant::now() - Duration::from_secs(1));
+                    pending = Some(
+                        Instant::now()
+                            .checked_sub(Duration::from_secs(1))
+                            .unwrap_or_else(Instant::now),
+                    );
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -120,11 +124,15 @@ fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Con
             Duration::from_secs(3)
         };
         if last.elapsed() >= interval {
-            pending = Some(Instant::now() - Duration::from_secs(1));
+            pending = Some(
+                Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .unwrap_or_else(Instant::now),
+            );
             cache.clear();
             refresh_all = true;
         }
-        if !pending.is_some_and(|at| at.elapsed() >= Duration::from_millis(250)) {
+        if pending.is_none_or(|at| at.elapsed() < Duration::from_millis(250)) {
             continue;
         }
         pending = None;
@@ -197,7 +205,11 @@ fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Con
         let missing = crate::retry_budget::path_missing(&request.cwd);
         missing_path.record(&request.cwd, request.generation, missing);
         if missing && !missing_path.exhausted(&request.cwd, request.generation) {
-            pending = Some(Instant::now() - Duration::from_secs(1));
+            pending = Some(
+                Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .unwrap_or_else(Instant::now),
+            );
         }
     }
 }
@@ -255,12 +267,12 @@ pub fn spawn_async(
         loop {
             let request = requests.borrow_and_update().clone();
             let Some(request) = request else {
-                tokio::select! { _ = token.cancelled() => break, result = requests.changed() => if result.is_err() { break } }
+                tokio::select! { () = token.cancelled() => break, result = requests.changed() => if result.is_err() { break } }
                 continue;
             };
             if missing_path.exhausted(&request.cwd, request.generation) {
                 tokio::select! {
-                    _ = token.cancelled() => break,
+                    () = token.cancelled() => break,
                     result = requests.changed() => if result.is_err() { break; },
                 }
                 continue;
@@ -271,12 +283,13 @@ pub fn spawn_async(
                 let context = services::context_async(&service, request.cwd.clone(), &operation).await;
                 let mut targets = vec![context.root.clone().unwrap_or(request.cwd.clone())];
                 targets.extend(context.git_dirs.iter().cloned());
-                let old = watched.clone(); let cache = watcher.clone();
+                let old = watched.clone();
+                let cache = std::sync::Arc::clone(&watcher);
                 let (targets, fallback) = service.fs().run(&operation, move || {
                     let mut targets: Vec<_> = targets.iter().map(|p| normalize(p)).collect();
                     targets.sort(); targets.dedup();
                     let all = targets.clone(); targets.retain(|p| !all.iter().any(|parent| parent != p && p.starts_with(parent)));
-                    let mut watcher = cache.lock().unwrap();
+                    let mut watcher = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     let mut fallback = watcher.is_none();
                     if let Some(watcher) = watcher.as_mut() && old != targets {
                         for path in old { let _ = watcher.unwatch(&path); }
@@ -293,7 +306,7 @@ pub fn spawn_async(
                 Ok::<_, anyhow::Error>((targets, fallback))
             };
             let result = tokio::select! {
-                _ = token.cancelled() => break,
+                () = token.cancelled() => break,
                 result = requests.changed() => { if result.is_err() { break; } continue; }
                 result = work => result,
             };
@@ -310,14 +323,14 @@ pub fn spawn_async(
                 continue;
             }
             tokio::select! {
-                _ = token.cancelled() => break,
+                () = token.cancelled() => break,
                 result = requests.changed() => if result.is_err() { break; },
                 _ = changed.changed() => {
                     // Fixed coalescing window cannot be extended by a continuous writer.
-                    tokio::select! { _ = token.cancelled() => break, _ = tokio::time::sleep(Duration::from_millis(250)) => {} }
+                    tokio::select! { () = token.cancelled() => break, () = tokio::time::sleep(Duration::from_millis(250)) => {} }
                     changed.borrow_and_update();
                 },
-                _ = tokio::time::sleep(Duration::from_secs(if fallback { 3 } else { 30 })) => {},
+                () = tokio::time::sleep(Duration::from_secs(if fallback { 3 } else { 30 })) => {},
             }
         }
         service.fs().run(&CancellationToken::new(), move || { drop(watcher); Ok(()) }).await?;

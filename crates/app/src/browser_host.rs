@@ -256,7 +256,7 @@ impl BrowserHost {
                 browser::navigation_target(&url, allow_local).is_some()
             })
             .with_on_page_load_handler({
-                let events = self.navigations.clone();
+                let events = std::sync::Arc::clone(&self.navigations);
                 let key = pane.key.clone();
                 move |event, url| {
                     if matches!(event, PageLoadEvent::Finished)
@@ -271,7 +271,7 @@ impl BrowserHost {
             .with_visible(true)
             .with_download_started_handler(|_, _| false)
             .with_new_window_req_handler({
-                let opens = self.opens.clone();
+                let opens = std::sync::Arc::clone(&self.opens);
                 let key = pane.key.clone();
                 move |url, _| {
                     if browser::parse_url(&url).is_ok()

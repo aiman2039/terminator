@@ -175,14 +175,15 @@ pub fn restart_result(
     };
     std::fs::remove_file(path)?;
     let report: serde_json::Value = serde_json::from_slice(&bytes)?;
-    if let Some(error) = report["error"].as_str() {
+    if let Some(error) = report.get("error").and_then(serde_json::Value::as_str) {
         anyhow::bail!(
             "Session service restart failed: {error}. The app reopened for recovery; the old service may still be running."
         );
     }
     ensure!(
-        report["generation"]
-            .as_str()
+        report
+            .get("generation")
+            .and_then(serde_json::Value::as_str)
             .is_some_and(|old| old != state.generation),
         "Session service restart failed: reconnected to the previous service"
     );
@@ -307,7 +308,9 @@ fn show_message(title: &str, description: &str, open_applications: bool) -> bool
         NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy,
     };
     use objc2_foundation::NSString;
-    let mtm = MainThreadMarker::new().expect("Startup dialogs run on the main thread");
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
     #[allow(deprecated)]
@@ -398,7 +401,9 @@ mod tests {
                     config: data.join("config.toml"),
                     data,
                 },
-                terminator_core::recovery::RestartInventory::capture(&Default::default()),
+                terminator_core::recovery::RestartInventory::capture(
+                    &terminator_core::State::default(),
+                ),
                 |_| {},
             )
             .unwrap();
@@ -442,9 +447,21 @@ mod tests {
             br#"{"generation":"old","error":"Session 7 did not stop"}"#,
         )
         .unwrap();
-        let error = restart_result(&paths, &Default::default(), Path::new("unused")).unwrap_err();
+        let error = restart_result(
+            &paths,
+            &terminator_core::State::default(),
+            Path::new("unused"),
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("Session 7 did not stop"));
-        assert!(restart_result(&paths, &Default::default(), Path::new("unused")).is_ok());
+        assert!(
+            restart_result(
+                &paths,
+                &terminator_core::State::default(),
+                Path::new("unused")
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -510,7 +527,7 @@ mod tests {
                 runtime: dir.path().join("run"),
                 config: config_dir.join("config.toml"),
             },
-            terminator_core::recovery::RestartInventory::capture(&Default::default()),
+            terminator_core::recovery::RestartInventory::capture(&terminator_core::State::default()),
             move |message| {
                 let _ = tx.send(message);
             },

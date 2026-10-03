@@ -149,11 +149,10 @@ fn project<'a>(state: &'a State, name: &str) -> Result<&'a Project> {
         .iter()
         .filter(|p| p.id == name || p.path.to_string_lossy() == name || p.name == name)
         .collect::<Vec<_>>();
-    ensure!(
-        matches.len() == 1,
-        "Project must match exactly one ID, path, or name"
-    );
-    Ok(matches[0])
+    match matches.as_slice() {
+        [project] => Ok(project),
+        _ => anyhow::bail!("Project must match exactly one ID, path, or name"),
+    }
 }
 fn session<'a>(state: &'a State, sid: &str) -> Result<&'a Session> {
     state
@@ -316,7 +315,8 @@ pub fn run(args: &[String]) -> Result<()> {
                     .read_to_end(&mut bytes)?;
                 bytes
             } else {
-                text.unwrap().into_bytes()
+                text.context("Supply either literal text or --stdin")?
+                    .into_bytes()
             };
             ensure!(bytes.len() <= 1024 * 1024, "Input exceeds 1 MiB");
             if enter {

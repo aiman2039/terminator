@@ -1,5 +1,5 @@
 //! macOS menu-bar status item. The app crate forbids unsafe, so the
-//! NSStatusItem lives here. Clicking it opens a menu of pending agent
+//! `NSStatusItem` lives here. Clicking it opens a menu of pending agent
 //! notices plus Show Terminator. The GUI syncs the menu with
 //! [`sync_status_menu`] and reads [`take_status_click`] /
 //! [`take_status_selection`] on the next frame.
@@ -44,7 +44,7 @@ define_class!(
 
         #[unsafe(method(selectNotice:))]
         fn select_notice(&self, sender: Option<&NSMenuItem>) {
-            if let Some(tag) = sender.map(|item| item.tag())
+            if let Some(tag) = sender.map(objc2_app_kit::NSMenuItem::tag)
                 && let Ok(index) = usize::try_from(tag)
             {
                 BAR.with(|slot| {
@@ -54,7 +54,9 @@ define_class!(
                         .and_then(|bar| bar.menu_ids.get(index))
                         .cloned()
                     {
-                        *SELECTION.lock().unwrap() = Some(id);
+                        *SELECTION
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id);
                     }
                 });
             }
@@ -81,7 +83,7 @@ fn raise_document_window(mtm: MainThreadMarker) {
     let app = NSApplication::sharedApplication(mtm);
     app.unhide(None);
     app.activate();
-    for window in app.windows().iter() {
+    for window in &app.windows() {
         if should_dismiss_menu_window(window.level()) {
             window.orderOut(None);
             continue;
@@ -159,7 +161,10 @@ pub fn sync_status_menu(items: &[StatusMenuItem]) {
 }
 
 pub fn take_status_selection() -> Option<String> {
-    SELECTION.lock().unwrap().take()
+    SELECTION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
 }
 
 fn menu_key(items: &[StatusMenuItem]) -> String {
@@ -183,6 +188,7 @@ fn rebuild_menu(mtm: MainThreadMarker, bar: &Bar, items: &[StatusMenuItem]) {
     } else {
         for (index, item) in items.iter().enumerate() {
             let title = NSString::from_str(&item.title);
+            // SAFETY: Allocates an NSMenuItem on the main thread. The initializer returns a retained item.
             let entry = unsafe {
                 NSMenuItem::initWithTitle_action_keyEquivalent(
                     NSMenuItem::alloc(mtm),
@@ -191,7 +197,8 @@ fn rebuild_menu(mtm: MainThreadMarker, bar: &Bar, items: &[StatusMenuItem]) {
                     &NSString::new(),
                 )
             };
-            entry.setTag(index as isize);
+            entry.setTag(index.cast_signed());
+            // SAFETY: `entry` is the menu item just created. The target is our StatusTarget, which implements `selectNotice:`.
             unsafe {
                 entry.setTarget(Some(&*bar._target));
             }
@@ -199,6 +206,7 @@ fn rebuild_menu(mtm: MainThreadMarker, bar: &Bar, items: &[StatusMenuItem]) {
         }
     }
     menu.addItem(&NSMenuItem::separatorItem(mtm));
+    // SAFETY: Allocates an NSMenuItem on the main thread. The initializer returns a retained item.
     let show = unsafe {
         NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),
@@ -207,6 +215,7 @@ fn rebuild_menu(mtm: MainThreadMarker, bar: &Bar, items: &[StatusMenuItem]) {
             &NSString::new(),
         )
     };
+    // SAFETY: `show` is the menu item just created. The target implements `showTerminator:`.
     unsafe {
         show.setTarget(Some(&*bar._target));
     }
@@ -221,6 +230,7 @@ fn install(mtm: MainThreadMarker) -> Bar {
     if let Some(button) = item.button(mtm) {
         let status: &NSStatusBarButton = &button;
         let control: &NSControl = status.as_ref();
+        // SAFETY: The status button is an NSControl. `target` implements `showTerminator:`.
         unsafe {
             control.setTarget(Some(&*target));
             control.setAction(Some(sel!(showTerminator:)));
@@ -236,6 +246,8 @@ fn install(mtm: MainThreadMarker) -> Bar {
 }
 
 fn new_target(mtm: MainThreadMarker) -> Retained<StatusTarget> {
+    // SAFETY: The receiver is a freshly allocated StatusTarget on the main thread.
+    // `init` is NSObject's initializer and returns a retained object.
     unsafe { msg_send![super(StatusTarget::alloc(mtm).set_ivars(StatusIvars)), init] }
 }
 

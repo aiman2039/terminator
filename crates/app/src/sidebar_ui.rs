@@ -57,7 +57,7 @@ fn cached_variable_card(
     ui.push_id(("terminal-card", key), |ui| {
         let id = ui.make_persistent_id("height");
         let width = ui.available_width();
-        let style = ui.style().clone();
+        let style = std::sync::Arc::clone(ui.style());
         let previous = ui.ctx().data_mut(|data| data.get_temp::<CardLayout>(id));
         if let Some(previous) = previous
             && previous.width == width
@@ -106,12 +106,13 @@ impl App {
                 .iter()
                 .filter(|n| notice_pending(n, now()))
                 .count()
-                + self
-                    .state
-                    .terminal_notices
-                    .iter()
-                    .filter(|n| !n.dismissed)
-                    .count();
+                .saturating_add(
+                    self.state
+                        .terminal_notices
+                        .iter()
+                        .filter(|n| !n.dismissed)
+                        .count(),
+                );
             let label = if pending == 0 {
                 String::new()
             } else {
@@ -376,7 +377,7 @@ impl App {
         if entry.as_ref() != project {
             *entry = std::sync::Arc::new(project.clone());
         }
-        entry.clone()
+        std::sync::Arc::clone(entry)
     }
 
     pub(super) fn visible_projects(&self) -> Vec<std::sync::Arc<Project>> {
@@ -874,172 +875,160 @@ impl App {
         });
         ui.spacing_mut().item_spacing.y = 0.0;
         let index = self.sidebar_index();
-        let live = index.live;
-        let footer = 28.0;
         let projects = self.cached_projects();
         let visible_ids: std::collections::HashSet<_> =
             projects.iter().map(|p| p.id.as_str()).collect();
-        appearance::sidebar_scroll("projects")
-            .max_height((ui.available_height() - footer).max(0.0))
-            .show(ui, |ui| {
-                for p in projects.iter() {
-                    if index.parents.get(&p.id).is_some_and(|parents| {
-                        parents
-                            .iter()
-                            .any(|parent| visible_ids.contains(parent.as_str()))
-                    }) {
-                        continue;
-                    }
-                    ui.add_space(6.0);
-                    let count = index.live_counts.get(&p.id).copied().unwrap_or(0);
-                    let selected = self.selected.as_ref() == Some(&p.id);
-                    let mut expanded = *self
-                        .preferences
-                        .expanded
-                        .entry(p.id.clone())
-                        .or_insert(true);
-                    let project_left = ui
-                        .horizontal(|ui| {
-                            if ui
-                                .add_sized(
-                                    [16.0, self.theme.row_height()],
-                                    egui::Button::image(
-                                        egui::Image::new(icons::source(if expanded {
-                                            "ChevronDown"
-                                        } else {
-                                            "ChevronRight"
-                                        }))
-                                        .tint(appearance::ICON_COLOR)
-                                        .fit_to_exact_size(egui::vec2(12.0, 12.0)),
-                                    )
-                                    .frame(false),
+        appearance::sidebar_scroll("projects").show(ui, |ui| {
+            for p in projects.iter() {
+                if index.parents.get(&p.id).is_some_and(|parents| {
+                    parents
+                        .iter()
+                        .any(|parent| visible_ids.contains(parent.as_str()))
+                }) {
+                    continue;
+                }
+                ui.add_space(6.0);
+                let count = index.live_counts.get(&p.id).copied().unwrap_or(0);
+                let selected = self.selected.as_ref() == Some(&p.id);
+                let mut expanded = *self
+                    .preferences
+                    .expanded
+                    .entry(p.id.clone())
+                    .or_insert(true);
+                let project_left = ui
+                    .horizontal(|ui| {
+                        if ui
+                            .add_sized(
+                                [16.0, self.theme.row_height()],
+                                egui::Button::image(
+                                    egui::Image::new(icons::source(if expanded {
+                                        "ChevronDown"
+                                    } else {
+                                        "ChevronRight"
+                                    }))
+                                    .tint(appearance::ICON_COLOR)
+                                    .fit_to_exact_size(egui::vec2(12.0, 12.0)),
                                 )
-                                .on_hover_text("Expand or collapse project")
+                                .frame(false),
+                            )
+                            .on_hover_text("Expand or collapse project")
+                            .clicked()
+                        {
+                            self.finish_rename(true);
+                            expanded = !expanded;
+                            self.preferences.expanded.insert(p.id.clone(), expanded);
+                        }
+                        let agent_face = self.project_agent_face(&p.id);
+                        let response = if let Some((brand, state)) = agent_face {
+                            appearance::session_row_spec(
+                                ui,
+                                appearance::SessionRowSpec {
+                                    label: &p.name,
+                                    icon: attention_status_icon(state),
+                                    selected,
+                                    trailing: &count.to_string(),
+                                    tint: appearance::color(&self.theme.secondary),
+                                    icon_tint: Some(state_color(state, &self.theme)),
+                                    spin: state == AgentState::Running,
+                                    subtitle: None,
+                                    brand: Some(brand),
+                                },
+                            )
+                        } else {
+                            appearance::project_row(
+                                ui,
+                                &p.name,
+                                if expanded { "FolderOpen" } else { "Folder" },
+                                selected,
+                                self.theme.row_height(),
+                                &count.to_string(),
+                                appearance::color(&self.theme.secondary),
+                            )
+                        }
+                        .on_hover_text(format!(
+                            "{}\n{}{}",
+                            p.name,
+                            p.path.display(),
+                            self.state
+                                .worktrees
+                                .iter()
+                                .find(|w| w.project_id == p.id)
+                                .map(|w| if w.removed {
+                                    "\nRemoved worktree; session history retained"
+                                } else {
+                                    "\nManaged Git worktree"
+                                })
+                                .unwrap_or("")
+                        ));
+                        #[cfg(feature = "test-support")]
+                        diagnostics::record(
+                            ui.ctx(),
+                            &format!("project-row:{}", p.id),
+                            response.rect,
+                        );
+                        if response.clicked() {
+                            self.select_project(p.id.clone());
+                        }
+                        appearance::context_menu(&response, |ui| {
+                            if self.has_worktrees()
+                                && appearance::menu_item(ui, "New task worktree…", "GitBranch", "")
+                                    .clicked()
+                            {
+                                self.select_project(p.id.clone());
+                                self.open_worktree_wizard();
+                                ui.close();
+                            }
+                            if self.has_worktrees() {
+                                ui.separator();
+                            }
+                            if self.managed_worktree(&p.id).is_some()
+                                && appearance::menu_item(ui, "Remove worktree…", "X", "").clicked()
+                            {
+                                self.confirm_remove_worktree(&p.id);
+                                ui.close();
+                            }
+                            if appearance::menu_item(ui, "Remove project from sidebar", "X", "")
                                 .clicked()
                             {
-                                self.finish_rename(true);
-                                expanded = !expanded;
-                                self.preferences.expanded.insert(p.id.clone(), expanded);
+                                self.hide_project(&p.id);
+                                ui.close();
                             }
-                            let agent_face = self.project_agent_face(&p.id);
-                            let response = if let Some((brand, state)) = agent_face {
-                                appearance::session_row_spec(
-                                    ui,
-                                    appearance::SessionRowSpec {
-                                        label: &p.name,
-                                        icon: attention_status_icon(state),
-                                        selected,
-                                        trailing: &count.to_string(),
-                                        tint: appearance::color(&self.theme.secondary),
-                                        icon_tint: Some(state_color(state, &self.theme)),
-                                        spin: state == AgentState::Running,
-                                        subtitle: None,
-                                        brand: Some(brand),
-                                    },
-                                )
-                            } else {
-                                appearance::project_row(
-                                    ui,
-                                    &p.name,
-                                    if expanded { "FolderOpen" } else { "Folder" },
-                                    selected,
-                                    self.theme.row_height(),
-                                    &count.to_string(),
-                                    appearance::color(&self.theme.secondary),
-                                )
-                            }
-                            .on_hover_text(format!(
-                                "{}\n{}{}",
-                                p.name,
-                                p.path.display(),
-                                self.state
-                                    .worktrees
-                                    .iter()
-                                    .find(|w| w.project_id == p.id)
-                                    .map(|w| if w.removed {
-                                        "\nRemoved worktree; session history retained"
-                                    } else {
-                                        "\nManaged Git worktree"
-                                    })
-                                    .unwrap_or("")
-                            ));
-                            #[cfg(feature = "test-support")]
-                            diagnostics::record(
-                                ui.ctx(),
-                                &format!("project-row:{}", p.id),
-                                response.rect,
-                            );
-                            if response.clicked() {
-                                self.select_project(p.id.clone());
-                            }
-                            appearance::context_menu(&response, |ui| {
-                                if self.has_worktrees()
-                                    && appearance::menu_item(
-                                        ui,
-                                        "New task worktree…",
-                                        "GitBranch",
-                                        "",
-                                    )
-                                    .clicked()
-                                {
-                                    self.select_project(p.id.clone());
-                                    self.open_worktree_wizard();
-                                    ui.close();
-                                }
-                                if self.has_worktrees() {
-                                    ui.separator();
-                                }
-                                if self.managed_worktree(&p.id).is_some()
-                                    && appearance::menu_item(ui, "Remove worktree…", "X", "")
-                                        .clicked()
-                                {
-                                    self.confirm_remove_worktree(&p.id);
-                                    ui.close();
-                                }
-                                if appearance::menu_item(ui, "Remove project from sidebar", "X", "")
-                                    .clicked()
-                                {
-                                    self.hide_project(&p.id);
-                                    ui.close();
-                                }
-                            });
-                            response.rect.left()
-                        })
-                        .inner;
-                    if expanded && !self.preferences.hidden_projects.contains(&p.id) {
-                        ui.scope(|ui| {
-                            // Indent from the project row, past its separate expand button.
-                            ui.spacing_mut().indent += project_left - ui.next_widget_position().x;
-                            ui.indent(&p.id, |ui| {
-                                if let Some(sessions) = index.by_project.get(&p.id) {
-                                    for session in sessions.iter().filter(|s| {
-                                        s.lifecycle.live() && s.kind != SessionKind::Editor
-                                    }) {
-                                        self.session_row(ui, session);
-                                    }
-                                }
-                                if let Some(children) = index.children.get(&p.id) {
-                                    for child in children {
-                                        self.worktree_card(ui, child);
-                                    }
-                                }
-                            });
                         });
-                    }
-                }
-                if projects.is_empty() {
-                    ui.weak(if self.state.projects.is_empty() {
-                        "Add a folder to begin."
-                    } else if !self.preferences.project_filter.trim().is_empty() {
-                        "No matching projects."
-                    } else {
-                        "Restore a project from Removed."
+                        response.rect.left()
+                    })
+                    .inner;
+                if expanded && !self.preferences.hidden_projects.contains(&p.id) {
+                    ui.scope(|ui| {
+                        // Indent from the project row, past its separate expand button.
+                        ui.spacing_mut().indent += project_left - ui.next_widget_position().x;
+                        ui.indent(&p.id, |ui| {
+                            if let Some(sessions) = index.by_project.get(&p.id) {
+                                for session in sessions
+                                    .iter()
+                                    .filter(|s| s.lifecycle.live() && s.kind != SessionKind::Editor)
+                                {
+                                    self.session_row(ui, session);
+                                }
+                            }
+                            if let Some(children) = index.children.get(&p.id) {
+                                for child in children {
+                                    self.worktree_card(ui, child);
+                                }
+                            }
+                        });
                     });
                 }
-            });
-        ui.add_space((ui.available_height() - footer).max(0.0));
-        ui.separator();
-        ui.weak(format!("{live} live sessions")).on_hover_text("Sessions continue when this window closes. Ended sessions remain in History until removed.");
+            }
+            if projects.is_empty() {
+                ui.weak(if self.state.projects.is_empty() {
+                    "Add a folder to begin."
+                } else if !self.preferences.project_filter.trim().is_empty() {
+                    "No matching projects."
+                } else {
+                    "Restore a project from Removed."
+                });
+            }
+        });
     }
     /// Brand plus status for a project row when one of its live sessions has an agent.
     /// A running agent wins over a finished one, so a working logo is not replaced by a folder.
@@ -1133,8 +1122,8 @@ impl App {
                 &session.id,
                 RenameSurface::Sidebar,
                 egui::Rect::from_min_max(
-                    response.rect.min + egui::vec2(36.0, 4.0),
-                    response.rect.max - egui::vec2(6.0, 3.0),
+                    egui::pos2(response.rect.min.x + 36.0, response.rect.min.y + 4.0),
+                    egui::pos2(response.rect.max.x - 6.0, response.rect.max.y - 3.0),
                 ),
             );
         }
@@ -1242,7 +1231,10 @@ impl App {
         let split_shortcut = self.shortcut_label("split_right");
         for row in rows.iter() {
             let mut rect = ui.available_rect_before_wrap();
-            rect.min.x += row.depth as f32 * ui.spacing().indent;
+            // Explorer indent is a UI coordinate; depth can exceed the f32 mantissa.
+            #[allow(clippy::cast_precision_loss)]
+            let indent = row.depth as f32 * ui.spacing().indent;
+            rect.min.x += indent;
             ui.push_id(&row.path, |ui| {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     if let Some(entry) = &row.entry {
@@ -1483,7 +1475,7 @@ impl App {
             if notices.is_empty() && terminal_notices.is_empty() {
                 self.agents_empty(ui);
             }
-            for group in notices.iter() {
+            for group in notices {
                 let Some(notice) = group.notices.first() else {
                     continue;
                 };
@@ -1508,19 +1500,22 @@ impl App {
                     AttentionCard {
                         theme: &self.theme,
                         notice,
-                        session: session.map(|s| s.as_ref()),
+                        session: session.map(std::convert::AsRef::as_ref),
                         selected,
                         highlight,
                         brand_icon,
                         brand_label,
                         show_read: false,
-                        group_extra: &group.notices[1..],
+                        group_extra: group.notices.get(1..).unwrap_or(&[]),
                     },
                 );
                 self.apply_group_action(group, action);
             }
             for notice in terminal_notices {
-                let row = cached_variable_card(ui, index.terminal_layout_keys[&notice.id], |ui| {
+                let Some(layout_key) = index.terminal_layout_keys.get(&notice.id).copied() else {
+                    continue;
+                };
+                let row = cached_variable_card(ui, layout_key, |ui| {
                     ui.group(|ui| {
                         ui.label(if notice.title.is_empty() {
                             "Terminal"
@@ -1616,13 +1611,13 @@ impl App {
                     AttentionCard {
                         theme: &self.theme,
                         notice,
-                        session: session.map(|s| s.as_ref()),
+                        session: session.map(std::convert::AsRef::as_ref),
                         selected,
                         highlight,
                         brand_icon,
                         brand_label,
                         show_read: true,
-                        group_extra: &group.notices[1..],
+                        group_extra: group.notices.get(1..).unwrap_or(&[]),
                     },
                 );
                 self.apply_group_action(group, action);
@@ -1977,7 +1972,7 @@ impl App {
                     .iter_mut()
                     .find(|notice| notice.id == id)
                 {
-                    notice.snoozed_until = now() + 600;
+                    notice.snoozed_until = now().saturating_add(600);
                     presentation_changed = true;
                 }
                 if self.detail.as_ref() == Some(&id) {
@@ -2184,10 +2179,10 @@ impl App {
         if let Some(context) = self.context.take() {
             let prepared = {
                 let cache = self.sidebar_cache.get_mut();
-                cache
+                let git = cache
                     .git
-                    .get_or_insert_with(|| std::sync::Arc::new(PreparedGit::new(&context)))
-                    .clone()
+                    .get_or_insert_with(|| std::sync::Arc::new(PreparedGit::new(&context)));
+                std::sync::Arc::clone(git)
             };
             self.ensure_git_lists(context.root.clone());
             let open_shortcut = self.shortcut_label("open_file");
@@ -2337,12 +2332,11 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
     let changes = &context.changes;
     let error = input.context.error.clone();
     let owned_prepared;
-    let prepared = match input.prepared {
-        Some(prepared) => prepared,
-        None => {
-            owned_prepared = PreparedGit::new(context);
-            &owned_prepared
-        }
+    let prepared = if let Some(prepared) = input.prepared {
+        prepared
+    } else {
+        owned_prepared = PreparedGit::new(context);
+        &owned_prepared
     };
     let stats = &context.stats;
     if root.is_none() {
@@ -2928,7 +2922,7 @@ impl ChangeTree {
 }
 fn build_change_tree(entries: &[&terminator_git::Change], root: Option<&Path>) -> ChangeTree {
     fn insert(node: &mut ChangeTree, dirs: &[String], change: &terminator_git::Change) {
-        node.count += 1;
+        node.count = node.count.saturating_add(1);
         match dirs.split_first() {
             None => {
                 node.files.push(change.clone());
@@ -2953,7 +2947,10 @@ fn build_change_tree(entries: &[&terminator_git::Change], root: Option<&Path>) -
             .map(|part| part.as_os_str().to_string_lossy().into_owned())
             .collect();
         if !components.is_empty() {
-            insert(&mut tree, &components[..components.len() - 1], change);
+            let parent = components.len().saturating_sub(1);
+            if let Some(dirs) = components.get(..parent) {
+                insert(&mut tree, dirs, change);
+            }
         }
     }
     tree
@@ -2992,7 +2989,7 @@ fn git_change_tree(
                 });
         if folder_response
             .as_ref()
-            .is_some_and(|response| response.clicked())
+            .is_some_and(eframe::egui::Response::clicked)
         {
             header.toggle();
         }
@@ -3199,7 +3196,10 @@ fn explorer_segmented(ui: &mut egui::Ui, mode: &mut ExplorerSearchMode) {
     .enumerate()
     {
         let cell = egui::Rect::from_min_size(
-            egui::pos2(rect.left() + half * index as f32, rect.top()),
+            egui::pos2(
+                rect.left() + half * f32::from(u16::try_from(index).unwrap_or(u16::MAX)),
+                rect.top(),
+            ),
             egui::vec2(half, rect.height()),
         );
         let response = ui
@@ -3529,7 +3529,10 @@ fn attention_title(
     let text = if group_extra.is_empty() {
         session_label.to_string()
     } else {
-        format!("{session_label} · {} events", group_extra.len() + 1)
+        format!(
+            "{session_label} · {} events",
+            group_extra.len().saturating_add(1)
+        )
     };
     // Measure after the leading icons so a brand glyph cannot push the
     // actions onto a second row.
@@ -3556,7 +3559,7 @@ fn attention_title(
                 ));
             }
             if group_extra.len() > 8 {
-                ui.weak(format!("…and {} more", group_extra.len() - 8));
+                ui.weak(format!("…and {} more", group_extra.len().saturating_sub(8)));
             }
         });
     match brand_response {
@@ -4097,7 +4100,7 @@ mod tests {
                     status: "??".into(),
                 },
             ],
-            decorations: Default::default(),
+            decorations: std::collections::HashMap::default(),
             stats: std::collections::HashMap::from([(PathBuf::from("/repo/a.rs"), (4, 2))]),
             error: None,
         };
@@ -4171,8 +4174,8 @@ mod tests {
             git_dirs: vec![],
             branch: "main".into(),
             changes: vec![],
-            decorations: Default::default(),
-            stats: Default::default(),
+            decorations: std::collections::HashMap::default(),
+            stats: std::collections::HashMap::default(),
             error: None,
         };
         let compare = workspace_ops::CompareData {

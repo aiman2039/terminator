@@ -3,7 +3,7 @@ use crate::{
     CommandOptions,
     async_service::{CancellationToken, Failure},
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use std::{
     collections::VecDeque,
     process::{Command, Output, Stdio},
@@ -35,7 +35,7 @@ impl Processes {
     ) -> (Self, impl std::future::Future<Output = Result<()>> + Send) {
         let (requests, mut incoming) = mpsc::channel::<Request>(128);
         let children = Arc::new(AtomicUsize::new(0));
-        let count = children.clone();
+        let count = Arc::clone(&children);
         let actor = async move {
             let mut tasks = JoinSet::new();
             let mut pending = VecDeque::<Request>::new();
@@ -45,20 +45,26 @@ impl Processes {
             loop {
                 let mut index = 0;
                 while tasks.len() < 4 && index < pending.len() {
-                    let request = &pending[index];
-                    if request.cancel.is_cancelled() {
+                    let Some(request) = pending.get(index) else {
+                        break;
+                    };
+                    let cancelled = request.cancel.is_cancelled();
+                    let blocked = request.key.as_ref().is_some_and(|key| keys.contains(key));
+                    if cancelled {
                         pending.remove(index);
                         continue;
                     }
-                    if request.key.as_ref().is_some_and(|key| keys.contains(key)) {
-                        index += 1;
+                    if blocked {
+                        index = index.saturating_add(1);
                         continue;
                     }
-                    let request = pending.remove(index).unwrap();
+                    let Some(request) = pending.remove(index) else {
+                        continue;
+                    };
                     if let Some(key) = &request.key {
                         keys.push(key.clone());
                     }
-                    let count = count.clone();
+                    let count = Arc::clone(&count);
                     cancellations.push(request.cancel.clone());
                     tasks.spawn(async move {
                         count.fetch_add(1, Ordering::AcqRel);
@@ -135,7 +141,9 @@ async fn drain(mut reader: impl AsyncRead + Unpin, limit: usize) -> Result<Vec<u
             bytes.len().saturating_add(n) <= limit,
             "Command output exceeds {limit} bytes"
         );
-        bytes.extend_from_slice(&buffer[..n]);
+        if let Some(chunk) = buffer.get(..n) {
+            bytes.extend_from_slice(chunk);
+        }
     }
 }
 async fn execute(
@@ -158,9 +166,9 @@ async fn execute(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn()?;
-    let group = child.id().unwrap();
-    let stdout = child.stdout.take().unwrap();
-    let stderr = child.stderr.take().unwrap();
+    let group = child.id().context("child pid missing")?;
+    let stdout = child.stdout.take().context("stdout pipe missing")?;
+    let stderr = child.stderr.take().context("stderr pipe missing")?;
     let input = child.stdin.take();
     let transfer = async {
         let (stdout, stderr, (), status) = tokio::try_join!(

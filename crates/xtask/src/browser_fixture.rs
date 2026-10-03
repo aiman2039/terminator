@@ -32,7 +32,7 @@ fn page() -> Result<(Server, u16)> {
     let port = listener.local_addr()?.port();
     listener.set_nonblocking(true)?;
     let stop = Arc::new(AtomicBool::new(false));
-    let running = stop.clone();
+    let running = Arc::clone(&stop);
     let thread = thread::spawn(move || {
         while !running.load(Ordering::Relaxed) {
             match listener.accept() {
@@ -89,7 +89,9 @@ pub fn run() -> Result<()> {
         command.arg("--no-sandbox");
     }
     let mut browser = Process(command.spawn()?);
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(15))
+        .ok_or_else(|| anyhow::anyhow!("browser deadline overflow"))?;
     let discovery = profile.join("DevToolsActivePort");
     while !discovery.exists() {
         ensure!(
@@ -121,9 +123,11 @@ pub fn run() -> Result<()> {
     let target = loop {
         if let Message::Text(text) = socket.read()? {
             let v: Value = serde_json::from_str(&text)?;
-            if v["id"] == 1 {
-                break v["result"]["targetId"]
-                    .as_str()
+            if v.get("id").is_some_and(|id| *id == 1) {
+                break v
+                    .get("result")
+                    .and_then(|result| result.get("targetId"))
+                    .and_then(Value::as_str)
                     .context("Target not created")?
                     .to_owned();
             }
@@ -141,15 +145,19 @@ pub fn run() -> Result<()> {
     ctl("navigate", &[&format!("http://127.0.0.1:{port}/")])?;
     let snapshot = ctl("snapshot", &[])?;
     ensure!(
-        snapshot["title"] == "Terminator browser fixture"
-            && snapshot["html"]
-                .as_str()
+        snapshot
+            .get("title")
+            .is_some_and(|title| title == "Terminator browser fixture")
+            && snapshot
+                .get("html")
+                .and_then(Value::as_str)
                 .is_some_and(|s| s.contains("id=\"name\"")),
         "DOM snapshot incorrect: {snapshot}"
     );
     ensure!(
-        !snapshot["styles"]
-            .as_array()
+        !snapshot
+            .get("styles")
+            .and_then(Value::as_array)
             .context("CSS snapshot missing")?
             .is_empty(),
         "Styles missing"

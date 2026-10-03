@@ -128,7 +128,7 @@ impl NativeDoc {
             self.loading = false;
             match result {
                 Ok(loaded) => {
-                    self.saved_text = loaded.text.clone();
+                    self.saved_text.clone_from(&loaded.text);
                     self.loaded_mtime = loaded.mtime;
                     self.doc = Some(Doc::new(loaded.text));
                     if self.insert_first {
@@ -351,8 +351,12 @@ impl App {
         let after = self.editor_target(project, origin.as_ref(), split);
         let path = std::path::absolute(&path).unwrap_or(path);
         if let Some(line) = line.filter(|line| *line > 0) {
-            self.native_pending_line
-                .insert(path.clone(), line as usize - 1);
+            self.native_pending_line.insert(
+                path.clone(),
+                usize::try_from(line)
+                    .unwrap_or(usize::MAX)
+                    .saturating_sub(1),
+            );
         }
         let _ = self
             .update_tx

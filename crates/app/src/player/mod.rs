@@ -14,6 +14,44 @@ use std::time::Duration;
 
 pub use radio::parse_stream_url;
 
+/// Low 64 bits, matching `as u64`.
+fn u64_from_u128(value: u128) -> u64 {
+    u64::try_from(value)
+        .unwrap_or_else(|_| u64::try_from(value & u128::from(u64::MAX)).unwrap_or(0))
+}
+
+/// Truncating `as u64`. Non-finite or negative becomes 0; overflow saturates.
+fn u64_from_f32(value: f32) -> u64 {
+    if value.is_nan() || value <= 0.0 {
+        return 0;
+    }
+    if !value.is_finite() || value >= 18_446_744_073_709_551_616.0 {
+        return u64::MAX;
+    }
+    let bits = value.to_bits();
+    let Some(exp) = i32::try_from((bits >> 23) & 0xff)
+        .ok()
+        .and_then(|biased| biased.checked_sub(127))
+    else {
+        return 0;
+    };
+    if exp < 0 {
+        return 0;
+    }
+    let mantissa = u64::from((bits & 0x007f_ffff) | (1_u32 << 23));
+    let Some(shift) = exp.checked_sub(23) else {
+        return 0;
+    };
+    if shift >= 0 {
+        let Ok(places) = u32::try_from(shift) else {
+            return u64::MAX;
+        };
+        mantissa.checked_shl(places).unwrap_or(u64::MAX)
+    } else {
+        mantissa.checked_shr(shift.unsigned_abs()).unwrap_or(0)
+    }
+}
+
 pub(super) fn audio_from_dir(root: &Path) -> Vec<PathBuf> {
     playlist::collect_audio(root, playlist::AUDIO_WALK_CAP)
 }
@@ -163,9 +201,9 @@ impl Controller {
             radio_base: if cfg!(test) {
                 std::sync::Arc::new(radio::catalog().to_vec())
             } else {
-                Default::default()
+                std::sync::Arc::default()
             },
-            radio_cache: Default::default(),
+            radio_cache: std::cell::RefCell::default(),
             radio_mode: false,
             radio_query: String::new(),
             radio_category: String::new(),
@@ -187,7 +225,7 @@ impl Controller {
     pub fn new(services: crate::gui_services::Services) -> Self {
         let rng = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos() as u64)
+            .map(|elapsed| u64_from_u128(elapsed.as_nanos()))
             .unwrap_or(1)
             .max(1);
         Self::with_engine(Handle::spawn(services), Status::Stopped, None, None, rng)
@@ -407,11 +445,14 @@ impl Controller {
         } else {
             0
         };
-        let last = playlist.len() - 1;
-        let next = current as isize + delta;
+        let last = playlist.len().saturating_sub(1);
+        let Some(next) = current.cast_signed().checked_add(delta) else {
+            self.stop();
+            return None;
+        };
         let index = if next < 0 {
             if repeat { last } else { 0 }
-        } else if next as usize > last {
+        } else if next.cast_unsigned() > last {
             if repeat {
                 0
             } else {
@@ -419,9 +460,10 @@ impl Controller {
                 return None;
             }
         } else {
-            next as usize
+            next.cast_unsigned()
         };
-        self.play_file(project, playlist[index].clone(), index);
+        let path = playlist.get(index).cloned()?;
+        self.play_file(project, path, index);
         Some(index)
     }
 
@@ -437,14 +479,16 @@ impl Controller {
         }
         let Some(index) = self.shuffle_bag.pop() else {
             if repeat {
-                self.play_file(project, playlist[current].clone(), current);
+                let path = playlist.get(current).cloned()?;
+                self.play_file(project, path, current);
                 return Some(current);
             }
             self.stop();
             return None;
         };
-        let index = index.min(playlist.len() - 1);
-        self.play_file(project, playlist[index].clone(), index);
+        let index = index.min(playlist.len().saturating_sub(1));
+        let path = playlist.get(index).cloned()?;
+        self.play_file(project, path, index);
         Some(index)
     }
 
@@ -454,8 +498,11 @@ impl Controller {
     }
 
     pub fn seek_fraction(&mut self, fraction: f32, duration: Duration) {
+        // Seek position. Durations above 2^24 ms do not fit in an f32 mantissa.
+        #[allow(clippy::cast_precision_loss)]
         let millis = duration.as_millis() as f32 * fraction.clamp(0.0, 1.0);
-        self.engine.seek(Duration::from_millis(millis as u64));
+        self.engine
+            .seek(Duration::from_millis(u64_from_f32(millis)));
     }
 
     pub fn set_volume(&mut self, volume: f32) {
@@ -919,7 +966,7 @@ impl App {
             cache.custom.clone_from(&self.preferences.radio_stations);
             cache.base = base;
         }
-        cache.all.clone()
+        std::sync::Arc::clone(&cache.all)
     }
     fn radio_visible(&self) -> std::sync::Arc<Vec<radio::Station>> {
         let all = self.radio_listing();
@@ -945,7 +992,7 @@ impl App {
             cache.query.clone_from(&self.player.radio_query);
             cache.category.clone_from(&self.player.radio_category);
         }
-        cache.visible.clone()
+        std::sync::Arc::clone(&cache.visible)
     }
 
     fn play_radio(&mut self, project: &str, station: radio::Station) {
@@ -980,8 +1027,14 @@ impl App {
         let pos = current
             .and_then(|url| stations.iter().position(|station| station.url == url))
             .unwrap_or(0);
-        let len = stations.len() as isize;
-        let next = (pos as isize + delta).rem_euclid(len) as usize;
+        let len = stations.len().cast_signed();
+        let Some(sum) = pos.cast_signed().checked_add(delta) else {
+            return;
+        };
+        if len <= 0 {
+            return;
+        }
+        let next = sum.rem_euclid(len).cast_unsigned();
         let Some(station) = stations.get(next).cloned() else {
             return;
         };

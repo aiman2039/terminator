@@ -340,8 +340,14 @@ pub fn tool_button(
     if active {
         ui.painter().line_segment(
             [
-                response.rect.left_bottom() + egui::vec2(8.0, -1.0),
-                response.rect.right_bottom() + egui::vec2(-8.0, -1.0),
+                egui::pos2(
+                    response.rect.left_bottom().x + 8.0,
+                    response.rect.left_bottom().y - 1.0,
+                ),
+                egui::pos2(
+                    response.rect.right_bottom().x - 8.0,
+                    response.rect.right_bottom().y - 1.0,
+                ),
             ],
             egui::Stroke::new(2.0, tint),
         );
@@ -521,7 +527,7 @@ fn wrapping_path_tooltip(
         .size()
         .x;
     let avail = ui.available_width().max(0.0);
-    let rows = usize::from(natural > avail) + 1;
+    let rows = usize::from(natural > avail).saturating_add(1);
     let mut job = egui::text::LayoutJob::simple(path.to_owned(), font, color, avail);
     job.wrap.max_rows = rows;
     job.wrap.break_anywhere = true;
@@ -659,6 +665,84 @@ const STATUS_SPIN_INTERVAL: Duration = Duration::from_millis(500);
 /// visibly rotating, not flashing.
 const STATUS_SPIN_PERIOD: f64 = 2.0;
 
+/// `as f32` for finite normals. Subnormals flush to zero; magnitudes past f32 saturate.
+fn f32_from_f64(value: f64) -> f32 {
+    let bits = value.to_bits();
+    let sign = (bits >> 63) & 1;
+    let exp_bits = (bits >> 52) & 0x7ff;
+    let mant = bits & 0x000f_ffff_ffff_ffff;
+    let Ok(exp_u) = u16::try_from(exp_bits) else {
+        return 0.0;
+    };
+    if exp_u == 0x7ff {
+        if mant != 0 {
+            return f32::NAN;
+        }
+        return if sign == 0 {
+            f32::INFINITY
+        } else {
+            f32::NEG_INFINITY
+        };
+    }
+    if exp_u == 0 {
+        return if sign == 0 { 0.0 } else { -0.0 };
+    }
+    let Some(unbiased) = i32::from(exp_u).checked_sub(1023) else {
+        return 0.0;
+    };
+    if unbiased > 127 {
+        return if sign == 0 {
+            f32::INFINITY
+        } else {
+            f32::NEG_INFINITY
+        };
+    }
+    if unbiased < -126 {
+        return if sign == 0 { 0.0 } else { -0.0 };
+    }
+    let mut mantissa = mant >> 29;
+    let remainder = mant & ((1_u64 << 29) - 1);
+    if remainder > (1_u64 << 28) || (remainder == (1_u64 << 28) && mantissa & 1 == 1) {
+        mantissa = mantissa.saturating_add(1);
+    }
+    let mut exp32 = unbiased.saturating_add(127);
+    if mantissa >= (1_u64 << 23) {
+        mantissa = 0;
+        exp32 = exp32.saturating_add(1);
+    }
+    if exp32 >= 255 {
+        return if sign == 0 {
+            f32::INFINITY
+        } else {
+            f32::NEG_INFINITY
+        };
+    }
+    let Ok(exp32) = u32::try_from(exp32) else {
+        return 0.0;
+    };
+    let Ok(mantissa) = u32::try_from(mantissa) else {
+        return 0.0;
+    };
+    let sign = u32::try_from(sign).unwrap_or(0);
+    f32::from_bits((sign << 31) | (exp32 << 23) | mantissa)
+}
+
+fn u8_from_f32(value: f32) -> u8 {
+    if !value.is_finite() || value <= 0.0 {
+        return 0;
+    }
+    if value >= 255.0 {
+        return 255;
+    }
+    let mut out = 0_u8;
+    let mut cursor = 0.0_f32;
+    while cursor + 1.0 <= value {
+        cursor += 1.0;
+        out = out.saturating_add(1);
+    }
+    out
+}
+
 /// Paint an icon, optionally rotating it to signal ongoing work.
 pub fn paint_status_icon(ui: &egui::Ui, rect: egui::Rect, icon: &str, tint: Color32, spin: bool) {
     if spin && !ui.is_rect_visible(rect) {
@@ -668,8 +752,8 @@ pub fn paint_status_icon(ui: &egui::Ui, rect: egui::Rect, icon: &str, tint: Colo
     if spin {
         let (angle, animate) = ui.input(|input| {
             let viewport = input.viewport();
-            let angle = ((input.time % STATUS_SPIN_PERIOD) / STATUS_SPIN_PERIOD) as f32
-                * std::f32::consts::TAU;
+            let turns = (input.time % STATUS_SPIN_PERIOD) / STATUS_SPIN_PERIOD;
+            let angle = f32_from_f64(turns) * std::f32::consts::TAU;
             let animate = viewport.focused != Some(false) && !viewport.minimized.unwrap_or(false);
             (angle, animate)
         });
@@ -1084,7 +1168,12 @@ pub fn unsaved_close_bar(ui: &mut egui::Ui, input: UnsavedCloseBar<'_>) -> Unsav
         enabled,
     } = input;
     let warn = color(&theme.status_failed);
-    let fill = Color32::from_rgb(warn.r() / 2 + 24, warn.g() / 6, warn.b() / 6);
+    let channel = |value: u8, divisor: u8| value.checked_div(divisor).unwrap_or(0);
+    let fill = Color32::from_rgb(
+        channel(warn.r(), 2).saturating_add(24),
+        channel(warn.g(), 6),
+        channel(warn.b(), 6),
+    );
     let response = egui::Frame::new()
         .fill(fill)
         .inner_margin(egui::Margin::symmetric(10, 5))
@@ -1350,7 +1439,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
 pub fn focus_stroke(accent: Color32, elapsed: std::time::Duration) -> egui::Stroke {
     let progress = ((elapsed.as_secs_f32() - 0.2) / 1.0).clamp(0.0, 1.0);
     let strength = (1.0 - progress).powi(2);
-    let alpha = (70.0 + 185.0 * strength).round() as u8;
+    let alpha = u8_from_f32((70.0 + 185.0 * strength).round());
     egui::Stroke::new(
         1.0 + strength,
         Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), alpha),
@@ -1381,6 +1470,22 @@ pub fn click_cursor(ctx: &egui::Context) {
 #[cfg(test)]
 mod row_tests {
     use super::*;
+
+    fn i32_from_f32(value: f32) -> i32 {
+        if !value.is_finite() || value <= 0.0 {
+            return 0;
+        }
+        if value >= 1_000_000.0 {
+            return i32::MAX;
+        }
+        let mut out = 0_i32;
+        let mut cursor = 0.0_f32;
+        while cursor + 1.0 <= value {
+            cursor += 1.0;
+            out = out.saturating_add(1);
+        }
+        out
+    }
 
     #[test]
     fn font_atlas_side_is_capped_to_4096() {
@@ -1467,7 +1572,7 @@ mod row_tests {
                     true,
                     false,
                     crate::markdown::Mode::Preview,
-                ))
+                ));
             },
         );
         output.textures_delta.clear();
@@ -1515,7 +1620,7 @@ mod row_tests {
                     pos,
                     button: egui::PointerButton::Primary,
                     pressed: true,
-                    modifiers: Default::default(),
+                    modifiers: egui::Modifiers::default(),
                 }],
             );
             let header = draw_markdown_header(
@@ -1525,7 +1630,7 @@ mod row_tests {
                     pos,
                     button: egui::PointerButton::Primary,
                     pressed: false,
-                    modifiers: Default::default(),
+                    modifiers: egui::Modifiers::default(),
                 }],
             );
             assert!(!header.title.clicked());
@@ -1689,11 +1794,10 @@ mod row_tests {
             let left = output
                 .shapes
                 .iter()
-                .filter_map(|shape| match &shape.shape {
+                .find_map(|shape| match &shape.shape {
                     egui::Shape::Text(text) if text.galley.text() == "Terminal" => Some(text.pos.x),
                     _ => None,
                 })
-                .next()
                 .expect("caption title");
             (left, meshes)
         }
@@ -1733,7 +1837,7 @@ mod row_tests {
         assert_eq!(steady.color.a(), 70);
         assert_eq!(
             steady,
-            focus_stroke(accent, std::time::Duration::from_secs(60))
+            focus_stroke(accent, std::time::Duration::from_mins(1))
         );
     }
     #[test]
@@ -1774,7 +1878,7 @@ mod row_tests {
             texts[0],
             texts[1]
         );
-        assert!(texts[0].left() == texts[1].left());
+        assert_eq!(texts[0].left(), texts[1].left());
     }
 
     #[test]
@@ -1800,13 +1904,12 @@ mod row_tests {
             output
                 .shapes
                 .iter()
-                .filter_map(|shape| match &shape.shape {
+                .find_map(|shape| match &shape.shape {
                     egui::Shape::Text(text) if text.galley.text() == "Terminal 2" => {
                         Some(text.pos.x)
                     }
                     _ => None,
                 })
-                .next()
                 .expect("session label")
         }
         let ctx = egui::Context::default();
@@ -1939,7 +2042,7 @@ mod row_tests {
                     pos,
                     button: egui::PointerButton::Primary,
                     pressed: true,
-                    modifiers: Default::default(),
+                    modifiers: egui::Modifiers::default(),
                 }],
             );
             assert!(
@@ -1949,7 +2052,7 @@ mod row_tests {
                         pos,
                         button: egui::PointerButton::Primary,
                         pressed: false,
-                        modifiers: Default::default()
+                        modifiers: egui::Modifiers::default()
                     }]
                 )
                 .clicked(),
@@ -2069,7 +2172,7 @@ mod row_tests {
         run_at_width(width, |ui| {
             let font = FontId::proportional(12.0);
             let response = wrapping_path(ui, PASTE_PATH, font.clone(), ui.visuals().text_color());
-            (response.rect.height() / line_height(ui, font)).round() as i32
+            i32_from_f32((response.rect.height() / line_height(ui, font)).round())
         })
     }
 
@@ -2134,7 +2237,7 @@ mod row_tests {
             let font = FontId::proportional(11.0);
             let response =
                 wrapping_path(ui, PASTE_PATH, font.clone(), ui.visuals().weak_text_color());
-            (response.rect.height() / line_height(ui, font)).round() as i32
+            i32_from_f32((response.rect.height() / line_height(ui, font)).round())
         });
         assert!(
             (1..=2).contains(&lines),
@@ -2178,13 +2281,13 @@ mod row_tests {
                 pos,
                 button: egui::PointerButton::Secondary,
                 pressed: true,
-                modifiers: Default::default(),
+                modifiers: egui::Modifiers::default(),
             }],
             vec![egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Secondary,
                 pressed: false,
-                modifiers: Default::default(),
+                modifiers: egui::Modifiers::default(),
             }],
         ] {
             let mut output = ctx.run_ui(

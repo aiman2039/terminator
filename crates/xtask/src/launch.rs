@@ -8,8 +8,9 @@ pub fn run() -> Result<()> {
     let kit = root().join("launch/product-hunt");
     let copy: serde_json::Value = serde_json::from_slice(&fs::read(kit.join("copy.json"))?)?;
     for (key, limit) in [("tagline", 60), ("description", 260)] {
-        let count = copy[key]
-            .as_str()
+        let count = copy
+            .get(key)
+            .and_then(serde_json::Value::as_str)
             .context("Missing launch copy")?
             .chars()
             .count();

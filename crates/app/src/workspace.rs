@@ -187,14 +187,17 @@ impl Workspace {
     }
 
     fn refresh_primary(&mut self, group: usize, removed: &Tab) {
-        let stale = self.tabs[group].primary.as_ref() == Some(removed);
+        let Some(tab) = self.tabs.get_mut(group) else {
+            return;
+        };
+        let stale = tab.primary.as_ref() == Some(removed);
         if stale {
-            let next = self.tabs[group]
+            let next = tab
                 .layout
                 .iter_all_tabs()
                 .next()
                 .map(|(_, pane)| pane.clone());
-            self.tabs[group].primary = next;
+            tab.primary = next;
         }
     }
 
@@ -207,7 +210,10 @@ impl Workspace {
         let Some(dst) = self.tabs.iter().position(|tab| tab.id == dest_group) else {
             return false;
         };
-        let path = self.tabs[dst]
+        let Some(tab) = self.tabs.get(dst) else {
+            return false;
+        };
+        let path = tab
             .layout
             .main_surface()
             .focused_leaf()
@@ -215,13 +221,7 @@ impl Workspace {
                 surface: egui_dock::SurfaceIndex::main(),
                 node,
             })
-            .or_else(|| {
-                self.tabs[dst]
-                    .layout
-                    .iter_leaves()
-                    .next()
-                    .map(|(path, _)| path)
-            });
+            .or_else(|| tab.layout.iter_leaves().next().map(|(path, _)| path));
         let Some(path) = path else {
             return false;
         };
@@ -234,27 +234,43 @@ impl Workspace {
     /// pane appends to the destination leaf.
     pub fn move_pane_to_leaf(&mut self, pane: &Tab, dest: egui_dock::NodePath) -> bool {
         let active = self.active_index();
-        let Some(src) = self.tabs[active].layout.find_tab(pane) else {
+        let Some(src) = self
+            .tabs
+            .get(active)
+            .and_then(|tab| tab.layout.find_tab(pane))
+        else {
             return false;
         };
-        if self.tabs[active].layout.leaf(dest).is_err() {
+        if self
+            .tabs
+            .get(active)
+            .is_none_or(|tab| tab.layout.leaf(dest).is_err())
+        {
             return false;
         }
         if src.node_path() == dest {
-            let layout = &mut self.tabs[active].layout;
+            let Some(layout) = self.tabs.get_mut(active).map(|tab| &mut tab.layout) else {
+                return false;
+            };
             let _ = layout.set_active_tab(src);
             layout.set_focused_node_and_surface(dest);
             return true;
         }
         let (src_len, dst_len) = match (
-            self.tabs[active].layout.leaf(src.node_path()),
-            self.tabs[active].layout.leaf(dest),
+            self.tabs
+                .get(active)
+                .and_then(|tab| tab.layout.leaf(src.node_path()).ok()),
+            self.tabs
+                .get(active)
+                .and_then(|tab| tab.layout.leaf(dest).ok()),
         ) {
-            (Ok(src_leaf), Ok(dst_leaf)) => (src_leaf.tabs.len(), dst_leaf.tabs.len()),
+            (Some(src_leaf), Some(dst_leaf)) => (src_leaf.tabs.len(), dst_leaf.tabs.len()),
             _ => return false,
         };
         if src_len == 1 && dst_len == 1 {
-            let layout = &mut self.tabs[active].layout;
+            let Some(layout) = self.tabs.get_mut(active).map(|tab| &mut tab.layout) else {
+                return false;
+            };
             let src_node = src.node_path();
             let other = layout
                 .leaf(dest)
@@ -266,18 +282,24 @@ impl Workspace {
             if other == *pane {
                 return true;
             }
-            if let Ok(leaf) = layout.leaf_mut(src_node) {
-                leaf.tabs[0] = other;
+            if let Ok(leaf) = layout.leaf_mut(src_node)
+                && let Some(slot) = leaf.tabs.get_mut(0)
+            {
+                *slot = other;
             }
-            if let Ok(leaf) = layout.leaf_mut(dest) {
-                leaf.tabs[0] = pane.clone();
+            if let Ok(leaf) = layout.leaf_mut(dest)
+                && let Some(slot) = leaf.tabs.get_mut(0)
+            {
+                *slot = pane.clone();
             }
             let _ = layout.set_active_tab(layout.find_tab(pane).unwrap_or(src));
             layout.set_focused_node_and_surface(dest);
             return true;
         }
         {
-            let layout = &mut self.tabs[active].layout;
+            let Some(layout) = self.tabs.get_mut(active).map(|tab| &mut tab.layout) else {
+                return false;
+            };
             layout.move_tab(src, (dest, egui_dock::TabInsert::Append));
             if let Some(path) = layout.find_tab(pane) {
                 let _ = layout.set_active_tab(path);
@@ -309,51 +331,77 @@ impl Workspace {
         if src == dst {
             return self.move_pane_to_leaf(pane, dest);
         }
-        let Ok(dst_leaf) = self.tabs[dst].layout.leaf(dest) else {
-            return false;
+        let (src_path, src_len, dst_len, other) = {
+            let Some(dst_tab) = self.tabs.get(dst) else {
+                return false;
+            };
+            let Ok(dst_leaf) = dst_tab.layout.leaf(dest) else {
+                return false;
+            };
+            let Some(src_tab) = self.tabs.get(src) else {
+                return false;
+            };
+            let Some(src_path) = src_tab.layout.find_tab(pane) else {
+                return false;
+            };
+            let Ok(src_leaf) = src_tab.layout.leaf(src_path.node_path()) else {
+                return false;
+            };
+            (
+                src_path,
+                src_leaf.tabs.len(),
+                dst_leaf.tabs.len(),
+                dst_leaf.tabs.first().cloned(),
+            )
         };
-        let Some(src_path) = self.tabs[src].layout.find_tab(pane) else {
-            return false;
-        };
-        let Ok(src_leaf) = self.tabs[src].layout.leaf(src_path.node_path()) else {
-            return false;
-        };
-        if src_leaf.tabs.len() == 1 && dst_leaf.tabs.len() == 1 {
+        if src_len == 1 && dst_len == 1 {
             // Exchange single panes across groups: no structure changes, so
             // both terminals stay exactly where the user can see them.
-            let other = dst_leaf.tabs[0].clone();
+            let Some(other) = other else {
+                return false;
+            };
             if other == *pane {
                 return true;
             }
-            if let Ok(leaf) = self.tabs[src].layout.leaf_mut(src_path.node_path()) {
-                leaf.tabs[0] = other;
+            if let Some(tab) = self.tabs.get_mut(src)
+                && let Ok(leaf) = tab.layout.leaf_mut(src_path.node_path())
+                && let Some(slot) = leaf.tabs.get_mut(0)
+            {
+                *slot = other;
             }
-            if let Ok(leaf) = self.tabs[dst].layout.leaf_mut(dest) {
-                leaf.tabs[0] = pane.clone();
+            if let Some(tab) = self.tabs.get_mut(dst)
+                && let Ok(leaf) = tab.layout.leaf_mut(dest)
+                && let Some(slot) = leaf.tabs.get_mut(0)
+            {
+                *slot = pane.clone();
             }
-            if let Some(path) = self.tabs[dst].layout.find_tab(pane) {
-                let _ = self.tabs[dst].layout.set_active_tab(path);
-                self.tabs[dst]
-                    .layout
-                    .set_focused_node_and_surface(path.node_path());
+            if let Some(tab) = self.tabs.get_mut(dst)
+                && let Some(path) = tab.layout.find_tab(pane)
+            {
+                let _ = tab.layout.set_active_tab(path);
+                tab.layout.set_focused_node_and_surface(path.node_path());
             }
-            self.active = dest_group.to_owned();
+            dest_group.clone_into(&mut self.active);
             return true;
         }
-        let removed = self.tabs[src].layout.remove_tab(src_path);
-        debug_assert!(removed.is_some());
+        if let Some(tab) = self.tabs.get_mut(src) {
+            let removed = tab.layout.remove_tab(src_path);
+            debug_assert!(removed.is_some());
+        }
         self.refresh_primary(src, pane);
-        if let Ok(leaf) = self.tabs[dst].layout.leaf_mut(dest) {
+        if let Some(tab) = self.tabs.get_mut(dst)
+            && let Ok(leaf) = tab.layout.leaf_mut(dest)
+        {
             leaf.append_tab(pane.clone());
         }
-        if let Some(path) = self.tabs[dst].layout.find_tab(pane) {
-            let _ = self.tabs[dst].layout.set_active_tab(path);
-            self.tabs[dst]
-                .layout
-                .set_focused_node_and_surface(path.node_path());
+        if let Some(tab) = self.tabs.get_mut(dst)
+            && let Some(path) = tab.layout.find_tab(pane)
+        {
+            let _ = tab.layout.set_active_tab(path);
+            tab.layout.set_focused_node_and_surface(path.node_path());
         }
         self.version = self.version.max(pane.layout_version());
-        self.active = dest_group.to_owned();
+        dest_group.clone_into(&mut self.active);
         let previous = self.active_index();
         self.tabs
             .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
@@ -380,32 +428,39 @@ impl Workspace {
         let Some(dst) = self.tabs.iter().position(|tab| tab.id == dest_group) else {
             return false;
         };
-        if self.tabs[dst].layout.leaf(dest).is_err() {
+        if self
+            .tabs
+            .get(dst)
+            .is_none_or(|tab| tab.layout.leaf(dest).is_err())
+        {
             return false;
         }
         if src == dst {
-            let Some(src_path) = self.tabs[src].layout.find_tab(pane) else {
+            let Some(src_path) = self.tabs.get(src).and_then(|tab| tab.layout.find_tab(pane))
+            else {
                 return false;
             };
-            self.tabs[src]
-                .layout
+            let Some(tab) = self.tabs.get_mut(src) else {
+                return false;
+            };
+            tab.layout
                 .move_tab(src_path, (dest, egui_dock::TabInsert::Split(split)));
-            if let Some(path) = self.tabs[src].layout.find_tab(pane) {
-                let _ = self.tabs[src].layout.set_active_tab(path);
-                self.tabs[src]
-                    .layout
-                    .set_focused_node_and_surface(path.node_path());
+            if let Some(path) = tab.layout.find_tab(pane) {
+                let _ = tab.layout.set_active_tab(path);
+                tab.layout.set_focused_node_and_surface(path.node_path());
             }
             return true;
         }
-        let Some(src_path) = self.tabs[src].layout.find_tab(pane) else {
+        let Some(src_path) = self.tabs.get(src).and_then(|tab| tab.layout.find_tab(pane)) else {
             return false;
         };
-        let removed = self.tabs[src].layout.remove_tab(src_path);
-        debug_assert!(removed.is_some());
+        if let Some(tab) = self.tabs.get_mut(src) {
+            let removed = tab.layout.remove_tab(src_path);
+            debug_assert!(removed.is_some());
+        }
         self.refresh_primary(src, pane);
-        {
-            let tree = self.tabs[dst].layout.main_surface_mut();
+        if let Some(tab) = self.tabs.get_mut(dst) {
+            let tree = tab.layout.main_surface_mut();
             match split {
                 egui_dock::Split::Above => tree.split_above(dest.node, 0.5, vec![pane.clone()]),
                 egui_dock::Split::Below => tree.split_below(dest.node, 0.5, vec![pane.clone()]),
@@ -413,14 +468,14 @@ impl Workspace {
                 egui_dock::Split::Right => tree.split_right(dest.node, 0.5, vec![pane.clone()]),
             };
         }
-        if let Some(path) = self.tabs[dst].layout.find_tab(pane) {
-            let _ = self.tabs[dst].layout.set_active_tab(path);
-            self.tabs[dst]
-                .layout
-                .set_focused_node_and_surface(path.node_path());
+        if let Some(tab) = self.tabs.get_mut(dst)
+            && let Some(path) = tab.layout.find_tab(pane)
+        {
+            let _ = tab.layout.set_active_tab(path);
+            tab.layout.set_focused_node_and_surface(path.node_path());
         }
         self.version = self.version.max(pane.layout_version());
-        self.active = dest_group.to_owned();
+        dest_group.clone_into(&mut self.active);
         let previous = self.active_index();
         self.tabs
             .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
@@ -435,9 +490,9 @@ impl Workspace {
     /// when missing.
     pub fn move_pane_to_new_group_at(&mut self, pane: &Tab, index: usize) -> Option<String> {
         let src = self.group_with_pane(pane)?;
-        let src_id = self.tabs[src].id.clone();
-        let path = self.tabs[src].layout.find_tab(pane)?;
-        self.tabs[src].layout.remove_tab(path);
+        let src_id = self.tabs.get(src)?.id.clone();
+        let path = self.tabs.get(src)?.layout.find_tab(pane)?;
+        self.tabs.get_mut(src)?.layout.remove_tab(path);
         self.refresh_primary(src, pane);
         let id = terminator_core::id();
         self.version = self.version.max(pane.layout_version());
@@ -542,7 +597,9 @@ impl Workspace {
             .get(active_index)
             .is_some_and(|tab| tab.layout.iter_all_tabs().next().is_none());
         if reuse {
-            let tab = &mut self.tabs[active_index];
+            let Some(tab) = self.tabs.get_mut(active_index) else {
+                return false;
+            };
             tab.layout = layout;
             tab.primary = Some(primary);
             return true;
@@ -625,9 +682,12 @@ impl Workspace {
                 self.active = id;
             }
         } else if !self.tabs.iter().any(|tab| tab.id == self.active) {
-            self.active = self.tabs[previous.saturating_sub(1).min(self.tabs.len() - 1)]
-                .id
-                .clone();
+            let fallback = previous
+                .saturating_sub(1)
+                .min(self.tabs.len().saturating_sub(1));
+            if let Some(tab) = self.tabs.get(fallback) {
+                self.active.clone_from(&tab.id);
+            }
         }
     }
 }
@@ -656,7 +716,9 @@ pub(crate) fn validate_layout(layout: &DockState<Tab>) -> Result<()> {
             && let Some(focus) = tree.focused_leaf()
         {
             ensure!(
-                tree.iter().nth(focus.0).is_some_and(|node| node.is_leaf()),
+                tree.iter()
+                    .nth(focus.0)
+                    .is_some_and(egui_dock::Node::is_leaf),
                 "Invalid saved pane focus"
             );
         }
@@ -668,13 +730,40 @@ pub(crate) fn validate_layout(layout: &DockState<Tab>) -> Result<()> {
 impl Deref for Workspace {
     type Target = DockState<Tab>;
     fn deref(&self) -> &Self::Target {
-        &self.tabs[self.active_index()].layout
+        let index = self.active_index();
+        if let Some(tab) = self.tabs.get(index).or_else(|| self.tabs.first()) {
+            return &tab.layout;
+        }
+        static FALLBACK: std::sync::OnceLock<DockState<Tab>> = std::sync::OnceLock::new();
+        FALLBACK.get_or_init(|| DockState::new(Vec::new()))
     }
 }
 impl DerefMut for Workspace {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        let index = self.active_index();
-        &mut self.tabs[index].layout
+        if self.tabs.is_empty() {
+            let id = if self.active.is_empty() {
+                terminator_core::id()
+            } else {
+                self.active.clone()
+            };
+            self.active.clone_from(&id);
+            self.tabs.push(WorkspaceTab {
+                id,
+                primary: None,
+                layout: DockState::new(Vec::new()),
+            });
+        }
+        let preferred = self.active_index();
+        let index = if self.tabs.get(preferred).is_some() {
+            preferred
+        } else {
+            0
+        };
+        if let Some(tab) = self.tabs.get_mut(index) {
+            &mut tab.layout
+        } else {
+            Box::leak(Box::new(DockState::new(Vec::new())))
+        }
     }
 }
 #[cfg(test)]

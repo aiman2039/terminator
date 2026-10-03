@@ -8,7 +8,7 @@ use crate::{
 use futures_util::{StreamExt, stream};
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, PoisonError},
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -49,7 +49,7 @@ impl Client {
             paths,
             catalog,
             cpu,
-            observations: Default::default(),
+            observations: Arc::default(),
             historical: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -57,14 +57,17 @@ impl Client {
         state.client_observation = self
             .observations
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
-            + 1;
+            .saturating_add(1);
     }
     /// Drop one retired owner's cached snapshot so the next poll re-reads it
     /// from disk. Retired state is otherwise served from [`Self::historical`]
     /// for the life of the client, which would resurrect a just-dismissed,
     /// read, or snoozed historical notice on the next full snapshot.
     fn evict_historical(&self, generation: &str) {
-        self.historical.lock().unwrap().remove(generation);
+        self.historical
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(generation);
     }
     async fn generations(&self) -> Result<bool> {
         let paths = self.paths.clone();
@@ -212,7 +215,7 @@ impl Client {
                 .checked();
         }
         let paths = self.paths.clone();
-        let cache = self.historical.clone();
+        let cache = Arc::clone(&self.historical);
         // One catalog read lists owners and reads the shared revision. Retired
         // owners are immutable, so their state is decoded from disk once and
         // then served from `cache`; only a retired owner's first poll touches
@@ -234,9 +237,9 @@ impl Client {
                         continue;
                     }
                     let state = {
-                        let mut cache = cache.lock().unwrap();
+                        let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
                         if let Some(state) = cache.get(&owner.id) {
-                            state.clone()
+                            Arc::clone(state)
                         } else {
                             // A retired generation can be pruned between this
                             // catalog read and the load; skip it rather than
@@ -245,7 +248,7 @@ impl Client {
                                 continue;
                             };
                             let state = Arc::new(state);
-                            cache.insert(owner.id.clone(), state.clone());
+                            cache.insert(owner.id.clone(), Arc::clone(&state));
                             state
                         }
                     };
@@ -253,7 +256,10 @@ impl Client {
                     plans.push(Plan::Historical(owner, state));
                 }
                 // Bound the cache to owners that are retired right now.
-                cache.lock().unwrap().retain(|id, _| retired.contains(id));
+                cache
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .retain(|id, _| retired.contains(id));
                 Ok((active, catalog_revision, plans))
             })
             .await?;
@@ -424,9 +430,8 @@ impl Client {
             .context("Session daemon connection deadline")?
             .context("Session daemon unavailable")?;
         let result = tokio::time::timeout(timeout, async {
-            socket
-                .write_all(&(bytes.len() as u32).to_be_bytes())
-                .await?;
+            let len = u32::try_from(bytes.len()).context("IPC frame too large")?;
+            socket.write_all(&len.to_be_bytes()).await?;
             socket.write_all(&bytes).await?;
             let mut response = self.read_response(&mut socket).await?;
             if let Response::State(state) = &mut response {
@@ -472,7 +477,10 @@ impl Client {
                 .run(&CancellationToken::new(), move || snapshot::decode(&data))
                 .await?;
             ensure!(
-                bytes.len() + chunk.len() <= 256 * 1024 * 1024,
+                bytes
+                    .len()
+                    .checked_add(chunk.len())
+                    .is_some_and(|total| total <= 256 * 1024 * 1024),
                 "Snapshot exceeds the 256 MiB client limit; saved state is intact"
             );
             bytes.extend(chunk);
@@ -526,7 +534,7 @@ pub fn read_only(request: &Request) -> bool {
 mod tests {
     use super::*;
     use crate::write_frame;
-    async fn fixture() -> (tempfile::TempDir, Client, tokio::net::UnixListener) {
+    fn fixture() -> (tempfile::TempDir, Client, tokio::net::UnixListener) {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::at(dir.path().into());
         paths.init().unwrap();
@@ -547,7 +555,7 @@ mod tests {
     }
     #[tokio::test]
     async fn fragmented_legacy_response_preserves_snapshot_hint_and_auth() {
-        let (_dir, client, listener) = fixture().await;
+        let (_dir, client, listener) = fixture();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let request = envelope(&mut socket).await;
@@ -568,7 +576,7 @@ mod tests {
     }
     #[tokio::test]
     async fn connection_loss_after_mutation_is_uncertain_and_never_replayed() {
-        let (_dir, client, listener) = fixture().await;
+        let (_dir, client, listener) = fixture();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             envelope(&mut socket).await;
@@ -593,11 +601,14 @@ mod tests {
     }
     #[tokio::test]
     async fn oversized_response_is_rejected_before_allocation() {
-        let (_dir, client, listener) = fixture().await;
+        let (_dir, client, listener) = fixture();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             envelope(&mut socket).await;
-            socket.write_u32((MAX_FRAME + 1) as u32).await.unwrap();
+            socket
+                .write_u32(u32::try_from(MAX_FRAME.saturating_add(1)).unwrap_or(u32::MAX))
+                .await
+                .unwrap();
         });
         assert!(
             client
@@ -623,7 +634,7 @@ mod tests {
         let owner = Generation {
             id: id.clone(),
             data: root.data.join("generations").join(&id),
-            runtime: root.runtime.join(&id[..8]),
+            runtime: root.runtime.join(id.get(..8).unwrap_or(&id)),
             version: "test".into(),
             build: "test".into(),
             protocol: PROTOCOL_VERSION,
@@ -745,7 +756,7 @@ mod tests {
             let id = crate::id();
             let owner = Generation {
                 data: root.data.join("generations").join(&id),
-                runtime: root.runtime.join(&id[..8]),
+                runtime: root.runtime.join(id.get(..8).unwrap_or(&id)),
                 id,
                 version: "1.0.0".into(),
                 build: "fixture".into(),

@@ -167,24 +167,27 @@ impl AppearanceConfig {
                 "#{:02X}{:02X}{:02X}",
                 r / 3,
                 g / 3,
-                ((u16::from(b) * 2) / 5) as u8
+                u8::try_from(u16::from(b).saturating_mul(2).checked_div(5).unwrap_or(0),)
+                    .unwrap_or(0)
             );
         }
         self.accent = accent;
     }
 }
 pub fn rgb(value: &str) -> Result<[u8; 3]> {
+    let Some(body) = value.get(1..) else {
+        anyhow::bail!("Invalid color {value:?}");
+    };
     ensure!(
-        value.len() == 7
-            && value.starts_with('#')
-            && value[1..].bytes().all(|b| b.is_ascii_hexdigit()),
+        value.len() == 7 && value.starts_with('#') && body.bytes().all(|b| b.is_ascii_hexdigit()),
         "Invalid color {value:?}"
     );
-    Ok([
-        u8::from_str_radix(&value[1..3], 16)?,
-        u8::from_str_radix(&value[3..5], 16)?,
-        u8::from_str_radix(&value[5..7], 16)?,
-    ])
+    let hex = |start: usize| -> Result<u8> {
+        let end = start.saturating_add(2);
+        let part = value.get(start..end).context("Invalid color")?;
+        Ok(u8::from_str_radix(part, 16)?)
+    };
+    Ok([hex(1)?, hex(3)?, hex(5)?])
 }
 pub fn config_path(paths: &crate::Paths) -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os("TERMINATOR_CONFIG_DIR") {
@@ -242,10 +245,14 @@ impl AppearanceFile {
         );
         let mut doc = current.source.parse::<toml_edit::DocumentMut>()?;
         if !doc.contains_key("appearance") {
-            doc["appearance"] = toml_edit::Item::Table(toml_edit::Table::new());
+            doc.insert(
+                "appearance",
+                toml_edit::Item::Table(toml_edit::Table::new()),
+            );
         }
-        let table = doc["appearance"]
-            .as_table_mut()
+        let table = doc
+            .get_mut("appearance")
+            .and_then(toml_edit::Item::as_table_mut)
             .context("appearance must be a table")?;
         let values = toml_edit::ser::to_document(config)?;
         for (key, item) in values.iter() {

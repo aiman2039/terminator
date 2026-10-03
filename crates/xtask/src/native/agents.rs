@@ -9,10 +9,17 @@ pub fn run(o: &Options) -> Result<()> {
     let h = Harness::new()?;
     h.setup()?;
     // Keep the pending event through navigation so this fixture can test resolve updates.
-    let mut settings = h.state()?["settings"].clone();
-    settings["dismissal"] = json!("Manual");
+    let mut settings = h
+        .state()?
+        .get("settings")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing settings"))?;
+    let settings_object = settings
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("settings is not an object"))?;
+    settings_object.insert("dismissal".into(), json!("Manual"));
     // The top attention bar records `attention`. Side mode hides that bar.
-    settings["notifications_side"] = json!(false);
+    settings_object.insert("notifications_side".into(), json!(false));
     h.rpc(json!({"Settings":settings}))?;
     let first = h.project("agent-project")?;
     let second = h.project("other-project")?;
@@ -31,9 +38,12 @@ pub fn run(o: &Options) -> Result<()> {
         h.wait(
             |_| {
                 gui(&h).is_ok_and(|s| {
-                    s["left_agents"] == false
-                        && s["agent_bar_badge"] == "1 waiting · 1 unread"
-                        && s["attention"] == json!([1, false])
+                    s.get("left_agents")
+                        .is_some_and(|value| value == &json!(false))
+                        && s.get("agent_bar_badge")
+                            .is_some_and(|badge| badge == "1 waiting · 1 unread")
+                        && s.get("attention")
+                            .is_some_and(|attention| attention == &json!([1, false]))
                 })
             },
             8,
@@ -50,7 +60,10 @@ pub fn run(o: &Options) -> Result<()> {
             h.wait(
                 |_| {
                     gui(&h).is_ok_and(|s| {
-                        s["attention"] == json!([1, true]) && s["left_agents"] == false
+                        s.get("attention")
+                            .is_some_and(|attention| attention == &json!([1, true]))
+                            && s.get("left_agents")
+                                .is_some_and(|value| value == &json!(false))
                     })
                 },
                 8,
@@ -68,7 +81,11 @@ pub fn run(o: &Options) -> Result<()> {
             h.wait(
                 |_| {
                     gui(&h).is_ok_and(|s| {
-                        s["left_agents"] == true && s["selected_project"] == second["id"]
+                        s.get("left_agents")
+                            .is_some_and(|value| value == &json!(true))
+                            && s.get("selected_project").is_some_and(|project| {
+                                second.get("id").is_some_and(|id| project == id)
+                            })
                     })
                 },
                 8,
@@ -77,7 +94,9 @@ pub fn run(o: &Options) -> Result<()> {
         },
     )?;
     ensure!(
-        prefs(&h)?["left_agents"] == true,
+        prefs(&h)?
+            .get("left_agents")
+            .is_some_and(|value| value == &json!(true)),
         "Opening Agents did not persist"
     );
     capture(
@@ -90,9 +109,14 @@ pub fn run(o: &Options) -> Result<()> {
             h.wait(
                 |_| {
                     gui(&h).is_ok_and(|s| {
-                        s["left_agents"] == true
-                            && s["selected_project"] == first["id"]
-                            && s["active_session"] == agent["id"]
+                        s.get("left_agents")
+                            .is_some_and(|value| value == &json!(true))
+                            && s.get("selected_project").is_some_and(|project| {
+                                first.get("id").is_some_and(|id| project == id)
+                            })
+                            && s.get("active_session").is_some_and(|session| {
+                                agent.get("id").is_some_and(|id| session == id)
+                            })
                     })
                 },
                 8,
@@ -101,7 +125,15 @@ pub fn run(o: &Options) -> Result<()> {
         },
     )?;
     // Navigation must not clear the observed waiting state.
-    h.wait(|s| s["agents"][0]["state"] == "waiting_permission", 5)?;
+    h.wait(
+        |s| {
+            s.get("agents")
+                .and_then(|agents| agents.get(0))
+                .and_then(|agent| agent.get("state"))
+                .is_some_and(|state| state == "waiting_permission")
+        },
+        5,
+    )?;
     capture(
         &h,
         o,
@@ -112,10 +144,11 @@ pub fn run(o: &Options) -> Result<()> {
             h.wait(
                 |_| {
                     gui(&h).is_ok_and(|s| {
-                        s["left_agents"] == false
-                            && s["agent_bar_badge"]
-                                .as_str()
-                                .is_some_and(|s| s.starts_with("1 waiting"))
+                        s.get("left_agents")
+                            .is_some_and(|value| value == &json!(false))
+                            && s.get("agent_bar_badge")
+                                .and_then(Value::as_str)
+                                .is_some_and(|badge| badge.starts_with("1 waiting"))
                     })
                 },
                 8,
@@ -124,20 +157,25 @@ pub fn run(o: &Options) -> Result<()> {
         },
     )?;
     ensure!(
-        prefs(&h)?["left_agents"] == false,
+        prefs(&h)?
+            .get("left_agents")
+            .is_some_and(|value| value == &json!(false)),
         "Returning to Projects did not persist"
     );
     let mut running = event.clone();
-    running["event_id"] = json!("bell-running");
-    running["state"] = json!("running");
-    running["sequence"] = json!(2);
+    let running_object = running
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("hook event is not an object"))?;
+    running_object.insert("event_id".into(), json!("bell-running"));
+    running_object.insert("state".into(), json!("running"));
+    running_object.insert("sequence".into(), json!(2));
     capture(&h, o, "running", json!([]), 3000, |_| {
         h.wait(
             |_| {
                 gui(&h).is_ok_and(|s| {
-                    s["agent_bar_badge"]
-                        .as_str()
-                        .is_some_and(|s| s.contains("waiting"))
+                    s.get("agent_bar_badge")
+                        .and_then(Value::as_str)
+                        .is_some_and(|badge| badge.contains("waiting"))
                 })
             },
             8,
@@ -146,9 +184,11 @@ pub fn run(o: &Options) -> Result<()> {
         h.wait(
             |_| {
                 gui(&h).is_ok_and(|s| {
-                    s["left_agents"] == false
-                        && !s["agent_bar_badge"]
-                            .as_str()
+                    s.get("left_agents")
+                        .is_some_and(|value| value == &json!(false))
+                        && !s
+                            .get("agent_bar_badge")
+                            .and_then(Value::as_str)
                             .unwrap_or("waiting")
                             .contains("waiting")
                 })

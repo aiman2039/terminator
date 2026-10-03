@@ -6,7 +6,7 @@ use std::{
     future::Future,
     panic::AssertUnwindSafe,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     thread::JoinHandle,
@@ -54,7 +54,11 @@ impl OperationContext {
             session: None,
             resource,
             generation: 0,
-            deadline: Some(Instant::now() + Duration::from_secs(30)),
+            deadline: Some(
+                Instant::now()
+                    .checked_add(Duration::from_secs(30))
+                    .unwrap_or_else(Instant::now),
+            ),
             policy,
             admitted: Instant::now(),
         }
@@ -149,7 +153,7 @@ struct Shared<T> {
 pub struct Handle<T>(Arc<Shared<T>>);
 impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self(Arc::clone(&self.0))
     }
 }
 impl<T: Send + 'static> Handle<T> {
@@ -169,7 +173,7 @@ impl<T: Send + 'static> Handle<T> {
             .counters
             .queued
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < QUEUE_LIMIT).then_some(n + 1)
+                (n < QUEUE_LIMIT).then_some(n.saturating_add(1))
             })
             .map_err(|_| Failure::Overloaded)?;
         context.id = OperationId(self.0.next.fetch_add(1, Ordering::Relaxed));
@@ -243,7 +247,7 @@ impl<T: Send + 'static> Supervisor<T> {
             read_epoch: AtomicU64::new(0),
             counters: Arc::default(),
         });
-        let owner = shared.clone();
+        let owner = Arc::clone(&shared);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("gui-async")
@@ -294,7 +298,7 @@ async fn deliver<T>(
         .send(Completion {
             context,
             result: Some(result),
-            counters: shared.counters.clone(),
+            counters: Arc::clone(&shared.counters),
         })
         .await;
     wake();
@@ -325,20 +329,24 @@ async fn supervise<T: Send + 'static>(
             .map(|(c, _)| c)
             .chain(pending.iter().map(|r| &r.context))
             .filter(|c| c.policy != Policy::ServiceLifetime)
-            .map(|c| c.admitted.elapsed().as_millis() as u64)
+            .map(|c| u64::try_from(c.admitted.elapsed().as_millis()).unwrap_or(u64::MAX))
             .max()
             .unwrap_or(0);
         shared.counters.oldest_ms.store(age, Ordering::Release);
 
         let mut index = 0;
         while index < pending.len() {
-            let job = &pending[index];
+            let Some(job) = pending.get(index) else {
+                break;
+            };
             let cancelled = job.cancellation.is_cancelled()
                 || (job.context.policy == Policy::ReplaceableRead && job.read_epoch != epoch)
                 || (stopping && job.context.policy != Policy::OrderedMutation);
             let expired = job.context.deadline.is_some_and(|d| Instant::now() >= d);
             if cancelled || expired {
-                let job = pending.remove(index).unwrap();
+                let Some(job) = pending.remove(index) else {
+                    break;
+                };
                 shared.counters.queued.fetch_sub(1, Ordering::AcqRel);
                 deliver(
                     job.context,
@@ -362,10 +370,12 @@ async fn supervise<T: Send + 'static>(
                 || (!actor && shared.counters.active.load(Ordering::Acquire) >= ACTIVE_LIMIT)
                 || (actor && shared.counters.actors.load(Ordering::Acquire) >= 16)
             {
-                index += 1;
+                index = index.saturating_add(1);
                 continue;
             }
-            let job = pending.remove(index).unwrap();
+            let Some(job) = pending.remove(index) else {
+                break;
+            };
             shared.counters.queued.fetch_sub(1, Ordering::AcqRel);
             if actor {
                 shared.counters.actors.fetch_add(1, Ordering::AcqRel);
@@ -453,28 +463,36 @@ impl NativePool {
         let running = Arc::new(AtomicUsize::new(0));
         let owner = Arc::new(PoolOwner {
             threads: Mutex::new(Vec::new()),
-            running: running.clone(),
+            running: Arc::clone(&running),
         });
         for index in 0..count {
-            let receiver = receiver.clone();
-            let running = running.clone();
-            owner.threads.lock().unwrap().push(
-                std::thread::Builder::new()
-                    .name(format!("{name}-{index}"))
-                    .spawn(move || {
-                        loop {
-                            let Some(job) = receiver.lock().unwrap().blocking_recv() else {
-                                break;
-                            };
-                            if job.cancellation.is_cancelled() {
-                                continue;
+            let receiver = Arc::clone(&receiver);
+            let running = Arc::clone(&running);
+            owner
+                .threads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(
+                    std::thread::Builder::new()
+                        .name(format!("{name}-{index}"))
+                        .spawn(move || {
+                            loop {
+                                let Some(job) = receiver
+                                    .lock()
+                                    .unwrap_or_else(PoisonError::into_inner)
+                                    .blocking_recv()
+                                else {
+                                    break;
+                                };
+                                if job.cancellation.is_cancelled() {
+                                    continue;
+                                }
+                                running.fetch_add(1, Ordering::AcqRel);
+                                let _ = std::panic::catch_unwind(AssertUnwindSafe(job.call));
+                                running.fetch_sub(1, Ordering::AcqRel);
                             }
-                            running.fetch_add(1, Ordering::AcqRel);
-                            let _ = std::panic::catch_unwind(AssertUnwindSafe(job.call));
-                            running.fetch_sub(1, Ordering::AcqRel);
-                        }
-                    })?,
-            );
+                        })?,
+                );
         }
         Ok(Self { sender, owner })
     }
@@ -516,7 +534,9 @@ impl NativePool {
     }
     #[must_use]
     pub fn queued(&self) -> usize {
-        self.sender.max_capacity() - self.sender.capacity()
+        self.sender
+            .max_capacity()
+            .saturating_sub(self.sender.capacity())
     }
 }
 
@@ -533,10 +553,17 @@ pub fn read_chunks(
         if cancel.is_cancelled() {
             return Err(Failure::Cancelled.into());
         }
-        let count = buffer.len().min(limit - bytes.len());
-        match reader.read(&mut buffer[..count]) {
+        let count = buffer.len().min(limit.saturating_sub(bytes.len()));
+        let Some(window) = buffer.get_mut(..count) else {
+            break;
+        };
+        match reader.read(window) {
             Ok(0) => break,
-            Ok(n) => bytes.extend_from_slice(&buffer[..n]),
+            Ok(n) => {
+                if let Some(chunk) = window.get(..n) {
+                    bytes.extend_from_slice(chunk);
+                }
+            }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(error.into()),
         }
@@ -548,7 +575,9 @@ pub fn read_chunks(
 mod tests {
     use super::*;
     async fn completion<T: Send + 'static>(supervisor: &mut Supervisor<T>) -> Completion<T> {
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(3))
+            .unwrap_or_else(Instant::now);
         loop {
             if let Some(result) = supervisor.try_recv() {
                 return result;
@@ -580,7 +609,7 @@ mod tests {
             read_chunks(
                 Reader {
                     token: token.clone(),
-                    reads: reads.clone()
+                    reads: Arc::clone(&reads)
                 },
                 2,
                 &token
@@ -682,7 +711,7 @@ mod tests {
             Err(Failure::Cancelled)
         ));
         let release = Arc::new(tokio::sync::Notify::new());
-        let gate = release.clone();
+        let gate = Arc::clone(&release);
         supervisor
             .handle
             .submit(
@@ -694,19 +723,19 @@ mod tests {
                 },
             )
             .unwrap();
-        let mut accepted = 1;
-        for _ in 0..(QUEUE_LIMIT + ACTIVE_LIMIT + 1) {
+        let mut accepted: usize = 1;
+        for _ in 0..QUEUE_LIMIT.saturating_add(ACTIVE_LIMIT).saturating_add(1) {
             match supervisor.handle.submit(
                 context("ordered", Policy::OrderedMutation),
                 CancellationToken::new(),
                 async { Ok(1) },
             ) {
-                Ok(_) => accepted += 1,
+                Ok(_) => accepted = accepted.saturating_add(1),
                 Err(Failure::Overloaded) => break,
                 Err(error) => panic!("{error}"),
             }
         }
-        assert!(accepted <= QUEUE_LIMIT + 1);
+        assert!(accepted <= QUEUE_LIMIT.saturating_add(1));
         supervisor.handle.close_admission();
         assert!(matches!(
             supervisor.handle.submit(
@@ -780,7 +809,9 @@ mod tests {
             let waiter = pool.clone();
             extra.push(tokio::spawn(async move {
                 waiter
-                    .run(&CancellationToken::new(), move || Ok(n as u8))
+                    .run(&CancellationToken::new(), move || {
+                        Ok(u8::try_from(n).unwrap_or(u8::MAX))
+                    })
                     .await
             }));
         }
@@ -792,7 +823,10 @@ mod tests {
         release.send(()).unwrap();
         assert_eq!(active.await.unwrap().unwrap(), 1);
         for (n, task) in extra.into_iter().enumerate() {
-            assert_eq!(task.await.unwrap().unwrap(), n as u8);
+            assert_eq!(
+                task.await.unwrap().unwrap(),
+                u8::try_from(n).unwrap_or(u8::MAX)
+            );
         }
     }
     #[tokio::test]

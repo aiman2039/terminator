@@ -42,7 +42,7 @@ fn fence(line: &str) -> bool {
 fn heading_level(line: &str) -> Option<u8> {
     let hashes = line.bytes().take_while(|b| *b == b'#').count();
     if (1..=6).contains(&hashes) && line.as_bytes().get(hashes) == Some(&b' ') {
-        Some(hashes as u8)
+        u8::try_from(hashes).ok()
     } else {
         None
     }
@@ -53,15 +53,16 @@ fn list_kind(line: &str) -> Option<BlockKind> {
     if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
         return Some(BlockKind::Bullet);
     }
-    let mut digits = 0;
+    let mut digits: usize = 0;
     for b in trimmed.bytes() {
         if b.is_ascii_digit() {
-            digits += 1;
+            digits = digits.checked_add(1)?;
         } else {
             break;
         }
     }
-    if digits > 0 && trimmed.as_bytes().get(digits..digits + 2) == Some(b". ") {
+    let end = digits.checked_add(2)?;
+    if digits > 0 && trimmed.as_bytes().get(digits..end) == Some(b". ") {
         return Some(BlockKind::Numbered);
     }
     None
@@ -78,9 +79,9 @@ pub fn parse_blocks<B: Buffer>(doc: &B) -> Vec<Block> {
         let trimmed = text.trim();
         if fence(&text) {
             let start = line;
-            line += 1;
+            line = line.checked_add(1).unwrap_or(count);
             while line < count && !fence(&doc.line_text(line)) {
-                line += 1;
+                line = line.checked_add(1).unwrap_or(count);
             }
             let end = line.min(count.saturating_sub(1));
             blocks.push(Block {
@@ -88,7 +89,7 @@ pub fn parse_blocks<B: Buffer>(doc: &B) -> Vec<Block> {
                 start_line: start,
                 end_line: end.max(start),
             });
-            line += 1;
+            line = line.checked_add(1).unwrap_or(count);
             continue;
         }
         if trimmed.is_empty() {
@@ -97,7 +98,7 @@ pub fn parse_blocks<B: Buffer>(doc: &B) -> Vec<Block> {
                 start_line: line,
                 end_line: line,
             });
-            line += 1;
+            line = line.checked_add(1).unwrap_or(count);
             continue;
         }
         if let Some(level) = heading_level(trimmed) {
@@ -106,7 +107,7 @@ pub fn parse_blocks<B: Buffer>(doc: &B) -> Vec<Block> {
                 start_line: line,
                 end_line: line,
             });
-            line += 1;
+            line = line.checked_add(1).unwrap_or(count);
             continue;
         }
         if trimmed.starts_with("> ") || trimmed == ">" {
@@ -115,7 +116,7 @@ pub fn parse_blocks<B: Buffer>(doc: &B) -> Vec<Block> {
                 start_line: line,
                 end_line: line,
             });
-            line += 1;
+            line = line.checked_add(1).unwrap_or(count);
             continue;
         }
         if let Some(kind) = list_kind(&text) {
@@ -124,7 +125,7 @@ pub fn parse_blocks<B: Buffer>(doc: &B) -> Vec<Block> {
                 start_line: line,
                 end_line: line,
             });
-            line += 1;
+            line = line.checked_add(1).unwrap_or(count);
             continue;
         }
         let start = line;
@@ -138,7 +139,7 @@ pub fn parse_blocks<B: Buffer>(doc: &B) -> Vec<Block> {
             {
                 break;
             }
-            line += 1;
+            line = line.checked_add(1).unwrap_or(count);
         }
         blocks.push(Block {
             kind: BlockKind::Paragraph,

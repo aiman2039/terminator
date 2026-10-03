@@ -28,23 +28,23 @@ impl Images {
         let (tx, _) = std::sync::mpsc::channel();
         let (services, owner) = crate::gui_services::Services::new(paths, ctx.clone(), tx).unwrap();
         let loader = Arc::new(Self {
-            entries: Default::default(),
+            entries: Arc::default(),
             submit: services.submit(),
-            next: Default::default(),
+            next: std::sync::atomic::AtomicU64::default(),
             _owner: Some(Mutex::new(owner)),
         });
-        ctx.add_image_loader(loader.clone());
+        ctx.add_image_loader(Arc::<Self>::clone(&loader));
         loader
     }
     pub fn with_submit(ctx: &egui::Context, submit: crate::gui_services::Submit) -> Arc<Self> {
         let loader = Arc::new(Self {
-            entries: Default::default(),
+            entries: Arc::default(),
             submit,
-            next: Default::default(),
+            next: std::sync::atomic::AtomicU64::default(),
             #[cfg(test)]
             _owner: None,
         });
-        ctx.add_image_loader(loader.clone());
+        ctx.add_image_loader(Arc::<Self>::clone(&loader));
         loader
     }
     pub fn clear(&self, ctx: &egui::Context) {
@@ -54,7 +54,7 @@ impl Images {
         let unused: Vec<_> = self
             .entries
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .keys()
             .filter(|uri| !used.contains(*uri))
             .cloned()
@@ -77,11 +77,14 @@ impl ImageLoader for Images {
         if !uri.starts_with("markdown-image:") {
             return Err(LoadError::NotSupported);
         }
-        let mut entries = self.entries.lock().unwrap();
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(entry) = entries.get(uri) {
             return match &entry.result {
                 Some(Ok(image)) => Ok(ImagePoll::Ready {
-                    image: image.clone(),
+                    image: Arc::clone(image),
                 }),
                 Some(Err(error)) => Err(LoadError::Loading(error.clone())),
                 None => Ok(ImagePoll::Pending { size: None }),
@@ -96,7 +99,7 @@ impl ImageLoader for Images {
         use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
         let token = CancellationToken::new();
         let cancelled = token.clone();
-        let cache = self.entries.clone();
+        let cache = Arc::clone(&self.entries);
         let submit = self.submit.clone();
         let target = uri.to_owned();
         let repaint = ctx.clone();
@@ -122,16 +125,20 @@ impl ImageLoader for Images {
                     .map_err(|e| format!("{e:#}")),
                     None => Err("Invalid local image path".into()),
                 };
-                let mut entries = cache.lock().unwrap();
+                let mut entries = cache
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let used: usize = entries
                     .values()
                     .filter_map(|e| e.result.as_ref())
                     .filter_map(|r| r.as_ref().ok())
-                    .map(|i| i.pixels.len() * 4)
+                    .map(|i| i.pixels.len().saturating_mul(4))
                     .sum();
                 if let Some(entry) = entries.get_mut(&target).filter(|e| e.ticket == ticket) {
                     entry.result = Some(result.and_then(|image| {
-                        if used + image.pixels.len() * 4 > 64 * 1024 * 1024 {
+                        if used.saturating_add(image.pixels.len().saturating_mul(4))
+                            > 64 * 1024 * 1024
+                        {
                             Err("Markdown images exceed the 64 MiB preview limit".into())
                         } else {
                             Ok(image)
@@ -157,25 +164,31 @@ impl ImageLoader for Images {
         Ok(ImagePoll::Pending { size: None })
     }
     fn forget(&self, uri: &str) {
-        self.entries.lock().unwrap().remove(uri);
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(uri);
     }
     fn forget_all(&self) {
-        self.entries.lock().unwrap().clear();
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
     fn byte_size(&self) -> usize {
         self.entries
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .values()
             .filter_map(|v| v.result.as_ref())
             .filter_map(|r| r.as_ref().ok())
-            .map(|i| i.pixels.len() * 4)
+            .map(|i| i.pixels.len().saturating_mul(4))
             .sum()
     }
     fn has_pending(&self) -> bool {
         self.entries
             .lock()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .values()
             .any(|v| v.result.is_none())
     }

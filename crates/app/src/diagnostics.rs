@@ -30,7 +30,7 @@ impl Default for Diagnostics {
             action_index: 0,
             release: None,
             pointer: None,
-            ticking: Default::default(),
+            ticking: std::sync::Arc::default(),
         }
     }
 }
@@ -66,16 +66,16 @@ impl Diagnostics {
                 pos,
                 button,
                 pressed: false,
-                modifiers: Default::default(),
+                modifiers: egui::Modifiers::default(),
             });
         } else if let Some(action) = self.actions.get(self.action_index)
-            && self.started.elapsed().as_millis() >= action.at_ms as u128
+            && self.started.elapsed().as_millis() >= u128::from(action.at_ms)
             && let Some(rect) = ctx.data(|d| {
                 d.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", &action.target)))
             })
         {
             let pos = if action.hover {
-                rect.min + egui::vec2(45.0, 10.0)
+                egui::pos2(rect.min.x + 45.0, rect.min.y + 10.0)
             } else {
                 rect.center()
             };
@@ -108,7 +108,7 @@ impl Diagnostics {
                         physical_key: None,
                         pressed: true,
                         repeat: false,
-                        modifiers: Default::default(),
+                        modifiers: egui::Modifiers::default(),
                     });
                 }
             } else if let Some(text) = &action.input {
@@ -138,15 +138,15 @@ impl Diagnostics {
                     pos,
                     button,
                     pressed: true,
-                    modifiers: Default::default(),
+                    modifiers: egui::Modifiers::default(),
                 });
                 self.release = Some((pos, button));
             }
             if action.capture {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
             }
             eprintln!("Fixture action: {}", action.target);
-            self.action_index += 1;
+            self.action_index = self.action_index.saturating_add(1);
         }
     }
     pub fn actions_completed(&self) -> usize {
@@ -163,7 +163,7 @@ impl Diagnostics {
                 .unwrap_or(1.0);
             self.ticking
                 .store(true, std::sync::atomic::Ordering::Relaxed);
-            let ticking = self.ticking.clone();
+            let ticking = std::sync::Arc::clone(&self.ticking);
             let repaint = ctx.clone();
             std::thread::spawn(move || {
                 while ticking.load(std::sync::atomic::Ordering::Relaxed) {
@@ -225,7 +225,7 @@ impl Diagnostics {
                     physical_key: None,
                     pressed: true,
                     repeat: false,
-                    modifiers: Default::default(),
+                    modifiers: egui::Modifiers::default(),
                 }),
                 2 if ms > 1800 => Some(egui::Event::Text(":w\r".into())),
                 _ => None,
@@ -235,7 +235,7 @@ impl Diagnostics {
                     i.focused = true;
                     i.events.push(event);
                 });
-                self.input_phase += 1;
+                self.input_phase = self.input_phase.saturating_add(1);
             }
         }
         for event in ctx.input(|i| i.events.clone()) {
@@ -248,7 +248,7 @@ impl Diagnostics {
                 let bytes = image
                     .pixels
                     .iter()
-                    .flat_map(|p| p.to_array())
+                    .flat_map(eframe::egui::Color32::to_array)
                     .collect::<Vec<_>>();
                 if let Some(parent) = path.parent() {
                     let _ = std::fs::create_dir_all(parent);
@@ -256,8 +256,8 @@ impl Diagnostics {
                 if let Err(e) = image::save_buffer(
                     path,
                     &bytes,
-                    image.width() as u32,
-                    image.height() as u32,
+                    u32::try_from(image.width()).unwrap_or(u32::MAX),
+                    u32::try_from(image.height()).unwrap_or(u32::MAX),
                     image::ColorType::Rgba8,
                 ) {
                     eprintln!("Capture failed: {e}");
@@ -290,7 +290,7 @@ impl Diagnostics {
                         .unwrap_or(3000),
                 )
         {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
             self.requested = true;
             eprintln!("Native fixture requested capture");
         }
@@ -343,8 +343,10 @@ mod tests {
         let ctx = egui::Context::default();
         let mut diagnostics = Diagnostics::default();
         diagnostics.path = Some("fixture.png".into());
-        diagnostics.started = Instant::now() - Duration::from_secs(3600);
-        let mut output = ctx.run_ui(Default::default(), |ui| {
+        diagnostics.started = Instant::now()
+            .checked_sub(Duration::from_secs(4))
+            .unwrap_or_else(Instant::now);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             if ui.ctx().current_pass_index() == 0 {
                 ui.ctx().request_discard("fixture sizing pass");
                 diagnostics.capture(ui.ctx());

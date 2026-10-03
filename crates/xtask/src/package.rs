@@ -1,5 +1,5 @@
 use crate::harness::{output, root};
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use serde_json::Value;
 use std::{
     fs,
@@ -69,8 +69,9 @@ fn licenses(destination: &Path) -> Result<()> {
     cmd.current_dir(root())
         .args(["metadata", "--format-version", "1", "--locked"]);
     let metadata: Value = serde_json::from_slice(&output(cmd)?)?;
-    for package in metadata["packages"]
-        .as_array()
+    for package in metadata
+        .get("packages")
+        .and_then(Value::as_array)
         .context("Cargo packages missing")?
     {
         let manifest = Path::new(package["manifest_path"].as_str().unwrap());
@@ -93,7 +94,13 @@ fn licenses(destination: &Path) -> Result<()> {
             }
         }
     }
-    let info=metadata["packages"].as_array().unwrap().iter().map(|p|serde_json::json!({"name":p["name"],"version":p["version"],"license":p["license"],"repository":p["repository"]})).collect::<Vec<_>>();
+    let info = metadata
+        .get("packages")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("Cargo packages missing"))?
+        .iter()
+        .map(|p| serde_json::json!({"name":p["name"],"version":p["version"],"license":p["license"],"repository":p["repository"]}))
+        .collect::<Vec<_>>();
     fs::write(
         destination.join("dependencies.json"),
         serde_json::to_vec_pretty(&info)?,

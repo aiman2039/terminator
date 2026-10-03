@@ -2,7 +2,7 @@ use crate::harness::{
     Harness, Process, artifacts, bin, git, id, output, root, session, session_ids, sessions,
     wait_child,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -81,8 +81,11 @@ pub fn capture(
     if let Err(error) = during(&mut gui.0) {
         return Err(error.context(fs::read_to_string(&logpath).unwrap_or_default()));
     }
-    let status = wait_child(&mut gui.0, Duration::from_millis(after + 20000))
-        .with_context(|| fs::read_to_string(&logpath).unwrap_or_default())?;
+    let status = wait_child(
+        &mut gui.0,
+        Duration::from_millis(after.saturating_add(20000)),
+    )
+    .with_context(|| fs::read_to_string(&logpath).unwrap_or_default())?;
     let logs = fs::read_to_string(logpath)?;
     ensure!(status.success(), "GUI failed: {logs}");
     for action in actions.as_array().unwrap() {
@@ -119,7 +122,11 @@ fn setup(name: &str) -> Result<(Harness, Value, Vec<Value>, PathBuf)> {
     let h = Harness::new()?;
     h.setup()?;
     let p = h.project(name)?;
-    let root = PathBuf::from(p["path"].as_str().unwrap());
+    let root = PathBuf::from(
+        p.get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("missing project path"))?,
+    );
     let sessions = (0..6).map(|_| h.shell(&p)).collect::<Result<Vec<_>>>()?;
     h.layout(&p, &sessions)?;
     Ok((h, p, sessions, root))
@@ -184,7 +191,8 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "agent-sidebar" => agents::run(&opts)?,
             "pane-close" => {
                 let (h, _, originals, _) = setup("pane-close")?;
-                let target = format!("pane-close:{}", id(&originals[0]));
+                let first = originals.first().ok_or_else(|| anyhow!("missing pane"))?;
+                let target = format!("pane-close:{}", id(first));
                 plain(
                     &h,
                     &opts,
@@ -206,10 +214,16 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
                     3000,
                 )?;
                 let state = h.state()?;
-                let remaining = session_ids(&state["projects"][0]["layout"]);
+                let remaining = session_ids(
+                    state
+                        .get("projects")
+                        .and_then(|projects| projects.get(0))
+                        .and_then(|project| project.get("layout"))
+                        .ok_or_else(|| anyhow!("missing projects[0].layout"))?,
+                );
                 ensure!(
-                    remaining.len() == originals.len() - 1
-                        && !remaining.contains(&id(&originals[0]).to_owned()),
+                    remaining.len() == originals.len().saturating_sub(1)
+                        && !remaining.contains(&id(first).to_owned()),
                     "Pane close removed the wrong session"
                 );
                 h.assert_pids(&originals)?;
@@ -256,8 +270,15 @@ fn smoke(opts: &Options) -> Result<()> {
     );
     let mut h = Harness::new()?;
     h.setup()?;
-    let mut settings = h.state()?["settings"].clone();
-    settings["font_size"] = json!(16.0);
+    let mut settings = h
+        .state()?
+        .get("settings")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing settings"))?;
+    settings
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("settings is not an object"))?
+        .insert("font_size".into(), json!(16.0));
     h.rpc(json!({"Settings":settings}))?;
     let p = h.project("native-ui")?;
     let path = h.root.join("native-ui/hello.rs");
@@ -266,13 +287,13 @@ fn smoke(opts: &Options) -> Result<()> {
         "fn main() {\n    println!(\"Native Rust terminal\");\n}\n",
     )?;
     let mut originals = Vec::new();
-    for i in 0..5 {
+    for i in 0usize..5 {
         let s = h.shell(&p)?;
         h.write(
             &mut h.attach(&s)?,
             &format!(
                 "printf '\\033[1;36mSESSION {}\\033[0m\\nNative terminal is connected.\\n'\n",
-                i + 1
+                i.saturating_add(1)
             ),
         )?;
         originals.push(s);
@@ -284,33 +305,71 @@ fn smoke(opts: &Options) -> Result<()> {
     }
     h.layout(&p, &originals)?;
     h.env.insert("TERMINATOR_TEST_INPUT".into(), "1".into());
-    plain(&h, opts, "six-panes", json!([]), opts.seconds * 1000)?;
+    plain(
+        &h,
+        opts,
+        "six-panes",
+        json!([]),
+        opts.seconds.saturating_mul(1000),
+    )?;
     h.env.remove("TERMINATOR_TEST_INPUT");
     ensure!(
-        h.state()?["settings"]["font_size"] == 13.0,
+        h.state()?
+            .get("settings")
+            .and_then(|settings| settings.get("font_size"))
+            .is_some_and(|size| size == &json!(13.0)),
         "Typography migration did not apply"
     );
     let mut pref = prefs(&h)?;
     ensure!(
-        pref["typography_migrated"] == true,
+        pref.get("typography_migrated")
+            .is_some_and(|migrated| migrated == &json!(true)),
         "Migration marker missing"
     );
-    let mut settings = h.state()?["settings"].clone();
-    settings["font_size"] = json!(18.0);
+    let mut settings = h
+        .state()?
+        .get("settings")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing settings"))?;
+    settings
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("settings is not an object"))?
+        .insert("font_size".into(), json!(18.0));
     h.rpc(json!({"Settings":settings}))?;
-    pref["tool"] = json!("Git");
-    pref["visible"] = json!(false);
-    pref["width"] = json!(370.0);
-    pref["expanded"] = json!({id(&p):false});
+    let preferences = pref
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("preferences are not an object"))?;
+    preferences.insert("tool".into(), json!("Git"));
+    preferences.insert("visible".into(), json!(false));
+    preferences.insert("width".into(), json!(370.0));
+    preferences.insert("expanded".into(), json!({id(&p):false}));
     save_prefs(&h, &pref)?;
-    plain(&h, opts, "restart", json!([]), opts.seconds * 1000)?;
+    plain(
+        &h,
+        opts,
+        "restart",
+        json!([]),
+        opts.seconds.saturating_mul(1000),
+    )?;
     ensure!(
-        h.state()?["settings"]["font_size"] == 18.0 && prefs(&h)? == pref,
+        h.state()?
+            .get("settings")
+            .and_then(|settings| settings.get("font_size"))
+            .is_some_and(|size| size == &json!(18.0))
+            && prefs(&h)? == pref,
         "User preferences changed on restart"
     );
     h.assert_pids(&originals)?;
     ensure!(
-        session_ids(&h.state()?["projects"][0]["layout"]).len() == 6,
+        session_ids(
+            h.state()?
+                .get("projects")
+                .and_then(|projects| projects.get(0))
+                .and_then(|project| project.get("layout"))
+                .ok_or_else(|| anyhow!("missing projects[0].layout"))?,
+        )
+        .len()
+            == 6,
         "Layout lost panes"
     );
     ensure!(
@@ -335,16 +394,23 @@ fn workspace_tabs(o: &Options) -> Result<()> {
         .iter()
         .find(|s| s["kind"] == "editor")
         .context("Editor not created")?;
-    let layout = &state["projects"][0]["layout"];
+    let layout = state
+        .get("projects")
+        .and_then(|projects| projects.get(0))
+        .and_then(|project| project.get("layout"))
+        .ok_or_else(|| anyhow!("missing projects[0].layout"))?;
     ensure!(
         layout["tabs"].as_array().unwrap().len() == 2,
         "File did not open top-level tab"
     );
+    let original = originals
+        .first()
+        .ok_or_else(|| anyhow!("missing original session"))?;
     let shell_group = layout["tabs"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|t| session_ids(&t["layout"]).contains(&id(&originals[0]).into()))
+        .find(|t| session_ids(&t["layout"]).contains(&id(original).into()))
         .unwrap();
     let editor_group = layout["tabs"]
         .as_array()
@@ -369,7 +435,12 @@ fn workspace_tabs(o: &Options) -> Result<()> {
         3500,
     )?;
     ensure!(
-        h.state()?["projects"][0]["layout"]["active"] == shell_group["id"],
+        h.state()?
+            .get("projects")
+            .and_then(|projects| projects.get(0))
+            .and_then(|project| project.get("layout"))
+            .and_then(|layout| layout.get("active"))
+            .is_some_and(|active| active == &shell_group["id"]),
         "Selected tab not restored"
     );
     plain(
@@ -388,7 +459,15 @@ fn workspace_tabs(o: &Options) -> Result<()> {
     )?;
     h.wait(|s| session(s, id(editor))["lifecycle"] == "ended", 5)?;
     ensure!(
-        session_ids(&h.state()?["projects"][0]["layout"]).len() == 7,
+        session_ids(
+            h.state()?
+                .get("projects")
+                .and_then(|projects| projects.get(0))
+                .and_then(|project| project.get("layout"))
+                .ok_or_else(|| anyhow!("missing projects[0].layout"))?,
+        )
+        .len()
+            == 7,
         "Closing editor removed shell"
     );
     plain(
@@ -405,7 +484,13 @@ fn split_file_opening(o: &Options) -> Result<()> {
     h.setup()?;
     let project = h.project("original-project")?;
     let original = h.shell(&project)?;
-    let old_root = PathBuf::from(project["path"].as_str().unwrap());
+    let old_root = PathBuf::from(
+        project
+            .get("path")
+            .ok_or_else(|| anyhow!("missing project path"))?
+            .as_str()
+            .unwrap(),
+    );
     for name in ["clicked.rs", "menu.rs", "split.rs"] {
         fs::write(old_root.join(name), "fn main() {}\n")?;
     }
@@ -454,30 +539,51 @@ fn split_file_opening(o: &Options) -> Result<()> {
         )?;
         let state = h.state()?;
         ensure!(
-            sessions(&state).len() == before + 1,
+            sessions(&state).len() == before.saturating_add(1),
             "Split {direction} did not create exactly one shell"
         );
-        let layout = &state["projects"][0]["layout"];
+        let layout = state
+            .get("projects")
+            .and_then(|projects| projects.get(0))
+            .and_then(|project| project.get("layout"))
+            .ok_or_else(|| anyhow!("missing projects[0].layout"))?;
         ensure!(
             layout["tabs"].as_array().unwrap().len() == 1,
             "Split created a top-level tab"
         );
-        let nodes = &layout["tabs"][0]["layout"]["surfaces"][0]["Main"]["nodes"];
+        let nodes = layout
+            .get("tabs")
+            .and_then(|tabs| tabs.get(0))
+            .and_then(|tab| tab.get("layout"))
+            .and_then(|layout| layout.get("surfaces"))
+            .and_then(|surfaces| surfaces.get(0))
+            .and_then(|surface| surface.get("Main"))
+            .and_then(|main| main.get("nodes"))
+            .ok_or_else(|| anyhow!("missing split nodes"))?;
         ensure!(
             nodes[0].get(axis).is_some(),
             "Wrong split orientation: {direction}"
         );
         ensure!(
-            session_ids(&nodes[3 - new_index]) == [id(&original)],
+            session_ids(&nodes[3usize.saturating_sub(new_index)]) == [id(&original)],
             "Split {direction} moved the original to the wrong side"
         );
         let created_ids = session_ids(&nodes[new_index]);
         ensure!(
-            created_ids.len() == 1 && created_ids[0] != id(&original),
+            created_ids.len() == 1
+                && created_ids
+                    .first()
+                    .is_some_and(|created| created != id(&original)),
             "New split is missing"
         );
         ensure!(
-            session(&state, &created_ids[0])["cwd"] == moved_root.to_string_lossy().as_ref(),
+            session(
+                &state,
+                created_ids
+                    .first()
+                    .ok_or_else(|| anyhow!("missing split session"))?,
+            )["cwd"]
+                == moved_root.to_string_lossy().as_ref(),
             "Split did not resolve relocated directory"
         );
     }
@@ -501,7 +607,7 @@ fn split_file_opening(o: &Options) -> Result<()> {
         plain(&h, o, name, json!(actions), 3300)?;
         let state = h.state()?;
         ensure!(
-            sessions(&state).len() == before + 1,
+            sessions(&state).len() == before.saturating_add(1),
             "Opening {name} did not create exactly one editor"
         );
         let editor = sessions(&state)
@@ -516,7 +622,11 @@ fn split_file_opening(o: &Options) -> Result<()> {
             editor["cwd"] == moved_root.to_string_lossy().as_ref(),
             "Editor did not resolve relocated directory"
         );
-        let layout = &state["projects"][0]["layout"];
+        let layout = state
+            .get("projects")
+            .and_then(|projects| projects.get(0))
+            .and_then(|project| project.get("layout"))
+            .ok_or_else(|| anyhow!("missing projects[0].layout"))?;
         let tabs = layout["tabs"].as_array().unwrap();
         ensure!(
             tabs.len() == if split { 1 } else { 2 },
@@ -538,17 +648,19 @@ fn split_file_opening(o: &Options) -> Result<()> {
 
 fn inline_rename(o: &Options) -> Result<()> {
     let (h, _, s, _) = setup("inline-titles")?;
+    let aux = s.get(1).ok_or_else(|| anyhow!("missing session"))?;
     plain(
         &h,
         o,
         "renamed",
-        json!([{"at_ms":1000,"target":"workspace-tab:Terminal 1","right_click":true},{"at_ms":1300,"target":"Rename terminal…"},{"at_ms":1700,"target":"rename-input","text":"Build workspace"},{"at_ms":2000,"target":"rename-input","key":"Enter"},{"at_ms":2500,"target":"terminal","right_click":true},{"at_ms":2800,"target":"Rename terminal…"},{"at_ms":3200,"target":"rename-input","text":"Worker pane"},{"at_ms":3500,"target":"rename-input","key":"Enter"},{"at_ms":4000,"target":format!("session-row:{}",id(&s[1])),"right_click":true},{"at_ms":4300,"target":"Rename terminal…"},{"at_ms":4700,"target":"rename-input","text":"Aux shell"},{"at_ms":5000,"target":"rename-input","key":"Enter"}]),
+        json!([{"at_ms":1000,"target":"workspace-tab:Terminal 1","right_click":true},{"at_ms":1300,"target":"Rename terminal…"},{"at_ms":1700,"target":"rename-input","text":"Build workspace"},{"at_ms":2000,"target":"rename-input","key":"Enter"},{"at_ms":2500,"target":"terminal","right_click":true},{"at_ms":2800,"target":"Rename terminal…"},{"at_ms":3200,"target":"rename-input","text":"Worker pane"},{"at_ms":3500,"target":"rename-input","key":"Enter"},{"at_ms":4000,"target":format!("session-row:{}",id(aux)),"right_click":true},{"at_ms":4300,"target":"Rename terminal…"},{"at_ms":4700,"target":"rename-input","text":"Aux shell"},{"at_ms":5000,"target":"rename-input","key":"Enter"}]),
         6400,
     )?;
     let state = h.state()?;
     for (index, label) in [(0, "Build workspace"), (5, "Worker pane"), (1, "Aux shell")] {
+        let renamed = s.get(index).ok_or_else(|| anyhow!("missing session"))?;
         ensure!(
-            session(&state, id(&s[index]))["label"] == label,
+            session(&state, id(renamed))["label"] == label,
             "Rename targeted wrong session"
         );
     }
@@ -564,7 +676,8 @@ fn inline_rename(o: &Options) -> Result<()> {
 fn editor_lifecycle(o: &Options) -> Result<()> {
     let (h, _, s, root) = setup("editor-isolation")?;
     fs::write(root.join("source.rs"), "fn main() {}\n")?;
-    let actions = json!([{"at_ms":1100,"target":"explorer-file:source.rs"},{"at_ms":5000,"target":format!("session-row:{}",id(&s[5])),"right_click":true},{"at_ms":5400,"target":"Rename terminal…"},{"at_ms":5900,"target":"rename-input","text":"Workspace shell"},{"at_ms":6400,"target":"rename-input","key":"Enter"},{"at_ms":6900,"target":format!("session-row:{}",id(&s[5]))}]);
+    let shell = s.get(5).ok_or_else(|| anyhow!("missing session"))?;
+    let actions = json!([{"at_ms":1100,"target":"explorer-file:source.rs"},{"at_ms":5000,"target":format!("session-row:{}",id(shell)),"right_click":true},{"at_ms":5400,"target":"Rename terminal…"},{"at_ms":5900,"target":"rename-input","text":"Workspace shell"},{"at_ms":6400,"target":"rename-input","key":"Enter"},{"at_ms":6900,"target":format!("session-row:{}",id(shell))}]);
     capture(&h, o, "editor-lifecycle", actions, 8500, |_| {
         let state = h.wait(|s| sessions(s).iter().any(|s| s["kind"] == "editor"), 5)?;
         let editor = sessions(&state)
@@ -575,14 +688,34 @@ fn editor_lifecycle(o: &Options) -> Result<()> {
             !s.iter().any(|s| s["pid"] == editor["pid"]),
             "Editor reused shell PTY"
         );
-        h.wait(|s| session_ids(&s["projects"][0]["layout"]).len() == 7, 5)?;
+        h.wait(
+            |s| {
+                s.get("projects")
+                    .and_then(|projects| projects.get(0))
+                    .and_then(|project| project.get("layout"))
+                    .is_some_and(|layout| session_ids(layout).len() == 7)
+            },
+            5,
+        )?;
         h.write(&mut h.attach(editor)?, ":q\r")?;
         h.wait(|s| session(s, id(editor))["lifecycle"] == "ended", 5)?;
-        h.wait(|s| session_ids(&s["projects"][0]["layout"]).len() == 6, 5)?;
+        h.wait(
+            |s| {
+                s.get("projects")
+                    .and_then(|projects| projects.get(0))
+                    .and_then(|project| project.get("layout"))
+                    .is_some_and(|layout| session_ids(layout).len() == 6)
+            },
+            5,
+        )?;
         Ok(())
     })?;
     ensure!(
-        session(&h.state()?, id(&s[5]))["label"] == "Workspace shell",
+        session(
+            &h.state()?,
+            id(s.get(5).ok_or_else(|| anyhow!("missing session"))?),
+        )["label"]
+            == "Workspace shell",
         "Sidebar rename failed"
     );
     h.assert_pids(&s)
@@ -604,7 +737,10 @@ fn file_close(o: &Options) -> Result<()> {
         .filter(|s| s["kind"] == "editor")
         .collect::<Vec<_>>();
     ensure!(
-        editors.len() == 1 && editors[0]["lifecycle"] == "ended",
+        editors.len() == 1
+            && editors
+                .first()
+                .is_some_and(|editor| editor["lifecycle"] == "ended"),
         "Double click or clean close failed: editor lifecycles {:?}; {close_log}",
         editors
             .iter()
@@ -635,8 +771,8 @@ fn file_close(o: &Options) -> Result<()> {
                 |_| {
                     h.rpc(json!({"EditorStatus":{"session":id(editor)}}))
                         .is_ok_and(|r| {
-                            r["Text"]
-                                .as_str()
+                            r.get("Text")
+                                .and_then(Value::as_str)
                                 .and_then(|s| s.trim().parse::<u32>().ok())
                                 .is_some_and(|n| n > 0)
                         })
@@ -659,7 +795,15 @@ fn file_close(o: &Options) -> Result<()> {
         "Editor did not close"
     );
     ensure!(
-        session_ids(&state["projects"][0]["layout"]).len() == 6,
+        session_ids(
+            state
+                .get("projects")
+                .and_then(|projects| projects.get(0))
+                .and_then(|project| project.get("layout"))
+                .ok_or_else(|| anyhow!("missing projects[0].layout"))?,
+        )
+        .len()
+            == 6,
         "Close removed shells"
     );
     let keep = root.join("keep.rs");
@@ -696,8 +840,8 @@ fn file_close(o: &Options) -> Result<()> {
                 |_| {
                     h.rpc(json!({"EditorStatus":{"session":id(editor)}}))
                         .is_ok_and(|r| {
-                            r["Text"]
-                                .as_str()
+                            r.get("Text")
+                                .and_then(Value::as_str)
                                 .and_then(|s| s.trim().parse::<u32>().ok())
                                 .is_some_and(|n| n > 0)
                         })
@@ -720,7 +864,15 @@ fn file_close(o: &Options) -> Result<()> {
         "Discard did not close the editor"
     );
     ensure!(
-        session_ids(&state["projects"][0]["layout"]).len() == 6,
+        session_ids(
+            state
+                .get("projects")
+                .and_then(|projects| projects.get(0))
+                .and_then(|project| project.get("layout"))
+                .ok_or_else(|| anyhow!("missing projects[0].layout"))?,
+        )
+        .len()
+            == 6,
         "Discard close removed shells"
     );
     let bar = root.join("bar.rs");
@@ -756,8 +908,8 @@ fn file_close(o: &Options) -> Result<()> {
                 |_| {
                     h.rpc(json!({"EditorStatus":{"session":id(editor)}}))
                         .is_ok_and(|r| {
-                            r["Text"]
-                                .as_str()
+                            r.get("Text")
+                                .and_then(Value::as_str)
                                 .and_then(|s| s.trim().parse::<u32>().ok())
                                 .is_some_and(|n| n > 0)
                         })
@@ -788,7 +940,7 @@ fn focus_close(o: &Options) -> Result<()> {
         &h,
         o,
         "strong-focus",
-        json!([{"at_ms":1100,"target":format!("session-row:{}",id(&shells[0]))}]),
+        json!([{"at_ms":1100,"target":format!("session-row:{}",id(shells.first().ok_or_else(|| anyhow!("missing shell"))?))}]),
         1500,
     )?;
     plain(
@@ -800,17 +952,31 @@ fn focus_close(o: &Options) -> Result<()> {
     )?;
     h.wait(|st| session(st, id(&editor))["lifecycle"] == "ended", 5)?;
     ensure!(
-        !session_ids(&h.state()?["projects"][0]["layout"]).contains(&id(&editor).into()),
+        !session_ids(
+            h.state()?
+                .get("projects")
+                .and_then(|projects| projects.get(0))
+                .and_then(|project| project.get("layout"))
+                .ok_or_else(|| anyhow!("missing projects[0].layout"))?,
+        )
+        .contains(&id(&editor).into()),
         "Closed editor remains in layout"
     );
     h.assert_pids(&shells)
 }
 fn cleanup(o: &Options) -> Result<()> {
     let (h, _p, s, root) = setup("ui-cleanup")?;
-    let mut settings = h.state()?["settings"].clone();
-    settings["external_editor"] = json!("/bin/echo");
-    settings["external_args"] = json!(["one argument with spaces"]);
-    settings["notifications_side"] = json!(false);
+    let mut settings = h
+        .state()?
+        .get("settings")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing settings"))?;
+    let settings_object = settings
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("settings is not an object"))?;
+    settings_object.insert("external_editor".into(), json!("/bin/echo"));
+    settings_object.insert("external_args".into(), json!(["one argument with spaces"]));
+    settings_object.insert("notifications_side".into(), json!(false));
     h.rpc(json!({"Settings":settings}))?;
     fs::write(root.join("modified.rs"), "fn main() {}\n")?;
     git(&root, &["init", "-q"])?;
@@ -821,8 +987,13 @@ fn cleanup(o: &Options) -> Result<()> {
     fs::write(root.join("untracked.txt"), "new\n")?;
     plain(&h, o, "explorer", json!([]), 3500)?;
     ensure!(
-        prefs(&h)?["attention_migrated"] == true
-            && h.state()?["settings"]["notifications_side"] == true,
+        prefs(&h)?
+            .get("attention_migrated")
+            .is_some_and(|migrated| migrated.as_bool() == Some(true))
+            && h.state()?
+                .get("settings")
+                .and_then(|settings| settings.get("notifications_side"))
+                .is_some_and(|side| side.as_bool() == Some(true)),
         "Attention migration failed"
     );
     plain(
@@ -830,14 +1001,20 @@ fn cleanup(o: &Options) -> Result<()> {
         o,
         "overflow",
         Value::Array(
-            (0..7)
-                .map(|i| json!({"at_ms":1000+i*450,"target":"workspace-plus"}))
+            (0u64..7)
+                .map(|i| {
+                    json!({"at_ms":1000u64.saturating_add(i.saturating_mul(450)),"target":"workspace-plus"})
+                })
                 .collect(),
         ),
         5300,
     )?;
     let state = h.state()?;
-    let workspace = &state["projects"][0]["layout"];
+    let workspace = state
+        .get("projects")
+        .and_then(|projects| projects.get(0))
+        .and_then(|project| project.get("layout"))
+        .ok_or_else(|| anyhow!("missing projects[0].layout"))?;
     let tabs = workspace["tabs"].as_array().unwrap();
     ensure!(
         tabs.len() == 8
@@ -854,24 +1031,52 @@ fn cleanup(o: &Options) -> Result<()> {
         4300,
     )?;
     ensure!(
-        h.state()?["settings"]["external_editor"] == "/bin/echo"
-            && h.state()?["settings"]["external_args"] == json!(["one argument with spaces"]),
+        h.state()?
+            .get("settings")
+            .and_then(|settings| settings.get("external_editor"))
+            .is_some_and(|editor| editor == "/bin/echo")
+            && h.state()?
+                .get("settings")
+                .and_then(|settings| settings.get("external_args"))
+                .is_some_and(|args| args == &json!(["one argument with spaces"])),
         "Unsaved draft changed settings"
     );
-    ensure!(prefs(&h)?["tool"] == "Git", "Settings changed sidebar tool");
-    let mut settings = h.state()?["settings"].clone();
-    settings["notifications_side"] = json!(false);
+    ensure!(
+        prefs(&h)?.get("tool").is_some_and(|tool| tool == "Git"),
+        "Settings changed sidebar tool"
+    );
+    let mut settings = h
+        .state()?
+        .get("settings")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing settings"))?;
+    settings
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("settings is not an object"))?
+        .insert("notifications_side".into(), json!(false));
     h.rpc(json!({"Settings":settings}))?;
     plain(
         &h,
         o,
         "reopen-first-tab",
-        json!([{"at_ms":1000,"target":format!("session-row:{}",id(&s[0]))}]),
+        json!([{"at_ms":1000,"target":format!("session-row:{}",id(s.first().ok_or_else(|| anyhow!("missing session"))?))}]),
         3500,
     )?;
     ensure!(
-        h.state()?["settings"]["notifications_side"] == false
-            && h.state()?["projects"][0]["layout"]["active"] == tabs[0]["id"],
+        h.state()?
+            .get("settings")
+            .and_then(|settings| settings.get("notifications_side"))
+            .is_some_and(|side| side.as_bool() == Some(false))
+            && h.state()?
+                .get("projects")
+                .and_then(|projects| projects.get(0))
+                .and_then(|project| project.get("layout"))
+                .and_then(|layout| layout.get("active"))
+                .is_some_and(|active| {
+                    tabs.first()
+                        .and_then(|tab| tab.get("id"))
+                        .is_some_and(|id| active == id)
+                }),
         "Restart lost user placement or selected workspace"
     );
     h.assert_pids(&s)
@@ -883,15 +1088,28 @@ fn external(o: &Options) -> Result<()> {
     let source = h.root.join("external-editor/space file.rs");
     fs::write(&source, "fn main() {}\n")?;
     let recorded = h.root.join("arguments.txt");
-    let mut settings = h.state()?["settings"].clone();
-    settings["external_editor"] = json!("/bin/sh");
-    settings["external_args"] = json!([
-        "-c",
-        "capture=$1; shift; printf \"%s\\n\" \"$@\" > \"$capture\"; sleep 2; printf \"fixture external exit failure\\n\" >&2; exit 7",
-        "fixture",
-        recorded,
-        "literal argument; $(not evaluated)"
-    ]);
+    let mut settings = h
+        .state()?
+        .get("settings")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing settings"))?;
+    settings
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("settings is not an object"))?
+        .insert("external_editor".into(), json!("/bin/sh"));
+    settings
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("settings is not an object"))?
+        .insert(
+            "external_args".into(),
+            json!([
+                "-c",
+                "capture=$1; shift; printf \"%s\\n\" \"$@\" > \"$capture\"; sleep 2; printf \"fixture external exit failure\\n\" >&2; exit 7",
+                "fixture",
+                recorded,
+                "literal argument; $(not evaluated)"
+            ]),
+        );
     h.rpc(json!({"Settings":settings}))?;
     let s = h.shell(&p)?;
     let logs = plain(
@@ -937,11 +1155,12 @@ fn browser(o: &Options) -> Result<()> {
         3500,
     )?;
     let state = h.state()?;
-    let layout = state["projects"]
-        .as_array()
+    let layout = state
+        .get("projects")
+        .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .map(|project| &project["layout"])
+        .filter_map(|project| project.get("layout"))
         .find(|layout| {
             layout["version"] == 6
                 || layout.to_string().contains("Browser")
@@ -951,12 +1170,16 @@ fn browser(o: &Options) -> Result<()> {
         sessions(&state).len() == 6,
         "HTML allocated an editor: {} sessions, layout {:?}",
         sessions(&state).len(),
-        state["projects"][0]["layout"]
+        state
+            .get("projects")
+            .and_then(|projects| projects.get(0))
+            .and_then(|project| project.get("layout"))
+            .unwrap_or(&Value::Null)
     );
     ensure!(
         layout.is_some_and(|layout| layout["version"] == 6),
         "Browser tab did not persist layout v6: {:?}",
-        state["projects"]
+        state.get("projects").unwrap_or(&Value::Null)
     );
     ensure!(
         layout.is_some_and(|layout| layout.to_string().contains("next.html")),
@@ -970,7 +1193,12 @@ fn browser(o: &Options) -> Result<()> {
         3000,
     )?;
     ensure!(
-        h.state()?["projects"][0]["layout"]["tabs"]
+        h.state()?
+            .get("projects")
+            .and_then(|projects| projects.get(0))
+            .and_then(|project| project.get("layout"))
+            .and_then(|layout| layout.get("tabs"))
+            .ok_or_else(|| anyhow!("missing projects[0].layout.tabs"))?
             .as_array()
             .unwrap()
             .len()
@@ -994,7 +1222,9 @@ fn images(o: &Options) -> Result<()> {
     let (h, _, s, root) = setup("images")?;
     let path = root.join("picture.png");
     image::RgbaImage::from_fn(64, 32, |x, y| {
-        image::Rgba([x as u8 * 3, y as u8 * 7, 180, 255])
+        let red = u8::try_from(x).unwrap_or(u8::MAX).saturating_mul(3);
+        let green = u8::try_from(y).unwrap_or(u8::MAX).saturating_mul(7);
+        image::Rgba([red, green, 180, 255])
     })
     .save(&path)?;
     fs::write(
@@ -1011,7 +1241,13 @@ fn images(o: &Options) -> Result<()> {
     )?;
     let state = h.state()?;
     ensure!(
-        sessions(&state).len() == 6 && state["projects"][0]["layout"]["version"] == 3,
+        sessions(&state).len() == 6
+            && state
+                .get("projects")
+                .and_then(|projects| projects.get(0))
+                .and_then(|project| project.get("layout"))
+                .and_then(|layout| layout.get("version"))
+                .is_some_and(|version| version.as_u64() == Some(3)),
         "Image allocated an editor or failed to version layout"
     );
     plain(
@@ -1029,7 +1265,12 @@ fn images(o: &Options) -> Result<()> {
         3000,
     )?;
     ensure!(
-        h.state()?["projects"][0]["layout"]["tabs"]
+        h.state()?
+            .get("projects")
+            .and_then(|projects| projects.get(0))
+            .and_then(|project| project.get("layout"))
+            .and_then(|layout| layout.get("tabs"))
+            .ok_or_else(|| anyhow!("missing projects[0].layout.tabs"))?
             .as_array()
             .unwrap()
             .len()
@@ -1088,7 +1329,7 @@ fn terminal_actions(o: &Options) -> Result<()> {
         2500,
     )?;
     ensure!(
-        prefs(&h)?["tool"] == "History",
+        prefs(&h)?.get("tool").is_some_and(|tool| tool == "History"),
         "Global History selection not saved"
     );
     plain(
@@ -1101,7 +1342,10 @@ fn terminal_actions(o: &Options) -> Result<()> {
         2000,
     )?;
     ensure!(
-        prefs(&h)?["history_expanded"][id(&p)] == false,
+        prefs(&h)?
+            .get("history_expanded")
+            .and_then(|expanded| expanded.get(id(&p)))
+            .is_some_and(|open| open.as_bool() == Some(false)),
         "History collapse not saved"
     );
     plain(
@@ -1114,7 +1358,10 @@ fn terminal_actions(o: &Options) -> Result<()> {
         2000,
     )?;
     ensure!(
-        prefs(&h)?["history_expanded"][id(&p)] == true,
+        prefs(&h)?
+            .get("history_expanded")
+            .and_then(|expanded| expanded.get(id(&p)))
+            .is_some_and(|open| open.as_bool() == Some(true)),
         "History expansion not saved"
     );
     plain(
@@ -1125,7 +1372,12 @@ fn terminal_actions(o: &Options) -> Result<()> {
         3500,
     )?;
     let git_state = h.state()?;
-    let layout = git_state["projects"][0]["layout"].to_string();
+    let layout = git_state
+        .get("projects")
+        .and_then(|projects| projects.get(0))
+        .and_then(|project| project.get("layout"))
+        .ok_or_else(|| anyhow!("missing projects[0].layout"))?
+        .to_string();
     ensure!(
         layout.contains("README.md") && layout.contains("Diff"),
         "Git file click did not open a diff: {layout}"
@@ -1166,7 +1418,7 @@ fn terminal_actions(o: &Options) -> Result<()> {
         3500,
     )?;
     ensure!(
-        sessions(&h.state()?).len() == before + 1,
+        sessions(&h.state()?).len() == before.saturating_add(1),
         "Lower pane split failed"
     );
     h.assert_pids(&s)
@@ -1185,11 +1437,25 @@ fn control(o: &Options) -> Result<()> {
         let paths = Paths::at(h.root.clone());
         h.wait(|_| ui_control::rpc(&paths, Request::Ping).is_ok(), 5)?;
         let mut command = h.command("terminator-hook");
-        command.args(["ctl", "split", id(&originals[0]), "right"]);
+        command.args([
+            "ctl",
+            "split",
+            id(originals
+                .first()
+                .ok_or_else(|| anyhow!("missing original session"))?),
+            "right",
+        ]);
         let created: Value = serde_json::from_slice(&output(command)?)?;
         let snapshot = ui_control::rpc(&paths, Request::Snapshot)?;
         ensure!(
-            session_ids(&snapshot["workspaces"][id(&p)]).len() == 7,
+            session_ids(
+                snapshot
+                    .get("workspaces")
+                    .and_then(|workspaces| workspaces.get(id(&p)))
+                    .ok_or_else(|| anyhow!("missing workspace snapshot"))?,
+            )
+            .len()
+                == 7,
             "CLI split did not target original layout"
         );
         ensure!(
@@ -1218,8 +1484,12 @@ fn control(o: &Options) -> Result<()> {
         output(open)?;
         h.wait(
             |_| {
-                ui_control::rpc(&paths, Request::Snapshot)
-                    .is_ok_and(|v| v["workspaces"][id(&p)]["version"] == 3)
+                ui_control::rpc(&paths, Request::Snapshot).is_ok_and(|v| {
+                    v.get("workspaces")
+                        .and_then(|workspaces| workspaces.get(id(&p)))
+                        .and_then(|workspace| workspace.get("version"))
+                        .is_some_and(|version| version.as_u64() == Some(3))
+                })
             },
             5,
         )?;
@@ -1362,9 +1632,9 @@ fn agent_wheel_case(
             {"at_ms":900,"target":target},
             {"at_ms":1300,"target":target,"hover":true},
             wheel(wheel_at_ms, 2.0, "start"),
-            wheel(wheel_at_ms + 200, 2.0, "move"),
-            wheel(wheel_at_ms + 400, -1.0, "move"),
-            wheel(wheel_at_ms + 600, 0.0, "cancel"),
+            wheel(wheel_at_ms.saturating_add(200), 2.0, "move"),
+            wheel(wheel_at_ms.saturating_add(400), -1.0, "move"),
+            wheel(wheel_at_ms.saturating_add(600), 0.0, "cancel"),
         ]),
         after_ms,
         |_| {
@@ -1387,10 +1657,7 @@ fn agent_wheel_case(
     );
     let prefix = format!("Scroll evidence: session={sid} focused=true offset=");
     ensure!(
-        logs.lines()
-            .filter_map(|l| l.strip_prefix(&prefix))
-            .next()
-            .is_some(),
+        logs.lines().find_map(|l| l.strip_prefix(&prefix)).is_some(),
         "Missing scroll evidence for agent session: {logs}"
     );
     h.assert_pids(&[session])?;

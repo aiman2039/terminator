@@ -56,16 +56,21 @@ pub fn process(parser: &mut vt100::Parser<Events>, bytes: &[u8]) {
         match byte {
             0x1b => escaped = true,
             b'c' if escaped => {
-                parser.process(&bytes[start..=index]);
+                let Some(chunk) = bytes.get(start..=index) else {
+                    return;
+                };
+                parser.process(chunk);
                 parser.callbacks_mut().extra_modes.clear();
-                start = index + 1;
+                start = index.saturating_add(1);
                 escaped = false;
             }
             0x00..=0x17 | 0x19 | 0x1c..=0x1f | 0x7f..=0xff => {}
             _ => escaped = false,
         }
     }
-    parser.process(&bytes[start..]);
+    if let Some(rest) = bytes.get(start..) {
+        parser.process(rest);
+    }
     if parser.callbacks().scrollback_clear_pending {
         rebuild_without_scrollback(parser);
     }
@@ -147,7 +152,10 @@ impl Events {
         if params.len() < 3 {
             return;
         }
-        let metadata = String::from_utf8_lossy(params[1]);
+        let Some(metadata) = params.get(1) else {
+            return;
+        };
+        let metadata = String::from_utf8_lossy(metadata);
         let fields = metadata
             .split(':')
             .filter_map(|s| s.split_once('='))
@@ -168,7 +176,10 @@ impl Events {
         if !matches!(part, "title" | "body") {
             return;
         }
-        let joined = params[2..].join(&b';');
+        let Some(parts) = params.get(2..) else {
+            return;
+        };
+        let joined = parts.join(&b';');
         let payload = if fields.get("e") == Some(&"1") {
             let Ok(data) = STANDARD
                 .decode(&joined)
@@ -205,7 +216,11 @@ impl Events {
             (None, 'n', 5) => self.reply("\x1b[0n".into()),
             (None, 'n', 6) => {
                 let (row, col) = screen.cursor_position();
-                self.reply(format!("\x1b[{};{}R", row + 1, col + 1));
+                self.reply(format!(
+                    "\x1b[{};{}R",
+                    row.saturating_add(1),
+                    col.saturating_add(1)
+                ));
             }
             (None, 't', 18) => {
                 let (rows, cols) = screen.size();
@@ -229,7 +244,10 @@ impl Events {
         self.reply(format!("\x1b[?{mode};{status}$y"));
     }
     fn reply_palette(&mut self, params: &[&[u8]]) {
-        let Ok(index) = String::from_utf8_lossy(params[1]).parse::<u8>() else {
+        let Some(raw) = params.get(1) else {
+            return;
+        };
+        let Ok(index) = String::from_utf8_lossy(raw).parse::<u8>() else {
             return;
         };
         let [r, g, b] = indexed_rgb(index);
@@ -267,14 +285,23 @@ fn dec_mode_status(screen: &vt100::Screen, mode: u16) -> u8 {
 
 fn indexed_rgb(index: u8) -> [u8; 3] {
     match index {
-        0..=15 => ANSI16[usize::from(index)],
+        0..=15 => ANSI16.get(usize::from(index)).copied().unwrap_or([0, 0, 0]),
         16..=231 => {
-            let i = index - 16;
-            let level = |n: u8| if n == 0 { 0 } else { n * 40 + 55 };
+            let i = index.saturating_sub(16);
+            let level = |n: u8| {
+                if n == 0 {
+                    0
+                } else {
+                    n.saturating_mul(40).saturating_add(55)
+                }
+            };
             [level(i / 36), level((i / 6) % 6), level(i % 6)]
         }
         232..=255 => {
-            let value = (index - 232) * 10 + 8;
+            let value = index
+                .saturating_sub(232)
+                .saturating_mul(10)
+                .saturating_add(8);
             [value, value, value]
         }
     }
@@ -319,19 +346,31 @@ impl vt100::Callbacks for Events {
         match params.first().copied().unwrap_or_default() {
             b"9" if params.len() > 1 => {
                 // OSC 9;4 is ConEmu progress, not a desktop notification.
-                if params.len() > 2 && params[1] == b"4" {
+                if params.len() > 2 && params.get(1) == Some(&b"4".as_slice()) {
                     return;
                 }
-                self.notice("Terminal".into(), text(&params[1..].join(&b';'), 1024));
+                let Some(body) = params.get(1..) else {
+                    return;
+                };
+                self.notice("Terminal".into(), text(&body.join(&b';'), 1024));
             }
-            b"777" if params.len() >= 3 && params[1] == b"notify" => {
-                self.notice(text(params[2], 256), text(&params[3..].join(&b';'), 1024));
+            b"777" if params.len() >= 3 && params.get(1) == Some(&b"notify".as_slice()) => {
+                let Some(title) = params.get(2) else {
+                    return;
+                };
+                let body = params.get(3..).unwrap_or_default();
+                self.notice(text(title, 256), text(&body.join(&b';'), 1024));
             }
             b"99" => self.kitty(params),
             b"10" | b"11" | b"12" if params.get(1) == Some(&b"?".as_slice()) => {
-                self.reply_dynamic_color(params[0]);
+                let Some(channel) = params.first().copied() else {
+                    return;
+                };
+                self.reply_dynamic_color(channel);
             }
-            b"4" if params.len() == 3 && params[2] == b"?" => self.reply_palette(params),
+            b"4" if params.len() == 3 && params.get(2) == Some(&b"?".as_slice()) => {
+                self.reply_palette(params)
+            }
             _ => {}
         }
     }

@@ -1,5 +1,5 @@
 //! Nonblocking Unix subprocess I/O; no reader threads survive a deadline.
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use std::{
     io::{Read, Write},
     os::{fd::AsFd, unix::process::CommandExt},
@@ -41,7 +41,9 @@ fn drain(pipe: &mut impl Read, bytes: &mut Vec<u8>, limit: usize) -> Result<bool
                     bytes.len().saturating_add(n) <= limit,
                     "Command output exceeds {limit} bytes"
                 );
-                bytes.extend_from_slice(&buf[..n]);
+                if let Some(chunk) = buf.get(..n) {
+                    bytes.extend_from_slice(chunk);
+                }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -61,8 +63,8 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
         .stderr(Stdio::piped());
     let mut child = cmd.spawn()?;
     let result = (|| {
-        let mut out = child.stdout.take().unwrap();
-        let mut err = child.stderr.take().unwrap();
+        let mut out = child.stdout.take().context("stdout pipe missing")?;
+        let mut err = child.stderr.take().context("stderr pipe missing")?;
         let mut input = child.stdin.take();
         nonblocking(&out)?;
         nonblocking(&err)?;
@@ -78,9 +80,13 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
             let out_done = drain(&mut out, &mut stdout, options.stdout_limit)?;
             let err_done = drain(&mut err, &mut stderr, options.stderr_limit)?;
             if let Some(stdin) = &mut input {
-                let bytes = options.input.as_deref().unwrap_or_default();
-                match stdin.write(&bytes[written..]) {
-                    Ok(n) => written += n,
+                let bytes = options.input.as_deref().unwrap_or(&[]);
+                let Some(rest) = bytes.get(written..) else {
+                    input = None;
+                    continue;
+                };
+                match stdin.write(rest) {
+                    Ok(n) => written = written.saturating_add(n),
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
                     Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => written = bytes.len(),
                     Err(e) => return Err(e.into()),

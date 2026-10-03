@@ -159,7 +159,7 @@ impl Paths {
     #[must_use]
     pub fn editor_socket(&self, session: &str) -> PathBuf {
         self.runtime
-            .join(format!("{}.nvim", &session[..8.min(session.len())]))
+            .join(format!("{}.nvim", session.get(..8).unwrap_or(session)))
     }
     pub fn token(&self) -> Result<String> {
         Ok(fs::read_to_string(self.auth())?.trim().into())
@@ -597,7 +597,7 @@ impl State {
         self.terminal_notices
             .retain(|n| !removed.contains(&n.session_id));
         self.presence.retain(|p| !removed.contains(&p.session_id));
-        self.revision += 1;
+        self.revision = self.revision.saturating_add(1);
         removed
     }
     /// Drop transient records that only matter to a live owner so a historical
@@ -609,23 +609,23 @@ impl State {
         self.presence.clear();
         let len = self.notifications.len();
         if len > MAX_NOTIFICATIONS {
-            let cutoff = len - MAX_NOTIFICATIONS;
+            let cutoff = len.saturating_sub(MAX_NOTIFICATIONS);
             let mut index = 0;
             self.notifications.retain(|n| {
                 let keep = index >= cutoff || !(n.dismissed || n.resolved);
-                index += 1;
+                index = index.saturating_add(1);
                 keep
             });
         }
         let len = self.agents.len();
         if len > MAX_AGENTS {
-            let cutoff = len - MAX_AGENTS;
+            let cutoff = len.saturating_sub(MAX_AGENTS);
             let mut index = 0;
             self.agents.retain(|a| {
                 // Keep live/resumable agents and the most recent records; a
                 // resumable handle must never be trimmed.
                 let keep = index >= cutoff || a.resumable() || a.state == AgentState::Running;
-                index += 1;
+                index = index.saturating_add(1);
                 keep
             });
         }
@@ -685,9 +685,9 @@ impl State {
         });
         if self.terminal_notices.len() > 128 {
             self.terminal_notices
-                .drain(..self.terminal_notices.len() - 128);
+                .drain(..self.terminal_notices.len().saturating_sub(128));
         }
-        self.revision += 1;
+        self.revision = self.revision.saturating_add(1);
         Ok(Some(id))
     }
     pub fn recover(&mut self) {
@@ -717,7 +717,7 @@ impl State {
         }
         // Presence is live observation only; a restart clears it.
         self.presence.clear();
-        self.revision += 1;
+        self.revision = self.revision.saturating_add(1);
     }
     pub fn apply_hook(&mut self, e: HookEvent) -> Result<Option<String>> {
         ensure!(
@@ -748,7 +748,9 @@ impl State {
             a.invocation_id == e.agent_invocation_id && a.session_id == e.terminal_session_id
         });
         if let Some(i) = existing {
-            let a = &self.agents[i];
+            let Some(a) = self.agents.get(i) else {
+                return Ok(None);
+            };
             if a.state == AgentState::Stopped {
                 return Ok(None);
             }
@@ -760,23 +762,30 @@ impl State {
         }
         self.recent_events.push(e.event_id.clone());
         if self.recent_events.len() > MAX_RECENT_EVENTS {
-            self.recent_events
-                .drain(..self.recent_events.len() - MAX_RECENT_EVENTS / 2);
+            self.recent_events.drain(
+                ..self
+                    .recent_events
+                    .len()
+                    .saturating_sub(MAX_RECENT_EVENTS / 2),
+            );
         }
-        let repeated_state =
-            existing.is_some_and(|i| self.agents[i].state == e.state) && e.request_id.is_none();
-        let mut agent = existing.map(|i| self.agents[i].clone()).unwrap_or(Agent {
-            invocation_id: e.agent_invocation_id.clone(),
-            session_id: e.terminal_session_id.clone(),
-            kind: e.agent_kind.clone(),
-            provider_session_id: None,
-            state: AgentState::Unknown,
-            sequence: None,
-            updated: now(),
-            resume: None,
-            // A new invocation never inherits an earlier invocation's process link.
-            process: None,
-        });
+        let repeated_state = existing
+            .is_some_and(|i| self.agents.get(i).is_some_and(|a| a.state == e.state))
+            && e.request_id.is_none();
+        let mut agent = existing
+            .and_then(|i| self.agents.get(i).cloned())
+            .unwrap_or(Agent {
+                invocation_id: e.agent_invocation_id.clone(),
+                session_id: e.terminal_session_id.clone(),
+                kind: e.agent_kind.clone(),
+                provider_session_id: None,
+                state: AgentState::Unknown,
+                sequence: None,
+                updated: now(),
+                resume: None,
+                // A new invocation never inherits an earlier invocation's process link.
+                process: None,
+            });
         agent.state = e.state;
         agent.sequence = e.sequence;
         agent.updated = now();
@@ -797,13 +806,15 @@ impl State {
             }
         }
         if e.provider_session_id.is_some() {
-            agent.provider_session_id = e.provider_session_id.clone();
+            agent.provider_session_id.clone_from(&e.provider_session_id);
         }
         if e.resume.is_some() {
-            agent.resume = e.resume.clone();
+            agent.resume.clone_from(&e.resume);
         }
-        if let Some(i) = existing {
-            self.agents[i] = agent;
+        if let Some(i) = existing
+            && let Some(slot) = self.agents.get_mut(i)
+        {
+            *slot = agent;
         } else {
             self.agents.push(agent);
         }
@@ -823,7 +834,7 @@ impl State {
                 }
             }
         }
-        self.revision += 1;
+        self.revision = self.revision.saturating_add(1);
         if repeated_state || !e.state.actionable() || !self.settings.events.contains(&e.state) {
             return Ok(None);
         }
@@ -871,7 +882,7 @@ impl State {
                     n.read = true;
                 }
             }
-            self.revision += 1;
+            self.revision = self.revision.saturating_add(1);
         }
     }
 }
@@ -1042,7 +1053,8 @@ impl Response {
 pub fn write_frame<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<()> {
     let data = serde_json::to_vec(value)?;
     ensure!(data.len() <= MAX_FRAME, "IPC frame too large");
-    writer.write_all(&(data.len() as u32).to_be_bytes())?;
+    let len = u32::try_from(data.len()).context("IPC frame too large")?;
+    writer.write_all(&len.to_be_bytes())?;
     writer.write_all(&data)?;
     writer.flush()?;
     Ok(())
@@ -1448,7 +1460,12 @@ mod tests {
     }
     #[test]
     fn oversized_frame_rejected_before_allocation() {
-        let mut b = (MAX_FRAME as u32 + 1).to_be_bytes().as_slice().to_vec();
+        let mut b = u32::try_from(MAX_FRAME)
+            .unwrap_or(u32::MAX)
+            .saturating_add(1)
+            .to_be_bytes()
+            .as_slice()
+            .to_vec();
         assert!(read_frame::<Request>(&mut b.as_slice()).is_err());
         b.clear();
     }

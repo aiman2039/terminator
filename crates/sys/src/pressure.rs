@@ -109,6 +109,8 @@ fn compressor_percent(compressor_pages: u64, page_size: u64, total_bytes: u64) -
         return None;
     }
     let bytes = compressor_pages.saturating_mul(page_size);
+    // 0–100 display bar; u64 does not fit in an f32 mantissa.
+    #[allow(clippy::cast_precision_loss)]
     Some((bytes as f32 / total_bytes as f32 * 100.0).clamp(0.0, 100.0))
 }
 
@@ -130,11 +132,13 @@ fn macos() -> Option<MemoryPressure> {
 fn read_level() -> Option<PressureLevel> {
     let mut level: libc::c_int = 0;
     let mut len = std::mem::size_of::<libc::c_int>();
+    // SAFETY: `level` is a live `c_int` and `len` is its size. The name is a
+    // NUL-terminated literal. The call only writes that output buffer.
     let rc = unsafe {
         libc::sysctlbyname(
             c"kern.memorystatus_vm_pressure_level".as_ptr(),
-            &mut level as *mut libc::c_int as *mut libc::c_void,
-            &mut len,
+            (&raw mut level).cast::<libc::c_void>(),
+            &raw mut len,
             std::ptr::null_mut(),
             0,
         )
@@ -145,17 +149,20 @@ fn read_level() -> Option<PressureLevel> {
 #[cfg(target_os = "macos")]
 #[allow(deprecated)] // libc::mach_host_self; mach2 is not a workspace dependency.
 fn read_compressor_percent() -> Option<f32> {
+    // SAFETY: `_SC_PAGESIZE` is a valid `sysconf` name. A negative result fails `try_from`.
     let page = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).ok()?;
     if page == 0 {
         return None;
     }
     let mut total: u64 = 0;
     let mut total_len = std::mem::size_of::<u64>();
+    // SAFETY: `total` is a live `u64` and `total_len` is its size. The name is a
+    // NUL-terminated literal. The call only writes that output buffer.
     let total_rc = unsafe {
         libc::sysctlbyname(
             c"hw.memsize".as_ptr(),
-            &mut total as *mut u64 as *mut libc::c_void,
-            &mut total_len,
+            (&raw mut total).cast::<libc::c_void>(),
+            &raw mut total_len,
             std::ptr::null_mut(),
             0,
         )
@@ -163,24 +170,29 @@ fn read_compressor_percent() -> Option<f32> {
     if total_rc != 0 || total == 0 {
         return None;
     }
+    // SAFETY: `mach_host_self` returns a send right. `HostPort` deallocates it on drop.
     let port = HostPort(unsafe { libc::mach_host_self() });
     if port.0 == 0 {
         return None;
     }
     let mut count = libc::HOST_VM_INFO64_COUNT;
+    // SAFETY: `vm_statistics64` is a plain integer struct. All-zero is a valid bit pattern.
     let mut stat = unsafe { std::mem::zeroed::<libc::vm_statistics64>() };
+    // SAFETY: `stat` is valid for `HOST_VM_INFO64_COUNT` words and `port` is the host
+    // send right. The call only writes `stat` and `count`.
     let rc = unsafe {
         libc::host_statistics64(
             port.0,
             libc::HOST_VM_INFO64,
-            &mut stat as *mut libc::vm_statistics64 as *mut _,
-            &mut count,
+            (&raw mut stat).cast(),
+            &raw mut count,
         )
     };
     if rc != libc::KERN_SUCCESS {
         return None;
     }
-    // `vm_statistics64` is packed. Copy the field instead of borrowing it.
+    // SAFETY: `vm_statistics64` is packed, so take the field by address. `host_statistics64`
+    // succeeded, and `compressor_page_count` is an integer with no padding requirements.
     let pages = unsafe { std::ptr::addr_of!(stat.compressor_page_count).read_unaligned() };
     compressor_percent(u64::from(pages), page, total)
 }
@@ -193,6 +205,7 @@ impl Drop for HostPort {
     #[allow(deprecated)] // libc::mach_task_self; mach2 is not a workspace dependency.
     fn drop(&mut self) {
         if self.0 != 0 {
+            // SAFETY: `self.0` is the send right from `mach_host_self`. This runs once, from `Drop`.
             unsafe {
                 mach_port_deallocate(libc::mach_task_self(), self.0);
             }

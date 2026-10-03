@@ -30,7 +30,8 @@ pub fn read(
         .open(path)
         .context("Open image")?;
     ensure!(file.metadata()?.is_file(), "Image is not a regular file");
-    let bytes = terminator_core::async_service::read_chunks(file, (MAX_FILE + 1) as usize, cancel)?;
+    let limit = usize::try_from(MAX_FILE + 1).unwrap_or(usize::MAX);
+    let bytes = terminator_core::async_service::read_chunks(file, limit, cancel)?;
     ensure!(
         bytes.len() as u64 <= MAX_FILE,
         "Image exceeds the 32 MiB file limit"
@@ -54,7 +55,7 @@ pub fn decode_bytes(bytes: Vec<u8>, svg: bool) -> Result<ColorImage> {
         // Constrain the output independently of untrusted SVG dimensions.
         let mut options = resvg::usvg::Options::default();
         let omitted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let linked = omitted.clone();
+        let linked = std::sync::Arc::clone(&omitted);
         options.image_href_resolver.resolve_string = Box::new(move |_, _| {
             linked.store(true, std::sync::atomic::Ordering::Relaxed);
             None
@@ -62,11 +63,14 @@ pub fn decode_bytes(bytes: Vec<u8>, svg: bool) -> Result<ColorImage> {
         // Validate embedded raster payloads with the same decoder limits, and
         // share a total pixel budget across all images in the SVG.
         let remaining = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(MAX_PIXELS));
-        let embedded = omitted.clone();
+        let embedded = std::sync::Arc::clone(&omitted);
         let resolver = resvg::usvg::ImageHrefResolver::default().resolve_data;
         options.image_href_resolver.resolve_data = Box::new(move |mime, data, options| {
             let valid = raster(&data).ok().is_some_and(|image| {
-                let pixels = u64::from(image.width()) * u64::from(image.height());
+                let Some(pixels) = u64::from(image.width()).checked_mul(u64::from(image.height()))
+                else {
+                    return false;
+                };
                 remaining
                     .fetch_update(
                         std::sync::atomic::Ordering::Relaxed,
@@ -116,7 +120,9 @@ fn raster(bytes: &[u8]) -> Result<image::DynamicImage> {
     let mut decoder = reader.into_decoder()?;
     let (width, height) = decoder.dimensions();
     ensure!(
-        u64::from(width) * u64::from(height) <= MAX_PIXELS,
+        u64::from(width)
+            .checked_mul(u64::from(height))
+            .is_some_and(|pixels| pixels <= MAX_PIXELS),
         "Image exceeds the 16 megapixel preview limit"
     );
     let orientation = decoder.orientation()?;

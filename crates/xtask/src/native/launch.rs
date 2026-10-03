@@ -8,7 +8,11 @@ pub fn run(o: &Options) -> Result<()> {
     h.setup()?;
     let web = h.project("atlas-web")?;
     let api = h.project("atlas-api")?;
-    let root = PathBuf::from(web["path"].as_str().unwrap());
+    let root = PathBuf::from(
+        web.get("path")
+            .and_then(super::Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing project path"))?,
+    );
     fs::write(
         root.join("README.md"),
         "# Atlas workspace\n\nA small **sample project** for exploring a native workflow.\n\n## Today\n\n- [x] Organize project terminals\n- [x] Review documentation beside the source\n- [ ] Connect your own coding tools\n\n## Commands\n\n```sh\ncargo test\ncargo run\n```\n\n## Notes\n\nYour editor keeps its configuration.\nYour sessions keep running when the window closes.\n",
@@ -44,13 +48,19 @@ pub fn run(o: &Options) -> Result<()> {
 
     h.rpc(json!({"Hook":{"protocol_version":1,"event_id":"launch-sample","terminal_session_id":id(&left),"agent_invocation_id":"launch-sample-agent","agent_kind":"sample","state":"waiting_input","request_id":"launch-sample-request","sequence":1,"summary":"Review the documentation changes","details":"Sample hook event for the launch gallery. No agent provider was launched.","resume":null}}))?;
     let mut preferences = prefs(&h)?;
-    preferences["left_agents"] = json!(true);
+    preferences
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("preferences are not an object"))?
+        .insert("left_agents".into(), json!(true));
     save_prefs(&h, &preferences)?;
     plain(&h, o, "attention", json!([]), 2300)?;
 
     let editor = h.editor(&web, &root.join("README.md"))?;
     h.layout(&web, std::slice::from_ref(&editor))?;
-    preferences["left_agents"] = json!(false);
+    preferences
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("preferences are not an object"))?
+        .insert("left_agents".into(), json!(false));
     save_prefs(&h, &preferences)?;
     plain(
         &h,

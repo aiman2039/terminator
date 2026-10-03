@@ -17,7 +17,7 @@ enum Launch {
 }
 mod shell;
 mod storage;
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use fs2::FileExt;
 use portable_pty::{MasterPty, PtySize, native_pty_system};
@@ -49,7 +49,7 @@ use terminator_core::*;
 fn relock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 struct Runtime {
@@ -99,18 +99,19 @@ impl Shared {
             let _operation = relock(&self.terminal_operations);
             let mut runtime = relock(runtime);
             ensure!(!runtime.ended && !runtime.closing, "Session is closing");
-            runtime.inputs_in_flight += 1;
-            runtime.writer.clone()
+            runtime.inputs_in_flight = runtime.inputs_in_flight.saturating_add(1);
+            Arc::clone(&runtime.writer)
         };
         // A full PTY input buffer must not block other panes or Stop.
         // In-flight input makes idle-close ineligible until it finishes.
         let result = {
             let mut writer = relock(&writer);
-            writer.write_all(bytes).and_then(|_| writer.flush())
+            writer.write_all(bytes).and_then(|()| writer.flush())
         };
         {
             let _operation = relock(&self.terminal_operations);
-            relock(runtime).inputs_in_flight -= 1;
+            let mut runtime = relock(runtime);
+            runtime.inputs_in_flight = runtime.inputs_in_flight.saturating_sub(1);
         }
         result.map_err(Into::into)
     }
@@ -125,12 +126,21 @@ impl Shared {
             budgets.insert(owner.id.clone(), 0);
             for path in storage::history_files(&owner.paths(), None) {
                 let metadata = fs::metadata(&path)?;
-                *budgets.get_mut(&owner.id).unwrap() += metadata.len();
+                let usage = budgets
+                    .get_mut(&owner.id)
+                    .ok_or_else(|| anyhow!("Missing history budget"))?;
+                *usage = usage
+                    .checked_add(metadata.len())
+                    .ok_or_else(|| anyhow!("History budget overflow"))?;
                 segments.push((metadata.modified()?, owner.id.clone(), metadata.len()));
             }
         }
         segments.sort_by_key(|s| s.0);
-        let limit = relock(&self.state).settings.total_mib * 1024 * 1024;
+        let total_mib = relock(&self.state).settings.total_mib;
+        let limit = total_mib
+            .checked_mul(1024)
+            .and_then(|value| value.checked_mul(1024))
+            .ok_or_else(|| anyhow!("History budget overflow"))?;
         let original_budgets = budgets.clone();
         let mut total: u64 = budgets.values().sum();
         for (_, owner, bytes) in segments {
@@ -138,19 +148,32 @@ impl Shared {
                 break;
             }
             total = total.saturating_sub(bytes);
-            *budgets.get_mut(&owner).unwrap() -= bytes;
+            let budget = budgets
+                .get_mut(&owner)
+                .ok_or_else(|| anyhow!("Missing history budget"))?;
+            *budget = budget
+                .checked_sub(bytes)
+                .ok_or_else(|| anyhow!("History budget underflow"))?;
         }
         let mine = relock(&self.state).generation.clone();
         for owner in owners
             .iter()
             .filter(|g| g.status != generations::Status::Prepared)
         {
-            let reduced = budgets[&owner.id] < original_budgets[&owner.id];
+            let budget = budgets
+                .get(&owner.id)
+                .copied()
+                .ok_or_else(|| anyhow!("Missing history budget"))?;
+            let original = original_budgets
+                .get(&owner.id)
+                .copied()
+                .ok_or_else(|| anyhow!("Missing history budget"))?;
+            let reduced = budget < original;
             if !reduced && owner.status != generations::Status::Retired {
                 continue;
             }
             let request = Request::PruneHistory {
-                budget: if reduced { budgets[&owner.id] } else { limit },
+                budget: if reduced { budget } else { limit },
             };
             self.prune_owner_history(owner, request, &mine)?;
         }
@@ -249,7 +272,7 @@ impl Shared {
                 match action.as_str() {
                     "read" => n.read = true,
                     "dismiss" => n.dismissed = true,
-                    "snooze" => n.snoozed_until = now() + 600,
+                    "snooze" => n.snoozed_until = now().saturating_add(600),
                     _ => bail!("Unknown notification action"),
                 }
             }
@@ -278,7 +301,7 @@ impl Shared {
             }
             _ => bail!("Operation requires a live session owner"),
         }
-        state.revision += 1;
+        state.revision = state.revision.saturating_add(1);
         store.save(&state)?;
         Ok(Response::Ok)
     }
@@ -302,7 +325,7 @@ impl Shared {
     fn degraded(&self, message: &str) {
         let mut s = relock(&self.state);
         s.degraded = Some(message.into());
-        s.revision += 1;
+        s.revision = s.revision.saturating_add(1);
     }
     fn create(
         self: &Arc<Self>,
@@ -464,7 +487,7 @@ impl Shared {
                         .iter()
                         .filter(|s| s.project_id == project)
                         .count()
-                        + 1
+                        .saturating_add(1)
                 )
             },
             cwd,
@@ -484,27 +507,29 @@ impl Shared {
             truncated: false,
             cwd_confirmed: false,
         };
-        relock(&self.sessions).insert(sid.clone(), runtime.clone());
+        relock(&self.sessions).insert(sid.clone(), Arc::clone(&runtime));
         {
             let mut s = relock(&self.state);
             s.sessions.push(record.clone());
-            s.revision += 1;
+            s.revision = s.revision.saturating_add(1);
         }
         if let Err(e) = self.persist() {
             self.degraded(&format!(
                 "Session running, recovery persistence failed: {e}"
             ));
         }
-        let shared = self.clone();
+        let shared = Arc::clone(self);
         let read_sid = sid.clone();
-        let read_rt = runtime.clone();
+        let read_rt = Arc::clone(&runtime);
         thread::spawn(move || {
             let mut bytes = [0u8; 8192];
             while let Ok(n) = reader.read(&mut bytes) {
                 if n == 0 {
                     break;
                 }
-                let data = &bytes[..n];
+                let Some(data) = bytes.get(..n) else {
+                    break;
+                };
                 {
                     let mut rt = relock(&read_rt);
                     terminal_events::process(&mut rt.parser, data);
@@ -542,11 +567,11 @@ impl Shared {
                     }
                     s.degraded =
                         Some("History storage worker stopped; terminal output continues but some history was not saved".into());
-                    s.revision += 1;
+                    s.revision = s.revision.saturating_add(1);
                 }
             }
         });
-        let shared = self.clone();
+        let shared = Arc::clone(self);
         thread::spawn(move || {
             let exit = child.wait();
             {
@@ -568,7 +593,7 @@ impl Shared {
                         a.state = AgentState::Stopped;
                     }
                 }
-                s.revision += 1;
+                s.revision = s.revision.saturating_add(1);
                 // Sessions without an agent resume command (plain shells,
                 // file editors) are not worth keeping: reopening them
                 // restores nothing actionable.
@@ -577,7 +602,7 @@ impl Shared {
                     s.agents.retain(|a| a.session_id != sid);
                     s.notifications.retain(|n| n.session_id != sid);
                     s.terminal_notices.retain(|n| n.session_id != sid);
-                    s.revision += 1;
+                    s.revision = s.revision.saturating_add(1);
                 }
             }
             let _ = shared.persist();
@@ -650,7 +675,7 @@ impl Shared {
                         session.truncated = true;
                     }
                 }
-                state.revision += 1;
+                state.revision = state.revision.saturating_add(1);
             }
             Request::Archived {
                 generation,
@@ -718,7 +743,7 @@ impl Shared {
                     created: now(),
                     removed: false,
                 });
-                state.revision += 1;
+                state.revision = state.revision.saturating_add(1);
             }
             Request::WorktreeRemove { project } => {
                 let _worktree_guard = relock(&self.worktree_operations);
@@ -745,7 +770,7 @@ impl Shared {
                 if let Some(record) = state.worktrees.iter_mut().find(|w| w.project_id == project) {
                     record.removed = true;
                 }
-                state.revision += 1;
+                state.revision = state.revision.saturating_add(1);
             }
             Request::Screen { session } => {
                 let runtime = self.runtime(&session)?;
@@ -805,7 +830,7 @@ impl Shared {
                     let project = project.id.clone();
                     if s.selected_project.as_ref() != Some(&project) {
                         s.selected_project = Some(project);
-                        s.revision += 1;
+                        s.revision = s.revision.saturating_add(1);
                     }
                 } else {
                     let pid = id();
@@ -820,7 +845,7 @@ impl Shared {
                         layout: serde_json::Value::Null,
                     });
                     s.selected_project = Some(pid);
-                    s.revision += 1;
+                    s.revision = s.revision.saturating_add(1);
                 }
             }
             Request::SaveLayout { project, layout } => {
@@ -834,7 +859,7 @@ impl Shared {
                     .find(|p| p.id == project)
                     .context("Unknown project")?
                     .layout = layout;
-                s.revision += 1;
+                s.revision = s.revision.saturating_add(1);
             }
             Request::SelectProject { project } => {
                 let mut s = relock(&self.state);
@@ -843,7 +868,7 @@ impl Shared {
                     "Unknown project"
                 );
                 s.selected_project = Some(project);
-                s.revision += 1;
+                s.revision = s.revision.saturating_add(1);
             }
             Request::Cwd { session, path } => {
                 let _worktree_guard = relock(&self.worktree_operations);
@@ -856,7 +881,7 @@ impl Shared {
                     .context("Unknown live session")?;
                 rec.cwd = path;
                 rec.cwd_confirmed = true;
-                s.revision += 1;
+                s.revision = s.revision.saturating_add(1);
             }
             Request::Focus { session } => relock(&self.state).focus(&session),
             Request::Notice { id, action } => {
@@ -869,10 +894,10 @@ impl Shared {
                 match action.as_str() {
                     "read" => n.read = true,
                     "dismiss" => n.dismissed = true,
-                    "snooze" => n.snoozed_until = now() + 600,
+                    "snooze" => n.snoozed_until = now().saturating_add(600),
                     _ => bail!("Unknown notification action"),
-                };
-                s.revision += 1;
+                }
+                s.revision = s.revision.saturating_add(1);
             }
             Request::TerminalNotify {
                 session,
@@ -895,13 +920,13 @@ impl Shared {
                     .find(|n| n.id == id)
                     .context("Unknown terminal notice")?;
                 notice.dismissed = true;
-                state.revision += 1;
+                state.revision = state.revision.saturating_add(1);
             }
             Request::Settings(settings) => {
                 settings.validate()?;
                 let mut s = relock(&self.state);
                 s.settings = settings;
-                s.revision += 1;
+                s.revision = s.revision.saturating_add(1);
             }
             Request::Hook(event) => {
                 let _operation = relock(&self.terminal_operations);
@@ -936,7 +961,7 @@ impl Shared {
                     .find(|r| r.id == session)
                     .context("Unknown session")?
                     .label = label;
-                s.revision += 1;
+                s.revision = s.revision.saturating_add(1);
             }
             Request::Stop { session } => {
                 let _operation = relock(&self.terminal_operations);
@@ -950,9 +975,10 @@ impl Shared {
                 ensure!(!relock(&rt).ended, "Session ended");
                 if let Some(pid) = rec.pid {
                     // Signal the PTY's foreground job as well as its owning shell.
-                    if let Some(foreground) = relock(&rt).master.process_group_leader()
+                    if let Ok(shell_pid) = i32::try_from(pid)
+                        && let Some(foreground) = relock(&rt).master.process_group_leader()
                         && foreground > 1
-                        && foreground != pid as i32
+                        && foreground != shell_pid
                         && let Ok(foreground) = u32::try_from(foreground)
                     {
                         let _ = signals::signal_group(foreground, signals::ProcSignal::Hangup);
@@ -963,7 +989,7 @@ impl Shared {
                     })?;
                 }
                 rec.lifecycle = Lifecycle::Stopping;
-                s.revision += 1;
+                s.revision = s.revision.saturating_add(1);
             }
             Request::Remove { session } => {
                 let mut s = relock(&self.state);
@@ -977,7 +1003,7 @@ impl Shared {
                 s.agents.retain(|a| a.session_id != session);
                 s.notifications.retain(|n| n.session_id != session);
                 s.terminal_notices.retain(|n| n.session_id != session);
-                s.revision += 1;
+                s.revision = s.revision.saturating_add(1);
                 drop(s);
                 self.history_clear(Some(session.clone()), true)?;
             }
@@ -1007,7 +1033,7 @@ impl Shared {
                         r.truncated = true;
                     }
                 }
-                s.revision += 1;
+                s.revision = s.revision.saturating_add(1);
             }
             Request::EditorSave { session } => return self.editor_rpc(&session, "execute('wall')"),
             Request::EditorCompare { session } => {
@@ -1144,7 +1170,7 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
             state.daemon_executable = executable;
             state.attachment_helper_executable = Some(helper.clone());
             state.attachment_helper_available = Some(available);
-            state.revision += 1;
+            state.revision = state.revision.saturating_add(1);
         }
         presence::expire_observations(&mut state, now());
         if let Some(hint) = &env.snapshot_hint
@@ -1198,8 +1224,8 @@ fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
         stream.set_read_timeout(None)?;
         let mut input = stream.try_clone()?;
         let input_disconnect = Disconnect(input.try_clone()?);
-        let input_rt = rt.clone();
-        let input_shared = shared.clone();
+        let input_rt = Arc::clone(&rt);
+        let input_shared = Arc::clone(&shared);
         let session_id = session.clone();
         thread::spawn(move || {
             // Same containment as the connection thread: input handling
@@ -1282,12 +1308,16 @@ fn main() -> Result<()> {
         data_dir: paths.data.clone(),
         notify: None,
     });
-    let catalog_paths = std::env::var_os("TERMINATOR_CATALOG_DATA").map(|data| Paths {
-        data: data.into(),
-        runtime: std::env::var_os("TERMINATOR_CATALOG_RUNTIME")
-            .expect("Catalog runtime")
-            .into(),
-    });
+    let catalog_paths = if let Some(data) = std::env::var_os("TERMINATOR_CATALOG_DATA") {
+        Some(Paths {
+            data: data.into(),
+            runtime: std::env::var_os("TERMINATOR_CATALOG_RUNTIME")
+                .context("Catalog runtime")?
+                .into(),
+        })
+    } else {
+        None
+    };
     if let Some(root) = &catalog_paths {
         generations::validate_endpoint(
             root,
@@ -1349,7 +1379,7 @@ fn main() -> Result<()> {
             state.sessions.is_empty(),
             "Generation directory must be new; never restart owned processes"
         );
-        state.generation = owner.clone();
+        state.generation.clone_from(&owner);
         store.bind_owner(owner);
         generations::Catalog::open(root)?.refresh(&mut state)?;
     }
@@ -1432,7 +1462,7 @@ fn main() -> Result<()> {
                         state.degraded = Some(format!(
                             "History write failed; some terminal history was not saved: {e}"
                         ));
-                        state.revision += 1;
+                        state.revision = state.revision.saturating_add(1);
                     }
                 }
                 Ok(HistoryJob::Flush(tx)) => {
@@ -1472,7 +1502,7 @@ fn main() -> Result<()> {
                                 record.truncated = true;
                             }
                         }
-                        state.revision += 1;
+                        state.revision = state.revision.saturating_add(1);
                         drop(state);
                         let _ = s.persist();
                     }
@@ -1490,7 +1520,9 @@ fn main() -> Result<()> {
     });
     let weak = Arc::downgrade(&shared);
     thread::spawn(move || {
-        let mut last = Instant::now() - Duration::from_secs(10);
+        let mut last = Instant::now()
+            .checked_sub(Duration::from_secs(10))
+            .unwrap_or_else(Instant::now);
         while let Ok(nid) = alert_rx.recv() {
             let Some(s) = weak.upgrade() else { break };
             if std::env::var_os("TERMINATOR_NO_NOTIFICATIONS").is_some()
@@ -1528,7 +1560,9 @@ fn main() -> Result<()> {
     let weak = Arc::downgrade(&shared);
     thread::spawn(move || {
         let born = Instant::now();
-        let mut global_prune = Instant::now() - Duration::from_secs(30);
+        let mut global_prune = Instant::now()
+            .checked_sub(Duration::from_secs(30))
+            .unwrap_or_else(Instant::now);
         loop {
             thread::sleep(Duration::from_secs(1));
             let Some(shared) = weak.upgrade() else {
@@ -1631,8 +1665,8 @@ fn main() -> Result<()> {
                     match listener.accept() {
                         Ok((stream, _)) => {
                             if active.load(Ordering::Relaxed) <= 256 {
-                                let s = shared.clone();
-                                let count = active.clone();
+                                let s = Arc::clone(&shared);
+                                let count = Arc::clone(&active);
                                 count.fetch_add(1, Ordering::Relaxed);
                                 thread::spawn(move || {
                                     // A panicking request kills at most its

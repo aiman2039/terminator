@@ -14,8 +14,15 @@ pub fn run(o: &Options) -> Result<()> {
     h.env
         .insert("ZDOTDIR".into(), home.to_string_lossy().into_owned());
     h.restart()?;
-    let mut settings = h.state()?["settings"].clone();
-    settings["shell"] = json!(shell);
+    let mut settings = h
+        .state()?
+        .get("settings")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing settings"))?;
+    settings
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("settings is not an object"))?
+        .insert("shell".into(), json!(shell));
     h.rpc(json!({"Settings":settings}))?;
     let project = h.project("idle-close-native")?;
     let idle = h.shell(&project)?;
@@ -40,7 +47,14 @@ pub fn run(o: &Options) -> Result<()> {
     );
     h.assert_pids(std::slice::from_ref(&busy))?;
     ensure!(
-        !session_ids(&state["projects"][0]["layout"]).contains(&id(&idle).to_owned()),
+        !session_ids(
+            state
+                .get("projects")
+                .and_then(|projects| projects.get(0))
+                .and_then(|project| project.get("layout"))
+                .ok_or_else(|| anyhow::anyhow!("missing projects[0].layout"))?,
+        )
+        .contains(&id(&idle).to_owned()),
         "Closed idle pane remains in layout"
     );
     Ok(())

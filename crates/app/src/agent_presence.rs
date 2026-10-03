@@ -36,11 +36,13 @@ pub struct AttentionCounts {
 impl AttentionCounts {
     #[must_use]
     pub fn waiting(self) -> usize {
-        self.input + self.permission
+        self.input.saturating_add(self.permission)
     }
     #[must_use]
     pub fn total(self) -> usize {
-        self.input + self.permission + self.failed
+        self.input
+            .saturating_add(self.permission)
+            .saturating_add(self.failed)
     }
     #[must_use]
     pub fn is_empty(self) -> bool {
@@ -72,9 +74,11 @@ pub fn tab_attention(state: &State, session_ids: &[String], now: u64) -> Attenti
             continue;
         }
         match notice.state {
-            AgentState::WaitingInput => counts.input += 1,
-            AgentState::WaitingPermission => counts.permission += 1,
-            AgentState::Failed => counts.failed += 1,
+            AgentState::WaitingInput => counts.input = counts.input.saturating_add(1),
+            AgentState::WaitingPermission => {
+                counts.permission = counts.permission.saturating_add(1);
+            }
+            AgentState::Failed => counts.failed = counts.failed.saturating_add(1),
             _ => {}
         }
     }
@@ -253,7 +257,7 @@ impl PresentationCache {
         self.ensure(state, now, fresh);
         self.entries
             .get(id)
-            .map(|entry| entry.presentation.clone())
+            .map(|entry| std::sync::Arc::clone(&entry.presentation))
             .unwrap_or_else(|| self.missing())
     }
 
@@ -280,9 +284,9 @@ impl PresentationCache {
                 continue;
             }
             if let Some(item) = self.attention.get(id.as_str()) {
-                counts.input += item.input;
-                counts.permission += item.permission;
-                counts.failed += item.failed;
+                counts.input = counts.input.saturating_add(item.input);
+                counts.permission = counts.permission.saturating_add(item.permission);
+                counts.failed = counts.failed.saturating_add(item.failed);
             }
         }
         counts
@@ -299,14 +303,17 @@ impl PresentationCache {
     }
 
     fn missing(&mut self) -> std::sync::Arc<AgentPresentation> {
-        self.missing
-            .get_or_insert_with(|| std::sync::Arc::new(unknown_presentation()))
-            .clone()
+        std::sync::Arc::clone(
+            self.missing
+                .get_or_insert_with(|| std::sync::Arc::new(unknown_presentation())),
+        )
     }
 
     fn rebuild(&mut self, state: &State, now: u64, fresh: Option<bool>) {
-        self.indexes_built += 1;
-        self.notifications_visited += state.notifications.len() as u64;
+        self.indexes_built = self.indexes_built.saturating_add(1);
+        self.notifications_visited = self
+            .notifications_visited
+            .saturating_add(state.notifications.len() as u64);
         let mut live = std::collections::HashSet::with_capacity(state.sessions.len());
         for session in &state.sessions {
             if session.lifecycle.live() {
@@ -365,14 +372,20 @@ impl PresentationCache {
             let fold = folds.entry(notice.session_id.as_str()).or_default();
             if live.contains(notice.session_id.as_str()) && notice_pending(notice, now) {
                 match notice.state {
-                    AgentState::WaitingInput => fold.attention.input += 1,
-                    AgentState::WaitingPermission => fold.attention.permission += 1,
-                    AgentState::Failed => fold.attention.failed += 1,
+                    AgentState::WaitingInput => {
+                        fold.attention.input = fold.attention.input.saturating_add(1);
+                    }
+                    AgentState::WaitingPermission => {
+                        fold.attention.permission = fold.attention.permission.saturating_add(1);
+                    }
+                    AgentState::Failed => {
+                        fold.attention.failed = fold.attention.failed.saturating_add(1);
+                    }
                     _ => {}
                 }
             }
             if !notice.read && notice_pending(notice, now) {
-                fold.unread += 1;
+                fold.unread = fold.unread.saturating_add(1);
             }
             if !notice.dismissed
                 && (fold.preview_index.is_none() || notice.created >= fold.preview_at)
@@ -422,7 +435,7 @@ impl PresentationCache {
                 fresh.unwrap_or_else(|| agents::presence_verified(presence.as_ref(), now));
             let notice_preview = hook.as_ref().and_then(|_| {
                 fold.and_then(|item| item.preview_index).and_then(|index| {
-                    let notice = &state.notifications[index];
+                    let notice = state.notifications.get(index)?;
                     let text = notice_preview(&notice.summary);
                     (!text.is_empty() && text != notice.state.label()).then_some(text)
                 })
@@ -448,10 +461,12 @@ impl PresentationCache {
                 (unchanged, presentation)
             };
             if unchanged {
-                self.presentations_reused += 1;
+                self.presentations_reused = self.presentations_reused.saturating_add(1);
                 continue;
             }
-            let presentation = presentation.expect("changed session builds a presentation");
+            let Some(presentation) = presentation else {
+                continue;
+            };
             self.entries.insert(
                 session.id.clone(),
                 CacheEntry {
@@ -469,7 +484,7 @@ impl PresentationCache {
                     presentation,
                 },
             );
-            self.presentations_rebuilt += 1;
+            self.presentations_rebuilt = self.presentations_rebuilt.saturating_add(1);
         }
         self.entries.retain(|id, _| seen.contains(id.as_str()));
         self.fresh = fresh;
@@ -757,13 +772,16 @@ fn diagnostics_text(
             .map(|a| agents::display_name(&a.kind))
             .collect();
         let age = ago(presence.map(|p| p.observed_at).unwrap_or(now), now);
-        if detected.len() == 1 && agents::preferred_agent(detected).is_some() {
-            let how = if detected[0].foreground {
+        if detected.len() == 1
+            && agents::preferred_agent(detected).is_some()
+            && let (Some(agent), Some(name)) = (detected.first(), names.first())
+        {
+            let how = if agent.foreground {
                 "foreground"
             } else {
                 "only agent"
             };
-            lines.push(format!("{} live (verified {age}; {how})", names[0]));
+            lines.push(format!("{name} live (verified {age}; {how})"));
         } else {
             lines.push(format!("{} live (verified {age})", names.join(", ")));
         }
@@ -879,7 +897,7 @@ mod tests {
                 .map(|(i, kind)| agents::DetectedAgent {
                     kind: (*kind).into(),
                     process: ProcessIdentity {
-                        pid: 200 + i as u32,
+                        pid: 200u32.saturating_add(u32::try_from(i).unwrap_or(u32::MAX)),
                         start_time: 500,
                     },
                     foreground: i == 0,
@@ -898,7 +916,7 @@ mod tests {
             provider_session_id: None,
             state: lifecycle,
             sequence: None,
-            updated: now() - 3,
+            updated: now().saturating_sub(3),
             resume: None,
             process: linked.then_some(ProcessIdentity {
                 pid: 200,
@@ -1026,7 +1044,7 @@ mod tests {
                 .map(|(i, kind)| agents::DetectedAgent {
                     kind: kind.into(),
                     process: ProcessIdentity {
-                        pid: 200 + i as u32,
+                        pid: 200u32.saturating_add(u32::try_from(i).unwrap_or(u32::MAX)),
                         start_time: 500,
                     },
                     foreground: false,

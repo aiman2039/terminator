@@ -155,13 +155,16 @@ fn parse_log(text: &str) -> Vec<CommitEntry> {
         } else {
             parents_str
                 .split_whitespace()
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .collect()
         };
         let refs: Vec<String> = if refs_str.is_empty() {
             vec![]
         } else {
-            refs_str.split(", ").map(|s| s.to_string()).collect()
+            refs_str
+                .split(", ")
+                .map(std::string::ToString::to_string)
+                .collect()
         };
         let timestamp: i64 = date.parse().unwrap_or(0);
         let formatted_date = if timestamp > 0 {
@@ -171,8 +174,9 @@ fn parse_log(text: &str) -> Vec<CommitEntry> {
             let now = SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_secs() as i64;
-            let diff = now - secs;
+                .as_secs()
+                .cast_signed();
+            let diff = now.saturating_sub(secs);
             if diff < 86400 {
                 format!("{}h ago", diff / 3600)
             } else if diff < 7 * 86400 {
@@ -180,7 +184,15 @@ fn parse_log(text: &str) -> Vec<CommitEntry> {
             } else {
                 // Format as YYYY-MM-DD
                 let days = secs / 86400;
-                let year = 1970 + (days - days / 146097 * 146097 + 719468) / 146097;
+                let span = 146_097_i64;
+                let year = days
+                    .checked_div(span)
+                    .and_then(|quotient| quotient.checked_mul(span))
+                    .and_then(|product| days.checked_sub(product))
+                    .and_then(|remainder| remainder.checked_add(719_468))
+                    .and_then(|shifted| shifted.checked_div(span))
+                    .and_then(|era| era.checked_add(1970))
+                    .unwrap_or(1970);
                 let month = 1;
                 let day = 1;
                 format!("{year}-{month:02}-{day:02}")
@@ -246,7 +258,7 @@ fn fetch_refs(root: &Path) -> Vec<RefEntry> {
             .to_string();
         let upstream = parts
             .next()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .filter(|s| !s.is_empty());
         refs.push(RefEntry {
             name,
@@ -294,8 +306,9 @@ pub fn fetch_blame(cwd: &Path, path: &Path) -> Result<BlameData, String> {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
-                    .as_secs() as i64;
-                let diff = now - secs;
+                    .as_secs()
+                    .cast_signed();
+                let diff = now.saturating_sub(secs);
                 if diff < 86400 {
                     format!("{}h ago", diff / 3600)
                 } else {

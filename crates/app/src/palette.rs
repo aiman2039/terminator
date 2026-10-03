@@ -93,13 +93,13 @@ impl App {
 
     pub(super) fn filtered_palette(&self) -> Vec<PaletteItem> {
         let query = self.palette_query.trim().to_lowercase();
-        let mut files = 0;
+        let mut files: i32 = 0;
         self.palette_items()
             .into_iter()
             .filter(|item| query.is_empty() || item.label().to_lowercase().contains(&query))
             .filter(|item| {
                 if matches!(item, PaletteItem::File(_)) {
-                    files += 1;
+                    files = files.saturating_add(1);
                     files <= 40
                 } else {
                     true
@@ -136,12 +136,21 @@ impl App {
             ui.weak("No matching commands.");
             return;
         }
-        self.palette_index = self.palette_index.min(items.len() - 1);
-        if ui.input(|input| input.key_pressed(egui::Key::ArrowDown)) {
-            self.palette_index = (self.palette_index + 1) % items.len();
+        let len = items.len();
+        self.palette_index = self.palette_index.min(len.saturating_sub(1));
+        if ui.input(|input| input.key_pressed(egui::Key::ArrowDown))
+            && let Some(next) = self
+                .palette_index
+                .checked_add(1)
+                .and_then(|index| index.checked_rem(len))
+        {
+            self.palette_index = next;
         }
         if ui.input(|input| input.key_pressed(egui::Key::ArrowUp)) {
-            self.palette_index = (self.palette_index + items.len() - 1) % items.len();
+            self.palette_index = self
+                .palette_index
+                .checked_sub(1)
+                .unwrap_or_else(|| len.saturating_sub(1));
         }
         let mut chosen = None;
         egui::ScrollArea::vertical()

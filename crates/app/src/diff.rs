@@ -112,8 +112,12 @@ fn syntaxes() -> &'static SyntaxSet {
 
 fn theme() -> &'static Theme {
     static SET: OnceLock<ThemeSet> = OnceLock::new();
+    static FALLBACK: OnceLock<Theme> = OnceLock::new();
     let themes = SET.get_or_init(ThemeSet::load_defaults);
-    &themes.themes["base16-ocean.dark"]
+    themes
+        .themes
+        .get("base16-ocean.dark")
+        .unwrap_or_else(|| FALLBACK.get_or_init(Theme::default))
 }
 
 fn highlight_file(path: &Path, text: &str) -> Vec<Vec<DiffSpan>> {
@@ -216,7 +220,7 @@ fn overlay(spans: Vec<DiffSpan>, fragments: &[(bool, String)]) -> Vec<DiffSpan> 
             rgb,
             intra: if *changed { Intra::Change } else { Intra::None },
         });
-        offset += text.len();
+        offset = offset.saturating_add(text.len());
     }
     if out.is_empty() { spans } else { out }
 }
@@ -229,9 +233,9 @@ fn hunk_line(old_start: usize, old_len: usize, new_start: usize, new_len: usize)
         spans: vec![DiffSpan {
             text: format!(
                 "@@ -{},{} +{},{} @@",
-                old_start + 1,
+                old_start.saturating_add(1),
                 old_len,
-                new_start + 1,
+                new_start.saturating_add(1),
                 new_len
             ),
             rgb: fallback_rgb(),
@@ -347,8 +351,12 @@ fn equal_line(change: similar::Change<&str>, old_hl: &[Vec<DiffSpan>]) -> DiffLi
     let text = change.value();
     DiffLine {
         kind: LineKind::Equal,
-        old_no: change.old_index().map(|n| n as u32 + 1),
-        new_no: change.new_index().map(|n| n as u32 + 1),
+        old_no: change
+            .old_index()
+            .map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1)),
+        new_no: change
+            .new_index()
+            .map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1)),
         spans: line_spans(old_hl, change.old_index(), text),
     }
 }
@@ -372,8 +380,12 @@ fn change_line(
     let spans = overlay(line_spans(highlighted, index, &joined), &fragments);
     DiffLine {
         kind,
-        old_no: change.old_index().map(|n| n as u32 + 1),
-        new_no: change.new_index().map(|n| n as u32 + 1),
+        old_no: change
+            .old_index()
+            .map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1)),
+        new_no: change
+            .new_index()
+            .map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1)),
         spans,
     }
 }

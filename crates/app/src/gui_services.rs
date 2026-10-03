@@ -95,10 +95,10 @@ impl Services {
             legacy_updates: updates,
             events: events.clone(),
             ctx,
-            paused: Default::default(),
-            snapshot_received: Default::default(),
-            editors: Default::default(),
-            snapshot: snapshot.clone(),
+            paused: std::sync::atomic::AtomicBool::default(),
+            snapshot_received: std::sync::Mutex::default(),
+            editors: std::sync::Mutex::default(),
+            snapshot: Arc::clone(&snapshot),
         }));
         let cpu = service.cpu().clone();
         supervisor.handle.submit(
@@ -128,9 +128,13 @@ impl Services {
         ))
     }
     pub fn presence_fresh(&self) -> Option<bool> {
-        self.0.snapshot_received.lock().unwrap().map(|received| {
-            received.elapsed().as_secs() <= terminator_core::agents::STALE_AFTER_SECS
-        })
+        self.0
+            .snapshot_received
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .map(|received| {
+                received.elapsed().as_secs() <= terminator_core::agents::STALE_AFTER_SECS
+            })
     }
     pub fn client(&self) -> &Client {
         &self.0.client
@@ -235,7 +239,7 @@ impl Services {
                         .await;
                 }
             };
-            tokio::select! { _ = cancel.cancelled() => {}, _ = nvim => {}, _ = git => {} }
+            tokio::select! { () = cancel.cancelled() => {}, _ = nvim => {}, _ = git => {} }
             Ok(Vec::new())
         })?;
         Ok(())
@@ -295,19 +299,26 @@ impl Services {
         self.0.handle.submit(context, cancel, async move {
             let mut revision = None;
             let mut appearance_source = None;
-            let mut config_check = Instant::now() - Duration::from_secs(3);
+            let mut config_check = Instant::now()
+                .checked_sub(Duration::from_secs(3))
+                .unwrap_or_else(Instant::now);
             loop {
                 tokio::select! {
-                    _ = token.cancelled() => break,
-                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                    () = token.cancelled() => break,
+                    () = tokio::time::sleep(Duration::from_millis(100)) => {}
                 }
                 if service.reads_paused() { continue; }
                 let result = tokio::select! {
-                    _ = token.cancelled() => break,
+                    () = token.cancelled() => break,
                     result = service.client().snapshot(revision.clone()) => result,
                 };
                 if matches!(&result, Ok(Response::State(_) | Response::Unchanged)) {
-                    *service.0.snapshot_received.lock().unwrap() = Some(Instant::now());
+                    *service
+                        .0
+                        .snapshot_received
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        Some(Instant::now());
                 }
                 let update = match result {
                     Ok(Response::State(state)) => {
@@ -324,7 +335,12 @@ impl Services {
                 };
                 let update = match update.filter(|_| !service.reads_paused()) {
                     Some(Update::State(state)) => {
-                        let previous = service.0.snapshot.lock().unwrap().replace(state);
+                        let previous = service
+                            .0
+                            .snapshot
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .replace(state);
                         drop(previous);
                         service.0.ctx.request_repaint();
                         None
@@ -332,7 +348,7 @@ impl Services {
                     other => other,
                 };
                 if let Some(update) = update {
-                    tokio::select! { _ = token.cancelled() => break, result = events.send(update) => { if result.is_err() { break; } } }
+                    tokio::select! { () = token.cancelled() => break, result = events.send(update) => { if result.is_err() { break; } } }
                     service.0.ctx.request_repaint();
                 }
                 // Catalog/persistence has its own worker, separate from bulk reads.
@@ -369,7 +385,11 @@ impl Services {
     async fn execute(&self, job: Job, cancel: CancellationToken) -> Result<Vec<Update>> {
         let ids = editor_ids(&job);
         let locks: Vec<_> = {
-            let mut editors = self.0.editors.lock().unwrap();
+            let mut editors = self
+                .0
+                .editors
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             editors.retain(|_, lock| lock.strong_count() != 0);
             ids.iter()
                 .map(|id| {
@@ -431,16 +451,16 @@ impl Services {
                     match after {
                         After::Create(split) => updates.push(Update::Created(session, split, None)),
                         After::CreateAt(anchors, split) => {
-                            updates.push(Update::Created(session, split, Some(anchors)))
+                            updates.push(Update::Created(session, split, Some(anchors)));
                         }
                         After::Workspace(id, anchors) => {
-                            updates.push(Update::WorkspaceCreated(session, id, anchors))
+                            updates.push(Update::WorkspaceCreated(session, id, anchors));
                         }
                         After::Strip => {
-                            updates.push(Update::StripCreated(session, None, Vec::new()))
+                            updates.push(Update::StripCreated(session, None, Vec::new()));
                         }
                         After::StripAt(anchors, split) => {
-                            updates.push(Update::StripCreated(session, split, anchors))
+                            updates.push(Update::StripCreated(session, split, anchors));
                         }
                         _ => {}
                     }
@@ -772,7 +792,7 @@ impl Services {
                     let mut bytes = [0; 256];
                     loop {
                         tokio::select! {
-                            _ = token.cancelled() => return Ok(Vec::new()),
+                            () = token.cancelled() => return Ok(Vec::new()),
                             n = completion.read(&mut bytes) => if n? == 0 { break; }
                         }
                     }

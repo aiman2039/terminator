@@ -252,7 +252,7 @@ impl From<Sender<Job>> for JobQueue {
         Self {
             sender: Some(sender),
             services: None,
-            serial: Default::default(),
+            serial: std::sync::Arc::default(),
         }
     }
 }
@@ -261,7 +261,7 @@ impl JobQueue {
         Self {
             sender: None,
             services: Some(services),
-            serial: Default::default(),
+            serial: std::sync::Arc::default(),
         }
     }
     pub fn serial(&self) -> u64 {
@@ -364,7 +364,12 @@ mod tests {
     #[test]
     fn timed_out_exit_can_be_retried() {
         let (mut app, ctx, _dir, _) = fixture();
-        app.exit = Exit::Saving(Instant::now() - Duration::from_secs(16), 1);
+        app.exit = Exit::Saving(
+            Instant::now()
+                .checked_sub(Duration::from_secs(16))
+                .unwrap_or_else(Instant::now),
+            1,
+        );
         app.advance_exit(&ctx);
         assert!(!app.exit.active());
         app.begin_exit();

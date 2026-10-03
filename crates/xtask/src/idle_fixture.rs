@@ -1,11 +1,14 @@
 //! Real PTYs: idle shells, children, all-target preflight, and agents.
 use crate::harness::{Harness, id, session};
-use anyhow::{Result, ensure};
+use anyhow::{Result, anyhow, ensure};
 use serde_json::{Value, json};
 use std::{fs, thread, time::Duration};
 
 fn close(h: &Harness, targets: &[&Value], generation: &str) -> Result<Value> {
-    Ok(h.rpc(json!({"CloseIdleSessions":{"generation":generation,"sessions":targets.iter().map(|s| id(s)).collect::<Vec<_>>()}}))?["IdleSessionsClosed"].clone())
+    h.rpc(json!({"CloseIdleSessions":{"generation":generation,"sessions":targets.iter().map(|s| id(s)).collect::<Vec<_>>()}}))?
+        .get("IdleSessionsClosed")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing IdleSessionsClosed"))
 }
 fn closed(value: &Value) -> bool {
     value.as_array().is_some_and(|outcomes| {
@@ -29,11 +32,24 @@ pub fn run() -> Result<()> {
         h.env
             .insert("ZDOTDIR".into(), home.to_string_lossy().into_owned());
         h.restart()?;
-        let mut settings = h.state()?["settings"].clone();
-        settings["shell"] = json!(shell);
+        let mut settings = h
+            .state()?
+            .get("settings")
+            .cloned()
+            .ok_or_else(|| anyhow!("missing settings"))?;
+        settings
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("settings is not an object"))?
+            .insert("shell".into(), json!(shell));
         h.rpc(json!({"Settings":settings}))?;
         let project = h.project(&format!("idle-{name}"))?;
-        let generation = h.state()?["generation"].as_str().unwrap().to_owned();
+        let generation = h
+            .state()?
+            .get("generation")
+            .ok_or_else(|| anyhow!("missing generation"))?
+            .as_str()
+            .unwrap()
+            .to_owned();
         let initial = h.shell(&project)?;
         thread::sleep(Duration::from_millis(700));
         let outcome = close(&h, &[&initial], &generation)?;
@@ -83,7 +99,10 @@ pub fn run() -> Result<()> {
         h.assert_pids(&[idle.clone(), busy.clone()])?;
         let stale = close(&h, &[&idle], "stale-generation")?;
         ensure!(
-            stale[0]["status"] == "stale_generation",
+            stale
+                .get(0)
+                .and_then(|outcome| outcome.get("status"))
+                .is_some_and(|status| status == "stale_generation"),
             "Stale generation was accepted"
         );
         h.assert_pids(std::slice::from_ref(&idle))?;
@@ -117,7 +136,9 @@ pub fn run() -> Result<()> {
         let mut input = h.attach(&submitted)?;
         h.write(&mut input, "sleep 30\r")?;
         terminator_core::write_frame(&mut input, &json!({"Resize":{"rows":31,"cols":91}}))?;
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let deadline = std::time::Instant::now()
+            .checked_add(Duration::from_secs(3))
+            .ok_or_else(|| anyhow!("input deadline overflow"))?;
         while session(&h.state()?, id(&submitted))["rows"] != 31 {
             ensure!(
                 std::time::Instant::now() < deadline,
@@ -171,11 +192,24 @@ fn zsh_prompt_framework() -> Result<()> {
     h.env
         .insert("ZDOTDIR".into(), home.to_string_lossy().into_owned());
     h.restart()?;
-    let mut settings = h.state()?["settings"].clone();
-    settings["shell"] = json!(shell);
+    let mut settings = h
+        .state()?
+        .get("settings")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing settings"))?;
+    settings
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("settings is not an object"))?
+        .insert("shell".into(), json!(shell));
     h.rpc(json!({"Settings": settings}))?;
     let project = h.project("idle-zsh-framework")?;
-    let generation = h.state()?["generation"].as_str().unwrap().to_owned();
+    let generation = h
+        .state()?
+        .get("generation")
+        .ok_or_else(|| anyhow!("missing generation"))?
+        .as_str()
+        .unwrap()
+        .to_owned();
     let initial = h.shell(&project)?;
     thread::sleep(Duration::from_millis(1200));
     let outcome = close(&h, &[&initial], &generation)?;

@@ -1,6 +1,6 @@
 //! Review regressions use fresh daemons, PTYs and temporary files only.
 use crate::harness::{Harness, bin, id, session, session_present, sessions, wait_child};
-use anyhow::{Result, ensure};
+use anyhow::{Result, anyhow, ensure};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -42,7 +42,10 @@ fn clean_shutdown() -> Result<()> {
         },
         5,
     )?;
-    let helper = h.state()?["attachment_helper_executable"]
+    let helper = h
+        .state()?
+        .get("attachment_helper_executable")
+        .ok_or_else(|| anyhow!("missing attachment helper"))?
         .as_str()
         .unwrap()
         .to_owned();
@@ -78,7 +81,12 @@ fn clean_shutdown() -> Result<()> {
     );
     let result: Value = serde_json::from_slice(&output.stdout)?;
     ensure!(
-        result["shutdown"] == true && result["stopped_sessions"] == 2,
+        result
+            .get("shutdown")
+            .is_some_and(|shutdown| shutdown.as_bool() == Some(true))
+            && result
+                .get("stopped_sessions")
+                .is_some_and(|stopped| stopped.as_u64() == Some(2)),
         "Cleanup did not report both sessions"
     );
     ensure!(
@@ -107,7 +115,11 @@ fn clean_shutdown() -> Result<()> {
         &format!("trap '' HUP; touch {}\n", quote(&ready.to_string_lossy())),
     )?;
     h.wait(|_| ready.exists(), 5)?;
-    let generation = h.state()?["generation"].clone();
+    let generation = h
+        .state()?
+        .get("generation")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing generation"))?;
     let output = h
         .command("terminator-hook")
         .args(["ctl", "shutdown", "--stop-all", "--timeout", "1"])
@@ -121,7 +133,9 @@ fn clean_shutdown() -> Result<()> {
         "Cleanup falsely succeeded for a refusing process"
     );
     ensure!(
-        h.state()?["generation"] == generation,
+        h.state()?
+            .get("generation")
+            .is_some_and(|current| current == &generation),
         "Timed-out cleanup replaced the daemon"
     );
     println!(
@@ -145,7 +159,9 @@ fn relaunch_stub(h: &Harness) -> Result<PathBuf> {
 
 fn wait_relaunch_marker(h: &Harness) -> Result<String> {
     let marker = h.root.join("relaunched");
-    let end = Instant::now() + Duration::from_secs(5);
+    let end = Instant::now()
+        .checked_add(Duration::from_secs(5))
+        .ok_or_else(|| anyhow!("deadline overflow"))?;
     loop {
         if marker.is_file() {
             let text = fs::read_to_string(&marker)?;
@@ -197,9 +213,15 @@ fn relaunch_shutdown() -> Result<()> {
     );
     let result: Value = serde_json::from_slice(&output.stdout)?;
     ensure!(
-        result["shutdown"] == true
-            && result["stopped_sessions"] == 2
-            && result["relaunched"] == true,
+        result
+            .get("shutdown")
+            .is_some_and(|shutdown| shutdown.as_bool() == Some(true))
+            && result
+                .get("stopped_sessions")
+                .is_some_and(|stopped| stopped.as_u64() == Some(2))
+            && result
+                .get("relaunched")
+                .is_some_and(|relaunched| relaunched.as_bool() == Some(true)),
         "Relaunch did not report both sessions"
     );
     let marker = wait_relaunch_marker(&h)?;
@@ -232,7 +254,11 @@ fn relaunch_shutdown() -> Result<()> {
         &format!("trap '' HUP; touch {}\n", quote(&ready.to_string_lossy())),
     )?;
     h.wait(|_| ready.exists(), 5)?;
-    let generation = h.state()?["generation"].clone();
+    let generation = h
+        .state()?
+        .get("generation")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing generation"))?;
     let _ = fs::remove_file(h.root.join("relaunched"));
     let output = h
         .command("terminator-hook")
@@ -255,7 +281,9 @@ fn relaunch_shutdown() -> Result<()> {
         "Relaunch cleanup falsely succeeded for a refusing process"
     );
     ensure!(
-        h.state()?["generation"] == generation,
+        h.state()?
+            .get("generation")
+            .is_some_and(|current| current == &generation),
         "Timed-out relaunch replaced the daemon"
     );
     ensure!(
@@ -304,8 +332,9 @@ fn large_snapshots() -> Result<()> {
     check(&state)?;
     let response: Value = read_frame(&mut h.connect(json!("Snapshot"), None, None)?)?;
     ensure!(
-        response["Error"]
-            .as_str()
+        response
+            .get("Error")
+            .and_then(Value::as_str)
             .is_some_and(|e| e.contains("update")),
         "Legacy client did not receive an actionable size error"
     );
@@ -344,13 +373,13 @@ fn stalled_attachment() -> Result<()> {
     // Exceed the daemon writer deadline without reading any output.
     thread::sleep(Duration::from_secs(4));
     let mut bytes = [0; 65536];
-    let mut total = 0;
+    let mut total = 0usize;
     loop {
         let n = stream.read(&mut bytes)?;
         if n == 0 {
             break;
         }
-        total += n;
+        total = total.saturating_add(n);
         ensure!(total < 4 * 1024 * 1024, "Stalled output did not disconnect");
     }
     ensure!(
@@ -391,14 +420,24 @@ fn terminal_editors() -> Result<()> {
             ),
         )?;
         fs::set_permissions(&program, fs::Permissions::from_mode(0o700))?;
-        let mut settings = h.state()?["settings"].clone();
-        settings["editor_mode"] = json!("Terminal");
-        settings["editor_program"] = json!(program);
+        let mut settings = h
+            .state()?
+            .get("settings")
+            .cloned()
+            .ok_or_else(|| anyhow!("missing settings"))?;
+        let settings_object = settings
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("settings is not an object"))?;
+        settings_object.insert("editor_mode".into(), json!("Terminal"));
+        settings_object.insert("editor_program".into(), json!(program));
         h.rpc(json!({"Settings":settings}))?;
-        let editor = h.rpc(json!({"Create":{
-            "project":id(&project),"cwd":null,"file":file,"line":12,"column":3,"editor":true
-        }}))?["Created"]
-            .clone();
+        let editor = h
+            .rpc(json!({"Create":{
+                "project":id(&project),"cwd":null,"file":file,"line":12,"column":3,"editor":true
+            }}))?
+            .get("Created")
+            .cloned()
+            .ok_or_else(|| anyhow!("missing Created"))?;
         h.wait(|st| !session_present(st, id(&editor)), 5)?;
         let args = fs::read_to_string(&capture)?;
         let expected = format!(
@@ -423,7 +462,7 @@ fn idle_shutdown_race() -> Result<()> {
         h.setup()?;
         let project = h.project("idle-shutdown-race")?;
         let barrier = Arc::new(Barrier::new(2));
-        let first = barrier.clone();
+        let first = Arc::clone(&barrier);
         let paths = Paths::at(h.root.clone());
         let project_id = id(&project).to_owned();
         let creator = thread::spawn(move || {
@@ -451,7 +490,8 @@ fn idle_shutdown_race() -> Result<()> {
                 );
                 let state = h.state()?;
                 ensure!(
-                    state["generation"] == session.generation,
+                    state.get("generation").and_then(Value::as_str)
+                        == Some(session.generation.as_str()),
                     "Daemon changed under a live session"
                 );
                 h.rpc(json!({"Stop":{"session":session.id}}))?;
@@ -513,14 +553,16 @@ fn history_burst() -> Result<()> {
         "History burst was truncated"
     );
     h.history(id(&shell))?; // Ended History requests flush the storage worker.
-    let mut saved = 0;
+    let mut saved = 0usize;
     for entry in fs::read_dir(terminator_core::Paths::at(h.root.clone()).history_dir())? {
         let entry = entry?;
         if entry.file_name().to_string_lossy().starts_with(id(&shell)) {
-            saved += fs::read(entry.path())?
-                .iter()
-                .filter(|b| **b == b'X')
-                .count();
+            saved = saved.saturating_add(
+                fs::read(entry.path())?
+                    .iter()
+                    .filter(|b| **b == b'X')
+                    .count(),
+            );
         }
     }
     ensure!(
@@ -554,11 +596,18 @@ fn missing_helper_health() -> Result<()> {
     let shell = h.shell(&project)?;
     let initial = h.state()?;
     ensure!(
-        initial["attachment_helper_available"] == true,
+        initial
+            .get("attachment_helper_available")
+            .is_some_and(|available| available.as_bool() == Some(true)),
         "Installed helper was not available"
     );
-    let pinned =
-        std::path::PathBuf::from(initial["attachment_helper_executable"].as_str().unwrap());
+    let pinned = std::path::PathBuf::from(
+        initial
+            .get("attachment_helper_executable")
+            .ok_or_else(|| anyhow!("missing attachment helper"))?
+            .as_str()
+            .unwrap(),
+    );
     ensure!(
         pinned.starts_with(&h.root) && !pinned.starts_with(&install),
         "Helper was not pinned outside the installation"
@@ -575,7 +624,10 @@ fn missing_helper_health() -> Result<()> {
     )?;
     fs::remove_dir_all(&install)?;
     ensure!(
-        h.state()?["attachment_helper_available"] == true && fs::read(&pinned)? == original_helper,
+        h.state()?
+            .get("attachment_helper_available")
+            .is_some_and(|available| available.as_bool() == Some(true))
+            && fs::read(&pinned)? == original_helper,
         "App replacement or removal changed the pinned helper"
     );
     let second = h.shell(&project)?;
@@ -596,7 +648,8 @@ fn missing_helper_health() -> Result<()> {
     )?;
     h.assert_pids(&[shell.clone(), second.clone()])?;
     ensure!(
-        h.state()?["generation"] == initial["generation"],
+        h.state()?.get("generation").unwrap_or(&Value::Null)
+            == initial.get("generation").unwrap_or(&Value::Null),
         "App removal replaced the daemon"
     );
     // Health now refers to the actual private helper, not a discarded bundle.
@@ -610,7 +663,9 @@ fn missing_helper_health() -> Result<()> {
     );
     fs::remove_file(&pinned)?;
     ensure!(
-        h.state()?["attachment_helper_available"] == false,
+        h.state()?
+            .get("attachment_helper_available")
+            .is_some_and(|available| available.as_bool() == Some(false)),
         "Removed helper was not detected"
     );
     h.assert_pids(std::slice::from_ref(&shell))?;

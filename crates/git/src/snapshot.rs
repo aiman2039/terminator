@@ -1,5 +1,5 @@
 //! Read-only snapshots for diff review: blob pairs with symlink, submodule,
-//! size, and text checks shared by the native viewer and CodeDiff reviews.
+//! size, and text checks shared by the native viewer and `CodeDiff` reviews.
 use anyhow::{Context, Result, bail, ensure};
 use std::{
     ffi::OsStr,
@@ -97,9 +97,14 @@ pub fn find_record(raw: &[u8], path: &Path) -> Result<Option<(String, String)>> 
     while let Some(header) = fields.next() {
         let header = std::str::from_utf8(header)?;
         let parts: Vec<_> = header.split_whitespace().collect();
-        ensure!(parts.len() == 5, "Invalid Git diff record");
+        let Some(&[old_mode, new_mode, before, after, status]) = parts.get(..5) else {
+            bail!("Invalid Git diff record");
+        };
+        if parts.len() != 5 {
+            bail!("Invalid Git diff record");
+        }
         let first = fields.next().context("Missing Git path")?;
-        let target = if parts[4].starts_with(['R', 'C']) {
+        let target = if status.starts_with(['R', 'C']) {
             fields.next().context("Missing rename target")?
         } else {
             first
@@ -108,17 +113,17 @@ pub fn find_record(raw: &[u8], path: &Path) -> Result<Option<(String, String)>> 
             continue;
         }
         ensure!(
-            !parts[4].starts_with('U'),
+            !status.starts_with('U'),
             "Resolve this file's merge conflict in your editor before opening a two-way diff"
         );
         ensure!(
-            parts[0] != ":160000"
-                && parts[1] != "160000"
-                && parts[0] != ":120000"
-                && parts[1] != "120000",
+            old_mode != ":160000"
+                && new_mode != "160000"
+                && old_mode != ":120000"
+                && new_mode != "120000",
             "Diff review supports regular files, not symlinks or submodules"
         );
-        return Ok(Some((parts[2].to_owned(), parts[3].to_owned())));
+        return Ok(Some((before.to_owned(), after.to_owned())));
     }
     Ok(None)
 }

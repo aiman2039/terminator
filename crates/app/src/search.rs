@@ -60,7 +60,7 @@ fn build_set(patterns: &[&str]) -> Option<GlobSet> {
             candidates.push(format!("**/{pattern}"));
         }
         if pattern.ends_with('/') {
-            candidates.push(format!("{}**", pattern));
+            candidates.push(format!("{pattern}**"));
         }
         for candidate in candidates {
             if let Ok(glob) = Glob::new(&candidate) {
@@ -168,7 +168,7 @@ pub fn run(root: &Path, query: &Query, show_ignored: bool) -> Result<Vec<Hit>, S
             if regex.is_match(line) {
                 hits.push(Hit {
                     path: path.to_path_buf(),
-                    line: index as u32 + 1,
+                    line: u32::try_from(index).unwrap_or(u32::MAX).saturating_add(1),
                     text: truncate(line),
                 });
                 if hits.len() >= MAX_HITS {

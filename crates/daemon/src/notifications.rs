@@ -51,7 +51,7 @@ static DISMISS_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Notifications that are shown but not yet acted on. A single long-lived
 /// worker owns every wait, so at most one waiter exists at a time. A newer
 /// alert preempts it by removing only its delivered notification, which the
-/// ObjC dismiss poll treats as an auto-dismiss and releases the waiter.
+/// `ObjC` dismiss poll treats as an auto-dismiss and releases the waiter.
 static ACTIVE: AtomicUsize = AtomicUsize::new(0);
 
 /// How long one alert may keep the worker blocked. macOS ignores
@@ -118,7 +118,10 @@ fn sound_name() -> &'static str {
 /// the daemon lets the main loop end a waiter whose notification a newer alert
 /// has superseded.
 pub fn send(alert: DesktopAlert) {
-    let _ = dispatcher().send(Queued {
+    let Some(queue) = dispatcher() else {
+        return;
+    };
+    let _ = queue.send(Queued {
         generation: next_generation(),
         alert,
     });
@@ -126,15 +129,32 @@ pub fn send(alert: DesktopAlert) {
 }
 
 fn next_generation() -> u64 {
-    SUBMITTED.fetch_add(1, Ordering::Relaxed) + 1
+    SUBMITTED.fetch_add(1, Ordering::Relaxed).saturating_add(1)
 }
 
-fn dispatcher() -> &'static Sender<Queued> {
-    static QUEUE: OnceLock<Sender<Queued>> = OnceLock::new();
-    QUEUE.get_or_init(|| spawn_worker(present))
+/// The notification queue, or `None` once the worker has failed to start.
+/// A spawn failure is logged and notifications stay off so the daemon and
+/// its sessions keep running.
+fn dispatcher() -> Option<&'static Sender<Queued>> {
+    static QUEUE: OnceLock<Option<Sender<Queued>>> = OnceLock::new();
+    QUEUE
+        .get_or_init(|| queue_or_disable(spawn_worker(present)))
+        .as_ref()
 }
 
-fn spawn_worker(present: impl Fn(Queued) + Send + 'static) -> Sender<Queued> {
+/// Keeps the queue only when the worker thread exists. Spawn failure disables
+/// notifications instead of exiting the process.
+fn queue_or_disable(spawned: std::io::Result<Sender<Queued>>) -> Option<Sender<Queued>> {
+    match spawned {
+        Ok(sender) => Some(sender),
+        Err(error) => {
+            eprintln!("desktop notification worker failed to start: {error}");
+            None
+        }
+    }
+}
+
+fn spawn_worker(present: impl Fn(Queued) + Send + 'static) -> std::io::Result<Sender<Queued>> {
     let (tx, rx) = mpsc::channel::<Queued>();
     std::thread::Builder::new()
         .name("desktop-notifications".into())
@@ -149,9 +169,8 @@ fn spawn_worker(present: impl Fn(Queued) + Send + 'static) -> Sender<Queued> {
                 }
                 present(latest);
             }
-        })
-        .expect("spawn desktop notification worker");
-    tx
+        })?;
+    Ok(tx)
 }
 
 fn present(Queued { generation, alert }: Queued) {
@@ -179,10 +198,13 @@ impl Waiter {
         {
             *PRESENTED_AT
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(std::time::Instant::now());
-            *PRESENTING_SUMMARY
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = summary.to_owned();
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Some(std::time::Instant::now());
+            summary.clone_into(
+                &mut PRESENTING_SUMMARY
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
         }
         #[cfg(not(target_os = "macos"))]
         let _ = summary;
@@ -196,10 +218,10 @@ impl Drop for Waiter {
         {
             *PRESENTED_AT
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
             PRESENTING_SUMMARY
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clear();
         }
     }
@@ -272,14 +294,14 @@ fn process_nonce() -> u64 {
     *NONCE.get_or_init(|| {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_nanos() as u64)
+            .map(|elapsed| u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX))
             .unwrap_or(0);
         (u64::from(std::process::id())).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ now
     })
 }
 
 /// Remove only the waiting notification from Notification Center. Its
-/// disappearance makes the ObjC dismiss poll resolve an auto-dismiss, releasing
+/// disappearance makes the `ObjC` dismiss poll resolve an auto-dismiss, releasing
 /// the waiter so the worker can present the alert that superseded it. Returns
 /// whether a matching delivered notification was found and removed.
 #[cfg(target_os = "macos")]
@@ -292,7 +314,7 @@ fn remove_active_notification() -> bool {
     let marker = marker_for(generation);
     let summary = PRESENTING_SUMMARY
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
     use objc2_foundation::NSUserNotificationCenter;
     let center = NSUserNotificationCenter::defaultUserNotificationCenter();
@@ -405,7 +427,9 @@ fn record_dismiss_attempt(generation: u64, removed: bool) -> bool {
         DISMISS_MISSES.store(1, Ordering::Relaxed);
         1
     } else {
-        DISMISS_MISSES.fetch_add(1, Ordering::Relaxed) + 1
+        DISMISS_MISSES
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1)
     };
     misses >= DISMISS_ATTEMPTS
 }
@@ -416,7 +440,7 @@ fn dismiss_poll_due() -> bool {
     let now = std::time::Instant::now();
     let mut last = LAST_DISMISS_POLL
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     match *last {
         Some(previous) if now.duration_since(previous) < DISMISS_POLL_INTERVAL => false,
         _ => {
@@ -474,7 +498,7 @@ struct Banner<'a> {
 /// Service the Cocoa run loop once. Cocoa delivers notification callbacks on
 /// the daemon main thread, so this must be called there while a waiter exists.
 /// A newer alert, or one that has been waiting for [`ALERT_WAIT`], is removed
-/// so the ObjC dismiss poll releases the worker.
+/// so the `ObjC` dismiss poll releases the worker.
 pub fn pump() {
     #[cfg(target_os = "macos")]
     {
@@ -482,7 +506,7 @@ pub fn pump() {
         if ACTIVE.load(Ordering::Relaxed) > 0 {
             let presented_at = *PRESENTED_AT
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if waiter_should_end(superseded(), presented_at, std::time::Instant::now()) {
                 let generation = PRESENTING.load(Ordering::Relaxed);
                 if DISMISSED.load(Ordering::Relaxed) != generation && dismiss_poll_due() {
@@ -520,7 +544,9 @@ mod tests {
     }
 
     fn wait_until(mut condition: impl FnMut() -> bool, message: &str) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(10))
+            .unwrap_or_else(Instant::now);
         while !condition() {
             assert!(Instant::now() < deadline, "{message}");
             std::thread::sleep(Duration::from_millis(5));
@@ -532,7 +558,7 @@ mod tests {
     fn dismiss_poll_is_throttled_between_pumps() {
         *LAST_DISMISS_POLL
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         assert!(dismiss_poll_due(), "the first dismiss poll runs");
         assert!(
             !dismiss_poll_due(),
@@ -667,7 +693,7 @@ mod tests {
         }
 
         fn present(&self, generation: u64) {
-            let live = self.live.fetch_add(1, Ordering::SeqCst) + 1;
+            let live = self.live.fetch_add(1, Ordering::SeqCst).saturating_add(1);
             self.peak.fetch_max(live, Ordering::SeqCst);
             self.entered.lock().unwrap().push(generation);
             self.cv.notify_all();
@@ -702,11 +728,18 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_notification_worker_disables_alerts_without_exiting() {
+        let queue = queue_or_disable(Err(std::io::Error::other("resource unavailable")));
+        assert!(queue.is_none(), "notifications stay disabled");
+    }
+
+    #[test]
     fn notification_waiters_are_bounded_and_coalesce() {
         const N: u64 = 32;
         let gate = Gate::new();
-        let presented = gate.clone();
-        let worker = spawn_worker(move |queued| presented.present(queued.generation));
+        let presented = Arc::clone(&gate);
+        let worker = spawn_worker(move |queued| presented.present(queued.generation))
+            .expect("spawn desktop notification worker");
 
         worker.send(gate_alert(1)).expect("queue first alert");
         wait_until(|| gate.entered(1), "no waiter started");
@@ -752,14 +785,15 @@ mod tests {
         PRESENTING.store(0, Ordering::SeqCst);
         ACTIVE.store(0, Ordering::SeqCst);
         let gate = Gate::new();
-        let presented = gate.clone();
+        let presented = Arc::clone(&gate);
         let worker = spawn_worker(move |queued| {
             ACTIVE.fetch_add(1, Ordering::Relaxed);
             PRESENTING.store(queued.generation, Ordering::Relaxed);
             presented.present(queued.generation);
             PRESENTING.store(0, Ordering::Relaxed);
             ACTIVE.fetch_sub(1, Ordering::Relaxed);
-        });
+        })
+        .expect("spawn desktop notification worker");
 
         let first = next_generation();
         worker.send(gate_alert(first)).expect("queue first alert");

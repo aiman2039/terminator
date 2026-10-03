@@ -54,7 +54,7 @@ impl Helper {
 }
 
 /// Called only while holding this data directory's exclusive daemon lock.
-/// Normal shutdown drops the TempDir; this removes leftovers from crashes.
+/// Normal shutdown drops the `TempDir`; this removes leftovers from crashes.
 pub fn cleanup_abandoned(data: &Path) -> Result<()> {
     for entry in fs::read_dir(data)? {
         let entry = entry?;

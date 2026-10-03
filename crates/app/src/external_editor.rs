@@ -30,12 +30,16 @@ pub fn preset(index: usize) -> (String, Vec<String>) {
             "open".into(),
             if index == 0 {
                 vec![]
+            } else if let Some(app) = apps.get(index) {
+                vec!["-a".into(), (*app).into()]
             } else {
-                vec!["-a".into(), apps[index].into()]
+                vec![]
             },
         )
+    } else if let Some(command) = commands.get(index) {
+        ((*command).into(), vec![])
     } else {
-        (commands[index].into(), vec![])
+        ("xdg-open".into(), vec![])
     }
 }
 pub fn selected(settings: &Settings) -> usize {
@@ -87,7 +91,7 @@ pub fn launch(
         .with_context(|| format!("Start external editor {program}"))?;
     let mut stderr = child.stderr.take().expect("piped stderr");
     let diagnostic = Arc::new(Mutex::new(Vec::new()));
-    let output = diagnostic.clone();
+    let output = Arc::clone(&diagnostic);
     let (drained, drain_complete) = std::sync::mpsc::channel();
     thread::spawn(move || {
         let mut bytes = [0; 1024];
@@ -171,9 +175,17 @@ pub async fn launch_supervised(
             }
         };
         let _ = started.send(Ok(()));
-        let mut stderr = child.stderr.take().unwrap();
+        let Some(mut stderr) = child.stderr.take() else {
+            let result = child.wait().await?;
+            if !result.success() {
+                return Ok(vec![crate::Update::Error(format!(
+                    "External editor exited with {result}"
+                ))]);
+            }
+            return Ok(Vec::new());
+        };
         let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let collected = output.clone();
+        let collected = std::sync::Arc::clone(&output);
         let read = async move {
             let mut bytes = [0; 1024];
             loop {
@@ -181,16 +193,21 @@ pub async fn launch_supervised(
                 if n == 0 {
                     return Ok::<_, std::io::Error>(());
                 }
-                let mut output = collected.lock().unwrap();
+                let mut output = collected
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let n = n.min(4096usize.saturating_sub(output.len()));
-                output.extend_from_slice(&bytes[..n]);
+                let Some(chunk) = bytes.get(..n) else {
+                    return Ok(());
+                };
+                output.extend_from_slice(chunk);
             }
         };
         tokio::pin!(read);
         let mut drained = false;
         let result = loop {
             tokio::select! {
-                _ = token.cancelled() => return Ok(Vec::new()), // persistent external editor is never killed
+                () = token.cancelled() => return Ok(Vec::new()), // persistent external editor is never killed
                 result = &mut read, if !drained => { let _ = result; drained = true; }
                 result = child.wait() => break result?,
             }
@@ -200,7 +217,9 @@ pub async fn launch_supervised(
                 let _ =
                     tokio::time::timeout(std::time::Duration::from_millis(100), &mut read).await;
             }
-            let bytes = output.lock().unwrap();
+            let bytes = output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let message: String = String::from_utf8_lossy(&bytes)
                 .chars()
                 .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
@@ -228,9 +247,13 @@ mod tests {
     };
     #[test]
     fn arguments_and_absolute_path_are_separate_and_literal() {
-        let args = vec!["--wait".into(), "a b; $(touch unwanted)".into(), "".into()];
+        let args = vec![
+            "--wait".into(),
+            "a b; $(touch unwanted)".into(),
+            String::new(),
+        ];
         let cmd = command("/bin/echo", &args, Path::new("a b;$x.rs")).unwrap();
-        let actual: Vec<_> = cmd.get_args().map(|a| a.to_os_string()).collect();
+        let actual: Vec<_> = cmd.get_args().map(std::ffi::OsStr::to_os_string).collect();
         assert_eq!(
             &actual[..3],
             &args

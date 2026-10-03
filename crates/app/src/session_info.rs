@@ -95,6 +95,67 @@ pub fn format_percent(value: f32) -> String {
     }
 }
 
+fn f32_from_f64(value: f64) -> f32 {
+    let bits = value.to_bits();
+    let sign = (bits >> 63) & 1;
+    let exp_bits = (bits >> 52) & 0x7ff;
+    let mant = bits & 0x000f_ffff_ffff_ffff;
+    let Ok(exp_u) = u16::try_from(exp_bits) else {
+        return 0.0;
+    };
+    if exp_u == 0x7ff {
+        if mant != 0 {
+            return f32::NAN;
+        }
+        return if sign == 0 {
+            f32::INFINITY
+        } else {
+            f32::NEG_INFINITY
+        };
+    }
+    if exp_u == 0 {
+        return if sign == 0 { 0.0 } else { -0.0 };
+    }
+    let Some(unbiased) = i32::from(exp_u).checked_sub(1023) else {
+        return 0.0;
+    };
+    if unbiased > 127 {
+        return if sign == 0 {
+            f32::INFINITY
+        } else {
+            f32::NEG_INFINITY
+        };
+    }
+    if unbiased < -126 {
+        return if sign == 0 { 0.0 } else { -0.0 };
+    }
+    let mut mantissa = mant >> 29;
+    let remainder = mant & ((1_u64 << 29) - 1);
+    if remainder > (1_u64 << 28) || (remainder == (1_u64 << 28) && mantissa & 1 == 1) {
+        mantissa = mantissa.saturating_add(1);
+    }
+    let mut exp32 = unbiased.saturating_add(127);
+    if mantissa >= (1_u64 << 23) {
+        mantissa = 0;
+        exp32 = exp32.saturating_add(1);
+    }
+    if exp32 >= 255 {
+        return if sign == 0 {
+            f32::INFINITY
+        } else {
+            f32::NEG_INFINITY
+        };
+    }
+    let Ok(exp32) = u32::try_from(exp32) else {
+        return 0.0;
+    };
+    let Ok(mantissa) = u32::try_from(mantissa) else {
+        return 0.0;
+    };
+    let sign = u32::try_from(sign).unwrap_or(0);
+    f32::from_bits((sign << 31) | (exp32 << 23) | mantissa)
+}
+
 #[must_use]
 pub fn format_bytes(bytes: u64) -> String {
     const KB: f64 = 1024.0;
@@ -103,6 +164,8 @@ pub fn format_bytes(bytes: u64) -> String {
     if bytes == 0 {
         return "0 MB".into();
     }
+    // Display size. Counts above 2^53 do not fit in an f64 mantissa.
+    #[allow(clippy::cast_precision_loss)]
     let value = bytes as f64;
     if value >= GB {
         format!("{:.1} GB", value / GB)
@@ -137,7 +200,7 @@ pub fn model(input: &Input) -> Model {
                 )
             })
             .unwrap_or_else(|| DASH.into());
-        let cores = system.cpus.max(1) as f64;
+        let cores = f64::from(u32::try_from(system.cpus.max(1)).unwrap_or(u32::MAX));
         SystemRows {
             cpu: format_percent(system.cpu),
             cpu_fraction: (system.cpu / 100.0).clamp(0.0, 1.0),
@@ -149,13 +212,20 @@ pub fn model(input: &Input) -> Model {
             memory_fraction: if system.memory_total == 0 {
                 0.0
             } else {
-                (system.memory_used as f32 / system.memory_total as f32).clamp(0.0, 1.0)
+                {
+                    // Memory meter. Byte counts can exceed the f32 mantissa.
+                    #[allow(clippy::cast_precision_loss)]
+                    let used = system.memory_used as f32;
+                    #[allow(clippy::cast_precision_loss)]
+                    let total = system.memory_total as f32;
+                    (used / total).clamp(0.0, 1.0)
+                }
             },
             pressure,
             pressure_fraction,
             pressure_level: system.pressure.map(|pressure| pressure.level),
             load: format_load(system.load_one, system.load_five, system.load_fifteen),
-            load_fraction: (system.load_one / cores).clamp(0.0, 1.0) as f32,
+            load_fraction: f32_from_f64((system.load_one / cores).clamp(0.0, 1.0)),
         }
     });
     Model {
@@ -501,7 +571,7 @@ mod tests {
     fn system() -> SystemStats {
         SystemStats {
             cpu: 29.0,
-            memory_used: (43.9_f64 * 1024.0 * 1024.0 * 1024.0) as u64,
+            memory_used: 47_137_266_073,
             memory_total: 128 * 1024 * 1024 * 1024,
             pressure: Some(MemoryPressure {
                 percent: 10.0,

@@ -64,7 +64,8 @@ fn key_name_char(key: egui::Key, modifiers: egui::Modifiers) -> Option<VKey> {
         // digit is a count. Positional like the rest of this table.
         (Some(c), None) if c.is_ascii_digit() => Some(VKey::Char(if modifiers.shift {
             const SYMBOLS: &[u8; 10] = b")!@#$%^&*(";
-            SYMBOLS[(c as u8 - b'0') as usize] as char
+            let index = (c as u8).checked_sub(b'0').map(usize::from).unwrap_or(0);
+            char::from(SYMBOLS.get(index).copied().unwrap_or(b')'))
         } else {
             c
         })),
@@ -215,10 +216,13 @@ pub fn show_source<B: Buffer>(
         )
     });
     let gutter = if options.show_line_numbers {
-        (doc.line_count().max(1).to_string().len() as f32 + 2.0) * advance
+        #[allow(clippy::cast_precision_loss)] // UI coordinate
+        let digits = doc.line_count().max(1).to_string().len() as f32;
+        (digits + 2.0) * advance
     } else {
         0.0
     };
+    #[allow(clippy::cast_precision_loss)] // UI coordinate
     let content_height = doc.line_count().max(1) as f32 * row_height;
     let mut effects = Vec::new();
 
@@ -242,7 +246,11 @@ pub fn show_source<B: Buffer>(
                 ui.memory_mut(|memory| memory.request_focus(focus_id));
                 if let Some(pos) = response.interact_pointer_pos() {
                     let click_origin = response.rect.min;
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    // UI coordinate
                     let line = ((pos.y - click_origin.y) / row_height).floor().max(0.0) as usize;
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    // UI coordinate
                     let col = ((pos.x - click_origin.x - gutter) / advance)
                         .round()
                         .max(0.0) as usize;
@@ -264,12 +272,13 @@ pub fn show_source<B: Buffer>(
             let cursor = engine.cursor();
             let cursor_visible = !matches!(engine.mode(), Mode::Command);
             for line in 0..doc.line_count() {
+                #[allow(clippy::cast_precision_loss)] // UI coordinate
                 let y = origin.y + line as f32 * row_height;
                 if options.show_line_numbers {
                     painter.text(
                         Pos2::new(origin.x + gutter - advance, y),
                         egui::Align2::RIGHT_TOP,
-                        format!("{}", line + 1),
+                        format!("{}", line.saturating_add(1)),
                         font.clone(),
                         ui.visuals().weak_text_color(),
                     );
@@ -279,10 +288,15 @@ pub fn show_source<B: Buffer>(
                 if let Some((a, b)) = selection {
                     let span = selection_span_for_line(a, b, line, text.chars().count());
                     if let Some((start_col, end_col)) = span {
+                        let span_cols = end_col.saturating_sub(start_col);
+                        #[allow(clippy::cast_precision_loss)] // UI coordinate
+                        let start_x = origin.x + gutter + start_col as f32 * advance;
+                        #[allow(clippy::cast_precision_loss)] // UI coordinate
+                        let span_w = span_cols as f32 * advance;
                         painter.rect_filled(
                             Rect::from_min_size(
-                                Pos2::new(origin.x + gutter + start_col as f32 * advance, y),
-                                Vec2::new((end_col - start_col) as f32 * advance, row_height),
+                                Pos2::new(start_x, y),
+                                Vec2::new(span_w, row_height),
                             ),
                             0.0,
                             ui.visuals().selection.bg_fill,
@@ -301,6 +315,7 @@ pub fn show_source<B: Buffer>(
                     ui.visuals().text_color(),
                 );
                 if cursor_visible && cursor.line == line {
+                    #[allow(clippy::cast_precision_loss)] // UI coordinate
                     let x = origin.x + gutter + cursor.col as f32 * advance;
                     if engine.mode() == Mode::Insert {
                         painter.rect_filled(
@@ -459,11 +474,10 @@ pub fn show_source<B: Buffer>(
             // user scrolling never triggers this, so it cannot fight input.
             let landed = engine.cursor();
             if engine.take_scroll_request() {
+                #[allow(clippy::cast_precision_loss)] // UI coordinate
+                let row_y = origin.y + landed.line as f32 * row_height;
                 ui.scroll_to_rect(
-                    Rect::from_min_size(
-                        Pos2::new(origin.x, origin.y + landed.line as f32 * row_height),
-                        Vec2::new(width, row_height),
-                    ),
+                    Rect::from_min_size(Pos2::new(origin.x, row_y), Vec2::new(width, row_height)),
                     Some(egui::Align::Center),
                 );
             }
@@ -501,7 +515,9 @@ fn selection_span_for_line(
     }
     let start = if line == a.line { a.col } else { 0 };
     let end = if line == b.line {
-        (b.col + 1).min(line_len)
+        b.col
+            .checked_add(1)
+            .map_or(line_len, |end| end.min(line_len))
     } else {
         line_len
     };
@@ -517,8 +533,8 @@ pub fn status_line(engine: &impl ModalEngine) -> String {
     format!(
         "-- {} -- {}:{}",
         mode_name(engine.mode()),
-        cursor.line + 1,
-        cursor.col + 1
+        cursor.line.saturating_add(1),
+        cursor.col.saturating_add(1)
     )
 }
 

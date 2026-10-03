@@ -15,7 +15,9 @@ pub fn run(o: &Options) -> Result<()> {
     h.daemon.take();
     // The first GUI launch performs the real idle migration and candidate check.
     capture(&h, o, "first-migration", json!([]), 1800, |_| {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(10))
+            .ok_or_else(|| anyhow::anyhow!("generation deadline overflow"))?;
         while h.state().is_err() {
             ensure!(
                 Instant::now() < deadline,
@@ -36,7 +38,9 @@ pub fn run(o: &Options) -> Result<()> {
             session: id(&editor).into(),
         },
     )?;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(5))
+        .ok_or_else(|| anyhow::anyhow!("editor deadline overflow"))?;
     while !owner.editor_socket(id(&editor)).exists() {
         ensure!(Instant::now() < deadline, "Editor did not start");
         thread::sleep(Duration::from_millis(50));
@@ -49,7 +53,11 @@ pub fn run(o: &Options) -> Result<()> {
         .args(["--remote-expr", "setline(1, '# Unsaved across upgrades')"]);
     output(change)?;
     h.layout(&project, &[a.clone(), editor.clone()])?;
-    let original_generation = h.state()?["generation"].clone();
+    let original_generation = h
+        .state()?
+        .get("generation")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing generation"))?;
     h.env
         .insert("TERMINATOR_TEST_NEW_GENERATION".into(), "1".into());
     let mut b = Value::Null;
@@ -70,8 +78,10 @@ pub fn run(o: &Options) -> Result<()> {
                 |_| {
                     ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)
                         .is_ok_and(|s| {
-                            s["markdown"][id(&editor)]["text"]
-                                .as_str()
+                            s.get("markdown")
+                                .and_then(|markdown| markdown.get(id(&editor)))
+                                .and_then(|editor| editor.get("text"))
+                                .and_then(Value::as_str)
                                 .is_some_and(|text| text.contains("Unsaved across upgrades"))
                         })
                 },
@@ -97,8 +107,14 @@ pub fn run(o: &Options) -> Result<()> {
                 |_| {
                     ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)
                         .is_ok_and(|s| {
-                            s["installation"]["restart_confirm"] == true
-                                && s["installation"]["live_count"] == 3
+                            s.get("installation").is_some_and(|installation| {
+                                installation
+                                    .get("restart_confirm")
+                                    .is_some_and(|confirm| confirm == &json!(true))
+                                    && installation
+                                        .get("live_count")
+                                        .is_some_and(|count| count == &json!(3))
+                            })
                         })
                 },
                 10,
@@ -168,7 +184,8 @@ pub fn run(o: &Options) -> Result<()> {
     capture(&h, o, "after-confirmed-recovery", json!([]), 2000, |_| {
         h.wait(
             |state| {
-                state["generation"] != before_recovery["generation"]
+                state.get("generation").unwrap_or(&Value::Null)
+                    != before_recovery.get("generation").unwrap_or(&Value::Null)
                     && sessions(state).iter().all(|s| s["lifecycle"] == "ended")
             },
             10,
@@ -178,7 +195,7 @@ pub fn run(o: &Options) -> Result<()> {
     fs::write(
         o.output.join("generations.json"),
         serde_json::to_vec_pretty(&json!({
-            "idle_migration":true,"generations":before_recovery["generations"],
+            "idle_migration":true,"generations":before_recovery.get("generations").unwrap_or(&Value::Null),
             "original_session":a,"new_session":b,"unsaved_editor":editor,"gui_relaunch_pids_preserved":true,
             "warning_counts_all_owners":true,"cancellation_preserves_sessions":true,
             "late_session_aborts_confirmed_cleanup":true,"confirmed_cleanup_stops_all_owners":true,"recovery_does_not_rerun_sessions":true
@@ -205,7 +222,9 @@ fn legacy_crash_recovery(o: &Options) -> Result<()> {
     wait_child(daemon, Duration::from_secs(5))?;
     h.daemon.take();
     capture(&h, o, "legacy-crash-recovered", json!([]), 2200, |_| {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(10))
+            .ok_or_else(|| anyhow::anyhow!("generation deadline overflow"))?;
         loop {
             if let Ok(state) = h.state() {
                 ensure!(

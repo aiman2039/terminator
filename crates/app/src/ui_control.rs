@@ -46,7 +46,7 @@ pub fn spawn(paths: Paths, service: Services) -> Result<Server> {
         let mut clients = FuturesUnordered::new();
         loop {
             tokio::select! {
-                _ = token.cancelled() => break,
+                () = token.cancelled() => break,
                 accepted = listener.accept(), if clients.len() < 16 => {
                     let (stream, _) = accepted?;
                     let service = service.clone(); let paths = paths.clone();
@@ -78,7 +78,9 @@ async fn serve_for(
     paths: Paths,
     timeout: Duration,
 ) -> Result<()> {
-    let deadline = Instant::now() + timeout;
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| anyhow::anyhow!("GUI response deadline overflow"))?;
     tokio::time::timeout_at(
         deadline.into(),
         serve_until(stream, service, paths, deadline),
@@ -129,7 +131,9 @@ async fn serve_until(
             service.emit(Update::State(state)).await?;
         }
         let (reply, response) = tokio::sync::oneshot::channel();
-        let deadline = deadline.min(Instant::now() + Duration::from_secs(5));
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(5))
+            .map_or(deadline, |limit| deadline.min(limit));
         service
             .emit(Update::AsyncUiRequest(envelope.request, reply, deadline))
             .await?;
@@ -158,10 +162,9 @@ async fn serve_until(
         bytes.len() <= terminator_core::MAX_FRAME,
         "GUI response too large"
     );
+    let len = u32::try_from(bytes.len())?;
     tokio::time::timeout(Duration::from_secs(3), async {
-        stream
-            .write_all(&(bytes.len() as u32).to_be_bytes())
-            .await?;
+        stream.write_all(&len.to_be_bytes()).await?;
         stream.write_all(&bytes).await
     })
     .await??;
@@ -205,7 +208,10 @@ mod tests {
             request: terminator_core::ui_control::Request::Ping,
         })
         .unwrap();
-        client.write_u32(bytes.len() as u32).await.unwrap();
+        client
+            .write_u32(u32::try_from(bytes.len()).unwrap_or(u32::MAX))
+            .await
+            .unwrap();
         client.write_all(&bytes).await.unwrap();
         assert!(
             task.await

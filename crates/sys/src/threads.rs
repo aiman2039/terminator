@@ -5,18 +5,35 @@ pub fn all_threads_waiting(pid: u32) -> bool {
     // PROC_PIDLISTTHREADS = 6 in the macOS SDK's sys/proc_info.h. Query actual
     // thread IDs: thread ID zero can yield a misleading runnable fallback.
     let mut threads = [0u64; 256];
-    let capacity = std::mem::size_of_val(&threads) as i32;
-    let bytes =
-        unsafe { libc::proc_pidinfo(pid as i32, 6, 0, threads.as_mut_ptr().cast(), capacity) };
-    if bytes <= 0 || bytes >= capacity || bytes % 8 != 0 {
+    let Ok(capacity) = i32::try_from(std::mem::size_of_val(&threads)) else {
+        return false;
+    };
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: `threads` is a 256-id buffer and `capacity` is its byte length.
+    // `proc_pidinfo` writes at most that many bytes. A short or failed read is
+    // rejected below.
+    let bytes = unsafe { libc::proc_pidinfo(pid, 6, 0, threads.as_mut_ptr().cast(), capacity) };
+    if bytes <= 0 || bytes >= capacity || bytes.checked_rem(8) != Some(0) {
         return false;
     }
-    threads[..bytes as usize / 8].iter().all(|thread| {
+    let Some(count) = usize::try_from(bytes).ok().and_then(|n| n.checked_div(8)) else {
+        return false;
+    };
+    let Some(ids) = threads.get(..count) else {
+        return false;
+    };
+    ids.iter().all(|thread| {
+        // SAFETY: `proc_threadinfo` is a plain integer struct. All-zero is a valid bit pattern.
         let mut info: libc::proc_threadinfo = unsafe { std::mem::zeroed() };
-        let size = std::mem::size_of_val(&info) as i32;
+        let Ok(size) = i32::try_from(std::mem::size_of_val(&info)) else {
+            return false;
+        };
+        // SAFETY: `info` is valid for `size` bytes. `*thread` came from the list call above.
         let result = unsafe {
             libc::proc_pidinfo(
-                pid as i32,
+                pid,
                 libc::PROC_PIDTHREADINFO,
                 *thread,
                 (&raw mut info).cast(),

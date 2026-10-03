@@ -57,7 +57,13 @@ pub fn run(o: &Options) -> Result<()> {
     let shell = h.shell(&first)?;
     let split = h.shell(&first)?;
     let hidden = h.shell(&second)?;
-    let root = PathBuf::from(first["path"].as_str().unwrap());
+    let root = PathBuf::from(
+        first
+            .get("path")
+            .ok_or_else(|| anyhow::anyhow!("missing project path"))?
+            .as_str()
+            .unwrap(),
+    );
     let path = root.join("unsaved.md");
     fs::write(&path, "# Saved on disk\n")?;
     let editor = h.editor(&first, &path)?;
@@ -75,7 +81,7 @@ pub fn run(o: &Options) -> Result<()> {
     h.wait(
         |_| {
             h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
-                .is_ok_and(|r| r["Text"] == "1")
+                .is_ok_and(|r| r.get("Text").is_some_and(|text| text == "1"))
         },
         8,
     )?;
@@ -100,7 +106,11 @@ pub fn run(o: &Options) -> Result<()> {
         &json!({"version":1,"hidden_projects":[id(&second)],"markdown_modes":{id(&editor):"Split"}}),
     )?;
     let original = vec![shell.clone(), split, hidden, editor.clone()];
-    let generation = h.state()?["generation"].clone();
+    let generation = h
+        .state()?
+        .get("generation")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing generation"))?;
     let daemon_pid = h.daemon.as_ref().unwrap().0.id();
     h.write(
         &mut h.attach(&shell)?,
@@ -162,19 +172,28 @@ pub fn run(o: &Options) -> Result<()> {
     let mut before = None;
     capture(&h, o, "before-replacement", json!([]), 2600, |_| {
         h.wait(
-            |_| snapshot(&h).is_ok_and(|s| s["selected_project"] == first["id"]),
+            |_| {
+                snapshot(&h).is_ok_and(|s| {
+                    s.get("selected_project").unwrap_or(&Value::Null)
+                        == first.get("id").unwrap_or(&Value::Null)
+                })
+            },
             8,
         )?;
         let initial = snapshot(&h)?;
         if cfg!(target_os = "macos") {
             ensure!(
-                initial["update_menu"] == true,
+                initial
+                    .get("update_menu")
+                    .is_some_and(|menu| menu.as_bool() == Some(true)),
                 "Check for Updates is missing from the application menu"
             );
         }
         if std::env::var_os("TERMINATOR_TEST_SPARKLE_FRAMEWORK").is_some() {
             ensure!(
-                initial["updater_available"] == true,
+                initial
+                    .get("updater_available")
+                    .is_some_and(|available| available.as_bool() == Some(true)),
                 "Sparkle controller did not load in the isolated app bundle"
             );
         }
@@ -210,7 +229,10 @@ pub fn run(o: &Options) -> Result<()> {
     )?;
     h.assert_pids(&original)?;
     ensure!(
-        h.state()?["generation"] == generation && h.daemon.as_ref().unwrap().0.id() == daemon_pid,
+        h.state()?
+            .get("generation")
+            .is_some_and(|current| current == &generation)
+            && h.daemon.as_ref().unwrap().0.id() == daemon_pid,
         "GUI update replaced daemon generation or PID"
     );
     let after = h.history(id(&shell))?;
@@ -219,7 +241,9 @@ pub fn run(o: &Options) -> Result<()> {
         "Output/input did not continue"
     );
     ensure!(
-        h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))?["Text"] == "1",
+        h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))?
+            .get("Text")
+            .is_some_and(|text| text == "1"),
         "GUI replacement discarded the editor buffer"
     );
     ensure!(

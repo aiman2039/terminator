@@ -49,15 +49,12 @@ impl EditRun {
         let slot = self.op.take();
         let (merged, next) = match (slot, op) {
             (Some(UndoOp::Delete { at: a, len: la }), UndoOp::Delete { at: b, len: lb })
-                if a + la == b =>
+                if a.checked_add(la) == Some(b) =>
             {
-                (
-                    true,
-                    Some(UndoOp::Delete {
-                        at: a,
-                        len: la + lb,
-                    }),
-                )
+                match la.checked_add(lb) {
+                    Some(len) => (true, Some(UndoOp::Delete { at: a, len })),
+                    None => (false, Some(UndoOp::Delete { at: b, len: lb })),
+                }
             }
             (
                 Some(UndoOp::Insert {
@@ -75,7 +72,7 @@ impl EditRun {
                     text: mut ta,
                 }),
                 UndoOp::Insert { at: b, text: tb },
-            ) if b + tb.chars().count() == a => {
+            ) if b.checked_add(tb.chars().count()) == Some(a) => {
                 ta.insert_str(0, &tb);
                 (true, Some(UndoOp::Insert { at: b, text: ta }))
             }
@@ -123,8 +120,10 @@ impl Doc {
         self.line_starts.clear();
         self.line_starts.push(0);
         for (i, c) in self.text.char_indices() {
-            if c == '\n' {
-                self.line_starts.push(i + 1);
+            if c == '\n'
+                && let Some(next) = i.checked_add(1)
+            {
+                self.line_starts.push(next);
             }
         }
     }
@@ -132,7 +131,11 @@ impl Doc {
     fn commit(&mut self, op: UndoOp) {
         if self.run.push(op.clone()) {
             let last = self.undo.len().saturating_sub(1);
-            self.undo[last] = self.run.op.clone().expect("run");
+            if let Some(stored) = self.run.op.clone()
+                && let Some(slot) = self.undo.get_mut(last)
+            {
+                *slot = stored;
+            }
         } else {
             self.undo.push(op);
         }
@@ -150,8 +153,15 @@ impl Doc {
                 UndoOp::Delete { at, len }
             }
             UndoOp::Delete { at, len } => {
-                let end = (at + len).min(self.len_chars());
-                let removed: String = self.text.chars().skip(at).take(end - at).collect();
+                let end = at
+                    .checked_add(len)
+                    .map_or(self.len_chars(), |sum| sum.min(self.len_chars()));
+                let removed: String = self
+                    .text
+                    .chars()
+                    .skip(at)
+                    .take(end.saturating_sub(at))
+                    .collect();
                 self.text.replace_range(byte_range(&self.text, at, end), "");
                 self.reindex();
                 UndoOp::Insert { at, text: removed }
@@ -184,10 +194,13 @@ impl Buffer for Doc {
             return String::new();
         };
         let start_char = char_idx_of_byte(&self.text, start_byte);
-        let end_char = self.line_starts.get(line + 1).map_or_else(
-            || self.text.chars().count(),
-            |b| char_idx_of_byte(&self.text, *b).saturating_sub(1),
-        );
+        let end_char = line
+            .checked_add(1)
+            .and_then(|next| self.line_starts.get(next))
+            .map_or_else(
+                || self.text.chars().count(),
+                |b| char_idx_of_byte(&self.text, *b).saturating_sub(1),
+            );
         self.text
             .chars()
             .skip(start_char)
@@ -197,9 +210,9 @@ impl Buffer for Doc {
 
     fn char_at_line_col(&self, line: usize, col: usize) -> usize {
         let line = line.min(self.line_count().saturating_sub(1));
-        let start = char_idx_of_byte(&self.text, self.line_starts[line]);
+        let start = char_idx_of_byte(&self.text, self.line_starts.get(line).copied().unwrap_or(0));
         let len = self.line_text(line).chars().count();
-        start + col.min(len)
+        start.checked_add(col.min(len)).unwrap_or(start)
     }
 
     fn line_col_at(&self, char_idx: usize) -> (usize, usize) {
@@ -212,7 +225,10 @@ impl Buffer for Doc {
             .unwrap_or(0);
         (
             line,
-            char_idx - char_idx_of_byte(&self.text, self.line_starts[line]),
+            char_idx.saturating_sub(char_idx_of_byte(
+                &self.text,
+                self.line_starts.get(line).copied().unwrap_or(0),
+            )),
         )
     }
 
@@ -233,7 +249,12 @@ impl Buffer for Doc {
         if start == end {
             return;
         }
-        let removed: String = self.text.chars().skip(start).take(end - start).collect();
+        let removed: String = self
+            .text
+            .chars()
+            .skip(start)
+            .take(end.saturating_sub(start))
+            .collect();
         self.text
             .replace_range(byte_range(&self.text, start, end), "");
         self.reindex();

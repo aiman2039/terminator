@@ -41,8 +41,8 @@ pub fn merge_stats(
     let mut stats = terminator_git::parse_numstat(root, staged);
     for (path, (added, deleted)) in terminator_git::parse_numstat(root, working) {
         let entry = stats.entry(path).or_insert((0, 0));
-        entry.0 += added;
-        entry.1 += deleted;
+        entry.0 = entry.0.saturating_add(added);
+        entry.1 = entry.1.saturating_add(deleted);
     }
     for change in changes.iter().filter(|change| change.status == "??") {
         let Ok(bytes) = fs::read(&change.path) else {
@@ -51,11 +51,13 @@ pub fn merge_stats(
         if bytes.len() > 2 * 1024 * 1024 || bytes.contains(&0) {
             continue;
         }
-        let mut lines = bytes.iter().filter(|byte| **byte == b'\n').count() as u32;
+        let mut lines =
+            u32::try_from(bytes.iter().filter(|byte| **byte == b'\n').count()).unwrap_or(u32::MAX);
         if !bytes.is_empty() && bytes.last() != Some(&b'\n') {
-            lines += 1;
+            lines = lines.saturating_add(1);
         }
-        stats.entry(change.path.clone()).or_insert((0, 0)).0 += lines;
+        let slot = stats.entry(change.path.clone()).or_insert((0, 0));
+        slot.0 = slot.0.saturating_add(lines);
     }
     stats
 }
@@ -133,8 +135,8 @@ pub fn context_cached(
         git_dirs: vec![],
         branch: String::new(),
         changes: vec![],
-        decorations: Default::default(),
-        stats: Default::default(),
+        decorations: std::collections::HashMap::default(),
+        stats: std::collections::HashMap::default(),
         error: None,
     };
     let options = || CommandOptions {
@@ -274,8 +276,8 @@ pub fn resolve_path(text: &str, cwd: &Path) -> Result<(PathBuf, Option<u32>)> {
     let earlier = pieces.next();
     if last.parse::<u32>().is_ok() {
         let (line, file) = if let Some(earlier) = earlier {
-            if rest.unwrap_or("").parse::<u32>().is_ok() {
-                (rest.unwrap().parse().ok(), earlier.to_owned())
+            if let Some(column) = rest.filter(|value| value.parse::<u32>().is_ok()) {
+                (column.parse().ok(), earlier.to_owned())
             } else {
                 (
                     last.parse().ok(),
@@ -312,8 +314,8 @@ pub async fn context_async(
         git_dirs: vec![],
         branch: String::new(),
         changes: vec![],
-        decorations: Default::default(),
-        stats: Default::default(),
+        decorations: std::collections::HashMap::default(),
+        stats: std::collections::HashMap::default(),
         error: None,
     };
     let options = || CommandOptions {
@@ -503,7 +505,7 @@ mod tests {
         .unwrap();
         fs::create_dir_all(root.join("new/nested")).unwrap();
         fs::write(root.join("new/nested/space file.rs"), "").unwrap();
-        let context = context_cached(&root, &mut Default::default());
+        let context = context_cached(&root, &mut std::collections::HashMap::default());
         assert_eq!(context.changes.len(), 1);
         for relative in ["new", "new/nested", "new/nested/space file.rs"] {
             assert_eq!(context.decorations[&root.join(relative)], 'U');

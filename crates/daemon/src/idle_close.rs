@@ -36,8 +36,11 @@ impl Shared {
             runtime.inputs_in_flight == 0,
             "Terminal input is still being forwarded"
         );
+        let Ok(shell_pid) = i32::try_from(pid) else {
+            anyhow::bail!("A foreground command owns the terminal");
+        };
         ensure!(
-            runtime.master.process_group_leader() == Some(pid as i32),
+            runtime.master.process_group_leader() == Some(shell_pid),
             "A foreground command owns the terminal"
         );
         Ok(Some(pid))
@@ -123,7 +126,7 @@ impl Shared {
                             {
                                 record.lifecycle = Lifecycle::Stopping;
                             }
-                            state.revision += 1;
+                            state.revision = state.revision.saturating_add(1);
                             (
                                 Status::Closed,
                                 "Idle shell signalled; waiting for exit".into(),
@@ -143,7 +146,9 @@ impl Shared {
                 partial_failure = failed;
             }
         }
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(2))
+            .unwrap_or_else(Instant::now);
         for outcome in &mut outcomes {
             if outcome.status != Status::Closed {
                 continue;

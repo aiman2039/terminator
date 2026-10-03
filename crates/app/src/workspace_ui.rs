@@ -83,8 +83,8 @@ impl TabLeading {
     fn width(&self) -> f32 {
         // Status and the kind fallback never co-occur: one slot covers both.
         let icons = usize::from(self.brand.is_some())
-            + usize::from(self.status.is_some() || self.kind.is_some());
-        icons as f32 * appearance::TERMINAL_LEADING_SLOT
+            .saturating_add(usize::from(self.status.is_some() || self.kind.is_some()));
+        f32::from(u16::try_from(icons).unwrap_or(u16::MAX)) * appearance::TERMINAL_LEADING_SLOT
     }
 }
 
@@ -243,9 +243,14 @@ struct HeaderIconButton<'a> {
 }
 
 fn header_row_width(buttons: usize, menu: bool) -> f32 {
+    // Header width is a UI coordinate; the button count can exceed the f32 mantissa.
+    #[allow(clippy::cast_precision_loss)]
     let mut width = buttons as f32 * HEADER_SLOT;
     if buttons > 1 {
-        width += (buttons - 1) as f32 * HEADER_GAP;
+        #[allow(clippy::cast_precision_loss)]
+        {
+            width += buttons.saturating_sub(1) as f32 * HEADER_GAP;
+        }
     }
     if menu {
         if buttons > 0 {
@@ -262,8 +267,8 @@ fn header_visible_count(budget: f32, count: usize) -> usize {
         return count;
     }
     let mut visible = 0;
-    while visible < count && header_row_width(visible + 1, true) <= budget {
-        visible += 1;
+    while visible < count && header_row_width(visible.saturating_add(1), true) <= budget {
+        visible = visible.saturating_add(1);
     }
     visible
 }
@@ -652,7 +657,9 @@ impl App {
         if visible >= HEADER_ACTIONS.len() {
             return;
         }
-        let hidden = &HEADER_ACTIONS[visible..];
+        let Some(hidden) = HEADER_ACTIONS.get(visible..) else {
+            return;
+        };
         let response = header_icon_button(
             ui,
             HeaderIconButton {
@@ -804,7 +811,7 @@ impl App {
                     brand: None,
                     status: None,
                 }),
-            Some(Tab::Diff { path, .. }) | Some(Tab::Image { path }) => TabFace {
+            Some(Tab::Diff { path, .. } | Tab::Image { path }) => TabFace {
                 label: path
                     .file_name()
                     .unwrap_or_default()
@@ -945,8 +952,10 @@ impl App {
                     )
                 })
                 .collect();
-            let content_width = tab_layout.iter().map(|(width, _)| *width).sum::<f32>()
-                + tab_layout.len().saturating_sub(1) as f32;
+            // Gap between tabs is a UI coordinate; the count can exceed the f32 mantissa.
+            #[allow(clippy::cast_precision_loss)]
+            let gaps = tab_layout.len().saturating_sub(1) as f32;
+            let content_width = tab_layout.iter().map(|(width, _)| *width).sum::<f32>() + gaps;
             let width = (ui.available_width() - 38.0).max(40.0);
             let overflow = content_width > width;
             let width = (width - if overflow { 58.0 } else { 0.0 }).max(1.0);
@@ -1006,7 +1015,9 @@ impl App {
                                     group.layout.iter_all_tabs().next().map(|(_, tab)| tab)
                                 });
                             let face = self.tab_face(primary);
-                            let (width, attention) = tab_layout[index];
+                            let Some((width, attention)) = tab_layout.get(index).copied() else {
+                                continue;
+                            };
                             let badge = tab_attention_text(attention);
                             let active = workspace.active == group.id;
                             let (rect, response) = ui.allocate_exact_size(
@@ -1044,7 +1055,7 @@ impl App {
                                     self.drop_preview_origin =
                                         Some((project.to_owned(), workspace.active.clone()));
                                 }
-                                workspace.active = group.id.clone();
+                                workspace.active.clone_from(&group.id);
                                 ui.painter().rect_stroke(
                                     rect,
                                     0,
@@ -1123,8 +1134,11 @@ impl App {
                                         sid,
                                         RenameSurface::Workspace,
                                         egui::Rect::from_min_max(
-                                            rect.min + egui::vec2(label_x, 8.0),
-                                            rect.max - egui::vec2(28.0 + badge_reserve, 7.0),
+                                            egui::pos2(rect.min.x + label_x, rect.min.y + 8.0),
+                                            egui::pos2(
+                                                rect.max.x - (28.0 + badge_reserve),
+                                                rect.max.y - 7.0,
+                                            ),
                                         ),
                                     );
                                 }
@@ -1294,7 +1308,7 @@ impl App {
                                     add_at = Some(index);
                                 }
                                 if action.add_right {
-                                    add_at = Some(index + 1);
+                                    add_at = Some(index.saturating_add(1));
                                 }
                             });
                             #[cfg(feature = "test-support")]
@@ -1556,11 +1570,18 @@ impl App {
         let x = if tabs.is_empty() {
             strip.left() + 2.0
         } else if index == 0 {
-            tabs[0].1.left()
+            tabs.first()
+                .map(|tab| tab.1.left())
+                .unwrap_or_else(|| strip.left())
         } else if index >= tabs.len() {
-            tabs[tabs.len() - 1].1.right()
+            tabs.last()
+                .map(|tab| tab.1.right())
+                .unwrap_or_else(|| strip.left())
         } else {
-            (tabs[index - 1].1.right() + tabs[index].1.left()) * 0.5
+            match (tabs.get(index.saturating_sub(1)), tabs.get(index)) {
+                (Some(prev), Some(next)) => (prev.1.right() + next.1.left()) * 0.5,
+                _ => strip.left(),
+            }
         };
         ui.painter().line_segment(
             [
@@ -1635,7 +1656,7 @@ impl App {
         job.wrap.max_rows = 1;
         job.wrap.break_anywhere = true;
         if !self.pane_drag_snapshot.is_empty() {
-            job.wrap.max_rows = 1 + self.pane_drag_snapshot.len().min(8);
+            job.wrap.max_rows = 1usize.saturating_add(self.pane_drag_snapshot.len().min(8));
             job.append(
                 &format!("\n{}", self.pane_drag_snapshot.join("\n")),
                 0.0,
@@ -1648,9 +1669,12 @@ impl App {
         }
         let galley = painter.layout_job(job);
         let padding = egui::vec2(12.0, 7.0);
-        let size = galley.size() + padding * 2.0;
+        let size = egui::vec2(
+            galley.size().x + padding.x * 2.0,
+            galley.size().y + padding.y * 2.0,
+        );
         let screen = ui.ctx().content_rect();
-        let mut min = pos + egui::vec2(16.0, 20.0);
+        let mut min = egui::pos2(pos.x + 16.0, pos.y + 20.0);
         min.x = min.x.clamp(
             screen.min.x + 4.0,
             (screen.max.x - size.x - 4.0).max(screen.min.x),
@@ -1671,7 +1695,11 @@ impl App {
             egui::Stroke::new(1.5, appearance::color(&self.theme.accent)),
             egui::StrokeKind::Inside,
         );
-        painter.galley(rect.min + padding, galley, egui::Color32::WHITE);
+        painter.galley(
+            egui::pos2(rect.min.x + padding.x, rect.min.y + padding.y),
+            galley,
+            egui::Color32::WHITE,
+        );
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "pane-ghost", rect);
     }
@@ -1687,7 +1715,7 @@ impl App {
         }
         if !ui.input(|i| i.pointer.any_down()) {
             return;
-        };
+        }
         let Some(pos) = ui.input(|i| i.pointer.hover_pos().or(i.pointer.latest_pos())) else {
             return;
         };
@@ -1727,7 +1755,7 @@ impl App {
         let galley = painter.layout_job(job);
         let size = egui::vec2(workspace_tab_width(galley.size().x), 32.0);
         let screen = ui.ctx().content_rect();
-        let mut min = pos - egui::vec2(size.x * 0.5, size.y * 0.5);
+        let mut min = egui::pos2(pos.x - size.x * 0.5, pos.y - size.y * 0.5);
         min.x = min.x.clamp(
             screen.min.x + 4.0,
             (screen.max.x - size.x - 4.0).max(screen.min.x),
@@ -1770,8 +1798,12 @@ impl App {
         ui.separator();
         let close_all = click_enabled_menu_item(ui, count > 1, "Close all tabs…", "X");
         let close_left = click_enabled_menu_item(ui, index > 0, "Close all tabs to the left…", "X");
-        let close_right =
-            click_enabled_menu_item(ui, index + 1 < count, "Close all tabs to the right…", "X");
+        let close_right = click_enabled_menu_item(
+            ui,
+            index.saturating_add(1) < count,
+            "Close all tabs to the right…",
+            "X",
+        );
         ui.separator();
         let add_left = click_menu_item(ui, "Add tab to the left", "Plus");
         let add_right = click_menu_item(ui, "Add tab to the right", "Plus");
@@ -1886,7 +1918,10 @@ impl App {
         if !self.renaming(sid, surface) {
             return;
         }
-        let mut title = self.rename_session.as_ref().unwrap().1.clone();
+        let Some(title) = self.rename_session.as_ref().map(|(_, title)| title.clone()) else {
+            return;
+        };
+        let mut title = title;
         let starting = self.rename_focus;
         let response = ui.put(
             rect,
@@ -1928,7 +1963,7 @@ impl App {
                         | egui::Event::Cut
                         | egui::Event::Key { .. }
                 )
-            })
+            });
         });
         if escape || (!starting && response.lost_focus() && !valid) {
             self.rename_session = None;
@@ -2012,7 +2047,11 @@ impl App {
             preview.scene = egui::Rect::NOTHING;
         }
         if actual && let Some(size) = preview.texture.as_ref().map(egui::TextureHandle::size_vec2) {
-            preview.scene = egui::Rect::from_center_size(size.to_pos2() * 0.5, ui.available_size());
+            let center = size.to_pos2();
+            preview.scene = egui::Rect::from_center_size(
+                egui::pos2(center.x * 0.5, center.y * 0.5),
+                ui.available_size(),
+            );
         }
         preview.show(ui);
     }
@@ -2223,7 +2262,7 @@ impl App {
                         accent: appearance::color(&self.theme.accent),
                         text: appearance::color(&self.theme.text),
                     };
-                    let doc = doc.clone();
+                    let doc = std::sync::Arc::clone(doc);
                     let mut sync = self.diff_split_scroll.get(&key).copied().unwrap_or(0.0);
                     paint_diff_document(
                         ui,
@@ -2264,9 +2303,12 @@ impl App {
         }
         ui.columns(3, |cols| {
             // Left: branch tree
-            cols[0].strong("Branches");
-            cols[0].separator();
-            appearance::sidebar_scroll("branches").show(&mut cols[0], |ui| {
+            let Some(col) = cols.get_mut(0) else {
+                return;
+            };
+            col.strong("Branches");
+            col.separator();
+            appearance::sidebar_scroll("branches").show(col, |ui| {
                 for rf in &log.refs {
                     let icon = match rf.kind {
                         git_log::RefKind::LocalBranch => "\u{2398}",
@@ -2284,10 +2326,13 @@ impl App {
                 }
             });
             // Center: commit list
-            cols[1].strong("Commits");
-            cols[1].separator();
+            let Some(col) = cols.get_mut(1) else {
+                return;
+            };
+            col.strong("Commits");
+            col.separator();
             let selected_hash = self.selected_commit.clone();
-            appearance::sidebar_scroll("commits").show(&mut cols[1], |ui| {
+            appearance::sidebar_scroll("commits").show(col, |ui| {
                 for commit in &log.commits {
                     let selected = selected_hash.as_deref() == Some(&commit.hash);
                     let response = ui.horizontal(|ui| {
@@ -2315,24 +2360,27 @@ impl App {
                 }
             });
             // Right: commit details
-            cols[2].strong("Details");
-            cols[2].separator();
+            let Some(col) = cols.get_mut(2) else {
+                return;
+            };
+            col.strong("Details");
+            col.separator();
             if let Some(hash) = &self.selected_commit {
                 if let Some(commit) = log.commits.iter().find(|c| &c.hash == hash) {
-                    cols[2].horizontal(|ui| {
+                    col.horizontal(|ui| {
                         ui.weak("Hash: ");
                         ui.label(&commit.short_hash);
                     });
-                    cols[2].horizontal(|ui| {
+                    col.horizontal(|ui| {
                         ui.weak("Author: ");
                         ui.label(&commit.author);
                     });
-                    cols[2].horizontal(|ui| {
+                    col.horizontal(|ui| {
                         ui.weak("Date: ");
                         ui.label(&commit.date);
                     });
-                    cols[2].separator();
-                    cols[2].label(&commit.message);
+                    col.separator();
+                    col.label(&commit.message);
                 }
             } else if let Some(first) = log.commits.first() {
                 self.selected_commit = Some(first.hash.clone());
@@ -2350,7 +2398,8 @@ impl App {
                 appearance::sidebar_scroll("blame").show(ui, |ui| {
                     for entry in &data.entries {
                         ui.horizontal(|ui| {
-                            ui.weak(&entry.hash[..7.min(entry.hash.len())]);
+                            let shown = entry.hash.len().min(7);
+                            ui.weak(entry.hash.get(..shown).unwrap_or(entry.hash.as_str()));
                             ui.weak(&entry.author);
                             ui.weak(&entry.date);
                             ui.weak("| ");
@@ -2390,7 +2439,19 @@ struct DiffMetrics {
 
 impl DiffMetrics {
     fn measure(ui: &egui::Ui, digits: u32) -> Self {
-        let font = ui.style().text_styles[&egui::TextStyle::Monospace].clone();
+        let Some(font) = ui
+            .style()
+            .text_styles
+            .get(&egui::TextStyle::Monospace)
+            .cloned()
+        else {
+            return Self {
+                font: egui::FontId::monospace(12.0),
+                digit_w: 0.0,
+                row_h: 0.0,
+                digits,
+            };
+        };
         let (digit_w, row_h) = ui
             .ctx()
             .fonts_mut(|fonts| (fonts.glyph_width(&font, '0'), fonts.row_height(&font)));
@@ -2403,7 +2464,10 @@ impl DiffMetrics {
     }
 
     fn number_w(&self) -> f32 {
-        self.digit_w * self.digits as f32
+        // Gutter digit column is a UI coordinate.
+        #[allow(clippy::cast_precision_loss)]
+        let digits = self.digits as f32;
+        self.digit_w * digits
     }
 }
 
@@ -2547,11 +2611,14 @@ fn paint_diff_document(
                     .show_rows(ui, metrics.row_h, rows, |ui, range| {
                         ui.set_min_width(width);
                         for index in range {
+                            let Some(line) = doc.unified.get(index) else {
+                                continue;
+                            };
                             paint_diff_line(
                                 ui,
                                 DiffPaint {
                                     width,
-                                    line: &doc.unified[index],
+                                    line,
                                     gutter: DiffGutter::Unified,
                                     colors,
                                     metrics: &metrics,
@@ -2685,7 +2752,7 @@ fn paint_diff_pane(
     scroll_key: &str,
     sync: f32,
 ) -> egui::scroll_area::ScrollAreaOutput<()> {
-    let side = matches!(pane, SplitPane::Left) as u8;
+    let side = u8::from(matches!(pane, SplitPane::Left));
     ui.scope_builder(
         egui::UiBuilder::new()
             .max_rect(rect)
@@ -2703,10 +2770,10 @@ fn paint_diff_pane(
                             ui,
                             DiffSidePaint {
                                 size: egui::vec2(content, metrics.row_h),
-                                line: match pane {
-                                    SplitPane::Left => doc.split[index].left.as_ref(),
-                                    SplitPane::Right => doc.split[index].right.as_ref(),
-                                },
+                                line: doc.split.get(index).and_then(|row| match pane {
+                                    SplitPane::Left => row.left.as_ref(),
+                                    SplitPane::Right => row.right.as_ref(),
+                                }),
                                 gutter: match pane {
                                     SplitPane::Left => DiffGutter::Old,
                                     SplitPane::Right => DiffGutter::New,
@@ -3007,7 +3074,7 @@ fn paint_diff_line(ui: &mut egui::Ui, paint: DiffPaint<'_>) {
         },
     );
     ui.painter().galley(
-        (rect.left_top() + egui::vec2(cols.code, 0.0)).round(),
+        egui::pos2(rect.left() + cols.code, rect.top()).round(),
         code,
         colors.text,
     );
@@ -3408,12 +3475,12 @@ impl TabViewer for Viewer<'_> {
                             sid,
                             RenameSurface::Pane,
                             egui::Rect::from_min_max(
-                                response.rect.min + egui::vec2(8.0, 1.0),
+                                egui::pos2(response.rect.min.x + 8.0, response.rect.min.y + 1.0),
                                 egui::pos2(controls_left, response.rect.bottom() - 1.0),
                             ),
                         );
                     }
-                    let closing = close.as_ref().is_some_and(|response| response.clicked());
+                    let closing = close.as_ref().is_some_and(eframe::egui::Response::clicked);
                     let git_clicked = actions.as_ref().is_some_and(|(git, _, _)| git.clicked());
                     let split_vertical = actions
                         .as_ref()
@@ -3421,7 +3488,7 @@ impl TabViewer for Viewer<'_> {
                     let split_horizontal = actions
                         .as_ref()
                         .is_some_and(|(_, _, split)| split.clicked());
-                    let on_control = close.as_ref().is_some_and(|close| close.hovered())
+                    let on_control = close.as_ref().is_some_and(eframe::egui::Response::hovered)
                         || actions.as_ref().is_some_and(|(git, vertical, horizontal)| {
                             git.hovered() || vertical.hovered() || horizontal.hovered()
                         });
@@ -3588,7 +3655,9 @@ impl TabViewer for Viewer<'_> {
                             lines.len(),
                             |ui, range| {
                                 for row in range {
-                                    ui.monospace(lines[row]);
+                                    if let Some(line) = lines.get(row) {
+                                        ui.monospace(*line);
+                                    }
                                 }
                             },
                         );
@@ -3899,7 +3968,7 @@ impl Viewer<'_> {
                 if find.dirty() || (stale && !find.query.is_empty()) {
                     let was_dirty = find.dirty();
                     find.outcome = backend.find(&find.query, find.case_insensitive);
-                    find.searched_query = find.query.clone();
+                    find.searched_query.clone_from(&find.query);
                     find.searched_case = find.case_insensitive;
                     find.last_search = Some(now);
                     if was_dirty {
@@ -3919,7 +3988,7 @@ impl Viewer<'_> {
                 } else if total == 0 {
                     "No matches".to_string()
                 } else {
-                    let mut text = format!("{}/{}", find.current + 1, total);
+                    let mut text = format!("{}/{}", find.current.saturating_add(1), total);
                     if find.outcome.truncated {
                         text.push('+');
                     }
@@ -3995,7 +4064,7 @@ impl Viewer<'_> {
         }
         if !self.app.backends.contains_key(sid) {
             let id = self.app.next_backend;
-            self.app.next_backend += 1;
+            self.app.next_backend = self.app.next_backend.saturating_add(1);
             let owner = self
                 .app
                 .state
@@ -4081,7 +4150,9 @@ impl Viewer<'_> {
             }
         }
         let find_paint = self.find_paint_for(sid);
-        let backend = self.app.backends.get_mut(sid).unwrap();
+        let Some(backend) = self.app.backends.get_mut(sid) else {
+            return;
+        };
         backend.set_painted(true);
         let font = egui_term::TerminalFont::new(egui_term::FontSettings {
             font_type: egui::FontId::monospace(self.app.state.settings.font_size),
@@ -4110,7 +4181,9 @@ impl Viewer<'_> {
         }
         let dragging = ui.input(|i| i.pointer.any_down());
         let (mouse_reporting, target) = {
-            let backend = self.app.backends.get(sid).unwrap();
+            let Some(backend) = self.app.backends.get(sid) else {
+                return;
+            };
             #[cfg(feature = "test-support")]
             if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
                 let content = backend.last_content();
@@ -4300,7 +4373,7 @@ impl Viewer<'_> {
             )
             .clicked()
             {
-                self.app.path_text = selected.clone();
+                self.app.path_text.clone_from(&selected);
                 self.app.open_path = true;
                 ui.close();
             }
@@ -4564,8 +4637,8 @@ mod tests {
             git_dirs: vec![],
             branch: "main".into(),
             changes: vec![],
-            decorations: Default::default(),
-            stats: Default::default(),
+            decorations: std::collections::HashMap::default(),
+            stats: std::collections::HashMap::default(),
             error: None,
         });
         let open_native = |app: &mut App| {
@@ -5306,12 +5379,14 @@ mod tests {
         for (pos, text) in painted {
             ys.entry(text.as_str()).or_default().push(pos.y);
         }
-        let mut compared = 0;
+        let mut compared: usize = 0;
         for (text, values) in &ys {
-            if values.len() == 2 {
-                compared += 1;
+            if values.len() == 2
+                && let (Some(left), Some(right)) = (values.first(), values.get(1))
+            {
+                compared = compared.saturating_add(1);
                 assert!(
-                    (values[0] - values[1]).abs() <= 1.0,
+                    (*left - *right).abs() <= 1.0,
                     "row {text:?} is misaligned across panes: {values:?}"
                 );
             }

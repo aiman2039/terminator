@@ -1,4 +1,4 @@
-//! Bounded local MessagePack requests to an existing Neovim process.
+//! Bounded local `MessagePack` requests to an existing Neovim process.
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use serde_json::Value;
@@ -21,12 +21,17 @@ impl Connection {
     pub fn connect(path: &Path, timeout: Duration) -> Result<Self> {
         Ok(Self {
             stream: UnixStream::connect(path).context("Connect to Neovim")?,
-            deadline: Instant::now() + timeout,
+            deadline: Instant::now()
+                .checked_add(timeout)
+                .context("Neovim deadline overflow")?,
             next: 0,
         })
     }
     pub fn call(&mut self, method: &str, args: Value, limit: usize) -> Result<Value> {
-        self.next += 1;
+        self.next = self
+            .next
+            .checked_add(1)
+            .context("Neovim request id overflow")?;
         self.stream
             .set_write_timeout(Some(remaining(self.deadline)?))?;
         self.stream
@@ -77,11 +82,13 @@ impl Read for Limited<'_> {
         // partial frames. It also permits draining a peer that already closed;
         // updating SO_RCVTIMEO on such a socket can fail with EINVAL on macOS.
         loop {
-            let wait = remaining(self.deadline)?
-                .as_millis()
-                .clamp(1, i32::MAX as u128) as i32;
-            let timeout = rustix::event::Timespec::try_from(Duration::from_millis(wait as u64))
-                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+            let cap = u128::try_from(i32::MAX).unwrap_or(1);
+            let wait = i32::try_from(remaining(self.deadline)?.as_millis().clamp(1, cap))
+                .unwrap_or(i32::MAX);
+            let timeout = rustix::event::Timespec::try_from(Duration::from_millis(
+                u64::try_from(wait).unwrap_or(0),
+            ))
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
             let mut descriptor = [rustix::event::PollFd::new(
                 &self.stream,
                 rustix::event::PollFlags::IN,
@@ -99,8 +106,16 @@ impl Read for Limited<'_> {
             }
         }
         let limit = bytes.len().min(self.remaining);
-        let read = self.stream.read(&mut bytes[..limit])?;
-        self.remaining -= read;
+        let Some(buf) = bytes.get_mut(..limit) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Neovim read buffer is short",
+            ));
+        };
+        let read = self.stream.read(buf)?;
+        self.remaining = self.remaining.checked_sub(read).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "Neovim read exceeded the limit")
+        })?;
         Ok(read)
     }
 }
@@ -127,7 +142,9 @@ impl AsyncConnection {
         timeout: Duration,
         cpu: terminator_core::async_service::NativePool,
     ) -> Result<Self> {
-        let deadline = tokio::time::Instant::now() + timeout;
+        let deadline = tokio::time::Instant::now()
+            .checked_add(timeout)
+            .context("Neovim connect deadline overflow")?;
         let stream = tokio::time::timeout_at(deadline, tokio::net::UnixStream::connect(path))
             .await
             .map_err(|_| {
@@ -146,7 +163,10 @@ impl AsyncConnection {
     pub async fn call(&mut self, method: &str, args: Value, limit: usize) -> Result<Value> {
         use terminator_core::async_service::CancellationToken;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        self.next += 1;
+        self.next = self
+            .next
+            .checked_add(1)
+            .context("Neovim request id overflow")?;
         let id = self.next;
         let deadline = self.deadline;
         tokio::time::timeout_at(deadline, async {
@@ -157,10 +177,19 @@ impl AsyncConnection {
             loop {
                 ensure!(bytes.len() < limit, "Neovim response exceeds preview limit");
                 let mut chunk = [0; 8192];
-                let available = chunk.len().min(limit - bytes.len());
-                let n = self.stream.read(&mut chunk[..available]).await?;
+                let Some(room) = limit.checked_sub(bytes.len()) else {
+                    anyhow::bail!("Neovim response exceeds preview limit");
+                };
+                let available = chunk.len().min(room);
+                let Some(buf) = chunk.get_mut(..available) else {
+                    anyhow::bail!("Neovim read buffer is short");
+                };
+                let n = self.stream.read(buf).await?;
                 ensure!(n > 0, "Neovim connection closed before response");
-                bytes.extend_from_slice(&chunk[..n]);
+                let Some(read) = chunk.get(..n) else {
+                    anyhow::bail!("Neovim read exceeded the buffer");
+                };
+                bytes.extend_from_slice(read);
                 let parse = move || {
                     let mut decoder = rmp_serde::Deserializer::from_read_ref(&bytes);
                     decoder.set_max_depth(32);
@@ -183,11 +212,18 @@ impl AsyncConnection {
                 };
                 let parts = response.as_array().context("Invalid Neovim response")?;
                 ensure!(
-                    parts.len() == 4 && parts[0] == 1 && parts[1] == id,
+                    parts.len() == 4
+                        && parts.first().is_some_and(|part| *part == 1)
+                        && parts.get(1).is_some_and(|part| *part == id),
                     "Unexpected Neovim response identity"
                 );
-                ensure!(parts[2].is_null(), "Neovim request failed: {}", parts[2]);
-                return Ok(response.as_array_mut().unwrap().pop().unwrap());
+                let err = parts.get(2).context("Neovim response missing error")?;
+                ensure!(err.is_null(), "Neovim request failed: {err}");
+                return response
+                    .as_array_mut()
+                    .context("Invalid Neovim response")?
+                    .pop()
+                    .context("Neovim response missing result");
             }
         })
         .await

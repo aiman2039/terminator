@@ -17,7 +17,9 @@ use macos::Desktop;
 #[cfg(target_os = "linux")]
 use x11::Desktop;
 fn wait(mut check: impl FnMut() -> Result<bool>) -> Result<()> {
-    let end = std::time::Instant::now() + Duration::from_secs(5);
+    let end = std::time::Instant::now()
+        .checked_add(Duration::from_secs(5))
+        .ok_or_else(|| anyhow::anyhow!("window deadline overflow"))?;
     loop {
         if check()? {
             return Ok(());
@@ -33,9 +35,17 @@ fn ui(h: &Harness, request: Request) -> Result<Value> {
     ui_control::rpc(&Paths::at(h.root.clone()), request)
 }
 fn coordinate_scale(snapshot: &Value) -> f64 {
-    let gui = snapshot["window"]["gui_ppp"].as_f64().unwrap_or(1.0);
+    let window = snapshot.get("window");
+    let gui = window
+        .and_then(|window| window.get("gui_ppp"))
+        .and_then(Value::as_f64)
+        .unwrap_or(1.0);
     if cfg!(target_os = "macos") {
-        gui / snapshot["window"]["native_ppp"].as_f64().unwrap_or(gui)
+        let native = window
+            .and_then(|window| window.get("native_ppp"))
+            .and_then(Value::as_f64)
+            .unwrap_or(gui);
+        gui / native
     } else {
         gui
     }
@@ -49,8 +59,15 @@ pub fn run(o: &Options) -> Result<()> {
     if cfg!(target_os = "macos") {
         let sink = h.root.join("terminator-test-shell");
         std::os::unix::fs::symlink(std::env::current_exe()?, &sink)?;
-        let mut settings = h.state()?["settings"].clone();
-        settings["shell"] = json!(sink);
+        let mut settings = h
+            .state()?
+            .get("settings")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing settings"))?;
+        settings
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("settings is not an object"))?
+            .insert("shell".into(), json!(sink));
         h.rpc(json!({"Settings":settings}))?;
     }
     let shell = h.shell(&p)?;
@@ -77,10 +94,18 @@ pub fn run(o: &Options) -> Result<()> {
     let original = desktop.geometry()?;
     println!("Window fixture: drag from {original:?}");
     let snapshot = ui(&h, Request::Snapshot)?;
-    let point = &snapshot["controls"]["header-drag"];
-    let x = point[0].as_f64().context("Missing header drag geometry")?
-        + point[2].as_f64().unwrap() / 2.0;
-    let y = point[1].as_f64().unwrap() + point[3].as_f64().unwrap() / 2.0;
+    let point = snapshot
+        .get("controls")
+        .and_then(|controls| controls.get("header-drag"))
+        .ok_or_else(|| anyhow::anyhow!("missing header drag control"))?;
+    let axis = |index: usize| {
+        point
+            .get(index)
+            .and_then(Value::as_f64)
+            .context("Missing header drag geometry")
+    };
+    let x = axis(0)? + axis(2)? / 2.0;
+    let y = axis(1)? + axis(3)? / 2.0;
     let scale = coordinate_scale(&snapshot);
     desktop.drag(
         (original[0] + x * scale, original[1] + y * scale),
@@ -96,13 +121,20 @@ pub fn run(o: &Options) -> Result<()> {
     let moved = desktop.geometry()?;
     println!("Window fixture: resize from {moved:?}");
     let snapshot = ui(&h, Request::Snapshot)?;
-    let corner = &snapshot["controls"]["resize-se"];
+    let corner = snapshot
+        .get("controls")
+        .and_then(|controls| controls.get("resize-se"))
+        .unwrap_or(&Value::Null);
     println!("Window resize control: {corner}");
     let factor = coordinate_scale(&snapshot);
-    let x = corner[0].as_f64().unwrap_or((moved[2] - 2.0) / factor)
-        + corner[2].as_f64().unwrap_or(0.0) / 2.0;
-    let y = corner[1].as_f64().unwrap_or((moved[3] - 2.0) / factor)
-        + corner[3].as_f64().unwrap_or(0.0) / 2.0;
+    let axis = |index: usize, fallback: f64| {
+        corner
+            .get(index)
+            .and_then(Value::as_f64)
+            .unwrap_or(fallback)
+    };
+    let x = axis(0, (moved[2] - 2.0) / factor) + axis(2, 0.0) / 2.0;
+    let y = axis(1, (moved[3] - 2.0) / factor) + axis(3, 0.0) / 2.0;
     desktop.drag(
         (moved[0] + x * factor, moved[1] + y * factor),
         (moved[0] + x * factor + 100.0, moved[1] + y * factor + 70.0),
@@ -175,19 +207,34 @@ pub fn run(o: &Options) -> Result<()> {
     // native folder selection idempotently selects an existing project.
     let other = h.project("picker-other")?;
     ensure!(
-        h.state()?["selected_project"] == id(&other),
+        h.state()?
+            .get("selected_project")
+            .is_some_and(|selected| selected == id(&other)),
         "Fixture selection setup failed"
     );
     let snapshot = ui(&h, Request::Snapshot)?;
     let r = desktop.geometry()?;
-    let button = &snapshot["controls"]["project-add"];
+    let button = snapshot
+        .get("controls")
+        .and_then(|controls| controls.get("project-add"))
+        .ok_or_else(|| anyhow::anyhow!("missing project picker button"))?;
     let scale = coordinate_scale(&snapshot);
     println!("Window project picker button: {button}, geometry={r:?}, scale={scale}");
+    let axis = |index: usize| {
+        button
+            .get(index)
+            .and_then(Value::as_f64)
+            .context("Missing project picker geometry")
+    };
     desktop.click(
-        r[0] + (button[0].as_f64().unwrap() + button[2].as_f64().unwrap() / 2.0) * scale,
-        r[1] + (button[1].as_f64().unwrap() + button[3].as_f64().unwrap() / 2.0) * scale,
+        r[0] + (axis(0)? + axis(2)? / 2.0) * scale,
+        r[1] + (axis(1)? + axis(3)? / 2.0) * scale,
     )?;
-    let folder = PathBuf::from(p["path"].as_str().unwrap());
+    let folder = PathBuf::from(
+        p.get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing project path"))?,
+    );
     thread::sleep(Duration::from_millis(700));
     desktop.choose_path(folder.to_str().unwrap())?;
     h.wait(
@@ -199,7 +246,12 @@ pub fn run(o: &Options) -> Result<()> {
         8,
     )?;
     ensure!(
-        h.state()?["projects"].as_array().unwrap().len() == 2,
+        h.state()?
+            .get("projects")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("missing projects"))?
+            .len()
+            == 2,
         "Native folder picker duplicated project"
     );
     println!("Window fixture: native close");

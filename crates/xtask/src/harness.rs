@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use serde_json::{Value, json};
 use std::{
@@ -103,7 +103,9 @@ pub fn git(cwd: &Path, args: &[&str]) -> Result<Vec<u8>> {
     output(c)
 }
 pub fn wait_child(child: &mut Child, timeout: Duration) -> Result<std::process::ExitStatus> {
-    let end = Instant::now() + timeout;
+    let end = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| anyhow!("child deadline overflow"))?;
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(status);
@@ -207,7 +209,9 @@ impl Harness {
             Some(Process(command.spawn().context(
                 "Build workspace binaries before running fixtures",
             )?));
-        let end = Instant::now() + Duration::from_secs(10);
+        let end = Instant::now()
+            .checked_add(Duration::from_secs(10))
+            .ok_or_else(|| anyhow!("daemon startup deadline overflow"))?;
         while self.state().is_err() {
             ensure!(
                 self.daemon.as_mut().unwrap().0.try_wait()?.is_none(),
@@ -236,7 +240,10 @@ impl Harness {
         let mut envelope =
             json!({"version":1,"auth":token.unwrap_or(auth.trim()),"request":request});
         if let Some(hint) = hint {
-            envelope["snapshot_hint"] = hint;
+            envelope
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("request envelope is not an object"))?
+                .insert("snapshot_hint".into(), hint);
         }
         write_frame(&mut stream, &envelope)?;
         Ok(stream)
@@ -248,13 +255,18 @@ impl Harness {
         )?)?)
     }
     pub fn state(&self) -> Result<Value> {
-        Ok(self.rpc(json!("Snapshot"))?["State"].clone())
+        self.rpc(json!("Snapshot"))?
+            .get("State")
+            .cloned()
+            .ok_or_else(|| anyhow!("missing State"))
     }
     #[track_caller]
     pub fn wait(&self, mut check: impl FnMut(&Value) -> bool, seconds: u64) -> Result<Value> {
         let caller = std::panic::Location::caller();
         let started = Instant::now();
-        let end = started + Duration::from_secs(seconds);
+        let end = started
+            .checked_add(Duration::from_secs(seconds))
+            .ok_or_else(|| anyhow!("wait deadline overflow"))?;
         let mut warned = false;
         loop {
             let state = self.state()?;
@@ -285,7 +297,9 @@ impl Harness {
         let path = self.root.join(name);
         fs::create_dir_all(&path)?;
         self.rpc(json!({"AddProject":{"path":path}}))?;
-        self.state()?["projects"]
+        self.state()?
+            .get("projects")
+            .ok_or_else(|| anyhow!("missing projects"))?
             .as_array()
             .unwrap()
             .iter()
@@ -294,10 +308,16 @@ impl Harness {
             .context("Created project missing")
     }
     pub fn shell(&self, project: &Value) -> Result<Value> {
-        Ok(self.rpc(json!({"Create":{"project":id(project),"cwd":null,"file":null,"line":null,"editor":false}}))?["Created"].clone())
+        self.rpc(json!({"Create":{"project":id(project),"cwd":null,"file":null,"line":null,"editor":false}}))?
+            .get("Created")
+            .cloned()
+            .ok_or_else(|| anyhow!("missing Created"))
     }
     pub fn editor(&self, project: &Value, path: &Path) -> Result<Value> {
-        Ok(self.rpc(json!({"Create":{"project":id(project),"cwd":project["path"],"file":path,"line":null,"editor":true}}))?["Created"].clone())
+        self.rpc(json!({"Create":{"project":id(project),"cwd":project["path"],"file":path,"line":null,"editor":true}}))?
+            .get("Created")
+            .cloned()
+            .ok_or_else(|| anyhow!("missing Created"))
     }
     pub fn attach(&self, session: &Value) -> Result<UnixStream> {
         let mut stream = self.connect(
@@ -314,22 +334,38 @@ impl Harness {
         Ok(())
     }
     pub fn history(&self, sid: &str) -> Result<String> {
-        Ok(self.rpc(json!({"History":{"session":sid}}))?["Text"]
-            .as_str()
+        Ok(self
+            .rpc(json!({"History":{"session":sid}}))?
+            .get("Text")
+            .and_then(Value::as_str)
             .context("History text missing")?
             .into())
     }
     pub fn setup(&self) -> Result<()> {
-        let mut settings = self.state()?["settings"].clone();
-        settings["shell"] = json!("/bin/sh");
+        let mut settings = self
+            .state()?
+            .get("settings")
+            .cloned()
+            .ok_or_else(|| anyhow!("missing settings"))?;
+        settings
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("settings is not an object"))?
+            .insert("shell".into(), json!("/bin/sh"));
         self.rpc(json!({"Settings":settings}))?;
         Ok(())
     }
     /// Route terminal notices to the OS so the daemon exercises its real
     /// notification path (Cocoa pump + Notification Center enumeration).
     pub fn enable_os_notifications(&self) -> Result<()> {
-        let mut settings = self.state()?["settings"].clone();
-        settings["terminal_notifications_os"] = json!(true);
+        let mut settings = self
+            .state()?
+            .get("settings")
+            .cloned()
+            .ok_or_else(|| anyhow!("missing settings"))?;
+        settings
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("settings is not an object"))?
+            .insert("terminal_notifications_os".into(), json!(true));
         self.rpc(json!({"Settings":settings}))?;
         Ok(())
     }
@@ -388,9 +424,10 @@ impl Drop for Harness {
                     let endpoint = owner.paths();
                     let _ =
                         terminator_core::rpc(&endpoint, terminator_core::Request::ShutdownIfIdle);
-                    let deadline = Instant::now() + Duration::from_secs(5);
-                    while endpoint.socket().exists() && Instant::now() < deadline {
-                        thread::sleep(Duration::from_millis(50));
+                    if let Some(deadline) = Instant::now().checked_add(Duration::from_secs(5)) {
+                        while endpoint.socket().exists() && Instant::now() < deadline {
+                            thread::sleep(Duration::from_millis(50));
+                        }
                     }
                 }
             } else {

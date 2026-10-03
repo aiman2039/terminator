@@ -76,7 +76,11 @@ impl AppStats {
                 .memory
                 .saturating_add(self.daemon.memory)
                 .saturating_add(self.hooks.memory),
-            processes: self.gui.processes + self.daemon.processes + self.hooks.processes,
+            processes: self
+                .gui
+                .processes
+                .saturating_add(self.daemon.processes)
+                .saturating_add(self.hooks.processes),
         }
     }
 }
@@ -106,7 +110,7 @@ fn classify(name: &str) -> Option<Component> {
 fn accumulate(stats: &mut ComponentStats, cpu: f32, memory: u64) {
     stats.cpu = finite_cpu(stats.cpu + finite_cpu(cpu));
     stats.memory = stats.memory.saturating_add(memory);
-    stats.processes += 1;
+    stats.processes = stats.processes.saturating_add(1);
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -182,7 +186,7 @@ pub fn spawn(
     thread::Builder::new()
         .name("terminator-resources".into())
         .spawn(move || sample_loop(rx, updates, repaint))
-        .expect("spawn resource sampler");
+        .ok();
     tx
 }
 
@@ -225,12 +229,11 @@ fn warmup(system: &mut System) {
 fn take_sample(system: &mut System, request: &Request) -> Option<Sample> {
     let request = request.clone();
     let sampled = std::panic::catch_unwind(AssertUnwindSafe(|| sample(system, &request)));
-    match sampled {
-        Ok(sample) => Some(sample),
-        Err(_) => {
-            *system = System::new();
-            None
-        }
+    if let Ok(sample) = sampled {
+        Some(sample)
+    } else {
+        *system = System::new();
+        None
     }
 }
 
@@ -275,7 +278,7 @@ fn sample(system: &mut System, request: &Request) -> Sample {
     let counted = system.cpus().len();
     let cpus = if counted == 0 {
         std::thread::available_parallelism()
-            .map(|n| n.get())
+            .map(std::num::NonZero::get)
             .unwrap_or(1)
     } else {
         counted

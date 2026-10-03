@@ -17,26 +17,38 @@ fn expression(h: &Harness, editor: &Value, expression: &str) -> Result<String> {
 }
 fn view(h: &Harness, editor: &Value, text: &str, attached: bool) -> bool {
     gui(h).is_ok_and(|snapshot| {
-        let markdown = &snapshot["markdown"][id(editor)];
+        let Some(markdown) = snapshot
+            .get("markdown")
+            .and_then(|markdown| markdown.get(id(editor)))
+        else {
+            return false;
+        };
         markdown["visible"] == true
             && markdown["error"].is_null()
             && markdown["text"].as_str().is_some_and(|t| t.contains(text))
-            && snapshot["visible_terminals"]
-                .as_array()
+            && snapshot
+                .get("visible_terminals")
+                .and_then(Value::as_array)
                 .is_some_and(|s| s.contains(&editor["id"]) == attached)
     })
 }
 
 fn check_header(h: &Harness) -> Result<()> {
     let snapshot = gui(h)?;
-    let header = &snapshot["markdown_header"];
+    let header = snapshot
+        .get("markdown_header")
+        .ok_or_else(|| anyhow::anyhow!("missing markdown header"))?;
     let rects = ["title", "edit", "preview", "split", "refresh"].map(|key| &header[key]);
     for rect in &rects {
         ensure!(rect.is_array(), "Missing Markdown header control");
     }
     for pair in rects.windows(2) {
-        let left = pair[0];
-        let right = pair[1];
+        let left = pair
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("missing header control"))?;
+        let right = pair
+            .get(1)
+            .ok_or_else(|| anyhow::anyhow!("missing header control"))?;
         ensure!(
             (left[1].as_f64().unwrap() - right[1].as_f64().unwrap()).abs() < 1.0,
             "Markdown header wrapped onto a second row"
@@ -56,13 +68,22 @@ pub fn run(o: &Options) -> Result<()> {
     let project = h.project("markdown")?;
     let shell = h.shell(&project)?;
     h.layout(&project, std::slice::from_ref(&shell))?;
-    let root = PathBuf::from(project["path"].as_str().unwrap());
+    let root = PathBuf::from(
+        project
+            .get("path")
+            .ok_or_else(|| anyhow::anyhow!("missing project path"))?
+            .as_str()
+            .unwrap(),
+    );
     let path = root.join("read me ' 日本.md");
     let text = "# Native Markdown\n\nA **native** preview with *emphasis* and [a local file](next.md).\n\n## Features\n\n- [x] Neovim editing\n- [ ] More notes\n\n| Mode | Purpose |\n| --- | --- |\n| Edit | Neovim |\n| Preview | Reading |\n\n```rust\nfn main() { println!(\"Hello\"); }\n```\n\n![Local illustration](<picture space.png>)\n";
     fs::write(&path, text)?;
     fs::write(root.join("next.md"), "# Linked document\n")?;
     image::RgbaImage::from_fn(180, 48, |x, y| {
-        image::Rgba([60 + (x / 3) as u8, 120 + y as u8, 210, 255])
+        let red =
+            60u8.saturating_add(u8::try_from(x.checked_div(3).unwrap_or(0)).unwrap_or(u8::MAX));
+        let green = 120u8.saturating_add(u8::try_from(y).unwrap_or(u8::MAX));
+        image::Rgba([red, green, 210, 255])
     })
     .save(root.join("picture space.png"))?;
 
@@ -97,7 +118,13 @@ pub fn run(o: &Options) -> Result<()> {
         "Markdown opening duplicated sessions"
     );
     ensure!(
-        prefs(&h)?["markdown_modes"][id(&editor)].is_null(),
+        prefs(&h)?
+            .get("markdown_modes")
+            .ok_or_else(|| anyhow::anyhow!("missing markdown_modes"))?
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("markdown_modes is not an object"))?
+            .get(id(&editor))
+            .is_none_or(Value::is_null),
         "A newly opened Markdown file must use the default Preview mode"
     );
 
@@ -116,11 +143,21 @@ pub fn run(o: &Options) -> Result<()> {
             h.wait(|_| view(&h, &editor, "# Unsaved preview", true), 8)?;
             let snapshot = gui(&h)?;
             ensure!(
-                snapshot["markdown"][id(&editor)]["status"] == "Unsaved changes",
+                snapshot
+                    .get("markdown")
+                    .and_then(|markdown| markdown.get(id(&editor)))
+                    .and_then(|markdown| markdown.get("status"))
+                    .is_some_and(|status| status == "Unsaved changes"),
                 "Live preview did not mark unsaved edits"
             );
-            let preview = &snapshot["markdown"][id(&editor)]["rect"];
-            let terminal = &snapshot["editor_rect"];
+            let preview = snapshot
+                .get("markdown")
+                .and_then(|markdown| markdown.get(id(&editor)))
+                .and_then(|markdown| markdown.get("rect"))
+                .ok_or_else(|| anyhow::anyhow!("missing markdown rect"))?;
+            let terminal = snapshot
+                .get("editor_rect")
+                .ok_or_else(|| anyhow::anyhow!("missing editor rect"))?;
             ensure!(
                 preview[2].as_f64().unwrap() > 80.0 && terminal[2].as_f64().unwrap() > 80.0,
                 "Split side is too narrow"
@@ -162,7 +199,13 @@ pub fn run(o: &Options) -> Result<()> {
         "Preview forwarded typing to the hidden editor"
     );
     ensure!(
-        prefs(&h)?["markdown_modes"][id(&editor)].is_null(),
+        prefs(&h)?
+            .get("markdown_modes")
+            .ok_or_else(|| anyhow::anyhow!("missing markdown_modes"))?
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("markdown_modes is not an object"))?
+            .get(id(&editor))
+            .is_none_or(Value::is_null),
         "Preview selection was not persisted"
     );
 
@@ -214,11 +257,19 @@ pub fn run(o: &Options) -> Result<()> {
         h.wait(
             |_| {
                 gui(&h).is_ok_and(|snapshot| {
-                    snapshot["markdown_modes"][id(&editor)] == "Edit"
-                        && snapshot["visible_terminals"]
-                            .as_array()
-                            .is_some_and(|ids| ids.contains(&editor["id"]))
-                        && snapshot["markdown"][id(&editor)]["visible"] == false
+                    snapshot
+                        .get("markdown_modes")
+                        .and_then(|modes| modes.get(id(&editor)))
+                        .is_some_and(|mode| mode == "Edit")
+                        && snapshot
+                            .get("visible_terminals")
+                            .and_then(Value::as_array)
+                            .is_some_and(|ids| editor.get("id").is_some_and(|id| ids.contains(id)))
+                        && snapshot
+                            .get("markdown")
+                            .and_then(|markdown| markdown.get(id(&editor)))
+                            .and_then(|markdown| markdown.get("visible"))
+                            .is_some_and(|visible| visible.as_bool() == Some(false))
                 })
             },
             8,
@@ -244,12 +295,19 @@ pub fn run(o: &Options) -> Result<()> {
             h.wait(
                 |_| {
                     gui(&h).is_ok_and(|snapshot| {
-                        snapshot["markdown"][id(&editor)]["status"]
-                            == "Unsaved preview · live updates paused"
-                            && snapshot["markdown"][id(&editor)]["text"]
-                                .as_str()
+                        let markdown = snapshot
+                            .get("markdown")
+                            .and_then(|markdown| markdown.get(id(&editor)));
+                        markdown
+                            .and_then(|markdown| markdown.get("status"))
+                            .is_some_and(|status| status == "Unsaved preview · live updates paused")
+                            && markdown
+                                .and_then(|markdown| markdown.get("text"))
+                                .and_then(Value::as_str)
                                 .is_some_and(|t| t.contains("# Back in editor"))
-                            && snapshot["markdown"][id(&editor)]["error"].is_null()
+                            && markdown
+                                .and_then(|markdown| markdown.get("error"))
+                                .is_none_or(Value::is_null)
                     })
                 },
                 8,
@@ -334,8 +392,8 @@ pub fn run(o: &Options) -> Result<()> {
                 |_| {
                     h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
                         .is_ok_and(|r| {
-                            r["Text"]
-                                .as_str()
+                            r.get("Text")
+                                .and_then(Value::as_str)
                                 .and_then(|s| s.trim().parse::<u32>().ok())
                                 .is_some_and(|n| n > 0)
                         })
@@ -376,7 +434,13 @@ pub fn run(o: &Options) -> Result<()> {
         "Discard wrote Markdown edits"
     );
     ensure!(
-        session_ids(&h.state()?["projects"][0]["layout"]) == [id(&shell)],
+        session_ids(
+            h.state()?
+                .get("projects")
+                .and_then(|projects| projects.get(0))
+                .and_then(|project| project.get("layout"))
+                .ok_or_else(|| anyhow::anyhow!("missing projects[0].layout"))?,
+        ) == [id(&shell)],
         "Closing Markdown changed the shell layout"
     );
     h.assert_pids(std::slice::from_ref(&shell))
@@ -388,7 +452,13 @@ pub fn busy(o: &Options) -> Result<()> {
     let project = h.project("markdown-busy")?;
     let shell = h.shell(&project)?;
     h.layout(&project, std::slice::from_ref(&shell))?;
-    let root = PathBuf::from(project["path"].as_str().unwrap());
+    let root = PathBuf::from(
+        project
+            .get("path")
+            .ok_or_else(|| anyhow::anyhow!("missing project path"))?
+            .as_str()
+            .unwrap(),
+    );
     let path = root.join("README.md");
     let text = "# Markdown while Neovim waits\n\nThe saved document remains readable.\n";
     fs::write(&path, text)?;
@@ -416,8 +486,12 @@ pub fn busy(o: &Options) -> Result<()> {
                         .is_some_and(|editor| {
                             view(&h, editor, "# Markdown while Neovim waits", false)
                                 && gui(&h).is_ok_and(|s| {
-                                    s["markdown"][id(editor)]["status"]
-                                        == "Saved file · live preview paused"
+                                    s.get("markdown")
+                                        .and_then(|markdown| markdown.get(id(editor)))
+                                        .and_then(|markdown| markdown.get("status"))
+                                        .is_some_and(|status| {
+                                            status == "Saved file · live preview paused"
+                                        })
                                 })
                         })
                 },
@@ -449,7 +523,12 @@ pub fn busy(o: &Options) -> Result<()> {
         h.wait(
             |_| {
                 view(&h, &editor, "# Markdown while Neovim waits", false)
-                    && gui(&h).is_ok_and(|s| s["markdown"][id(&editor)]["status"] == "Live preview")
+                    && gui(&h).is_ok_and(|s| {
+                        s.get("markdown")
+                            .and_then(|markdown| markdown.get(id(&editor)))
+                            .and_then(|markdown| markdown.get("status"))
+                            .is_some_and(|status| status == "Live preview")
+                    })
             },
             8,
         )?;

@@ -104,6 +104,11 @@ pub fn file_title(path: &Path) -> String {
         .into_owned()
 }
 
+fn usize_from_u64(value: u64) -> usize {
+    usize::try_from(value)
+        .unwrap_or_else(|_| usize::try_from(value & u64::from(u32::MAX)).unwrap_or(0))
+}
+
 pub fn next_rng(seed: &mut u64) -> u64 {
     let mut x = (*seed).max(1);
     x ^= x << 13;
@@ -118,7 +123,10 @@ pub fn fisher_yates<T>(items: &mut [T], seed: &mut u64) {
         return;
     }
     for i in (1..items.len()).rev() {
-        let j = (next_rng(seed) as usize) % (i + 1);
+        let span = i.saturating_add(1);
+        let Some(j) = usize_from_u64(next_rng(seed)).checked_rem(span) else {
+            continue;
+        };
         items.swap(i, j);
     }
 }

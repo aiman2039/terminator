@@ -19,13 +19,21 @@ pub(crate) fn status_icon(waiting: usize) -> StatusIcon {
     let canvas = compose(waiting);
     let (width, height) = (canvas.width(), canvas.height());
     let mut png = Vec::new();
-    canvas
+    if canvas
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .expect("status icon encodes");
+        .is_err()
+    {
+        png.clear();
+    }
+    // Menu-bar point size; canvas pixels are UI coordinates.
+    #[allow(clippy::cast_precision_loss)]
+    let width_pt = width as f32 / SCALE as f32;
+    #[allow(clippy::cast_precision_loss)]
+    let height_pt = height as f32 / SCALE as f32;
     StatusIcon {
         png,
-        width_pt: width as f32 / SCALE as f32,
-        height_pt: height as f32 / SCALE as f32,
+        width_pt,
+        height_pt,
     }
 }
 
@@ -33,8 +41,8 @@ fn base_icon() -> &'static image::RgbaImage {
     static ICON: OnceLock<image::RgbaImage> = OnceLock::new();
     ICON.get_or_init(|| {
         let decoded = image::load_from_memory(include_bytes!("../assets/branding/terminator.png"))
-            .expect("bundled Terminator icon")
-            .to_rgba8();
+            .map(|image| image.to_rgba8())
+            .unwrap_or_else(|_| image::RgbaImage::new(ICON_PX, ICON_PX));
         image::imageops::resize(
             &decoded,
             ICON_PX,
@@ -52,12 +60,15 @@ fn compose(waiting: usize) -> image::RgbaImage {
         return canvas;
     }
     let label = badge_label(waiting);
-    let badge_h = 8 * SCALE;
+    let badge_h = 8u32.saturating_mul(SCALE);
     let badge_w = badge_width(&label, badge_h);
-    let width = 2 + ICON_PX + badge_w - 6;
+    let width = 2u32
+        .saturating_add(ICON_PX)
+        .saturating_add(badge_w)
+        .saturating_sub(6);
     let mut canvas = image::RgbaImage::new(width, CANVAS);
     image::imageops::overlay(&mut canvas, icon, 2, 2);
-    let badge_x = width - badge_w;
+    let badge_x = width.saturating_sub(badge_w);
     fill_pill(&mut canvas, badge_x, 0, badge_w, badge_h, BADGE);
     blit_label(&mut canvas, &label, badge_x, 0, badge_w, badge_h);
     canvas
@@ -75,11 +86,16 @@ fn badge_width(label: &str, badge_h: u32) -> u32 {
     if label.chars().count() == 1 {
         return badge_h;
     }
-    let glyphs = label.chars().count() as u32;
-    let text = glyphs * 5 * SCALE + glyphs.saturating_sub(1) * SCALE;
-    text + 4 * SCALE
+    let glyphs = u32::try_from(label.chars().count()).unwrap_or(u32::MAX);
+    let text = glyphs
+        .saturating_mul(5)
+        .saturating_mul(SCALE)
+        .saturating_add(glyphs.saturating_sub(1).saturating_mul(SCALE));
+    text.saturating_add(4u32.saturating_mul(SCALE))
 }
 
+// Pill geometry is pixel UI coordinates.
+#[allow(clippy::cast_precision_loss)]
 fn fill_pill(image: &mut image::RgbaImage, x: u32, y: u32, w: u32, h: u32, color: image::Rgba<u8>) {
     let radius = h as f32 / 2.0;
     let left = x as f32 + radius;
@@ -103,14 +119,17 @@ fn fill_pill(image: &mut image::RgbaImage, x: u32, y: u32, w: u32, h: u32, color
 }
 
 fn blit_label(image: &mut image::RgbaImage, label: &str, x: u32, y: u32, w: u32, h: u32) {
-    let glyphs = label.chars().count() as u32;
-    let text_w = glyphs * 5 * SCALE + glyphs.saturating_sub(1) * SCALE;
-    let text_h = 7 * SCALE;
-    let mut cursor = x + w.saturating_sub(text_w) / 2;
-    let origin_y = y + h.saturating_sub(text_h) / 2;
+    let glyphs = u32::try_from(label.chars().count()).unwrap_or(u32::MAX);
+    let text_w = glyphs
+        .saturating_mul(5)
+        .saturating_mul(SCALE)
+        .saturating_add(glyphs.saturating_sub(1).saturating_mul(SCALE));
+    let text_h = 7u32.saturating_mul(SCALE);
+    let mut cursor = x.saturating_add(w.saturating_sub(text_w) / 2);
+    let origin_y = y.saturating_add(h.saturating_sub(text_h) / 2);
     for ch in label.chars() {
         blit_glyph(image, glyph(ch), cursor, origin_y);
-        cursor += 5 * SCALE + SCALE;
+        cursor = cursor.saturating_add(5u32.saturating_mul(SCALE).saturating_add(SCALE));
     }
 }
 
@@ -122,8 +141,14 @@ fn blit_glyph(image: &mut image::RgbaImage, rows: &[&str], origin_x: u32, origin
             }
             for dy in 0..SCALE {
                 for dx in 0..SCALE {
-                    let x = origin_x + col as u32 * SCALE + dx;
-                    let y = origin_y + row as u32 * SCALE + dy;
+                    let col = u32::try_from(col).unwrap_or(u32::MAX);
+                    let row = u32::try_from(row).unwrap_or(u32::MAX);
+                    let x = origin_x
+                        .saturating_add(col.saturating_mul(SCALE))
+                        .saturating_add(dx);
+                    let y = origin_y
+                        .saturating_add(row.saturating_mul(SCALE))
+                        .saturating_add(dy);
                     if x < image.width() && y < image.height() {
                         image.put_pixel(x, y, INK);
                     }
@@ -178,12 +203,17 @@ mod tests {
     fn decode(waiting: usize) -> image::RgbaImage {
         let icon = status_icon(waiting);
         let image = image::load_from_memory(&icon.png).expect("png").to_rgba8();
-        assert_eq!(icon.width_pt, image.width() as f32 / SCALE as f32);
-        assert_eq!(icon.height_pt, image.height() as f32 / SCALE as f32);
+        // Point size is a UI coordinate.
+        #[allow(clippy::cast_precision_loss)]
+        let width_pt = image.width() as f32 / SCALE as f32;
+        #[allow(clippy::cast_precision_loss)]
+        let height_pt = image.height() as f32 / SCALE as f32;
+        assert_eq!(icon.width_pt, width_pt);
+        assert_eq!(icon.height_pt, height_pt);
         image
     }
 
-    fn badge(pixel: &image::Rgba<u8>) -> bool {
+    fn badge(pixel: image::Rgba<u8>) -> bool {
         pixel[0] > 220 && pixel[1] < 90 && pixel[2] < 80 && pixel[3] > 200
     }
 
@@ -200,15 +230,21 @@ mod tests {
         // The mark itself is red, so only pixels past the idle icon are the badge.
         let past = plain.width();
         let badge_red = one.pixels().enumerate().any(|(index, pixel)| {
-            let x = index as u32 % one.width();
-            let y = index as u32 / one.width();
-            x >= past && y < 16 && badge(pixel)
+            let index = u32::try_from(index).unwrap_or(u32::MAX);
+            let x = index.checked_rem(one.width()).unwrap_or(0);
+            let y = index.checked_div(one.width()).unwrap_or(0);
+            x >= past && y < 16 && badge(*pixel)
         });
         assert!(badge_red, "badge extends past the icon in telegram red");
         let digit = one.pixels().enumerate().any(|(index, pixel)| {
-            let x = index as u32 % one.width();
-            let y = index as u32 / one.width();
-            y < 16 && x + 12 > one.width() && pixel[0] > 230 && pixel[1] > 230 && pixel[2] > 230
+            let index = u32::try_from(index).unwrap_or(u32::MAX);
+            let x = index.checked_rem(one.width()).unwrap_or(0);
+            let y = index.checked_div(one.width()).unwrap_or(0);
+            y < 16
+                && x.saturating_add(12) > one.width()
+                && pixel[0] > 230
+                && pixel[1] > 230
+                && pixel[2] > 230
         });
         assert!(digit, "badge count is white");
     }

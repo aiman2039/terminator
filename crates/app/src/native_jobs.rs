@@ -1,4 +1,4 @@
-//! Per-pass UI work budget. Native pools live in terminator_core::async_service.
+//! Per-pass UI work budget. Native pools live in `terminator_core::async_service`.
 use std::time::{Duration, Instant};
 /// A pass can exceed the time limit by one handler; handlers must remain cheap.
 pub struct ResultBudget {
@@ -16,7 +16,7 @@ impl ResultBudget {
         if self.processed >= 64 || self.started.elapsed() >= Duration::from_millis(2) {
             return false;
         }
-        self.processed += 1;
+        self.processed = self.processed.saturating_add(1);
         true
     }
 }
@@ -30,7 +30,9 @@ mod tests {
         budget.processed = 64;
         assert!(!budget.next());
         budget.processed = 0;
-        budget.started = Instant::now() - Duration::from_millis(3);
+        budget.started = Instant::now()
+            .checked_sub(Duration::from_millis(3))
+            .unwrap_or_else(Instant::now);
         assert!(!budget.next());
     }
 }

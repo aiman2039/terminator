@@ -60,8 +60,9 @@ impl App {
             recovery::RestartInventory::capture(&self.state),
         )) {
             Ok(()) => self.restart_pending = true,
-            Err(_) => {
-                self.error = Some("Restart worker disconnected. Reopen Terminator to retry.".into())
+            Err(()) => {
+                self.error =
+                    Some("Restart worker disconnected. Reopen Terminator to retry.".into());
             }
         }
     }
@@ -81,15 +82,15 @@ impl App {
                     checkpoint,
                 )) {
                     Ok(()) => self.repair_pending = true,
-                    Err(_) => {
+                    Err(()) => {
                         self.error = Some(
                             "Installation worker disconnected. Reopen Terminator to retry.".into(),
-                        )
+                        );
                     }
                 }
             }
             Err(error) => {
-                self.error = Some(format!("Could not save workspace before repair: {error:#}"))
+                self.error = Some(format!("Could not save workspace before repair: {error:#}"));
             }
         }
     }
@@ -118,7 +119,7 @@ impl App {
                     .ide_strip_docks
                     .0
                     .values()
-                    .flat_map(|dock| dock.iter_all_tabs()),
+                    .flat_map(egui_dock::DockState::iter_all_tabs),
             )
             .filter_map(|(_, tab)| match tab {
                 Tab::Terminal(sid) => {
@@ -160,8 +161,9 @@ impl App {
         }
         match self.jobs.send(Job::StartSessionService) {
             Ok(()) => self.service_start_pending = true,
-            Err(_) => {
-                self.error = Some("Service worker disconnected. Reopen Terminator to retry.".into())
+            Err(()) => {
+                self.error =
+                    Some("Service worker disconnected. Reopen Terminator to retry.".into());
             }
         }
     }

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use rusqlite::{Connection, params};
 use std::{
     fs,
@@ -119,7 +119,7 @@ pub fn history_files(paths: &Paths, session: Option<&str>) -> Vec<PathBuf> {
     let mut files = fs::read_dir(paths.history_dir())
         .into_iter()
         .flatten()
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .filter(|p| {
             p.extension().is_some_and(|s| s == "pty")
@@ -158,12 +158,12 @@ impl History {
     pub fn new(paths: Paths) -> Result<Self> {
         let mut history = Self {
             paths,
-            writers: Default::default(),
-            segments: Default::default(),
-            removed: Default::default(),
+            writers: std::collections::HashMap::default(),
+            segments: std::collections::BTreeMap::default(),
+            removed: std::collections::HashSet::default(),
             total: 0,
             sequence: 0,
-            per_session: Default::default(),
+            per_session: std::collections::HashMap::default(),
         };
         for path in history_files(&history.paths, None) {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -181,11 +181,13 @@ impl History {
                 size: metadata.len(),
                 created,
             };
-            history.total += segment.size;
-            *history
+            history.total = history.total.saturating_add(segment.size);
+            let size = segment.size;
+            let usage = history
                 .per_session
                 .entry(segment.session.clone())
-                .or_default() += segment.size;
+                .or_default();
+            *usage = usage.saturating_add(size);
             history.segments.insert(path, segment);
         }
         Ok(history)
@@ -196,14 +198,25 @@ impl History {
         }
         const LIMIT: u64 = 4 * 1024 * 1024;
         while !data.is_empty() {
-            if self.writers.get(session).is_some_and(|w| {
-                self.segments[&w.path].size >= LIMIT
-                    || w.opened.elapsed() >= std::time::Duration::from_secs(300)
-            }) {
-                self.writers.remove(session).unwrap().file.flush()?;
+            let rotate = if let Some(writer) = self.writers.get(session) {
+                let size = self
+                    .segments
+                    .get(&writer.path)
+                    .map(|segment| segment.size)
+                    .ok_or_else(|| anyhow!("Missing history segment"))?;
+                size >= LIMIT || writer.opened.elapsed() >= std::time::Duration::from_mins(5)
+            } else {
+                false
+            };
+            if rotate {
+                self.writers
+                    .remove(session)
+                    .ok_or_else(|| anyhow!("Missing history writer"))?
+                    .file
+                    .flush()?;
             }
             if !self.writers.contains_key(session) {
-                self.sequence = (self.sequence + 1).max(
+                self.sequence = self.sequence.saturating_add(1).max(
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
@@ -235,14 +248,45 @@ impl History {
                     },
                 );
             }
-            let writer = self.writers.get_mut(session).unwrap();
-            let segment = self.segments.get_mut(&writer.path).unwrap();
-            let n = data.len().min((LIMIT - segment.size) as usize);
-            writer.file.write_all(&data[..n])?;
-            segment.size += n as u64;
-            self.total += n as u64;
-            *self.per_session.entry(session.into()).or_default() += n as u64;
-            data = &data[n..];
+            let path = self
+                .writers
+                .get(session)
+                .ok_or_else(|| anyhow!("Missing history writer"))?
+                .path
+                .clone();
+            let room = LIMIT.saturating_sub(
+                self.segments
+                    .get(&path)
+                    .ok_or_else(|| anyhow!("Missing history segment"))?
+                    .size,
+            );
+            let Ok(room) = usize::try_from(room) else {
+                bail!("History segment does not fit");
+            };
+            let n = data.len().min(room);
+            if n == 0 {
+                bail!("History segment is full");
+            }
+            let chunk = data
+                .get(..n)
+                .ok_or_else(|| anyhow!("History write is out of range"))?;
+            self.writers
+                .get_mut(session)
+                .ok_or_else(|| anyhow!("Missing history writer"))?
+                .file
+                .write_all(chunk)?;
+            let bytes = u64::try_from(n).map_err(|_| anyhow!("History write does not fit"))?;
+            let segment = self
+                .segments
+                .get_mut(&path)
+                .ok_or_else(|| anyhow!("Missing history segment"))?;
+            segment.size = segment.size.saturating_add(bytes);
+            self.total = self.total.saturating_add(bytes);
+            let usage = self.per_session.entry(session.into()).or_default();
+            *usage = usage.saturating_add(bytes);
+            data = data
+                .get(n..)
+                .ok_or_else(|| anyhow!("History write is out of range"))?;
         }
         Ok(())
     }
@@ -253,19 +297,41 @@ impl History {
         Ok(())
     }
     pub fn exceeds(&self, settings: &Settings) -> bool {
-        self.total > settings.total_mib * 1024 * 1024
-            || self
-                .per_session
-                .values()
-                .any(|n| *n > settings.session_mib * 1024 * 1024)
+        let Some(total_limit) = settings
+            .total_mib
+            .checked_mul(1024)
+            .and_then(|value| value.checked_mul(1024))
+        else {
+            return true;
+        };
+        let Some(session_limit) = settings
+            .session_mib
+            .checked_mul(1024)
+            .and_then(|value| value.checked_mul(1024))
+        else {
+            return true;
+        };
+        self.total > total_limit || self.per_session.values().any(|n| *n > session_limit)
     }
     fn delete(&mut self, path: &PathBuf) -> Result<String> {
-        let session = self.segments[path].session.clone();
+        let session = self
+            .segments
+            .get(path)
+            .ok_or_else(|| anyhow!("Missing history segment"))?
+            .session
+            .clone();
         if self.writers.get(&session).is_some_and(|w| &w.path == path) {
-            self.writers.remove(&session).unwrap().file.flush()?;
+            self.writers
+                .remove(&session)
+                .ok_or_else(|| anyhow!("Missing history writer"))?
+                .file
+                .flush()?;
         }
         fs::remove_file(path)?;
-        let segment = self.segments.remove(path).unwrap();
+        let segment = self
+            .segments
+            .remove(path)
+            .ok_or_else(|| anyhow!("Missing history segment"))?;
         self.total = self.total.saturating_sub(segment.size);
         if let Some(size) = self.per_session.get_mut(&session) {
             *size = size.saturating_sub(segment.size);
@@ -273,17 +339,47 @@ impl History {
         Ok(session)
     }
     pub fn prune(&mut self, settings: &Settings) -> Result<Vec<String>> {
-        self.prune_with_budget(settings, settings.total_mib * 1024 * 1024)
+        let budget = settings
+            .total_mib
+            .checked_mul(1024)
+            .and_then(|value| value.checked_mul(1024))
+            .ok_or_else(|| anyhow!("History budget overflow"))?;
+        self.prune_with_budget(settings, budget)
     }
     pub fn prune_with_budget(&mut self, settings: &Settings, budget: u64) -> Result<Vec<String>> {
+        let max_age = settings
+            .history_days
+            .checked_mul(86400)
+            .ok_or_else(|| anyhow!("History age limit overflows"))?;
+        let session_limit = settings
+            .session_mib
+            .checked_mul(1024)
+            .and_then(|value| value.checked_mul(1024))
+            .ok_or_else(|| anyhow!("History budget overflow"))?;
         let mut paths: Vec<_> = self.segments.keys().cloned().collect();
-        paths.sort_by_key(|p| self.segments[p].created);
+        paths.sort_by_key(|p| {
+            self.segments
+                .get(p)
+                .map(|segment| segment.created)
+                .unwrap_or(0)
+        });
         let mut removed = Vec::new();
         for path in paths {
-            let segment = &self.segments[&path];
-            if now().saturating_sub(segment.created) > settings.history_days * 86400
+            let (created, session) = {
+                let segment = self
+                    .segments
+                    .get(&path)
+                    .ok_or_else(|| anyhow!("Missing history segment"))?;
+                (segment.created, segment.session.clone())
+            };
+            let session_usage = self
+                .per_session
+                .get(&session)
+                .copied()
+                .ok_or_else(|| anyhow!("Missing session history"))?;
+            if now().saturating_sub(created) > max_age
                 || self.total > budget
-                || self.per_session[&segment.session] > settings.session_mib * 1024 * 1024
+                || session_usage > session_limit
             {
                 removed.push(self.delete(&path)?);
             }
@@ -310,16 +406,19 @@ impl History {
 }
 pub fn text(paths: &Paths, session: &Session) -> Result<String> {
     let mut parser = vt100::Parser::new(session.rows.max(1), session.cols.max(1), 10_000);
-    let mut total = 0;
+    let mut total: u64 = 0;
     let mut files = history_files(paths, Some(&session.id));
     files.reverse();
     let mut selected = Vec::new();
     for p in files {
         let size = fs::metadata(&p)?.len();
-        if total + size > 16 * 1024 * 1024 {
+        let Some(next) = total.checked_add(size) else {
+            break;
+        };
+        if next > 16 * 1024 * 1024 {
             break;
         }
-        total += size;
+        total = next;
         selected.push(p);
     }
     selected.reverse();
@@ -331,7 +430,10 @@ pub fn text(paths: &Paths, session: &Session) -> Result<String> {
             if n == 0 {
                 break;
             }
-            parser.process(&buf[..n]);
+            let Some(chunk) = buf.get(..n) else {
+                break;
+            };
+            parser.process(chunk);
         }
     }
     Ok(screen_text(parser.screen(), 10_000))

@@ -1,7 +1,7 @@
 //! Live agent-presence inspection. One background pass every two seconds
 //! batches all owned live shell sessions against a single process inventory.
 //! Observations never create lifecycle events, notifications, or resume
-//! commands, and never touch SQLite.
+//! commands, and never touch `SQLite`.
 use super::*;
 use terminator_core::agents;
 
@@ -43,7 +43,7 @@ fn inspect_once(shared: &Shared, system: &mut sysinfo::System) {
         let mut state = relock(&shared.state);
         if !state.presence.is_empty() {
             state.presence.clear();
-            state.revision += 1;
+            state.revision = state.revision.saturating_add(1);
         }
         return;
     }
@@ -75,13 +75,13 @@ pub(super) fn expire_observations(state: &mut State, moment: u64) {
         }
     }
     if changed {
-        state.revision += 1;
+        state.revision = state.revision.saturating_add(1);
     }
 }
 
 fn update_presence(state: &mut State, presence: Vec<agents::TerminalPresence>) {
     if presence_changed(&state.presence, &presence) {
-        state.revision += 1;
+        state.revision = state.revision.saturating_add(1);
     }
     // Hook linking still needs the latest successful inspection timestamp.
     state.presence = presence;
@@ -211,13 +211,13 @@ mod tests {
     /// Renamed copies of this test binary run only
     /// [`presence_fixture_sleeper`], so fixtures verify appearance and
     /// removal without launching paid agents. (Copies of system binaries are
-    /// SIGKILLed by macOS code-signing enforcement.)
+    /// `SIGKILLed` by macOS code-signing enforcement.)
     #[test]
     fn presence_fixture_sleeper() {
         if std::env::var_os("TERMINATOR_FIXTURE_SLEEPER").is_none() {
             return;
         }
-        std::thread::sleep(Duration::from_secs(60));
+        std::thread::sleep(Duration::from_mins(1));
     }
 
     /// Serializes the real-process fixture tests. Each poll does full-system
@@ -229,7 +229,7 @@ mod tests {
     fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
         FIXTURE_SERIAL
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn fixture_refresh_kind() -> sysinfo::ProcessRefreshKind {
@@ -388,12 +388,11 @@ mod tests {
             {
                 return presence;
             }
-            if start.elapsed() >= Duration::from_secs(30) {
-                panic!(
-                    "presence never became {wanted:?} within 30s: {presence:?}; shell children: {}",
-                    fixture.children_debug()
-                );
-            }
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "presence never became {wanted:?} within 30s: {presence:?}; shell children: {}",
+                fixture.children_debug()
+            );
             thread::sleep(Duration::from_millis(50));
         }
     }

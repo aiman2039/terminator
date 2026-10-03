@@ -4,6 +4,8 @@ use std::{os::unix::process::CommandExt, process::Command};
 ///
 /// The `pre_exec` closure only calls `setsid`.
 pub fn detach_session(command: &mut Command) {
+    // SAFETY: `pre_exec` runs in the forked child before exec. The closure only
+    // calls async-signal-safe `setsid` and returns its error.
     unsafe {
         command.pre_exec(|| {
             if libc::setsid() < 0 {
@@ -19,6 +21,8 @@ pub fn detach_session(command: &mut Command) {
 ///
 /// The closure runs after `Command`'s fork and only calls `fork`, `setsid`, and `_exit`.
 pub fn double_fork_setsid(command: &mut Command) {
+    // SAFETY: `pre_exec` runs in the forked child before exec. The closure only
+    // calls async-signal-safe `fork`, `setsid`, and `_exit`.
     unsafe {
         command.pre_exec(|| match libc::fork() {
             -1 => Err(std::io::Error::last_os_error()),

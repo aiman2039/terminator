@@ -1,7 +1,7 @@
 use crate::harness::{
     Harness, artifacts, bin, git, id, output, session, session_present, sessions,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use serde_json::{Value, json};
 use std::{
@@ -34,20 +34,45 @@ pub fn run() -> Result<()> {
         5,
     )?;
     drop(stream);
-    std::os::unix::fs::symlink(a["path"].as_str().unwrap(), h.root.join("alias-a"))?;
+    std::os::unix::fs::symlink(
+        a.get("path")
+            .ok_or_else(|| anyhow!("missing project path"))?
+            .as_str()
+            .unwrap(),
+        h.root.join("alias-a"),
+    )?;
     for (path, expected) in [
-        (PathBuf::from(b["path"].as_str().unwrap()), id(&b)),
+        (
+            PathBuf::from(
+                b.get("path")
+                    .ok_or_else(|| anyhow!("missing project path"))?
+                    .as_str()
+                    .unwrap(),
+            ),
+            id(&b),
+        ),
         (h.root.join("alias-a"), id(&a)),
-        (PathBuf::from(a["path"].as_str().unwrap()), id(&a)),
+        (
+            PathBuf::from(
+                a.get("path")
+                    .ok_or_else(|| anyhow!("missing project path"))?
+                    .as_str()
+                    .unwrap(),
+            ),
+            id(&a),
+        ),
     ] {
         h.rpc(json!({"AddProject":{"path":path}}))?;
         let state = h.state()?;
+        let selected = state.get("selected_project").unwrap_or(&Value::Null);
+        let projects = state
+            .get("projects")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("missing projects"))?;
         ensure!(
-            state["selected_project"] == expected
-                && state["projects"].as_array().unwrap().len() == 2,
-            "Project selection must be idempotent: expected {expected}, selected {}, projects {}",
-            state["selected_project"],
-            state["projects"].as_array().unwrap().len()
+            selected == expected && projects.len() == 2,
+            "Project selection must be idempotent: expected {expected}, selected {selected}, projects {}",
+            projects.len()
         );
         h.assert_pids(std::slice::from_ref(&s))?;
     }
@@ -57,7 +82,9 @@ pub fn run() -> Result<()> {
             "Invalid project accepted"
         );
         ensure!(
-            h.state()?["selected_project"] == id(&a),
+            h.state()?
+                .get("selected_project")
+                .is_some_and(|selected| selected == id(&a)),
             "Failed open changed selection"
         );
     }
@@ -66,11 +93,22 @@ pub fn run() -> Result<()> {
         &mut stream,
         &format!(
             "cd {}; {} cwd \"$PWD\"\n",
-            shell_quote(b["path"].as_str().unwrap()),
+            shell_quote(
+                b.get("path")
+                    .ok_or_else(|| anyhow!("missing project path"))?
+                    .as_str()
+                    .unwrap(),
+            ),
             shell_quote(&bin().join("terminator-hook").to_string_lossy())
         ),
     )?;
-    h.wait(|st| session(st, id(&s))["cwd"] == b["path"], 5)?;
+    h.wait(
+        |st| {
+            b.get("path")
+                .is_some_and(|path| &session(st, id(&s))["cwd"] == path)
+        },
+        5,
+    )?;
     ensure!(
         session(&h.state()?, id(&s))["project_id"] == id(&a),
         "cwd moved project ownership"
@@ -88,12 +126,25 @@ pub fn run() -> Result<()> {
     h.rpc(json!({"Focus":{"session":id(&s)}}))?;
     let st = h.state()?;
     ensure!(
-        st["notifications"][0]["dismissed"] == true && st["agents"][0]["state"] == "waiting_input",
+        st.get("notifications")
+            .and_then(|notes| notes.get(0))
+            .and_then(|note| note.get("dismissed"))
+            .is_some_and(|dismissed| dismissed == &json!(true))
+            && st
+                .get("agents")
+                .and_then(|agents| agents.get(0))
+                .and_then(|agent| agent.get("state"))
+                .is_some_and(|agent_state| agent_state == "waiting_input"),
         "Dismissal changed agent state"
     );
     h.rpc(json!({"Hook":event}))?;
     ensure!(
-        h.state()?["notifications"].as_array().unwrap().len() == 1,
+        h.state()?
+            .get("notifications")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("missing notifications"))?
+            .len()
+            == 1,
         "Duplicate hook"
     );
     if let Ok(mut wrong) = h.connect(
@@ -105,7 +156,10 @@ pub fn run() -> Result<()> {
         ensure!(response.get("Error").is_some(), "Invalid auth accepted");
     }
     ensure!(
-        session(&h.state()?, id(&s))["cwd"] == b["path"],
+        h.state().is_ok_and(|state| {
+            b.get("path")
+                .is_some_and(|path| &session(&state, id(&s))["cwd"] == path)
+        }),
         "Invalid auth mutated cwd"
     );
     let layout = json!({"fixture":"layout-does-not-launch-anything"});
@@ -142,8 +196,18 @@ pub fn run() -> Result<()> {
         sessions(&state).is_empty(),
         "Recovery resurrected a pruned session"
     );
-    ensure!(state["projects"][0]["layout"] == layout, "Layout lost");
-    let hint = json!({"generation":state["generation"],"revision":state["revision"]});
+    ensure!(
+        state
+            .get("projects")
+            .and_then(|projects| projects.get(0))
+            .and_then(|project| project.get("layout"))
+            .is_some_and(|saved| saved == &layout),
+        "Layout lost"
+    );
+    let hint = json!({
+        "generation": state.get("generation").unwrap_or(&Value::Null),
+        "revision": state.get("revision").unwrap_or(&Value::Null)
+    });
     ensure!(
         read_frame::<Value>(&mut h.connect(json!("Snapshot"), None, Some(hint.clone()))?)?
             == "Unchanged",
@@ -184,8 +248,15 @@ pub fn load(duration: Duration, destination: Option<PathBuf>, conditional: bool)
     let projects = (0..5)
         .map(|i| h.project(&format!("load-{i}")))
         .collect::<Result<Vec<_>>>()?;
-    let sessions = (0..50)
-        .map(|i| h.shell(&projects[i % 5]))
+    let sessions = (0usize..50)
+        .map(|i| {
+            let index = i.checked_rem(5).unwrap_or(0);
+            h.shell(
+                projects
+                    .get(index)
+                    .ok_or_else(|| anyhow!("missing load project"))?,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
     let stop = Arc::new(AtomicBool::new(false));
     let bytes = Arc::new(AtomicU64::new(0));
@@ -194,8 +265,8 @@ pub fn load(duration: Duration, destination: Option<PathBuf>, conditional: bool)
         let mut stream = h.attach(s)?;
         h.write(&mut stream,"i=0; while [ $i -lt 10000 ]; do printf 'load %s: sample terminal output\\n' \"$i\"; i=$((i+1)); sleep 0.1; done\n")?;
         if i < 6 {
-            let stop = stop.clone();
-            let bytes = bytes.clone();
+            let stop = Arc::clone(&stop);
+            let bytes = Arc::clone(&bytes);
             stream.set_read_timeout(Some(Duration::from_millis(500)))?;
             drains.push(thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
@@ -231,13 +302,14 @@ pub fn load(duration: Duration, destination: Option<PathBuf>, conditional: bool)
             if conditional { hint.clone() } else { None },
         )?)?;
         times.push(t.elapsed().as_secs_f64() * 1000.0);
-        wire_bytes += serde_json::to_vec(&response)?.len() + 4;
+        wire_bytes =
+            wire_bytes.saturating_add(serde_json::to_vec(&response)?.len().saturating_add(4));
         if let Some(state) = response.get("State") {
             last_state = state.clone();
             hint = Some(json!({"revision":state["revision"],"generation":state["generation"]}));
         } else {
             ensure!(response == "Unchanged", "Invalid load snapshot");
-            unchanged += 1;
+            unchanged = unchanged.saturating_add(1);
         }
         let state = &last_state;
         for entry in fs::read_dir(h.root.join("history"))? {
@@ -248,8 +320,10 @@ pub fn load(duration: Duration, destination: Option<PathBuf>, conditional: bool)
             if let Ok(meta) = entry.metadata() {
                 let value = (meta.len(), meta.modified().ok());
                 match seen.insert(entry.path(), value) {
-                    None => history_creations += 1,
-                    Some(old) if old != value => history_changes += 1,
+                    None => history_creations = history_creations.saturating_add(1),
+                    Some(old) if old != value => {
+                        history_changes = history_changes.saturating_add(1);
+                    }
                     _ => {}
                 }
             }
@@ -281,7 +355,22 @@ pub fn load(duration: Duration, destination: Option<PathBuf>, conditional: bool)
         let _ = task.join();
     }
     times.sort_by(f64::total_cmp);
-    let report = json!({"duration_seconds":start.elapsed().as_secs_f64(),"conditional":conditional,"snapshot_requests":times.len(),"snapshot_wire_bytes":wire_bytes,"unchanged_responses":unchanged,"snapshot_p50_ms":times[times.len()/2],"history_files_observed":history_creations,"history_metadata_changes_observed":history_changes,"history_activity_scope":"100ms metadata sampling, not syscall counts","sessions":50,"subscribed_streams":6,"gui_rendering_measured":false,"snapshot_p95_ms":times[(times.len()*95/100).min(times.len()-1)],"daemon_peak_rss_kib":rss.iter().max(),"bytes_received":bytes.load(Ordering::Relaxed),"platform":std::env::consts::OS});
+    let sample_count = times.len();
+    let p50_index = sample_count.checked_div(2).unwrap_or(0);
+    let p95_index = sample_count
+        .saturating_mul(95)
+        .checked_div(100)
+        .unwrap_or(0)
+        .min(sample_count.saturating_sub(1));
+    let p50 = times
+        .get(p50_index)
+        .copied()
+        .ok_or_else(|| anyhow!("missing snapshot p50"))?;
+    let p95 = times
+        .get(p95_index)
+        .copied()
+        .ok_or_else(|| anyhow!("missing snapshot p95"))?;
+    let report = json!({"duration_seconds":start.elapsed().as_secs_f64(),"conditional":conditional,"snapshot_requests":sample_count,"snapshot_wire_bytes":wire_bytes,"unchanged_responses":unchanged,"snapshot_p50_ms":p50,"history_files_observed":history_creations,"history_metadata_changes_observed":history_changes,"history_activity_scope":"100ms metadata sampling, not syscall counts","sessions":50,"subscribed_streams":6,"gui_rendering_measured":false,"snapshot_p95_ms":p95,"daemon_peak_rss_kib":rss.iter().max(),"bytes_received":bytes.load(Ordering::Relaxed),"platform":std::env::consts::OS});
     if let Some(path) = destination {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -358,7 +447,13 @@ pub fn command_counts(seconds: u64, destination: Option<PathBuf>) -> Result<()> 
     );
     let project = h.project("command-counts")?;
     git(
-        Path::new(project["path"].as_str().unwrap()),
+        Path::new(
+            project
+                .get("path")
+                .ok_or_else(|| anyhow!("missing project path"))?
+                .as_str()
+                .unwrap(),
+        ),
         &["init", "-q"],
     )?;
     let session = h.shell(&project)?;
@@ -377,7 +472,7 @@ pub fn command_counts(seconds: u64, destination: Option<PathBuf>) -> Result<()> 
             &opts,
             if visible { "visible" } else { "hidden" },
             json!([]),
-            seconds * 1000,
+            seconds.saturating_mul(1000),
             |_| Ok(()),
         )?;
         let commands = fs::read_to_string(&log)?
@@ -409,7 +504,10 @@ pub fn command_counts(seconds: u64, destination: Option<PathBuf>) -> Result<()> 
         json!(
             fs::read_to_string(&log)?
                 .lines()
-                .filter(|l| serde_json::from_str::<Value>(l).is_ok_and(|v| v["program"] == "ps"))
+                .filter(|l| {
+                    serde_json::from_str::<Value>(l)
+                        .is_ok_and(|v| v.get("program").is_some_and(|program| program == "ps"))
+                })
                 .count()
         ),
     );
@@ -429,9 +527,14 @@ pub fn muse(muse: &Path) -> Result<()> {
     let project = h.project("muse-echo")?;
     let s = h.shell(&project)?;
     let mut install = h.command("terminator-hook");
-    install
-        .args(["install", "muse"])
-        .env("TERMINATOR_CONFIG_HOME", project["path"].as_str().unwrap());
+    install.args(["install", "muse"]).env(
+        "TERMINATOR_CONFIG_HOME",
+        project
+            .get("path")
+            .ok_or_else(|| anyhow!("missing project path"))?
+            .as_str()
+            .unwrap(),
+    );
     output(install)?;
     let args = vec![
         muse.to_string_lossy().into_owned(),
@@ -439,7 +542,12 @@ pub fn muse(muse: &Path) -> Result<()> {
         "--provider".into(),
         "echo".into(),
         "--workspace".into(),
-        project["path"].as_str().unwrap().into(),
+        project
+            .get("path")
+            .ok_or_else(|| anyhow!("missing project path"))?
+            .as_str()
+            .unwrap()
+            .into(),
         "--no-session-log".into(),
         "--no-foreign-personal-context".into(),
         "--trust-workspace".into(),
@@ -466,19 +574,30 @@ pub fn muse(muse: &Path) -> Result<()> {
         20,
     )?;
     ensure!(
-        state["agents"].as_array().unwrap().len() == 1,
+        state
+            .get("agents")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("missing agents"))?
+            .len()
+            == 1,
         "Duplicate invocation"
     );
     ensure!(
-        state["notifications"]
-            .as_array()
-            .unwrap()
+        state
+            .get("notifications")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("missing notifications"))?
             .iter()
             .any(|n| n["state"] == "completed"),
         "Missing completion"
     );
     ensure!(
-        state["agents"][0]["resume"]["program"] == "muse",
+        state
+            .get("agents")
+            .and_then(|agents| agents.get(0))
+            .and_then(|agent| agent.get("resume"))
+            .and_then(|resume| resume.get("program"))
+            .is_some_and(|program| program == "muse"),
         "Missing resume"
     );
     println!(
@@ -494,7 +613,13 @@ pub fn controls() -> Result<()> {
     let h = Harness::new()?;
     h.setup()?;
     let project = h.project("worktree-root")?;
-    let repo = PathBuf::from(project["path"].as_str().unwrap());
+    let repo = PathBuf::from(
+        project
+            .get("path")
+            .ok_or_else(|| anyhow!("missing project path"))?
+            .as_str()
+            .unwrap(),
+    );
     git(&repo, &["init", "-q"])?;
     git(&repo, &["config", "user.name", "Fixture"])?;
     git(&repo, &["config", "user.email", "fixture@example.invalid"])?;
@@ -509,15 +634,21 @@ pub fn controls() -> Result<()> {
         .args(["--branch", "fixture-task"]);
     output(command)?;
     let state = h.state()?;
-    let p = state["projects"]
-        .as_array()
-        .unwrap()
+    let p = state
+        .get("projects")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("missing projects"))?
         .iter()
         .find(|p| p["path"] == destination.to_string_lossy().as_ref())
         .context("Worktree project not registered")?
         .clone();
     ensure!(
-        state["worktrees"].as_array().unwrap().len() == 1,
+        state
+            .get("worktrees")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("missing worktrees"))?
+            .len()
+            == 1,
         "Worktree registry missing"
     );
     let s = h.shell(&p)?;
@@ -561,16 +692,34 @@ pub fn controls() -> Result<()> {
     h.write(&mut stream, "printf '\\033]9;OSC fixture\\007'\n")?;
     let state = h.wait(|s| s["terminal_notices"].as_array().unwrap().len() >= 2, 5)?;
     ensure!(
-        state["agents"].as_array().unwrap().is_empty()
-            && state["notifications"].as_array().unwrap().is_empty(),
+        state
+            .get("agents")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("missing agents"))?
+            .is_empty()
+            && state
+                .get("notifications")
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow!("missing notifications"))?
+                .is_empty(),
         "Terminal notices changed agent lifecycle"
     );
-    let notice = state["terminal_notices"][0]["id"].as_str().unwrap();
+    let notice = state
+        .get("terminal_notices")
+        .and_then(|notices| notices.get(0))
+        .and_then(|notice| notice.get("id"))
+        .ok_or_else(|| anyhow!("missing terminal notice"))?
+        .as_str()
+        .unwrap();
     let mut dismiss = h.command("terminator-hook");
     dismiss.args(["ctl", "dismiss-notice", notice]);
     output(dismiss)?;
     ensure!(
-        h.state()?["terminal_notices"][0]["dismissed"] == true,
+        h.state()?
+            .get("terminal_notices")
+            .and_then(|notices| notices.get(0))
+            .and_then(|notice| notice.get("dismissed"))
+            .is_some_and(|dismissed| dismissed == &json!(true)),
         "Notice dismissal failed"
     );
     let stub = h.root.join("gh-fixture");
@@ -581,11 +730,19 @@ pub fn controls() -> Result<()> {
     metadata.env("PATH",format!("{}:{}",stub.display(),std::env::var("PATH").unwrap_or_default())).env("TERMINATOR_FIXTURE_GH_JSON",json!({"number":7,"title":"Fixture PR","url":"https://github.com/example/fixture/pull/7","state":"OPEN"}).to_string()).arg("--pr");
     let metadata: Value = serde_json::from_slice(&output(metadata)?)?;
     ensure!(
-        metadata["branch"] == "fixture-task" && metadata["worktree"] == true,
+        metadata
+            .get("branch")
+            .is_some_and(|branch| branch == "fixture-task")
+            && metadata
+                .get("worktree")
+                .is_some_and(|worktree| worktree == &json!(true)),
         "Worktree metadata incorrect: {metadata}"
     );
     ensure!(
-        metadata["pull_request"]["number"] == 7,
+        metadata
+            .get("pull_request")
+            .and_then(|pull_request| pull_request.get("number"))
+            .is_some_and(|number| number == &json!(7)),
         "PR metadata fixture failed: {metadata}"
     );
     drop(stream);
@@ -618,7 +775,11 @@ pub fn controls() -> Result<()> {
         5,
     )?;
     ensure!(
-        session(&h.state()?, id(&outside))["cwd"] == project["path"],
+        h.state().is_ok_and(|state| {
+            project
+                .get("path")
+                .is_some_and(|path| &session(&state, id(&outside))["cwd"] == path)
+        }),
         "Fixture unexpectedly reported cwd"
     );
     let error = h
@@ -629,7 +790,12 @@ pub fn controls() -> Result<()> {
         "Wrong cwd refusal: {error:#}"
     );
     ensure!(
-        destination.join("file").is_file() && h.state()?["worktrees"][0]["removed"] == false,
+        destination.join("file").is_file()
+            && h.state()?
+                .get("worktrees")
+                .and_then(|worktrees| worktrees.get(0))
+                .and_then(|worktree| worktree.get("removed"))
+                .is_some_and(|removed| removed == &json!(false)),
         "Refusal changed checkout or registry"
     );
     h.write(
@@ -667,7 +833,11 @@ pub fn controls() -> Result<()> {
     )
     .with_context(|| format!("Child cleanup history: {:?}", h.history(id(&outside))))?;
     h.assert_pids(std::slice::from_ref(&outside))?;
-    let recorded = h.rpc(json!({"Create":{"project":id(&project),"cwd":alias,"file":null,"line":null,"editor":false}}))?["Created"].clone();
+    let recorded = h
+        .rpc(json!({"Create":{"project":id(&project),"cwd":alias,"file":null,"line":null,"editor":false}}))?
+        .get("Created")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing Created"))?;
     ensure!(
         h.rpc(json!({"WorktreeRemove":{"project":id(&p)}})).is_err(),
         "Removed checkout used by another project's recorded cwd"
@@ -713,7 +883,11 @@ pub fn controls() -> Result<()> {
     );
     let state = h.state()?;
     ensure!(
-        state["worktrees"][0]["removed"] == false,
+        state
+            .get("worktrees")
+            .and_then(|worktrees| worktrees.get(0))
+            .and_then(|worktree| worktree.get("removed"))
+            .is_some_and(|removed| removed == &json!(false)),
         "Refusal marked checkout removed"
     );
     ensure!(
@@ -729,7 +903,12 @@ pub fn controls() -> Result<()> {
     output(remove)?;
     h.assert_pids(std::slice::from_ref(&outside))?;
     ensure!(
-        !destination.exists() && h.state()?["worktrees"][0]["removed"] == true,
+        !destination.exists()
+            && h.state()?
+                .get("worktrees")
+                .and_then(|worktrees| worktrees.get(0))
+                .and_then(|worktree| worktree.get("removed"))
+                .is_some_and(|removed| removed == &json!(true)),
         "Worktree removal not recorded"
     );
     ensure!(
@@ -752,7 +931,13 @@ pub fn hook_controls() -> Result<()> {
     h.setup()?;
     let project = h.project("cli-controls")?;
     git(
-        Path::new(project["path"].as_str().unwrap()),
+        Path::new(
+            project
+                .get("path")
+                .ok_or_else(|| anyhow!("missing project path"))?
+                .as_str()
+                .unwrap(),
+        ),
         &["init", "-q"],
     )?;
 
@@ -764,7 +949,13 @@ pub fn hook_controls() -> Result<()> {
 
     let listed: Value = serde_json::from_slice(&ctl(&["list"])?)?;
     ensure!(
-        listed["generation"].is_string() && listed["projects"].as_array().unwrap().len() == 1,
+        listed.get("generation").is_some_and(Value::is_string)
+            && listed
+                .get("projects")
+                .and_then(Value::as_array)
+                .ok_or_else(|| anyhow!("missing projects"))?
+                .len()
+                == 1,
         "ctl list inventory incorrect: {listed}"
     );
 
@@ -773,14 +964,23 @@ pub fn hook_controls() -> Result<()> {
     let added: Value =
         serde_json::from_slice(&ctl(&["add-project", extra.to_str().unwrap_or_default()])?)?;
     ensure!(
-        added["path"] == extra.to_string_lossy().as_ref(),
+        added
+            .get("path")
+            .is_some_and(|path| path == extra.to_string_lossy().as_ref()),
         "ctl add-project returned the wrong project: {added}"
     );
 
     let created: Value = serde_json::from_slice(&ctl(&["create", id(&project), "--background"])?)?;
-    let sid = created["id"].as_str().context("ctl create ID")?.to_string();
+    let sid = created
+        .get("id")
+        .and_then(Value::as_str)
+        .context("ctl create ID")?
+        .to_string();
     ensure!(
-        created["kind"] == "shell" && created["lifecycle"] == "running",
+        created.get("kind").is_some_and(|kind| kind == "shell")
+            && created
+                .get("lifecycle")
+                .is_some_and(|lifecycle| lifecycle == "running"),
         "ctl create --background did not start a shell: {created}"
     );
 

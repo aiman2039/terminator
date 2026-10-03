@@ -1,5 +1,7 @@
 //! Repository automation in Rust. No Python interpreter or downloaded test runner.
 #![forbid(unsafe_code)]
+// The harness fails the process on a broken fixture. That is an assertion, not a library error.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 mod async_boundary;
 mod browser_fixture;
 mod harness;
@@ -255,11 +257,13 @@ fn main() -> Result<()> {
             let b: serde_json::Value = serde_json::from_slice(&std::fs::read(after)?)?;
             let mut comparison = serde_json::Map::new();
             for key in ["snapshot_p95_ms", "daemon_peak_rss_kib", "bytes_received"] {
-                let old = a[key]
-                    .as_f64()
+                let old = a
+                    .get(key)
+                    .and_then(serde_json::Value::as_f64)
                     .with_context(|| format!("Missing baseline metric {key}"))?;
-                let new = b[key]
-                    .as_f64()
+                let new = b
+                    .get(key)
+                    .and_then(serde_json::Value::as_f64)
                     .with_context(|| format!("Missing current metric {key}"))?;
                 comparison.insert(key.into(),serde_json::json!({"before":old,"after":new,"ratio":if old==0.0 {None}else{Some(new/old)}}));
             }

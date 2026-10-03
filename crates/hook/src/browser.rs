@@ -54,7 +54,7 @@ fn endpoint(value: &str) -> Result<(url::Url, SocketAddr)> {
     );
     let host = url.host_str().context("CDP host missing")?;
     let ip: IpAddr = if host == "localhost" {
-        "127.0.0.1".parse().unwrap()
+        IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
     } else {
         host.trim_matches(['[', ']'])
             .parse()
@@ -90,29 +90,29 @@ impl Client {
         Ok(Self {
             socket,
             sequence: 0,
-            events: Default::default(),
+            events: std::collections::VecDeque::default(),
         })
     }
     fn call(&mut self, method: &str, params: Value) -> Result<Value> {
-        self.sequence += 1;
+        self.sequence = self.sequence.saturating_add(1);
         let id = self.sequence;
         self.socket.send(Message::Text(
             json!({"id":id,"method":method,"params":params})
                 .to_string()
                 .into(),
         ))?;
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(5))
+            .unwrap_or_else(Instant::now);
         for _ in 0..512 {
             ensure!(Instant::now() < deadline, "CDP response timed out");
             if let Message::Text(text) = self.socket.read()? {
                 let value: Value = serde_json::from_str(&text)?;
-                if value["id"] == id {
-                    ensure!(
-                        value.get("error").is_none(),
-                        "Browser rejected command: {}",
-                        value["error"]
-                    );
-                    return Ok(value["result"].clone());
+                if value.get("id").is_some_and(|found| *found == id) {
+                    if let Some(error) = value.get("error") {
+                        anyhow::bail!("Browser rejected command: {error}");
+                    }
+                    return Ok(value.get("result").cloned().unwrap_or(Value::Null));
                 }
                 if self.events.len() == 64 {
                     self.events.pop_front();
@@ -126,25 +126,28 @@ impl Client {
         self.call("Page.enable", json!({}))?;
         self.events.clear();
         let result = self.call("Page.navigate", json!({"url":url}))?;
-        ensure!(
-            result.get("errorText").is_none(),
-            "Navigation failed: {}",
-            result["errorText"]
-        );
+        if let Some(error) = result.get("errorText") {
+            anyhow::bail!("Navigation failed: {error}");
+        }
         if result.get("loaderId").is_some() {
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now()
+                .checked_add(Duration::from_secs(10))
+                .unwrap_or_else(Instant::now);
             loop {
-                if self
-                    .events
-                    .iter()
-                    .any(|e| e["method"] == "Page.loadEventFired")
-                {
+                if self.events.iter().any(|event| {
+                    event
+                        .get("method")
+                        .is_some_and(|method| method == "Page.loadEventFired")
+                }) {
                     break;
                 }
                 ensure!(Instant::now() < deadline, "Page load timed out");
                 if let Message::Text(text) = self.socket.read()? {
                     let event: Value = serde_json::from_str(&text)?;
-                    if event["method"] == "Page.loadEventFired" {
+                    if event
+                        .get("method")
+                        .is_some_and(|method| method == "Page.loadEventFired")
+                    {
                         break;
                     }
                 }
@@ -157,27 +160,29 @@ impl Client {
             "Runtime.evaluate",
             json!({"expression":expression,"returnByValue":true,"awaitPromise":true}),
         )?;
-        ensure!(
-            result.get("exceptionDetails").is_none(),
-            "Browser script failed: {}",
-            result["exceptionDetails"]
-        );
-        Ok(result["result"]["value"].clone())
+        if let Some(error) = result.get("exceptionDetails") {
+            anyhow::bail!("Browser script failed: {error}");
+        }
+        Ok(result
+            .get("result")
+            .and_then(|inner| inner.get("value"))
+            .cloned()
+            .unwrap_or(Value::Null))
     }
 }
-fn selector_expression(selector: &str, text: Option<&str>) -> String {
-    let selector = serde_json::to_string(selector).unwrap();
+fn selector_expression(selector: &str, text: Option<&str>) -> Result<String> {
+    let selector = serde_json::to_string(selector)?;
     let action = if let Some(text) = text {
+        let literal = serde_json::to_string(text)?;
         format!(
-            "const v={}; if(e.isContentEditable) e.textContent=v; const p=Object.getPrototypeOf(e); const setter=Object.getOwnPropertyDescriptor(p,'value')?.set; if(setter) setter.call(e,v); else e.value=v; e.dispatchEvent(new Event('input',{{bubbles:true}})); e.dispatchEvent(new Event('change',{{bubbles:true}}));",
-            serde_json::to_string(text).unwrap()
+            "const v={literal}; if(e.isContentEditable) e.textContent=v; const p=Object.getPrototypeOf(e); const setter=Object.getOwnPropertyDescriptor(p,'value')?.set; if(setter) setter.call(e,v); else e.value=v; e.dispatchEvent(new Event('input',{{bubbles:true}})); e.dispatchEvent(new Event('change',{{bubbles:true}}));"
         )
     } else {
         "e.click();".into()
     };
-    format!(
+    Ok(format!(
         "(()=>{{const e=document.querySelector({selector});if(!e)throw new Error('Element not found');{action}return true;}})()"
-    )
+    ))
 }
 pub fn run(command: BrowserCommand) -> Result<()> {
     let value=match command {
@@ -186,12 +191,12 @@ pub fn run(command: BrowserCommand) -> Result<()> {
         BrowserCommand::Snapshot {endpoint}=>Client::connect(&endpoint)?.evaluate("({url:location.href,title:document.title,html:document.documentElement.outerHTML,styles:[...document.styleSheets].slice(0,64).map(s=>{try{return {href:s.href,text:[...s.cssRules].map(r=>r.cssText).join('\\n').slice(0,65536)}}catch{return {href:s.href,text:null}}})})".into())?,
         BrowserCommand::Screenshot {endpoint,output}=>{
             let response=Client::connect(&endpoint)?.call("Page.captureScreenshot",json!({"format":"png","captureBeyondViewport":false}))?;
-            let bytes=B64.decode(response["data"].as_str().context("Screenshot missing")?)?;
+            let bytes=B64.decode(response.get("data").and_then(Value::as_str).context("Screenshot missing")?)?;
             if let Some(parent)=output.parent().filter(|p|!p.as_os_str().is_empty()) {std::fs::create_dir_all(parent)?;}
             std::fs::write(&output,bytes)?;json!({"screenshot":output})
         }
-        BrowserCommand::Click {endpoint,selector}=>Client::connect(&endpoint)?.evaluate(selector_expression(&selector,None))?,
-        BrowserCommand::Fill {endpoint,selector,text}=>Client::connect(&endpoint)?.evaluate(selector_expression(&selector,Some(&text)))?,
+        BrowserCommand::Click {endpoint,selector}=>Client::connect(&endpoint)?.evaluate(selector_expression(&selector,None)?)?,
+        BrowserCommand::Fill {endpoint,selector,text}=>Client::connect(&endpoint)?.evaluate(selector_expression(&selector,Some(&text))?)?,
         BrowserCommand::Evaluate {endpoint,expression}=>Client::connect(&endpoint)?.evaluate(expression)?,
     };
     println!("{}", serde_json::to_string_pretty(&value)?);
@@ -204,7 +209,7 @@ mod tests {
     fn selectors_and_values_are_serialized_as_literals() {
         let selector = "input[data-name=\"a'b\"]";
         let value = "';window.bad=true;//";
-        let expression = selector_expression(selector, Some(value));
+        let expression = selector_expression(selector, Some(value)).unwrap();
         assert!(expression.contains(&serde_json::to_string(selector).unwrap()));
         assert!(expression.contains(&serde_json::to_string(value).unwrap()));
     }

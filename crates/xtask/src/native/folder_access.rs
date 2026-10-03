@@ -12,7 +12,12 @@ pub fn run(o: &Options) -> Result<()> {
     let h = Harness::new()?;
     h.setup()?;
     let project = h.project("folder-recovery")?;
-    let path = PathBuf::from(project["path"].as_str().unwrap());
+    let path = PathBuf::from(
+        project
+            .get("path")
+            .and_then(super::Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing project path"))?,
+    );
     fs::write(path.join("retained.rs"), "// Public fixture\n")?;
     let shell = h.shell(&project)?;
     h.layout(&project, std::slice::from_ref(&shell))?;
@@ -24,7 +29,9 @@ pub fn run(o: &Options) -> Result<()> {
         json!([{"at_ms":5500,"target":"directory-retry"}]),
         7000,
         |_| {
-            let deadline = std::time::Instant::now() + Duration::from_secs(4);
+            let deadline = std::time::Instant::now()
+                .checked_add(Duration::from_secs(4))
+                .ok_or_else(|| anyhow::anyhow!("directory deadline overflow"))?;
             while !fs::read_to_string(h.root.join("recovered.log"))
                 .unwrap_or_default()
                 .contains("Directory refresh succeeded: entries=1")

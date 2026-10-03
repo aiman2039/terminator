@@ -58,7 +58,7 @@ pub struct VisibleProjects<'a> {
     pub terminal_notices: &'a [TerminalNotice],
 }
 
-pub fn sort_visible_projects<'a>(input: VisibleProjects<'a>) -> Vec<&'a Project> {
+pub fn sort_visible_projects(input: VisibleProjects<'_>) -> Vec<&Project> {
     let VisibleProjects {
         projects,
         hidden,
@@ -278,7 +278,7 @@ pub fn sort_history(input: HistoryInput<'_>) -> Vec<HistoryGroup> {
                 .then_with(|| name_order(&left.project, &right.project))
         }),
         HistorySort::NameAsc => {
-            groups.sort_by(|left, right| name_order(&left.project, &right.project))
+            groups.sort_by(|left, right| name_order(&left.project, &right.project));
         }
         HistorySort::NameDesc => {
             groups.sort_by(|left, right| name_order(&right.project, &left.project));
@@ -755,8 +755,9 @@ impl UiPreferences {
             .playlists
             .iter()
             .all(|playlist| playlist.name != self.selected_playlist)
+            && let Some(playlist) = self.playlists.first()
         {
-            self.selected_playlist = self.playlists[0].name.clone();
+            self.selected_playlist.clone_from(&playlist.name);
         }
     }
 

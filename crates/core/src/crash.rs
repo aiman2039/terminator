@@ -239,7 +239,7 @@ fn prune_old(dir: &Path) {
             .and_then(|meta| meta.modified().ok())
             .unwrap_or(SystemTime::UNIX_EPOCH)
     });
-    let drop = files.len() - KEEP;
+    let drop = files.len().saturating_sub(KEEP);
     for entry in files.into_iter().take(drop) {
         let _ = fs::remove_file(entry.path());
     }

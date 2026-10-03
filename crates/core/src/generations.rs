@@ -24,7 +24,9 @@ pub fn build_identity(bin: &Path) -> Result<String> {
             if count == 0 {
                 break;
             }
-            hash.write(&bytes[..count]);
+            if let Some(chunk) = bytes.get(..count) {
+                hash.write(chunk);
+            }
         }
     }
     Ok(format!("{:016x}", hash.finish()))
@@ -157,7 +159,7 @@ impl Catalog {
             fs::create_dir_all(archive_paths.history_dir())?;
             fs::set_permissions(&data, fs::Permissions::from_mode(0o700))?;
             let mut archive = legacy.clone();
-            archive.generation = owner.clone();
+            archive.generation.clone_from(&owner);
             archive.sessions.retain(|s| s.generation == owner);
             let ids: BTreeSet<_> = archive.sessions.iter().map(|s| s.id.clone()).collect();
             archive.agents.retain(|a| ids.contains(&a.session_id));
@@ -596,7 +598,7 @@ pub fn recover_exited(root: &Paths, owner: &Generation) -> Result<bool> {
             agent.state = AgentState::Unknown;
         }
     }
-    state.revision += 1;
+    state.revision = state.revision.saturating_add(1);
     let conn = Connection::open(owner.data.join("state.sqlite3"))?;
     conn.execute(
         "UPDATE app_state SET json=?1 WHERE id=1",
@@ -639,8 +641,10 @@ pub fn prune_retired(root: &Paths, keep: usize) -> Result<usize> {
     if retired.len() <= keep {
         return Ok(0);
     }
-    let doomed: Vec<Generation> = retired.drain(..retired.len() - keep).collect();
-    let mut removed = 0;
+    let doomed: Vec<Generation> = retired
+        .drain(..retired.len().saturating_sub(keep))
+        .collect();
+    let mut removed: usize = 0;
     for owner in doomed {
         if owner.data == root.data {
             continue;
@@ -658,7 +662,7 @@ pub fn prune_retired(root: &Paths, keep: usize) -> Result<usize> {
         if owner.runtime != root.runtime {
             let _ = fs::remove_dir_all(&owner.runtime);
         }
-        removed += 1;
+        removed = removed.saturating_add(1);
     }
     Ok(removed)
 }
@@ -904,7 +908,7 @@ mod tests {
         let id = id();
         let g = Generation {
             data: paths.data.join("generations").join(&id),
-            runtime: paths.runtime.join(&id[..8]),
+            runtime: paths.runtime.join(id.get(..8).unwrap_or(&id)),
             id,
             version: "1.0.0".into(),
             build: "fixture".into(),

@@ -60,10 +60,10 @@ pub fn take_image_paste(
     if !cfg!(target_os = "macos") && !(modifiers.command && modifiers.shift) {
         return 0;
     }
-    let mut count = 0;
+    let mut count: usize = 0;
     events.retain(|event| {
         if matches!(event, eframe::egui::Event::Paste(text) if text.is_empty()) {
-            count += 1;
+            count = count.saturating_add(1);
             false
         } else {
             true

@@ -112,10 +112,13 @@ pub fn install_at(
         };
         ensure!(doc.is_object(), "Expected config object");
         if doc.get("hooks").is_none() {
-            doc["hooks"] = json!({});
+            doc.as_object_mut()
+                .context("Expected config object")?
+                .insert("hooks".to_owned(), json!({}));
         }
-        let hooks = doc["hooks"]
-            .as_object_mut()
+        let hooks = doc
+            .get_mut("hooks")
+            .and_then(Value::as_object_mut)
             .context("hooks is not an object")?;
         for groups in hooks.values_mut() {
             clean_json_groups(groups)?;
@@ -189,15 +192,22 @@ fn sync_muse_settings(home: &Path, command: &str, remove: bool) -> Result<()> {
     };
     ensure!(doc.is_object(), "Muse settings must be an object");
     match doc.get("schema_version") {
-        None => doc["schema_version"] = json!(1),
+        None => {
+            doc.as_object_mut()
+                .context("Muse settings must be an object")?
+                .insert("schema_version".to_owned(), json!(1));
+        }
         Some(version) if version.as_u64() == Some(1) => {}
         Some(_) => bail!("Muse settings schema is not version 1; left untouched"),
     }
     if doc.get("hooks").is_none() {
-        doc["hooks"] = json!({});
+        doc.as_object_mut()
+            .context("Muse settings must be an object")?
+            .insert("hooks".to_owned(), json!({}));
     }
-    let hooks = doc["hooks"]
-        .as_object_mut()
+    let hooks = doc
+        .get_mut("hooks")
+        .and_then(Value::as_object_mut)
         .context("Muse hooks must be an object")?;
     for groups in hooks.values_mut() {
         clean_json_groups(groups)?;
@@ -250,10 +260,11 @@ fn codex_config(before: &str, command: &str, remove: bool) -> Result<String> {
         .parse::<DocumentMut>()
         .context("Invalid Codex TOML; left untouched")?;
     if doc.get("hooks").is_none() {
-        doc["hooks"] = Item::Table(Table::new());
+        doc.insert("hooks", Item::Table(Table::new()));
     }
-    let hooks = doc["hooks"]
-        .as_table_mut()
+    let hooks = doc
+        .get_mut("hooks")
+        .and_then(Item::as_table_mut)
         .context("Codex hooks must be a table")?;
     let events = [
         "SessionStart",
@@ -322,11 +333,15 @@ fn codex_config(before: &str, command: &str, remove: bool) -> Result<String> {
                 arr.push(group);
             } else {
                 if hooks.get(event).is_none() {
-                    hooks[event] = Item::ArrayOfTables(ArrayOfTables::new());
+                    hooks.insert(event, Item::ArrayOfTables(ArrayOfTables::new()));
                 }
                 let mut group = Table::new();
-                group["hooks"] = Item::Value(T::Array(hs));
-                hooks[event].as_array_of_tables_mut().unwrap().push(group);
+                group.insert("hooks", Item::Value(T::Array(hs)));
+                hooks
+                    .get_mut(event)
+                    .and_then(Item::as_array_of_tables_mut)
+                    .context("Unsupported Codex hook format for {event}; left untouched")?
+                    .push(group);
             }
         }
     }

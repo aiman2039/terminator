@@ -178,11 +178,13 @@ fn vis_row(ui: &mut Ui, spectrum: &[f32]) {
     let accent = ui.visuals().selection.stroke.color;
     let bars = spectrum.len().max(1);
     let gap = 2.0;
-    let bar_w = ((rect.width() - 4.0) / bars as f32 - gap).max(1.5);
+    let bars_f = f32::from(u16::try_from(bars).unwrap_or(u16::MAX));
+    let bar_w = ((rect.width() - 4.0) / bars_f - gap).max(1.5);
     for (i, value) in spectrum.iter().enumerate() {
         let wave = value.clamp(0.04, 1.0);
         let h = (rect.height() - 4.0) * wave;
-        let x = rect.min.x + 2.0 + i as f32 * (bar_w + gap);
+        let i_f = f32::from(u16::try_from(i).unwrap_or(u16::MAX));
+        let x = rect.min.x + 2.0 + i_f * (bar_w + gap);
         let bar = Rect::from_min_max(
             pos2(x, rect.max.y - 2.0 - h),
             pos2(x + bar_w, rect.max.y - 2.0),
@@ -273,24 +275,28 @@ fn eq_panel(app: &mut App, ui: &mut Ui) {
     ];
     let height = 88.0;
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
-    let n = labels.len() as f32;
+    let n = f32::from(u16::try_from(labels.len()).unwrap_or(u16::MAX));
     let slot = rect.width() / n;
     let accent = ui.visuals().selection.stroke.color;
     let groove = ui.visuals().extreme_bg_color;
     let muted = ui.visuals().weak_text_color();
     for (i, label) in labels.iter().enumerate() {
-        let x = rect.min.x + i as f32 * slot + slot / 2.0;
+        let i_f = f32::from(u16::try_from(i).unwrap_or(u16::MAX));
+        let x = rect.min.x + i_f * slot + slot / 2.0;
         let groove_rect = Rect::from_center_size(pos2(x, rect.min.y + 36.0), vec2(6.0, 64.0));
         let value = if i == 0 {
             app.player.eq_preamp
         } else {
-            app.player.eq_bands[i - 1]
+            let Some(value) = app.player.eq_bands.get(i.saturating_sub(1)).copied() else {
+                continue;
+            };
+            value
         };
         if let Some(next) = v_slider(ui, groove_rect, &format!("eq-{i}"), value, groove, accent) {
             if i == 0 {
                 app.player.eq_preamp = next;
-            } else {
-                app.player.eq_bands[i - 1] = next;
+            } else if let Some(slot) = app.player.eq_bands.get_mut(i.saturating_sub(1)) {
+                *slot = next;
             }
         }
         ui.painter().text(
@@ -355,7 +361,7 @@ fn playlist_rows(app: &mut App, ui: &mut Ui, rect: Rect, project: &str) {
                 ui.painter().text(
                     pos2(row.min.x + 6.0, row.center().y),
                     egui::Align2::LEFT_CENTER,
-                    format!("{}. {title}", index + 1),
+                    format!("{}. {title}", index.saturating_add(1)),
                     egui::FontId::proportional(13.0),
                     color,
                 );
@@ -870,7 +876,7 @@ mod tests {
     fn format_clock_zero_pads_seconds() {
         assert_eq!(format_clock(Duration::from_secs(0)), "0:00");
         assert_eq!(format_clock(Duration::from_secs(65)), "1:05");
-        assert_eq!(format_clock(Duration::from_secs(3600)), "60:00");
+        assert_eq!(format_clock(Duration::from_hours(1)), "60:00");
     }
 
     #[test]

@@ -348,7 +348,7 @@ fn begin_native_window_gesture(ctx: &egui::Context, command: egui::ViewportComma
     // The window manager grabs pointer input and may consume mouse-up. Clear
     // egui's drag state at the handoff so the next control/edge can be pressed.
     ctx.stop_dragging();
-    ctx.input_mut(|input| input.pointer = Default::default());
+    ctx.input_mut(|input| input.pointer = egui::PointerState::default());
 }
 fn window_resize_edges(ui: &mut egui::Ui) {
     use egui::{CursorIcon as C, ResizeDirection as D};
@@ -362,59 +362,59 @@ fn window_resize_edges(ui: &mut egui::Ui) {
     let corner = 8.0;
     let regions = [
         (
-            egui::Rect::from_min_max(r.min, r.min + egui::vec2(corner, corner)),
+            egui::Rect::from_min_max(r.min, egui::pos2(r.min.x + corner, r.min.y + corner)),
             D::NorthWest,
             C::ResizeNwSe,
         ),
         (
             egui::Rect::from_min_max(
-                r.right_top() - egui::vec2(corner, 0.0),
-                r.right_top() + egui::vec2(0.0, corner),
+                egui::pos2(r.right() - corner, r.top()),
+                egui::pos2(r.right(), r.top() + corner),
             ),
             D::NorthEast,
             C::ResizeNeSw,
         ),
         (
             egui::Rect::from_min_max(
-                r.left_bottom() - egui::vec2(0.0, corner),
-                r.left_bottom() + egui::vec2(corner, 0.0),
+                egui::pos2(r.left(), r.bottom() - corner),
+                egui::pos2(r.left() + corner, r.bottom()),
             ),
             D::SouthWest,
             C::ResizeNeSw,
         ),
         (
-            egui::Rect::from_min_max(r.max - egui::vec2(corner, corner), r.max),
+            egui::Rect::from_min_max(egui::pos2(r.right() - corner, r.bottom() - corner), r.max),
             D::SouthEast,
             C::ResizeNwSe,
         ),
         (
             egui::Rect::from_min_max(
-                r.min + egui::vec2(corner, 0.0),
-                r.right_top() + egui::vec2(-corner, edge),
+                egui::pos2(r.left() + corner, r.top()),
+                egui::pos2(r.right() - corner, r.top() + edge),
             ),
             D::North,
             C::ResizeVertical,
         ),
         (
             egui::Rect::from_min_max(
-                r.left_bottom() + egui::vec2(corner, -edge),
-                r.max - egui::vec2(corner, 0.0),
+                egui::pos2(r.left() + corner, r.bottom() - edge),
+                egui::pos2(r.right() - corner, r.bottom()),
             ),
             D::South,
             C::ResizeVertical,
         ),
         (
             egui::Rect::from_min_max(
-                r.min + egui::vec2(0.0, corner),
-                r.left_bottom() + egui::vec2(edge, -corner),
+                egui::pos2(r.left(), r.top() + corner),
+                egui::pos2(r.left() + edge, r.bottom() - corner),
             ),
             D::West,
             C::ResizeHorizontal,
         ),
         (
             egui::Rect::from_min_max(
-                r.right_top() + egui::vec2(-edge, corner),
-                r.max - egui::vec2(0.0, corner),
+                egui::pos2(r.right() - edge, r.top() + corner),
+                egui::pos2(r.right(), r.bottom() - corner),
             ),
             D::East,
             C::ResizeHorizontal,
@@ -502,7 +502,12 @@ impl TerminalFind {
             self.current = 0;
             return;
         }
-        self.current = (self.current as isize + delta).rem_euclid(n as isize) as usize;
+        self.current = self
+            .current
+            .cast_signed()
+            .saturating_add(delta)
+            .rem_euclid(n.cast_signed())
+            .cast_unsigned();
     }
 }
 
@@ -855,8 +860,12 @@ impl App {
         let preferences = loaded.unwrap_or_default();
         let (tx, updates) = mpsc::channel();
         let (services, service_owner) =
-            gui_services::Services::new(paths.clone(), ctx.clone(), tx.clone())
-                .expect("start GUI services");
+            gui_services::Services::new(paths.clone(), ctx.clone(), tx.clone()).unwrap_or_else(
+                |error| {
+                    eprintln!("start GUI services: {error:#}");
+                    std::process::exit(1);
+                },
+            );
         let markdown = markdown::Previews::with_services(ctx, services.clone());
         let jobs = exit::JobQueue::supervised(services.clone());
         let refresh = refresh::spawn_async(services.clone());
@@ -892,9 +901,9 @@ impl App {
             services: services.clone(),
             service_owner,
             service_completion: None,
-            service_ready: Default::default(),
+            service_ready: std::collections::VecDeque::default(),
             ui_service_peak_ms: 0.0,
-            exit: Default::default(),
+            exit: exit::Exit::default(),
             exit_attempt: 0,
             updater: updater::Updater::new(ctx),
             #[cfg(all(not(test), target_os = "macos"))]
@@ -906,7 +915,7 @@ impl App {
             restart_confirm: false,
             automatic_repair_attempt: None,
             #[cfg(feature = "test-support")]
-            diagnostics: Default::default(),
+            diagnostics: diagnostics::Diagnostics::default(),
             preferences_saved: preferences.clone(),
             preferences,
             preferences_writable,
@@ -1078,9 +1087,9 @@ impl App {
             last_focus: None,
             highlight_session: None,
             highlight_since: Instant::now(),
-            presentations: Default::default(),
-            sidebar_projects: Default::default(),
-            sidebar_cache: Default::default(),
+            presentations: std::cell::RefCell::default(),
+            sidebar_projects: std::cell::RefCell::default(),
+            sidebar_cache: std::cell::RefCell::default(),
             unread_selected: None,
             connected: false,
             control_server: None,
@@ -1134,68 +1143,135 @@ impl App {
                         "resize-se":self.fixture_rect(ctx,"window-resize-3")
                     },
                     "window":ctx.input(|i|serde_json::json!({"inner":i.viewport().inner_rect.map(|r|[r.min.x,r.min.y,r.width(),r.height()]),"outer":i.viewport().outer_rect.map(|r|[r.min.x,r.min.y,r.width(),r.height()]),"maximized":i.viewport().maximized,"minimized":i.viewport().minimized,"gui_ppp":gui_ppp,"native_ppp":i.viewport().native_pixels_per_point}))});
-                snapshot["services"] = self.services.diagnostics();
-                snapshot["services"]["ui_processing_peak_ms"] =
-                    serde_json::json!(self.ui_service_peak_ms);
+                let insert = |value: &mut serde_json::Value, key: &str, next: serde_json::Value| {
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert(key.to_owned(), next);
+                    }
+                };
+                insert(&mut snapshot, "services", self.services.diagnostics());
+                if let Some(services) = snapshot.get_mut("services") {
+                    insert(
+                        services,
+                        "ui_processing_peak_ms",
+                        serde_json::json!(self.ui_service_peak_ms),
+                    );
+                }
                 #[cfg(feature = "test-support")]
                 {
-                    snapshot["updater_available"] = serde_json::json!(self.updater.available());
-                    snapshot["update_menu"] = serde_json::json!(self.updater.menu_installed());
-                    snapshot["installation"] = serde_json::json!({
-                        "connected":self.connected,
-                        "problem":self.installation_problem(),
-                        "repair_pending":self.repair_pending,
-                        "restart_pending":self.restart_pending,
-                        "restart_confirm":self.restart_confirm,
-                        "can_repair":self.connected && can_retire_daemon(&self.state),
-                        "can_restart":self.connected && can_restart_service(&self.state),
-                        "settings_visible":self.settings_open && self.settings_section == SettingsSection::Updates,
-                        "generation":self.state.generation,
-                        "generations":self.state.generations,
-                        "live_count":self.state.sessions.iter().filter(|s| s.lifecycle.live()).count(),
-                        "error":self.error,
-                    });
-                    snapshot["attention"] = serde_json::json!(ctx.data(|data| {
-                        data.get_temp::<(usize, bool)>(egui::Id::new("attention-state"))
-                    }));
-                    snapshot["left_agents"] = serde_json::json!(self.preferences.left_agents);
-                    snapshot["agent_bar_badge"] = serde_json::json!(ctx.data(|data| {
-                        data.get_temp::<String>(egui::Id::new("agent-bar-badge"))
-                    }));
-                    snapshot["markdown"] = self.markdown.diagnostics();
-                    snapshot["markdown_modes"] =
-                        serde_json::to_value(&self.preferences.markdown_modes)?;
-                    snapshot["visible_terminals"] = serde_json::to_value(&self.visible_sessions)?;
-                    snapshot["fixture_actions_completed"] =
-                        serde_json::json!(self.diagnostics.actions_completed());
-                    snapshot["terminal_scroll"] = serde_json::json!(self.backends.iter().map(|(sid, backend)| {
-                        let content = backend.last_content();
-                        let text: String = content.grid.display_iter().map(|cell| cell.c).collect();
-                        let samples: Vec<_> = (1..=160).filter(|n| text.contains(&format!("TSAMPLE{n:03}"))).collect();
-                        let updates: Vec<_> = (1..=100).filter(|n| text.contains(&format!("TUPDATE{n:03}"))).collect();
-                        (sid.clone(), serde_json::json!({"ui_pass":ctx.cumulative_pass_nr(), "window_occluded":ctx.input(|i| i.viewport().occluded), "offset":content.display_offset, "modes":content.terminal_mode.bits(), "focused":self.active_session.as_ref()==Some(sid), "samples":samples, "updates":updates, "rect":self.fixture_rect(ctx,&format!("terminal:{sid}"))}))
-                    }).collect::<HashMap<_,_>>());
-                    snapshot["editor_rect"] =
-                        serde_json::to_value(self.fixture_rect(ctx, "editor-terminal"))?;
-                    snapshot["sidebar_projects"] = serde_json::json!(
-                        self.visible_projects()
-                            .iter()
-                            .map(|p| &p.id)
-                            .collect::<Vec<_>>()
+                    insert(
+                        &mut snapshot,
+                        "updater_available",
+                        serde_json::json!(self.updater.available()),
                     );
-                    snapshot["project_sort"] = serde_json::to_value(self.preferences.project_sort)?;
-                    snapshot["player"] = serde_json::json!({
-                        "chrome":self.fixture_rect(ctx,"player-chrome"),
-                        "project":self.player.project,
-                        "engine":self.player.fixture_diagnostics(),
-                    });
-                    snapshot["markdown_header"] = serde_json::json!({
-                        "title":self.fixture_rect(ctx,"markdown-title"),
-                        "edit":self.fixture_rect(ctx,"markdown-mode:Edit"),
-                        "preview":self.fixture_rect(ctx,"markdown-mode:Preview"),
-                        "split":self.fixture_rect(ctx,"markdown-mode:Split"),
-                        "refresh":self.fixture_rect(ctx,"markdown-refresh")
-                    });
+                    insert(
+                        &mut snapshot,
+                        "update_menu",
+                        serde_json::json!(self.updater.menu_installed()),
+                    );
+                    insert(
+                        &mut snapshot,
+                        "installation",
+                        serde_json::json!({
+                            "connected":self.connected,
+                            "problem":self.installation_problem(),
+                            "repair_pending":self.repair_pending,
+                            "restart_pending":self.restart_pending,
+                            "restart_confirm":self.restart_confirm,
+                            "can_repair":self.connected && can_retire_daemon(&self.state),
+                            "can_restart":self.connected && can_restart_service(&self.state),
+                            "settings_visible":self.settings_open && self.settings_section == SettingsSection::Updates,
+                            "generation":self.state.generation,
+                            "generations":self.state.generations,
+                            "live_count":self.state.sessions.iter().filter(|s| s.lifecycle.live()).count(),
+                            "error":self.error,
+                        }),
+                    );
+                    insert(
+                        &mut snapshot,
+                        "attention",
+                        serde_json::json!(ctx.data(|data| {
+                            data.get_temp::<(usize, bool)>(egui::Id::new("attention-state"))
+                        })),
+                    );
+                    insert(
+                        &mut snapshot,
+                        "left_agents",
+                        serde_json::json!(self.preferences.left_agents),
+                    );
+                    insert(
+                        &mut snapshot,
+                        "agent_bar_badge",
+                        serde_json::json!(ctx.data(|data| {
+                            data.get_temp::<String>(egui::Id::new("agent-bar-badge"))
+                        })),
+                    );
+                    insert(&mut snapshot, "markdown", self.markdown.diagnostics());
+                    insert(
+                        &mut snapshot,
+                        "markdown_modes",
+                        serde_json::to_value(&self.preferences.markdown_modes)?,
+                    );
+                    insert(
+                        &mut snapshot,
+                        "visible_terminals",
+                        serde_json::to_value(&self.visible_sessions)?,
+                    );
+                    insert(
+                        &mut snapshot,
+                        "fixture_actions_completed",
+                        serde_json::json!(self.diagnostics.actions_completed()),
+                    );
+                    insert(
+                        &mut snapshot,
+                        "terminal_scroll",
+                        serde_json::json!(self.backends.iter().map(|(sid, backend)| {
+                            let content = backend.last_content();
+                            let text: String = content.grid.display_iter().map(|cell| cell.c).collect();
+                            let samples: Vec<_> = (1..=160).filter(|n| text.contains(&format!("TSAMPLE{n:03}"))).collect();
+                            let updates: Vec<_> = (1..=100).filter(|n| text.contains(&format!("TUPDATE{n:03}"))).collect();
+                            (sid.clone(), serde_json::json!({"ui_pass":ctx.cumulative_pass_nr(), "window_occluded":ctx.input(|i| i.viewport().occluded), "offset":content.display_offset, "modes":content.terminal_mode.bits(), "focused":self.active_session.as_ref()==Some(sid), "samples":samples, "updates":updates, "rect":self.fixture_rect(ctx,&format!("terminal:{sid}"))}))
+                        }).collect::<HashMap<_,_>>()),
+                    );
+                    insert(
+                        &mut snapshot,
+                        "editor_rect",
+                        serde_json::to_value(self.fixture_rect(ctx, "editor-terminal"))?,
+                    );
+                    insert(
+                        &mut snapshot,
+                        "sidebar_projects",
+                        serde_json::json!(
+                            self.visible_projects()
+                                .iter()
+                                .map(|p| &p.id)
+                                .collect::<Vec<_>>()
+                        ),
+                    );
+                    insert(
+                        &mut snapshot,
+                        "project_sort",
+                        serde_json::to_value(self.preferences.project_sort)?,
+                    );
+                    insert(
+                        &mut snapshot,
+                        "player",
+                        serde_json::json!({
+                            "chrome":self.fixture_rect(ctx,"player-chrome"),
+                            "project":self.player.project,
+                            "engine":self.player.fixture_diagnostics(),
+                        }),
+                    );
+                    insert(
+                        &mut snapshot,
+                        "markdown_header",
+                        serde_json::json!({
+                            "title":self.fixture_rect(ctx,"markdown-title"),
+                            "edit":self.fixture_rect(ctx,"markdown-mode:Edit"),
+                            "preview":self.fixture_rect(ctx,"markdown-mode:Preview"),
+                            "split":self.fixture_rect(ctx,"markdown-mode:Split"),
+                            "refresh":self.fixture_rect(ctx,"markdown-refresh")
+                        }),
+                    );
                 }
                 return Ok(snapshot);
             }
@@ -1308,7 +1384,10 @@ impl App {
             if self.service_ready.is_empty() {
                 self.service_completion.take();
                 if let Some(mut completion) = self.service_owner.supervisor.try_recv() {
-                    match completion.result.take().unwrap() {
+                    let Some(result) = completion.result.take() else {
+                        continue;
+                    };
+                    match result {
                         Ok(updates) => self.service_ready.extend(updates),
                         Err(async_service::Failure::Cancelled) => {
                             let key = &completion.context.resource;
@@ -1403,7 +1482,7 @@ impl App {
                                 Some("Installation repaired. New terminals can be opened.".into());
                         }
                         Err(error) => {
-                            self.error = Some(format!("Could not repair installation: {error}"))
+                            self.error = Some(format!("Could not repair installation: {error}"));
                         }
                     }
                 }
@@ -1531,7 +1610,7 @@ impl App {
                         .images
                         .values()
                         .filter_map(|p| p.texture.as_ref())
-                        .map(|t| t.size()[0] * t.size()[1] * 4)
+                        .map(|t| t.size()[0].saturating_mul(t.size()[1]).saturating_mul(4))
                         .sum();
                     if let Some(preview) = self
                         .images
@@ -1539,13 +1618,14 @@ impl App {
                         .filter(|p| p.generation == generation)
                     {
                         preview.loading = false;
-                        let previous_bytes = preview
-                            .texture
-                            .as_ref()
-                            .map_or(0, |t| t.size()[0] * t.size()[1] * 4);
+                        let previous_bytes = preview.texture.as_ref().map_or(0, |t| {
+                            t.size()[0].saturating_mul(t.size()[1]).saturating_mul(4)
+                        });
                         match result {
                             Ok(image)
-                                if used.saturating_sub(previous_bytes) + image.pixels.len() * 4
+                                if used
+                                    .saturating_sub(previous_bytes)
+                                    .saturating_add(image.pixels.len().saturating_mul(4))
                                     <= 128 * 1024 * 1024 =>
                             {
                                 preview.texture = Some(ctx.load_texture(
@@ -1558,7 +1638,7 @@ impl App {
                                 preview.error = Some(
                                     "Preview memory limit reached; close another image and retry."
                                         .into(),
-                                )
+                                );
                             }
                             Err(error) => preview.error = Some(error),
                         }
@@ -1586,7 +1666,7 @@ impl App {
                     match result {
                         Ok(()) => self.preferences.attention_migrated = true,
                         Err(error) => {
-                            self.error = Some(format!("Attention settings migration: {error}"))
+                            self.error = Some(format!("Attention settings migration: {error}"));
                         }
                     }
                 }
@@ -1919,7 +1999,7 @@ impl App {
                     Ok(workspace_ops::Report::Branches(names)) => self.git_branches = names,
                     Ok(workspace_ops::Report::Log(rows)) => self.git_log = rows,
                     Ok(workspace_ops::Report::Compare(data)) => {
-                        self.git_compare_root = data.root.clone();
+                        self.git_compare_root.clone_from(&data.root);
                         self.git_compare = Some(data);
                     }
                     Err(error) => self.report_status_error(error),
@@ -2188,7 +2268,9 @@ impl App {
                     .as_ref()
                     .is_some_and(|id| dock.tabs.iter().any(|tab| &tab.id == id));
                 if survives {
-                    dock.active = old_group.unwrap();
+                    if let Some(group) = old_group {
+                        dock.active = group;
+                    }
                 } else if let Some(tab) = anchors
                     .iter()
                     .find(|tab| live_tab(tab) && dock.contains(tab))
@@ -2400,7 +2482,7 @@ impl App {
             }
         });
         if next != self.resource_request {
-            self.resource_request = next.clone();
+            self.resource_request.clone_from(&next);
             let _ = self.resource_tx.send(next);
         }
     }
@@ -2565,7 +2647,7 @@ impl App {
 
         if let Some(dock) = self.layouts.get(project) {
             let path = origin
-                .and_then(|tab| dock.find_tab(tab).map(|path| path.node_path()))
+                .and_then(|tab| dock.find_tab(tab).map(egui_dock::TabPath::node_path))
                 .or_else(|| {
                     dock.main_surface()
                         .focused_leaf()
@@ -2917,37 +2999,34 @@ impl App {
         Ok(())
     }
     fn place_gui_tab(&mut self, project: String, tab: Tab, after: After) {
-        match after {
-            After::CreateAt(anchors, direction) => {
-                let previous = self.layouts.get(&project).map(|d| d.active.clone());
-                if let Some(dock) = self.layouts.get_mut(&project) {
-                    if let Some(anchor) = anchors.iter().find(|t| dock.contains(t)) {
-                        dock.activate_containing(anchor);
-                    }
-                    if let Some(path) = anchors.iter().find_map(|t| dock.find_tab(t)) {
-                        dock.set_focused_node_and_surface(path.node_path());
-                    }
+        if let After::CreateAt(anchors, direction) = after {
+            let previous = self.layouts.get(&project).map(|d| d.active.clone());
+            if let Some(dock) = self.layouts.get_mut(&project) {
+                if let Some(anchor) = anchors.iter().find(|t| dock.contains(t)) {
+                    dock.activate_containing(anchor);
                 }
-                let same = previous.as_ref() == self.layouts.get(&project).map(|d| &d.active);
-                self.insert(&project, tab, direction.as_deref());
-                if !same
-                    && let Some(previous) = previous
-                    && let Some(dock) = self.layouts.get_mut(&project)
-                {
-                    dock.active = previous;
-                }
-                if same && self.selected.as_deref() == Some(&project) {
-                    self.active_session = None;
+                if let Some(path) = anchors.iter().find_map(|t| dock.find_tab(t)) {
+                    dock.set_focused_node_and_surface(path.node_path());
                 }
             }
-            _ => {
-                self.layouts
-                    .entry(project.clone())
-                    .or_insert_with(Workspace::empty)
-                    .add(id(), tab);
-                if self.selected.as_deref() == Some(&project) {
-                    self.active_session = None;
-                }
+            let same = previous.as_ref() == self.layouts.get(&project).map(|d| &d.active);
+            self.insert(&project, tab, direction.as_deref());
+            if !same
+                && let Some(previous) = previous
+                && let Some(dock) = self.layouts.get_mut(&project)
+            {
+                dock.active = previous;
+            }
+            if same && self.selected.as_deref() == Some(&project) {
+                self.active_session = None;
+            }
+        } else {
+            self.layouts
+                .entry(project.clone())
+                .or_insert_with(Workspace::empty)
+                .add(id(), tab);
+            if self.selected.as_deref() == Some(&project) {
+                self.active_session = None;
             }
         }
     }
@@ -3164,8 +3243,15 @@ impl App {
             .active_session
             .as_ref()
             .and_then(|active| order.iter().position(|id| id == active))
-            .map_or(0, |index| (index + 1) % order.len());
-        let target = order[next].clone();
+            .map_or(0, |index| {
+                index
+                    .saturating_add(1)
+                    .checked_rem(order.len())
+                    .unwrap_or(0)
+            });
+        let Some(target) = order.get(next).cloned() else {
+            return;
+        };
         self.go_session(&target);
     }
 
@@ -3207,9 +3293,16 @@ impl App {
         let index = nodes
             .iter()
             .position(|node| Some(*node) == current)
-            .map(|index| (index + 1) % nodes.len())
+            .map(|index| {
+                index
+                    .saturating_add(1)
+                    .checked_rem(nodes.len())
+                    .unwrap_or(0)
+            })
             .unwrap_or(0);
-        dock.main_surface_mut().set_focused_node(nodes[index]);
+        if let Some(node) = nodes.get(index) {
+            dock.main_surface_mut().set_focused_node(*node);
+        }
     }
 
     fn select_all_active(&mut self) {
@@ -3768,7 +3861,7 @@ impl App {
         let mut anchors = Vec::new();
         if let Some(dock) = self.preferences.ide_strip_docks.0.get(project) {
             let path = origin
-                .and_then(|tab| dock.find_tab(tab).map(|path| path.node_path()))
+                .and_then(|tab| dock.find_tab(tab).map(egui_dock::TabPath::node_path))
                 .or_else(|| {
                     dock.main_surface()
                         .focused_leaf()
@@ -4601,7 +4694,7 @@ impl App {
                     .filter(|(_, l)| l.to_lowercase().contains(&needle))
                     .take(2000)
                 {
-                    ui.monospace(format!("{}  {}", line + 1, text));
+                    ui.monospace(format!("{}  {}", line.saturating_add(1), text));
                 }
             } else {
                 ui.weak("Loading scrollback…");
@@ -4829,7 +4922,7 @@ impl App {
             .map(|(_, tab)| tab.clone());
         let main_moved = focused != self.last_main_focus;
         if main_moved {
-            self.last_main_focus = focused.clone();
+            self.last_main_focus.clone_from(&focused);
             self.follow_focus_tab(focused);
         }
         let strip_focused = self
@@ -4847,7 +4940,7 @@ impl App {
                     .cloned()
             });
         let strip_moved = strip_focused != self.last_strip_focus;
-        self.last_strip_focus = strip_focused.clone();
+        self.last_strip_focus.clone_from(&strip_focused);
         // Both docks move together when the project changes. Keep the main
         // pane; a later strip-only move can still take focus.
         if strip_moved && !main_moved && self.ide_strip_visible() {
@@ -5077,8 +5170,9 @@ impl App {
                     Some(edge) => {
                         // `move_pane_to_split` focuses a lone pane dropped on
                         // an edge of its own leaf instead of splitting it.
-                        let split = edge.split().expect("edge zone has a split");
-                        dock.move_pane_to_split(&pane, &group, path, split)
+                        edge.split().is_some_and(|split| {
+                            dock.move_pane_to_split(&pane, &group, path, split)
+                        })
                     }
                 };
                 if moved {
@@ -5153,7 +5247,7 @@ impl App {
         }
         // A center swap keeps every split in place and only exchanges two
         // panes: outline the other side and say so.
-        let source = dock.find_tab(pane).map(|path| path.node_path());
+        let source = dock.find_tab(pane).map(egui_dock::TabPath::node_path);
         let mut swapping = false;
         if zone == PaneDropZone::Center
             && let Some(node) = source
@@ -5171,7 +5265,7 @@ impl App {
             );
         }
         ui.painter().text(
-            landing.min + egui::vec2(8.0, 6.0),
+            egui::pos2(landing.min.x + 8.0, landing.min.y + 6.0),
             egui::Align2::LEFT_TOP,
             if swapping {
                 "Swap terminals"
@@ -5282,7 +5376,7 @@ impl RepaintProbe {
 
     /// Count one frame; about once per second render a one-line summary.
     fn sample(&mut self, now: Instant, causes: &[String]) -> Option<String> {
-        self.frames += 1;
+        self.frames = self.frames.saturating_add(1);
         if now.duration_since(self.last) < Duration::from_secs(1) {
             return None;
         }
@@ -5661,7 +5755,7 @@ impl eframe::App for App {
                 directories: self.visible_dirs.clone(),
             });
         if next != self.refresh_request {
-            self.refresh_generation += 1;
+            self.refresh_generation = self.refresh_generation.saturating_add(1);
             let next = next.map(|mut r| {
                 r.generation = self.refresh_generation;
                 r
@@ -5673,7 +5767,7 @@ impl eframe::App for App {
                 self.directory_errors.clear();
             }
             self.context_path = cwd;
-            self.refresh_request = next.clone();
+            self.refresh_request.clone_from(&next);
             let _ = self.refresh.send(next);
         }
         if self.last_save.elapsed() > Duration::from_secs(1) {
@@ -6707,7 +6801,7 @@ mod navigation_tests {
                 },
                 |ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        app.app_resource_status(ui)
+                        app.app_resource_status(ui);
                     });
                 },
             );
@@ -6789,7 +6883,7 @@ mod navigation_tests {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed: true,
-                modifiers: Default::default(),
+                modifiers: egui::Modifiers::default(),
             }],
         );
         paint(
@@ -6799,7 +6893,7 @@ mod navigation_tests {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed: false,
-                modifiers: Default::default(),
+                modifiers: egui::Modifiers::default(),
             }],
         );
         assert_eq!(app.preferences.tool, SidebarTool::Info);
@@ -6984,7 +7078,7 @@ mod navigation_tests {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed: true,
-                modifiers: Default::default(),
+                modifiers: egui::Modifiers::default(),
             }],
         );
         paint_header(
@@ -6994,7 +7088,7 @@ mod navigation_tests {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed: false,
-                modifiers: Default::default(),
+                modifiers: egui::Modifiers::default(),
             }],
         );
         // The opening frame is a sizing pass. Read the item after the menu settles.
@@ -7010,7 +7104,7 @@ mod navigation_tests {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed: true,
-                modifiers: Default::default(),
+                modifiers: egui::Modifiers::default(),
             }],
         );
         paint_header(
@@ -7020,7 +7114,7 @@ mod navigation_tests {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed: false,
-                modifiers: Default::default(),
+                modifiers: egui::Modifiers::default(),
             }],
         );
         assert!(app.palette_open);
@@ -7257,7 +7351,7 @@ mod navigation_tests {
         app.open_scrollback_search(&ctx, "live");
         assert!(app.search_open);
         assert_eq!(
-            ctx.memory(|memory| memory.focused()),
+            ctx.memory(eframe::egui::Memory::focused),
             Some(egui::Id::new("scrollback-search"))
         );
     }
@@ -7525,7 +7619,7 @@ mod navigation_tests {
         });
         paint_explorer(&mut app, &ctx, vec![]);
         assert_eq!(
-            ctx.memory(|memory| memory.focused()),
+            ctx.memory(eframe::egui::Memory::focused),
             Some(App::explorer_name_prompt_id())
         );
         paint_explorer(&mut app, &ctx, vec![egui::Event::Text("a.txt".into())]);
@@ -7537,7 +7631,7 @@ mod navigation_tests {
         assert_eq!(prompt_name(&app), Some("a.txt"));
         assert!(!app.name_prompt_focus);
         assert_ne!(
-            ctx.memory(|memory| memory.focused()),
+            ctx.memory(eframe::egui::Memory::focused),
             Some(App::explorer_name_prompt_id())
         );
         paint_explorer(&mut app, &ctx, vec![egui::Event::Text("more".into())]);
@@ -7867,7 +7961,9 @@ mod navigation_tests {
                     as_text: true,
                 },
                 reply,
-                Instant::now() - Duration::from_secs(1),
+                Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .unwrap_or_else(Instant::now),
             ))
             .unwrap();
         app.process_updates(&ctx);
@@ -8324,8 +8420,8 @@ mod navigation_tests {
             git_dirs: vec![],
             branch: "main".into(),
             changes: vec![],
-            decorations: Default::default(),
-            stats: Default::default(),
+            decorations: HashMap::default(),
+            stats: HashMap::default(),
             error: None,
         };
         app.dirs.insert(root.clone(), vec![]);
@@ -8614,6 +8710,42 @@ mod navigation_tests {
         assert!(target("history-sort").is_some());
         assert!(target("history-toggle-all").is_some());
         assert_eq!(app.state.sessions.len(), 4);
+    }
+
+    #[test]
+    fn project_sidebar_does_not_repeat_the_live_session_count() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(280.0, 500.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.projects(ui),
+        );
+        let mut text = Vec::new();
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        walk(shape, out);
+                    }
+                }
+                egui::Shape::Text(painted) => out.push(painted.galley.text().to_owned()),
+                _ => {}
+            }
+        }
+        for clipped in &output.shapes {
+            walk(&clipped.shape, &mut text);
+        }
+        output.textures_delta.clear();
+        assert!(
+            text.iter().all(|line| !line.contains("live sessions")),
+            "{text:?}"
+        );
     }
 
     #[test]
@@ -8944,7 +9076,7 @@ mod navigation_tests {
                         physical_key: None,
                         pressed: true,
                         repeat: false,
-                        modifiers: Default::default(),
+                        modifiers: egui::Modifiers::default(),
                     },
                 ]);
                 assert!(app.rename_session.is_none());
@@ -9008,8 +9140,8 @@ mod navigation_tests {
             git_dirs: vec![],
             branch: "main".into(),
             changes: vec![],
-            decorations: Default::default(),
-            stats: Default::default(),
+            decorations: HashMap::default(),
+            stats: HashMap::default(),
             error: None,
         });
         let (jobs, requests) = mpsc::channel();
@@ -9067,8 +9199,8 @@ mod navigation_tests {
             git_dirs: vec![],
             branch: "main".into(),
             changes: vec![],
-            decorations: Default::default(),
-            stats: Default::default(),
+            decorations: HashMap::default(),
+            stats: HashMap::default(),
             error: None,
         });
         let (jobs, requests) = mpsc::channel();
@@ -9124,7 +9256,9 @@ mod navigation_tests {
         click(&mut app, &ctx);
         click(&mut app, &ctx);
         assert_eq!(creates(), 1);
-        app.file_activation.as_mut().unwrap().at = Instant::now() - Duration::from_secs(120);
+        app.file_activation.as_mut().unwrap().at = Instant::now()
+            .checked_sub(Duration::from_mins(2))
+            .unwrap_or_else(Instant::now);
         click(&mut app, &ctx);
         assert_eq!(creates(), 1);
     }
@@ -9138,8 +9272,8 @@ mod navigation_tests {
             git_dirs: vec![],
             branch: "main".into(),
             changes: vec![],
-            decorations: Default::default(),
-            stats: Default::default(),
+            decorations: HashMap::default(),
+            stats: HashMap::default(),
             error: None,
         });
         app.selected = Some("a".into());
@@ -9177,8 +9311,8 @@ mod navigation_tests {
                 path: "/a/dirty.rs".into(),
                 status: " M".into(),
             }],
-            decorations: Default::default(),
-            stats: Default::default(),
+            decorations: HashMap::default(),
+            stats: HashMap::default(),
             error: None,
         });
         app.selected = Some("a".into());
@@ -9274,7 +9408,7 @@ mod navigation_tests {
                 status: " M".into(),
             }],
             decorations: std::collections::HashMap::from([(path.clone(), 'M')]),
-            stats: Default::default(),
+            stats: HashMap::default(),
             error: None,
         });
         let (jobs, requests) = mpsc::channel();
@@ -9301,7 +9435,7 @@ mod navigation_tests {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed,
-                modifiers: Default::default(),
+                modifiers: egui::Modifiers::default(),
             }]);
         }
         let expected = Tab::browser_file(std::path::absolute(&path).unwrap_or(path));
@@ -9332,8 +9466,8 @@ mod navigation_tests {
             git_dirs: vec![],
             branch: "main".into(),
             changes: vec![],
-            decorations: Default::default(),
-            stats: Default::default(),
+            decorations: HashMap::default(),
+            stats: HashMap::default(),
             error: None,
         });
         for staged in [false, true] {
@@ -9743,7 +9877,7 @@ mod navigation_tests {
                     pos,
                     button: egui::PointerButton::Primary,
                     pressed,
-                    modifiers: Default::default(),
+                    modifiers: egui::Modifiers::default(),
                 }]);
             }
             let Ok(Job::Control(request, After::Workspace(_, _))) = received.try_recv() else {
@@ -10148,8 +10282,8 @@ mod navigation_tests {
             git_dirs: vec![],
             branch: String::new(),
             changes: vec![],
-            decorations: Default::default(),
-            stats: Default::default(),
+            decorations: HashMap::default(),
+            stats: HashMap::default(),
             error: None,
         };
         app.update_tx
@@ -10201,8 +10335,8 @@ mod navigation_tests {
                     git_dirs: vec![],
                     branch: "stale".into(),
                     changes: vec![],
-                    decorations: Default::default(),
-                    stats: Default::default(),
+                    decorations: HashMap::default(),
+                    stats: HashMap::default(),
                     error: None,
                 },
                 vec![],
@@ -10694,6 +10828,8 @@ mod navigation_tests {
         steps: usize,
     ) {
         for step in 1..=steps {
+            // Glide step is a UI coordinate blend; the count can exceed the f32 mantissa.
+            #[allow(clippy::cast_precision_loss)]
             let k = step as f32 / steps as f32;
             combined_frame(
                 app,
@@ -11391,7 +11527,7 @@ mod navigation_tests {
         dock_frame(&mut app, &ctx, vec![press(start, true)]);
         assert!(app.pane_drag.is_none());
         for step in 1..=4 {
-            let k = step as f32 / 4.0;
+            let k = f32::from(i16::try_from(step).unwrap_or(0)) / 4.0;
             dock_frame(
                 &mut app,
                 &ctx,
@@ -11487,7 +11623,7 @@ mod navigation_tests {
         combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
         combined_frame(&mut app, &ctx, vec![press(start, true)]);
         for step in 1..=4 {
-            let k = step as f32 / 4.0;
+            let k = f32::from(i16::try_from(step).unwrap_or(0)) / 4.0;
             combined_frame(
                 &mut app,
                 &ctx,
@@ -11518,7 +11654,11 @@ mod navigation_tests {
         app.migrate_attention();
         assert!(app.attention_requested.is_some());
         assert!(!app.preferences.attention_migrated);
-        app.attention_requested = Some(Instant::now() - Duration::from_secs(6));
+        app.attention_requested = Some(
+            Instant::now()
+                .checked_sub(Duration::from_secs(6))
+                .unwrap_or_else(Instant::now),
+        );
         app.migrate_attention();
         assert!(app.attention_requested.unwrap().elapsed() >= Duration::from_secs(6));
         app.update_tx
@@ -11526,7 +11666,11 @@ mod navigation_tests {
             .unwrap();
         app.process_updates(&ctx);
         assert!(!app.preferences.attention_migrated);
-        app.attention_requested = Some(Instant::now() - Duration::from_secs(6));
+        app.attention_requested = Some(
+            Instant::now()
+                .checked_sub(Duration::from_secs(6))
+                .unwrap_or_else(Instant::now),
+        );
         app.migrate_attention();
         assert!(app.attention_requested.unwrap().elapsed() < Duration::from_secs(1));
         app.update_tx
@@ -11746,7 +11890,12 @@ mod navigation_tests {
         app.preferences.info_show_system = true;
         let system = resource_sample::SystemStats {
             cpu: 29.0,
-            memory_used: (43.9 * 1024.0 * 1024.0 * 1024.0) as u64,
+            memory_used: 439_u64
+                .saturating_mul(1024)
+                .saturating_mul(1024)
+                .saturating_mul(1024)
+                .checked_div(10)
+                .unwrap_or(0),
             memory_total: 128 * 1024 * 1024 * 1024,
             pressure: Some(terminator_sys::MemoryPressure {
                 percent: 10.0,
@@ -12248,8 +12397,7 @@ mod navigation_tests {
                     }
                     assert!(
                         (action_rects[0].center().y - action_rects[2].center().y).abs() < 2.0,
-                        "width {width}: actions should stay one cluster {:?}",
-                        action_rects
+                        "width {width}: actions should stay one cluster {action_rects:?}"
                     );
                     let row = agent_target(&ctx, "agent-row:live-shell").unwrap();
                     assert!(
@@ -12392,7 +12540,12 @@ mod navigation_tests {
             session_memory: Some(357 * 1024 * 1024),
             system: Some(resource_sample::SystemStats {
                 cpu: 14.0,
-                memory_used: (55.5 * 1024.0 * 1024.0 * 1024.0) as u64,
+                memory_used: 555_u64
+                    .saturating_mul(1024)
+                    .saturating_mul(1024)
+                    .saturating_mul(1024)
+                    .checked_div(10)
+                    .unwrap_or(0),
                 memory_total: 128 * 1024 * 1024 * 1024,
                 pressure: Some(terminator_sys::MemoryPressure {
                     percent: 0.0,
@@ -12479,7 +12632,7 @@ mod navigation_tests {
         }];
         assert_eq!(app.waiting_notice_count(), 1);
         update_notice(&mut app, |notice| {
-            notice.state = AgentState::WaitingPermission
+            notice.state = AgentState::WaitingPermission;
         });
         assert_eq!(app.waiting_notice_count(), 1);
         update_notice(&mut app, |notice| notice.dismissed = true);
@@ -12956,7 +13109,7 @@ mod navigation_tests {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed: true,
-                modifiers: Default::default(),
+                modifiers: egui::Modifiers::default(),
             }],
         );
         render_agents(
@@ -12966,7 +13119,7 @@ mod navigation_tests {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed: false,
-                modifiers: Default::default(),
+                modifiers: egui::Modifiers::default(),
             }],
         );
     }

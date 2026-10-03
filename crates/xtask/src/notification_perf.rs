@@ -225,20 +225,23 @@ fn measure(
 
     let daemon_pid = h.daemon.as_ref().map(|p| p.0.id()).unwrap_or(0);
     let daemon_version = h.state().ok().and_then(|state| {
-        state["daemon_version"]
-            .as_str()
-            .or_else(|| state["daemon_build"].as_str())
+        state
+            .get("daemon_version")
+            .and_then(Value::as_str)
+            .or_else(|| state.get("daemon_build").and_then(Value::as_str))
             .map(str::to_owned)
     });
 
-    let total = Duration::from_secs(options.warmup + options.seconds);
+    let total = Duration::from_secs(options.warmup.saturating_add(options.seconds));
     let started = Instant::now();
     let measure_after = Duration::from_secs(options.warmup);
     let mut cpu_start = None::<f64>;
     let mut rss_peak = 0u64;
     let mut ipc = Vec::new();
     let mut notifications_submitted = 0usize;
-    let mut last_replacement = Instant::now() - Duration::from_secs(2);
+    let mut last_replacement = Instant::now()
+        .checked_sub(Duration::from_secs(2))
+        .unwrap_or_else(Instant::now);
     let burst_due = matches!(case, Case::Burst);
     let mut burst_sent = false;
 
@@ -250,14 +253,14 @@ fn measure(
             Case::Unanswered => {
                 if !burst_sent && measuring {
                     h.terminal_notify(&session, "Agent: Waiting", "bench unanswered")?;
-                    notifications_submitted += 1;
+                    notifications_submitted = notifications_submitted.saturating_add(1);
                     burst_sent = true;
                 }
             }
             Case::Replacements => {
                 if measuring && last_replacement.elapsed() >= Duration::from_secs(2) {
                     h.terminal_notify(&session, "Agent: Waiting", "bench replacement")?;
-                    notifications_submitted += 1;
+                    notifications_submitted = notifications_submitted.saturating_add(1);
                     last_replacement = Instant::now();
                 }
             }
@@ -265,7 +268,7 @@ fn measure(
                 if measuring && burst_due && !burst_sent {
                     for _ in 0..options.burst {
                         h.terminal_notify(&session, "Agent: Waiting", "bench burst")?;
-                        notifications_submitted += 1;
+                        notifications_submitted = notifications_submitted.saturating_add(1);
                     }
                     burst_sent = true;
                 }
@@ -322,7 +325,7 @@ fn finite(value: f64) -> Option<f64> {
 /// attributed to the wrong build.
 fn binary_identity(path: &Path) -> (String, u64, Option<u64>) {
     let meta = fs::metadata(path).ok();
-    let len = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let len = meta.as_ref().map(std::fs::Metadata::len).unwrap_or(0);
     let mtime = meta
         .and_then(|m| m.modified().ok())
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -378,8 +381,15 @@ pub fn percentile(sorted: &[f64], p: f64) -> f64 {
     if sorted.is_empty() {
         return f64::NAN;
     }
-    let rank = (p / 100.0 * (sorted.len() as f64 - 1.0)).round() as usize;
-    sorted[rank.min(sorted.len() - 1)]
+    let len = u32::try_from(sorted.len()).unwrap_or(u32::MAX);
+    let rank = (p / 100.0 * (f64::from(len) - 1.0)).round();
+    let rank = if rank.is_finite() && rank > 0.0 {
+        format!("{rank:.0}").parse::<usize>().unwrap_or(usize::MAX)
+    } else {
+        0
+    };
+    let last = sorted.len().saturating_sub(1);
+    sorted.get(rank.min(last)).copied().unwrap_or(f64::NAN)
 }
 
 fn aggregate(runs: &[Run]) -> Value {

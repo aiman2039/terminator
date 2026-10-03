@@ -6,7 +6,11 @@ use super::{
 use terminator_core::{Paths, ui_control};
 
 fn snapshot(h: &Harness, sid: &str) -> Result<Value> {
-    Ok(ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)?["terminal_scroll"][sid].clone())
+    ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)?
+        .get("terminal_scroll")
+        .and_then(|scroll| scroll.get(sid))
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing terminal scroll"))
 }
 fn attach(h: &Harness, session: &Value) -> Result<std::os::unix::net::UnixStream> {
     let state = h.state()?;
@@ -26,13 +30,22 @@ fn markers(text: &str, prefix: &str, count: usize) -> Vec<usize> {
 }
 fn action(h: &Harness, actions: &mut Vec<Value>, value: Value) -> Result<()> {
     let mut value = value;
-    value["capture"] = json!(true);
+    value
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("action is not an object"))?
+        .insert("capture".into(), json!(true));
     actions.push(value);
     terminator_core::atomic_write(&h.root.join("actions.json"), &serde_json::to_vec(actions)?)?;
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now()
+        .checked_add(Duration::from_secs(5))
+        .ok_or_else(|| anyhow::anyhow!("action deadline overflow"))?;
     loop {
         let state = ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)?;
-        if state["fixture_actions_completed"].as_u64() == Some(actions.len() as u64) {
+        if state
+            .get("fixture_actions_completed")
+            .and_then(Value::as_u64)
+            == Some(actions.len() as u64)
+        {
             break;
         }
         ensure!(
@@ -75,9 +88,11 @@ pub fn run(o: &Options) -> Result<()> {
         let h = Harness::new()?;
         h.setup()?;
         h.rpc(json!({"AddProject":{"path":scratch.path()}}))?;
-        let project = h.state()?["projects"]
-            .as_array()
-            .unwrap()
+        let project = h
+            .state()?
+            .get("projects")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("missing projects"))?
             .iter()
             .find(|p| p["path"] == scratch.path().to_string_lossy().as_ref())
             .unwrap()
@@ -88,7 +103,10 @@ pub fn run(o: &Options) -> Result<()> {
         fs::write(h.root.join("actions.json"), "[]")?;
         let mut native = gui(&h, &o.output, &run_label)?;
         h.wait(
-            |_| snapshot(&h, id(&session)).is_ok_and(|s| s["rect"].is_array()),
+            |_| {
+                snapshot(&h, id(&session))
+                    .is_ok_and(|scroll| scroll.get("rect").is_some_and(Value::is_array))
+            },
             15,
         )?;
         thread::sleep(Duration::from_secs(1));
@@ -105,7 +123,9 @@ pub fn run(o: &Options) -> Result<()> {
         )?;
         let preflight_state = snapshot(&h, id(&session))?;
         ensure!(
-            preflight_state["focused"] == false,
+            preflight_state
+                .get("focused")
+                .is_some_and(|focused| focused == &json!(false)),
             "Fixture cannot deliver a focus click before Codex launch: {preflight_state}"
         );
         // Retain action numbering for the same GUI input stream.
@@ -120,7 +140,9 @@ pub fn run(o: &Options) -> Result<()> {
         println!(
             "Live Codex {mode}: started in disposable directory under the already-trusted repository"
         );
-        let deadline = std::time::Instant::now() + Duration::from_mins(3);
+        let deadline = std::time::Instant::now()
+            .checked_add(Duration::from_mins(3))
+            .ok_or_else(|| anyhow::anyhow!("codex deadline overflow"))?;
         while !h.history(id(&session))?.contains("TSAMPLE160") {
             ensure!(
                 std::time::Instant::now() < deadline,
@@ -149,10 +171,13 @@ pub fn run(o: &Options) -> Result<()> {
         }
         let focused = snapshot(&h, id(&session))?;
         ensure!(
-            focused["focused"] == true
-                && focused["offset"].as_u64().unwrap_or(0) > 0
-                && focused["samples"]
-                    .as_array()
+            focused
+                .get("focused")
+                .is_some_and(|focused| focused == &json!(true))
+                && focused.get("offset").and_then(Value::as_u64).unwrap_or(0) > 0
+                && focused
+                    .get("samples")
+                    .and_then(Value::as_array)
                     .is_some_and(|v| v.iter().any(|n| n.as_u64().is_some_and(|n| n < 120))),
             "Focused Codex history is inaccessible: {focused}"
         );
@@ -166,9 +191,12 @@ pub fn run(o: &Options) -> Result<()> {
         }
         let focused_latest = snapshot(&h, id(&session))?;
         ensure!(
-            focused_latest["focused"] == true
-                && focused_latest["samples"]
-                    .as_array()
+            focused_latest
+                .get("focused")
+                .is_some_and(|focused| focused == &json!(true))
+                && focused_latest
+                    .get("samples")
+                    .and_then(Value::as_array)
                     .is_some_and(|v| v.contains(&json!(160))),
             "Focused scrolling did not return to the latest output: {focused_latest}"
         );
@@ -195,12 +223,15 @@ pub fn run(o: &Options) -> Result<()> {
         let earlier = snapshot(&h, id(&session))?;
         fs::write(&evidence_path, serde_json::to_vec_pretty(&observations)?)?;
         ensure!(
-            earlier["focused"] == false,
+            earlier
+                .get("focused")
+                .is_some_and(|focused| focused == &json!(false)),
             "Hover scrolling changed typing focus"
         );
         ensure!(
-            earlier["samples"]
-                .as_array()
+            earlier
+                .get("samples")
+                .and_then(Value::as_array)
                 .is_some_and(|v| v.iter().any(|n| n.as_u64().is_some_and(|n| n < 120))),
             "Earlier live Codex messages were not reached in {mode}: {earlier}"
         );
@@ -213,8 +244,9 @@ pub fn run(o: &Options) -> Result<()> {
         }
         let recent = snapshot(&h, id(&session))?;
         ensure!(
-            recent["samples"]
-                .as_array()
+            recent
+                .get("samples")
+                .and_then(Value::as_array)
                 .is_some_and(|v| v.contains(&json!(160))),
             "Downward scrolling did not reach recent output: {recent}"
         );
@@ -238,7 +270,9 @@ pub fn run(o: &Options) -> Result<()> {
         thread::sleep(Duration::from_millis(500));
         h.write(&mut input, "\r")?;
         println!("Live Codex {mode}: second prompt submitted separately from paste");
-        let deadline = std::time::Instant::now() + Duration::from_mins(2);
+        let deadline = std::time::Instant::now()
+            .checked_add(Duration::from_mins(2))
+            .ok_or_else(|| anyhow::anyhow!("codex deadline overflow"))?;
         loop {
             let text = h.history(id(&session))?;
             if text.contains("TUPDATE001") || text.contains("TUPDATE100") {
@@ -265,7 +299,10 @@ pub fn run(o: &Options) -> Result<()> {
             "Response completed before a live streaming observation"
         );
         ensure!(
-            during["samples"].as_array().is_some_and(|v| !v.is_empty()),
+            during
+                .get("samples")
+                .and_then(Value::as_array)
+                .is_some_and(|samples| !samples.is_empty()),
             "Earlier conversation was not visible during new output"
         );
         observations
@@ -273,7 +310,8 @@ pub fn run(o: &Options) -> Result<()> {
         thread::sleep(Duration::from_secs(4));
         let after = snapshot(&h, id(&session))?;
         ensure!(
-            after["samples"] == during["samples"],
+            after.get("samples").unwrap_or(&Value::Null)
+                == during.get("samples").unwrap_or(&Value::Null),
             "New Codex output moved the retained-history view"
         );
         observations.push(json!({"phase":"after-output-wait","state":after}));
@@ -284,10 +322,13 @@ pub fn run(o: &Options) -> Result<()> {
                 json!({"at_ms":0,"target":target,"scroll":-10.0,"wheel_unit":"line"}),
             )?;
         }
-        let deadline = std::time::Instant::now() + Duration::from_mins(2);
-        while !snapshot(&h, id(&session))?["updates"]
-            .as_array()
-            .is_some_and(|v| v.contains(&json!(100)))
+        let deadline = std::time::Instant::now()
+            .checked_add(Duration::from_mins(2))
+            .ok_or_else(|| anyhow::anyhow!("codex deadline overflow"))?;
+        while !snapshot(&h, id(&session))?
+            .get("updates")
+            .and_then(Value::as_array)
+            .is_some_and(|updates| updates.contains(&json!(100)))
         {
             ensure!(
                 std::time::Instant::now() < deadline,
@@ -307,7 +348,10 @@ pub fn run(o: &Options) -> Result<()> {
         fs::write(h.root.join("actions.json"), "[]")?;
         let mut native = gui(&h, &o.output, &format!("{mode}-reconnect"))?;
         h.wait(
-            |_| snapshot(&h, id(&session)).is_ok_and(|s| s["rect"].is_array()),
+            |_| {
+                snapshot(&h, id(&session))
+                    .is_ok_and(|scroll| scroll.get("rect").is_some_and(Value::is_array))
+            },
             15,
         )?;
         thread::sleep(Duration::from_secs(1));
@@ -324,8 +368,16 @@ pub fn run(o: &Options) -> Result<()> {
             | (1 << 13)
             | (1 << 15);
         ensure!(
-            latest_update["modes"].as_u64().unwrap() & routing_modes
-                == reconnected["modes"].as_u64().unwrap() & routing_modes,
+            latest_update
+                .get("modes")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| anyhow::anyhow!("missing terminal modes"))?
+                & routing_modes
+                == reconnected
+                    .get("modes")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| anyhow::anyhow!("missing terminal modes"))?
+                    & routing_modes,
             "Terminal input modes changed after reconnect: {latest_update} -> {reconnected}"
         );
         observations.push(json!({"phase":"reconnected","state":reconnected}));

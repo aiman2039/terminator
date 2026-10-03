@@ -1,2 +1,5 @@
 # Tests index fixtures on purpose. Production code still warns.
 allow-indexing-slicing-in-tests = true
+# Fixture asserts use unwrap/expect. Production code still warns.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

@@ -18,15 +18,16 @@ fn restart_failure_is_visible(o: &Options) -> Result<()> {
     fs::write(
         h.root.join("restart-result.json"),
         serde_json::to_vec(&json!({
-            "generation":h.state()?["generation"], "error":"Fixture session did not stop"
+            "generation":h.state()?.get("generation").unwrap_or(&Value::Null), "error":"Fixture session did not stop"
         }))?,
     )?;
     capture(&h, o, "restart-failure-visible", json!([]), 2300, |_| {
         h.wait(
             |_| {
                 gui(&h).is_ok_and(|s| {
-                    s["installation"]["error"]
-                        .as_str()
+                    s.get("installation")
+                        .and_then(|installation| installation.get("error"))
+                        .and_then(Value::as_str)
                         .is_some_and(|error| error.contains("Fixture session did not stop"))
                 })
             },
@@ -62,8 +63,16 @@ pub fn run(o: &Options) -> Result<()> {
     let shell = h.shell(&project)?;
     h.layout(&project, std::slice::from_ref(&shell))?;
     let state = h.state()?;
-    let generation = state["generation"].clone();
-    let helper = PathBuf::from(state["attachment_helper_executable"].as_str().unwrap());
+    let generation = state
+        .get("generation")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing generation"))?;
+    let helper = PathBuf::from(
+        state
+            .get("attachment_helper_executable")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing attachment helper"))?,
+    );
     fs::remove_file(helper)?;
     capture(
         &h,
@@ -76,17 +85,32 @@ pub fn run(o: &Options) -> Result<()> {
         2200,
         |_| {
             h.wait(
-                |_| gui(&h).is_ok_and(|s| s["installation"]["settings_visible"] == true),
+                |_| {
+                    gui(&h).is_ok_and(|s| {
+                        s.get("installation")
+                            .and_then(|installation| installation.get("settings_visible"))
+                            .is_some_and(|visible| visible == &json!(true))
+                    })
+                },
                 5,
             )?;
             let ui = gui(&h)?;
             ensure!(
-                ui["installation"]["problem"] == true && ui["installation"]["can_repair"] == false,
+                ui.get("installation").is_some_and(|installation| {
+                    installation
+                        .get("problem")
+                        .is_some_and(|problem| problem == &json!(true))
+                        && installation
+                            .get("can_repair")
+                            .is_some_and(|repair| repair == &json!(false))
+                }),
                 "Recovery must remain disabled with a live session"
             );
             h.assert_pids(std::slice::from_ref(&shell))?;
             ensure!(
-                h.state()?["generation"] == generation,
+                h.state()?
+                    .get("generation")
+                    .is_some_and(|current| current == &generation),
                 "Recovery retired a live daemon"
             );
             Ok(())
@@ -102,20 +126,34 @@ pub fn run(o: &Options) -> Result<()> {
         5500,
         |_| {
             h.wait(
-                |_| gui(&h).is_ok_and(|s| s["installation"]["settings_visible"] == true),
+                |_| {
+                    gui(&h).is_ok_and(|s| {
+                        s.get("installation")
+                            .and_then(|installation| installation.get("settings_visible"))
+                            .is_some_and(|visible| visible == &json!(true))
+                    })
+                },
                 5,
             )?;
             // The user finishes the last session while the recovery screen is open.
             h.rpc(json!({"Stop":{"session":id(&shell)}}))?;
             // Idle migration starts automatically; the repair button can disappear immediately.
             // Daemon RPC is briefly unavailable during the acknowledged idle restart.
-            let deadline = std::time::Instant::now() + Duration::from_secs(8);
+            let deadline = std::time::Instant::now()
+                .checked_add(Duration::from_secs(8))
+                .ok_or_else(|| anyhow::anyhow!("repair deadline overflow"))?;
             loop {
                 if gui(&h).is_ok_and(|s| {
-                    s["installation"]["generation"] != generation
-                        && s["installation"]["repair_pending"] == false
-                        && s["installation"]["problem"] == false
-                        && s["installation"]["error"].is_null()
+                    s.get("installation").is_some_and(|installation| {
+                        installation.get("generation") != Some(&generation)
+                            && installation
+                                .get("repair_pending")
+                                .is_some_and(|pending| pending == &json!(false))
+                            && installation
+                                .get("problem")
+                                .is_some_and(|problem| problem == &json!(false))
+                            && installation.get("error").is_none_or(Value::is_null)
+                    })
                 }) {
                     break;
                 }
@@ -130,7 +168,10 @@ pub fn run(o: &Options) -> Result<()> {
     )?;
     let repaired = h.state()?;
     ensure!(
-        repaired["generation"] != generation && repaired["attachment_helper_available"] == true,
+        repaired.get("generation") != Some(&generation)
+            && repaired
+                .get("attachment_helper_available")
+                .is_some_and(|available| available == &json!(true)),
         "Repair did not install a working private helper"
     );
     ensure!(
@@ -153,7 +194,9 @@ pub fn run(o: &Options) -> Result<()> {
         &terminator_core::Request::Snapshot,
     )?;
     h.rpc(json!("ShutdownIfIdle"))?;
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let deadline = std::time::Instant::now()
+        .checked_add(Duration::from_secs(5))
+        .ok_or_else(|| anyhow::anyhow!("deadline overflow"))?;
     while endpoint.socket().exists() {
         ensure!(
             std::time::Instant::now() < deadline,
@@ -171,8 +214,16 @@ fn restart_cancel(o: &Options) -> Result<()> {
     let shell = h.shell(&project)?;
     h.layout(&project, std::slice::from_ref(&shell))?;
     let state = h.state()?;
-    let generation = state["generation"].clone();
-    let helper = PathBuf::from(state["attachment_helper_executable"].as_str().unwrap());
+    let generation = state
+        .get("generation")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing generation"))?;
+    let helper = PathBuf::from(
+        state
+            .get("attachment_helper_executable")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing attachment helper"))?,
+    );
     fs::remove_file(helper)?;
     capture(
         &h,
@@ -185,20 +236,43 @@ fn restart_cancel(o: &Options) -> Result<()> {
         2200,
         |_| {
             h.wait(
-                |_| gui(&h).is_ok_and(|s| s["installation"]["can_restart"] == true),
+                |_| {
+                    gui(&h).is_ok_and(|s| {
+                        s.get("installation")
+                            .and_then(|installation| installation.get("can_restart"))
+                            .is_some_and(|restart| restart == &json!(true))
+                    })
+                },
                 5,
             )?;
             h.wait(
-                |_| gui(&h).is_ok_and(|s| s["installation"]["restart_confirm"] == true),
+                |_| {
+                    gui(&h).is_ok_and(|s| {
+                        s.get("installation")
+                            .and_then(|installation| installation.get("restart_confirm"))
+                            .is_some_and(|confirm| confirm == &json!(true))
+                    })
+                },
                 5,
             )?;
             h.wait(
-                |_| gui(&h).is_ok_and(|s| s["installation"]["restart_confirm"] == false),
+                |_| {
+                    gui(&h).is_ok_and(|s| {
+                        s.get("installation")
+                            .and_then(|installation| installation.get("restart_confirm"))
+                            .is_some_and(|confirm| confirm == &json!(false))
+                    })
+                },
                 5,
             )?;
             ensure!(
-                gui(&h)?["installation"]["restart_pending"] == false
-                    && h.state()?["generation"] == generation,
+                gui(&h)?
+                    .get("installation")
+                    .and_then(|installation| installation.get("restart_pending"))
+                    .is_some_and(|pending| pending == &json!(false))
+                    && h.state()?
+                        .get("generation")
+                        .is_some_and(|current| current == &generation),
                 "Cancel must not restart the service"
             );
             h.assert_pids(std::slice::from_ref(&shell))?;
@@ -229,14 +303,22 @@ fn restart_relaunch(o: &Options) -> Result<()> {
     h.wait(
         |_| {
             h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
-                .is_ok_and(|r| r["Text"] == "1")
+                .is_ok_and(|status| status.get("Text").is_some_and(|text| text == "1"))
         },
         8,
     )?;
     h.layout(&project, &[shell, editor])?;
     let state = h.state()?;
-    let generation = state["generation"].clone();
-    let helper = PathBuf::from(state["attachment_helper_executable"].as_str().unwrap());
+    let generation = state
+        .get("generation")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing generation"))?;
+    let helper = PathBuf::from(
+        state
+            .get("attachment_helper_executable")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing attachment helper"))?,
+    );
     fs::remove_file(&helper)?;
     let log = fs::File::create(o.output.join("restart-relaunch.log"))?;
     let mut command = h.command("terminator");
@@ -265,14 +347,22 @@ fn restart_relaunch(o: &Options) -> Result<()> {
     command.stdout(log.try_clone()?).stderr(log);
     let mut child = Process(command.spawn()?);
     h.wait(
-        |_| gui(&h).is_ok_and(|s| s["installation"]["can_restart"] == true),
+        |_| {
+            gui(&h).is_ok_and(|s| {
+                s.get("installation")
+                    .and_then(|installation| installation.get("can_restart"))
+                    .is_some_and(|restart| restart == &json!(true))
+            })
+        },
         8,
     )?;
     ensure!(
         wait_child(&mut child.0, Duration::from_secs(20))?.success(),
         "GUI did not close for restart"
     );
-    let deadline = std::time::Instant::now() + Duration::from_secs(40);
+    let deadline = std::time::Instant::now()
+        .checked_add(Duration::from_secs(40))
+        .ok_or_else(|| anyhow::anyhow!("relaunch deadline overflow"))?;
     let mut next = None;
     while next.is_none() {
         ensure!(
@@ -280,12 +370,22 @@ fn restart_relaunch(o: &Options) -> Result<()> {
             "Relaunched GUI did not come back: {}; report: {}; GUI: {:?}",
             fs::read_to_string(h.root.join("restart.log")).unwrap_or_default(),
             fs::read_to_string(h.root.join("restart-result.json")).unwrap_or_default(),
-            gui(&h).map(|snapshot| snapshot["installation"].clone())
+            gui(&h)
+                .map(|snapshot| { snapshot.get("installation").cloned().unwrap_or(Value::Null) })
         );
         if let Ok(snapshot) = gui(&h)
-            && snapshot["installation"]["generation"] != generation
-            && snapshot["installation"]["problem"] == false
-            && snapshot["installation"]["error"].is_null()
+            && snapshot
+                .get("installation")
+                .and_then(|installation| installation.get("generation"))
+                .is_some_and(|current| current != &generation)
+            && snapshot
+                .get("installation")
+                .and_then(|installation| installation.get("problem"))
+                .is_some_and(|problem| problem == &json!(false))
+            && snapshot
+                .get("installation")
+                .and_then(|installation| installation.get("error"))
+                .is_none_or(Value::is_null)
         {
             next = Some(snapshot);
         } else {
@@ -294,7 +394,10 @@ fn restart_relaunch(o: &Options) -> Result<()> {
     }
     let after = h.state()?;
     ensure!(
-        after["generation"] != generation && after["attachment_helper_available"] == true,
+        after.get("generation").unwrap_or(&Value::Null) != &generation
+            && after
+                .get("attachment_helper_available")
+                .is_some_and(|available| available == &json!(true)),
         "Restart did not start this installation's service"
     );
     ensure!(
@@ -346,7 +449,7 @@ fn cleanup_closes_gui(o: &Options, minimized: bool) -> Result<()> {
     h.wait(
         |_| {
             h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
-                .is_ok_and(|r| r["Text"] == "1")
+                .is_ok_and(|status| status.get("Text").is_some_and(|text| text == "1"))
         },
         8,
     )?;
@@ -376,7 +479,14 @@ fn cleanup_closes_gui(o: &Options, minimized: bool) -> Result<()> {
             },
         )?;
         h.wait(
-            |_| gui(&h).is_ok_and(|s| s["window"]["minimized"] == true),
+            |_| {
+                gui(&h).is_ok_and(|snapshot| {
+                    snapshot
+                        .get("window")
+                        .and_then(|window| window.get("minimized"))
+                        .is_some_and(|minimized| minimized == &json!(true))
+                })
+            },
             8,
         )?;
     }
@@ -406,7 +516,11 @@ fn cleanup_closes_gui(o: &Options, minimized: bool) -> Result<()> {
         "GUI cleanup lost or relaunched session records"
     );
     ensure!(
-        !state["projects"][0]["layout"].is_null(),
+        !state
+            .get("projects")
+            .and_then(|projects| projects.get(0))
+            .and_then(|project| project.get("layout"))
+            .is_none_or(Value::is_null),
         "GUI cleanup did not retain its workspace checkpoint"
     );
     fs::write(
@@ -427,7 +541,12 @@ fn manual_recovery(o: &Options) -> Result<()> {
     let mut h = Harness::new()?;
     h.setup()?;
     let state = h.state()?;
-    let helper = PathBuf::from(state["attachment_helper_executable"].as_str().unwrap());
+    let helper = PathBuf::from(
+        state
+            .get("attachment_helper_executable")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing attachment helper"))?,
+    );
     fs::remove_file(helper)?;
     // Reuse the old-service proxy, which omits advertised capabilities.
     let _proxy = reviews::proxy(&h.root)?;
@@ -446,8 +565,11 @@ fn manual_recovery(o: &Options) -> Result<()> {
         |_| {
             h.wait(
                 |_| {
-                    ui_control::rpc(&paths, ui_control::Request::Snapshot)
-                        .is_ok_and(|s| s["installation"]["settings_visible"] == true)
+                    ui_control::rpc(&paths, ui_control::Request::Snapshot).is_ok_and(|s| {
+                        s.get("installation")
+                            .and_then(|installation| installation.get("settings_visible"))
+                            .is_some_and(|visible| visible == &json!(true))
+                    })
                 },
                 5,
             )?;
@@ -456,7 +578,9 @@ fn manual_recovery(o: &Options) -> Result<()> {
     )?;
     let after = h.state()?;
     ensure!(
-        after["generation"] == state["generation"] && sessions(&after).is_empty(),
+        after.get("generation").unwrap_or(&Value::Null)
+            == state.get("generation").unwrap_or(&Value::Null)
+            && sessions(&after).is_empty(),
         "Showing manual recovery must not restart the service or create sessions"
     );
     Ok(())
@@ -475,17 +599,24 @@ fn connection_recovery(o: &Options) -> Result<()> {
         &json!({"version":1,"typography_migrated":true,"attention_migrated":true}),
     )?;
     let wait_connection = |connected: bool| -> Result<()> {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now()
+            .checked_add(Duration::from_secs(5))
+            .ok_or_else(|| anyhow::anyhow!("deadline overflow"))?;
         loop {
-            if gui(&h).is_ok_and(|s| {
-                let status = &s["installation"];
-                status["connected"] == connected
+            if gui(&h).is_ok_and(|snapshot| {
+                let Some(status) = snapshot.get("installation") else {
+                    return false;
+                };
+                status
+                    .get("connected")
+                    .is_some_and(|value| value == &json!(connected))
                     && if connected {
-                        status["error"].is_null()
+                        status.get("error").is_none_or(Value::is_null)
                     } else {
-                        status["error"]
-                            .as_str()
-                            .is_some_and(|e| e.starts_with("Reconnecting:"))
+                        status
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .is_some_and(|error| error.starts_with("Reconnecting:"))
                     }
             }) {
                 return Ok(());
@@ -510,7 +641,10 @@ fn connection_recovery(o: &Options) -> Result<()> {
         wait_connection(true)?;
         let after = h.state()?;
         ensure!(
-            before["generation"] == after["generation"] && before["revision"] == after["revision"],
+            before.get("generation").unwrap_or(&Value::Null)
+                == after.get("generation").unwrap_or(&Value::Null)
+                && before.get("revision").unwrap_or(&Value::Null)
+                    == after.get("revision").unwrap_or(&Value::Null),
             "Reconnection fixture must retain the exact daemon snapshot"
         );
         Ok(())

@@ -1,4 +1,4 @@
-//! Immutable Git snapshots rendered by the pinned, app-owned CodeDiff runtime.
+//! Immutable Git snapshots rendered by the pinned, app-owned `CodeDiff` runtime.
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
 use std::{
@@ -54,7 +54,7 @@ fn runtime(paths: &Paths) -> Result<PathBuf> {
         private_dir(&root)?;
         for (name, bytes) in ASSETS {
             let dest = root.join(name);
-            fs::create_dir_all(dest.parent().unwrap())?;
+            fs::create_dir_all(dest.parent().context("Missing review asset directory")?)?;
             atomic_write(&dest, bytes)?;
         }
         atomic_write(
@@ -123,7 +123,7 @@ pub fn prepare(
             .join(if staged { "INDEX" } else { "WORKTREE" })
             .join(filename);
         for (path, bytes) in [(&old, &left), (&new, &right)] {
-            private_dir(path.parent().unwrap())?;
+            private_dir(path.parent().context("Missing review file directory")?)?;
             atomic_write(path, bytes)?;
         }
         let config = serde_json::json!({"runtime":runtime,"left":old,"right":new, "left_label":if staged { "HEAD" } else { "Index" }, "right_label":if staged { "Index" } else { "Working tree" }});

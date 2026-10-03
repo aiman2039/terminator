@@ -40,7 +40,6 @@ pub(super) struct Index {
     pub live_counts: HashMap<String, usize>,
     pub faces: HashMap<String, (&'static str, AgentState)>,
     pub worktree_states: HashMap<String, (bool, bool)>,
-    pub live: usize,
     pub history_brands: HashMap<(String, String), (&'static str, String)>,
     pub kinds: HashMap<String, Vec<String>>,
     pub pending: Vec<Notification>,
@@ -118,7 +117,7 @@ impl App {
             ),
         };
         if self.sidebar_cache.borrow().stamp.as_ref() == Some(&stamp) {
-            return self.sidebar_cache.borrow().index.clone();
+            return Arc::clone(&self.sidebar_cache.borrow().index);
         }
         let mut index = Index::default();
         let resumable: HashSet<_> = self
@@ -130,12 +129,14 @@ impl App {
             .collect();
         for session in &self.state.sessions {
             let session = Arc::new(session.clone());
-            index.sessions.insert(session.id.clone(), session.clone());
+            index
+                .sessions
+                .insert(session.id.clone(), Arc::clone(&session));
             index
                 .by_project
                 .entry(session.project_id.clone())
                 .or_default()
-                .push(session.clone());
+                .push(Arc::clone(&session));
             if !session.lifecycle.live() {
                 if resumable.contains(session.id.as_str()) {
                     index.resumable.push(session.as_ref().clone());
@@ -155,11 +156,11 @@ impl App {
             if session.kind == SessionKind::Editor {
                 continue;
             }
-            index.live += 1;
-            *index
+            let count = index
                 .live_counts
                 .entry(session.project_id.clone())
-                .or_default() += 1;
+                .or_default();
+            *count = count.saturating_add(1);
             if let Some(brand) = presented.brand_icon {
                 let state = presented.lifecycle.unwrap_or(AgentState::Unknown);
                 let rank = |state| match state {
@@ -199,7 +200,7 @@ impl App {
         let now = moment;
         for notice in &self.state.notifications {
             if !notice.read && super::sidebar_ui::notice_pending(notice, now) {
-                index.unread_count += 1;
+                index.unread_count = index.unread_count.saturating_add(1);
             }
             if !notice.dismissed
                 && !notice.resolved
@@ -281,7 +282,7 @@ impl App {
         let index = Arc::new(index);
         let mut cache = self.sidebar_cache.borrow_mut();
         cache.stamp = Some(stamp);
-        cache.index = index.clone();
+        cache.index = Arc::clone(&index);
         cache.projects = None;
         cache.history = None;
         cache.unread = None;
@@ -297,7 +298,7 @@ impl App {
             && key.filter == self.preferences.project_filter
             && key.activity == self.preferences.project_activity
         {
-            return rows.clone();
+            return Arc::clone(rows);
         }
         let rows: Arc<Vec<Arc<terminator_core::Project>>> = Arc::new(
             preferences::sort_visible_projects(VisibleProjects {
@@ -322,7 +323,7 @@ impl App {
                 filter: self.preferences.project_filter.clone(),
                 activity: self.preferences.project_activity.clone(),
             },
-            rows.clone(),
+            Arc::clone(&rows),
         ));
         rows
     }
@@ -333,7 +334,7 @@ impl App {
             && *sort == self.preferences.history_sort
             && *filter == self.preferences.history_filter
         {
-            return rows.clone();
+            return Arc::clone(rows);
         }
         let rows = Arc::new(preferences::sort_history(HistoryInput {
             projects: self.state.projects.clone(),
@@ -347,7 +348,7 @@ impl App {
         cache.history = Some((
             self.preferences.history_sort,
             self.preferences.history_filter.clone(),
-            rows.clone(),
+            Arc::clone(&rows),
         ));
         rows
     }
@@ -360,7 +361,7 @@ impl App {
             && *old_query == query
             && old_kind == kind
         {
-            return rows.clone();
+            return Arc::clone(rows);
         }
         let mut live: HashMap<String, Vec<Arc<Session>>> = HashMap::new();
         let mut rows = LiveRows::default();
@@ -400,7 +401,9 @@ impl App {
                     continue;
                 }
             }
-            let session = index.sessions[&session.id].clone();
+            let Some(session) = index.sessions.get(&session.id).map(Arc::clone) else {
+                continue;
+            };
             if presented.live {
                 live.entry(session.project_id.clone())
                     .or_default()
@@ -415,7 +418,7 @@ impl App {
             }
         }
         let rows = Arc::new(rows);
-        cache.live_rows = Some((query, kind.clone(), rows.clone()));
+        cache.live_rows = Some((query, kind.clone(), Arc::clone(&rows)));
         rows
     }
     pub(super) fn explorer_rows(&mut self, root: &std::path::Path) -> Arc<Vec<ExplorerRow>> {
@@ -428,7 +431,7 @@ impl App {
             && model.query == self.explorer_query
         {
             self.visible_dirs.extend(model.dirs.iter().cloned());
-            return model.rows.clone();
+            return Arc::clone(&model.rows);
         }
         fn walk(
             app: &App,
@@ -472,7 +475,7 @@ impl App {
                         depth,
                     });
                     if entry.directory && app.expanded_dirs.contains(&entry.path) {
-                        walk(app, &entry.path, depth + 1, query, rows, dirs);
+                        walk(app, &entry.path, depth.saturating_add(1), query, rows, dirs);
                     }
                 }
             }
@@ -490,7 +493,7 @@ impl App {
             expanded: self.expanded_dirs.clone(),
             ignored: self.preferences.show_ignored,
             query: self.explorer_query.clone(),
-            rows: rows.clone(),
+            rows: Arc::clone(&rows),
             dirs,
         });
         rows
@@ -501,7 +504,7 @@ impl App {
         if let Some((selected, rows)) = &cache.unread
             && *selected == self.unread_selected
         {
-            return rows.clone();
+            return Arc::clone(rows);
         }
         let mut notices: Vec<_> = index
             .pending
@@ -511,7 +514,7 @@ impl App {
             .collect();
         notices.sort_by_key(|n| std::cmp::Reverse(n.created));
         let rows = Arc::new(group_notices(notices));
-        cache.unread = Some((self.unread_selected.clone(), rows.clone()));
+        cache.unread = Some((self.unread_selected.clone(), Arc::clone(&rows)));
         rows
     }
 }

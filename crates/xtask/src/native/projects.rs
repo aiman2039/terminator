@@ -8,7 +8,10 @@ fn gui(h: &Harness) -> Result<Value> {
     ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)
 }
 fn wait_sidebar(h: &Harness, ids: &Value) -> Result<()> {
-    h.wait(|_| gui(h).is_ok_and(|s| s["sidebar_projects"] == *ids), 8)?;
+    h.wait(
+        |_| gui(h).is_ok_and(|s| s.get("sidebar_projects").unwrap_or(&Value::Null) == ids),
+        8,
+    )?;
     Ok(())
 }
 fn sort_sidebar(h: &Harness, o: &Options, first: &Value, second: &Value) -> Result<()> {
@@ -29,7 +32,9 @@ fn sort_sidebar(h: &Harness, o: &Options, first: &Value, second: &Value) -> Resu
         |_| wait_sidebar(h, &desc),
     )?;
     ensure!(
-        prefs(h)?["project_sort"] == "name_desc",
+        prefs(h)?
+            .get("project_sort")
+            .is_some_and(|sort| sort == "name_desc"),
         "Name Z → A did not persist"
     );
     capture(h, o, "sorted-name-desc-restart", json!([]), 2200, |_| {
@@ -48,7 +53,9 @@ fn sort_sidebar(h: &Harness, o: &Options, first: &Value, second: &Value) -> Resu
         |_| wait_sidebar(h, &asc),
     )?;
     ensure!(
-        prefs(h)?["project_sort"] == "latest_activity",
+        prefs(h)?
+            .get("project_sort")
+            .is_some_and(|sort| sort == "latest_activity"),
         "Latest activity did not persist"
     );
     capture(h, o, "sorted-latest-restart", json!([]), 2200, |_| {
@@ -63,7 +70,14 @@ pub fn run(o: &Options) -> Result<()> {
     let second = h.project("second-project")?;
     let shell = h.shell(&first)?;
     let other = h.shell(&second)?;
-    let path = PathBuf::from(first["path"].as_str().unwrap()).join("kept.md");
+    let path = PathBuf::from(
+        first
+            .get("path")
+            .ok_or_else(|| anyhow::anyhow!("missing project path"))?
+            .as_str()
+            .unwrap(),
+    )
+    .join("kept.md");
     fs::write(&path, "# Saved project file\n")?;
     let editor = h.editor(&first, &path)?;
     h.wait(
@@ -77,7 +91,7 @@ pub fn run(o: &Options) -> Result<()> {
     h.wait(
         |_| {
             h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))
-                .is_ok_and(|s| s["Text"] == "1")
+                .is_ok_and(|s| s.get("Text").is_some_and(|text| text == "1"))
         },
         5,
     )?;
@@ -107,8 +121,9 @@ pub fn run(o: &Options) -> Result<()> {
             h.wait(
                 |_| {
                     gui(&h).is_ok_and(|s| {
-                        s["sidebar_projects"] == json!([id(&second)])
-                            && s["selected_project"] == second["id"]
+                        s.get("sidebar_projects").unwrap_or(&Value::Null) == &json!([id(&second)])
+                            && s.get("selected_project").unwrap_or(&Value::Null)
+                                == second.get("id").unwrap_or(&Value::Null)
                     })
                 },
                 8,
@@ -117,10 +132,16 @@ pub fn run(o: &Options) -> Result<()> {
         },
     )?;
     ensure!(
-        prefs(&h)?["hidden_projects"]
+        prefs(&h)?
+            .get("hidden_projects")
+            .ok_or_else(|| anyhow::anyhow!("missing hidden_projects"))?
             .as_array()
             .unwrap()
-            .contains(&first["id"]),
+            .contains(
+                first
+                    .get("id")
+                    .ok_or_else(|| anyhow::anyhow!("missing project id"))?,
+            ),
         "Sidebar removal did not persist"
     );
     h.assert_pids(&originals)?;
@@ -129,13 +150,19 @@ pub fn run(o: &Options) -> Result<()> {
         "Removing a project changed its file"
     );
     ensure!(
-        h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))?["Text"] == "1",
+        h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))?
+            .get("Text")
+            .is_some_and(|text| text == "1"),
         "Removing a project discarded unsaved edits"
     );
 
     capture(&h, o, "removed-after-restart", json!([]), 2200, |_| {
         h.wait(
-            |_| gui(&h).is_ok_and(|s| s["sidebar_projects"] == json!([id(&second)])),
+            |_| {
+                gui(&h).is_ok_and(|s| {
+                    s.get("sidebar_projects").unwrap_or(&Value::Null) == &json!([id(&second)])
+                })
+            },
             8,
         )?;
         Ok(())
@@ -153,7 +180,8 @@ pub fn run(o: &Options) -> Result<()> {
             h.wait(
                 |_| {
                     gui(&h).is_ok_and(|s| {
-                        s["sidebar_projects"] == json!([]) && s["selected_project"].is_null()
+                        s.get("sidebar_projects").unwrap_or(&Value::Null) == &json!([])
+                            && s.get("selected_project").is_none_or(Value::is_null)
                     })
                 },
                 8,
@@ -165,7 +193,8 @@ pub fn run(o: &Options) -> Result<()> {
         h.wait(
             |_| {
                 gui(&h).is_ok_and(|s| {
-                    s["sidebar_projects"] == json!([]) && s["selected_project"].is_null()
+                    s.get("sidebar_projects").unwrap_or(&Value::Null) == &json!([])
+                        && s.get("selected_project").is_none_or(Value::is_null)
                 })
             },
             8,
@@ -186,8 +215,9 @@ pub fn run(o: &Options) -> Result<()> {
             h.wait(
                 |_| {
                     gui(&h).is_ok_and(|s| {
-                        s["sidebar_projects"] == json!([id(&first)])
-                            && s["selected_project"] == first["id"]
+                        s.get("sidebar_projects").unwrap_or(&Value::Null) == &json!([id(&first)])
+                            && s.get("selected_project").unwrap_or(&Value::Null)
+                                == first.get("id").unwrap_or(&Value::Null)
                     })
                 },
                 8,
@@ -196,28 +226,52 @@ pub fn run(o: &Options) -> Result<()> {
         },
     )?;
     let state = h.state()?;
+    let projects = state
+        .get("projects")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("missing projects"))?;
     ensure!(
-        state["projects"].as_array().unwrap().len() == 2 && sessions(&state).len() == 3,
+        projects.len() == 2 && sessions(&state).len() == 3,
         "Restoration duplicated or removed project/session records"
     );
-    let restored = state["projects"]
-        .as_array()
-        .unwrap()
+    let restored = projects
         .iter()
-        .find(|p| p["id"] == first["id"])
+        .find(|p| p.get("id").unwrap_or(&Value::Null) == first.get("id").unwrap_or(&Value::Null))
         .unwrap();
     ensure!(
-        restored["layout"]["tabs"].as_array().unwrap().len() == 2,
+        restored
+            .get("layout")
+            .and_then(|layout| layout.get("tabs"))
+            .ok_or_else(|| anyhow::anyhow!("missing layout tabs"))?
+            .as_array()
+            .unwrap()
+            .len()
+            == 2,
         "Project tab layout was lost"
     );
     let ids = session_ids(&restored["layout"]);
     ensure!(
-        ids.contains(&shell["id"].as_str().unwrap().to_owned())
-            && ids.contains(&editor["id"].as_str().unwrap().to_owned()),
+        ids.contains(
+            &shell
+                .get("id")
+                .ok_or_else(|| anyhow::anyhow!("missing shell id"))?
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        ) && ids.contains(
+            &editor
+                .get("id")
+                .ok_or_else(|| anyhow::anyhow!("missing editor id"))?
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        ),
         "Original panes were not restored"
     );
     ensure!(
-        h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))?["Text"] == "1",
+        h.rpc(json!({"EditorStatus":{"session":id(&editor)}}))?
+            .get("Text")
+            .is_some_and(|text| text == "1"),
         "Restoration discarded unsaved edits"
     );
     h.assert_pids(&originals)

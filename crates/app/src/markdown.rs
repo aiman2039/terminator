@@ -57,7 +57,7 @@ impl Source {
     pub fn new(paths: &Paths, session: &Session) -> Self {
         Self {
             session: session.id.clone(),
-            path: session.file.clone().expect("Markdown editor file"),
+            path: session.file.clone().unwrap_or_default(),
             socket: paths.editor_socket(&session.id),
         }
     }
@@ -204,18 +204,24 @@ fn html_to_markdown(chunk: &str) -> String {
     let mut out = String::with_capacity(chunk.len());
     let mut rest = chunk;
     while let Some(start) = rest.find('<') {
-        out.push_str(&rest[..start]);
-        rest = &rest[start..];
+        out.push_str(rest.get(..start).unwrap_or(""));
+        rest = rest.get(start..).unwrap_or("");
         if rest.starts_with("<!--") {
-            rest = rest.find("-->").map(|end| &rest[end + 3..]).unwrap_or("");
+            rest = rest
+                .find("-->")
+                .and_then(|end| end.checked_add(3).and_then(|from| rest.get(from..)))
+                .unwrap_or("");
             continue;
         }
         let Some(close) = rest.find('>') else {
             out.push_str(rest);
             break;
         };
-        let tag = &rest[1..close];
-        rest = &rest[close + 1..];
+        let tag = rest.get(1..close).unwrap_or("");
+        rest = close
+            .checked_add(1)
+            .and_then(|from| rest.get(from..))
+            .unwrap_or("");
         let (name, closing) = match tag.strip_prefix('/') {
             Some(name) => (name, true),
             None => (tag, false),
@@ -238,7 +244,10 @@ fn html_to_markdown(chunk: &str) -> String {
             }
             "p" => out.push_str("\n\n"),
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" if !closing => {
-                let level = name[1..].parse::<usize>().unwrap_or(1);
+                let level = name
+                    .get(1..)
+                    .and_then(|digits| digits.parse::<usize>().ok())
+                    .unwrap_or(1);
                 out.push_str("\n\n");
                 out.push_str(&"#".repeat(level));
                 out.push(' ');
@@ -254,52 +263,68 @@ fn html_to_markdown(chunk: &str) -> String {
 fn html_attr(tag: &str, name: &str) -> Option<String> {
     let bytes = tag.as_bytes();
     let mut i = 0;
-    while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'/' {
-        i += 1;
+    while i < bytes.len()
+        && bytes
+            .get(i)
+            .is_some_and(|byte| !byte.is_ascii_whitespace() && *byte != b'/')
+    {
+        i = i.saturating_add(1);
     }
     loop {
-        while i < bytes.len() && (bytes[i].is_ascii_whitespace() || bytes[i] == b'/') {
-            i += 1;
+        while i < bytes.len()
+            && bytes
+                .get(i)
+                .is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'/')
+        {
+            i = i.saturating_add(1);
         }
         if i >= bytes.len() {
             return None;
         }
         let start = i;
         while i < bytes.len()
-            && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-' || bytes[i] == b'_')
+            && bytes
+                .get(i)
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'-' || *byte == b'_')
         {
-            i += 1;
+            i = i.saturating_add(1);
         }
         if start == i {
-            i += 1;
+            i = i.saturating_add(1);
             continue;
         }
-        let attr = &tag[start..i];
+        let attr = tag.get(start..i)?;
         let mut j = i;
-        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-            j += 1;
+        while j < bytes.len() && bytes.get(j).is_some_and(|byte| byte.is_ascii_whitespace()) {
+            j = j.saturating_add(1);
         }
-        if j < bytes.len() && bytes[j] == b'=' {
-            j += 1;
-            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                j += 1;
+        if j < bytes.len() && bytes.get(j) == Some(&b'=') {
+            j = j.saturating_add(1);
+            while j < bytes.len() && bytes.get(j).is_some_and(|byte| byte.is_ascii_whitespace()) {
+                j = j.saturating_add(1);
             }
-            let value = if j < bytes.len() && (bytes[j] == b'"' || bytes[j] == b'\'') {
-                let quote = bytes[j];
-                j += 1;
+            let value = if j < bytes.len()
+                && bytes
+                    .get(j)
+                    .is_some_and(|byte| *byte == b'"' || *byte == b'\'')
+            {
+                let quote = bytes.get(j).copied()?;
+                j = j.saturating_add(1);
                 let start = j;
-                while j < bytes.len() && bytes[j] != quote {
-                    j += 1;
+                while j < bytes.len() && bytes.get(j) != Some(&quote) {
+                    j = j.saturating_add(1);
                 }
-                let value = tag[start..j].to_string();
-                j = (j + 1).min(bytes.len());
+                let value = tag.get(start..j)?.to_string();
+                j = j.saturating_add(1).min(bytes.len());
                 value
             } else {
                 let start = j;
-                while j < bytes.len() && !bytes[j].is_ascii_whitespace() {
-                    j += 1;
+                while j < bytes.len()
+                    && bytes.get(j).is_some_and(|byte| !byte.is_ascii_whitespace())
+                {
+                    j = j.saturating_add(1);
                 }
-                tag[start..j].to_string()
+                tag.get(start..j)?.to_string()
             };
             i = j;
             if attr.eq_ignore_ascii_case(name) {
@@ -313,22 +338,25 @@ fn decode_html_entities(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(start) = rest.find('&') {
-        out.push_str(&rest[..start]);
-        let tail = &rest[start..];
+        out.push_str(rest.get(..start).unwrap_or(""));
+        let Some(tail) = rest.get(start..) else {
+            break;
+        };
         let candidate = tail
             .find(';')
             .filter(|&end| end < 12)
-            .map(|end| &tail[..=end])
-            .filter(|entity| !entity[1..].contains(|c: char| c.is_whitespace() || c == '<'));
-        match candidate.and_then(decode_entity) {
-            Some((decoded, len)) => {
-                out.push_str(&decoded);
-                rest = &tail[len..];
-            }
-            None => {
-                out.push('&');
-                rest = &tail[1..];
-            }
+            .and_then(|end| tail.get(..=end))
+            .filter(|entity| {
+                entity
+                    .get(1..)
+                    .is_some_and(|body| !body.contains(|c: char| c.is_whitespace() || c == '<'))
+            });
+        if let Some((decoded, len)) = candidate.and_then(decode_entity) {
+            out.push_str(&decoded);
+            rest = tail.get(len..).unwrap_or("");
+        } else {
+            out.push('&');
+            rest = tail.get(1..).unwrap_or("");
         }
     }
     out.push_str(rest);
@@ -357,12 +385,48 @@ fn decode_entity(entity: &str) -> Option<(String, usize)> {
     Some((decoded, len))
 }
 
+/// `as usize` for a UI width. Non-finite or negative becomes 0; overflow saturates.
+fn usize_from_f32(value: f32) -> usize {
+    usize::try_from(u64_from_f32(value)).unwrap_or(usize::MAX)
+}
+
+fn u64_from_f32(value: f32) -> u64 {
+    if value.is_nan() || value <= 0.0 {
+        return 0;
+    }
+    if !value.is_finite() || value >= 18_446_744_073_709_551_616.0 {
+        return u64::MAX;
+    }
+    let bits = value.to_bits();
+    let Some(exp) = i32::try_from((bits >> 23) & 0xff)
+        .ok()
+        .and_then(|biased| biased.checked_sub(127))
+    else {
+        return 0;
+    };
+    if exp < 0 {
+        return 0;
+    }
+    let mantissa = u64::from((bits & 0x007f_ffff) | (1_u32 << 23));
+    let Some(shift) = exp.checked_sub(23) else {
+        return 0;
+    };
+    if shift >= 0 {
+        let Ok(places) = u32::try_from(shift) else {
+            return u64::MAX;
+        };
+        mantissa.checked_shl(places).unwrap_or(u64::MAX)
+    } else {
+        mantissa.checked_shr(shift.unsigned_abs()).unwrap_or(0)
+    }
+}
+
 fn collapse_html_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut newlines = 0;
+    let mut newlines: u32 = 0;
     for ch in text.chars() {
         if ch == '\n' {
-            newlines += 1;
+            newlines = newlines.saturating_add(1);
             if newlines <= 2 {
                 out.push('\n');
             }
@@ -403,14 +467,17 @@ fn prepare(snapshot: Snapshot) -> Document {
                             images.insert(uri.clone());
                             format!("![{alt}](<{uri}>)")
                         }
-                        Err(_) => format!("Image: {alt}"),
+                        Err(()) => format!("Image: {alt}"),
                     },
                     _ => format!("Image: {alt}"),
                 };
                 replacements.push((range, replacement));
             }
             Event::Html(_) | Event::InlineHtml(_) => {
-                replacements.push((range.clone(), html_to_markdown(&snapshot.text[range])));
+                let Some(html) = snapshot.text.get(range.clone()) else {
+                    continue;
+                };
+                replacements.push((range, html_to_markdown(html)));
             }
             _ => {}
         }
@@ -525,7 +592,7 @@ impl Preview {
                     ui.spacing_mut().item_spacing.y = 8.0;
                     CommonMarkViewer::new()
                         .explicit_image_uri_scheme(true)
-                        .max_image_width(Some(ui.available_width().max(1.0) as usize))
+                        .max_image_width(Some(usize_from_f32(ui.available_width().max(1.0))))
                         .enable_scroll_to_heading(true)
                         .show(ui, &mut self.cache, &document.text);
                 });
@@ -597,18 +664,18 @@ impl Previews {
             let failed = Arc::new(Mutex::new(HashSet::<String>::new()));
             loop {
                 let watch = incoming.borrow_and_update().clone();
-                snapshots.lock().unwrap().retain(|sid, _| watch.retained.contains(sid));
+                snapshots.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|sid, _| watch.retained.contains(sid));
                 let changed = watched_generation != Some(watch.generation);
                 watched_generation = Some(watch.generation);
-                failed.lock().unwrap().retain(|sid| watch.retained.contains(sid));
+                failed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|sid| watch.retained.contains(sid));
                 let operation = token.child_token();
                 let _guard = operation.clone().drop_guard();
                 let work = async {
                     let mut jobs = stream::iter(watch.sources.iter().cloned().map(|source| {
-                        let previous = snapshots.lock().unwrap().get(&source.session).cloned();
-                        let service = service.clone(); let operation = operation.clone(); let snapshots = snapshots.clone();
-                        let failed = failed.clone();
-                        let force = changed || failed.lock().unwrap().contains(&source.session);
+                        let previous = snapshots.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&source.session).cloned();
+                        let service = service.clone(); let operation = operation.clone(); let snapshots = Arc::clone(&snapshots);
+                        let failed = Arc::clone(&failed);
+                        let force = changed || failed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(&source.session);
                         async move {
                             let result = match read_source_async(&service, &source, previous.clone(), &operation, force).await {
                                 Ok(None) => return None,
@@ -616,12 +683,12 @@ impl Previews {
                                 Ok(Some(snapshot)) => {
                                     let retained = Arc::new(snapshot.clone());
                                     let result = service.cpu().run(&operation, move || Ok(prepare(snapshot))).await.map_err(|e| format!("{e:#}"));
-                                    if result.is_ok() { snapshots.lock().unwrap().insert(source.session.clone(), retained); failed.lock().unwrap().remove(&source.session); }
-                                    else { failed.lock().unwrap().insert(source.session.clone()); }
+                                    if result.is_ok() { snapshots.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(source.session.clone(), retained); failed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&source.session); }
+                                    else { failed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(source.session.clone()); }
                                     result
                                 }
                                 Err(error) => {
-                                    failed.lock().unwrap().insert(source.session.clone());
+                                    failed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(source.session.clone());
                                     Err(format!("{error:#}"))
                                 }
                             };
@@ -636,11 +703,11 @@ impl Previews {
                     }
                 };
                 tokio::select! {
-                    _ = token.cancelled() => break,
+                    () = token.cancelled() => break,
                     result = incoming.changed() => { if result.is_err() { break; } continue; }
-                    _ = work => {},
+                    () = work => {},
                 }
-                tokio::select! { _ = token.cancelled() => break, result = incoming.changed() => if result.is_err() { break }, _ = tokio::time::sleep(INTERVAL) => {} }
+                tokio::select! { () = token.cancelled() => break, result = incoming.changed() => if result.is_err() { break }, () = tokio::time::sleep(INTERVAL) => {} }
             }
             Ok(Vec::new())
         });
@@ -679,7 +746,9 @@ impl Previews {
     }
     #[cfg(test)]
     pub fn wait_prepared(&mut self) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let deadline = std::time::Instant::now()
+            .checked_add(Duration::from_secs(3))
+            .unwrap_or_else(std::time::Instant::now);
         loop {
             self.process_results();
             if self.entries.values().all(|p| {
@@ -812,7 +881,11 @@ async fn read_source_async(
             let mode = rpc
                 .call("nvim_get_mode", serde_json::json!([]), 4096)
                 .await?;
-            if mode["blocking"].as_bool().context("Invalid Neovim mode")? {
+            if mode
+                .get("blocking")
+                .and_then(serde_json::Value::as_bool)
+                .context("Invalid Neovim mode")?
+            {
                 return Ok(None);
             }
             let revision = previous
@@ -848,10 +921,10 @@ async fn read_source_async(
         };
         let value: serde_json::Value =
             serde_json::from_str(value.as_str().context("Invalid editor preview response")?)?;
-        if let Some(error) = value["error"].as_str() {
+        if let Some(error) = value.get("error").and_then(serde_json::Value::as_str) {
             anyhow::bail!("{error}");
         }
-        if value["unchanged"].as_bool() == Some(true) {
+        if value.get("unchanged").and_then(serde_json::Value::as_bool) == Some(true) {
             return Ok(None);
         }
         let snapshot: Snapshot = serde_json::from_value(value)?;
@@ -1274,7 +1347,7 @@ mod tests {
                     pos: egui::pos2(150.0, 40.0),
                     button: egui::PointerButton::Primary,
                     pressed: true,
-                    modifiers: Default::default(),
+                    modifiers: egui::Modifiers::default(),
                 }],
                 ..Default::default()
             },

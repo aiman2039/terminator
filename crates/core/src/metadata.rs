@@ -101,16 +101,26 @@ fn decode_pull_request(bytes: &[u8]) -> Result<Option<PullRequest>> {
         return Ok(None);
     }
     Ok(Some(PullRequest {
-        number: value["number"].as_u64().context("Missing PR number")?,
-        title: value["title"]
-            .as_str()
+        number: value
+            .get("number")
+            .and_then(serde_json::Value::as_u64)
+            .context("Missing PR number")?,
+        title: value
+            .get("title")
+            .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .chars()
             .take(256)
             .collect(),
-        url: http_url(value["url"].as_str().context("Missing PR URL")?)?,
-        state: value["state"]
-            .as_str()
+        url: http_url(
+            value
+                .get("url")
+                .and_then(serde_json::Value::as_str)
+                .context("Missing PR URL")?,
+        )?,
+        state: value
+            .get("state")
+            .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .chars()
             .take(32)
@@ -215,8 +225,12 @@ impl Default for Cache {
         Self {
             cwd: None,
             data: Metadata::default(),
-            git_at: Instant::now().checked_sub(Duration::from_mins(1)).unwrap(),
-            pr_at: Instant::now().checked_sub(Duration::from_mins(1)).unwrap(),
+            git_at: Instant::now()
+                .checked_sub(Duration::from_mins(1))
+                .unwrap_or_else(Instant::now),
+            pr_at: Instant::now()
+                .checked_sub(Duration::from_mins(1))
+                .unwrap_or_else(Instant::now),
             pr_enabled: false,
         }
     }
@@ -251,7 +265,9 @@ impl Cache {
                 .as_ref()
                 .is_some_and(|p| p.join(".git").is_file());
             if self.data.branch != previous {
-                self.pr_at = Instant::now().checked_sub(Duration::from_mins(1)).unwrap();
+                self.pr_at = Instant::now()
+                    .checked_sub(Duration::from_mins(1))
+                    .unwrap_or_else(Instant::now);
             }
         }
         if include_pr
@@ -325,7 +341,9 @@ impl Cache {
                 .await
                 .unwrap_or(false);
             if self.data.branch != previous {
-                self.pr_at = Instant::now().checked_sub(Duration::from_mins(1)).unwrap();
+                self.pr_at = Instant::now()
+                    .checked_sub(Duration::from_mins(1))
+                    .unwrap_or_else(Instant::now);
             }
         }
         if include_pr
