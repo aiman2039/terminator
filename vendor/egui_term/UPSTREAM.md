@@ -243,3 +243,25 @@ wheel routing is unchanged. Regressions:
 
 `scroll_local_drag` is only called from widget unit tests, so it is gated
 with `#[cfg(test)]` to avoid a `dead_code` warning in normal builds.
+
+## Wheel reaches an agent that is not scrolling (2026-10-03)
+
+A wheel inside a full-screen agent sometimes did nothing. Three causes:
+
+- A missed mouse-up left the selection drag active, so later wheels took the
+  local-scroll path. On the alternate screen that path cannot move.
+- macOS reports momentum-begin as a new gesture start. Resetting the pixel
+  accumulator there dropped a partial line, so a slow trackpad scroll never
+  reached one cell.
+- The alternate screen has no scrollback. With mode 1007 off and mouse
+  reporting off, the wheel was a local scroll that did not move. Cursor keys
+  are now sent for any alternate-screen wheel that is not a mouse report.
+  Routing and SGR-versus-X10 encoding use the live terminal mode, not the
+  painted snapshot. A wheel forwarded to the application also returns a
+  viewport that was parked in history to the live screen. SGR rows are
+  clamped to 1-based coordinates so a scrolled point is not a negative row.
+
+Tests: `trackpad_start_does_not_drop_a_partial_line`,
+`a_missed_mouse_up_does_not_keep_the_wheel`,
+`alternate_screen_wheel_reaches_the_app_without_mode_1007`,
+`revealing_a_scrolled_view_returns_to_the_live_screen`.

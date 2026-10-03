@@ -1,5 +1,11 @@
 # Validation evidence — 2026-09-08
 
+## Agent wheel stuck (2026-10-03)
+
+A wheel inside a full-screen agent could sit still. A missed mouse-up kept the selection drag, so later wheels scrolled local history and never reached the agent. macOS momentum-begin resets were dropping partial trackpad lines. An alternate screen with mode 1007 off and mouse reporting off was a local scroll of an empty grid. Cursor keys now cover that case. Wheel routing uses the live terminal mode. A wheel forwarded to the application returns a viewport parked in history to the live screen.
+
+`cargo test --manifest-path vendor/egui_term/Cargo.toml --offline --lib` passed, including `trackpad_start_does_not_drop_a_partial_line`, `a_missed_mouse_up_does_not_keep_the_wheel`, `alternate_screen_wheel_reaches_the_app_without_mode_1007`, and `revealing_a_scrolled_view_returns_to_the_live_screen`. Live agent scrolling was not exercised.
+
 ## Selection scroll in agent terminals (2026-10-01)
 
 The same failure happens off the alternate screen. A drag wheel that only

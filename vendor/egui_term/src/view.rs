@@ -169,6 +169,13 @@ impl<'a> TerminalView<'a> {
 
     fn process_input(mut self, layout: &Response, state: &mut TerminalViewState) -> Self {
         let wheel_target = layout.enabled() && layout.contains_pointer();
+        // A missed mouse-up leaves the drag flag set. Wheels then take the
+        // selection path and never reach an agent. The button state is the
+        // source of truth.
+        let primary_down = layout
+            .ctx
+            .input(|i| i.pointer.button_down(PointerButton::Primary));
+        state.is_dragged = drag_still_down(state.is_dragged, primary_down);
         // An active selection drag owns the gesture: wheel input extends the
         // selection even after the pointer leaves the pane.
         let wheel_active = wheel_target || (layout.enabled() && state.is_dragged);
@@ -218,9 +225,12 @@ impl<'a> TerminalView<'a> {
                     modifiers,
                 } => {
                     let now = layout.ctx.input(|i| i.time);
-                    if matches!(phase, egui::TouchPhase::Start | egui::TouchPhase::Cancel)
-                        || state.scroll_time.is_some_and(|last| now - last > 0.5)
-                    {
+                    // Start is not a reset. macOS delivers momentum-begin and
+                    // MayBegin as Start between deltas of the same gesture;
+                    // clearing there drops a partial line, so a slow trackpad
+                    // scroll never reaches one cell.
+                    let idle = state.scroll_time.is_some_and(|last| now - last > 0.5);
+                    if scroll_accumulator_resets(phase, idle) {
                         state.scroll_pixels = 0.0;
                         state.scroll_lines = 0.0;
                     }
@@ -259,7 +269,10 @@ impl<'a> TerminalView<'a> {
                         (layout.rect.height() / cell_height.max(1.0)) as usize,
                         unit,
                         delta,
-                        self.backend.last_content().terminal_mode,
+                        // The painted snapshot lags a mode change by a frame.
+                        // Routing from it sends arrow keys, or an X10 report,
+                        // after the agent has already switched to SGR mouse.
+                        self.backend.term_mode(),
                         modifiers,
                     ));
                     if state.is_dragged && input_actions.len() > lines_before {
@@ -741,6 +754,19 @@ fn process_keyboard_key(
         Some(bytes) => InputAction::BackendCall(BackendCommand::Write(bytes)),
         None => InputAction::Ignore,
     }
+}
+
+/// macOS reports momentum-begin and MayBegin as [`egui::TouchPhase::Start`]
+/// between the deltas of one gesture. Clearing there drops a partial line.
+/// Cancel and an idle gap still start a new gesture.
+fn scroll_accumulator_resets(phase: egui::TouchPhase, idle: bool) -> bool {
+    idle || phase == egui::TouchPhase::Cancel
+}
+
+/// A missed mouse-up used to leave the drag flag set, so later wheels never
+/// reached the agent.
+fn drag_still_down(is_dragged: bool, primary_down: bool) -> bool {
+    is_dragged && primary_down
 }
 
 fn process_mouse_wheel(
@@ -1264,6 +1290,22 @@ fn drag_actions(
 mod scroll_tests {
     use super::*;
     use alacritty_terminal::index::Column;
+
+    #[test]
+    fn trackpad_start_does_not_drop_a_partial_line() {
+        assert!(!scroll_accumulator_resets(egui::TouchPhase::Start, false));
+        assert!(!scroll_accumulator_resets(egui::TouchPhase::Move, false));
+        assert!(!scroll_accumulator_resets(egui::TouchPhase::End, false));
+        assert!(scroll_accumulator_resets(egui::TouchPhase::Cancel, false));
+        assert!(scroll_accumulator_resets(egui::TouchPhase::Move, true));
+    }
+
+    #[test]
+    fn a_missed_mouse_up_does_not_keep_the_wheel() {
+        assert!(!drag_still_down(true, false));
+        assert!(drag_still_down(true, true));
+        assert!(!drag_still_down(false, true));
+    }
 
     #[test]
     fn agent_mouse_mode_receives_wheel_reports_in_both_directions() {

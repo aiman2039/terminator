@@ -10,7 +10,8 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSApplication, NSButton, NSCellImagePosition, NSControl, NSImage, NSImageScaling, NSMenu,
-    NSMenuItem, NSStatusBar, NSStatusBarButton, NSStatusItem, NSVariableStatusItemLength,
+    NSMenuItem, NSNormalWindowLevel, NSPopUpMenuWindowLevel, NSStatusBar, NSStatusBarButton,
+    NSStatusItem, NSVariableStatusItemLength, NSWindowLevel,
 };
 use objc2_foundation::{NSData, NSObject, NSObjectProtocol, NSSize, NSString, ns_string};
 use std::{
@@ -63,18 +64,46 @@ define_class!(
 );
 
 fn order_front() {
-    let Some(mtm) = MainThreadMarker::new() else {
-        return;
-    };
+    // Menu actions run inside menu tracking. Ordering every NSWindow front
+    // from here includes the menu window, and AppKit then fades that window
+    // to alpha 0 without ordering it out. It stays at popup level and
+    // swallows clicks. Wait until tracking ends, drop any leftover menu
+    // window, and raise only the document window.
+    dispatch2::DispatchQueue::main().exec_async(|| {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        raise_document_window(mtm);
+    });
+}
+
+fn raise_document_window(mtm: MainThreadMarker) {
     let app = NSApplication::sharedApplication(mtm);
     app.unhide(None);
     app.activate();
     for window in app.windows().iter() {
+        if should_dismiss_menu_window(window.level()) {
+            window.orderOut(None);
+            continue;
+        }
+        if !should_raise_window(window.level(), &window.title().to_string()) {
+            continue;
+        }
         if window.isMiniaturized() {
             window.deminiaturize(None);
         }
         window.makeKeyAndOrderFront(None);
     }
+}
+
+/// The eframe document window. Popup menus share the app's window list and
+/// must not be raised with it.
+fn should_raise_window(level: NSWindowLevel, title: &str) -> bool {
+    level == NSNormalWindowLevel && title == "Terminator"
+}
+
+fn should_dismiss_menu_window(level: NSWindowLevel) -> bool {
+    level == NSPopUpMenuWindowLevel
 }
 
 struct Bar {
@@ -257,5 +286,14 @@ mod tests {
             menu_key(&base),
             menu_key(&[item("b", "two"), item("a", "one")])
         );
+    }
+
+    #[test]
+    fn only_the_document_window_is_raised() {
+        assert!(should_raise_window(NSNormalWindowLevel, "Terminator"));
+        assert!(!should_raise_window(NSPopUpMenuWindowLevel, "Terminator"));
+        assert!(!should_raise_window(NSNormalWindowLevel, ""));
+        assert!(should_dismiss_menu_window(NSPopUpMenuWindowLevel));
+        assert!(!should_dismiss_menu_window(NSNormalWindowLevel));
     }
 }

@@ -394,7 +394,13 @@ impl TerminalBackend {
                 self.process_link_action(&term, link_action, point);
             }
             BackendCommand::MouseReport(button, modifiers, point, pressed) => {
-                self.process_mouse_report(button, modifiers, point, pressed);
+                // A wheel parked in local history never moves the agent, and
+                // the live screen stays hidden. Return to it, then report.
+                if matches!(button, MouseButton::ScrollUp | MouseButton::ScrollDown) {
+                    self.reveal_live_screen(&mut term);
+                }
+                let mode = *term.mode();
+                self.process_mouse_report(button, modifiers, point, pressed, mode);
             }
         };
     }
@@ -651,6 +657,7 @@ impl TerminalBackend {
         modifiers: Modifiers,
         point: Point,
         pressed: bool,
+        mode: TermMode,
     ) {
         let mut mods = 0;
         if modifiers.contains(Modifiers::SHIFT) {
@@ -663,7 +670,7 @@ impl TerminalBackend {
             mods += 16;
         }
 
-        match MouseMode::from(self.last_content().terminal_mode) {
+        match MouseMode::from(mode) {
             MouseMode::Sgr => self.sgr_mouse_report(point, button as u8 + mods, pressed),
             MouseMode::Normal(is_utf8) => {
                 if pressed {
@@ -677,20 +684,20 @@ impl TerminalBackend {
 
     fn sgr_mouse_report(&self, point: Point, button: u8, pressed: bool) {
         let c = if pressed { 'M' } else { 'm' };
+        // A point taken from a scrolled viewport has a negative line. SGR
+        // rows are 1-based; a negative row is dropped by the agent and the
+        // wheel looks stuck.
+        let column = point.column.0.saturating_add(1);
+        let line = point.line.0.max(0).saturating_add(1);
 
-        let msg = format!(
-            "\x1b[<{};{};{}{}",
-            button,
-            point.column + 1,
-            point.line + 1,
-            c
-        );
+        let msg = format!("\x1b[<{};{};{}{}", button, column, line, c);
 
         self.notifier.notify(msg.as_bytes().to_vec());
     }
 
     fn normal_mouse_report(&self, point: Point, button: u8, is_utf8: bool) {
-        let Point { line, column } = point;
+        let column = Column(point.column.0);
+        let line = Line(point.line.0.max(0));
         let max_point = if is_utf8 { 2015 } else { 223 };
 
         if line >= max_point || column >= max_point {
@@ -788,14 +795,29 @@ impl TerminalBackend {
         self.notifier.notify(input);
     }
 
+    /// The live screen is hidden while `display_offset` is non-zero. An
+    /// application wheel does not move that offset, so the agent scrolls
+    /// off-screen. Snap back before forwarding the wheel.
+    fn reveal_live_screen(&self, terminal: &mut Term<EventProxy>) {
+        if !reveal_live_viewport(terminal) {
+            return;
+        }
+        self.grid_dirty.store(true, Ordering::Relaxed);
+    }
+
+    pub fn term_mode(&self) -> TermMode {
+        *self.term.lock().mode()
+    }
+
     fn scroll(&mut self, terminal: &mut Term<EventProxy>, delta_value: i32) {
         if delta_value == 0 {
             return;
         }
-        if terminal
-            .mode()
-            .contains(TermMode::ALTERNATE_SCROLL | TermMode::ALT_SCREEN)
-        {
+        // The alternate screen has no scrollback. Mode 1007 off used to make
+        // this a no-op, so a wheel inside an agent that does not want mouse
+        // reports never moved. Cursor keys still follow DECCKM.
+        if alternate_wheel_sends_keys(terminal.mode()) {
+            self.reveal_live_screen(terminal);
             self.notifier
                 .notify(scroll_key_bytes(delta_value, terminal.mode()));
         } else {
@@ -1079,6 +1101,22 @@ fn point_closer(candidate: Point, other: Point, anchor: Point) -> bool {
     candidate_col < other_col
 }
 
+/// Alt-screen grids are created with an empty scrollback, so a local wheel
+/// cannot move them. Cursor keys reach the application even when it has
+/// turned mode 1007 off. Mouse reporting is chosen before this is called.
+fn alternate_wheel_sends_keys(mode: &TermMode) -> bool {
+    mode.contains(TermMode::ALT_SCREEN)
+}
+
+/// `true` when the viewport was parked in history and is now on the live screen.
+fn reveal_live_viewport<T: EventListener>(terminal: &mut Term<T>) -> bool {
+    if terminal.grid().display_offset() == 0 {
+        return false;
+    }
+    terminal.scroll_display(Scroll::Bottom);
+    true
+}
+
 /// Wheel-generated cursor keys for alternate-scroll mode. Honors DECCKM
 /// application-cursor state exactly like the keyboard arrow bindings: CSI
 /// (`ESC [ A/B`) normally, SS3 (`ESC O A/B`) with `APP_CURSOR` set.
@@ -1121,6 +1159,16 @@ mod scroll_key_tests {
         assert!(scroll_key_bytes(0, &TermMode::empty()).is_empty());
         assert!(scroll_key_bytes(0, &TermMode::APP_CURSOR).is_empty());
     }
+
+    #[test]
+    fn alternate_screen_wheel_reaches_the_app_without_mode_1007() {
+        assert!(alternate_wheel_sends_keys(&TermMode::ALT_SCREEN));
+        assert!(alternate_wheel_sends_keys(
+            &(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL)
+        ));
+        assert!(!alternate_wheel_sends_keys(&TermMode::ALTERNATE_SCROLL));
+        assert!(!alternate_wheel_sends_keys(&TermMode::empty()));
+    }
 }
 
 #[cfg(test)]
@@ -1129,6 +1177,17 @@ mod selection_scroll_tests {
     use alacritty_terminal::event::VoidListener;
     use alacritty_terminal::index::Point;
     use alacritty_terminal::vte::ansi::Handler;
+
+    #[test]
+    fn revealing_a_scrolled_view_returns_to_the_live_screen() {
+        let mut term = Term::new(term::Config::default(), &TermSize::new(8, 6), VoidListener);
+        term.grid_mut().scroll_up(&(Line(0)..Line(6)), 3);
+        term.scroll_display(Scroll::Delta(2));
+        assert_eq!(term.grid().display_offset(), 2);
+        assert!(reveal_live_viewport(&mut term));
+        assert_eq!(term.grid().display_offset(), 0);
+        assert!(!reveal_live_viewport(&mut term));
+    }
 
     #[test]
     fn alternate_screen_local_scroll_does_not_move_the_viewport() {

@@ -3354,10 +3354,272 @@ impl App {
         if self.preferences.ide_mode {
             // Sidebar visibility is user-controlled in both modes.
             // Switching modes must not overwrite the saved flags.
+            // The strip opens so shells that just moved are on screen.
             self.preferences.ide_terminal_collapsed = false;
+            self.move_shells_to_strip();
+            if let (Some(project), Some(sid)) = (self.selected.clone(), self.active_session.clone())
+                && self.is_strip_session(&project, &sid)
+            {
+                self.activate_strip_session(&project, &sid);
+            }
         } else {
+            self.move_shells_to_main();
             self.resync_active_from_dock();
         }
+        // The relocation is not a click. Recording the docks now keeps the
+        // next focus sync from treating it as one.
+        self.note_focus_baselines();
+        self.save_layouts();
+    }
+
+    fn shell_ids_for(&self, project: &str) -> HashSet<String> {
+        self.state
+            .sessions
+            .iter()
+            .filter(|session| session.project_id == project && session.kind == SessionKind::Shell)
+            .map(|session| session.id.clone())
+            .collect()
+    }
+
+    /// Mode is layout. Shells in the bottom strip move into the main dock
+    /// when IDE mode turns off, preserving a shell-only split as one tab.
+    /// Editors stay where they are. Returns whether anything moved.
+    fn move_project_strip_to_main(&mut self, project: &str) -> bool {
+        let shell_ids = self.shell_ids_for(project);
+        let Some(layout) = self.take_strip_shell_dock(project, &shell_ids) else {
+            return false;
+        };
+        let focus_moved = self.selected.as_deref() == Some(project)
+            && self
+                .active_session
+                .as_ref()
+                .is_some_and(|sid| shell_ids.contains(sid));
+        let moved_ids: HashSet<String> = layout
+            .iter_all_tabs()
+            .filter_map(|(_, tab)| match tab {
+                Tab::Terminal(sid) if shell_ids.contains(sid) => Some(sid.clone()),
+                _ => None,
+            })
+            .collect();
+        let show = {
+            let workspace = self
+                .layouts
+                .entry(project.to_owned())
+                .or_insert_with(Workspace::empty);
+            // Drop a copy that was already in the main dock so the shell
+            // renders once. Shells that were only in the main dock stay.
+            workspace.remove_terminal_ids(&moved_ids);
+            let blank = workspace
+                .tabs
+                .iter()
+                .all(|tab| tab.layout.iter_all_tabs().next().is_none());
+            let show = focus_moved || blank;
+            workspace.adopt_dock(layout, show);
+            show
+        };
+        let selected = self.selected.clone();
+        if show && selected.as_deref() == Some(project) {
+            let focused = self.layouts.get_mut(project).and_then(|workspace| {
+                workspace
+                    .main_surface_mut()
+                    .find_active_focused()
+                    .map(|(_, tab)| tab.clone())
+            });
+            if let Some(Tab::Terminal(sid)) = focused
+                && shell_ids.contains(&sid)
+            {
+                self.active_session = Some(sid);
+                self.non_terminal_selected = false;
+            }
+        }
+        true
+    }
+
+    fn move_shells_to_main(&mut self) {
+        let projects: Vec<String> = self.preferences.ide_strip_docks.0.keys().cloned().collect();
+        for project in projects {
+            self.move_project_strip_to_main(&project);
+        }
+    }
+
+    /// Pull shell tabs out of the strip. A strip that is only shells moves
+    /// as a whole dock so splits survive. Anything else stays in the strip.
+    fn take_strip_shell_dock(
+        &mut self,
+        project: &str,
+        shell_ids: &HashSet<String>,
+    ) -> Option<egui_dock::DockState<Tab>> {
+        let focus = self.active_session.clone();
+        let strip = self.preferences.ide_strip_docks.0.get_mut(project)?;
+        let shells: Vec<Tab> = strip
+            .iter_all_tabs()
+            .filter(|(_, tab)| matches!(tab, Tab::Terminal(sid) if shell_ids.contains(sid)))
+            .map(|(_, tab)| tab.clone())
+            .collect();
+        if shells.is_empty() {
+            return None;
+        }
+        let only_shells = strip
+            .iter_all_tabs()
+            .all(|(_, tab)| matches!(tab, Tab::Terminal(sid) if shell_ids.contains(sid)));
+        if only_shells {
+            return Some(std::mem::replace(strip, egui_dock::DockState::new(vec![])));
+        }
+        for tab in &shells {
+            while let Some(path) = strip.find_tab(tab) {
+                strip.remove_tab(path);
+            }
+        }
+        let mut dock = egui_dock::DockState::new(shells);
+        if let Some(sid) = focus {
+            let pane = Tab::Terminal(sid);
+            if let Some(path) = dock.find_tab(&pane) {
+                let _ = dock.set_active_tab(path);
+                dock.set_focused_node_and_surface(path.node_path());
+            }
+        }
+        Some(dock)
+    }
+
+    /// Shells in the main dock move into the strip when IDE mode turns on.
+    /// The first shell-only workspace tab keeps its splits. Editors stay.
+    fn move_project_main_shells_to_strip(&mut self, project: &str) {
+        let shell_ids = self.shell_ids_for(project);
+        if shell_ids.is_empty() {
+            return;
+        }
+        let mut carried: Vec<egui_dock::DockState<Tab>> = Vec::new();
+        let mut loose: Vec<Tab> = Vec::new();
+        {
+            let Some(workspace) = self.layouts.get_mut(project) else {
+                return;
+            };
+            let tabs = std::mem::take(&mut workspace.tabs);
+            let mut kept = Vec::new();
+            for tab in tabs {
+                let panes: Vec<Tab> = tab
+                    .layout
+                    .iter_all_tabs()
+                    .map(|(_, pane)| pane.clone())
+                    .collect();
+                let shells: Vec<Tab> = panes
+                    .iter()
+                    .filter(|pane| matches!(pane, Tab::Terminal(sid) if shell_ids.contains(sid)))
+                    .cloned()
+                    .collect();
+                if shells.is_empty() {
+                    kept.push(tab);
+                    continue;
+                }
+                if shells.len() == panes.len() {
+                    carried.push(tab.layout);
+                    continue;
+                }
+                let mut tab = tab;
+                for pane in &shells {
+                    while let Some(path) = tab.layout.find_tab(pane) {
+                        tab.layout.remove_tab(path);
+                    }
+                }
+                loose.extend(shells);
+                if tab.layout.iter_all_tabs().next().is_none() {
+                    continue;
+                }
+                if tab.primary.as_ref().is_some_and(
+                    |pane| matches!(pane, Tab::Terminal(sid) if shell_ids.contains(sid)),
+                ) {
+                    tab.primary = tab
+                        .layout
+                        .iter_all_tabs()
+                        .next()
+                        .map(|(_, pane)| pane.clone());
+                }
+                kept.push(tab);
+            }
+            workspace.tabs = kept;
+            workspace.drop_empty_tabs();
+        }
+        if carried.is_empty() && loose.is_empty() {
+            return;
+        }
+        let strip = self
+            .preferences
+            .ide_strip_docks
+            .0
+            .entry(project.to_owned())
+            .or_insert_with(|| egui_dock::DockState::new(vec![]));
+        let strip_empty = strip.iter_all_tabs().next().is_none();
+        if strip_empty && !carried.is_empty() {
+            let mut dock = carried.remove(0);
+            let focused = dock
+                .main_surface_mut()
+                .find_active_focused()
+                .map(|(_, tab)| tab.clone());
+            for extra in &carried {
+                for (_, pane) in extra.iter_all_tabs() {
+                    if dock.find_tab(pane).is_none() {
+                        dock.push_to_focused_leaf(pane.clone());
+                    }
+                }
+            }
+            for pane in &loose {
+                if dock.find_tab(pane).is_none() {
+                    dock.push_to_focused_leaf(pane.clone());
+                }
+            }
+            if let Some(focused) = focused
+                && let Some(path) = dock.find_tab(&focused)
+            {
+                let _ = dock.set_active_tab(path);
+                dock.set_focused_node_and_surface(path.node_path());
+            }
+            *strip = dock;
+            return;
+        }
+        for dock in &carried {
+            for (_, pane) in dock.iter_all_tabs() {
+                if strip.find_tab(pane).is_none() {
+                    strip.push_to_focused_leaf(pane.clone());
+                }
+            }
+        }
+        for pane in &loose {
+            if strip.find_tab(pane).is_none() {
+                strip.push_to_focused_leaf(pane.clone());
+            }
+        }
+    }
+
+    fn move_shells_to_strip(&mut self) {
+        let projects: Vec<String> = self.layouts.keys().cloned().collect();
+        for project in projects {
+            self.move_project_main_shells_to_strip(&project);
+        }
+    }
+
+    /// Match the baselines `sync_active_session` compares, so a mode switch
+    /// does not look like the user clicked a dock.
+    fn note_focus_baselines(&mut self) {
+        let project = self.selected.clone();
+        self.last_main_focus = project.as_ref().and_then(|project| {
+            self.layouts.get_mut(project).and_then(|dock| {
+                dock.main_surface_mut()
+                    .find_active_focused()
+                    .map(|(_, tab)| tab.clone())
+            })
+        });
+        self.last_strip_focus = project.as_ref().and_then(|project| {
+            self.preferences
+                .ide_strip_docks
+                .0
+                .get_mut(project)
+                .and_then(|strip| {
+                    strip
+                        .main_surface_mut()
+                        .find_active_focused()
+                        .map(|(_, tab)| tab.clone())
+                })
+        });
     }
 
     /// Strip-dock membership: a session lives in exactly one dock, so this
@@ -3707,12 +3969,17 @@ impl App {
         self.hide_center_overlay();
         self.finish_rename(true);
         if let Some(s) = self.state.sessions.iter().find(|s| s.id == sid).cloned() {
-            if s.lifecycle.live() && self.is_strip_session(&s.project_id, sid) {
-                self.select_project(s.project_id.clone());
-                self.preferences.ide_mode = true;
-                self.preferences.ide_terminal_collapsed = false;
-                self.activate_strip_session(&s.project_id, &s.id);
-                return;
+            if s.kind == SessionKind::Shell && self.is_strip_session(&s.project_id, sid) {
+                if self.preferences.ide_mode {
+                    self.select_project(s.project_id.clone());
+                    self.preferences.ide_terminal_collapsed = false;
+                    self.activate_strip_session(&s.project_id, &s.id);
+                    return;
+                }
+                // Regular mode uses the same shell in the main dock.
+                if self.move_project_strip_to_main(&s.project_id) {
+                    self.save_layouts();
+                }
             }
             self.select_project(s.project_id.clone());
             let pane = Tab::Terminal(sid.into());
@@ -5796,7 +6063,7 @@ mod navigation_tests {
     }
 
     #[test]
-    fn go_session_reveals_strip_sessions_in_the_strip() {
+    fn regular_mode_opens_a_strip_shell_in_the_main_dock() {
         let (mut app, _ctx, _dir) = fixture();
         app.selected = Some("a".into());
         app.state.sessions = vec![session_fixture("strip", SessionKind::Shell)];
@@ -5806,14 +6073,28 @@ mod navigation_tests {
         );
         assert!(!app.preferences.ide_mode);
         app.go_session("strip");
+        assert!(!app.preferences.ide_mode);
+        assert_eq!(app.active_session.as_deref(), Some("strip"));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("strip".into())));
+        assert!(!app.is_strip_session("a", "strip"));
+    }
+
+    #[test]
+    fn ide_mode_session_jump_still_focuses_the_strip() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        app.preferences.ide_terminal_collapsed = true;
+        app.state.sessions = vec![session_fixture("strip", SessionKind::Shell)];
+        app.preferences.ide_strip_docks.0.insert(
+            "a".into(),
+            egui_dock::DockState::new(vec![Tab::Terminal("strip".into())]),
+        );
+        app.go_session("strip");
         assert!(app.preferences.ide_mode);
         assert!(!app.preferences.ide_terminal_collapsed);
         assert_eq!(app.active_session.as_deref(), Some("strip"));
-        assert!(
-            !app.layouts
-                .get("a")
-                .is_some_and(|dock| dock.contains(&Tab::Terminal("strip".into())))
-        );
+        assert!(!app.layouts["a"].contains(&Tab::Terminal("strip".into())));
     }
 
     #[test]
@@ -6089,33 +6370,92 @@ mod navigation_tests {
     }
 
     #[test]
-    fn toggle_off_resyncs_strip_owned_focus_from_the_dock() {
+    fn leaving_ide_mode_puts_the_focused_strip_shell_on_the_main_screen() {
         let (mut app, ctx, _dir) = fixture();
         app.selected = Some("a".into());
         app.state.sessions = vec![
             session_fixture("dock", SessionKind::Shell),
             session_fixture("strip", SessionKind::Shell),
+            session_fixture("edit", SessionKind::Editor),
         ];
         app.preferences.ide_strip_docks.0.insert(
             "a".into(),
             egui_dock::DockState::new(vec![Tab::Terminal("strip".into())]),
         );
-        app.layouts.insert(
-            "a".into(),
-            Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
-                "dock".into(),
-            )])),
+        let mut main = egui_dock::DockState::new(vec![Tab::Terminal("edit".into())]);
+        main.main_surface_mut().split_right(
+            NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("dock".into())],
         );
+        app.layouts.insert("a".into(), Workspace::from_layout(main));
         app.preferences.ide_mode = true;
         app.active_session = Some("strip".into());
         app.run_shortcut(&ctx, "toggle_ide_mode");
         assert!(!app.preferences.ide_mode);
-        assert_eq!(app.active_session.as_deref(), Some("dock"));
-        // Dock-owned focus is untouched by the toggle.
-        app.preferences.ide_mode = true;
-        app.active_session = Some("dock".into());
+        assert_eq!(app.active_session.as_deref(), Some("strip"));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("strip".into())));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("edit".into())));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("dock".into())));
+        assert!(!app.is_strip_session("a", "strip"));
+        // Sidebar jump stays in regular mode and shows the same shell.
+        app.go_session("strip");
+        assert!(!app.preferences.ide_mode);
+        assert_eq!(app.active_session.as_deref(), Some("strip"));
+    }
+
+    #[test]
+    fn entering_ide_mode_puts_main_shells_in_the_strip_and_keeps_editors() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.state.sessions = vec![
+            session_fixture("shell", SessionKind::Shell),
+            session_fixture("edit", SessionKind::Editor),
+        ];
+        let mut main = egui_dock::DockState::new(vec![Tab::Terminal("edit".into())]);
+        main.main_surface_mut().split_right(
+            NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("shell".into())],
+        );
+        app.layouts.insert("a".into(), Workspace::from_layout(main));
+        app.active_session = Some("shell".into());
         app.run_shortcut(&ctx, "toggle_ide_mode");
-        assert_eq!(app.active_session.as_deref(), Some("dock"));
+        assert!(app.preferences.ide_mode);
+        assert!(!app.preferences.ide_terminal_collapsed);
+        assert_eq!(app.active_session.as_deref(), Some("shell"));
+        assert!(app.is_strip_session("a", "shell"));
+        assert!(!app.layouts["a"].contains(&Tab::Terminal("shell".into())));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("edit".into())));
+    }
+
+    #[test]
+    fn strip_split_survives_a_mode_round_trip() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.state.sessions = vec![
+            session_fixture("left", SessionKind::Shell),
+            session_fixture("right", SessionKind::Shell),
+        ];
+        let mut strip = egui_dock::DockState::new(vec![Tab::Terminal("left".into())]);
+        strip.main_surface_mut().split_right(
+            NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("right".into())],
+        );
+        app.preferences.ide_strip_docks.0.insert("a".into(), strip);
+        app.preferences.ide_mode = true;
+        app.active_session = Some("right".into());
+        app.run_shortcut(&ctx, "toggle_ide_mode");
+        assert_eq!(app.layouts["a"].iter_leaves().count(), 2);
+        assert_eq!(app.active_session.as_deref(), Some("right"));
+        app.run_shortcut(&ctx, "toggle_ide_mode");
+        let strip = app.preferences.ide_strip_docks.0.get("a").unwrap();
+        assert_eq!(strip.iter_leaves().count(), 2);
+        assert!(strip.find_tab(&Tab::Terminal("left".into())).is_some());
+        assert!(strip.find_tab(&Tab::Terminal("right".into())).is_some());
+        assert!(!app.layouts["a"].contains(&Tab::Terminal("left".into())));
+        assert_eq!(app.active_session.as_deref(), Some("right"));
     }
 
     #[test]
@@ -7814,6 +8154,19 @@ mod navigation_tests {
             }
         }
         panic!("timed out waiting for {project} activity to reach {at_least}");
+    }
+
+    /// One pass drains at most 64 updates or 2 ms, and startup completions
+    /// sit ahead of the test's own update. A loaded runner can defer that
+    /// update past a single call, so pump the way production pumps each frame.
+    fn pump_until(app: &mut App, ctx: &egui::Context, mut ready: impl FnMut(&App) -> bool) {
+        for _ in 0..100 {
+            app.process_updates(ctx);
+            if ready(app) {
+                return;
+            }
+        }
+        panic!("timed out waiting for a queued update");
     }
 
     #[test]
@@ -10037,7 +10390,11 @@ mod navigation_tests {
         app.jobs = jobs.into();
         app.open_file("/a/image.PNG".into(), None, None, false);
         app.select_project("b".into());
-        app.process_updates(&ctx);
+        pump_until(&mut app, &ctx, |app| {
+            app.layouts["a"].contains(&Tab::Image {
+                path: "/a/image.PNG".into(),
+            })
+        });
         assert_eq!(app.selected.as_deref(), Some("b"));
         assert!(app.layouts["a"].contains(&Tab::Image {
             path: "/a/image.PNG".into()
@@ -10053,7 +10410,9 @@ mod navigation_tests {
         app.jobs = jobs.into();
         app.open_file("/a/index.HTML".into(), None, None, false);
         app.select_project("b".into());
-        app.process_updates(&ctx);
+        pump_until(&mut app, &ctx, |app| {
+            app.layouts["a"].contains(&Tab::browser_file("/a/index.HTML".into()))
+        });
         assert_eq!(app.selected.as_deref(), Some("b"));
         assert!(app.layouts["a"].contains(&Tab::browser_file("/a/index.HTML".into())));
         assert_eq!(app.layouts["a"].version, 6);
@@ -10066,7 +10425,12 @@ mod navigation_tests {
         app.open_browser_url("a", "https://example.com/app", None)
             .unwrap();
         app.select_project("b".into());
-        app.process_updates(&ctx);
+        pump_until(&mut app, &ctx, |app| {
+            app.layouts["a"].contains(&Tab::Browser {
+                id: String::new(),
+                target: BrowserTarget::Url("https://example.com/app".into()),
+            })
+        });
         assert_eq!(app.selected.as_deref(), Some("b"));
         assert!(app.layouts["a"].contains(&Tab::Browser {
             id: String::new(),
@@ -10088,7 +10452,9 @@ mod navigation_tests {
         let (mut app, ctx, _dir) = fixture();
         app.open_browser_url("a", "https://example.com/app", None)
             .unwrap();
-        app.process_updates(&ctx);
+        pump_until(&mut app, &ctx, |app| {
+            matches!(app.layouts["a"].active_pane(), Some(Tab::Browser { .. }))
+        });
         app.selected = Some("a".into());
         let old = app.layouts["a"].active_pane().unwrap().clone();
         app.browser_submit = Some((
@@ -10164,7 +10530,9 @@ mod navigation_tests {
         let (mut app, ctx, _dir) = fixture();
         app.open_browser_url("a", "https://example.com/start", None)
             .unwrap();
-        app.process_updates(&ctx);
+        pump_until(&mut app, &ctx, |app| {
+            matches!(app.layouts["a"].active_pane(), Some(Tab::Browser { .. }))
+        });
         let key = app.layouts["a"].active_pane().unwrap().key();
         app.selected = Some("b".into());
         let target = BrowserTarget::from_http_url("https://example.com/next").unwrap();

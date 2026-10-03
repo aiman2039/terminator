@@ -3,6 +3,7 @@ use crate::Tab;
 use anyhow::{Context, Result, ensure};
 use egui_dock::DockState;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -478,6 +479,84 @@ impl Workspace {
         self.tabs
             .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
         self.normalize(previous);
+    }
+
+    /// Drop shell panes whose ids are in `ids`. Emptied top-level tabs go away.
+    pub(crate) fn remove_terminal_ids(&mut self, ids: &HashSet<String>) {
+        if ids.is_empty() {
+            return;
+        }
+        let hit = self.tabs.iter().any(|tab| {
+            tab.layout
+                .iter_all_tabs()
+                .any(|(_, pane)| matches!(pane, Tab::Terminal(sid) if ids.contains(sid)))
+        });
+        if !hit {
+            return;
+        }
+        let previous = self.active_index();
+        for tab in &mut self.tabs {
+            let panes: Vec<Tab> = tab
+                .layout
+                .iter_all_tabs()
+                .filter(|(_, pane)| matches!(pane, Tab::Terminal(sid) if ids.contains(sid)))
+                .map(|(_, pane)| pane.clone())
+                .collect();
+            for pane in panes {
+                while let Some(path) = tab.layout.find_tab(&pane) {
+                    tab.layout.remove_tab(path);
+                }
+                if tab.primary.as_ref() == Some(&pane) {
+                    tab.primary = tab
+                        .layout
+                        .iter_all_tabs()
+                        .next()
+                        .map(|(_, pane)| pane.clone());
+                }
+            }
+        }
+        self.tabs
+            .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
+        self.normalize(previous);
+    }
+
+    /// Install `layout` as a top-level tab. An empty active tab is reused so a
+    /// blank workspace does not keep a second empty group. `activate` selects
+    /// the new tab; a reused blank tab is already the one on screen.
+    pub(crate) fn adopt_dock(&mut self, mut layout: DockState<Tab>, activate: bool) -> bool {
+        let primary = layout
+            .main_surface_mut()
+            .find_active_focused()
+            .map(|(_, tab)| tab.clone())
+            .or_else(|| layout.iter_all_tabs().next().map(|(_, tab)| tab.clone()));
+        let Some(primary) = primary else {
+            return false;
+        };
+        self.version = layout
+            .iter_all_tabs()
+            .map(|(_, tab)| tab.layout_version())
+            .fold(self.version, u32::max);
+        let active_index = self.active_index();
+        let reuse = self
+            .tabs
+            .get(active_index)
+            .is_some_and(|tab| tab.layout.iter_all_tabs().next().is_none());
+        if reuse {
+            let tab = &mut self.tabs[active_index];
+            tab.layout = layout;
+            tab.primary = Some(primary);
+            return true;
+        }
+        let id = terminator_core::id();
+        self.tabs.push(WorkspaceTab {
+            id: id.clone(),
+            primary: Some(primary),
+            layout,
+        });
+        if activate {
+            self.active = id;
+        }
+        true
     }
 
     pub fn strip_player(&mut self) {
@@ -1254,5 +1333,29 @@ mod tests {
             vec!["tC".to_owned(), "tB".to_owned(), first.clone()]
         );
         assert!(!workspace.reorder_group("ghost", 0));
+    }
+
+    #[test]
+    fn adopt_dock_reuses_a_blank_tab_and_appends_beside_content() {
+        let mut workspace = Workspace::empty();
+        let layout = DockState::new(vec![Tab::Terminal("shell".into())]);
+        assert!(workspace.adopt_dock(layout, true));
+        assert_eq!(workspace.tabs.len(), 1);
+        assert!(workspace.contains(&Tab::Terminal("shell".into())));
+
+        workspace.add("editor".into(), Tab::Terminal("edit".into()));
+        let editor = workspace.active.clone();
+        assert!(workspace.adopt_dock(DockState::new(vec![Tab::Terminal("other".into())]), false));
+        assert_eq!(workspace.tabs.len(), 3);
+        assert_eq!(workspace.active, editor);
+        assert!(workspace.contains(&Tab::Terminal("other".into())));
+
+        let mut ids = HashSet::new();
+        ids.insert("shell".into());
+        ids.insert("missing".into());
+        workspace.remove_terminal_ids(&ids);
+        assert!(!workspace.contains(&Tab::Terminal("shell".into())));
+        assert!(workspace.contains(&Tab::Terminal("edit".into())));
+        assert!(workspace.contains(&Tab::Terminal("other".into())));
     }
 }
