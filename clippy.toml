@@ -1,0 +1,2 @@
+# Tests index fixtures on purpose. Production code still warns.
+allow-indexing-slicing-in-tests = true

@@ -33,3 +33,6 @@ core-foundation = "0.10"
 version = "0.28"
 default-features = false
 features = ["handshake"]
+
+[lints]
+workspace = true

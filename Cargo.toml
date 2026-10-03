@@ -3,7 +3,7 @@ members = ["crates/*"]
 exclude = ["vendor/egui_term", "vendor/egui_dock", "vendor/egui-winit"]
 resolver = "2"
 [workspace.package]
-version = "0.87.0"
+version = "0.88.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.97.1"
@@ -29,3 +29,11 @@ codegen-units = 8
 [patch.crates-io]
 egui_dock = { path = "vendor/egui_dock" }
 egui-winit = { path = "vendor/egui-winit" }
+
+# Panic indexing is a restriction lint, so pedantic does not see it.
+# `scripts/check.sh clippy` uses `-D warnings`, which denies these.
+# unwrap_used, expect_used, and arithmetic_side_effects stay off: they flag
+# justified panics and ordinary arithmetic, not only out-of-range indexes.
+[workspace.lints.clippy]
+indexing_slicing = "warn"
+string_slice = "warn"

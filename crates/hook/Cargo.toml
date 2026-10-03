@@ -33,3 +33,6 @@ features = ["handshake"]
 
 [dependencies.url]
 version = "2"
+
+[lints]
+workspace = true
