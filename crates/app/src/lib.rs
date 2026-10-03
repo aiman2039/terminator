@@ -627,6 +627,17 @@ pub struct App {
     add_strip_tab: Option<(egui_dock::NodePath, Option<String>)>,
     /// Strip-dock tab to focus after the strip renders.
     focus_strip_tab: Option<Tab>,
+    /// Strip shell to move into the main pane once the strip dock is back in
+    /// `ide_strip_docks`. The menu runs while that dock is checked out for
+    /// paint, so the removal has to wait until it is inserted again.
+    move_strip_to_main: Option<String>,
+    /// Main-pane shell to move into the strip once the workspace dock is
+    /// checked back in. The caption menu runs while that dock is checked out.
+    move_main_to_strip: Option<String>,
+    /// Strip tab whose drag has started. Promoted to [`Self::pane_drag`] once
+    /// the pointer leaves the strip, so reordering inside the strip stays
+    /// with the dock.
+    strip_tab_drag: Option<String>,
     /// Strip-dock pane lookup, rebuilt every strip render (the main-dock
     /// maps only ever cover the main dock; paths are meaningless across
     /// docks).
@@ -636,11 +647,16 @@ pub struct App {
 
     pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
     pane_index: Option<PaneIndex>,
-    /// Terminal pane currently dragged by its caption header. Dropped onto
-    /// another split leaf (rearrange), a workspace strip tab (move across
-    /// top-level tabs), or a strip gap (new tab at that slot) within the
-    /// same project.
+    /// Terminal pane currently dragged by its caption header or, once the
+    /// pointer leaves the IDE strip, by a strip tab. Dropped onto another
+    /// split leaf, a workspace tab, or the opposite dock.
     pane_drag: Option<Tab>,
+    /// The dragged pane started in the IDE strip. A drop on the main pane
+    /// moves it there; a drop back on the strip cancels that move.
+    pane_drag_from_strip: bool,
+    /// A cross-dock move changed a dock that was checked out for paint.
+    /// Baselines and layout save run after that dock is inserted again.
+    pending_layout_save: bool,
     /// Top-level tab currently dragged by its strip tab. Dropping it over
     /// the strip reorders it to the insertion slot; releasing elsewhere
     /// cancels. Only one of `pane_drag` and `tab_drag` is active at a time.
@@ -973,6 +989,9 @@ impl App {
             add_tab: None,
             add_strip_tab: None,
             focus_strip_tab: None,
+            move_strip_to_main: None,
+            move_main_to_strip: None,
+            strip_tab_drag: None,
             strip_pane_by_tab: HashMap::new(),
             strip_pane_tabs: HashMap::new(),
             pane_by_tab: HashMap::new(),
@@ -980,6 +999,8 @@ impl App {
             pane_tabs: HashMap::new(),
             pane_index: None,
             pane_drag: None,
+            pane_drag_from_strip: false,
+            pending_layout_save: false,
             tab_drag: None,
             strip_tab_hover: false,
             strip_new_tab_hover: false,
@@ -3122,8 +3143,41 @@ impl App {
     fn shortcut_applies(&self, action: &str) -> bool {
         match action {
             "editor_save" | "compare_disk" => self.active_editor_id().is_some(),
+            "move_to_main" => self.focused_strip_shell().is_some(),
+            "move_to_strip" => self.preferences.ide_mode && self.focused_main_shell().is_some(),
             _ => true,
         }
+    }
+
+    /// Live or ended shell whose tab is in the strip and which currently has
+    /// keyboard focus. Main-pane shells stay put.
+    fn focused_strip_shell(&self) -> Option<String> {
+        let sid = self.active_session.as_ref()?;
+        let session = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| &session.id == sid)?;
+        (session.kind == SessionKind::Shell && self.is_strip_session(&session.project_id, sid))
+            .then(|| sid.clone())
+    }
+
+    /// Shell that is open in the main pane, not the IDE strip.
+    fn focused_main_shell(&self) -> Option<String> {
+        let sid = self.active_session.as_ref()?;
+        let session = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| &session.id == sid)?;
+        if session.kind != SessionKind::Shell || self.is_strip_session(&session.project_id, sid) {
+            return None;
+        }
+        let pane = Tab::Terminal(sid.clone());
+        self.layouts
+            .get(&session.project_id)
+            .is_some_and(|workspace| workspace.contains(&pane))
+            .then(|| sid.clone())
     }
 
     fn active_editor_id(&self) -> Option<String> {
@@ -3161,6 +3215,18 @@ impl App {
             "toggle_left_sidebar" => self.toggle_left_sidebar(),
             "toggle_right_sidebar" => self.toggle_right_sidebar(),
             "toggle_ide_mode" => self.toggle_ide_mode(),
+            "move_to_main" => {
+                if let Some(sid) = self.focused_strip_shell() {
+                    self.move_strip_session_to_main(&sid);
+                }
+            }
+            "move_to_strip" => {
+                if self.preferences.ide_mode
+                    && let Some(sid) = self.focused_main_shell()
+                {
+                    self.move_main_session_to_strip(&sid);
+                }
+            }
             "next_attention" => self.next_attention(),
             _ => {}
         }
@@ -3778,6 +3844,245 @@ impl App {
         }
     }
 
+    /// Remember a strip shell to move once its dock is not checked out.
+    fn queue_strip_move(&mut self, sid: &str) {
+        self.move_strip_to_main = Some(sid.to_owned());
+    }
+
+    /// Apply a queued strip move. No-op while the selected project's strip
+    /// dock is checked out for paint; the caller retries after inserting it.
+    fn drain_strip_move(&mut self) {
+        let Some(sid) = self.move_strip_to_main.clone() else {
+            return;
+        };
+        let checked_out = self.selected.as_ref().is_some_and(|project| {
+            !self.preferences.ide_strip_docks.0.contains_key(project)
+                && self
+                    .state
+                    .sessions
+                    .iter()
+                    .any(|session| session.id == sid && session.project_id == *project)
+        });
+        if checked_out {
+            return;
+        }
+        self.move_strip_to_main = None;
+        self.move_strip_session_to_main(&sid);
+    }
+
+    /// Move one strip shell into its own main-pane workspace tab. IDE mode
+    /// stays on. Split siblings stay in the strip. Editors stay where they
+    /// are. Returns false when `sid` is not a strip shell.
+    fn move_strip_session_to_main(&mut self, sid: &str) -> bool {
+        let Some(project) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == sid && session.kind == SessionKind::Shell)
+            .map(|session| session.project_id.clone())
+        else {
+            return false;
+        };
+        if !self.is_strip_session(&project, sid) {
+            return false;
+        }
+        let pane = Tab::Terminal(sid.to_owned());
+        self.drop_strip_session(sid);
+        {
+            let workspace = self
+                .layouts
+                .entry(project.clone())
+                .or_insert_with(Workspace::empty);
+            workspace.remove_terminal_ids(&HashSet::from([sid.to_owned()]));
+            if workspace.contains(&pane) {
+                workspace.activate_containing(&pane);
+            } else {
+                workspace.add(id(), pane.clone());
+            }
+        }
+        self.hide_center_overlay();
+        if self.selected.as_deref() != Some(project.as_str()) {
+            self.select_project(project);
+        }
+        self.active_session = Some(sid.to_owned());
+        self.non_terminal_selected = false;
+        self.focus_tab = Some(pane);
+        self.note_focus_baselines();
+        self.save_layouts();
+        self.send(Request::Focus {
+            session: sid.to_owned(),
+        });
+        true
+    }
+
+    /// Remember a main-pane shell to move once its workspace is checked in.
+    fn queue_main_to_strip(&mut self, sid: &str) {
+        self.move_main_to_strip = Some(sid.to_owned());
+    }
+
+    fn drain_main_to_strip(&mut self) {
+        let Some(sid) = self.move_main_to_strip.take() else {
+            return;
+        };
+        self.move_main_session_to_strip(&sid);
+    }
+
+    /// Move one main-pane shell into the IDE strip. IDE mode stays on and the
+    /// strip is shown. Other main-pane tabs, including editors, stay. Returns
+    /// false when `sid` is not a main-pane shell or IDE mode is off.
+    fn move_main_session_to_strip(&mut self, sid: &str) -> bool {
+        if !self.preferences.ide_mode {
+            return false;
+        }
+        let Some(project) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == sid && session.kind == SessionKind::Shell)
+            .map(|session| session.project_id.clone())
+        else {
+            return false;
+        };
+        if self.is_strip_session(&project, sid) {
+            return false;
+        }
+        let pane = Tab::Terminal(sid.to_owned());
+        let Some(workspace) = self.layouts.get_mut(&project) else {
+            return false;
+        };
+        if !workspace.contains(&pane) {
+            return false;
+        }
+        workspace.remove_terminal_ids(&HashSet::from([sid.to_owned()]));
+        self.insert_strip(&project, pane.clone(), None);
+        self.preferences.ide_terminal_collapsed = false;
+        self.hide_center_overlay();
+        if self.selected.as_deref() != Some(project.as_str()) {
+            self.select_project(project);
+        }
+        self.active_session = Some(sid.to_owned());
+        self.non_terminal_selected = false;
+        self.focus_strip_tab = Some(pane);
+        self.note_focus_baselines();
+        self.save_layouts();
+        self.send(Request::Focus {
+            session: sid.to_owned(),
+        });
+        true
+    }
+
+    /// Take a strip shell into `dock` as its own workspace tab. The caller
+    /// then lands it on the drop target. The workspace is checked out, so
+    /// the layout save waits until it is inserted again.
+    fn pull_strip_shell_into(&mut self, dock: &mut Workspace, sid: &str) -> bool {
+        let Some(project) = self.selected.clone() else {
+            return false;
+        };
+        let shell = self.state.sessions.iter().any(|session| {
+            session.id == sid && session.kind == SessionKind::Shell && session.project_id == project
+        });
+        if !shell || !self.is_strip_session(&project, sid) {
+            return false;
+        }
+        let pane = Tab::Terminal(sid.to_owned());
+        self.drop_strip_session(sid);
+        if dock.contains(&pane) {
+            dock.activate_containing(&pane);
+        } else {
+            dock.add(id(), pane.clone());
+        }
+        self.active_session = Some(sid.to_owned());
+        self.non_terminal_selected = false;
+        self.focus_tab = Some(pane);
+        self.hide_center_overlay();
+        self.pending_layout_save = true;
+        self.send(Request::Focus {
+            session: sid.to_owned(),
+        });
+        true
+    }
+
+    /// Drop a strip shell onto a main-pane leaf. Single panes exchange places.
+    /// A failed landing still leaves the shell in its own workspace tab.
+    fn land_strip_shell_on_leaf(
+        &mut self,
+        dock: &mut Workspace,
+        sid: &str,
+        group: &str,
+        path: egui_dock::NodePath,
+        zone: PaneDropZone,
+    ) -> bool {
+        if !self.pull_strip_shell_into(dock, sid) {
+            return false;
+        }
+        let pane = Tab::Terminal(sid.to_owned());
+        let placed = match zone.split() {
+            None => dock.move_pane_to_group_leaf(&pane, group, path),
+            Some(split) => dock.move_pane_to_split(&pane, group, path, split),
+        };
+        placed || dock.contains(&pane)
+    }
+
+    /// A strip-tab drag that has left the strip becomes a pane drag so the
+    /// main pane can accept the drop. Releasing inside the strip does not.
+    fn track_strip_tab_drag(&mut self, ui: &egui::Ui, strip_rect: egui::Rect) {
+        let Some(sid) = self.strip_tab_drag.clone() else {
+            return;
+        };
+        let down = ui.input(|input| input.pointer.any_down());
+        let released = ui.input(|input| input.pointer.any_released());
+        if !down && !released {
+            self.strip_tab_drag = None;
+            return;
+        }
+        let outside = ui
+            .input(|input| input.pointer.interact_pos().or(input.pointer.latest_pos()))
+            .is_some_and(|pos| !strip_rect.contains(pos));
+        if outside && self.pane_drag.is_none() {
+            self.pane_drag = Some(Tab::Terminal(sid));
+            self.pane_drag_from_strip = true;
+        }
+        if released || !down {
+            self.strip_tab_drag = None;
+        }
+    }
+
+    /// Drop a main-pane shell onto the IDE strip. A strip-origin drag released
+    /// back here cancels instead, leaving the dock reorder in place.
+    fn take_main_drop_on_strip(&mut self, ui: &egui::Ui, strip_rect: egui::Rect) {
+        let Some(Tab::Terminal(sid)) = self.pane_drag.clone() else {
+            return;
+        };
+        let over = ui
+            .input(|input| input.pointer.interact_pos().or(input.pointer.latest_pos()))
+            .is_some_and(|pos| strip_rect.contains(pos));
+        if !over {
+            return;
+        }
+        let released = ui.input(|input| input.pointer.any_released());
+        let down = ui.input(|input| input.pointer.any_down());
+        if self.pane_drag_from_strip {
+            if released {
+                self.end_pane_drag();
+            }
+            return;
+        }
+        if down && !released {
+            ui.painter().rect_stroke(
+                strip_rect,
+                2,
+                egui::Stroke::new(2.0, appearance::color(&self.theme.accent)),
+                egui::StrokeKind::Inside,
+            );
+            ui.ctx().request_repaint();
+            return;
+        }
+        if released {
+            self.move_main_session_to_strip(&sid);
+            self.end_pane_drag();
+        }
+    }
+
     /// Focus a strip tab: activate it in the strip dock, make it the active
     /// session, tell the daemon.
     fn activate_strip_session(&mut self, project: &str, sid: &str) {
@@ -4037,6 +4342,8 @@ impl App {
     }
 
     fn ide_terminal_strip(&mut self, ui: &mut egui::Ui) {
+        // A move queued last frame lands before this dock is checked out.
+        self.drain_strip_move();
         // Keep the resizable panel at its stored height even when the strip has
         // nothing to show. Otherwise the frame shrinks to its content and the
         // separator jumps down for whichever project you switch away from.
@@ -4096,8 +4403,9 @@ impl App {
             let style = self.dock_style(ui);
             self.refresh_strip_pane_maps(&strip);
             DockArea::new(&mut strip)
-                // Distinct area id: drag state is keyed by it, so tabs can
-                // never move between the strip and the main dock.
+                // Distinct area id: an in-strip reorder stays here. Dragging
+                // the tab out of this rect promotes it to a pane drag, which
+                // the main pane accepts.
                 .id(egui::Id::new("ide-strip-dock"))
                 .style(style)
                 .show_add_buttons(true)
@@ -4113,7 +4421,15 @@ impl App {
             self.apply_add_strip_tab(&project, &mut strip);
             self.apply_focus_strip_tab(&mut strip);
         }
+        let strip_rect = ui.max_rect();
         self.preferences.ide_strip_docks.0.insert(project, strip);
+        // The context menu queues during `show`, while this dock was checked
+        // out. Apply that move now that membership is visible again.
+        self.drain_strip_move();
+        // Same frame as a release: later panels see a promoted strip drag,
+        // and a main-pane shell released here moves into the dock just inserted.
+        self.track_strip_tab_drag(ui, strip_rect);
+        self.take_main_drop_on_strip(ui, strip_rect);
     }
 
     fn go_session(&mut self, sid: &str) {
@@ -4940,17 +5256,30 @@ impl App {
         self.restore_cleared_focus(&dock);
         if dock.iter_all_tabs().next().is_none() {
             self.workspace_blank(ui);
+            // No leaf to drop on. A strip shell released here still becomes
+            // the main pane's first tab.
+            if self.pane_drag_from_strip
+                && ui.input(|input| input.pointer.any_released())
+                && let Some(Tab::Terminal(sid)) = self.pane_drag.clone()
+            {
+                self.pull_strip_shell_into(&mut dock, &sid);
+            }
         } else {
             self.paint_dock(ui, &project, &mut dock);
         }
         self.apply_focus_tab(&mut dock);
         self.apply_add_tab(&project, &mut dock);
         self.paint_session_focus(ui, &dock);
-        self.layouts.insert(project, dock);
+        self.layouts.insert(project.clone(), dock);
+        if self.pending_layout_save {
+            self.pending_layout_save = false;
+            self.note_focus_baselines();
+            self.save_layouts();
+        }
+        self.drain_main_to_strip();
         self.paint_drag_ghost(ui);
         self.paint_tab_ghost(ui);
-        // A drag released over an empty workspace has no dock drop handler;
-        // never leave the payload stuck.
+        // A release the docks did not accept cancels so the payload cannot stick.
         if self.pane_drag.is_some() && ui.input(|i| i.pointer.any_released()) {
             self.drop_preview_origin = None;
             self.end_pane_drag();
@@ -5117,6 +5446,7 @@ impl App {
     /// Clear a finished or cancelled pane drag, including its ghost snapshot.
     fn end_pane_drag(&mut self) {
         self.pane_drag = None;
+        self.pane_drag_from_strip = false;
         self.pane_drag_snapshot.clear();
         self.strip_tab_hover = false;
         self.strip_new_tab_hover = false;
@@ -5215,22 +5545,36 @@ impl App {
         if released {
             if let Some((path, _)) = target {
                 let group = dock.active.clone();
-                let moved = match zone {
-                    Some(PaneDropZone::Center) | None => {
-                        if dock.find_tab(&pane).is_some() {
-                            // Same group: `move_pane_to_leaf` also focuses a
-                            // drop back onto the pane's own leaf.
-                            dock.move_pane_to_leaf(&pane, path)
-                        } else {
-                            dock.move_pane_to_group_leaf(&pane, &group, path)
-                        }
+                let from_strip = self.pane_drag_from_strip;
+                let moved = if from_strip {
+                    match &pane {
+                        Tab::Terminal(sid) => self.land_strip_shell_on_leaf(
+                            dock,
+                            sid,
+                            &group,
+                            path,
+                            zone.unwrap_or(PaneDropZone::Center),
+                        ),
+                        _ => false,
                     }
-                    Some(edge) => {
-                        // `move_pane_to_split` focuses a lone pane dropped on
-                        // an edge of its own leaf instead of splitting it.
-                        edge.split().is_some_and(|split| {
-                            dock.move_pane_to_split(&pane, &group, path, split)
-                        })
+                } else {
+                    match zone {
+                        Some(PaneDropZone::Center) | None => {
+                            if dock.find_tab(&pane).is_some() {
+                                // Same group: `move_pane_to_leaf` also focuses a
+                                // drop back onto the pane's own leaf.
+                                dock.move_pane_to_leaf(&pane, path)
+                            } else {
+                                dock.move_pane_to_group_leaf(&pane, &group, path)
+                            }
+                        }
+                        Some(edge) => {
+                            // `move_pane_to_split` focuses a lone pane dropped on
+                            // an edge of its own leaf instead of splitting it.
+                            edge.split().is_some_and(|split| {
+                                dock.move_pane_to_split(&pane, &group, path, split)
+                            })
+                        }
                     }
                 };
                 if moved {
@@ -6569,6 +6913,207 @@ mod navigation_tests {
         assert!(app.is_strip_session("a", "shell"));
         assert!(!app.layouts["a"].contains(&Tab::Terminal("shell".into())));
         assert!(app.layouts["a"].contains(&Tab::Terminal("edit".into())));
+    }
+
+    #[test]
+    fn move_to_main_keeps_ide_mode_and_the_strip_sibling() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        app.state.sessions = vec![
+            session_fixture("left", SessionKind::Shell),
+            session_fixture("right", SessionKind::Shell),
+            session_fixture("edit", SessionKind::Editor),
+        ];
+        let mut strip = egui_dock::DockState::new(vec![Tab::Terminal("left".into())]);
+        strip.main_surface_mut().split_right(
+            NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("right".into())],
+        );
+        app.preferences.ide_strip_docks.0.insert("a".into(), strip);
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+                "edit".into(),
+            )])),
+        );
+        app.active_session = Some("right".into());
+        app.run_shortcut(&ctx, "move_to_main");
+        assert!(app.preferences.ide_mode);
+        assert_eq!(app.active_session.as_deref(), Some("right"));
+        assert!(!app.is_strip_session("a", "right"));
+        assert!(app.is_strip_session("a", "left"));
+        assert_eq!(
+            app.preferences
+                .ide_strip_docks
+                .0
+                .get("a")
+                .unwrap()
+                .iter_all_tabs()
+                .count(),
+            1
+        );
+        let workspace = &app.layouts["a"];
+        assert!(workspace.tabs.iter().any(|tab| {
+            tab.layout.find_tab(&Tab::Terminal("edit".into())).is_some()
+                && tab
+                    .layout
+                    .find_tab(&Tab::Terminal("right".into()))
+                    .is_none()
+        }));
+        assert!(workspace.tabs.iter().any(|tab| {
+            tab.layout
+                .find_tab(&Tab::Terminal("right".into()))
+                .is_some()
+                && tab.layout.find_tab(&Tab::Terminal("edit".into())).is_none()
+        }));
+        assert_eq!(
+            workspace.active_pane(),
+            Some(&Tab::Terminal("right".into()))
+        );
+        // The shell is already in the main pane. The chord does not copy it.
+        app.run_shortcut(&ctx, "move_to_main");
+        assert_eq!(
+            app.layouts["a"]
+                .tabs
+                .iter()
+                .filter(|tab| tab
+                    .layout
+                    .find_tab(&Tab::Terminal("right".into()))
+                    .is_some())
+                .count(),
+            1
+        );
+        assert!(app.is_strip_session("a", "left"));
+        assert!(!app.move_strip_session_to_main("edit"));
+        assert!(!app.move_strip_session_to_main("missing"));
+    }
+
+    #[test]
+    fn queued_strip_move_waits_until_the_dock_is_checked_in() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        app.state.sessions = vec![
+            session_fixture("left", SessionKind::Shell),
+            session_fixture("right", SessionKind::Shell),
+        ];
+        let mut strip = egui_dock::DockState::new(vec![Tab::Terminal("left".into())]);
+        strip.main_surface_mut().split_right(
+            NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("right".into())],
+        );
+        app.preferences.ide_strip_docks.0.insert("a".into(), strip);
+        app.active_session = Some("right".into());
+        app.queue_strip_move("left");
+        let checked_out = app.preferences.ide_strip_docks.0.remove("a").unwrap();
+        app.drain_strip_move();
+        assert_eq!(app.move_strip_to_main.as_deref(), Some("left"));
+        assert!(
+            checked_out
+                .find_tab(&Tab::Terminal("left".into()))
+                .is_some()
+        );
+        app.preferences
+            .ide_strip_docks
+            .0
+            .insert("a".into(), checked_out);
+        app.drain_strip_move();
+        assert!(app.move_strip_to_main.is_none());
+        assert!(!app.is_strip_session("a", "left"));
+        assert!(app.is_strip_session("a", "right"));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("left".into())));
+        assert_eq!(app.active_session.as_deref(), Some("left"));
+        assert!(app.preferences.ide_mode);
+    }
+
+    #[test]
+    fn move_to_strip_keeps_ide_mode_and_the_main_editor() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        app.preferences.ide_terminal_collapsed = true;
+        app.state.sessions = vec![
+            session_fixture("dock", SessionKind::Shell),
+            session_fixture("stay", SessionKind::Shell),
+            session_fixture("edit", SessionKind::Editor),
+        ];
+        let mut main = egui_dock::DockState::new(vec![Tab::Terminal("edit".into())]);
+        main.main_surface_mut().split_right(
+            NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("dock".into()), Tab::Terminal("stay".into())],
+        );
+        app.layouts.insert("a".into(), Workspace::from_layout(main));
+        app.preferences
+            .ide_strip_docks
+            .0
+            .insert("a".into(), egui_dock::DockState::new(vec![]));
+        app.active_session = Some("dock".into());
+        app.run_shortcut(&ctx, "move_to_strip");
+        assert!(app.preferences.ide_mode);
+        assert!(!app.preferences.ide_terminal_collapsed);
+        assert_eq!(app.active_session.as_deref(), Some("dock"));
+        assert!(app.is_strip_session("a", "dock"));
+        assert!(!app.is_strip_session("a", "stay"));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("edit".into())));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("stay".into())));
+        assert!(!app.layouts["a"].contains(&Tab::Terminal("dock".into())));
+        // Already in the strip. The chord does not copy it, and IDE mode
+        // off has no lower pane to move into.
+        app.run_shortcut(&ctx, "move_to_strip");
+        assert_eq!(
+            app.preferences
+                .ide_strip_docks
+                .0
+                .get("a")
+                .unwrap()
+                .iter_all_tabs()
+                .filter(|(_, tab)| matches!(tab, Tab::Terminal(sid) if sid == "dock"))
+                .count(),
+            1
+        );
+        app.preferences.ide_mode = false;
+        app.active_session = Some("stay".into());
+        assert!(!app.move_main_session_to_strip("stay"));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("stay".into())));
+    }
+
+    #[test]
+    fn strip_drag_lands_on_the_main_leaf() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        app.state.sessions = vec![
+            session_fixture("left", SessionKind::Shell),
+            session_fixture("edit", SessionKind::Editor),
+        ];
+        app.preferences.ide_strip_docks.0.insert(
+            "a".into(),
+            egui_dock::DockState::new(vec![Tab::Terminal("left".into())]),
+        );
+        let mut dock = Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+            "edit".into(),
+        )]));
+        let path = dock
+            .find_tab(&Tab::Terminal("edit".into()))
+            .unwrap()
+            .node_path();
+        let group = dock.active.clone();
+        assert!(app.land_strip_shell_on_leaf(
+            &mut dock,
+            "left",
+            &group,
+            path,
+            PaneDropZone::Center
+        ));
+        assert!(app.preferences.ide_mode);
+        assert!(!app.is_strip_session("a", "left"));
+        assert!(dock.contains(&Tab::Terminal("left".into())));
+        assert!(dock.contains(&Tab::Terminal("edit".into())));
+        assert!(app.pending_layout_save);
     }
 
     #[test]
@@ -10925,6 +11470,58 @@ mod navigation_tests {
                 .contains_key(&Tab::Terminal("other".into()).key())
         );
     }
+    /// Drive one headless frame with the IDE strip painted before the main
+    /// dock, matching `App::ui`, so a release is seen by both drop targets.
+    #[cfg(feature = "test-support")]
+    fn cross_dock_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 600.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                egui::Panel::bottom("ide-terminal")
+                    .resizable(false)
+                    .exact_size(180.0)
+                    .show(ui, |ui| app.ide_terminal_strip(ui));
+                let mut dock = app.layouts.remove("a").unwrap_or_else(Workspace::empty);
+                app.workspace_bar(ui, "a", &mut dock);
+                app.paint_dock(ui, "a", &mut dock);
+                app.layouts.insert("a".into(), dock);
+                if app.pending_layout_save {
+                    app.pending_layout_save = false;
+                    app.note_focus_baselines();
+                }
+            },
+        );
+        output.textures_delta.clear();
+    }
+    #[cfg(feature = "test-support")]
+    fn cross_glide(
+        app: &mut App,
+        ctx: &egui::Context,
+        from: egui::Pos2,
+        to: egui::Pos2,
+        steps: usize,
+    ) {
+        for step in 1..=steps {
+            // Glide step is a UI coordinate blend; the count can exceed the f32 mantissa.
+            #[allow(clippy::cast_precision_loss)]
+            let k = step as f32 / steps as f32;
+            cross_dock_frame(
+                app,
+                ctx,
+                vec![egui::Event::PointerMoved(egui::pos2(
+                    from.x + (to.x - from.x) * k,
+                    from.y + (to.y - from.y) * k,
+                ))],
+            );
+        }
+    }
     /// Drive one headless frame of the strip plus the dock in real panel
     /// order (strip first, dock after) with synthetic pointer events.
     /// Needs test-support for the geometry records.
@@ -11145,6 +11742,90 @@ mod navigation_tests {
             "edge drop did not split right"
         );
         assert_eq!(dock.active_pane(), Some(&Tab::Terminal("left".into())));
+    }
+    /// Dragging a lower-pane tab up into the main dock lands that shell there.
+    /// IDE mode stays on and the editor stays.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn strip_tab_drag_lands_in_the_main_pane() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        app.state.sessions = vec![
+            session_fixture("low", SessionKind::Shell),
+            session_fixture("edit", SessionKind::Editor),
+        ];
+        app.preferences.ide_strip_docks.0.insert(
+            "a".into(),
+            egui_dock::DockState::new(vec![Tab::Terminal("low".into())]),
+        );
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+                "edit".into(),
+            )])),
+        );
+        cross_dock_frame(&mut app, &ctx, vec![]);
+        let start = frame_center(&app, &ctx, "strip-tab:low");
+        let caption = frame_center(&app, &ctx, "pane-drag:edit");
+        let strip = app
+            .fixture_rect(&ctx, "ide-terminal-strip")
+            .expect("strip geometry");
+        let drop_at = egui::pos2(caption.x, (caption.y + strip[1]) * 0.5);
+        cross_dock_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        cross_dock_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        cross_glide(&mut app, &ctx, start, drop_at, 8);
+        assert!(
+            app.pane_drag_from_strip,
+            "leaving the strip did not promote the tab drag"
+        );
+        cross_dock_frame(&mut app, &ctx, vec![frame_press(drop_at, false)]);
+        assert!(app.pane_drag.is_none());
+        assert!(app.preferences.ide_mode);
+        assert!(!app.is_strip_session("a", "low"));
+        let dock = app.layouts.get("a").unwrap();
+        assert!(dock.contains(&Tab::Terminal("low".into())));
+        assert!(dock.contains(&Tab::Terminal("edit".into())));
+    }
+    /// Dragging a main-pane shell down onto the IDE strip moves only that shell.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn main_caption_drag_lands_in_the_strip() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.preferences.ide_mode = true;
+        app.preferences.ide_terminal_collapsed = true;
+        app.state.sessions = vec![
+            session_fixture("up", SessionKind::Shell),
+            session_fixture("edit", SessionKind::Editor),
+        ];
+        let mut main = egui_dock::DockState::new(vec![Tab::Terminal("edit".into())]);
+        main.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("up".into())],
+        );
+        app.layouts.insert("a".into(), Workspace::from_layout(main));
+        cross_dock_frame(&mut app, &ctx, vec![]);
+        let start = frame_center(&app, &ctx, "pane-drag:up");
+        let strip = app
+            .fixture_rect(&ctx, "ide-terminal-strip")
+            .expect("strip geometry");
+        let drop_at = egui::pos2(strip[0] + strip[2] * 0.5, strip[1] + strip[3] * 0.5);
+        cross_dock_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        cross_dock_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        cross_glide(&mut app, &ctx, start, drop_at, 8);
+        assert_eq!(app.pane_drag, Some(Tab::Terminal("up".into())));
+        assert!(!app.pane_drag_from_strip);
+        cross_dock_frame(&mut app, &ctx, vec![frame_press(drop_at, false)]);
+        assert!(app.pane_drag.is_none());
+        assert!(app.preferences.ide_mode);
+        assert!(!app.preferences.ide_terminal_collapsed);
+        assert!(app.is_strip_session("a", "up"));
+        assert!(!app.is_strip_session("a", "edit"));
+        let dock = app.layouts.get("a").unwrap();
+        assert!(!dock.contains(&Tab::Terminal("up".into())));
+        assert!(dock.contains(&Tab::Terminal("edit".into())));
     }
     /// Cancelling a pane drag (Esc) after previewing another tab switches
     /// back to the origin tab without moving anything.

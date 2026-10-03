@@ -22,6 +22,8 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("toggle_left_sidebar", "Toggle left sidebar"),
     ("toggle_right_sidebar", "Toggle right sidebar"),
     ("toggle_ide_mode", "Toggle IDE mode"),
+    ("move_to_main", "Move terminal to main pane"),
+    ("move_to_strip", "Move terminal to lower pane"),
     ("open_settings", "Settings"),
     ("open_palette", "Command palette"),
     ("next_attention", "Next agent needing attention"),

@@ -460,6 +460,8 @@ impl Default for Settings {
                 ("toggle_left_sidebar".into(), "command+B".into()),
                 ("toggle_right_sidebar".into(), "command+L".into()),
                 ("toggle_ide_mode".into(), "command+E".into()),
+                ("move_to_main".into(), "command+alt+M".into()),
+                ("move_to_strip".into(), "command+alt+Down".into()),
                 ("open_settings".into(), "command+,".into()),
                 ("open_palette".into(), "command+P".into()),
                 ("next_attention".into(), "command+shift+J".into()),

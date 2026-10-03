@@ -293,6 +293,31 @@ restarted.
   Full app suite: 335 passed, 12 failed — the documented pre-existing
   sandbox socket/process failures, none in touched areas.
 
+## Move one shell between the IDE strip and the main pane (2026-10-03)
+
+- IDE mode stays on. Either direction: right-click "Move to main pane" /
+  "Move to lower pane", `move_to_main` (`command+alt+M`) / `move_to_strip`
+  (`command+alt+Down`), or the command palette. The menu queues the move
+  while that dock is checked out and drains it after the dock is inserted.
+  Menu to main opens the shell as its own workspace tab. Menu to the strip
+  inserts it in the focused strip leaf and shows the strip.
+- Drag matches other pane drags. A strip tab dragged out of the strip
+  becomes a pane drag (egui_dock still owns the in-strip reorder) and lands
+  on a main leaf, workspace tab, or tab gap. A main-pane caption dragged
+  onto the strip moves that shell down. Editors stay. Releasing a strip drag
+  back on the strip cancels. Entering IDE mode still pulls every main-pane
+  shell back into the strip.
+- Unit: `move_to_main_keeps_ide_mode_and_the_strip_sibling`,
+  `move_to_strip_keeps_ide_mode_and_the_main_editor`,
+  `queued_strip_move_waits_until_the_dock_is_checked_in`,
+  `strip_drag_lands_on_the_main_leaf`,
+  `strip_tab_drag_lands_in_the_main_pane`,
+  `main_caption_drag_lands_in_the_strip`,
+  `every_menu_action_has_a_unique_default_chord`, `palette_labels_are_stable`.
+  The two drag tests need `--features test-support`.
+  `cargo clippy -p terminator -p terminator-core --all-targets --locked -- -D warnings`
+  clean. Full app suite and a live GUI were not run.
+
 ## IDE strip is a full terminal dock (2026-09-25)
 
 - Splits from the strip landed in the main dock because creation anchored

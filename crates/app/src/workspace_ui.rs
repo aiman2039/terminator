@@ -1373,6 +1373,11 @@ impl App {
                 && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
             {
                 if let Some(group_id) = Self::strip_interior_tab(&strip_rects, pos) {
+                    if self.pane_drag_from_strip
+                        && let Tab::Terminal(sid) = &pane
+                    {
+                        self.pull_strip_shell_into(workspace, sid);
+                    }
                     if workspace.move_pane_to_group(&pane, &group_id) {
                         if let Tab::Terminal(sid) = &pane {
                             self.active_session = Some(sid.clone());
@@ -1390,6 +1395,11 @@ impl App {
                         Self::strip_insertion_at(&strip_rect, &strip_rects, pos)
                     };
                     if let Some(index) = index {
+                        if self.pane_drag_from_strip
+                            && let Tab::Terminal(sid) = &pane
+                        {
+                            self.pull_strip_shell_into(workspace, sid);
+                        }
                         if workspace.move_pane_to_new_group_at(&pane, index).is_some() {
                             if let Tab::Terminal(sid) = &pane {
                                 self.active_session = Some(sid.clone());
@@ -1632,6 +1642,10 @@ impl App {
         let Some(pane) = &self.pane_drag else {
             return;
         };
+        // The IDE strip tab is already floating in the dock's drag layer.
+        if self.pane_drag_from_strip {
+            return;
+        }
         // The tab ghost owns the pointer over strip new-tab zones so the
         // two never stack.
         if self.strip_new_tab_hover {
@@ -3317,6 +3331,32 @@ impl TabViewer for Viewer<'_> {
                 session: sid.clone(),
             });
         }
+        // Dragging a strip tab starts inside this dock. Leaving the strip
+        // promotes it to a pane drag; releasing inside keeps the dock reorder.
+        // egui_dock floats the tab on its button id, then hands us a second
+        // interact id (`tab_id.with("dragged")`), so `drag_started` on this
+        // response never fires. Match that floating id, and a release that
+        // comes back through the tab button itself.
+        if self.strip
+            && let Tab::Terminal(sid) = tab
+            && self
+                .app
+                .state
+                .sessions
+                .iter()
+                .any(|session| &session.id == sid && session.kind == SessionKind::Shell)
+        {
+            let floating = response
+                .ctx
+                .dragged_id()
+                .is_some_and(|drag_id| response.id == drag_id.with("dragged"));
+            if response.drag_started() || response.dragged() || response.drag_stopped() || floating
+            {
+                self.app.strip_tab_drag = Some(sid.clone());
+            }
+            #[cfg(feature = "test-support")]
+            diagnostics::record(&response.ctx, &format!("strip-tab:{sid}"), response.rect);
+        }
     }
     fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Tab, pane: egui_dock::NodePath) {
         if let Tab::Terminal(sid) = tab {
@@ -3326,6 +3366,39 @@ impl TabViewer for Viewer<'_> {
         self.app.new_terminal_menu(ui, Some(pane), self.strip);
         ui.separator();
         if let Tab::Terminal(sid) = tab {
+            let shell = self
+                .app
+                .state
+                .sessions
+                .iter()
+                .any(|session| &session.id == sid && session.kind == SessionKind::Shell);
+            if self.strip
+                && shell
+                && appearance::menu_item(
+                    ui,
+                    "Move to main pane",
+                    "ArrowUp",
+                    &self.app.shortcut_label("move_to_main"),
+                )
+                .clicked()
+            {
+                self.app.queue_strip_move(sid);
+                ui.close();
+            }
+            if !self.strip
+                && shell
+                && self.app.preferences.ide_mode
+                && appearance::menu_item(
+                    ui,
+                    "Move to lower pane",
+                    "ArrowDown",
+                    &self.app.shortcut_label("move_to_strip"),
+                )
+                .clicked()
+            {
+                self.app.queue_main_to_strip(sid);
+                ui.close();
+            }
             if appearance::menu_item(
                 ui,
                 "Search scrollback",

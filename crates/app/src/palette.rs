@@ -12,6 +12,8 @@ pub(crate) enum PaletteItem {
     NewWorktree,
     OpenPlayer,
     ToggleIdeMode,
+    MoveToMain,
+    MoveToStrip,
     ToggleIdeSidebarHeight,
     NextAttention,
     SaveLayout,
@@ -33,6 +35,8 @@ impl PaletteItem {
             Self::NewWorktree => "New task worktree".into(),
             Self::OpenPlayer => "Open player".into(),
             Self::ToggleIdeMode => "Toggle IDE mode".into(),
+            Self::MoveToMain => "Move terminal to main pane".into(),
+            Self::MoveToStrip => "Move terminal to lower pane".into(),
             Self::ToggleIdeSidebarHeight => "Toggle IDE sidebar height".into(),
             Self::NextAttention => "Next agent needing attention".into(),
             Self::SaveLayout => "Save layout".into(),
@@ -49,6 +53,8 @@ impl App {
             PaletteItem::NextAttention,
             PaletteItem::OpenPlayer,
             PaletteItem::ToggleIdeMode,
+            PaletteItem::MoveToMain,
+            PaletteItem::MoveToStrip,
             PaletteItem::ToggleIdeSidebarHeight,
             PaletteItem::SaveLayout,
         ];
@@ -205,6 +211,18 @@ impl App {
             PaletteItem::NewWorktree => self.open_worktree_wizard(),
             PaletteItem::OpenPlayer => self.open_player(),
             PaletteItem::ToggleIdeMode => self.toggle_ide_mode(),
+            PaletteItem::MoveToMain => {
+                if let Some(sid) = self.focused_strip_shell() {
+                    self.move_strip_session_to_main(&sid);
+                }
+            }
+            PaletteItem::MoveToStrip => {
+                if self.preferences.ide_mode
+                    && let Some(sid) = self.focused_main_shell()
+                {
+                    self.move_main_session_to_strip(&sid);
+                }
+            }
             PaletteItem::ToggleIdeSidebarHeight => self.toggle_ide_sidebar_height(),
             PaletteItem::SaveLayout => self.save_layout_dialog(),
             PaletteItem::ApplyLayout(name) => {
@@ -250,6 +268,14 @@ mod tests {
     fn palette_labels_are_stable() {
         assert_eq!(PaletteItem::AddProject.label(), "Add project");
         assert_eq!(PaletteItem::ToggleIdeMode.label(), "Toggle IDE mode");
+        assert_eq!(
+            PaletteItem::MoveToMain.label(),
+            "Move terminal to main pane"
+        );
+        assert_eq!(
+            PaletteItem::MoveToStrip.label(),
+            "Move terminal to lower pane"
+        );
         assert_eq!(
             PaletteItem::ToggleIdeSidebarHeight.label(),
             "Toggle IDE sidebar height"
