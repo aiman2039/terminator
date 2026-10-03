@@ -488,6 +488,55 @@ fn click_enabled_menu_item(ui: &mut egui::Ui, enabled: bool, label: &str, icon: 
     clicked
 }
 
+/// Linux title-bar buttons. They stay inside [`App::WINDOW_CONTROL_RESERVE`]
+/// so the project header keeps the same width it has beside the macOS traffic lights.
+#[cfg(not(target_os = "macos"))]
+fn paint_window_controls(ui: &egui::Ui, rect: egui::Rect) {
+    let maximized = ui.input(|input| input.viewport().maximized.unwrap_or(false));
+    let controls = [
+        ("×", "Close", egui::ViewportCommand::Close),
+        ("−", "Minimize", egui::ViewportCommand::Minimized(true)),
+        (
+            "□",
+            "Maximize",
+            egui::ViewportCommand::Maximized(!maximized),
+        ),
+    ];
+    let slot = rect.width() / 3.0;
+    let mut x = rect.left();
+    for (label, tip, command) in controls {
+        let control =
+            egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(slot, rect.height()));
+        x += slot;
+        let response = ui
+            .interact(
+                control,
+                ui.id().with(("window-control", tip)),
+                egui::Sense::click(),
+            )
+            .on_hover_text(tip);
+        if response.hovered() {
+            ui.painter()
+                .rect_filled(control, 4.0, ui.visuals().widgets.hovered.bg_fill);
+        }
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let color = ui.visuals().text_color();
+        let galley = ui.painter().layout_no_wrap(label.to_owned(), font, color);
+        let text = galley.size();
+        ui.painter().galley(
+            egui::pos2(
+                control.center().x - text.x * 0.5,
+                control.center().y - text.y * 0.5,
+            ),
+            galley,
+            color,
+        );
+        if response.clicked() {
+            ui.ctx().send_viewport_cmd(command);
+        }
+    }
+}
+
 impl App {
     pub(super) fn terminal_input_enabled(&self, sid: &str) -> bool {
         !self.picker_active
@@ -624,6 +673,29 @@ impl App {
             .map_or_else(|| "Terminator".to_string(), |project| project.name.clone())
     }
 
+    /// macOS traffic lights and the Linux close, minimize, and maximize
+    /// buttons share this width. Wider Linux buttons steal the project name
+    /// and fold Player and Agents into the menu at the default sidebar width.
+    const WINDOW_CONTROL_RESERVE: f32 = 72.0;
+
+    fn window_controls(&mut self, ui: &mut egui::Ui) {
+        let native = ui
+            .input(|i| i.viewport().native_pixels_per_point)
+            .unwrap_or(ui.ctx().pixels_per_point());
+        let width = Self::WINDOW_CONTROL_RESERVE * native / ui.ctx().pixels_per_point();
+        let row = ui.cursor();
+        let height = 28.0_f32.min(row.height());
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(row.left(), row.center().y - height * 0.5),
+            egui::vec2(width, height),
+        );
+        ui.add_space(width);
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "window-controls", rect);
+        #[cfg(not(target_os = "macos"))]
+        paint_window_controls(ui, rect);
+    }
+
     /// Right-align the project name against Player, Agents, and hide.
     /// A narrow sidebar folds Player and Agents into the menu.
     fn project_header_cluster(&mut self, ui: &mut egui::Ui) {
@@ -728,27 +800,7 @@ impl App {
                 .max_rect(left_rect.shrink2(egui::vec2(4.0, 4.0)))
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
             |ui| {
-                if cfg!(target_os = "macos") {
-                    let native = ui
-                        .input(|i| i.viewport().native_pixels_per_point)
-                        .unwrap_or(ui.ctx().pixels_per_point());
-                    ui.add_space(72.0 * native / ui.ctx().pixels_per_point());
-                } else {
-                    for (label, command) in [
-                        ("×", egui::ViewportCommand::Close),
-                        ("−", egui::ViewportCommand::Minimized(true)),
-                        (
-                            "□",
-                            egui::ViewportCommand::Maximized(
-                                !ui.input(|i| i.viewport().maximized.unwrap_or(false)),
-                            ),
-                        ),
-                    ] {
-                        if ui.small_button(label).clicked() {
-                            ui.ctx().send_viewport_cmd(command);
-                        }
-                    }
-                }
+                self.window_controls(ui);
                 self.project_header_cluster(ui);
             },
         );

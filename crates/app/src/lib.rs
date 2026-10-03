@@ -13019,6 +13019,11 @@ mod navigation_tests {
         }
         paint_header(&mut app, &ctx, &[]);
         let rect = header_target(&ctx);
+        let controls = rect("window-controls").expect("window controls");
+        assert!(
+            (controls.width() - 72.0).abs() < 0.5,
+            "window controls use the 72px slot, controls={controls:?}"
+        );
         assert!(
             rect("player-chrome").is_some() && rect("left-agent-bar").is_some(),
             "a default sidebar fits the player and the bell, menu={:?}",
