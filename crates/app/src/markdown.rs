@@ -194,6 +194,185 @@ struct Document {
     links: HashMap<String, Option<Link>>,
     images: HashSet<String>,
 }
+
+/// Raw HTML has no native preview rendering: without a custom HTML hook the
+/// viewer prints tags literally, so README-style headers (`p`, `h1`, badges
+/// built from `a`/`img`, `br`) preview as tag soup. Convert that markup to
+/// its readable text instead. Code spans never surface as HTML events, so
+/// this cannot corrupt fenced or inline code.
+fn html_to_markdown(chunk: &str) -> String {
+    let mut out = String::with_capacity(chunk.len());
+    let mut rest = chunk;
+    while let Some(start) = rest.find('<') {
+        out.push_str(&rest[..start]);
+        rest = &rest[start..];
+        if rest.starts_with("<!--") {
+            rest = rest.find("-->").map(|end| &rest[end + 3..]).unwrap_or("");
+            continue;
+        }
+        let Some(close) = rest.find('>') else {
+            out.push_str(rest);
+            break;
+        };
+        let tag = &rest[1..close];
+        rest = &rest[close + 1..];
+        let (name, closing) = match tag.strip_prefix('/') {
+            Some(name) => (name, true),
+            None => (tag, false),
+        };
+        let name = name
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match name.as_str() {
+            "br" => out.push('\n'),
+            "img" if !closing => {
+                let alt = html_attr(tag, "alt").unwrap_or_default();
+                if alt.is_empty() {
+                    out.push_str("Image");
+                } else {
+                    out.push_str("Image: ");
+                    out.push_str(&alt);
+                }
+            }
+            "p" => out.push_str("\n\n"),
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" if !closing => {
+                let level = name[1..].parse::<usize>().unwrap_or(1);
+                out.push_str("\n\n");
+                out.push_str(&"#".repeat(level));
+                out.push(' ');
+            }
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => out.push_str("\n\n"),
+            _ => {}
+        }
+    }
+    out.push_str(rest);
+    collapse_html_text(&out)
+}
+
+fn html_attr(tag: &str, name: &str) -> Option<String> {
+    let bytes = tag.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() && !bytes[i].is_ascii_whitespace() && bytes[i] != b'/' {
+        i += 1;
+    }
+    loop {
+        while i < bytes.len() && (bytes[i].is_ascii_whitespace() || bytes[i] == b'/') {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return None;
+        }
+        let start = i;
+        while i < bytes.len()
+            && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-' || bytes[i] == b'_')
+        {
+            i += 1;
+        }
+        if start == i {
+            i += 1;
+            continue;
+        }
+        let attr = &tag[start..i];
+        let mut j = i;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if j < bytes.len() && bytes[j] == b'=' {
+            j += 1;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            let value = if j < bytes.len() && (bytes[j] == b'"' || bytes[j] == b'\'') {
+                let quote = bytes[j];
+                j += 1;
+                let start = j;
+                while j < bytes.len() && bytes[j] != quote {
+                    j += 1;
+                }
+                let value = tag[start..j].to_string();
+                j = (j + 1).min(bytes.len());
+                value
+            } else {
+                let start = j;
+                while j < bytes.len() && !bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                tag[start..j].to_string()
+            };
+            i = j;
+            if attr.eq_ignore_ascii_case(name) {
+                return Some(decode_html_entities(&value));
+            }
+        }
+    }
+}
+
+fn decode_html_entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('&') {
+        out.push_str(&rest[..start]);
+        let tail = &rest[start..];
+        let candidate = tail
+            .find(';')
+            .filter(|&end| end < 12)
+            .map(|end| &tail[..=end])
+            .filter(|entity| !entity[1..].contains(|c: char| c.is_whitespace() || c == '<'));
+        match candidate.and_then(decode_entity) {
+            Some((decoded, len)) => {
+                out.push_str(&decoded);
+                rest = &tail[len..];
+            }
+            None => {
+                out.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+fn decode_entity(entity: &str) -> Option<(String, usize)> {
+    let len = entity.len();
+    let decoded = match entity {
+        "&amp;" => "&".into(),
+        "&lt;" => "<".into(),
+        "&gt;" => ">".into(),
+        "&quot;" => "\"".into(),
+        "&#39;" | "&apos;" => "'".into(),
+        "&nbsp;" => "\u{a0}".into(),
+        _ => {
+            let digits = entity.strip_prefix("&#")?.strip_suffix(';')?;
+            if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            char::from_u32(digits.parse::<u32>().ok()?)
+                .unwrap_or('\u{fffd}')
+                .to_string()
+        }
+    };
+    Some((decoded, len))
+}
+
+fn collapse_html_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut newlines = 0;
+    for ch in text.chars() {
+        if ch == '\n' {
+            newlines += 1;
+            if newlines <= 2 {
+                out.push('\n');
+            }
+        } else {
+            newlines = 0;
+            out.push(ch);
+        }
+    }
+    decode_html_entities(&out)
+}
 fn prepare(snapshot: Snapshot) -> Document {
     let mut links = HashMap::new();
     let mut images = HashSet::new();
@@ -229,6 +408,9 @@ fn prepare(snapshot: Snapshot) -> Document {
                     _ => format!("Image: {alt}"),
                 };
                 replacements.push((range, replacement));
+            }
+            Event::Html(_) | Event::InlineHtml(_) => {
+                replacements.push((range.clone(), html_to_markdown(&snapshot.text[range])));
             }
             _ => {}
         }
@@ -724,6 +906,41 @@ mod tests {
             revision: None,
             paused: false,
         }
+    }
+
+    #[test]
+    fn readme_style_html_renders_as_text_not_literal_tags() {
+        let doc = prepare(snapshot(
+            "<p align=\"center\">\n  <img src=\"logo.png\" alt=\"Terminator app icon\" width=\"128\" height=\"128\">\n</p>\n\n<h1 align=\"center\">Terminator</h1>\n\n<p align=\"center\">Your terminals.<br>For macOS and Linux.</p>\n\n<a href=\"https://example.com/ci\"><img src=\"https://example.com/badge.svg\" alt=\"CI\"></a>",
+        ));
+        assert!(
+            !doc.text.contains('<'),
+            "raw HTML leaked into preview: {:?}",
+            doc.text
+        );
+        assert!(doc.text.contains("# Terminator"), "{:?}", doc.text);
+        assert!(
+            doc.text.contains("Image: Terminator app icon"),
+            "{:?}",
+            doc.text
+        );
+        assert!(doc.text.contains("Image: CI"), "{:?}", doc.text);
+        // The converted document must still render without panicking.
+        let ctx = egui::Context::default();
+        let mut cache = CommonMarkCache::default();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                CommonMarkViewer::new().show(ui, &mut cache, &doc.text);
+            },
+        );
+        output.textures_delta.clear();
     }
 
     #[test]
