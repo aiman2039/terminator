@@ -3421,6 +3421,12 @@ impl App {
                     });
                 });
             self.project_width = projects_response.response.rect.width();
+            #[cfg(feature = "test-support")]
+            diagnostics::record(
+                ui.ctx(),
+                "projects-sidebar",
+                projects_response.response.rect,
+            );
         }
         if self.preferences.visible {
             let response = egui::Panel::right("context")
@@ -3431,7 +3437,39 @@ impl App {
                     self.sidebar(ui);
                 });
             self.preferences.width = response.response.rect.width().clamp(220.0, 480.0);
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "context-sidebar", response.response.rect);
         }
+    }
+
+    /// Sidebars and the IDE terminal strip. Panel order is the layout:
+    /// sidebars registered first run the full height and the strip stays in
+    /// the center column; the strip registered first runs under both sidebars.
+    fn place_ide_columns(&mut self, ui: &mut egui::Ui) {
+        if self.preferences.ide_sidebars_full_height {
+            self.workspace_sidebars(ui);
+            self.ide_terminal_panel(ui);
+        } else {
+            self.ide_terminal_panel(ui);
+            self.workspace_sidebars(ui);
+        }
+    }
+
+    fn ide_terminal_panel(&mut self, ui: &mut egui::Ui) {
+        if !(self.preferences.ide_mode && !self.preferences.ide_terminal_collapsed) {
+            return;
+        }
+        let max_height = (ui.available_height() * 0.8).max(80.0);
+        #[cfg_attr(not(feature = "test-support"), allow(unused_variables))]
+        let shown = egui::Panel::bottom("ide-terminal")
+            .resizable(true)
+            .default_size(220.0)
+            .size_range(80.0..=max_height)
+            .show(ui, |ui| {
+                self.ide_terminal_strip(ui);
+            });
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "ide-terminal-panel", shown.response.rect);
     }
 
     fn toggle_left_sidebar(&mut self) {
@@ -3440,6 +3478,10 @@ impl App {
 
     fn toggle_right_sidebar(&mut self) {
         self.preferences.visible = !self.preferences.visible;
+    }
+
+    fn toggle_ide_sidebar_height(&mut self) {
+        self.preferences.ide_sidebars_full_height = !self.preferences.ide_sidebars_full_height;
     }
 
     fn toggle_ide_mode(&mut self) {
@@ -3774,8 +3816,8 @@ impl App {
     }
 
     /// Right end of the bottom status strip. One right-to-left block so the
-    /// Terminal button keeps the far-right corner with the resource readout
-    /// to its left; separate right-anchored blocks paint over each other.
+    /// terminal button keeps the far-right corner, the sidebar-height toggle
+    /// sits to its left, and the resource readout sits left of that.
     fn status_right_end(&mut self, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if self.preferences.ide_mode {
@@ -3798,6 +3840,22 @@ impl App {
                     if !collapsed {
                         self.resync_active_from_dock();
                     }
+                }
+                let full_height = self.preferences.ide_sidebars_full_height;
+                let height = appearance::selectable_icon(
+                    ui,
+                    "Columns3",
+                    if full_height {
+                        "Terminal full width"
+                    } else {
+                        "Sidebars full height"
+                    },
+                    full_height,
+                );
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "status-sidebar-height", height.rect);
+                if height.clicked() {
+                    self.toggle_ide_sidebar_height();
                 }
                 ui.separator();
             }
@@ -5661,24 +5719,14 @@ impl eframe::App for App {
                     self.notification_status_badge(ui);
                 }
                 // Single right-aligned block (see status_right_end): resource
-                // readout at the far right, collapse button to its left.
+                // readout, sidebar-height toggle, then the strip collapse.
                 // Right-aligned app totals. Pure paint over the background
                 // sample: no extra wakes, updates land with the heartbeat.
                 self.status_right_end(ui);
             });
         });
-        if self.preferences.ide_mode && !self.preferences.ide_terminal_collapsed {
-            let max_height = (ui.available_height() * 0.8).max(80.0);
-            egui::Panel::bottom("ide-terminal")
-                .resizable(true)
-                .default_size(220.0)
-                .size_range(80.0..=max_height)
-                .show(ui, |ui| {
-                    self.ide_terminal_strip(ui);
-                });
-        }
-        self.workspace_sidebars(ui);
-        // Center-only: shown after the sidebars so the strip sits beside
+        self.place_ide_columns(ui);
+        // Center-only: shown after the sidebars so the tab strip sits beside
         // them instead of pushing them down.
         egui::Panel::top("workspace-tabs")
             .exact_size(36.0)
@@ -6954,17 +7002,114 @@ mod navigation_tests {
             output.textures_delta.clear();
             let resources = agent_target(&ctx, "status-resources").expect("resource readout");
             let toggle = agent_target(&ctx, "status-terminal-toggle").expect("terminal toggle");
+            let height = agent_target(&ctx, "status-sidebar-height").expect("sidebar height");
             assert!(
                 !resources.intersects(toggle),
                 "resources {resources:?} overlap terminal toggle {toggle:?} (collapsed={collapsed})"
             );
-            // Terminal button keeps the far-right corner; the readout sits
-            // left of it.
             assert!(
-                resources.right() <= toggle.left(),
-                "resources {resources:?} should sit left of toggle {toggle:?}"
+                !resources.intersects(height) && !height.intersects(toggle),
+                "sidebar height {height:?} overlaps resources {resources:?} or toggle {toggle:?}"
+            );
+            // Terminal button keeps the far-right corner. Sidebar height sits
+            // immediately left of it, and the readout sits left of that.
+            assert!(
+                height.right() <= toggle.left() && resources.right() <= height.left(),
+                "resources {resources:?} height {height:?} toggle {toggle:?}"
             );
         }
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn status_sidebar_height_toggles_the_preference() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.ide_mode = true;
+        assert!(app.preferences.ide_sidebars_full_height);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 40.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.status_right_end(ui),
+        );
+        output.textures_delta.clear();
+        let height = agent_target(&ctx, "status-sidebar-height").expect("sidebar height");
+        let pos = height.center();
+        for pressed in [true, false] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 40.0),
+                    )),
+                    events: vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::default(),
+                    }],
+                    ..Default::default()
+                },
+                |ui| app.status_right_end(ui),
+            );
+            output.textures_delta.clear();
+        }
+        assert!(!app.preferences.ide_sidebars_full_height);
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn ide_sidebar_height_moves_the_terminal_strip() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.ide_mode = true;
+        app.preferences.ide_terminal_collapsed = false;
+        app.preferences.left_visible = true;
+        app.preferences.visible = true;
+        app.selected = Some("a".into());
+        fn paint(app: &mut App, ctx: &egui::Context) {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 700.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.place_ide_columns(ui),
+            );
+            output.textures_delta.clear();
+        }
+        app.preferences.ide_sidebars_full_height = true;
+        paint(&mut app, &ctx);
+        let left = agent_target(&ctx, "projects-sidebar").expect("left sidebar");
+        let right = agent_target(&ctx, "context-sidebar").expect("right sidebar");
+        let strip = agent_target(&ctx, "ide-terminal-panel").expect("terminal strip");
+        assert!(
+            left.bottom() > strip.center().y && right.bottom() > strip.center().y,
+            "full-height sidebars should run through the strip: left {left:?} right {right:?} strip {strip:?}"
+        );
+        assert!(
+            strip.left() + 1.0 >= left.right() && strip.right() <= right.left() + 1.0,
+            "strip should stay between the sidebars: left {left:?} right {right:?} strip {strip:?}"
+        );
+
+        app.preferences.ide_sidebars_full_height = false;
+        paint(&mut app, &ctx);
+        let left = agent_target(&ctx, "projects-sidebar").expect("left sidebar");
+        let right = agent_target(&ctx, "context-sidebar").expect("right sidebar");
+        let strip = agent_target(&ctx, "ide-terminal-panel").expect("terminal strip");
+        assert!(
+            left.bottom() <= strip.top() + 4.0 && right.bottom() <= strip.top() + 4.0,
+            "sidebars should stop above a full-width strip: left {left:?} right {right:?} strip {strip:?}"
+        );
+        assert!(
+            strip.left() <= left.left() + 1.0 && strip.right() + 1.0 >= right.right(),
+            "strip should run under both sidebars: left {left:?} right {right:?} strip {strip:?}"
+        );
     }
 
     #[test]

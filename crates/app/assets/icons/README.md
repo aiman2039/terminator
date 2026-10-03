@@ -37,6 +37,10 @@ adaptation, for the header overflow menu.
 white-stroke adaptation, for the IDE mode header action. Its four-pane grid
 stays distinct from the single-divider sidebar toggles at 16px.
 
+`columns-3.svg` comes from Lucide 0.577.0 with the same license and
+white-stroke adaptation, for the IDE status-bar control that lets the
+sidebars run full height beside the terminal strip.
+
 `archive.svg` comes from Lucide 0.577.0 with the same license and white-stroke
 adaptation, for the removed-projects control.
 

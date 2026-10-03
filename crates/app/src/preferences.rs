@@ -448,6 +448,10 @@ const DEFAULT_SIDEBAR_WIDTH: f32 = 328.0;
 pub struct LayoutPreset {
     pub ide_mode: bool,
     pub ide_terminal_collapsed: bool,
+    /// Sidebars run the full height beside the IDE terminal strip.
+    /// Missing presets keep that layout.
+    #[serde(default = "default_true")]
+    pub ide_sidebars_full_height: bool,
     pub visible: bool,
     pub left_visible: bool,
     pub tool: SidebarTool,
@@ -471,6 +475,10 @@ pub struct UiPreferences {
     /// Bottom IDE terminal strip collapsed (IDE mode only).
     #[serde(default)]
     pub ide_terminal_collapsed: bool,
+    /// IDE sidebars run beside the terminal strip instead of stopping above it.
+    /// False gives the strip the full window width. Missing prefs stay full height.
+    #[serde(default = "default_true")]
+    pub ide_sidebars_full_height: bool,
     /// Named layout presets for quick switching.
     #[serde(default)]
     pub named_layouts: HashMap<String, LayoutPreset>,
@@ -560,6 +568,7 @@ impl Default for UiPreferences {
             visible: true,
             ide_mode: false,
             ide_terminal_collapsed: false,
+            ide_sidebars_full_height: true,
             named_layouts: HashMap::new(),
             active_layout: None,
             left_visible: true,
@@ -697,6 +706,7 @@ impl UiPreferences {
         let preset = LayoutPreset {
             ide_mode: self.ide_mode,
             ide_terminal_collapsed: self.ide_terminal_collapsed,
+            ide_sidebars_full_height: self.ide_sidebars_full_height,
             visible: self.visible,
             left_visible: self.left_visible,
             tool: self.tool,
@@ -713,6 +723,7 @@ impl UiPreferences {
         let preset = self.named_layouts.get(name)?;
         self.ide_mode = preset.ide_mode;
         self.ide_terminal_collapsed = preset.ide_terminal_collapsed;
+        self.ide_sidebars_full_height = preset.ide_sidebars_full_height;
         self.visible = preset.visible;
         self.left_visible = preset.left_visible;
         self.tool = preset.tool;
@@ -970,6 +981,52 @@ mod tests {
         reopened.ide_mode = true;
         reopened.save(dir.path()).unwrap();
         assert!(UiPreferences::load(dir.path()).unwrap().ide_mode);
+    }
+
+    #[test]
+    fn ide_sidebar_height_defaults_full_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefs = UiPreferences::load(dir.path()).unwrap();
+        assert!(prefs.ide_sidebars_full_height);
+        let mut prefs = prefs;
+        prefs.ide_mode = true;
+        prefs.ide_sidebars_full_height = false;
+        prefs.save_current_layout("wide");
+        prefs.ide_sidebars_full_height = true;
+        prefs.apply_layout("wide").unwrap();
+        assert!(!prefs.ide_sidebars_full_height);
+        prefs.save(dir.path()).unwrap();
+        assert!(
+            !UiPreferences::load(dir.path())
+                .unwrap()
+                .ide_sidebars_full_height
+        );
+        let mut value: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(dir.path().join("ui-preferences.json")).unwrap(),
+        )
+        .unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("ide_sidebars_full_height");
+        value["named_layouts"]["wide"]
+            .as_object_mut()
+            .unwrap()
+            .remove("ide_sidebars_full_height");
+        fs::write(
+            dir.path().join("ui-preferences.json"),
+            serde_json::to_string(&value).unwrap(),
+        )
+        .unwrap();
+        let loaded = UiPreferences::load(dir.path()).unwrap();
+        assert!(loaded.ide_sidebars_full_height);
+        assert!(
+            loaded
+                .named_layouts
+                .get("wide")
+                .unwrap()
+                .ide_sidebars_full_height
+        );
     }
 
     #[test]

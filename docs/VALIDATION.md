@@ -1,5 +1,11 @@
 # Validation evidence — 2026-09-08
 
+## IDE sidebar height (2026-10-03)
+
+IDE mode can keep both sidebars full height, with the terminal strip only in the center column. The other position gives the strip the full window width and stops the sidebars above it. The status-bar columns button and the command palette flip `UiPreferences::ide_sidebars_full_height`. Missing preferences and named layouts stay full height. No daemon request and no layout version change.
+
+`cargo test -p terminator --features test-support --offline --lib sidebar_height` passed: `ide_sidebar_height_defaults_full_and_round_trips`, `palette_toggles_ide_sidebar_height`, `status_sidebar_height_toggles_the_preference`, and `ide_sidebar_height_moves_the_terminal_strip`. `status_resources_do_not_overlap_terminal_toggle` still passes with the new button between the readout and the strip toggle.
+
 ## Agent wheel stuck (2026-10-03)
 
 A wheel inside a full-screen agent could sit still. A missed mouse-up kept the selection drag, so later wheels scrolled local history and never reached the agent. macOS momentum-begin resets were dropping partial trackpad lines. An alternate screen with mode 1007 off and mouse reporting off was a local scroll of an empty grid. Cursor keys now cover that case. Wheel routing uses the live terminal mode. A wheel forwarded to the application returns a viewport parked in history to the live screen.

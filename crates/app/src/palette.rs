@@ -12,6 +12,7 @@ pub(crate) enum PaletteItem {
     NewWorktree,
     OpenPlayer,
     ToggleIdeMode,
+    ToggleIdeSidebarHeight,
     NextAttention,
     SaveLayout,
     ApplyLayout(String),
@@ -32,6 +33,7 @@ impl PaletteItem {
             Self::NewWorktree => "New task worktree".into(),
             Self::OpenPlayer => "Open player".into(),
             Self::ToggleIdeMode => "Toggle IDE mode".into(),
+            Self::ToggleIdeSidebarHeight => "Toggle IDE sidebar height".into(),
             Self::NextAttention => "Next agent needing attention".into(),
             Self::SaveLayout => "Save layout".into(),
             Self::ApplyLayout(name) => format!("Layout  {name}"),
@@ -47,6 +49,7 @@ impl App {
             PaletteItem::NextAttention,
             PaletteItem::OpenPlayer,
             PaletteItem::ToggleIdeMode,
+            PaletteItem::ToggleIdeSidebarHeight,
             PaletteItem::SaveLayout,
         ];
         for name in self.preferences.named_layouts.keys() {
@@ -202,6 +205,7 @@ impl App {
             PaletteItem::NewWorktree => self.open_worktree_wizard(),
             PaletteItem::OpenPlayer => self.open_player(),
             PaletteItem::ToggleIdeMode => self.toggle_ide_mode(),
+            PaletteItem::ToggleIdeSidebarHeight => self.toggle_ide_sidebar_height(),
             PaletteItem::SaveLayout => self.save_layout_dialog(),
             PaletteItem::ApplyLayout(name) => {
                 self.preferences.apply_layout(&name);
@@ -247,6 +251,10 @@ mod tests {
         assert_eq!(PaletteItem::AddProject.label(), "Add project");
         assert_eq!(PaletteItem::ToggleIdeMode.label(), "Toggle IDE mode");
         assert_eq!(
+            PaletteItem::ToggleIdeSidebarHeight.label(),
+            "Toggle IDE sidebar height"
+        );
+        assert_eq!(
             PaletteItem::NextAttention.label(),
             "Next agent needing attention"
         );
@@ -254,5 +262,16 @@ mod tests {
             PaletteItem::Settings(SettingsSection::Terminal).label(),
             "Settings  Terminal & Editor"
         );
+    }
+
+    #[test]
+    fn palette_toggles_ide_sidebar_height() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+        assert!(app.preferences.ide_sidebars_full_height);
+        app.run_palette(PaletteItem::ToggleIdeSidebarHeight);
+        assert!(!app.preferences.ide_sidebars_full_height);
+        app.run_palette(PaletteItem::ToggleIdeSidebarHeight);
+        assert!(app.preferences.ide_sidebars_full_height);
     }
 }

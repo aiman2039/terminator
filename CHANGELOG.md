@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- IDE mode defaults to full-height sidebars, so the terminal strip stays in
+  the center column. The status-bar columns button (left of the strip
+  hide control) and the command palette entry "Toggle IDE sidebar height"
+  switch the strip back to full width under both sidebars. The choice is
+  saved in `ui-preferences.json` and in named layout presets.
+
 - Removing ntfy settings no longer traps Apply: clearing the channel
   switches the toggle off, and a disabled toggle saves regardless of
   leftover field contents. Re-enabling still requires a valid channel.

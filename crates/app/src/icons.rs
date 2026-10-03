@@ -298,6 +298,7 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         "SquareDashed" => egui::include_image!("../assets/icons/square-dashed.svg"),
         "ExternalLink" => egui::include_image!("../assets/icons/external-link.svg"),
         "Columns2" => egui::include_image!("../assets/icons/columns-2.svg"),
+        "Columns3" => egui::include_image!("../assets/icons/columns-3.svg"),
         "Rows2" => egui::include_image!("../assets/icons/rows-2.svg"),
         "Split" => egui::include_image!("../assets/icons/split.svg"),
         "X" => egui::include_image!("../assets/icons/x.svg"),
