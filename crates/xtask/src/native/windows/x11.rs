@@ -8,6 +8,59 @@ use x11rb::{
     },
     rust_connection::RustConnection,
 };
+fn x11_coord(value: f64) -> Result<i16> {
+    let rounded = value.round();
+    ensure!(rounded.is_finite(), "X11 coordinate is not finite: {value}");
+    format!("{rounded:.0}")
+        .parse()
+        .with_context(|| format!("X11 coordinate out of range: {value}"))
+}
+fn row_stride(width: u16, scanline_pad: u8) -> Result<usize> {
+    let pad_bytes = usize::from(scanline_pad)
+        .checked_div(8)
+        .filter(|pad| *pad > 0)
+        .context("X11 scanline pad is zero")?;
+    let row = usize::from(width)
+        .checked_mul(4)
+        .context("X11 row too wide")?;
+    row.div_ceil(pad_bytes)
+        .checked_mul(pad_bytes)
+        .context("X11 stride overflow")
+}
+fn pixel_index(x: u32, y: u32, stride: usize) -> Result<usize> {
+    let row = usize::try_from(y)
+        .ok()
+        .and_then(|y| y.checked_mul(stride))
+        .context("X11 pixel offset")?;
+    let column = usize::try_from(x)
+        .ok()
+        .and_then(|x| x.checked_mul(4))
+        .context("X11 pixel offset")?;
+    row.checked_add(column).context("X11 pixel offset")
+}
+fn rgba_image(data: &[u8], width: u16, height: u16, stride: usize) -> Result<image::RgbaImage> {
+    let width_px = u32::from(width);
+    let height_px = u32::from(height);
+    let pixels = usize::from(width)
+        .checked_mul(usize::from(height))
+        .and_then(|count| count.checked_mul(4))
+        .context("X11 image too large")?;
+    let mut buffer = Vec::with_capacity(pixels);
+    for y in 0..height_px {
+        for x in 0..width_px {
+            let index = pixel_index(x, y, stride)?;
+            let green = index.checked_add(1).context("X11 pixel offset")?;
+            let red = index.checked_add(2).context("X11 pixel offset")?;
+            buffer.extend_from_slice(&[
+                data.get(red).copied().context("short X11 image")?,
+                data.get(green).copied().context("short X11 image")?,
+                data.get(index).copied().context("short X11 image")?,
+                255,
+            ]);
+        }
+    }
+    image::RgbaImage::from_raw(width_px, height_px, buffer).context("X11 image buffer")
+}
 pub struct Desktop {
     connection: RustConnection,
     root: u32,
@@ -31,7 +84,12 @@ impl Desktop {
     }
     pub fn new(pid: u32, output: &Path) -> Result<Self> {
         let (connection, screen) = x11rb::connect(None)?;
-        let root = connection.setup().roots[screen].root;
+        let root = connection
+            .setup()
+            .roots
+            .get(screen)
+            .context("X11 screen missing")?
+            .root;
         let mut desktop = Self {
             connection,
             root,
@@ -72,15 +130,23 @@ impl Desktop {
             .translate_coordinates(self.window, self.root, 0, 0)?
             .reply()?;
         Ok([
-            position.dst_x as f64,
-            position.dst_y as f64,
-            geometry.width as f64,
-            geometry.height as f64,
+            f64::from(position.dst_x),
+            f64::from(position.dst_y),
+            f64::from(geometry.width),
+            f64::from(geometry.height),
         ])
     }
     fn event(&self, kind: u8, detail: u8, x: f64, y: f64) -> Result<()> {
         self.connection
-            .xtest_fake_input(kind, detail, CURRENT_TIME, self.root, x as i16, y as i16, 0)?
+            .xtest_fake_input(
+                kind,
+                detail,
+                CURRENT_TIME,
+                self.root,
+                x11_coord(x)?,
+                x11_coord(y)?,
+                0,
+            )?
             .check()?;
         self.connection.flush()?;
         thread::sleep(Duration::from_millis(45));
@@ -98,8 +164,8 @@ impl Desktop {
             self.event(
                 xproto::MOTION_NOTIFY_EVENT,
                 0,
-                start.0 + (end.0 - start.0) * i as f64 / 10.0,
-                start.1 + (end.1 - start.1) * i as f64 / 10.0,
+                start.0 + (end.0 - start.0) * f64::from(i) / 10.0,
+                start.1 + (end.1 - start.1) * f64::from(i) / 10.0,
             )?;
         }
         self.event(xproto::BUTTON_RELEASE_EVENT, 1, end.0, end.1)
@@ -201,14 +267,12 @@ impl Desktop {
             format.bits_per_pixel == 32,
             "Unsupported X11 capture pixel format"
         );
-        let stride = (usize::from(geometry.width) * 4)
-            .div_ceil(usize::from(format.scanline_pad) / 8)
-            * (usize::from(format.scanline_pad) / 8);
-        let pixels =
-            image::RgbaImage::from_fn(geometry.width.into(), geometry.height.into(), |x, y| {
-                let i = y as usize * stride + x as usize * 4;
-                image::Rgba([image.data[i + 2], image.data[i + 1], image.data[i], 255])
-            });
+        let pixels = rgba_image(
+            &image.data,
+            geometry.width,
+            geometry.height,
+            row_stride(geometry.width, format.scanline_pad)?,
+        )?;
         pixels.save(self.output.join("native-picker.png"))?;
         Ok(())
     }
@@ -216,16 +280,25 @@ impl Desktop {
         let setup = self.connection.setup();
         let map = self
             .connection
-            .get_keyboard_mapping(setup.min_keycode, setup.max_keycode - setup.min_keycode + 1)?
+            .get_keyboard_mapping(
+                setup.min_keycode,
+                setup
+                    .max_keycode
+                    .checked_sub(setup.min_keycode)
+                    .and_then(|span| span.checked_add(1))
+                    .context("X11 keycode range")?,
+            )?
             .reply()?;
-        for (index, symbols) in map
-            .keysyms
-            .chunks(map.keysyms_per_keycode as usize)
-            .enumerate()
-        {
+        let per_keycode = usize::from(map.keysyms_per_keycode);
+        ensure!(per_keycode > 0, "X11 keyboard map is empty");
+        for (index, symbols) in map.keysyms.chunks(per_keycode).enumerate() {
             for (shift, &code) in symbols.iter().take(2).enumerate() {
                 if code == symbol {
-                    return Ok((setup.min_keycode + index as u8, shift == 1));
+                    let keycode = setup
+                        .min_keycode
+                        .checked_add(u8::try_from(index).context("X11 keycode index")?)
+                        .context("X11 keycode overflow")?;
+                    return Ok((keycode, shift == 1));
                 }
             }
         }
@@ -248,7 +321,7 @@ impl Desktop {
         Ok(())
     }
     pub fn open_file_shortcut(&self) -> Result<()> {
-        self.keys(&[0xffe3, 0xffe1], b'o' as u32)
+        self.keys(&[0xffe3, 0xffe1], u32::from(b'o'))
     }
     pub fn escape(&self) -> Result<()> {
         self.keys(&[], 0xff1b)
@@ -268,10 +341,10 @@ impl Desktop {
                 f64::from(position.dst_y) + 60.0,
             )?;
             thread::sleep(Duration::from_millis(250));
-            self.keys(&[0xffe3], b'l' as u32)?;
-            self.keys(&[0xffe3], b'a' as u32)?;
+            self.keys(&[0xffe3], u32::from(b'l'))?;
+            self.keys(&[0xffe3], u32::from(b'a'))?;
             for byte in format!("{}/", path.trim_end_matches('/')).bytes() {
-                self.keys(&[], byte as u32)?;
+                self.keys(&[], u32::from(byte))?;
             }
             thread::sleep(Duration::from_millis(200));
             self.keys(&[], 0xff0d)?;
@@ -283,13 +356,44 @@ impl Desktop {
             )?;
             return Ok(());
         }
-        self.keys(&[0xffe3], b'l' as u32)?;
+        self.keys(&[0xffe3], u32::from(b'l'))?;
         thread::sleep(Duration::from_millis(200));
         for byte in path.bytes() {
-            self.keys(&[], byte as u32)?;
+            self.keys(&[], u32::from(byte))?;
         }
         self.keys(&[], 0xff0d)?;
         thread::sleep(Duration::from_millis(500));
         self.keys(&[], 0xff0d)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{rgba_image, row_stride, x11_coord};
+
+    #[test]
+    fn stride_rounds_the_row_up_to_the_scanline_pad() {
+        assert_eq!(row_stride(1, 32).unwrap(), 4);
+        assert_eq!(row_stride(2, 32).unwrap(), 8);
+        assert_eq!(row_stride(1, 8).unwrap(), 4);
+        assert!(row_stride(1, 0).is_err());
+    }
+
+    #[test]
+    fn coordinate_stays_inside_the_x11_i16_range() {
+        assert_eq!(x11_coord(12.6).unwrap(), 13);
+        assert_eq!(x11_coord(-12.6).unwrap(), -13);
+        assert_eq!(x11_coord(f64::from(i16::MAX)).unwrap(), i16::MAX);
+        assert!(x11_coord(f64::from(i16::MAX) + 1.0).is_err());
+        assert!(x11_coord(f64::NAN).is_err());
+    }
+
+    #[test]
+    fn capture_reads_bgrx_rows_with_padding() {
+        let data = [1, 2, 3, 9, 4, 5, 6, 9];
+        let image = rgba_image(&data, 1, 2, 4).unwrap();
+        assert_eq!(image.get_pixel(0, 0).0, [3, 2, 1, 255]);
+        assert_eq!(image.get_pixel(0, 1).0, [6, 5, 4, 255]);
+        assert!(rgba_image(&[0, 0], 1, 1, 4).is_err());
     }
 }
