@@ -297,6 +297,18 @@ fn dimensions() -> (u16, u16) {
 fn dimensions() -> (u16, u16) {
     terminator_sys::dimensions()
 }
+/// Track the last forwarded size; true when `current` is a new resize.
+/// Resize frames go out on change only, so an idle poll loop never floods
+/// the daemon with identical sizes. Live on Windows, covered by tests
+/// everywhere else.
+#[cfg(any(windows, test))]
+fn resize_changed(known: &mut (u16, u16), current: (u16, u16)) -> bool {
+    if *known == current {
+        return false;
+    }
+    *known = current;
+    true
+}
 fn lock_writer<T>(writer: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     writer
         .lock()
@@ -381,8 +393,6 @@ fn attach(session: &str, args: &[String]) -> Result<()> {
         }
         let _ = lock_writer(&input_writer).shutdown();
     });
-    // Resize signals do not exist on Windows; the GUI repaints at the size
-    // negotiated here.
     #[cfg(unix)]
     {
         let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGWINCH])?;
@@ -390,6 +400,23 @@ fn attach(session: &str, args: &[String]) -> Result<()> {
         std::thread::spawn(move || {
             for _ in signals.forever() {
                 if write_winsize(sigwinch_writer.as_ref()).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    // Windows has no SIGWINCH; poll the console size instead and forward
+    // `Request::Resize` on change, like the signal handler does on Unix.
+    #[cfg(windows)]
+    {
+        let resize_writer = Arc::clone(&writer);
+        let mut known = (rows, cols);
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(200));
+                if resize_changed(&mut known, dimensions())
+                    && write_winsize(resize_writer.as_ref()).is_err()
+                {
                     break;
                 }
             }
@@ -431,6 +458,15 @@ mod identity_tests {
 #[cfg(test)]
 mod winsize_tests {
     use super::*;
+    #[test]
+    fn resizes_forward_once_per_size_change() {
+        let mut known = (24, 80);
+        assert!(!resize_changed(&mut known, (24, 80)));
+        assert_eq!(known, (24, 80));
+        assert!(resize_changed(&mut known, (30, 100)));
+        assert_eq!(known, (30, 100));
+        assert!(!resize_changed(&mut known, (30, 100)));
+    }
     #[test]
     fn write_winsize_sends_a_resize_frame() {
         let buf = Mutex::new(Vec::new());

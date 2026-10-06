@@ -10,8 +10,8 @@ use std::io;
 use windows_sys::Win32::{
     Foundation::INVALID_HANDLE_VALUE,
     System::Console::{
-        CONSOLE_SCREEN_BUFFER_INFO, ENABLE_EXTENDED_FLAGS, ENABLE_INSERT_MODE, ENABLE_LINE_INPUT,
-        ENABLE_PROCESSED_INPUT, ENABLE_PROCESSED_OUTPUT, ENABLE_QUICK_EDIT_MODE,
+        CONSOLE_SCREEN_BUFFER_INFO, ENABLE_ECHO_INPUT, ENABLE_EXTENDED_FLAGS, ENABLE_INSERT_MODE,
+        ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_PROCESSED_OUTPUT, ENABLE_QUICK_EDIT_MODE,
         ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING, ENABLE_WINDOW_INPUT,
         ENABLE_WRAP_AT_EOL_OUTPUT, GetConsoleMode, GetConsoleScreenBufferInfo, GetStdHandle,
         STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode,
@@ -92,14 +92,7 @@ impl RawMode {
             {
                 return Err(io::Error::last_os_error());
             }
-            let raw_input = (prev_input
-                & !(ENABLE_LINE_INPUT
-                    | ENABLE_PROCESSED_INPUT
-                    | ENABLE_QUICK_EDIT_MODE
-                    | ENABLE_INSERT_MODE))
-                | ENABLE_VIRTUAL_TERMINAL_INPUT
-                | ENABLE_WINDOW_INPUT
-                | ENABLE_EXTENDED_FLAGS;
+            let raw_input = raw_input_mode(prev_input);
             let raw_output = (prev_output | ENABLE_PROCESSED_OUTPUT)
                 | ENABLE_WRAP_AT_EOL_OUTPUT
                 | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
@@ -116,6 +109,23 @@ impl RawMode {
     }
 }
 
+/// Raw input mode derived from `previous`. Echo requires line input, so a
+/// default console that keeps `ENABLE_ECHO_INPUT` while clearing
+/// `ENABLE_LINE_INPUT` is an invalid combination that can leave input
+/// buffered until Enter; both flags go together.
+#[cfg(windows)]
+fn raw_input_mode(previous: u32) -> u32 {
+    (previous
+        & !(ENABLE_ECHO_INPUT
+            | ENABLE_LINE_INPUT
+            | ENABLE_PROCESSED_INPUT
+            | ENABLE_QUICK_EDIT_MODE
+            | ENABLE_INSERT_MODE))
+        | ENABLE_VIRTUAL_TERMINAL_INPUT
+        | ENABLE_WINDOW_INPUT
+        | ENABLE_EXTENDED_FLAGS
+}
+
 #[cfg(windows)]
 impl Drop for RawMode {
     fn drop(&mut self) {
@@ -125,5 +135,22 @@ impl Drop for RawMode {
             let _ = SetConsoleMode(self.input, self.prev_input);
             let _ = SetConsoleMode(self.output, self.prev_output);
         }
+    }
+}
+
+#[cfg(windows)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::System::Console::ENABLE_MOUSE_INPUT;
+
+    #[test]
+    fn raw_input_clears_echo_with_line_input() {
+        let previous =
+            ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT | ENABLE_MOUSE_INPUT;
+        let raw = raw_input_mode(previous);
+        assert_eq!(raw & (ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT), 0);
+        assert_ne!(raw & ENABLE_VIRTUAL_TERMINAL_INPUT, 0);
+        assert_ne!(raw & ENABLE_WINDOW_INPUT, 0);
     }
 }

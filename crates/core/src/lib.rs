@@ -95,7 +95,7 @@ fn windows_candidate_names(program: &str) -> Vec<String> {
 
 fn find_executable_in(program: &str, paths: &[PathBuf]) -> Option<PathBuf> {
     #[cfg(windows)]
-    let candidates = if program.contains('/') || program.contains('\\') {
+    let candidates: Vec<PathBuf> = if program.contains('/') || program.contains('\\') {
         windows_candidate_names(program)
             .into_iter()
             .map(PathBuf::from)
