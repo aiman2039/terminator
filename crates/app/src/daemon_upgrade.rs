@@ -1,9 +1,10 @@
 //! Stage and verify a candidate before atomically admitting new sessions.
 use anyhow::{Context, Result, ensure};
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
     fs,
     io::{Read, Write},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::Path,
     process::{Command, Stdio},
     thread,
@@ -77,11 +78,11 @@ fn copy_executable(source: &Path, target: &Path) -> Result<()> {
         source.display()
     );
     let mut source = fs::File::open(source)?;
-    let mut output = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o500)
-        .open(target)?;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o500);
+    let mut output = options.open(target)?;
     std::io::copy(&mut source, &mut output)?;
     output.flush()?;
     output.sync_all()?;
@@ -155,12 +156,12 @@ fn activate_candidate(paths: &Paths, executable: &Path, force: bool) -> Result<(
             && let Ok(Response::State(state)) = rpc(&owner.paths(), Request::Snapshot)
             && state.attachment_helper_available == Some(true)
             && same_file_contents(
-                &owner.data.join("bin/terminator-daemon"),
-                &executable.with_file_name("terminator-daemon"),
+                &owner.data.join("bin").join(exe_name("terminator-daemon")),
+                &sibling_exe(executable, "terminator-daemon"),
             )?
             && same_file_contents(
-                &owner.data.join("bin/terminator-hook"),
-                &executable.with_file_name("terminator-hook"),
+                &owner.data.join("bin").join(exe_name("terminator-hook")),
+                &sibling_exe(executable, "terminator-hook"),
             )?
         {
             let _guard = generations::coordinate(paths)?;
@@ -186,9 +187,10 @@ fn activate_candidate(paths: &Paths, executable: &Path, force: bool) -> Result<(
     )?;
     let bin = data.join("bin");
     fs::create_dir(&bin)?;
+    #[cfg(unix)]
     fs::set_permissions(&bin, fs::Permissions::from_mode(0o700))?;
-    for name in ["terminator-daemon", "terminator-hook"] {
-        copy_executable(&executable.with_file_name(name), &bin.join(name))?;
+    for name in bundled_exes() {
+        copy_executable(&sibling_exe(executable, &name), &bin.join(&name))?;
     }
     // The unique staged directory identifies immutable complete executable copies.
     let owner = Generation {
@@ -217,7 +219,7 @@ fn activate_candidate(paths: &Paths, executable: &Path, force: bool) -> Result<(
         .create(true)
         .append(true)
         .open(candidate.data.join("daemon.log"))?;
-    let mut command = Command::new(bin.join("terminator-daemon"));
+    let mut command = Command::new(bin.join(exe_name("terminator-daemon")));
     command
         .env("TERMINATOR_DATA_DIR", &candidate.data)
         .env("TERMINATOR_RUNTIME_DIR", &candidate.runtime)
@@ -258,7 +260,8 @@ fn activate_candidate(paths: &Paths, executable: &Path, force: bool) -> Result<(
                         .iter()
                         .any(|c| c == generations::CAPABILITY)
                     && state.attachment_helper_available == Some(true)
-                    && state.daemon_executable.as_ref() == Some(&bin.join("terminator-daemon")),
+                    && state.daemon_executable.as_ref()
+                        == Some(&bin.join(exe_name("terminator-daemon"))),
                 "Candidate identity or helper verification failed"
             );
             let helper = state
@@ -266,7 +269,7 @@ fn activate_candidate(paths: &Paths, executable: &Path, force: bool) -> Result<(
                 .as_ref()
                 .context("Candidate has no helper")?;
             ensure!(
-                same_file_contents(helper, &bin.join("terminator-hook"))?,
+                same_file_contents(helper, &bin.join(exe_name("terminator-hook")))?,
                 "Candidate private helper does not match the staged helper"
             );
             let mut health = Command::new(helper);
@@ -305,6 +308,7 @@ fn activate_candidate(paths: &Paths, executable: &Path, force: bool) -> Result<(
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
     use base64::{Engine, engine::general_purpose::STANDARD};

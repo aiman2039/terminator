@@ -1,12 +1,13 @@
 //! Each daemon keeps its own executable copy until its last session is gone.
 //! Bundle replacement must never replace code used by an existing shell hook.
 use anyhow::{Context, Result, ensure};
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
     fs,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
-use terminator_core::executable_available;
+use terminator_core::{exe_name, executable_available};
 
 const PREFIX: &str = ".daemon-helper-";
 
@@ -29,17 +30,19 @@ impl Helper {
             source.display()
         );
         let directory = tempfile::Builder::new().prefix(PREFIX).tempdir_in(data)?;
+        #[cfg(unix)]
         fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
-        let executable = directory.path().join("terminator-hook");
+        let executable = directory.path().join(exe_name("terminator-hook"));
         // Create a new inode, never a symlink or hard link into the app bundle.
         // Publish the path only after the complete executable is on disk.
         let mut source = fs::File::open(source)?;
-        let mut target = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&executable)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut target = options.open(&executable)?;
         std::io::copy(&mut source, &mut target).context("Copy daemon helper")?;
+        #[cfg(unix)]
         target.set_permissions(fs::Permissions::from_mode(0o500))?;
         target.sync_all()?;
         ensure!(
@@ -68,15 +71,18 @@ pub fn cleanup_abandoned(data: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::{MetadataExt, symlink};
 
     #[test]
     fn replacement_and_removal_leave_each_daemons_helper_intact() {
         let temp = tempfile::tempdir().unwrap();
-        let source = temp.path().join("terminator-hook");
+        let source = temp.path().join(exe_name("terminator-hook"));
         fs::write(&source, b"first build").unwrap();
+        #[cfg(unix)]
         fs::set_permissions(&source, fs::Permissions::from_mode(0o700)).unwrap();
         let first = Helper::stage(&source, temp.path()).unwrap();
+        #[cfg(unix)]
         assert_ne!(
             fs::metadata(&source).unwrap().ino(),
             fs::metadata(&first.executable).unwrap().ino()
@@ -87,6 +93,7 @@ mod tests {
         assert_eq!(fs::read(&first.executable).unwrap(), b"first build");
         assert_eq!(fs::read(&second.executable).unwrap(), b"second build");
         assert!(executable_available(&first.executable));
+        #[cfg(unix)]
         assert_eq!(
             fs::metadata(first.executable.parent().unwrap())
                 .unwrap()
@@ -107,6 +114,7 @@ mod tests {
         assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 0);
     }
 
+    #[cfg(unix)]
     #[test]
     fn cleanup_does_not_follow_symlinks_or_remove_other_data() {
         let temp = tempfile::tempdir().unwrap();

@@ -1,14 +1,21 @@
 //! Unix access revocation in a disposable project. This is not a TCC policy test.
 use super::{Duration, Harness, Options, PathBuf, Result, capture, ensure, fs, json, thread};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+#[cfg_attr(not(unix), allow(dead_code))]
 struct RestoreAccess(PathBuf);
 impl Drop for RestoreAccess {
     fn drop(&mut self) {
+        #[cfg(unix)]
         let _ = fs::set_permissions(&self.0, fs::Permissions::from_mode(0o755));
     }
 }
 pub fn run(o: &Options) -> Result<()> {
+    ensure!(
+        cfg!(unix),
+        "folder-access fixture requires Unix permission revocation"
+    );
     let h = Harness::new()?;
     h.setup()?;
     let project = h.project("folder-recovery")?;
@@ -42,8 +49,10 @@ pub fn run(o: &Options) -> Result<()> {
                 );
                 thread::sleep(Duration::from_millis(50));
             }
+            #[cfg(unix)]
             fs::set_permissions(&path, fs::Permissions::from_mode(0o000))?;
             thread::sleep(Duration::from_millis(1100));
+            #[cfg(unix)]
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
             Ok(())
         },

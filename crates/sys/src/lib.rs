@@ -2,12 +2,20 @@
 //! pressure (`host_statistics64`, `sysctlbyname`), and Accessibility.
 //! Sparkle stays in `terminator-updater`. Every other Terminator crate forbids `unsafe`.
 
+#[cfg(windows)]
+mod console;
+#[cfg(windows)]
+mod handle;
 mod pressure;
 mod session;
 
 #[cfg(target_os = "macos")]
 mod threads;
 
+#[cfg(windows)]
+pub use console::{RawMode, dimensions};
+#[cfg(windows)]
+pub use handle::socket_into_handle;
 pub use pressure::{MemoryPressure, PressureLevel, memory_pressure};
 pub use session::{detach_session, double_fork_setsid};
 

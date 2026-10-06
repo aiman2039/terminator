@@ -17,7 +17,7 @@ pub fn prepare(
     let mut command = CommandBuilder::new(&editor);
     if settings.editor_mode == EditorMode::Embedded {
         command.arg("--listen");
-        command.arg(paths.editor_socket(sid));
+        command.arg(transport::nvim_listen_arg(&paths.editor_socket(sid)));
         let script = paths.data.join("editor.lua");
         atomic_write(&script, include_bytes!("editor.lua"))?;
         command.args([

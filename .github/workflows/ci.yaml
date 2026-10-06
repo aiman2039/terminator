@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, ubuntu-24.04]
+        os: [macos-15, ubuntu-24.04, windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -38,6 +38,10 @@ jobs:
             libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev \
             libgl1-mesa-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
             libasound2-dev libwebkit2gtk-4.1-dev
+      # Editor and upgrade fixtures spawn Neovim; the image has none.
+      - name: Install Neovim (Windows)
+        if: runner.os == 'Windows'
+        run: winget install -e --id Neovim.Neovim --silent --accept-source-agreements --accept-package-agreements
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.97.1'
@@ -63,6 +67,8 @@ jobs:
     name: E2E (${{ matrix.os }})
     strategy:
       fail-fast: false
+      # Real-PTY integration stays Unix until the xtask fixtures learn ConPTY.
+      # Windows runtime coverage comes from the checks job above.
       matrix:
         os: [macos-15, ubuntu-24.04]
     runs-on: ${{ matrix.os }}

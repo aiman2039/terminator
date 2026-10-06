@@ -364,6 +364,10 @@ impl App {
                         self.installation_settings(ui);
                         ui.add_space(12.0);
                         ui.separator();
+                        #[cfg(any(windows, test))]
+                        self.windows_updates
+                            .settings(ui, &mut self.settings_draft.automatic_update_checks);
+                        #[cfg(not(windows))]
                         self.updater.settings(ui);
                     }
                 });

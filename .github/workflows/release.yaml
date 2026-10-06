@@ -144,6 +144,23 @@ jobs:
           rust-version: ${{ env.RUST_VERSION }}
           tag: ${{ needs.prepare.outputs.tag }}
 
+  build-windows:
+    needs: [prepare, checks]
+    name: Build x86_64-pc-windows-msvc
+    runs-on: windows-2025
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/release-build
+        with:
+          runner-label: windows-2025
+          target: x86_64-pc-windows-msvc
+          rust-version: ${{ env.RUST_VERSION }}
+          tag: ${{ needs.prepare.outputs.tag }}
+
   assemble-macos:
     needs: [prepare, build-macos]
     runs-on: macos-15
@@ -326,7 +343,7 @@ jobs:
           retention-days: 7
 
   upload-draft:
-    needs: [prepare, build-linux, assemble-macos]
+    needs: [prepare, build-linux, build-windows, assemble-macos]
     if: needs.prepare.outputs.tag != ''
     runs-on: ubuntu-24.04
     concurrency:
@@ -348,8 +365,8 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 4
-          sha256sum ./*.dmg ./*.tar.gz appcast.xml > SHA256SUMS.txt
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 5
+          sha256sum ./*.dmg ./*.tar.gz ./*.zip appcast.xml > SHA256SUMS.txt
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             prerelease=()
             if [[ "$TAG" == *-* ]]; then
@@ -362,7 +379,7 @@ jobs:
             echo "::error::Refusing to replace published update bytes. Bump the version."
             exit 1
           fi
-          gh release upload "$TAG" ./*.dmg ./*.tar.gz appcast.xml SHA256SUMS.txt --clobber
+          gh release upload "$TAG" ./*.dmg ./*.tar.gz ./*.zip appcast.xml SHA256SUMS.txt --clobber
           gh release view "$TAG" --json assets > "$RUNNER_TEMP/draft-assets.json"
           python3 - "$RUNNER_TEMP/draft-assets.json" <<'ASSETS'
           import json, pathlib, sys

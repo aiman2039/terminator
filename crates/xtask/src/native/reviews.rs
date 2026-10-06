@@ -4,22 +4,22 @@ use super::{
 };
 use std::{
     io,
-    net::Shutdown,
-    os::unix::net::{UnixListener, UnixStream},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
-use terminator_core::{read_frame, write_frame};
+use terminator_core::{read_frame, transport, write_frame};
 fn expression(h: &Harness, s: &Value, expression: &str) -> Result<String> {
     let mut cmd = std::process::Command::new("nvim");
     cmd.arg("--server")
-        .arg(h.root.join("run").join(format!(
-            "{}.nvim",
-            id(s)
-                .get(..8)
-                .ok_or_else(|| anyhow::anyhow!("review socket id is shorter than 8 characters"))?
+        .arg(transport::nvim_listen_arg(&h.root.join("run").join(
+            format!(
+                "{}.nvim",
+                id(s).get(..8).ok_or_else(|| anyhow::anyhow!(
+                    "review socket id is shorter than 8 characters"
+                ))?
+            ),
         )))
         .args(["--remote-expr", expression]);
     Ok(String::from_utf8(output(cmd)?)?.trim().into())
@@ -251,7 +251,7 @@ pub(super) fn proxy(root: &Path) -> Result<Proxy> {
     let dir = root.join("legacy");
     fs::create_dir(&dir)?;
     fs::copy(root.join("run/auth"), dir.join("auth"))?;
-    let listener = UnixListener::bind(dir.join("daemon.sock"))?;
+    let listener = transport::Listener::bind_ipc(&dir.join("daemon.sock"))?;
     listener.set_nonblocking(true)?;
     let target = root.join("run/daemon.sock");
     let stop = Arc::new(AtomicBool::new(false));
@@ -278,7 +278,7 @@ pub(super) fn proxy(root: &Path) -> Result<Proxy> {
                                 counter.fetch_add(1, Ordering::Relaxed);
                                 return Ok(());
                             }
-                            let mut upstream = UnixStream::connect(target)?;
+                            let mut upstream = transport::Stream::connect_ipc(&target)?;
                             write_frame(&mut upstream, &envelope)?;
                             if request == "Snapshot" {
                                 let mut response: Value = read_frame(&mut upstream)?;
@@ -294,10 +294,10 @@ pub(super) fn proxy(root: &Path) -> Result<Proxy> {
                             let mut write_upstream = upstream.try_clone()?;
                             thread::spawn(move || {
                                 let _ = io::copy(&mut read_client, &mut write_upstream);
-                                let _ = write_upstream.shutdown(Shutdown::Both);
+                                let _ = write_upstream.shutdown();
                             });
                             let _ = io::copy(&mut upstream, &mut client);
-                            let _ = client.shutdown(Shutdown::Both);
+                            let _ = client.shutdown();
                             Ok(())
                         })();
                     });

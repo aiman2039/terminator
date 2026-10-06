@@ -6,7 +6,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
-use terminator_core::{CommandOptions, git, run_command};
+use terminator_core::{CommandOptions, git, os_name, run_command};
 
 #[derive(Clone, Debug)]
 pub enum Op {
@@ -230,7 +230,6 @@ fn valid_ref(root: &Path, base: &str) -> bool {
 /// Parse `git diff --name-status -z`. Rename/copy records carry `old\0new`; the
 /// destination path wins.
 fn parse_name_status(root: &Path, raw: &[u8]) -> Vec<(PathBuf, char)> {
-    use std::os::unix::ffi::OsStrExt;
     let mut result = Vec::new();
     let mut parts = raw.split(|b| *b == 0).filter(|part| !part.is_empty());
     while let Some(status) = parts.next() {
@@ -246,7 +245,7 @@ fn parse_name_status(root: &Path, raw: &[u8]) -> Vec<(PathBuf, char)> {
         } else {
             first
         };
-        result.push((root.join(std::ffi::OsStr::from_bytes(path)), letter));
+        result.push((root.join(os_name(path)), letter));
     }
     result
 }

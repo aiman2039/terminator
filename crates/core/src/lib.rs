@@ -16,18 +16,17 @@ pub mod metadata;
 pub mod recovery;
 pub mod signals;
 pub mod snapshot;
+pub mod transport;
 pub mod ui_control;
 pub mod worktrees;
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{
     collections::BTreeSet,
     fs,
     io::{Read, Write},
-    os::unix::{
-        fs::{OpenOptionsExt, PermissionsExt},
-        net::UnixStream,
-    },
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -63,27 +62,161 @@ pub fn find_executable(program: &str) -> Option<PathBuf> {
     }
     find_executable_in(program, &paths)
 }
+/// Windows executable search stems for `program`: the name itself when it
+/// already carries an extension, otherwise the name plus each `PATHEXT`
+/// extension (`.exe`, `.bat`, ...). Plain `PATH` entries never include the
+/// extension, so `nvim` must match `nvim.exe`.
+#[cfg(windows)]
+fn windows_candidate_names(program: &str) -> Vec<String> {
+    if Path::new(program).extension().is_some() {
+        return vec![program.to_owned()];
+    }
+    let extensions = std::env::var_os("PATHEXT")
+        .map(|value| {
+            std::env::split_paths(&value)
+                .filter_map(|p| {
+                    let ext = p.to_str()?.trim().to_owned();
+                    (!ext.is_empty()).then_some(ext)
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|exts| !exts.is_empty())
+        .unwrap_or_else(|| {
+            [".COM", ".EXE", ".BAT", ".CMD"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        });
+    extensions
+        .iter()
+        .map(|ext| format!("{program}{ext}"))
+        .collect()
+}
+
 fn find_executable_in(program: &str, paths: &[PathBuf]) -> Option<PathBuf> {
+    #[cfg(windows)]
+    let candidates = if program.contains('/') || program.contains('\\') {
+        windows_candidate_names(program)
+            .into_iter()
+            .map(PathBuf::from)
+            .collect()
+    } else {
+        paths
+            .iter()
+            .flat_map(|p| {
+                windows_candidate_names(program)
+                    .into_iter()
+                    .map(|name| p.join(name))
+            })
+            .collect()
+    };
+    #[cfg(not(windows))]
     let candidates = if program.contains('/') {
         vec![PathBuf::from(program)]
     } else {
         paths.iter().map(|p| p.join(program)).collect()
     };
     candidates.into_iter().find(|p| {
-        p.metadata()
-            .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        p.metadata().is_ok_and(|m| {
+            if !m.is_file() {
+                return false;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                m.permissions().mode() & 0o111 != 0
+            }
+            #[cfg(not(unix))]
+            {
+                true
+            }
+        })
     })
+}
+/// Sibling executable file name for this platform (`.exe` on Windows).
+/// Idempotent: a stem that already carries the extension is returned unchanged
+/// so `sibling_exe` stays correct even when handed a `bundled_exes()` entry.
+#[must_use]
+pub fn exe_name(stem: &str) -> String {
+    if cfg!(windows) {
+        if Path::new(stem)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        {
+            stem.into()
+        } else {
+            format!("{stem}.exe")
+        }
+    } else {
+        stem.into()
+    }
+}
+/// `executable`'s sibling with the platform file name applied.
+#[must_use]
+pub fn sibling_exe(executable: &Path, stem: &str) -> PathBuf {
+    executable.with_file_name(exe_name(stem))
+}
+/// Both bundled sibling executables with the platform file names applied.
+#[must_use]
+pub fn bundled_exes() -> [String; 2] {
+    [exe_name("terminator-daemon"), exe_name("terminator-hook")]
+}
+/// Raw subprocess-output bytes as an `OsStr`. Unix paths are arbitrary bytes;
+/// Windows paths must be valid WTF-8, so anything else becomes lossy UTF-8.
+#[must_use]
+pub fn os_name(bytes: &[u8]) -> std::ffi::OsString {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        std::ffi::OsStr::from_bytes(bytes).to_os_string()
+    }
+    #[cfg(not(unix))]
+    {
+        String::from_utf8_lossy(bytes).into_owned().into()
+    }
+}
+/// `OsStr` as bytes for comparison against subprocess output. Lossy on
+/// Windows, where paths cannot hold arbitrary bytes.
+#[must_use]
+pub fn os_bytes(value: &std::ffi::OsStr) -> std::borrow::Cow<'_, [u8]> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        std::borrow::Cow::Borrowed(value.as_bytes())
+    }
+    #[cfg(not(unix))]
+    {
+        std::borrow::Cow::Owned(value.to_string_lossy().into_owned().into_bytes())
+    }
 }
 /// Check the current user's ability to execute a regular file, including ACLs.
 #[must_use]
 pub fn executable_available(path: &Path) -> bool {
-    path.is_file() && rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok()
+    #[cfg(unix)]
+    {
+        path.is_file() && rustix::fs::access(path, rustix::fs::Access::EXEC_OK).is_ok()
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
 }
 pub fn default_shell() -> Result<PathBuf> {
-    ["zsh", "bash", "sh"]
-        .into_iter()
-        .find_map(find_executable)
-        .context("No zsh, bash, or sh executable found")
+    #[cfg(unix)]
+    {
+        ["zsh", "bash", "sh"]
+            .into_iter()
+            .find_map(find_executable)
+            .context("No zsh, bash, or sh executable found")
+    }
+    #[cfg(not(unix))]
+    {
+        ["pwsh", "powershell", "cmd"]
+            .into_iter()
+            .find_map(find_executable)
+            .or_else(|| std::env::var_os("COMSPEC").map(PathBuf::from))
+            .context("No pwsh, powershell, or cmd executable found")
+    }
 }
 #[must_use]
 pub fn quote(value: &str) -> String {
@@ -111,10 +244,14 @@ impl Paths {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         home.home_dir().hash(&mut h);
-        Ok(Self {
-            data: dirs.data_local_dir().into(),
-            runtime: PathBuf::from(format!("/tmp/terminator-{:x}", h.finish())),
-        })
+        let data: PathBuf = dirs.data_local_dir().into();
+        #[cfg(unix)]
+        let runtime = PathBuf::from(format!("/tmp/terminator-{:x}", h.finish()));
+        // Windows uses a TCP-loopback port file, so the runtime dir only
+        // needs to be private, not short.
+        #[cfg(not(unix))]
+        let runtime = std::env::temp_dir().join(format!("terminator-{:x}", h.finish()));
+        Ok(Self { data, runtime })
     }
     #[must_use]
     pub fn at(data: PathBuf) -> Self {
@@ -132,8 +269,10 @@ impl Paths {
                 );
             }
             fs::create_dir_all(path)?;
+            #[cfg(unix)]
             fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
         }
+        #[cfg(unix)]
         ensure!(
             self.socket().as_os_str().len() < 100,
             "Runtime path too long for Unix socket; use a shorter data directory"
@@ -171,11 +310,11 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::create_dir_all(parent)?;
     let tmp = parent.join(format!(".terminator-{}.tmp", id()));
     let result = (|| -> Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options.open(&tmp)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         fs::rename(&tmp, path)?;
@@ -376,6 +515,7 @@ pub struct Settings {
     pub terminal_notifications: bool,
     pub terminal_notifications_os: bool,
     pub notification_sound: bool,
+    pub automatic_update_checks: bool,
     pub ntfy_enabled: bool,
     pub ntfy_channel: String,
     pub ntfy_machine: String,
@@ -417,6 +557,7 @@ impl Default for Settings {
             terminal_notifications: true,
             terminal_notifications_os: false,
             notification_sound: true,
+            automatic_update_checks: true,
             ntfy_enabled: false,
             ntfy_channel: String::new(),
             ntfy_machine: String::new(),
@@ -1070,7 +1211,11 @@ pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read) -> Result<T> {
     reader.read_exact(&mut bytes)?;
     Ok(serde_json::from_slice(&bytes)?)
 }
-pub fn connect(paths: &Paths, request: Request, token: Option<String>) -> Result<UnixStream> {
+pub fn connect(
+    paths: &Paths,
+    request: Request,
+    token: Option<String>,
+) -> Result<transport::Stream> {
     connect_hint(paths, request, token, None)
 }
 fn connect_hint(
@@ -1078,18 +1223,18 @@ fn connect_hint(
     request: Request,
     token: Option<String>,
     snapshot_hint: Option<SnapshotHint>,
-) -> Result<UnixStream> {
+) -> Result<transport::Stream> {
     let routed = generations::owner_for(paths, &request)?;
     let paths = &routed;
-    let mut s = UnixStream::connect(paths.socket()).context("Session daemon unavailable")?;
-    s.set_read_timeout(Some(Duration::from_secs(
-        if matches!(&request, Request::CloseIdleSessions { .. }) {
+    let mut s = transport::Stream::connect_ipc(&paths.socket())?;
+    s.set_timeouts(
+        Duration::from_secs(if matches!(&request, Request::CloseIdleSessions { .. }) {
             30
         } else {
             3
-        },
-    )))?;
-    s.set_write_timeout(Some(Duration::from_secs(3)))?;
+        }),
+        Duration::from_secs(3),
+    )?;
     write_frame(
         &mut s,
         &Envelope {
@@ -1297,6 +1442,7 @@ pub fn bounded_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     #[test]
     fn shell_preference_skips_missing_and_nonexecutable_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -1318,6 +1464,34 @@ mod tests {
         fs::remove_file(dir.path().join("bash")).unwrap();
         assert_eq!(choose(), Some(dir.path().join("sh")));
     }
+    #[test]
+    fn bundled_names_already_carry_the_platform_suffix() {
+        for name in bundled_exes() {
+            assert_eq!(exe_name(&name), name);
+            assert_eq!(
+                sibling_exe(Path::new("/tmp/terminator"), &name),
+                Path::new("/tmp/terminator").with_file_name(&name)
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_lookup_finds_bare_names_with_executable_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = vec![dir.path().to_path_buf()];
+        assert!(find_executable_in("nvim", &paths).is_none());
+        std::fs::write(dir.path().join("nvim.exe"), b"fixture").unwrap();
+        assert_eq!(
+            find_executable_in("nvim", &paths),
+            Some(dir.path().join("nvim.exe"))
+        );
+        assert_eq!(
+            find_executable_in("nvim.exe", &paths),
+            Some(dir.path().join("nvim.exe"))
+        );
+    }
+
     pub(crate) fn setup() -> State {
         let mut s = State::default();
         s.sessions.push(Session {
@@ -1737,6 +1911,18 @@ mod snapshot_tests {
     }
 
     #[test]
+    fn automatic_update_checks_default_on_and_round_trip() {
+        assert!(Settings::default().automatic_update_checks);
+        let parsed: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(parsed.automatic_update_checks);
+        let off: Settings =
+            serde_json::from_value(serde_json::json!({"automatic_update_checks": false})).unwrap();
+        assert!(!off.automatic_update_checks);
+        let encoded = serde_json::to_value(&off).unwrap();
+        assert_eq!(encoded["automatic_update_checks"], false);
+    }
+
+    #[test]
     fn notification_sound_defaults_on_and_round_trips() {
         assert!(Settings::default().notification_sound);
         let parsed: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
@@ -1928,7 +2114,9 @@ mod snapshot_tests {
 
 #[cfg(test)]
 mod executable_health_tests {
+    #[cfg(unix)]
     use super::*;
+    #[cfg(unix)]
     #[test]
     fn missing_non_executable_and_directory_helpers_are_unavailable() {
         let dir = tempfile::tempdir().unwrap();

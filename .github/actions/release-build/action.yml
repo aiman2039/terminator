@@ -71,6 +71,16 @@ runs:
             file "$package/Terminator.app/Contents/MacOS/$binary"
           done
           ditto -c -k --sequesterRsrc --keepParent "$package/Terminator.app" "$artifacts/$asset.zip"
+        elif [[ "$RUNNER_OS" == Windows ]]; then
+          mv "$package/terminator-windows.zip" "$artifacts/$asset.zip"
+          mkdir -p "$package/verify"
+          tar -xf "$artifacts/$asset.zip" -C "$package/verify"
+          for binary in terminator terminator-daemon terminator-hook; do
+            path="$package/verify/terminator/$binary.exe"
+            test -f "$path"
+            test -s "$path"
+          done
+          test -f "$package/verify/terminator/README.md"
         else
           mv "$package/terminator-linux.tar.gz" "$artifacts/$asset.tar.gz"
           mkdir -p "$package/verify"

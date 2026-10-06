@@ -691,7 +691,10 @@ impl Services {
                             "Install the {kind} CLI before configuring its hooks"
                         );
                         let home = std::env::var_os("HOME").context("No home directory")?;
-                        let helper = std::env::current_exe()?.with_file_name("terminator-hook");
+                        let helper = terminator_core::sibling_exe(
+                            &std::env::current_exe()?,
+                            "terminator-hook",
+                        );
                         let path = terminator_integrations::install_at(
                             Path::new(&home),
                             &kind,
@@ -788,7 +791,7 @@ impl Services {
                 context.deadline = None;
                 self.handle().submit(context, cancel, async move {
                     use tokio::io::AsyncReadExt;
-                    let mut completion = tokio::net::UnixStream::from_std(watched.completion)?;
+                    let mut completion = watched.completion.into_tokio()?;
                     let mut bytes = [0; 256];
                     loop {
                         tokio::select! {
@@ -1005,11 +1008,16 @@ impl ImageJobs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{nvim_rpc, preferences::UiPreferences};
+    #[cfg(unix)]
+    use crate::nvim_rpc;
+    use crate::preferences::UiPreferences;
     use std::sync::mpsc;
+    #[cfg(unix)]
     use terminator_core::CommandOptions;
+    #[cfg(unix)]
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     #[tokio::test]
+    #[cfg(unix)]
     async fn stalled_radio_git_and_neovim_do_not_block_another_editor() {
         let directory = tempfile::Builder::new()
             .prefix("async-load-")

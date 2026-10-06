@@ -195,7 +195,25 @@ fn agent_parent() -> (
 ) {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let mut system = System::new();
+    #[cfg(unix)]
     let mut pid = Pid::from_u32(std::os::unix::process::parent_id());
+    #[cfg(not(unix))]
+    let mut pid = {
+        let mut system = System::new();
+        let current = Pid::from_u32(std::process::id());
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[current]),
+            false,
+            ProcessRefreshKind::nothing(),
+        );
+        Pid::from_u32(
+            system
+                .process(current)
+                .and_then(|process| process.parent())
+                .map(|parent| parent.as_u32())
+                .unwrap_or(0),
+        )
+    };
     let mut ancestors = Vec::new();
     let mut selected = None;
     for _ in 0..16 {
@@ -264,6 +282,7 @@ fn legacy_identity(pid: u32, text: &[u8]) -> Option<String> {
     let parts = text.split_whitespace().collect::<Vec<_>>();
     (parts.len() == 5).then(|| format!("{pid}:{}", parts.join("-")))
 }
+#[cfg(unix)]
 fn dimensions() -> (u16, u16) {
     let size =
         rustix::termios::tcgetwinsize(std::io::stdin()).unwrap_or(rustix::termios::Winsize {
@@ -274,6 +293,10 @@ fn dimensions() -> (u16, u16) {
         });
     (size.ws_row.max(1), size.ws_col.max(1))
 }
+#[cfg(not(unix))]
+fn dimensions() -> (u16, u16) {
+    terminator_sys::dimensions()
+}
 fn lock_writer<T>(writer: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     writer
         .lock()
@@ -283,7 +306,9 @@ fn write_winsize(writer: &Mutex<impl Write>) -> Result<()> {
     let (rows, cols) = dimensions();
     write_frame(&mut *lock_writer(writer), &Request::Resize { rows, cols })
 }
+#[cfg(unix)]
 struct Raw(rustix::termios::Termios);
+#[cfg(unix)]
 impl Drop for Raw {
     fn drop(&mut self) {
         let _ = rustix::termios::tcsetattr(
@@ -294,6 +319,7 @@ impl Drop for Raw {
     }
 }
 fn attach(session: &str, args: &[String]) -> Result<()> {
+    #[cfg(unix)]
     let raw = rustix::termios::tcgetattr(std::io::stdin())
         .ok()
         .map(|previous| {
@@ -306,6 +332,11 @@ fn attach(session: &str, args: &[String]) -> Result<()> {
             );
             Raw(previous)
         });
+    // Without a console (redirected stdio) there is no mode to set; the
+    // bridge still works, but interactive programs may echo input. The
+    // guard restores the previous console mode when dropped below.
+    #[cfg(not(unix))]
+    let raw = terminator_sys::RawMode::enable().ok();
     let paths = if args.len() >= 2 {
         Paths {
             data: args.first().context("Missing data path")?.clone().into(),
@@ -348,17 +379,22 @@ fn attach(session: &str, args: &[String]) -> Result<()> {
                 break;
             }
         }
-        let _ = lock_writer(&input_writer).shutdown(std::net::Shutdown::Both);
+        let _ = lock_writer(&input_writer).shutdown();
     });
-    let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGWINCH])?;
-    let sigwinch_writer = Arc::clone(&writer);
-    std::thread::spawn(move || {
-        for _ in signals.forever() {
-            if write_winsize(sigwinch_writer.as_ref()).is_err() {
-                break;
+    // Resize signals do not exist on Windows; the GUI repaints at the size
+    // negotiated here.
+    #[cfg(unix)]
+    {
+        let mut signals = signal_hook::iterator::Signals::new([signal_hook::consts::SIGWINCH])?;
+        let sigwinch_writer = Arc::clone(&writer);
+        std::thread::spawn(move || {
+            for _ in signals.forever() {
+                if write_winsize(sigwinch_writer.as_ref()).is_err() {
+                    break;
+                }
             }
-        }
-    });
+        });
+    }
     // Attach used the PTY size at spawn (often 80x50). Catch a GUI resize that
     // raced before this handler existed so COLUMNS matches the painted grid.
     let _ = write_winsize(writer.as_ref());

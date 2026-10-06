@@ -111,9 +111,9 @@ pub fn repair(paths: &Paths, executable: &Path, generation: &str) -> Result<Box<
         anyhow::bail!("Could not verify the active service");
     }
     // Check the installed replacement before retiring even an idle daemon.
-    for name in ["terminator-daemon", "terminator-hook"] {
+    for name in bundled_exes() {
         ensure!(
-            executable_available(&executable.with_file_name(name)),
+            executable_available(&sibling_exe(executable, &name)),
             "Reinstall the complete Terminator app before repairing: {name} is unavailable"
         );
     }
@@ -159,19 +159,18 @@ pub fn repair(paths: &Paths, executable: &Path, generation: &str) -> Result<Box<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     fn fixture() -> (tempfile::TempDir, Paths, std::path::PathBuf) {
-        let dir = tempfile::Builder::new()
-            .prefix("tr-")
-            .tempdir_in("/tmp")
-            .unwrap();
+        let dir = tempfile::Builder::new().prefix("tr-").tempdir().unwrap();
         let paths = Paths::at(dir.path().to_path_buf());
         paths.init().unwrap();
         atomic_write(&paths.auth(), b"fixture").unwrap();
-        for name in ["terminator-daemon", "terminator-hook"] {
-            let path = dir.path().join(name);
+        for name in bundled_exes() {
+            let path = dir.path().join(&name);
             fs::write(&path, b"must never be executed").unwrap();
+            #[cfg(unix)]
             fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
         }
         let exe = dir.path().join("terminator");
@@ -205,7 +204,7 @@ mod tests {
     fn repair_rechecks_identity_and_capability_before_sending_shutdown() {
         for changed_generation in [false, true] {
             let (_dir, paths, exe) = fixture();
-            let listener = UnixListener::bind(paths.socket()).unwrap();
+            let listener = transport::Listener::bind_ipc(&paths.socket()).unwrap();
             let server = thread::spawn(move || {
                 let (mut stream, _) = listener.accept().unwrap();
                 let request: Envelope = read_frame(&mut stream).unwrap();
@@ -241,7 +240,7 @@ mod tests {
     #[test]
     fn refused_idle_shutdown_does_not_fall_back_to_replacing_the_daemon() {
         let (_dir, paths, exe) = fixture();
-        let listener = UnixListener::bind(paths.socket()).unwrap();
+        let listener = transport::Listener::bind_ipc(&paths.socket()).unwrap();
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let request: Envelope = read_frame(&mut stream).unwrap();

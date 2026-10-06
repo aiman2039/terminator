@@ -1,9 +1,9 @@
 //! Authenticated GUI control, separate from the persistent daemon protocol.
 //! Old daemons remain usable; an old GUI simply has no gui.sock endpoint.
-use crate::{Paths, read_frame, write_frame};
+use crate::{Paths, read_frame, transport, write_frame};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use std::{os::unix::net::UnixStream, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 pub const CAPABILITY: &str = "gui-control-v1";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Request {
@@ -104,10 +104,9 @@ impl Request {
 }
 pub fn rpc(paths: &Paths, request: Request) -> Result<serde_json::Value> {
     request.validate()?;
-    let mut stream = UnixStream::connect(paths.runtime.join("gui.sock"))
+    let mut stream = transport::Stream::connect_ipc(&paths.runtime.join("gui.sock"))
         .context("GUI control unavailable; open the updated Terminator GUI")?;
-    stream.set_read_timeout(Some(Duration::from_secs(8)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+    stream.set_timeouts(Duration::from_secs(8), Duration::from_secs(3))?;
     write_frame(
         &mut stream,
         &Envelope {

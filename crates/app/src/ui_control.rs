@@ -4,12 +4,12 @@ use anyhow::{Result, ensure};
 use futures_util::{FutureExt, StreamExt, stream::FuturesUnordered};
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
     time::{Duration, Instant},
 };
 use terminator_core::{
     Paths,
     async_service::{CancellationToken, OperationContext, Policy},
+    transport,
     ui_control::{Envelope, Response},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -31,18 +31,15 @@ pub fn spawn(paths: Paths, service: Services) -> Result<Server> {
     handle.submit(context, cancel.clone(), async move {
         let socket = paths.runtime.join("gui.sock");
         let bind = socket.clone();
-        let listener = service
+        // Tokio listeners panic when constructed without a runtime, and the
+        // catalog pool is native worker threads. Bind synchronously there,
+        // then adopt the socket on this Tokio task.
+        let std_listener: transport::Listener = service
             .client()
             .catalog
-            .run(&token, move || {
-                let _ = fs::remove_file(&bind);
-                let listener = std::os::unix::net::UnixListener::bind(&bind)?;
-                fs::set_permissions(bind, fs::Permissions::from_mode(0o600))?;
-                listener.set_nonblocking(true)?;
-                Ok(listener)
-            })
+            .run(&token, move || transport::Listener::bind_ipc(&bind))
             .await?;
-        let listener = tokio::net::UnixListener::from_std(listener)?;
+        let listener = transport::AsyncListener::from_std(std_listener)?;
         let mut clients = FuturesUnordered::new();
         loop {
             tokio::select! {
@@ -69,11 +66,11 @@ pub fn spawn(paths: Paths, service: Services) -> Result<Server> {
     })?;
     Ok(Server { cancel })
 }
-async fn serve(stream: tokio::net::UnixStream, service: Services, paths: Paths) -> Result<()> {
+async fn serve(stream: transport::AsyncStream, service: Services, paths: Paths) -> Result<()> {
     serve_for(stream, service, paths, Duration::from_secs(8)).await
 }
 async fn serve_for(
-    stream: tokio::net::UnixStream,
+    stream: transport::AsyncStream,
     service: Services,
     paths: Paths,
     timeout: Duration,
@@ -89,7 +86,7 @@ async fn serve_for(
     .map_err(|_| anyhow::anyhow!("GUI response deadline exceeded"))?
 }
 async fn serve_until(
-    mut stream: tokio::net::UnixStream,
+    mut stream: transport::AsyncStream,
     service: Services,
     paths: Paths,
     deadline: Instant,
@@ -196,8 +193,9 @@ mod tests {
                 .await
         });
         entered.await.unwrap();
-        let listener = tokio::net::UnixListener::bind(paths.runtime.join("deadline.sock")).unwrap();
-        let mut client = tokio::net::UnixStream::connect(paths.runtime.join("deadline.sock"))
+        let listener =
+            transport::AsyncListener::bind_ipc(&paths.runtime.join("deadline.sock")).unwrap();
+        let mut client = transport::AsyncStream::connect_ipc(&paths.runtime.join("deadline.sock"))
             .await
             .unwrap();
         let (server, _) = listener.accept().await.unwrap();

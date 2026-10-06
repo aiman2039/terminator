@@ -78,6 +78,7 @@ struct Snapshot {
     paused: bool,
 }
 #[cfg(test)]
+#[cfg(unix)]
 fn read_source(source: &Source, previous: Option<&Snapshot>) -> Result<Option<Snapshot>> {
     if source.socket.exists() {
         let response = (|| -> Result<Option<serde_json::Value>> {
@@ -127,6 +128,7 @@ fn read_source(source: &Source, previous: Option<&Snapshot>) -> Result<Option<Sn
     read_saved(source).map(Some)
 }
 #[cfg(test)]
+#[cfg(unix)]
 fn paused_snapshot(source: &Source, previous: Option<&Snapshot>) -> Result<Snapshot> {
     // Never replace an observed unsaved buffer with older disk contents.
     let mut snapshot = match previous.filter(|s| s.revision.is_some()) {
@@ -137,6 +139,7 @@ fn paused_snapshot(source: &Source, previous: Option<&Snapshot>) -> Result<Snaps
     Ok(snapshot)
 }
 #[cfg(test)]
+#[cfg(unix)]
 fn read_saved(source: &Source) -> Result<Snapshot> {
     read_saved_cancel(
         source,
@@ -148,12 +151,14 @@ fn read_saved_cancel(
     cancel: &terminator_core::async_service::CancellationToken,
 ) -> Result<Snapshot> {
     // Custom terminal editors have no Neovim RPC. Clearly label their saved-file view.
+    #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(&source.path)
-        .context("Open Markdown file")?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    // Avoid blocking on FIFOs; Windows has no equivalent flag.
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+    let file = options.open(&source.path).context("Open Markdown file")?;
     ensure!(
         file.metadata()?.is_file(),
         "Markdown preview requires a regular file"
@@ -864,11 +869,20 @@ async fn read_source_async(
     force: bool,
 ) -> Result<Option<Snapshot>> {
     let socket = source.socket.clone();
-    if service
+    // Windows Neovim listens on a named pipe with no filesystem record, so
+    // the existence probe is Unix-only; on Windows the connect attempt below
+    // decides, falling back to saved content on timeout.
+    #[cfg(unix)]
+    let live = service
         .fs()
         .run(cancel, move || Ok(socket.exists()))
-        .await?
-    {
+        .await?;
+    #[cfg(windows)]
+    let live = {
+        let _ = socket;
+        true
+    };
+    if live {
         let response = (async {
             let mut rpc = crate::nvim_rpc::AsyncConnection::connect(
                 &source.socket,
@@ -970,6 +984,7 @@ async fn paused_async(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::io::Read;
 
     fn snapshot(text: &str) -> Snapshot {
@@ -1064,7 +1079,9 @@ mod tests {
         assert!(previews.entries.is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
+    #[cfg(unix)]
     fn blocking_editor_uses_saved_file_and_preserves_the_last_unsaved_preview() {
         use std::{io::Write, os::unix::net::UnixListener};
         let dir = tempfile::tempdir().unwrap();
@@ -1137,6 +1154,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn refresh_during_a_prompt_keeps_the_cached_unsaved_document() {
         use std::{io::Write, os::unix::net::UnixListener, time::Instant};
         let dir = tempfile::tempdir().unwrap();
@@ -1249,7 +1267,9 @@ mod tests {
         assert!(doc.text.contains("Image: remote"));
     }
 
+    #[cfg(unix)]
     #[test]
+    #[cfg(unix)]
     fn saved_file_preview_reports_changes_missing_files_and_size_limits() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("file.MD");

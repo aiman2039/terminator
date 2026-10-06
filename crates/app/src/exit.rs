@@ -466,12 +466,11 @@ mod tests {
     }
     #[test]
     fn a_drained_socket_is_not_a_successful_persistence_acknowledgment() {
-        use std::os::unix::net::UnixListener;
         let directory = tempfile::tempdir().unwrap();
         let paths = Paths::at(directory.path().into());
         paths.init().unwrap();
         fs::write(paths.auth(), "fixture").unwrap();
-        let listener = UnixListener::bind(paths.socket()).unwrap();
+        let listener = transport::Listener::bind_ipc(&paths.socket()).unwrap();
         let server = thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
             let _: Envelope = read_frame(&mut socket).unwrap();

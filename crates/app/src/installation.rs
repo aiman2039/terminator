@@ -7,7 +7,10 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
-use terminator_core::{Paths, crash::CrashNotice, executable_available, spawn_session_leader};
+use terminator_core::{
+    Paths, bundled_exes, crash::CrashNotice, exe_name, executable_available, sibling_exe,
+    spawn_session_leader, transport,
+};
 
 pub fn is_helper_error(error: &str) -> bool {
     error.starts_with("Attachment helper unavailable:")
@@ -16,7 +19,7 @@ pub fn is_helper_error(error: &str) -> bool {
 /// Target this GUI's installation and service even from an unrelated terminal.
 pub fn manual_shutdown_command(executable: &Path, paths: &Paths, stop_all: bool) -> Result<String> {
     use terminator_core::quote;
-    let helper = executable.with_file_name("terminator-hook");
+    let helper = sibling_exe(executable, "terminator-hook");
     let path = |p: &Path| {
         let p = std::path::absolute(p)?;
         p.to_str()
@@ -49,9 +52,9 @@ pub struct RestartInvocation {
 }
 
 pub fn restart_invocation(executable: &Path, paths: &Paths) -> Result<RestartInvocation> {
-    let hook = executable.with_file_name("terminator-hook");
+    let hook = sibling_exe(executable, "terminator-hook");
     let gui = std::path::absolute(executable)?;
-    let daemon = executable.with_file_name("terminator-daemon");
+    let daemon = sibling_exe(executable, "terminator-daemon");
     ensure!(
         executable_available(&daemon),
         "Cannot restart: {} is unavailable. Reinstall the complete app.",
@@ -77,7 +80,7 @@ pub fn restart_invocation(executable: &Path, paths: &Paths) -> Result<RestartInv
 }
 
 pub struct RestartWatch {
-    pub completion: std::os::unix::net::UnixStream,
+    pub completion: transport::Stream,
     pub log_path: PathBuf,
     pub log_start: u64,
 }
@@ -101,7 +104,7 @@ pub fn begin_restart(
     let log_path = data.join("restart.log");
     // A silent inherited socket tracks helper lifetime without routing its output
     // through the GUI. Losing the GUI must not give the helper a broken pipe.
-    let (completion, lifetime) = std::os::unix::net::UnixStream::pair()?;
+    let (completion, lifetime) = transport::pair()?;
     let mut command = Command::new(&hook);
     command
         .args(["ctl", "shutdown", "--stop-all", "--relaunch", "--exe"])
@@ -116,7 +119,7 @@ pub fn begin_restart(
         )
         .env_remove("TERMINATOR_SESSION_ID")
         .env_remove("TERMINATOR_SESSION_TOKEN")
-        .stdin(Stdio::from(std::os::fd::OwnedFd::from(lifetime)))
+        .stdin(Stdio::from(lifetime.into_owned_fd()))
         .stdout(Stdio::null())
         .stderr(log);
     let mut child = spawn_session_leader(command)?;
@@ -200,16 +203,18 @@ pub fn verify_replacement(state: &terminator_core::State, executable: &Path) -> 
             active.error.is_none()
                 && state.attachment_helper_available == Some(true)
                 && crate::daemon_upgrade::same_file_contents(
-                    &active.owner.data.join("bin/terminator-daemon"),
-                    &executable.with_file_name("terminator-daemon")
+                    &active
+                        .owner
+                        .data
+                        .join("bin")
+                        .join(exe_name("terminator-daemon")),
+                    &sibling_exe(executable, "terminator-daemon")
                 )?,
             "Active generation does not match this installation"
         );
         return Ok(());
     }
-    let expected = executable
-        .with_file_name("terminator-daemon")
-        .canonicalize()?;
+    let expected = sibling_exe(executable, "terminator-daemon").canonicalize()?;
     ensure!(
         state
             .daemon_executable
@@ -241,7 +246,7 @@ pub fn attachment_helper(state: &terminator_core::State) -> anyhow::Result<std::
     }
     // Old daemons don't advertise a private helper. A newly installed GUI's
     // bridge can still attach to their existing PTYs without replacing them.
-    Ok(std::env::current_exe()?.with_file_name("terminator-hook"))
+    Ok(sibling_exe(&std::env::current_exe()?, "terminator-hook"))
 }
 
 pub fn needs_installation(executable: &Path, home: Option<&Path>) -> bool {
@@ -280,8 +285,8 @@ pub fn preflight() -> anyhow::Result<bool> {
         }
         return Ok(false);
     }
-    for name in ["terminator-daemon", "terminator-hook"] {
-        let helper = executable.with_file_name(name);
+    for name in bundled_exes() {
+        let helper = sibling_exe(&executable, &name);
         if !terminator_core::executable_available(&helper) {
             show_message(
                 "Terminator installation needs repair",
@@ -348,6 +353,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(unix)]
     fn detached_helper_receives_the_exact_confirmed_inventory() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
@@ -389,6 +395,7 @@ mod tests {
         assert_eq!(received, inventory);
     }
     #[test]
+    #[cfg(unix)]
     fn helper_continues_and_logs_after_gui_process_exits() {
         const CHILD: &str = "TERMINATOR_RESTART_TEST_PARENT_EXIT";
         if let Some(directory) = std::env::var_os(CHILD) {
@@ -507,6 +514,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn detached_helper_failure_reports_completion_and_preserves_config() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
@@ -542,6 +550,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn manual_shutdown_targets_this_installation_and_quotes_shell_metacharacters() {
         use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
@@ -584,12 +593,15 @@ mod tests {
 
     #[test]
     fn restart_invocation_uses_gui_sibling_not_a_private_helper() {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let gui = dir.path().join("terminator");
-        let hook = dir.path().join("terminator-hook");
-        for path in [&gui, &hook, &dir.path().join("terminator-daemon")] {
+        let hook = dir.path().join(exe_name("terminator-hook"));
+        for path in [&gui, &hook, &dir.path().join(exe_name("terminator-daemon"))] {
             std::fs::write(path, b"#!/bin/sh\n").unwrap();
+            // `executable_available` checks the exec bit on Unix only.
+            #[cfg(unix)]
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
         let paths = terminator_core::Paths {
@@ -613,9 +625,7 @@ mod tests {
             attachment_helper_available: Some(true),
             ..State::default()
         };
-        let bundled = std::env::current_exe()
-            .unwrap()
-            .with_file_name("terminator-hook");
+        let bundled = sibling_exe(&std::env::current_exe().unwrap(), "terminator-hook");
         assert_eq!(attachment_helper(&state).unwrap(), bundled);
         state.capabilities.push(STABLE_HELPER_CAPABILITY.into());
         assert_eq!(

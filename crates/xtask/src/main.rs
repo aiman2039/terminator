@@ -13,6 +13,7 @@ mod native;
 mod notification_perf;
 mod package;
 mod regressions;
+mod zip_writer;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::{path::PathBuf, time::Duration};
@@ -164,17 +165,25 @@ fn main() -> Result<()> {
     {
         // Native-input fixtures use a non-executing PTY sink, so desktop typing
         // can never become shell commands or appear in their captures.
-        let mut attributes = rustix::termios::tcgetattr(std::io::stdin())
-            .map_err(|_| anyhow::anyhow!("Fixture sink requires a PTY"))?;
-        attributes
-            .local_modes
-            .remove(rustix::termios::LocalModes::ECHO | rustix::termios::LocalModes::ECHONL);
-        rustix::termios::tcsetattr(
-            std::io::stdin(),
-            rustix::termios::OptionalActions::Now,
-            &attributes,
-        )
-        .map_err(|_| anyhow::anyhow!("Cannot disable fixture echo"))?;
+        #[cfg(unix)]
+        {
+            let mut attributes = rustix::termios::tcgetattr(std::io::stdin())
+                .map_err(|_| anyhow::anyhow!("Fixture sink requires a PTY"))?;
+            attributes
+                .local_modes
+                .remove(rustix::termios::LocalModes::ECHO | rustix::termios::LocalModes::ECHONL);
+            rustix::termios::tcsetattr(
+                std::io::stdin(),
+                rustix::termios::OptionalActions::Now,
+                &attributes,
+            )
+            .map_err(|_| anyhow::anyhow!("Cannot disable fixture echo"))?;
+        }
+        #[cfg(not(unix))]
+        anyhow::ensure!(
+            false,
+            "Fixture sink requires a Unix PTY; Windows fixtures are not implemented yet"
+        );
         std::io::copy(&mut std::io::stdin(), &mut std::io::sink())?;
         return Ok(());
     }

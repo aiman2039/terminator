@@ -21,16 +21,14 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use fs2::FileExt;
 use portable_pty::{MasterPty, PtySize, native_pty_system};
+#[cfg(unix)]
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
+#[cfg(unix)]
 use rustix::io::Errno;
 use std::{
     collections::HashMap,
     fs,
     io::{Read, Write},
-    os::unix::{
-        fs::PermissionsExt,
-        net::{UnixListener, UnixStream},
-    },
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -64,10 +62,10 @@ struct Runtime {
     shell_executable: Option<std::path::PathBuf>,
 }
 /// A cloned input descriptor must not keep a failed output connection alive.
-struct Disconnect(UnixStream);
+struct Disconnect(transport::Stream);
 impl Drop for Disconnect {
     fn drop(&mut self) {
-        let _ = self.0.shutdown(std::net::Shutdown::Both);
+        let _ = self.0.shutdown();
     }
 }
 enum HistoryJob {
@@ -975,6 +973,7 @@ impl Shared {
                 ensure!(!relock(&rt).ended, "Session ended");
                 if let Some(pid) = rec.pid {
                     // Signal the PTY's foreground job as well as its owning shell.
+                    #[cfg(unix)]
                     if let Ok(shell_pid) = i32::try_from(pid)
                         && let Some(foreground) = relock(&rt).master.process_group_leader()
                         && foreground > 1
@@ -1101,12 +1100,17 @@ impl Shared {
         };
         drop(state);
         let socket = self.paths.editor_socket(sid);
+        // Neovim listens on a named pipe on Windows, so the socket path has
+        // no filesystem record there; the `--server` address must match the
+        // `--listen` address from `editor::prepare` on every platform.
+        let server = transport::nvim_listen_arg(&socket);
+        #[cfg(unix)]
         ensure!(socket.exists(), "Embedded editor RPC unavailable");
         let editor = find_executable(&program).context("Editor executable not found")?;
         let mut command = std::process::Command::new(editor);
         command
             .args(["--server"])
-            .arg(socket)
+            .arg(server)
             .args(["--remote-expr", expression]);
         let out = bounded_output(command, Duration::from_secs(2))?;
         ensure!(
@@ -1122,17 +1126,16 @@ impl Shared {
 
 /// Drain the notification waker socketpair after `poll` reports it readable.
 /// The read end is non-blocking, so this stops at the first `WouldBlock`.
-fn drain_wake(stream: &UnixStream) {
-    let mut reader = stream;
+fn drain_wake(stream: &mut transport::Stream) {
     let mut buf = [0u8; 64];
-    while let Ok(read) = reader.read(&mut buf) {
+    while let Ok(read) = stream.read(&mut buf) {
         if read == 0 {
             break;
         }
     }
 }
 
-fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
+fn serve(mut stream: transport::Stream, shared: Arc<Shared>) -> Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
     stream.set_write_timeout(Some(Duration::from_secs(3)))?;
@@ -1345,12 +1348,10 @@ fn main() -> Result<()> {
         .context("Daemon already running")?;
     helper::cleanup_abandoned(&paths.data)?;
     let helper = helper::Helper::stage(
-        &std::env::current_exe()?.with_file_name("terminator-hook"),
+        &std::env::current_exe()?.with_file_name(exe_name("terminator-hook")),
         &paths.data,
     )?;
-    let _ = fs::remove_file(paths.socket());
-    let listener = UnixListener::bind(paths.socket())?;
-    fs::set_permissions(paths.socket(), fs::Permissions::from_mode(0o600))?;
+    let listener = transport::Listener::bind_ipc(&paths.socket())?;
     listener.set_nonblocking(true)?;
     let auth = id();
     atomic_write(&paths.auth(), auth.as_bytes())?;
@@ -1633,15 +1634,23 @@ fn main() -> Result<()> {
     // periodic work. A socketpair wakes it when a waiter needs Cocoa run-loop
     // pumping or has finished; a shutdown request wakes it explicitly. The
     // listener is still non-blocking so the poll/accept pair never blocks.
-    let (wake_tx, wake_rx) = UnixStream::pair()?;
+    // Windows has no `poll` on sockets here; the loop below polls the
+    // non-blocking listener and waker on a short sleep instead.
+    let (wake_tx, wake_rx) = transport::pair()?;
     wake_tx.set_nonblocking(true)?;
     wake_rx.set_nonblocking(true)?;
+    // Draining through a clone: the poll set borrows `wake_rx` while a wake
+    // needs a mutable drain handle on the same socket buffer.
+    let mut wake_drain = wake_rx.try_clone()?;
     notifications::set_waker({
-        let wake_tx = wake_tx.try_clone()?;
+        let wake_tx = Mutex::new(wake_tx.try_clone()?);
         move || {
-            let _ = (&wake_tx).write(&[1u8]);
+            if let Ok(mut guard) = wake_tx.lock() {
+                let _ = guard.write(&[1u8]);
+            }
         }
     });
+    #[cfg(unix)]
     while !shared.shutdown.load(Ordering::Relaxed) {
         let waiting = notifications::waiting();
         // While a waiter exists, service the Cocoa run loop often enough that
@@ -1652,14 +1661,14 @@ fn main() -> Result<()> {
             tv_nsec: 100_000_000,
         });
         let mut fds = [
-            PollFd::new(&listener, PollFlags::IN),
-            PollFd::new(&wake_rx, PollFlags::IN),
+            PollFd::new(listener.as_std(), PollFlags::IN),
+            PollFd::new(wake_rx.as_std(), PollFlags::IN),
         ];
         match poll(&mut fds, timeout.as_ref()) {
             Ok(0) => notifications::pump(),
             Ok(_) => {
                 if fds[1].revents().contains(PollFlags::IN) {
-                    drain_wake(&wake_rx);
+                    drain_wake(&mut wake_drain);
                 }
                 if fds[0].revents().contains(PollFlags::IN) {
                     match listener.accept() {
@@ -1699,8 +1708,37 @@ fn main() -> Result<()> {
             Err(e) => return Err(e.into()),
         }
     }
+    #[cfg(not(unix))]
+    while !shared.shutdown.load(Ordering::Relaxed) {
+        drain_wake(&mut wake_drain);
+        if notifications::waiting() {
+            notifications::pump();
+        }
+        match listener.accept() {
+            Ok((stream, _)) => {
+                if active.load(Ordering::Relaxed) <= 256 {
+                    let s = Arc::clone(&shared);
+                    let count = Arc::clone(&active);
+                    count.fetch_add(1, Ordering::Relaxed);
+                    thread::spawn(move || {
+                        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            serve(stream, s)
+                        }))
+                        .is_err()
+                        {
+                            eprintln!("daemon connection handler panicked; connection dropped");
+                        }
+                        count.fetch_sub(1, Ordering::Relaxed);
+                    });
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) => return Err(e.into()),
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
     shared.persist()?;
-    let _ = fs::remove_file(shared.paths.socket());
+    transport::cleanup_ipc(&shared.paths.socket());
     shared.helper.cleanup()?;
     if shared.catalog_paths.is_some() {
         let _ = fs::remove_file(shared.paths.auth());

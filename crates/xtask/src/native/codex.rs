@@ -12,7 +12,7 @@ fn snapshot(h: &Harness, sid: &str) -> Result<Value> {
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("missing terminal scroll"))
 }
-fn attach(h: &Harness, session: &Value) -> Result<std::os::unix::net::UnixStream> {
+fn attach(h: &Harness, session: &Value) -> Result<terminator_core::transport::Stream> {
     let state = h.state()?;
     let record = crate::harness::session(&state, id(session));
     let mut stream = h.connect(

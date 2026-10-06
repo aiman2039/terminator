@@ -155,8 +155,9 @@ async fn execute(
         return Err(Failure::Cancelled.into());
     }
     let mut command = tokio::process::Command::from(command);
+    #[cfg(unix)]
+    command.process_group(0);
     command
-        .process_group(0)
         .kill_on_drop(true)
         .stdin(if options.input.is_some() {
             Stdio::piped()
@@ -220,13 +221,16 @@ async fn execute(
 /// Linked checkouts share their canonical common Git directory.
 #[must_use]
 pub fn git_key(cwd: &std::path::Path) -> String {
-    use std::{io::Read, os::unix::fs::OpenOptionsExt};
+    use std::io::Read;
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
     let read = |path: &std::path::Path| -> Option<String> {
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NONBLOCK)
-            .open(path)
-            .ok()?;
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        // Avoid blocking on FIFOs; Windows has no equivalent flag.
+        #[cfg(unix)]
+        options.custom_flags(libc::O_NONBLOCK);
+        let file = options.open(path).ok()?;
         if !file.metadata().ok()?.is_file() {
             return None;
         }
@@ -262,11 +266,19 @@ pub fn git_key(cwd: &std::path::Path) -> String {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+    #[cfg(unix)]
     fn shell(script: &str) -> Command {
         let mut command = Command::new("sh");
         command.args(["-c", script]);
         command
     }
+    #[cfg(not(unix))]
+    fn shell(script: &str) -> Command {
+        let mut command = Command::new("cmd");
+        command.args(["/c", script]);
+        command
+    }
+    #[cfg(unix)]
     #[tokio::test]
     async fn stalled_children_inherited_pipes_and_overflow_are_reaped() {
         let stop = CancellationToken::new();
@@ -295,6 +307,7 @@ mod tests {
         stop.cancel();
         owner.await.unwrap().unwrap();
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn cancellation_reaps_child_and_other_repository_progresses() {
         let stop = CancellationToken::new();
@@ -326,6 +339,32 @@ mod tests {
             assert!(Instant::now() < deadline);
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
+        stop.cancel();
+        owner.await.unwrap().unwrap();
+    }
+
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn timeout_reaps_a_sleeping_child() {
+        let stop = CancellationToken::new();
+        let (processes, actor) = Processes::new(stop.clone());
+        let owner = tokio::spawn(actor);
+        let started = Instant::now();
+        assert!(
+            processes
+                .run(
+                    shell("ping -n 10 127.0.0.1 >nul"),
+                    CommandOptions {
+                        timeout: Duration::from_millis(200),
+                        ..Default::default()
+                    },
+                    None
+                )
+                .await
+                .is_err()
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert_eq!(processes.children(), 0);
         stop.cancel();
         owner.await.unwrap().unwrap();
     }

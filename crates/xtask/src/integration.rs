@@ -18,6 +18,24 @@ use std::{
 };
 use terminator_core::{quote as shell_quote, read_frame};
 
+/// Fixture symlink. Windows directory/file variants are picked by the caller;
+/// creating links may need developer mode or privileges at runtime.
+#[cfg(unix)]
+fn symlink(original: &Path, link: &Path, dir: bool) -> Result<()> {
+    let _ = dir;
+    std::os::unix::fs::symlink(original, link)?;
+    Ok(())
+}
+#[cfg(not(unix))]
+fn symlink(original: &Path, link: &Path, dir: bool) -> Result<()> {
+    if dir {
+        std::os::windows::fs::symlink_dir(original, link)?;
+    } else {
+        std::os::windows::fs::symlink_file(original, link)?;
+    }
+    Ok(())
+}
+
 pub fn run() -> Result<()> {
     let mut h = Harness::new()?;
     h.setup()?;
@@ -34,12 +52,15 @@ pub fn run() -> Result<()> {
         5,
     )?;
     drop(stream);
-    std::os::unix::fs::symlink(
-        a.get("path")
-            .ok_or_else(|| anyhow!("missing project path"))?
-            .as_str()
-            .unwrap(),
-        h.root.join("alias-a"),
+    symlink(
+        Path::new(
+            a.get("path")
+                .ok_or_else(|| anyhow!("missing project path"))?
+                .as_str()
+                .unwrap(),
+        ),
+        &h.root.join("alias-a"),
+        true,
     )?;
     for (path, expected) in [
         (
@@ -426,7 +447,7 @@ pub fn command_counts(seconds: u64, destination: Option<PathBuf>) -> Result<()> 
     for program in ["git", "ps"] {
         let real =
             terminator_core::find_executable(program).context("Measurement helper missing")?;
-        std::os::unix::fs::symlink(std::env::current_exe()?, shim.join(program))?;
+        symlink(&std::env::current_exe()?, &shim.join(program), false)?;
         h.env.insert(
             format!("TERMINATOR_FIXTURE_REAL_{}", program.to_ascii_uppercase()),
             real.to_string_lossy().into_owned(),
@@ -724,7 +745,7 @@ pub fn controls() -> Result<()> {
     );
     let stub = h.root.join("gh-fixture");
     fs::create_dir(&stub)?;
-    std::os::unix::fs::symlink(std::env::current_exe()?, stub.join("gh"))?;
+    symlink(&std::env::current_exe()?, &stub.join("gh"), false)?;
     let mut metadata = h.command("terminator-hook");
     metadata.args(["ctl", "metadata", id(&s)]);
     metadata.env("PATH",format!("{}:{}",stub.display(),std::env::var("PATH").unwrap_or_default())).env("TERMINATOR_FIXTURE_GH_JSON",json!({"number":7,"title":"Fixture PR","url":"https://github.com/example/fixture/pull/7","state":"OPEN"}).to_string()).arg("--pr");
@@ -759,7 +780,7 @@ pub fn controls() -> Result<()> {
     let outside = h.shell(&project)?;
     let mut outside_stream = h.attach(&outside)?;
     let alias = h.root.join("checkout-alias");
-    std::os::unix::fs::symlink(&destination, &alias)?;
+    symlink(&destination, &alias, true)?;
     h.write(
         &mut outside_stream,
         &format!(

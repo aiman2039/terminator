@@ -92,7 +92,6 @@ pub fn check_text(bytes: &[u8]) -> bool {
 /// Renames match on the target path; conflicts, symlinks, and submodules are
 /// refused with the same messages the viewers already report.
 pub fn find_record(raw: &[u8], path: &Path) -> Result<Option<(String, String)>> {
-    use std::os::unix::ffi::OsStrExt;
     let mut fields = raw.split(|b| *b == 0).filter(|f| !f.is_empty());
     while let Some(header) = fields.next() {
         let header = std::str::from_utf8(header)?;
@@ -109,7 +108,7 @@ pub fn find_record(raw: &[u8], path: &Path) -> Result<Option<(String, String)>> 
         } else {
             first
         };
-        if target != path.as_os_str().as_bytes() {
+        if target != terminator_core::os_bytes(path.as_os_str()).as_ref() {
             continue;
         }
         ensure!(
@@ -284,6 +283,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn symlink_reviews_reject_the_link_instead_of_reviewing_its_target() {
         let dir = repo();
         let root = dir.path();
@@ -308,6 +308,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn directory_aliases_and_deleted_files_keep_their_git_identity() {
         let dir = repo();
         let root = dir.path();

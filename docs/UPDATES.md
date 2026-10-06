@@ -235,3 +235,29 @@ unavailable/crashed owners, installation removal and retirement. The native
 fixture covers initial migration, generation diagnostics, an unsaved Markdown
 preview, GUI relaunch, the all-owner warning, cancellation and confirmed cleanup. These are isolated
 local fixtures, not a signed Sparkle rollout or cross-release compatibility proof.
+
+## Windows releases and update checks
+
+The release workflow builds `x86_64-pc-windows-msvc` on `windows-2025` with the
+same `release-build` action as Linux. `cargo xtask package` stages the three
+`.exe` binaries plus README, radio, licenses, and icon under `terminator/` and
+writes `terminator-windows.zip` with the in-tree ZIP writer (deflated entries,
+no extra dependencies). The archive is renamed to
+`terminator-vVERSION-x86_64-pc-windows-msvc.zip`, verified (three non-empty
+exes plus README), and uploaded with the draft; drafts now carry five files
+(DMG, two Linux archives, Windows zip, appcast) plus SHA256SUMS.
+
+There is no signed installer yet: the zip is a portable install (unzip
+anywhere, run `terminator.exe`). A signed MSIX can replace the zip later; the
+updater below only depends on the asset name.
+
+Windows has no Sparkle. Settings → Updates shows a notify-only checker backed
+by the GitHub Releases API (`releases/latest` for `aiman2039/terminator`):
+once a minute and on demand via **Check for Updates…**, a worker thread
+compares the latest `vMAJOR.MINOR.PATCH` tag against the build and offers a
+download link for the Windows zip asset (release page as fallback). Nothing
+downloads or installs automatically; the toggle persists as
+`automatic_update_checks` (default on) next to `notification_sound`.
+Development and isolated launches (`TERMINATOR_DATA_DIR`, `--data-dir`,
+`TERMINATOR_CONFIG_DIR`, `TERMINATOR_RUNTIME_DIR`, debug builds) never touch
+the feed. Linux keeps the releases link.

@@ -270,7 +270,7 @@ const PROJECT_HEADER_NAME_MIN: f32 = 36.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum ProjectHeaderChrome {
-    /// Name, then Player, Agents, and hide, packed against the sidebar's right edge.
+    /// Name on the left; Player, Agents, and hide packed against the sidebar's right edge.
     Icons { name: f32 },
     /// Player and Agents are in the menu. `hide` puts the sidebar toggle there too.
     Menu { name: f32, hide: bool },
@@ -696,31 +696,39 @@ impl App {
         paint_window_controls(ui, rect);
     }
 
-    /// Right-align the project name against Player, Agents, and hide.
+    /// Left-align the project name; spare width is drag space between the
+    /// name and Player, Agents, and hide, which stay packed on the right.
     /// A narrow sidebar folds Player and Agents into the menu.
     fn project_header_cluster(&mut self, ui: &mut egui::Ui) {
         self.note_agent_bar_badge(ui);
         let name = self.project_header_name();
         let natural = project_title_width(ui, &name);
         let chrome = project_header_chrome(ui.available_width(), natural);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = PROJECT_HEADER_GAP;
             match chrome {
                 ProjectHeaderChrome::Icons { name: width } => {
-                    self.sidebar_toggle(ui, false);
-                    self.header_agents_button(ui);
-                    self.header_player_button(ui);
                     self.project_header_title(ui, &name, width);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = PROJECT_HEADER_GAP;
+                        self.sidebar_toggle(ui, false);
+                        self.header_agents_button(ui);
+                        self.header_player_button(ui);
+                        header_drag_space(ui);
+                    });
                 }
                 ProjectHeaderChrome::Menu { name: width, hide } => {
-                    if !hide {
-                        self.sidebar_toggle(ui, false);
-                    }
-                    self.project_header_menu(ui, hide);
                     self.project_header_title(ui, &name, width);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = PROJECT_HEADER_GAP;
+                        if !hide {
+                            self.sidebar_toggle(ui, false);
+                        }
+                        self.project_header_menu(ui, hide);
+                        header_drag_space(ui);
+                    });
                 }
             }
-            header_drag_space(ui);
         });
     }
 

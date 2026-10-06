@@ -1,6 +1,20 @@
 use super::*;
 use terminator_core::idle_close::{Outcome, Status};
 
+/// `ConPTY` has no foreground process group: treat any live child of the shell
+/// as owning the terminal instead.
+#[cfg(not(unix))]
+fn shell_has_live_children(pid: u32) -> bool {
+    use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
+    let mut system = System::new();
+    system.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+    system.processes().values().any(|process| {
+        process
+            .parent()
+            .is_some_and(|parent| parent.as_u32() == pid)
+    })
+}
+
 impl Shared {
     fn idle_preflight(&self, session: &str) -> Result<Option<u32>> {
         let state = relock(&self.state);
@@ -36,11 +50,19 @@ impl Shared {
             runtime.inputs_in_flight == 0,
             "Terminal input is still being forwarded"
         );
-        let Ok(shell_pid) = i32::try_from(pid) else {
-            anyhow::bail!("A foreground command owns the terminal");
-        };
+        #[cfg(unix)]
+        {
+            let Ok(shell_pid) = i32::try_from(pid) else {
+                anyhow::bail!("A foreground command owns the terminal");
+            };
+            ensure!(
+                runtime.master.process_group_leader() == Some(shell_pid),
+                "A foreground command owns the terminal"
+            );
+        }
+        #[cfg(not(unix))]
         ensure!(
-            runtime.master.process_group_leader() == Some(shell_pid),
+            !shell_has_live_children(pid),
             "A foreground command owns the terminal"
         );
         Ok(Some(pid))

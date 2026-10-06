@@ -1,11 +1,13 @@
 //! Shared catalog and generation ownership. No operation here starts a session.
 use crate::{
-    AgentState, BTreeSet, Context, Deserialize, Duration, Lifecycle, OpenOptionsExt,
-    PROTOCOL_VERSION, Path, PathBuf, Paths, PermissionsExt, Read, Request, Response, Result,
-    Serialize, State, atomic_write, bail, ensure, fs, id,
+    AgentState, BTreeSet, Context, Deserialize, Duration, Lifecycle, PROTOCOL_VERSION, Path,
+    PathBuf, Paths, Read, Request, Response, Result, Serialize, State, atomic_write, bail, ensure,
+    exe_name, fs, id,
 };
 use fs2::FileExt;
 use rusqlite::{Connection, OpenFlags, params};
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 pub const CAPABILITY: &str = "daemon-generations-v1";
 pub const CATALOG_VERSION: u32 = 1;
@@ -15,7 +17,7 @@ pub const CATALOG_VERSION: u32 = 1;
 pub fn build_identity(bin: &Path) -> Result<String> {
     use std::hash::Hasher;
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    for name in ["terminator-daemon", "terminator-hook"] {
+    for name in [exe_name("terminator-daemon"), exe_name("terminator-hook")] {
         let mut file = fs::File::open(bin.join(name))?;
         hash.write_u64(file.metadata()?.len());
         let mut bytes = [0; 65536];
@@ -101,12 +103,11 @@ fn catalog_version(paths: &Paths) -> Option<u32> {
 /// All callers acquire this before activation or admitting a creation/mutation.
 /// Each open has its own file description, so threads are serialized too.
 pub fn coordinate(paths: &Paths) -> Result<fs::File> {
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .mode(0o600)
-        .open(paths.data.join("coordination.lock"))?;
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let file = options.open(paths.data.join("coordination.lock"))?;
     file.lock_exclusive()?;
     Ok(file)
 }
@@ -157,6 +158,7 @@ impl Catalog {
             let data = paths.data.join("generations").join(id());
             let archive_paths = Paths::at(data.clone());
             fs::create_dir_all(archive_paths.history_dir())?;
+            #[cfg(unix)]
             fs::set_permissions(&data, fs::Permissions::from_mode(0o700))?;
             let mut archive = legacy.clone();
             archive.generation.clone_from(&owner);
@@ -423,12 +425,11 @@ pub fn migrate_idle(paths: &Paths) -> Result<()> {
 /// that service has exited, even when its last persisted records still say live.
 /// Reconcile records only; never signal, adopt or rerun their recorded PIDs.
 pub fn migrate_after_legacy_exit(paths: &Paths) -> Result<()> {
-    let legacy = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .mode(0o600)
-        .open(paths.runtime.join("daemon.lock"))?;
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let legacy = options.open(paths.runtime.join("daemon.lock"))?;
     legacy.try_lock_exclusive().context(
         "Running daemon is unresponsive or incompatible; its sessions have been preserved",
     )?;
@@ -533,7 +534,7 @@ fn process_alive(pid: u32) -> bool {
 fn owner_is_serving(root: &Paths, owner: &Generation) -> Result<bool> {
     Ok(
         Catalog::open(root)?.active()?.as_deref() == Some(owner.id.as_str())
-            && std::os::unix::net::UnixStream::connect(owner.paths().socket()).is_ok(),
+            && crate::transport::probe_ipc(&owner.paths().socket()),
     )
 }
 
@@ -553,12 +554,11 @@ fn claim_dead_owner(owner: &Generation, pid: u32) -> Result<Option<std::fs::File
                 return Ok(None);
             }
             fs::create_dir_all(&owner.runtime)?;
-            let lock = fs::OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .write(true)
-                .mode(0o600)
-                .open(&path)?;
+            let mut options = fs::OpenOptions::new();
+            options.create(true).truncate(false).write(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            let lock = options.open(&path)?;
             if lock.try_lock_exclusive().is_err() {
                 return Ok(None);
             }
@@ -569,7 +569,7 @@ fn claim_dead_owner(owner: &Generation, pid: u32) -> Result<Option<std::fs::File
 }
 
 fn owner_socket_open(owner: &Generation) -> bool {
-    std::os::unix::net::UnixStream::connect(owner.paths().socket()).is_ok()
+    crate::transport::probe_ipc(&owner.paths().socket())
 }
 
 pub fn recover_exited(root: &Paths, owner: &Generation) -> Result<bool> {
@@ -1171,12 +1171,11 @@ mod tests {
 
     #[test]
     fn uncertain_creation_response_is_never_retried() {
-        use std::os::unix::net::UnixListener;
         let (_dir, paths, mut catalog) = fixture();
         let a = owner(&paths, &catalog);
         catalog.activate(&a.id).unwrap();
         atomic_write(&a.paths().auth(), b"fixture").unwrap();
-        let listener = UnixListener::bind(a.paths().socket()).unwrap();
+        let listener = crate::transport::Listener::bind_ipc(&a.paths().socket()).unwrap();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let envelope: Envelope = read_frame(&mut stream).unwrap();
@@ -1202,7 +1201,6 @@ mod tests {
 
     #[test]
     fn only_explicit_pre_spawn_redirect_retries_on_active_owner() {
-        use std::os::unix::net::UnixListener;
         let (_dir, paths, mut catalog) = fixture();
         let a = owner(&paths, &catalog);
         let b = owner(&paths, &catalog);
@@ -1210,8 +1208,8 @@ mod tests {
         for g in [&a, &b] {
             atomic_write(&g.paths().auth(), b"fixture").unwrap();
         }
-        let first = UnixListener::bind(a.paths().socket()).unwrap();
-        let second = UnixListener::bind(b.paths().socket()).unwrap();
+        let first = crate::transport::Listener::bind_ipc(&a.paths().socket()).unwrap();
+        let second = crate::transport::Listener::bind_ipc(&b.paths().socket()).unwrap();
         let root = paths.clone();
         let new_id = b.id.clone();
         let created = session(&b.id, Lifecycle::Running);
@@ -1316,13 +1314,12 @@ mod tests {
 
     #[test]
     fn create_reaches_catalog_active_owner_marked_retired() {
-        use std::os::unix::net::UnixListener;
         let (_dir, paths, mut catalog) = fixture();
         let a = owner(&paths, &catalog);
         catalog.activate(&a.id).unwrap();
         catalog.retire(&a.id).unwrap();
         atomic_write(&a.paths().auth(), b"fixture").unwrap();
-        let listener = UnixListener::bind(a.paths().socket()).unwrap();
+        let listener = crate::transport::Listener::bind_ipc(&a.paths().socket()).unwrap();
         let generation = a.id.clone();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
@@ -1356,7 +1353,6 @@ mod tests {
 
     #[test]
     fn historical_owner_requests_stay_archived() {
-        use std::os::unix::net::UnixListener;
         let (_dir, paths, mut catalog) = fixture();
         let a = owner(&paths, &catalog);
         let b = owner(&paths, &catalog);
@@ -1373,7 +1369,7 @@ mod tests {
         catalog.activate(&b.id).unwrap();
         catalog.retire(&a.id).unwrap();
         atomic_write(&b.paths().auth(), b"fixture").unwrap();
-        let listener = UnixListener::bind(b.paths().socket()).unwrap();
+        let listener = crate::transport::Listener::bind_ipc(&b.paths().socket()).unwrap();
         let expected = record.id.clone();
         let archived = a.id.clone();
         let server = std::thread::spawn(move || {
@@ -1406,7 +1402,6 @@ mod tests {
 
     #[test]
     fn snapshot_contacts_catalog_active_owner_marked_retired() {
-        use std::os::unix::net::UnixListener;
         let (_dir, paths, mut catalog) = fixture();
         let a = owner(&paths, &catalog);
         catalog.activate(&a.id).unwrap();
@@ -1420,7 +1415,7 @@ mod tests {
         );
         catalog.retire(&a.id).unwrap();
         atomic_write(&a.paths().auth(), b"fixture").unwrap();
-        let listener = UnixListener::bind(a.paths().socket()).unwrap();
+        let listener = crate::transport::Listener::bind_ipc(&a.paths().socket()).unwrap();
         let generation = a.id.clone();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
@@ -1444,7 +1439,6 @@ mod tests {
 
     #[test]
     fn recover_exited_does_not_retire_a_listening_catalog_active_owner() {
-        use std::os::unix::net::UnixListener;
         let (_dir, paths, mut catalog) = fixture();
         let a = owner(&paths, &catalog);
         let mut child = std::process::Command::new("true").spawn().unwrap();
@@ -1460,7 +1454,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let _listener = UnixListener::bind(a.paths().socket()).unwrap();
+        let _listener = crate::transport::Listener::bind_ipc(&a.paths().socket()).unwrap();
         let registered = catalog.generations().unwrap().remove(0);
         assert!(!recover_exited(&paths, &registered).unwrap());
         assert_eq!(

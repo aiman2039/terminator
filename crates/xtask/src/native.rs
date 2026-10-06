@@ -23,6 +23,7 @@ mod projects;
 mod responsiveness;
 mod reviews;
 mod updates;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod windows;
 
 #[derive(Clone)]
@@ -253,7 +254,12 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "terminal-actions" | "ui-flat" | "ui-plan3" => terminal_actions(&opts)?,
             "reviews" => reviews::run(&opts)?,
             "legacy-diff" => reviews::legacy(&opts)?,
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
             "window-controls" => windows::run(&opts)?,
+            #[cfg(windows)]
+            "window-controls" => {
+                anyhow::bail!("window-controls needs a macOS or X11 desktop driver")
+            }
             _ => anyhow::bail!("Unknown native fixture: {case}"),
         }
         println!(
@@ -518,7 +524,10 @@ fn split_file_opening(o: &Options) -> Result<()> {
 
     // A compatibility path lets the existing daemon, shells and saved layouts
     // survive a move without restarting sessions or rewriting their identities.
+    #[cfg(unix)]
     std::os::unix::fs::symlink(&moved_root, &old_root)?;
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_dir(&moved_root, &old_root)?;
     for (direction, axis, new_index) in [
         ("up", "Vertical", 1),
         ("down", "Vertical", 2),

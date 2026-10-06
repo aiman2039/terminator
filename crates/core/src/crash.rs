@@ -1,11 +1,12 @@
 //! Fatal panic dump. Writes a crash log, then lets the process die.
 //! Does not resume. Recovered worker panics are not dumped.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     backtrace::Backtrace,
     ffi::OsStr,
     fs,
-    os::unix::fs::PermissionsExt,
     panic::{AssertUnwindSafe, PanicHookInfo},
     path::{Path, PathBuf},
     sync::OnceLock,
@@ -201,6 +202,7 @@ fn prepare_crash_dir(dir: &Path) -> bool {
     if fs::create_dir_all(dir).is_err() {
         return false;
     }
+    #[cfg(unix)]
     let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
     true
 }
@@ -282,8 +284,12 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("binary: terminator"));
         assert!(text.contains("index out of bounds"));
-        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
     }
 
     #[test]
@@ -321,6 +327,7 @@ mod tests {
         assert!(!other);
     }
 
+    #[cfg(unix)]
     #[test]
     fn write_report_refuses_a_symlink_crash_directory() {
         let tmp = tempfile::tempdir().unwrap();
@@ -421,6 +428,7 @@ mod tests {
         assert!(write_report(&file, "terminator", &report()).is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn crash_directory_is_owner_only() {
         let tmp = tempfile::tempdir().unwrap();

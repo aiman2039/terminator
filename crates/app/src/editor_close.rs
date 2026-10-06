@@ -174,6 +174,7 @@ pub async fn close_async(
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 pub fn close(paths: &Paths, ids: &[String], mode: Mode, timeout: Duration) -> Result<()> {
     let client = async_client::Client::new(
         paths.clone(),

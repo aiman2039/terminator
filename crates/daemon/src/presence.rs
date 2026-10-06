@@ -16,14 +16,20 @@ fn targets(shared: &Shared) -> Vec<agents::ShellTarget> {
                 .map(|pid| (s.id.clone(), s.generation.clone(), pid, s.created))
         })
         .collect();
+    #[cfg(unix)]
     let runtimes = relock(&shared.sessions);
     live.into_iter()
         .map(|(id, generation, pid, created)| {
+            // ConPTY exposes no process-group leader; foreground detection
+            // stays Unix-only until a Windows equivalent lands.
+            #[cfg(unix)]
             let foreground_pgid = runtimes
                 .get(&id)
                 .and_then(|runtime| relock(runtime).master.process_group_leader())
                 .and_then(|pgid| u32::try_from(pgid).ok())
                 .filter(|pgid| *pgid > 1);
+            #[cfg(not(unix))]
+            let foreground_pgid = None;
             agents::ShellTarget {
                 session_id: id,
                 generation,
@@ -121,6 +127,9 @@ pub(super) fn start(shared: std::sync::Weak<Shared>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
     use std::os::unix::process::CommandExt;
 
     #[test]
@@ -224,20 +233,24 @@ mod tests {
     /// exe+cmd scans; two concurrent scanners on a loaded CI runner starve
     /// each other, which flaked ubuntu-24.04. Poison-tolerant so a panicked
     /// holder cannot block the next test.
+    #[cfg(unix)]
     static FIXTURE_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    #[cfg(unix)]
     fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
         FIXTURE_SERIAL
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    #[cfg(unix)]
     fn fixture_refresh_kind() -> sysinfo::ProcessRefreshKind {
         sysinfo::ProcessRefreshKind::nothing()
             .with_exe(sysinfo::UpdateKind::Always)
             .with_cmd(sysinfo::UpdateKind::Always)
     }
 
+    #[cfg(unix)]
     fn fixture_system() -> sysinfo::System {
         sysinfo::System::new_with_specifics(
             sysinfo::RefreshKind::nothing().with_processes(fixture_refresh_kind()),
@@ -245,6 +258,7 @@ mod tests {
     }
 
     /// Fake agent executables: renamed test-binary copies running the sleeper.
+    #[cfg(unix)]
     struct Fixture {
         dir: tempfile::TempDir,
         shell: std::process::Child,
@@ -254,6 +268,7 @@ mod tests {
         system: sysinfo::System,
         shell_start_time: u64,
     }
+    #[cfg(unix)]
     impl Fixture {
         fn spawn(agents: &[&str]) -> Self {
             // First: concurrent full-system scanners starve each other.
@@ -366,6 +381,7 @@ mod tests {
             }
         }
     }
+    #[cfg(unix)]
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = signals::signal_group(self.shell.id(), signals::ProcSignal::Kill);
@@ -374,6 +390,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn poll_kinds(fixture: &mut Fixture, wanted: &[&str]) -> agents::TerminalPresence {
         let start = Instant::now();
         loop {
@@ -397,6 +414,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn real_processes_appear_and_remove_without_launching_agents() {
         let mut fixture = Fixture::spawn(&["codex"]);
@@ -409,6 +427,7 @@ mod tests {
         poll_kinds(&mut fixture, &[]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn sibling_agents_share_one_shell_without_merging() {
         let mut fixture = Fixture::spawn(&["claude", "pi"]);

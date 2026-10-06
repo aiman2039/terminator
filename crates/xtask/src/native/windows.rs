@@ -58,6 +58,7 @@ pub fn run(o: &Options) -> Result<()> {
     let p = h.project("window-controls")?;
     if cfg!(target_os = "macos") {
         let sink = h.root.join("terminator-test-shell");
+        #[cfg(unix)]
         std::os::unix::fs::symlink(std::env::current_exe()?, &sink)?;
         let mut settings = h
             .state()?

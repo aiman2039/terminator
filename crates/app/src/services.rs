@@ -474,7 +474,10 @@ mod tests {
         let real = dir.path().join("project");
         let alias = dir.path().join("old-location");
         fs::create_dir(&real).unwrap();
+        #[cfg(unix)]
         std::os::unix::fs::symlink(&real, &alias).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&real, &alias).unwrap();
         let projects = vec![terminator_core::Project {
             id: "original".into(),
             name: "Project".into(),

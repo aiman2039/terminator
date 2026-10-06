@@ -5,13 +5,12 @@ use std::{
     collections::BTreeMap,
     fs,
     io::Write,
-    os::unix::net::UnixStream,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
-use terminator_core::{read_frame, write_frame};
+use terminator_core::{read_frame, transport, write_frame};
 
 pub fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -228,14 +227,13 @@ impl Harness {
         request: Value,
         token: Option<&str>,
         hint: Option<Value>,
-    ) -> Result<UnixStream> {
+    ) -> Result<transport::Stream> {
         let paths = terminator_core::generations::owner_for(
             &terminator_core::Paths::at(self.root.clone()),
             &serde_json::from_value(request.clone())?,
         )?;
-        let mut stream = UnixStream::connect(paths.socket())?;
-        stream.set_read_timeout(Some(Duration::from_secs(3)))?;
-        stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+        let mut stream = transport::Stream::connect_ipc(&paths.socket())?;
+        stream.set_timeouts(Duration::from_secs(3), Duration::from_secs(3))?;
         let auth = paths.token()?;
         let mut envelope =
             json!({"version":1,"auth":token.unwrap_or(auth.trim()),"request":request});
@@ -319,7 +317,7 @@ impl Harness {
             .cloned()
             .ok_or_else(|| anyhow!("missing Created"))
     }
-    pub fn attach(&self, session: &Value) -> Result<UnixStream> {
+    pub fn attach(&self, session: &Value) -> Result<transport::Stream> {
         let mut stream = self.connect(
             json!({"Attach":{"session":id(session),"rows":24,"cols":80}}),
             None,
@@ -328,7 +326,7 @@ impl Harness {
         let _: Value = read_frame(&mut stream)?;
         Ok(stream)
     }
-    pub fn write(&self, stream: &mut UnixStream, text: &str) -> Result<()> {
+    pub fn write(&self, stream: &mut transport::Stream, text: &str) -> Result<()> {
         write_frame(stream, &json!({"Input":{"data":B64.encode(text)}}))?;
         stream.flush()?;
         Ok(())

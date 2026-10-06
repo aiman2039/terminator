@@ -2,10 +2,11 @@
 use crate::harness::{Harness, bin, id, session, session_present, sessions, wait_child};
 use anyhow::{Result, anyhow, ensure};
 use serde_json::{Value, json};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs,
     io::Read,
-    os::unix::fs::PermissionsExt,
     path::PathBuf,
     thread,
     time::{Duration, Instant},
@@ -153,6 +154,7 @@ fn relaunch_stub(h: &Harness) -> Result<PathBuf> {
         &stub,
         "#!/bin/sh\n{\n  printf 'data=%s\\n' \"$TERMINATOR_DATA_DIR\"\n  printf 'runtime=%s\\n' \"$TERMINATOR_RUNTIME_DIR\"\n  printf 'session=%s\\n' \"${TERMINATOR_SESSION_ID-}\"\n} > \"$TERMINATOR_DATA_DIR/relaunched.tmp\"\nmv \"$TERMINATOR_DATA_DIR/relaunched.tmp\" \"$TERMINATOR_DATA_DIR/relaunched\"\n",
     )?;
+    #[cfg(unix)]
     fs::set_permissions(&stub, fs::Permissions::from_mode(0o700))?;
     Ok(stub)
 }
@@ -419,6 +421,7 @@ fn terminal_editors() -> Result<()> {
                 quote(&capture.to_string_lossy())
             ),
         )?;
+        #[cfg(unix)]
         fs::set_permissions(&program, fs::Permissions::from_mode(0o700))?;
         let mut settings = h
             .state()?
@@ -618,6 +621,7 @@ fn missing_helper_health() -> Result<()> {
         install.join("terminator-hook"),
         b"replaced application helper",
     )?;
+    #[cfg(unix)]
     fs::set_permissions(
         install.join("terminator-hook"),
         fs::Permissions::from_mode(0o600),
@@ -654,6 +658,7 @@ fn missing_helper_health() -> Result<()> {
     );
     // Health now refers to the actual private helper, not a discarded bundle.
     let hint = serde_json::from_value::<terminator_core::State>(h.state()?)?.snapshot_hint();
+    #[cfg(unix)]
     fs::set_permissions(&pinned, fs::Permissions::from_mode(0o600))?;
     let paths = terminator_core::Paths::at(h.root.clone());
     let response = terminator_core::conditional_snapshot(&paths, Some(hint))?;

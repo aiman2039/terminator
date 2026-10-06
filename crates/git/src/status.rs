@@ -112,7 +112,6 @@ impl Change {
 /// Parse `status --porcelain=v1 -z` output. Rename and copy records carry
 /// their origin path in the following field; the target path wins.
 pub fn parse_porcelain(root: &Path, raw: &[u8]) -> Vec<Change> {
-    use std::os::unix::ffi::OsStrExt;
     let mut changes = Vec::new();
     let mut parts = raw.split(|b| *b == 0);
     while let Some(part) = parts.next() {
@@ -123,7 +122,7 @@ pub fn parse_porcelain(root: &Path, raw: &[u8]) -> Vec<Change> {
             continue;
         };
         let status = String::from_utf8_lossy(status_bytes).into_owned();
-        let path = root.join(std::ffi::OsStr::from_bytes(path_bytes));
+        let path = root.join(terminator_core::os_name(path_bytes));
         if status.contains('R') || status.contains('C') {
             let _ = parts.next();
         }

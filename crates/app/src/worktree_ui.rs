@@ -318,7 +318,10 @@ mod tests {
         let checkout = dir.path().join("checkout");
         fs::create_dir(&checkout).unwrap();
         let alias = dir.path().join("alias");
+        #[cfg(unix)]
         std::os::unix::fs::symlink(&checkout, &alias).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&checkout, &alias).unwrap();
         let state = State {
             projects: vec![Project {
                 id: "created".into(),

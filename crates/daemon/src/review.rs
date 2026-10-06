@@ -1,10 +1,11 @@
 //! Immutable Git snapshots rendered by the pinned, app-owned `CodeDiff` runtime.
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs,
     hash::{Hash, Hasher},
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
@@ -35,6 +36,7 @@ pub fn snapshots(root: &Path, path: &Path, staged: bool) -> Result<(Vec<u8>, Vec
 }
 fn private_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path)?;
+    #[cfg(unix)]
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     Ok(())
 }
@@ -133,7 +135,7 @@ pub fn prepare(
         cmd.args(["-u"]);
         cmd.arg(dir.join("init.lua"));
         cmd.args(["-i", "NONE", "--noplugin", "-n", "--listen"]);
-        cmd.arg(paths.editor_socket(sid));
+        cmd.arg(transport::nvim_listen_arg(&paths.editor_socket(sid)));
         cmd.env("TERMINATOR_REVIEW_CONFIG", dir.join("config.json"));
         cmd.env("VSCODE_DIFF_NO_AUTO_INSTALL", "1");
         // Matching argv lets CodeDiff remove Neovim's redundant initial tab.

@@ -23,12 +23,14 @@ pub fn read(
     path: &Path,
     cancel: &terminator_core::async_service::CancellationToken,
 ) -> Result<Vec<u8>> {
+    #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)
-        .context("Open image")?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    // Avoid blocking on FIFOs; Windows has no equivalent flag.
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+    let file = options.open(path).context("Open image")?;
     ensure!(file.metadata()?.is_file(), "Image is not a regular file");
     let limit = usize::try_from(MAX_FILE + 1).unwrap_or(usize::MAX);
     let bytes = terminator_core::async_service::read_chunks(file, limit, cancel)?;

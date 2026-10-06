@@ -1300,6 +1300,7 @@ fn format_clock(duration: Duration) -> String {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 pub(crate) async fn fixture_download(url: String) -> Result<()> {
     let client = reqwest::Client::builder().no_proxy().build()?;
     let (sender, _receiver) = tokio::sync::mpsc::channel(14);

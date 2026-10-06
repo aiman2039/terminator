@@ -80,6 +80,7 @@ mod tests {
 
     #[test]
     fn image_paste_retains_unique_private_pngs_with_exact_pixels() {
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path().join("clipboard ' space");
@@ -99,6 +100,7 @@ mod tests {
                 first == terminator_core::quote(&path.to_string_lossy())
                     || second == terminator_core::quote(&path.to_string_lossy())
             );
+            #[cfg(unix)]
             assert_eq!(
                 std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
                 0o600

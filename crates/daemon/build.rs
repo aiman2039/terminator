@@ -43,25 +43,49 @@ fn run() -> Result<(), Box<dyn Error>> {
         out.join("version.h"),
         format!("#define VSCODE_DIFF_VERSION {:?}\n", version.trim()),
     )?;
-    let ext = if env::var("CARGO_CFG_TARGET_OS")? == "macos" {
-        "dylib"
-    } else {
-        "so"
+    let target_os = env::var("CARGO_CFG_TARGET_OS")?;
+    let ext = match target_os.as_str() {
+        "macos" => "dylib",
+        "windows" => "dll",
+        _ => "so",
     };
     let library = out.join(format!("libvscode_diff.{ext}"));
     let compiler = cc::Build::new().get_compiler();
     let mut cmd = compiler.to_command();
-    cmd.args([
-        "-shared",
-        "-fPIC",
-        "-O2",
-        "-std=c11",
-        "-DNDEBUG",
-        "-DUTF8PROC_STATIC",
-        "-D_POSIX_C_SOURCE=200809L",
-    ]);
-    for dir in [source.join("include"), source.join("vendor"), out.clone()] {
-        cmd.arg("-I").arg(dir);
+    if compiler.is_like_msvc() {
+        // MSVC: `/LD` builds the DLL; the C runtime supplies libm.
+        // `BUILDING_DLL` selects `dllexport` in
+        // `default_lines_diff_computer.h`; without it our own functions are
+        // declared `dllimport`, matching upstream `build.cmd.in`.
+        cmd.args([
+            "/LD",
+            "/O2",
+            "/std:clatest",
+            "/DNDEBUG",
+            "/DUTF8PROC_STATIC",
+            "/DBUILDING_DLL",
+        ]);
+        for dir in [source.join("include"), source.join("vendor"), out.clone()] {
+            cmd.arg(format!("/I{}", dir.display()));
+        }
+    } else {
+        cmd.args([
+            "-shared",
+            "-fPIC",
+            "-O2",
+            "-std=c11",
+            "-DNDEBUG",
+            "-DUTF8PROC_STATIC",
+            "-D_POSIX_C_SOURCE=200809L",
+        ]);
+        if target_os == "windows" {
+            // Non-MSVC Windows compilers (MinGW) also define `_WIN32`, so the
+            // export header needs the same define.
+            cmd.arg("-DBUILDING_DLL");
+        }
+        for dir in [source.join("include"), source.join("vendor"), out.clone()] {
+            cmd.arg("-I").arg(dir);
+        }
     }
     for file in [
         "default_lines_diff_computer.c",
@@ -80,7 +104,11 @@ fn run() -> Result<(), Box<dyn Error>> {
     ] {
         cmd.arg(source.join(file));
     }
-    cmd.arg("-lm").arg("-o").arg(&library);
+    if compiler.is_like_msvc() {
+        cmd.arg(format!("/Fe{}", library.display()));
+    } else {
+        cmd.arg("-lm").arg("-o").arg(&library);
+    }
     let status = cmd
         .status()
         .map_err(|error| format!("C compiler required for bundled CodeDiff: {error}"))?;

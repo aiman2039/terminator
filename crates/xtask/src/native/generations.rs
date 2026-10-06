@@ -41,15 +41,35 @@ pub fn run(o: &Options) -> Result<()> {
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(5))
         .ok_or_else(|| anyhow::anyhow!("editor deadline overflow"))?;
+    let server = terminator_core::transport::nvim_listen_arg(&owner.editor_socket(id(&editor)));
+    #[cfg(unix)]
     while !owner.editor_socket(id(&editor)).exists() {
         ensure!(Instant::now() < deadline, "Editor did not start");
         thread::sleep(Duration::from_millis(50));
+    }
+    // Windows Neovim listens on a named pipe with no filesystem record, so
+    // poll the endpoint instead of waiting for a socket file.
+    #[cfg(not(unix))]
+    {
+        let nvim = terminator_core::find_executable("nvim").context("Neovim required")?;
+        loop {
+            let mut probe = Command::new(&nvim);
+            probe
+                .arg("--server")
+                .arg(&server)
+                .args(["--remote-expr", "1"]);
+            if output(probe).is_ok() {
+                break;
+            }
+            ensure!(Instant::now() < deadline, "Editor did not start");
+            thread::sleep(Duration::from_millis(50));
+        }
     }
     let mut change =
         Command::new(terminator_core::find_executable("nvim").context("Neovim required")?);
     change
         .arg("--server")
-        .arg(owner.editor_socket(id(&editor)))
+        .arg(&server)
         .args(["--remote-expr", "setline(1, '# Unsaved across upgrades')"]);
     output(change)?;
     h.layout(&project, &[a.clone(), editor.clone()])?;

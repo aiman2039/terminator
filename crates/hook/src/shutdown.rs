@@ -2,10 +2,11 @@
 use anyhow::{Context, Result, ensure};
 use fs2::FileExt;
 use serde_json::{Value, json};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     collections::HashSet,
     fs::{File, OpenOptions},
-    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -52,12 +53,11 @@ fn try_lock(file: &File) -> Result<bool> {
 }
 
 fn close_gui(paths: &Paths, timeout: Duration) -> Result<File> {
-    let lock = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(paths.runtime.join("ui.lock"))?;
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let lock = options.open(paths.runtime.join("ui.lock"))?;
     if !try_lock(&lock)? {
         ui_control::rpc(paths, ui_control::Request::Window { action: "close".into() })
             .context("Could not request a normal GUI exit. If Terminator is hidden or minimized, restore its window, quit it completely and retry; sessions have not been stopped")?;
@@ -385,7 +385,6 @@ pub fn run(paths: &Paths, state: State, options: Options) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::net::UnixListener;
 
     // Run socket fixtures in a child rather than mutating process-wide environment
     // while other tests are running. Keep the production managed-session guard.
@@ -412,7 +411,7 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, Paths) {
         let dir = tempfile::Builder::new()
             .prefix("cleanup-")
-            .tempdir_in("/tmp")
+            .tempdir()
             .unwrap();
         let paths = Paths::at(dir.path().into());
         paths.init().unwrap();
@@ -429,6 +428,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn stub_exe(dir: &Path, name: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let path = dir.join(name);
@@ -441,6 +441,7 @@ mod tests {
         path
     }
 
+    #[cfg(unix)]
     fn wait_marker(path: &Path) -> String {
         let start = Instant::now();
         while !path.exists() {
@@ -465,8 +466,8 @@ mod tests {
     #[test]
     fn gui_confirmation_rejects_late_session_before_closing_or_stopping_anything() {
         let (_dir, paths) = fixture();
-        let daemon = UnixListener::bind(paths.socket()).unwrap();
-        let gui = UnixListener::bind(paths.runtime.join("gui.sock")).unwrap();
+        let daemon = transport::Listener::bind_ipc(&paths.socket()).unwrap();
+        let gui = transport::Listener::bind_ipc(&paths.runtime.join("gui.sock")).unwrap();
         let mut state = State {
             generation: "confirmed-owner".into(),
             sessions: vec![live_session()],
@@ -496,8 +497,8 @@ mod tests {
         let (_dir, paths) = fixture();
         let lock = File::create(paths.runtime.join("ui.lock")).unwrap();
         lock.lock_exclusive().unwrap();
-        let daemon = UnixListener::bind(paths.socket()).unwrap();
-        let gui = UnixListener::bind(paths.runtime.join("gui.sock")).unwrap();
+        let daemon = transport::Listener::bind_ipc(&paths.socket()).unwrap();
+        let gui = transport::Listener::bind_ipc(&paths.runtime.join("gui.sock")).unwrap();
         let server = thread::spawn(move || {
             let (mut stream, _) = gui.accept().unwrap();
             let request: ui_control::Envelope = read_frame(&mut stream).unwrap();
@@ -542,7 +543,7 @@ mod tests {
                 changed.sessions.push(live_session());
             }
             replies.push(changed);
-            let listener = UnixListener::bind(paths.socket()).unwrap();
+            let listener = transport::Listener::bind_ipc(&paths.socket()).unwrap();
             let server = thread::spawn(move || {
                 for state in replies {
                     let (mut stream, _) = listener.accept().unwrap();
@@ -572,8 +573,8 @@ mod tests {
         let (_dir, paths) = fixture();
         let lock = File::create(paths.runtime.join("ui.lock")).unwrap();
         lock.lock_exclusive().unwrap();
-        let daemon = UnixListener::bind(paths.socket()).unwrap();
-        let gui = UnixListener::bind(paths.runtime.join("gui.sock")).unwrap();
+        let daemon = transport::Listener::bind_ipc(&paths.socket()).unwrap();
+        let gui = transport::Listener::bind_ipc(&paths.runtime.join("gui.sock")).unwrap();
         let error = run(
             &paths,
             State::default(),
@@ -588,7 +589,11 @@ mod tests {
         assert!(!paths.data.join("relaunched").exists());
     }
 
+    #[cfg(unix)]
+    #[cfg(unix)]
+    #[cfg(unix)]
     #[test]
+    #[cfg(unix)]
     fn failed_gui_close_does_not_relaunch() {
         if isolated("shutdown::tests::failed_gui_close_does_not_relaunch") {
             return;
@@ -597,8 +602,8 @@ mod tests {
         let stub = stub_exe(dir.path(), "relaunch");
         let lock = File::create(paths.runtime.join("ui.lock")).unwrap();
         lock.lock_exclusive().unwrap();
-        let daemon = UnixListener::bind(paths.socket()).unwrap();
-        let gui = UnixListener::bind(paths.runtime.join("gui.sock")).unwrap();
+        let daemon = transport::Listener::bind_ipc(&paths.socket()).unwrap();
+        let gui = transport::Listener::bind_ipc(&paths.runtime.join("gui.sock")).unwrap();
         let server = thread::spawn(move || {
             let (mut stream, _) = gui.accept().unwrap();
             let request: ui_control::Envelope = read_frame(&mut stream).unwrap();
@@ -631,7 +636,11 @@ mod tests {
         assert!(!paths.data.join("relaunched").exists());
     }
 
+    #[cfg(unix)]
+    #[cfg(unix)]
+    #[cfg(unix)]
     #[test]
+    #[cfg(unix)]
     fn relaunch_pins_the_original_appearance_directory() {
         let (_dir, paths) = fixture();
         let expected = terminator_core::appearance::config_path(&paths).unwrap();
@@ -645,6 +654,7 @@ mod tests {
         assert_eq!(Path::new(configured), expected.parent().unwrap());
     }
 
+    #[cfg(unix)]
     fn idle_state() -> State {
         State {
             generation: "fixture".into(),
@@ -653,7 +663,11 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[cfg(unix)]
+    #[cfg(unix)]
     #[test]
+    #[cfg(unix)]
     fn relaunch_runs_after_lock_release_with_isolated_env() {
         if isolated("shutdown::tests::relaunch_runs_after_lock_release_with_isolated_env") {
             return;
@@ -661,7 +675,7 @@ mod tests {
         let (dir, paths) = fixture();
         File::create(paths.runtime.join("daemon.lock")).unwrap();
         let stub = stub_exe(dir.path(), "relaunch");
-        let listener = UnixListener::bind(paths.socket()).unwrap();
+        let listener = transport::Listener::bind_ipc(&paths.socket()).unwrap();
         let socket = paths.socket();
         let server = thread::spawn(move || {
             loop {
@@ -694,14 +708,18 @@ mod tests {
         assert!(try_lock(&lock).unwrap());
     }
 
+    #[cfg(unix)]
+    #[cfg(unix)]
+    #[cfg(unix)]
     #[test]
+    #[cfg(unix)]
     fn stop_timeout_relaunches_without_replacing_the_daemon() {
         if isolated("shutdown::tests::stop_timeout_relaunches_without_replacing_the_daemon") {
             return;
         }
         let (dir, paths) = fixture();
         let stub = stub_exe(dir.path(), "relaunch");
-        let listener = UnixListener::bind(paths.socket()).unwrap();
+        let listener = transport::Listener::bind_ipc(&paths.socket()).unwrap();
         let server = thread::spawn(move || {
             let mut live = idle_state();
             live.sessions.push(live_session());
@@ -744,7 +762,11 @@ mod tests {
         drop(server);
     }
 
+    #[cfg(unix)]
+    #[cfg(unix)]
+    #[cfg(unix)]
     #[test]
+    #[cfg(unix)]
     fn managed_session_refuses_relaunch() {
         const CHILD: &str = "TERMINATOR_SHUTDOWN_TEST_CHILD";
         let name = "shutdown::tests::managed_session_refuses_relaunch";

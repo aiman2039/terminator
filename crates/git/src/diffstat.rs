@@ -10,7 +10,6 @@ pub type Stat = (u32, u32);
 /// Parse NUL-delimited `--numstat -z` output. Rename/copy records carry the
 /// new path as the following NUL field, and binary files report `-`.
 pub fn parse_numstat(root: &Path, raw: &[u8]) -> HashMap<PathBuf, Stat> {
-    use std::os::unix::ffi::OsStrExt;
     let mut stats = HashMap::new();
     let mut parts = raw.split(|b| *b == 0);
     while let Some(part) = parts.next() {
@@ -31,9 +30,9 @@ pub fn parse_numstat(root: &Path, raw: &[u8]) -> HashMap<PathBuf, Stat> {
             let Some(new) = parts.next() else {
                 continue;
             };
-            root.join(std::ffi::OsStr::from_bytes(new))
+            root.join(terminator_core::os_name(new))
         } else {
-            root.join(std::ffi::OsStr::from_bytes(rest.as_bytes()))
+            root.join(terminator_core::os_name(rest.as_bytes()))
         };
         let added = added.parse::<u32>().ok();
         let deleted = deleted.parse::<u32>().ok();

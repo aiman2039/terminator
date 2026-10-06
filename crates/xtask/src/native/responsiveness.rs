@@ -64,7 +64,7 @@ struct NvimServer {
 }
 impl NvimServer {
     fn new(path: &Path) -> Result<Self> {
-        let listener = std::os::unix::net::UnixListener::bind(path)?;
+        let listener = terminator_core::transport::Listener::bind_ipc(path)?;
         listener.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
         let done = Arc::clone(&stop);

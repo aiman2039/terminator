@@ -1,4 +1,5 @@
 //! Async transport with the same owner routing and pre-execution redirects as CLI clients.
+use crate::transport::AsyncStream;
 use crate::{
     Context, Duration, Envelope, MAX_FRAME, PROTOCOL_VERSION, PathBuf, Paths, Request, Response,
     Result, SnapshotHint, State, archived_generation,
@@ -10,10 +11,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, Mutex, PoisonError},
 };
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::UnixStream,
-};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Debug)]
 pub struct UncertainMutation;
@@ -425,7 +423,7 @@ impl Client {
         } else {
             self.cpu.run(&CancellationToken::new(), encode).await?
         };
-        let mut socket = tokio::time::timeout(timeout, UnixStream::connect(paths.socket()))
+        let mut socket = tokio::time::timeout(timeout, AsyncStream::connect_ipc(&paths.socket()))
             .await
             .context("Session daemon connection deadline")?
             .context("Session daemon unavailable")?;
@@ -448,7 +446,7 @@ impl Client {
             result
         }
     }
-    async fn frame(&self, socket: &mut UnixStream) -> Result<Response> {
+    async fn frame(&self, socket: &mut AsyncStream) -> Result<Response> {
         let n = socket.read_u32().await? as usize;
         ensure!(n <= MAX_FRAME, "IPC frame too large");
         let mut bytes = vec![0; n];
@@ -462,7 +460,7 @@ impl Client {
             })
             .await
     }
-    async fn read_response(&self, socket: &mut UnixStream) -> Result<Response> {
+    async fn read_response(&self, socket: &mut AsyncStream) -> Result<Response> {
         let mut response = self.frame(socket).await?;
         if !matches!(response, Response::SnapshotChunk { .. }) {
             return Ok(response);
@@ -534,12 +532,12 @@ pub fn read_only(request: &Request) -> bool {
 mod tests {
     use super::*;
     use crate::write_frame;
-    fn fixture() -> (tempfile::TempDir, Client, tokio::net::UnixListener) {
+    fn fixture() -> (tempfile::TempDir, Client, crate::transport::AsyncListener) {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::at(dir.path().into());
         paths.init().unwrap();
         std::fs::write(paths.auth(), "fixture").unwrap();
-        let listener = tokio::net::UnixListener::bind(paths.socket()).unwrap();
+        let listener = crate::transport::AsyncListener::bind_ipc(&paths.socket()).unwrap();
         let client = Client::new(
             paths,
             NativePool::new("catalog-test", 1).unwrap(),
@@ -547,7 +545,7 @@ mod tests {
         );
         (dir, client, listener)
     }
-    async fn envelope(socket: &mut UnixStream) -> Envelope {
+    async fn envelope(socket: &mut AsyncStream) -> Envelope {
         let len = socket.read_u32().await.unwrap() as usize;
         let mut bytes = vec![0; len];
         socket.read_exact(&mut bytes).await.unwrap();
@@ -667,7 +665,7 @@ mod tests {
             revision: 7,
             ..Default::default()
         };
-        let listener = tokio::net::UnixListener::bind(owner.paths().socket()).unwrap();
+        let listener = crate::transport::AsyncListener::bind_ipc(&owner.paths().socket()).unwrap();
         let server = tokio::spawn(async move {
             while let Ok((mut socket, _)) = listener.accept().await {
                 let _ = envelope(&mut socket).await;
@@ -848,7 +846,7 @@ mod tests {
         let retired_id = retired.id.clone();
         let evicted_id = retired_id.clone();
         let expected_notice = notice_id.clone();
-        let listener = tokio::net::UnixListener::bind(active.paths().socket()).unwrap();
+        let listener = crate::transport::AsyncListener::bind_ipc(&active.paths().socket()).unwrap();
         let server = tokio::spawn(async move {
             while let Ok((mut socket, _)) = listener.accept().await {
                 let request = envelope(&mut socket).await;

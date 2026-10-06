@@ -241,6 +241,7 @@ pub async fn launch_supervised(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::{
         sync::mpsc,
         time::{Duration, Instant},
@@ -279,11 +280,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let invalid = dir.path().join("invalid");
         std::fs::write(&invalid, "#!/missing/fixture/interpreter\n").unwrap();
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
+        #[cfg(unix)]
         std::fs::set_permissions(&invalid, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(launch(invalid.to_str().unwrap(), &[], Path::new("file"), |_| {}).is_err());
     }
     #[test]
+    #[cfg(unix)]
     fn failing_exit_is_reported_and_long_running_editor_does_not_block() {
         let (tx, rx) = mpsc::channel();
         let start = Instant::now();
@@ -309,6 +313,7 @@ mod tests {
         assert!(error.contains("fixture-failure"));
     }
     #[test]
+    #[cfg(unix)]
     fn noisy_failure_is_drained_but_diagnostic_is_bounded() {
         let (tx, rx) = mpsc::channel();
         launch(

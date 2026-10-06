@@ -5,7 +5,6 @@ use clap::{Parser, Subcommand};
 use serde_json::json;
 use std::{
     io::{Read, Write},
-    os::unix::net::UnixStream,
     path::PathBuf,
     time::Duration,
 };
@@ -329,9 +328,8 @@ pub fn run(args: &[String]) -> Result<()> {
                     session: sid.clone(),
                 },
             )?;
-            let mut stream = UnixStream::connect(owner.socket())?;
-            stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-            stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+            let mut stream = transport::Stream::connect_ipc(&owner.socket())?;
+            stream.set_timeouts(Duration::from_secs(5), Duration::from_secs(5))?;
             write_frame(
                 &mut stream,
                 &Envelope {

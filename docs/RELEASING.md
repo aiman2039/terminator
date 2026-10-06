@@ -8,18 +8,21 @@ Rust 1.97.1 and the committed Cargo.lock. It does not use Docker.
 | macOS Apple Silicon | `macos-15` | `terminator-vVERSION-macos.dmg` |
 | Linux x86-64 | `ubuntu-24.04` | `terminator-vVERSION-x86_64-unknown-linux-gnu.tar.gz` |
 | Linux ARM64 | `ubuntu-24.04-arm` | `terminator-vVERSION-aarch64-unknown-linux-gnu.tar.gz` |
+| Windows x86-64 | `windows-2025` | `terminator-vVERSION-x86_64-pc-windows-msvc.zip` |
 
 Each package includes the GUI, daemon, hook executable, and the existing
 packager's resources and dependency notices. The macOS ZIP is an intermediate
 Apple Silicon app; assembly embeds Sparkle and does not lipo extra slices.
-Linux archives contain a `terminator/` directory. `SHA256SUMS.txt` covers the
-DMG, both Linux archives and `appcast.xml`.
+Linux archives contain a `terminator/` directory, and so does the Windows zip
+(portable install: unzip anywhere, run `terminator.exe`; unsigned until an
+MSIX lands). `SHA256SUMS.txt` covers the DMG, both Linux archives, the
+Windows zip, and `appcast.xml`.
 Neovim is not bundled; install Neovim 0.10+ for CodeDiff reviews.
 
 ## Build dependencies and caches
 
-Separate macOS and Linux jobs use `.github/actions/release-build` and run
-the three native builds concurrently. macOS assembly depends only on the Apple
+Separate macOS, Linux, and Windows jobs use `.github/actions/release-build` and run
+the four native builds concurrently. macOS assembly depends only on the Apple
 Silicon job; final draft upload still requires Linux and macOS to succeed. That
 macOS job also uploads its development `xtask` binary in a tar archive to retain
 executable permissions. Assembly and DMG creation run that exact same-revision
@@ -58,8 +61,8 @@ To retry an older release manually, select its tag rather than the current branc
 The workflow never moves existing tags. Bump the version for a new revision.
 
 The upload job runs only after all packages and macOS assembly pass their checks.
-It creates a draft if needed, uploads the DMG, Linux archives, appcast and
-checksums, and verifies the asset inventory. Draft assets can be replaced on
+It creates a draft if needed, uploads the DMG, Linux archives, Windows zip,
+appcast and checksums, and verifies the asset inventory. Draft assets can be replaced on
 retry; published bytes are never replaced. New versions containing a hyphen are
 marked prerelease. Publication additionally requires `SIGNED_UPDATE_VALIDATED`
 and the `production-release` environment. See [the update rollout guide](UPDATES.md).

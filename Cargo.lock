@@ -6132,6 +6132,7 @@ dependencies = [
  "tempfile",
  "terminator-core",
  "terminator-integrations",
+ "terminator-sys",
  "tungstenite",
  "url",
 ]
@@ -6161,6 +6162,7 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics",
  "libc",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

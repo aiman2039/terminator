@@ -853,12 +853,14 @@ fn decode_audio(
     let source = desired.source.as_ref().context("audio source missing")?;
     let mut decoder: Box<dyn Source<Item = f32> + Send> = match source {
         Playable::File { path, .. } => {
+            #[cfg(unix)]
             use std::os::unix::fs::OpenOptionsExt;
-            let file = File::options()
-                .read(true)
-                .custom_flags(libc::O_NONBLOCK)
-                .open(path)
-                .context("Open audio file")?;
+            let mut options = File::options();
+            options.read(true);
+            // Avoid blocking on FIFOs; Windows has no equivalent flag.
+            #[cfg(unix)]
+            options.custom_flags(libc::O_NONBLOCK);
+            let file = options.open(path).context("Open audio file")?;
             ensure!(
                 file.metadata()?.is_file(),
                 "Audio playback requires a regular file"

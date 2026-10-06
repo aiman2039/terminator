@@ -29,10 +29,9 @@ fn status_options(input: Option<Vec<u8>>, allow_no_matches: bool) -> CommandOpti
 
 /// NUL-delimited stdin batch for [`CHECK_IGNORE_ARGV`].
 pub fn stdin_batch(entries: &[Entry]) -> Vec<u8> {
-    use std::os::unix::ffi::OsStrExt;
     let mut input = Vec::new();
     for entry in entries {
-        input.extend_from_slice(entry.path.as_os_str().as_bytes());
+        input.extend_from_slice(&terminator_core::os_bytes(entry.path.as_os_str()));
         input.push(0);
     }
     input
@@ -40,10 +39,9 @@ pub fn stdin_batch(entries: &[Entry]) -> Vec<u8> {
 
 /// Whether `path` appears in [`CHECK_IGNORE_ARGV`] output.
 pub fn is_ignored(output: &[u8], path: &Path) -> bool {
-    use std::os::unix::ffi::OsStrExt;
     output
         .split(|b| *b == 0)
-        .any(|p| p == path.as_os_str().as_bytes())
+        .any(|p| p == terminator_core::os_bytes(path.as_os_str()).as_ref())
 }
 
 pub fn entries(path: &Path) -> Result<Vec<Entry>> {

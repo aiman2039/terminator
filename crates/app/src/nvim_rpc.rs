@@ -4,6 +4,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::{io, path::Path, time::Duration};
 #[cfg(test)]
+#[cfg(unix)]
 use std::{
     io::{Read, Write},
     os::unix::net::UnixStream,
@@ -11,12 +12,14 @@ use std::{
 };
 
 #[cfg(test)]
+#[cfg(unix)]
 pub struct Connection {
     stream: UnixStream,
     deadline: Instant,
     next: u64,
 }
 #[cfg(test)]
+#[cfg(unix)]
 impl Connection {
     pub fn connect(path: &Path, timeout: Duration) -> Result<Self> {
         Ok(Self {
@@ -54,6 +57,7 @@ impl Connection {
     }
 }
 #[cfg(test)]
+#[cfg(unix)]
 fn remaining(deadline: Instant) -> io::Result<Duration> {
     deadline
         .checked_duration_since(Instant::now())
@@ -61,12 +65,14 @@ fn remaining(deadline: Instant) -> io::Result<Duration> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "Neovim request deadline exceeded"))
 }
 #[cfg(test)]
+#[cfg(unix)]
 struct Limited<'a> {
     stream: &'a UnixStream,
     deadline: Instant,
     remaining: usize,
 }
 #[cfg(test)]
+#[cfg(unix)]
 impl Read for Limited<'_> {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         if bytes.is_empty() {
@@ -131,7 +137,10 @@ pub fn timed_out(error: &anyhow::Error) -> bool {
 }
 
 pub struct AsyncConnection {
+    #[cfg(unix)]
     stream: tokio::net::UnixStream,
+    #[cfg(windows)]
+    stream: tokio::net::windows::named_pipe::NamedPipeClient,
     deadline: tokio::time::Instant,
     next: u64,
     cpu: terminator_core::async_service::NativePool,
@@ -145,6 +154,7 @@ impl AsyncConnection {
         let deadline = tokio::time::Instant::now()
             .checked_add(timeout)
             .context("Neovim connect deadline overflow")?;
+        #[cfg(unix)]
         let stream = tokio::time::timeout_at(deadline, tokio::net::UnixStream::connect(path))
             .await
             .map_err(|_| {
@@ -153,6 +163,27 @@ impl AsyncConnection {
                     "Neovim connection deadline exceeded",
                 )
             })??;
+        #[cfg(windows)]
+        let stream = {
+            // `ClientOptions::open` is synchronous: retry fast failures (no
+            // listener yet) until the same deadline the Unix await enforces.
+            let pipe = terminator_core::transport::nvim_listen_arg(path);
+            loop {
+                match tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe) {
+                    Ok(stream) => break stream,
+                    Err(_) if tokio::time::Instant::now() < deadline => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Err(_) => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "Neovim connection deadline exceeded",
+                        )
+                        .into());
+                    }
+                }
+            }
+        };
         Ok(Self {
             stream,
             deadline,
@@ -232,6 +263,7 @@ impl AsyncConnection {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
     use std::os::unix::net::UnixListener;

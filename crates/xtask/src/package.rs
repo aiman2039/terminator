@@ -136,11 +136,18 @@ pub fn run(debug: bool, timings: bool, output_dir: Option<PathBuf>) -> Result<()
         app.clone()
     };
     fs::create_dir_all(&executables)?;
-    for name in ["terminator", "terminator-daemon", "terminator-hook"] {
-        let target = executables.join(name);
-        fs::copy(binaries.join(name), &target)?;
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&target, fs::Permissions::from_mode(0o755))?;
+    for name in [
+        terminator_core::exe_name("terminator"),
+        terminator_core::exe_name("terminator-daemon"),
+        terminator_core::exe_name("terminator-hook"),
+    ] {
+        let target = executables.join(&name);
+        fs::copy(binaries.join(&name), &target)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o755))?;
+        }
         ensure!(
             terminator_core::executable_available(&target),
             "Packaged executable is unavailable: {name}"
@@ -223,6 +230,25 @@ pub fn run(debug: bool, timings: bool, output_dir: Option<PathBuf>) -> Result<()
         if backup.exists() {
             fs::remove_dir_all(backup)?;
         }
+        println!("{}", target.display());
+    } else if cfg!(target_os = "windows") {
+        // Portable install: unzip anywhere and run terminator.exe. The zip
+        // holds the same tree as the Linux tarball (binaries, README, radio,
+        // licenses, icon). A signed MSIX can replace this once the release
+        // flow has signing; the updater only needs the asset name below.
+        fs::copy(
+            root().join("crates/app/assets/branding/terminator-512.png"),
+            app.join("terminator.png"),
+        )?;
+        fs::copy(root().join("README.md"), app.join("README.md"))?;
+        copy_tree(&root().join("crates/app/assets/radio"), &app.join("radio"))?;
+        licenses(&app.join("licenses"))?;
+        let mut entries = Vec::new();
+        crate::zip_writer::append_tree(&mut entries, "terminator", &app)?;
+        let staged = staging.path().join("terminator-windows.zip");
+        crate::zip_writer::finish(&staged, &mut entries)?;
+        let target = destination.join("terminator-windows.zip");
+        fs::rename(&staged, &target)?;
         println!("{}", target.display());
     } else {
         fs::write(
@@ -337,12 +363,14 @@ fn require_sparkle_version(sparkle: &Path) -> Result<()> {
 }
 
 fn verify_app_executables(app: &Path) -> Result<()> {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     for name in ["terminator", "terminator-daemon", "terminator-hook"] {
         let path = app.join("Contents/MacOS").join(name);
         let mut verify = Command::new("lipo");
         verify.arg(&path).args(["-verify_arch", "arm64"]);
         output(verify)?;
+        #[cfg(unix)]
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
     }
     Ok(())
@@ -521,6 +549,7 @@ pub fn local_dmg(
         let mut copy = Command::new("ditto");
         copy.arg(&app).arg(source.join("Terminator.app"));
         output(copy)?;
+        #[cfg(unix)]
         std::os::unix::fs::symlink("/Applications", source.join("Applications"))?;
         let mut create = Command::new("hdiutil");
         create
@@ -617,6 +646,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn dangling_app_symlink_is_not_an_empty_destination() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("Terminator.app");

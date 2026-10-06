@@ -2,7 +2,7 @@ use super::{
     Context, Harness, Options, PathBuf, Result, Value, capture, ensure, fs, id, json, output,
     plain, prefs, session, session_ids, sessions,
 };
-use terminator_core::{Paths, ui_control};
+use terminator_core::{Paths, transport, ui_control};
 
 fn gui(h: &Harness) -> Result<Value> {
     ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)
@@ -11,7 +11,9 @@ fn expression(h: &Harness, editor: &Value, expression: &str) -> Result<String> {
     let mut command = std::process::Command::new("nvim");
     command
         .arg("--server")
-        .arg(Paths::at(h.root.clone()).editor_socket(id(editor)))
+        .arg(transport::nvim_listen_arg(
+            &Paths::at(h.root.clone()).editor_socket(id(editor)),
+        ))
         .args(["--remote-expr", expression]);
     Ok(String::from_utf8(output(command)?)?.trim().into())
 }

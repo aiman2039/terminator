@@ -5,7 +5,10 @@
 Run `sh scripts/check.sh` for formatting, compiler checks (`lint`), build,
 Clippy with warnings denied, `cargo audit`, and `cargo deny` (bans, licenses,
 sources). Run `sh scripts/check.sh test` for workspace tests. Individual checks
-accept `fmt`, `lint`, `build`, `clippy`, `audit`, or `deny`. Checks use the
+accept `fmt`, `lint`, `build`, `clippy`, `audit`, or `deny`. `windows-check`
+and `windows-clippy` cross-check `x86_64-pc-windows-msvc` from macOS/Linux via
+zig 0.14.x (`TERMINATOR_ZIG` when not on PATH; check-only, linking stays on
+windows-2025 CI). Checks use the
 lockfile and do not rewrite files. Pre-commit uses the same `all` path; install
 `cargo-audit` and `cargo-deny` (`cargo install cargo-audit cargo-deny --locked`).
 `cargo deny check advisories` is CI-only (same RustSec DB as `cargo audit`).

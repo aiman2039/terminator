@@ -47,6 +47,8 @@ mod close_idle;
 mod editor_close;
 mod popup;
 mod preferences;
+#[cfg(any(windows, test))]
+mod windows_updates;
 mod workspace;
 #[cfg(any(test, target_os = "macos"))]
 use preferences::AgentsTab;
@@ -550,6 +552,8 @@ pub struct App {
     exit: exit::Exit,
     exit_attempt: u64,
     updater: updater::Updater,
+    #[cfg(any(windows, test))]
+    windows_updates: windows_updates::WindowsUpdateCheck,
     /// Last waiting count painted on the macOS menu-bar icon.
     #[cfg(all(not(test), target_os = "macos"))]
     status_waiting_shown: Option<usize>,
@@ -922,6 +926,8 @@ impl App {
             exit: exit::Exit::default(),
             exit_attempt: 0,
             updater: updater::Updater::new(ctx),
+            #[cfg(any(windows, test))]
+            windows_updates: windows_updates::WindowsUpdateCheck::new(),
             #[cfg(all(not(test), target_os = "macos"))]
             status_waiting_shown: None,
             installation_error: None,
@@ -5852,6 +5858,13 @@ impl eframe::App for App {
                 ctx.request_repaint_after(Duration::from_millis(50));
             }
             self.updater.poll();
+            #[cfg(any(windows, test))]
+            if self
+                .windows_updates
+                .poll(self.settings_draft.automatic_update_checks)
+            {
+                ctx.request_repaint();
+            }
         }
         ctx.request_repaint_after(Duration::from_secs(1));
     }
@@ -12980,10 +12993,15 @@ mod navigation_tests {
         let chrome = rect("player-chrome").expect("player chrome");
         let bell = rect("left-agent-bar").expect("project bell");
         let toggle = rect("toggle-left-sidebar").expect("hide sidebar");
+        let controls = rect("window-controls").expect("window controls");
         assert!(rect("project-header-menu").is_none());
         assert!(
-            name.right() <= chrome.left() + 1.0 && chrome.left() - name.right() < 8.0,
-            "the name sits against the player, name={name:?} chrome={chrome:?}"
+            name.left() >= controls.right() - 1.0 && name.left() - controls.right() < 16.0,
+            "the name hugs the left, after the traffic lights, name={name:?} controls={controls:?}"
+        );
+        assert!(
+            chrome.left() - name.right() > 8.0,
+            "spare width sits between the name and the player, name={name:?} chrome={chrome:?}"
         );
         assert!(
             chrome.right() <= bell.left() + 1.0 && bell.left() - chrome.right() < 8.0,
