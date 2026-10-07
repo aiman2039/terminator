@@ -175,28 +175,38 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@v8
-        with:
-          name: macos-assembly-tools
-          path: ${{ runner.temp }}/assembly-tools
+      # Artifact downloads, the Sparkle fetch, and the brew install touch
+      # disjoint paths, so they overlap. Assembly stays after: it consumes
+      # all of them.
+      - parallel:
+          - uses: actions/download-artifact@v8
+            with:
+              name: macos-assembly-tools
+              path: ${{ runner.temp }}/assembly-tools
+          - uses: actions/download-artifact@v8
+            with:
+              pattern: macos-slice-*
+              path: ${{ runner.temp }}/slices
+              merge-multiple: true
+          - name: Fetch pinned Sparkle
+            run: |
+              set -euo pipefail
+              curl --fail --location --retry 3 https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-2.10.0.tar.xz -o "$RUNNER_TEMP/Sparkle.tar.xz"
+              echo "c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c  $RUNNER_TEMP/Sparkle.tar.xz" | shasum -a 256 --check
+              mkdir -p "$RUNNER_TEMP/sparkle"
+              tar -xf "$RUNNER_TEMP/Sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
+          - name: Install DMG layout tool
+            run: brew install create-dmg
       - name: Restore assembly tooling from the native build
         run: |
           set -euo pipefail
           tar -xzf "$RUNNER_TEMP/assembly-tools/terminator-assembly-tools.tar.gz" -C "$RUNNER_TEMP/assembly-tools"
           test -x "$RUNNER_TEMP/assembly-tools/xtask"
           lipo "$RUNNER_TEMP/assembly-tools/xtask" -verify_arch arm64
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: macos-slice-*
-          path: ${{ runner.temp }}/slices
-          merge-multiple: true
-      - name: Fetch pinned Sparkle and assemble the Apple Silicon app
+      - name: Assemble the Apple Silicon app
         run: |
           set -euo pipefail
-          curl --fail --location --retry 3 https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-2.10.0.tar.xz -o "$RUNNER_TEMP/Sparkle.tar.xz"
-          echo "c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c  $RUNNER_TEMP/Sparkle.tar.xz" | shasum -a 256 --check
-          mkdir -p "$RUNNER_TEMP/sparkle" "$RUNNER_TEMP/slices/arm"
-          tar -xf "$RUNNER_TEMP/Sparkle.tar.xz" -C "$RUNNER_TEMP/sparkle"
+          mkdir -p "$RUNNER_TEMP/slices/arm"
           ditto -x -k "$RUNNER_TEMP/slices/terminator-${TAG}-aarch64-apple-darwin.zip" "$RUNNER_TEMP/slices/arm"
           "$RUNNER_TEMP/assembly-tools/xtask" assemble --app "$RUNNER_TEMP/slices/arm/Terminator.app" \
             --sparkle "$RUNNER_TEMP/sparkle" --build-number "$GITHUB_RUN_NUMBER" --output "$RUNNER_TEMP/terminator-package"
@@ -220,8 +230,6 @@ jobs:
           if int(os.environ['GITHUB_RUN_NUMBER']) <= previous:
               raise SystemExit('Build number must exceed the previous published build')
           CHECK
-      - name: Install DMG layout tool
-        run: brew install create-dmg
       - name: Sign and notarize macOS app
         timeout-minutes: 30
         env:

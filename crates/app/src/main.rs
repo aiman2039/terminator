@@ -80,6 +80,11 @@ fn main() -> Result<()> {
             .with_window_level(
                 if cfg!(feature = "test-support")
                     && std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
+                    && std::env::var_os("TERMINATOR_TEST_VISIBLE_CAPTURE").is_some()
+                {
+                    egui::WindowLevel::AlwaysOnTop
+                } else if cfg!(feature = "test-support")
+                    && std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
                     && std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some()
                 {
                     egui::WindowLevel::AlwaysOnBottom
@@ -95,13 +100,30 @@ fn main() -> Result<()> {
             .with_titlebar_buttons_shown(true)
             .with_movable_by_background(false)
             .with_decorations(cfg!(target_os = "macos")),
-        renderer: eframe::Renderer::Glow,
+        renderer: {
+            #[cfg(feature = "wgpu")]
+            {
+                eframe::Renderer::Wgpu
+            }
+            #[cfg(not(feature = "wgpu"))]
+            {
+                eframe::Renderer::Glow
+            }
+        },
         ..Default::default()
     };
+    #[cfg(feature = "test-support")]
+    eprintln!("Native renderer: {:?}", options.renderer);
     eframe::run_native(
         "Terminator",
         options,
-        Box::new(move |cc| Ok(Box::new(App::new(cc, paths)))),
+        Box::new(move |cc| {
+            #[cfg(all(feature = "test-support", feature = "wgpu"))]
+            if let Some(state) = &cc.wgpu_render_state {
+                eprintln!("Native Wgpu adapter: {:?}", state.adapter.get_info());
+            }
+            Ok(Box::new(App::new(cc, paths)))
+        }),
     )
     .map_err(|e| anyhow::anyhow!("{e}"))
 }

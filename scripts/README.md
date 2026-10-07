@@ -22,6 +22,41 @@ all checks plus tests on native macOS and Linux for pushes and pull requests to
 `master`, or via manual dispatch. Local checks, CI, and releases use Rust 1.97.1, pinned locally by
 `rust-toolchain.toml` with rustfmt and Clippy.
 
+## Renderer comparison
+
+Glow is the default renderer. Build with `--features terminator/wgpu` to select
+Wgpu through eframe. The feature keeps Glow compiled for compatibility; selection
+is fixed at build time, with no automatic renderer fallback.
+
+Use release builds and save each GUI before the next build replaces it:
+
+```sh
+cargo build --release --workspace --bins --examples --features terminator/test-support --locked
+mkdir -p target/renderer-comparison/glow/examples target/renderer-comparison/wgpu/examples
+cp target/release/terminator target/release/terminator-daemon target/release/terminator-hook target/release/xtask target/renderer-comparison/glow/
+cp target/release/examples/layout target/renderer-comparison/glow/examples/
+cargo build --release --workspace --bins --examples --features terminator/test-support,terminator/wgpu --locked
+cp target/renderer-comparison/glow/terminator-daemon target/renderer-comparison/glow/terminator-hook target/renderer-comparison/glow/xtask target/renderer-comparison/wgpu/
+cp target/renderer-comparison/glow/examples/layout target/renderer-comparison/wgpu/examples/
+cp target/release/terminator target/renderer-comparison/wgpu/
+TERMINATOR_TEST_BIN_DIR="$PWD/target/renderer-comparison/glow" target/renderer-comparison/glow/xtask gui renderer-perf --seconds 15 --output target/validation/renderer-glow
+TERMINATOR_TEST_BIN_DIR="$PWD/target/renderer-comparison/wgpu" target/renderer-comparison/glow/xtask gui renderer-perf --seconds 15 --output target/validation/renderer-wgpu
+```
+
+Run measurements serially after builds finish. Each command uses disposable
+state and six visible shells, with three idle trials and three output trials.
+Output is one line per shell approximately every 33 ms. Each trial warms up for
+five seconds, then samples GUI cumulative CPU time and RSS every 500 ms. CPU
+percentage uses one core as 100%. Screenshot polling stops after three seconds;
+the final capture occurs after measurement. Captures and renderer logs verify
+that the native GUI ran. `OUTPUT/renderer-perf/renderer-perf.json` contains raw trial results. Compare
+medians and repeat in reverse order to check order effects.
+
+These results do not measure GPU time, power use, startup, or input delay. The
+fixture uses visible, inactive windows with mouse passthrough and a fixed scale.
+Keep the screen unlocked during the test. Wgpu captures can time out behind
+another window on macOS. This is not a measurement of the installed application.
+
 ## Dependency security
 
 `.github/workflows/security.yaml` runs on master pushes, pull requests, Monday

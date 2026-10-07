@@ -1115,6 +1115,19 @@ mod tests {
         assert!(prefs.visible);
     }
     #[test]
+    fn saved_tool_uses_snake_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let prefs = UiPreferences {
+            tool: SidebarTool::Git,
+            ..UiPreferences::default()
+        };
+        prefs.save(dir.path()).unwrap();
+        let raw: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.path().join("ui-preferences.json")).unwrap())
+                .unwrap();
+        assert_eq!(raw.get("tool"), Some(&serde_json::json!("git")));
+    }
+    #[test]
     fn setup_waits_for_inventory_and_counts_hidden_projects() {
         let mut preferences = UiPreferences::default();
         assert!(!preferences.needs_setup(false, 0));

@@ -1,5 +1,21 @@
 # Validation evidence — 2026-09-08
 
+## Wgpu feature and native comparison (2026-10-07)
+
+`terminator/wgpu` selects Wgpu through eframe; Glow remains the default.
+Both release builds passed three idle and three output trials with six visible
+terminal panes, isolated data, five-second warmup and 15-second measurement.
+On this Apple M5 Max, median output GUI CPU was 12.15% with Glow and 9.32% with
+Wgpu/Metal (23.3% lower); median peak GUI RSS was 211.78 and 218.69 MiB.
+Idle CPU was 2.24% and 2.13%. One CPU core is 100%.
+The first covered-window Wgpu capture timed out; those preliminary trials were
+excluded and both renderers were measured again with visible, inactive windows.
+Builds, focused strict Clippy, the CPU-time parser test, native captures,
+formatting and whitespace checks passed. The installed app and live sessions
+were not changed. GPU time, power, input delay and other platforms were not
+measured. See [the comparison report](RENDERER-COMPARISON.md) for raw evidence,
+method, order limits and repeat commands.
+
 ## Windows installer and update checks (2026-10-06)
 
 `cargo xtask package` writes `terminator-windows.zip` on Windows: same `terminator/` tree as the Linux tarball (three `.exe`s, README, radio, licenses, icon) via an in-tree deflated ZIP writer (`xtask::zip_writer`, no new dependencies; CRC-32 check value and an independent from-spec decoder verify the round trip). The release workflow builds `x86_64-pc-windows-msvc` on `windows-2025`, verifies the three non-empty exes plus README with bsdtar, and uploads `terminator-vVERSION-x86_64-pc-windows-msvc.zip` (drafts now carry five files plus SHA256SUMS). The daemon `build.rs` emits `libvscode_diff.dll` with MSVC flags on Windows, matching the Lua loader's existing `dll` branch.

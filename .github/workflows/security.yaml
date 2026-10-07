@@ -17,12 +17,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-audit
+      # The installer only writes the tool cache, so it overlaps checkout.
+      - parallel:
+          - uses: actions/checkout@v6
+            with:
+              persist-credentials: false
+          - uses: taiki-e/install-action@v2
+            with:
+              tool: cargo-audit
       - name: Audit Cargo.lock
         run: cargo audit
 
@@ -36,6 +38,7 @@ jobs:
         checks:
           - advisories
           - bans licenses sources
+    # Stays sequential: the deny action scans the checked-out repo.
     steps:
       - uses: actions/checkout@v6
         with:

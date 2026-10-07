@@ -20,6 +20,7 @@ mod installation;
 mod launch;
 mod markdown;
 mod projects;
+mod renderer_perf;
 mod responsiveness;
 mod reviews;
 mod updates;
@@ -260,6 +261,7 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "window-controls" => {
                 anyhow::bail!("window-controls needs a macOS or X11 desktop driver")
             }
+            "renderer-perf" => renderer_perf::run(&opts)?,
             _ => anyhow::bail!("Unknown native fixture: {case}"),
         }
         println!(
@@ -345,7 +347,7 @@ fn smoke(opts: &Options) -> Result<()> {
     let preferences = pref
         .as_object_mut()
         .ok_or_else(|| anyhow!("preferences are not an object"))?;
-    preferences.insert("tool".into(), json!("Git"));
+    preferences.insert("tool".into(), json!("git"));
     preferences.insert("visible".into(), json!(false));
     preferences.insert("width".into(), json!(370.0));
     preferences.insert("expanded".into(), json!({id(&p):false}));

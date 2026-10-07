@@ -161,8 +161,10 @@ impl Diagnostics {
                 .and_then(|s| s.parse::<f32>().ok())
                 .filter(|s| (1.0..=2.0).contains(s))
                 .unwrap_or(1.0);
-            self.ticking
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            self.ticking.store(
+                std::env::var_os("TERMINATOR_TEST_PASSIVE_CAPTURE").is_none(),
+                std::sync::atomic::Ordering::Relaxed,
+            );
             let ticking = std::sync::Arc::clone(&self.ticking);
             let repaint = ctx.clone();
             std::thread::spawn(move || {
@@ -173,11 +175,13 @@ impl Diagnostics {
             });
             ctx.set_pixels_per_point(scale);
             let background = std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some();
-            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(if background {
-                egui::WindowLevel::AlwaysOnBottom
-            } else {
-                egui::WindowLevel::AlwaysOnTop
-            }));
+            ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(
+                if background && std::env::var_os("TERMINATOR_TEST_VISIBLE_CAPTURE").is_none() {
+                    egui::WindowLevel::AlwaysOnBottom
+                } else {
+                    egui::WindowLevel::AlwaysOnTop
+                },
+            ));
             if background && std::env::var_os("TERMINATOR_TEST_NATIVE_INPUT").is_none() {
                 // Synthetic fixtures must not intercept the user's real wheel or clicks.
                 ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(true));
@@ -273,7 +277,23 @@ impl Diagnostics {
                 }
             }
         }
-        ctx.request_repaint_after(Duration::from_millis(16));
+        if std::env::var_os("TERMINATOR_TEST_PASSIVE_CAPTURE").is_some()
+            && self.started.elapsed() > Duration::from_secs(3)
+        {
+            let deadline = Duration::from_millis(
+                std::env::var("TERMINATOR_CAPTURE_AFTER_MS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(3000),
+            );
+            ctx.request_repaint_after(
+                deadline
+                    .saturating_sub(self.started.elapsed())
+                    .saturating_add(Duration::from_millis(1)),
+            );
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
     }
     /// Called after UI layout, so a discarded sizing pass cannot supply a
     /// partial screenshot. Input injection remains at the start of the pass.
