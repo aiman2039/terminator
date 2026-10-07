@@ -786,6 +786,8 @@ pub struct App {
     targets: HashMap<String, Option<services::Target>>,
     hover: Option<(String, Instant)>,
     hover_popup: Option<HoverPopup>,
+    dismissed_hover: Option<(String, String)>,
+    hover_popup_blocks_input: bool,
     pending_target_action: Option<(String, Session)>,
     last_heartbeat: Instant,
     /// Env-gated (`TERMINATOR_REPAINT_LOG`) idle-CPU probe. `None` unless the
@@ -1108,6 +1110,8 @@ impl App {
             targets: HashMap::new(),
             hover: None,
             hover_popup: None,
+            dismissed_hover: None,
+            hover_popup_blocks_input: false,
             pending_target_action: None,
             last_heartbeat: Instant::now(),
             repaint_probe: RepaintProbe::enabled(),
@@ -5884,6 +5888,8 @@ impl eframe::App for App {
             });
             return;
         }
+        self.hover_popup_blocks_input = self.hover_popup.is_some()
+            || (ctx.current_pass_index() > 0 && self.hover_popup_blocks_input);
         self.visible_dirs.clear();
         self.visible_sessions.clear();
         self.visible_images.clear();
@@ -6187,6 +6193,12 @@ impl eframe::App for App {
         self.reconcile_gui_resources();
         self.sync_browsers(frame);
         self.popups.end_frame();
+        if self.hover_popup.as_ref().is_some_and(|popup| {
+            !self.visible_sessions.contains(&popup.session)
+                || !self.backends.contains_key(&popup.session)
+        }) {
+            self.dismiss_hover_popup(&ctx);
+        }
         self.sync_menu_bar(&ctx);
         appearance::click_cursor(&ctx);
         #[cfg(feature = "test-support")]
@@ -7352,6 +7364,37 @@ mod navigation_tests {
         // True modals still suspend the strip.
         app.add_project = true;
         assert!(!app.strip_terminal_input_enabled("shell"));
+    }
+
+    #[test]
+    fn hover_popup_blocks_terminal_input_through_its_closing_frame() {
+        let (mut app, ctx, _dir) = fixture();
+        app.hover_popup = Some(HoverPopup {
+            session: "shell".into(),
+            key: "first-file".into(),
+            target: services::Target::File("/first.rs".into(), None, None),
+            rect: egui::Rect::ZERO,
+        });
+        assert!(!app.terminal_input_enabled("shell"));
+        assert!(!app.strip_terminal_input_enabled("other-shell"));
+        app.hover_popup_blocks_input = true;
+        app.dismiss_hover_popup(&ctx);
+        assert!(!app.terminal_input_enabled("shell"));
+        assert!(!app.strip_terminal_input_enabled("other-shell"));
+        app.hover_popup_blocks_input = false;
+        assert!(app.terminal_input_enabled("shell"));
+        assert!(app.strip_terminal_input_enabled("other-shell"));
+    }
+
+    #[test]
+    fn dismissed_hover_stays_closed_until_the_pointer_leaves_its_file() {
+        let (mut app, _ctx, _dir) = fixture();
+        app.dismissed_hover = Some(("shell".into(), "first-file".into()));
+        assert!(app.hover_target_dismissed("shell", "first-file"));
+        assert!(!app.hover_target_dismissed("other-shell", "different-file"));
+        assert!(app.hover_target_dismissed("shell", "first-file"));
+        assert!(!app.hover_target_dismissed("shell", "outside"));
+        assert!(!app.hover_target_dismissed("shell", "first-file"));
     }
 
     #[test]

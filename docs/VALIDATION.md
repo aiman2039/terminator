@@ -1,8 +1,72 @@
 # Validation evidence — 2026-09-08
 
+## Terminal file-menu input and dismissal (2026-10-07)
+
+An open terminal hover menu keeps its first file target until it closes. Mouse
+and keyboard input are blocked for terminal panes, including the IDE strip,
+through the closing frame so a menu click cannot change terminal selection.
+The rest of the GUI remains usable. X, Escape and clicking outside dismiss the
+menu. A dismissed target stays suppressed until the pointer leaves that file.
+Menus for hidden or detached terminal panes are cleared.
+
+Nine focused hover tests passed. The native `cargo xtask gui hover-menu` fixture
+passed five cases: pointer movement over the adjacent file, Escape with the
+pointer held on the original file, X, an outside click, and Open file. The last
+case verified that the original file opened and the adjacent file did not; the
+same shell PID remained alive throughout. Captures and logs are in
+`target/validation/terminal-hover-menu/hover-menu`; the open-menu capture was
+inspected. Strict Clippy, formatting and whitespace checks passed. The native
+run used a release build with Wgpu and isolated fixture data. No live session
+or installed application was changed.
+
+## Wgpu default on all platforms (2026-10-07)
+
+The app now enables `wgpu` as a default Cargo feature on every platform. Normal
+builds select Wgpu. `TERMINATOR_RENDERER=glow` selects the compiled Glow fallback;
+`cargo build -p terminator --no-default-features` builds a GUI that uses Glow
+without Wgpu. The macOS-only dependency override was removed.
+
+Three renderer-selection tests passed with default features, and three passed
+with `--no-default-features`. The release workspace binary build passed with the
+lockfile. Cargo feature graphs for Linux x86-64, Linux ARM64 and Windows x86-64
+all include eframe's Wgpu feature by default. Linux and Windows native runtime
+checks remain unrun; the earlier macOS native evidence below still applies.
+Focused strict Clippy, formatting and whitespace checks passed.
+The installed app and running daemon were not replaced.
+
+## macOS Wgpu default (2026-10-07)
+
+The first rollout enabled Wgpu by default on macOS, with
+`TERMINATOR_RENDERER=glow` for recovery. Invalid overrides failed before data
+setup or daemon startup. At that stage, Linux and Windows kept Glow unless
+`terminator/wgpu` was enabled; their native runtime checks were not run.
+
+Three renderer-selection tests passed, including the macOS default without the
+`wgpu` feature, explicit Glow recovery, and invalid-override rejection. The
+Release workspace builds with and without test-support passed, as did focused
+strict Clippy checks with test-support. The ordinary build retains the existing
+unused `rect` warning in `workspace_ui.rs`; that unrelated source was not changed.
+The six-session native terminal smoke fixture also passed with default Wgpu,
+including GUI reopen and preserved session identities.
+Native Wgpu browser checks passed twice after an initial capture timeout. They
+covered local HTML navigation, persisted targets, browser close and Open as text.
+Glow passed the same browser fixture. Wgpu image checks passed for raster, SVG,
+GUI reopen, corrupt-image handling, close and Open as text. Native captures and
+logs are under `target/validation/wgpu-default-browser/browser` and
+`target/validation/wgpu-default/images`.
+
+The window-controls fixture passed header drag, edge resize, maximize/restore,
+minimize/restore and both picker steps with each renderer. Its final native
+close-button Accessibility action failed with `Native button action failed` for
+both Wgpu and Glow; the full fixture is not a pass. The cause was not diagnosed.
+Logs are in `target/validation/wgpu-default/window-controls/window.log` and
+`target/validation/glow-window-control/window-controls/window.log`.
+Actual system sleep recovery was not tested because it would suspend this Mac.
+The installed GUI and its live daemon were not replaced or stopped.
+
 ## Wgpu feature and native comparison (2026-10-07)
 
-`terminator/wgpu` selects Wgpu through eframe; Glow remains the default.
+At measurement time, `terminator/wgpu` selected Wgpu and Glow was the default.
 Both release builds passed three idle and three output trials with six visible
 terminal panes, isolated data, five-second warmup and 15-second measurement.
 On this Apple M5 Max, median output GUI CPU was 12.15% with Glow and 9.32% with

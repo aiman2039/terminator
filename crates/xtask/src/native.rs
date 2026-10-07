@@ -15,6 +15,7 @@ mod agents;
 mod codex;
 mod folder_access;
 mod generations;
+mod hover_menu;
 mod idle_close;
 mod installation;
 mod launch;
@@ -60,7 +61,7 @@ pub fn capture(
     if path.exists() {
         fs::remove_file(&path)?;
     }
-    let logpath = h.root.join(format!("{name}.log"));
+    let logpath = directory.join(format!("{name}.log"));
     let log = fs::File::create(&logpath)?;
     let mut command = h.command("terminator");
     command
@@ -76,6 +77,7 @@ pub fn capture(
     if cfg!(target_os = "macos") {
         command
             .env("TERMINATOR_TEST_BACKGROUND", "1")
+            .env("TERMINATOR_TEST_VISIBLE_CAPTURE", "1")
             .env("TERMINATOR_TEST_RENDER_OCCLUDED", "1");
     }
     command.stdout(log.try_clone()?).stderr(log);
@@ -262,6 +264,7 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
                 anyhow::bail!("window-controls needs a macOS or X11 desktop driver")
             }
             "renderer-perf" => renderer_perf::run(&opts)?,
+            "hover-menu" => hover_menu::run(&opts)?,
             _ => anyhow::bail!("Unknown native fixture: {case}"),
         }
         println!(

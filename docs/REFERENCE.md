@@ -16,6 +16,11 @@ cargo run -p terminator --locked
 
 Build all three executables together: `terminator`, `terminator-daemon`, and `terminator-hook`. The GUI starts the daemon if needed. Keep the executables beside one another.
 
+Wgpu is the default renderer on all platforms. To use the Glow recovery renderer, launch with
+`TERMINATOR_RENDERER=glow cargo run -p terminator --locked`, or set that environment
+variable when launching the app executable.
+`cargo build -p terminator --no-default-features` builds the GUI with Glow only.
+
 GitHub release automation builds macOS (Apple Silicon) and Linux
 (x86-64 and ARM64) archives. Intel Macs are source-build only and unvalidated.
 See [Releasing](RELEASING.md) for triggers, downloads, signing, and

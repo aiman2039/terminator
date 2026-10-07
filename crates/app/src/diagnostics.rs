@@ -74,7 +74,9 @@ impl Diagnostics {
                 d.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", &action.target)))
             })
         {
-            let pos = if action.hover {
+            let pos = if let Some([x, y]) = action.hover_offset {
+                egui::pos2(rect.min.x + x, rect.min.y + y)
+            } else if action.hover {
                 egui::pos2(rect.min.x + 45.0, rect.min.y + 10.0)
             } else {
                 rect.center()
@@ -325,6 +327,8 @@ struct FixtureAction {
     capture: bool,
     #[serde(default)]
     hover: bool,
+    #[serde(default)]
+    hover_offset: Option<[f32; 2]>,
     #[serde(default)]
     right_click: bool,
     #[serde(default)]

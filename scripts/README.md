@@ -24,23 +24,19 @@ all checks plus tests on native macOS and Linux for pushes and pull requests to
 
 ## Renderer comparison
 
-Glow is the default renderer. Build with `--features terminator/wgpu` to select
-Wgpu through eframe. The feature keeps Glow compiled for compatibility; selection
-is fixed at build time, with no automatic renderer fallback.
+Wgpu is the default renderer on macOS, Linux and Windows. Glow stays available
+in Wgpu builds. `cargo build -p terminator --no-default-features` builds a GUI
+that uses Glow without Wgpu.
+`TERMINATOR_RENDERER=glow` selects the recovery renderer; `wgpu` selects Wgpu
+when compiled. An invalid or unavailable override fails before starting the
+daemon. There is no automatic renderer retry.
 
-Use release builds and save each GUI before the next build replaces it:
+Compare both renderers with the same release executable:
 
 ```sh
 cargo build --release --workspace --bins --examples --features terminator/test-support --locked
-mkdir -p target/renderer-comparison/glow/examples target/renderer-comparison/wgpu/examples
-cp target/release/terminator target/release/terminator-daemon target/release/terminator-hook target/release/xtask target/renderer-comparison/glow/
-cp target/release/examples/layout target/renderer-comparison/glow/examples/
-cargo build --release --workspace --bins --examples --features terminator/test-support,terminator/wgpu --locked
-cp target/renderer-comparison/glow/terminator-daemon target/renderer-comparison/glow/terminator-hook target/renderer-comparison/glow/xtask target/renderer-comparison/wgpu/
-cp target/renderer-comparison/glow/examples/layout target/renderer-comparison/wgpu/examples/
-cp target/release/terminator target/renderer-comparison/wgpu/
-TERMINATOR_TEST_BIN_DIR="$PWD/target/renderer-comparison/glow" target/renderer-comparison/glow/xtask gui renderer-perf --seconds 15 --output target/validation/renderer-glow
-TERMINATOR_TEST_BIN_DIR="$PWD/target/renderer-comparison/wgpu" target/renderer-comparison/glow/xtask gui renderer-perf --seconds 15 --output target/validation/renderer-wgpu
+TERMINATOR_FIXTURE_RENDERER=glow TERMINATOR_TEST_BIN_DIR="$PWD/target/release" target/release/xtask gui renderer-perf --seconds 15 --output target/validation/renderer-glow
+TERMINATOR_FIXTURE_RENDERER=wgpu TERMINATOR_TEST_BIN_DIR="$PWD/target/release" target/release/xtask gui renderer-perf --seconds 15 --output target/validation/renderer-wgpu
 ```
 
 Run measurements serially after builds finish. Each command uses disposable
@@ -118,6 +114,11 @@ New cases: `cargo xtask gui images`, `cargo xtask gui browser`, `cargo xtask gui
 `cargo xtask gui all` runs the ordinary native fixture suite. All GUI cases accept
 `--scale 1|2`, `--narrow`, and `--output PATH`. Captures default to the Cargo target
 validation directory; earlier committed screenshots are not overwritten.
+
+`cargo xtask gui hover-menu` checks that adjacent terminal file paths cannot
+replace an open menu. It checks Escape, X, outside-click dismissal and opening
+the original file while preserving the shell PID. Fixture actions accept
+`hover_offset: [x, y]` for pointer coordinates relative to the target rectangle.
 
 `split-file-opening` reproduces unavailable working directories after a project
 move, checks the error and unchanged session inventory, then restores a path

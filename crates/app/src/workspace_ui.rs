@@ -435,15 +435,16 @@ fn should_replace_hover_popup(
     popup_key: Option<&str>,
     delay: Duration,
 ) -> bool {
+    if popup_key.is_some() {
+        return false;
+    }
     let switched = hover.as_ref().is_none_or(|(old, _)| old != key);
     if switched {
         *hover = Some((key.to_owned(), Instant::now()));
     }
-    let ready = hover
+    hover
         .as_ref()
-        .is_some_and(|(_, since)| since.elapsed() >= delay);
-    let other_popup = popup_key.is_some_and(|shown| shown != key);
-    ready || other_popup
+        .is_some_and(|(_, since)| since.elapsed() >= delay)
 }
 
 /// One wake for the remaining hover delay. An open popup for this key needs
@@ -454,7 +455,7 @@ fn hover_popup_wake(
     popup_key: Option<&str>,
     delay: Duration,
 ) -> Option<Duration> {
-    if popup_key == Some(key) {
+    if popup_key.is_some() {
         return None;
     }
     let elapsed = hover
@@ -538,8 +539,32 @@ fn paint_window_controls(ui: &egui::Ui, rect: egui::Rect) {
 }
 
 impl App {
+    pub(super) fn dismiss_hover_popup(&mut self, ctx: &egui::Context) {
+        if let Some(popup) = self.hover_popup.take() {
+            #[cfg(feature = "test-support")]
+            eprintln!("Terminal file menu dismissed: {}", popup.target.display());
+            self.dismissed_hover = Some((popup.session, popup.key));
+        }
+        self.hover = None;
+        ctx.request_repaint();
+    }
+
+    pub(super) fn hover_target_dismissed(&mut self, sid: &str, key: &str) -> bool {
+        if let Some((session, dismissed)) = &self.dismissed_hover
+            && session == sid
+        {
+            if dismissed == key {
+                return true;
+            }
+            self.dismissed_hover = None;
+        }
+        false
+    }
+
     pub(super) fn terminal_input_enabled(&self, sid: &str) -> bool {
         !self.picker_active
+            && self.hover_popup.is_none()
+            && !self.hover_popup_blocks_input
             && !self.settings_open
             && !self.player_open
             && !self.command_dialog_open()
@@ -558,6 +583,8 @@ impl App {
     /// True modals still suspend them.
     pub(super) fn strip_terminal_input_enabled(&self, sid: &str) -> bool {
         !self.picker_active
+            && self.hover_popup.is_none()
+            && !self.hover_popup_blocks_input
             && !self.add_project
             && !self.notice_detail_modal_open()
             && (self.close_session.is_none() || self.idle_close_pending.is_some())
@@ -4458,11 +4485,11 @@ impl Viewer<'_> {
                 diagnostics::record(ui.ctx(), "editor-terminal", response.rect);
             }
         }
-        if response.contains_pointer() && ui.input(|i| i.pointer.any_pressed()) {
+        if input_enabled && response.contains_pointer() && ui.input(|i| i.pointer.any_pressed()) {
             self.app.terminal_pressed(ui.ctx(), sid);
         }
         let dragging = ui.input(|i| i.pointer.any_down());
-        let (mouse_reporting, target) = {
+        let (mouse_reporting, target, dismissal_token) = {
             let Some(backend) = self.app.backends.get(sid) else {
                 return;
             };
@@ -4487,17 +4514,42 @@ impl Viewer<'_> {
                 .last_content()
                 .terminal_mode
                 .intersects(egui_term::TerminalMode::MOUSE_MODE);
-            let target = if dragging {
+            let target = if !input_enabled || dragging || self.app.hover_popup.is_some() {
                 None
             } else {
                 response.hover_pos().and_then(|pos| {
                     backend.target_at(pos.x - response.rect.left(), pos.y - response.rect.top())
                 })
             };
-            (mouse_reporting, target)
+            // A closing popup can still own egui's hover hit-test for this pass.
+            // Use the grid position to decide whether the pointer left its file.
+            let dismissal_token = self
+                .app
+                .dismissed_hover
+                .as_ref()
+                .filter(|(session, _)| session == sid)
+                .map(|_| {
+                    ui.ctx()
+                        .pointer_hover_pos()
+                        .filter(|pos| response.rect.contains(*pos))
+                        .and_then(|pos| {
+                            backend.target_at(
+                                pos.x - response.rect.left(),
+                                pos.y - response.rect.top(),
+                            )
+                        })
+                        .map_or_else(String::new, |target| target.text)
+                });
+            (mouse_reporting, target, dismissal_token)
         };
         let token = target.as_ref().map(|t| t.text.clone()).unwrap_or_default();
         let key = format!("target:{}:{}:{}", sid, session.cwd.display(), token);
+        let dismissal_key = dismissal_token
+            .map(|token| format!("target:{}:{}:{}", sid, session.cwd.display(), token));
+        let dismissed = self.app.hover_popup.is_none()
+            && self
+                .app
+                .hover_target_dismissed(sid, dismissal_key.as_deref().unwrap_or(&key));
         if !token.is_empty()
             && !self.app.targets.contains_key(&key)
             && self.app.loading.insert(key.clone())
@@ -4520,12 +4572,14 @@ impl Viewer<'_> {
                 }
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 let popup_key = self.app.hover_popup.as_ref().map(|popup| popup.key.clone());
-                if should_replace_hover_popup(
-                    &mut self.app.hover,
-                    &key,
-                    popup_key.as_deref(),
-                    HOVER_POPUP_DELAY,
-                ) {
+                if !dismissed
+                    && should_replace_hover_popup(
+                        &mut self.app.hover,
+                        &key,
+                        popup_key.as_deref(),
+                        HOVER_POPUP_DELAY,
+                    )
+                {
                     let rect = target
                         .rects
                         .first()
@@ -4538,16 +4592,20 @@ impl Viewer<'_> {
                         target: resolved.clone(),
                         rect,
                     });
+                    #[cfg(feature = "test-support")]
+                    eprintln!("Terminal file menu opened: {}", resolved.display());
                 }
-                if let Some(wake) = hover_popup_wake(
-                    &self.app.hover,
-                    &key,
-                    self.app
-                        .hover_popup
-                        .as_ref()
-                        .map(|popup| popup.key.as_str()),
-                    HOVER_POPUP_DELAY,
-                ) {
+                if !dismissed
+                    && let Some(wake) = hover_popup_wake(
+                        &self.app.hover,
+                        &key,
+                        self.app
+                            .hover_popup
+                            .as_ref()
+                            .map(|popup| popup.key.as_str()),
+                        HOVER_POPUP_DELAY,
+                    )
+                {
                     ui.ctx().request_repaint_after(wake);
                 }
             }
@@ -4739,6 +4797,17 @@ impl Viewer<'_> {
                 .style(appearance::menu_style)
                 .show(|ui| {
                     ui.set_max_width(440.0);
+                    ui.horizontal(|ui| {
+                        ui.label("File actions");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let close = appearance::sidebar_action(ui, "X", "Dismiss file menu");
+                            #[cfg(feature = "test-support")]
+                            diagnostics::record(ui.ctx(), "terminal-file-menu-close", close.rect);
+                            if close.clicked() {
+                                ui.close();
+                            }
+                        });
+                    });
                     appearance::target_header(ui, &popup.target.compact(), &popup.target.display());
                     if let Some(action) =
                         file_actions::menu(ui, file_actions::target_menu(&popup.target))
@@ -4748,8 +4817,7 @@ impl Viewer<'_> {
                     }
                 });
             if !open {
-                self.app.hover_popup = None;
-                self.app.hover = None;
+                self.app.dismiss_hover_popup(ui.ctx());
             }
         }
     }
@@ -5585,15 +5653,15 @@ mod tests {
     }
 
     #[test]
-    fn hover_popup_switches_when_the_target_changes() {
+    fn an_open_hover_popup_keeps_its_target_when_the_pointer_crosses_another_file() {
         let mut hover = Some(("a".into(), Instant::now()));
-        assert!(should_replace_hover_popup(
+        assert!(!should_replace_hover_popup(
             &mut hover,
             "b",
             Some("a"),
             HOVER_POPUP_DELAY
         ));
-        assert_eq!(hover.as_ref().map(|(key, _)| key.as_str()), Some("b"));
+        assert_eq!(hover.as_ref().map(|(key, _)| key.as_str()), Some("a"));
         assert!(!should_replace_hover_popup(
             &mut hover,
             "b",

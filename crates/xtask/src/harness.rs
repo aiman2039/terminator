@@ -195,6 +195,11 @@ impl Harness {
             .env_remove("VIMINIT")
             .env_remove("EXINIT")
             .envs(&self.env);
+        if name == "terminator"
+            && let Some(renderer) = std::env::var_os("TERMINATOR_FIXTURE_RENDERER")
+        {
+            c.env("TERMINATOR_RENDERER", renderer);
+        }
         c
     }
     pub fn start(&mut self) -> Result<()> {

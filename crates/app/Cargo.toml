@@ -62,6 +62,7 @@ globset = "0.4.20"
 ignore = { version = "0.4.33", default-features = false }
 
 [features]
+default = ["wgpu"]
 wgpu = ["eframe/wgpu"]
 test-support = ["dep:egui-winit", "egui-winit/test-support", "terminator-updater/test-support"]
 

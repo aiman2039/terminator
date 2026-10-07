@@ -7,8 +7,16 @@ use fs2::FileExt;
 use std::fs;
 use terminator::{App, daemon_connection, installation};
 use terminator_core::{Paths, crash, generations};
+mod renderer;
 
 fn main() -> Result<()> {
+    let renderer_name = std::env::var_os("TERMINATOR_RENDERER")
+        .map(|name| {
+            name.into_string()
+                .map_err(|_| anyhow::anyhow!("TERMINATOR_RENDERER must be UTF-8"))
+        })
+        .transpose()?;
+    let renderer = renderer::selected(renderer_name.as_deref())?;
     if !installation::preflight()? {
         return Ok(());
     }
@@ -100,17 +108,21 @@ fn main() -> Result<()> {
             .with_titlebar_buttons_shown(true)
             .with_movable_by_background(false)
             .with_decorations(cfg!(target_os = "macos")),
-        renderer: {
-            #[cfg(feature = "wgpu")]
-            {
-                eframe::Renderer::Wgpu
-            }
-            #[cfg(not(feature = "wgpu"))]
-            {
-                eframe::Renderer::Glow
-            }
-        },
+        renderer,
         ..Default::default()
+    };
+    #[cfg(all(feature = "test-support", feature = "wgpu"))]
+    let options = {
+        let mut options = options;
+        let handler = std::sync::Arc::clone(&options.wgpu_options.on_surface_status);
+        let count = std::sync::atomic::AtomicU32::new(0);
+        options.wgpu_options.on_surface_status = std::sync::Arc::new(move |status| {
+            if count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 8 {
+                eprintln!("Native Wgpu surface status: {status:?}");
+            }
+            handler(status)
+        });
+        options
     };
     #[cfg(feature = "test-support")]
     eprintln!("Native renderer: {:?}", options.renderer);

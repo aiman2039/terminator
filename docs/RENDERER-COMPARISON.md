@@ -1,7 +1,9 @@
 # Renderer comparison — 2026-10-07
 
-The `terminator/wgpu` feature selects eframe's Wgpu renderer. Glow remains the
-default. Both native release builds completed all six comparison trials.
+At measurement time, the `terminator/wgpu` feature selected eframe's Wgpu
+renderer and Glow was the default. Both native release builds completed all six
+comparison trials. All platforms now default to Wgpu; `TERMINATOR_RENDERER=glow`
+selects Glow for recovery or comparison with the same executable.
 
 Wgpu used **23.3% less GUI CPU time during terminal output** on
 this Mac. Idle CPU use was close. Output memory use was about 7 MiB higher.
