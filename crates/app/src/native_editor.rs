@@ -6,6 +6,7 @@
 //! file that changed on disk unless forced, Reload is disabled while dirty,
 //! and closing a dirty tab asks first — nothing is silently discarded.
 
+use super::workspace::WorkspaceTab;
 use super::*;
 use anyhow::Context as _;
 use std::path::{Path, PathBuf};
@@ -230,12 +231,19 @@ enum PostEdit {
 /// Deferred `:split` / `:vsplit` / `:tabnew`: which layout change a drained
 /// engine effect asks for. The engine never touches layout; the GUI maps
 /// these onto its own tabs, preserving the originating project.
-/// View that asked for a deferred native close. Plain closes remove
-/// only this view; every other copy of the file stays open.
+/// View that asked for a deferred native close, captured when the
+/// command starts. Plain closes remove only this view; every other
+/// copy of the file stays open.
 #[derive(Clone, Debug)]
 pub(super) enum CloseIssuer {
-    /// A docked pane in `project`: plain closes remove one copy there.
-    Docked(String),
+    /// A docked pane: project, top-level tab, and leaf recorded up
+    /// front, so a later focus move or a same-file twin tab cannot
+    /// redirect the close.
+    Docked {
+        project: String,
+        tab: String,
+        node: Option<egui_dock::NodePath>,
+    },
     /// A floating window: plain closes remove that pane.
     Floating(egui::ViewportId),
 }
@@ -351,46 +359,87 @@ impl App {
     }
 
     /// Issuing view for a close requested from a file view: the floating
-    /// window it renders in, else the docked project it renders under.
-    fn close_issuer(ui: &egui::Ui, project: Option<&str>) -> Option<CloseIssuer> {
+    /// window it renders in, else the docked project/tab/leaf under
+    /// render. Captured now (not at drain time) so later focus moves
+    /// cannot redirect the close.
+    fn close_issuer(
+        ui: &egui::Ui,
+        project: Option<&str>,
+        tab: Option<&str>,
+        node: Option<egui_dock::NodePath>,
+    ) -> Option<CloseIssuer> {
         let viewport = ui.ctx().viewport_id();
         if viewport != egui::ViewportId::ROOT {
             Some(CloseIssuer::Floating(viewport))
         } else {
-            project.map(|project| CloseIssuer::Docked(project.to_owned()))
+            match (project, tab) {
+                (Some(project), Some(tab)) => Some(CloseIssuer::Docked {
+                    project: project.to_owned(),
+                    tab: tab.to_owned(),
+                    node,
+                }),
+                _ => None,
+            }
         }
     }
 
-    /// Remove one docked copy of `path` from `workspace`: the copy in
-    /// the focused leaf, which is the split that issued the close. Only
-    /// when focus is elsewhere does the first match go. Returns whether
-    /// a copy was there.
+    /// Remove one `target` copy from one top-level tab: the copy in
+    /// `node` (the issuing pane recorded when the command started), then
+    /// the focused leaf, then the first match. A stale node (layout moved
+    /// since) simply misses and the fallbacks take over. Fixes `primary`
+    /// afterwards. Returns whether a copy was removed.
+    fn remove_copy_from_tab(
+        tab_state: &mut WorkspaceTab,
+        target: &Tab,
+        node: Option<egui_dock::NodePath>,
+    ) -> bool {
+        let same_leaf = |at: &egui_dock::TabPath, leaf: egui_dock::NodePath| {
+            at.surface == leaf.surface && at.node == leaf.node
+        };
+        let pick = {
+            let layout = &tab_state.layout;
+            layout
+                .iter_all_tabs()
+                .filter(|(_, tab)| *tab == target)
+                .map(|(at, _)| at)
+                .find(|at| node.is_some_and(|stored| same_leaf(at, stored)))
+                .or_else(|| {
+                    layout
+                        .iter_all_tabs()
+                        .filter(|(_, tab)| *tab == target)
+                        .map(|(at, _)| at)
+                        .find(|at| {
+                            layout
+                                .focused_leaf()
+                                .is_some_and(|focus| same_leaf(at, focus))
+                        })
+                })
+                .or_else(|| layout.find_tab(target))
+        };
+        let Some(found) = pick else {
+            return false;
+        };
+        tab_state.layout.remove_tab(found);
+        if tab_state.primary.as_ref() == Some(target) {
+            tab_state.primary = tab_state
+                .layout
+                .iter_all_tabs()
+                .next()
+                .map(|(_, tab)| tab.clone());
+        }
+        true
+    }
+
+    /// Remove one docked copy of `path` from `workspace`: the focused
+    /// copy first, then the first match. Returns whether a copy was
+    /// there.
     fn remove_one_docked_copy(workspace: &mut Workspace, path: &Path) -> bool {
         let target = Tab::NativeEditor {
             path: path.to_owned(),
         };
         let mut removed = false;
         for tab in &mut workspace.tabs {
-            let focused = tab.layout.focused_leaf();
-            let pick = tab
-                .layout
-                .iter_all_tabs()
-                .filter(|(_, tab)| **tab == target)
-                .map(|(at, _)| at)
-                .find(|at| {
-                    focused
-                        .is_some_and(|focus| at.surface == focus.surface && at.node == focus.node)
-                })
-                .or_else(|| tab.layout.find_tab(&target));
-            if let Some(found) = pick {
-                tab.layout.remove_tab(found);
-                if tab.primary == Some(target.clone()) {
-                    tab.primary = tab
-                        .layout
-                        .iter_all_tabs()
-                        .next()
-                        .map(|(_, tab)| tab.clone());
-                }
+            if Self::remove_copy_from_tab(tab, &target, None) {
                 removed = true;
                 break;
             }
@@ -428,14 +477,30 @@ impl App {
             }
         } else {
             match issuer {
-                // One copy in the issuing project; other projects and
-                // splits keep theirs.
-                Some(CloseIssuer::Docked(project)) => {
-                    if !self
-                        .layouts
-                        .get_mut(&project)
-                        .is_some_and(|workspace| Self::remove_one_docked_copy(workspace, path))
-                    {
+                // One copy in the issuing tab: the recorded pane first,
+                // then that tab's focused copy. Same-file twin tabs and
+                // other projects keep theirs.
+                Some(CloseIssuer::Docked { project, tab, node }) => {
+                    let target = Tab::NativeEditor {
+                        path: path.to_owned(),
+                    };
+                    let mut removed = false;
+                    if let Some(workspace) = self.layouts.get_mut(&project) {
+                        if let Some(tab_state) = workspace
+                            .tabs
+                            .iter_mut()
+                            .find(|tab_state| tab_state.id == *tab)
+                        {
+                            removed = Self::remove_copy_from_tab(tab_state, &target, node);
+                        }
+                        if !removed {
+                            // Issuing tab replaced since the request queued:
+                            // one copy in the project, focused first.
+                            removed = Self::remove_one_docked_copy(workspace, path);
+                        }
+                        workspace.drop_empty_tabs();
+                    }
+                    if !removed {
                         // Project gone since the request queued: take one
                         // copy anywhere rather than dropping the close.
                         for workspace in self.layouts.values_mut() {
@@ -511,14 +576,16 @@ impl App {
             .send(Update::OpenNativeEditor(project.into(), path, after));
     }
 
-    /// Render the native editor pane for an open file. `project` is the
-    /// docked project under render, if any: close requests remember
-    /// their issuing view so plain closes take only that copy.
+    /// Render the native editor pane for an open file. `project`/`tab`/
+    /// `node` locate the docked view under render, if any: close requests
+    /// remember their issuing view so plain closes take only that copy.
     pub(super) fn native_editor_view(
         &mut self,
         ui: &mut egui::Ui,
         path: &Path,
         project: Option<&str>,
+        tab: Option<&str>,
+        node: Option<egui_dock::NodePath>,
     ) {
         let vim = self.state.settings.native_vim;
         let failed_color = appearance::color(&self.theme.status_failed);
@@ -694,7 +761,7 @@ impl App {
                         doc.force_save = force;
                         doc.start_save(&services);
                         defer_close_after_save = true;
-                        wq_issuer = Self::close_issuer(ui, project);
+                        wq_issuer = Self::close_issuer(ui, project, tab, node);
                     }
                     Effect::QuitAll { force } => {
                         quit_all = Some(force);
@@ -783,7 +850,7 @@ impl App {
             self.pending_native_close.push((
                 path.to_owned(),
                 force,
-                Self::close_issuer(ui, project),
+                Self::close_issuer(ui, project, tab, node),
             ));
             return;
         }

@@ -183,11 +183,8 @@ mod tests {
         });
         // A plain close issued from the dock removes that copy and keeps
         // the floated buffer: the floating window stays open.
-        app.close_native_tab(
-            &path,
-            false,
-            Some(crate::native_editor::CloseIssuer::Docked("a".into())),
-        );
+        let tab = app.layouts.get("a").expect("workspace").active.clone();
+        app.close_native_tab(&path, false, docked_issuer("a", &tab, None));
         assert_eq!(app.floating.len(), 1);
         assert!(
             app.native_docs.contains_key(&path),
@@ -316,9 +313,34 @@ mod tests {
             .unwrap_or(0)
     }
 
+    fn docked_issuer(
+        project: &str,
+        tab: &str,
+        node: Option<egui_dock::NodePath>,
+    ) -> Option<crate::native_editor::CloseIssuer> {
+        Some(crate::native_editor::CloseIssuer::Docked {
+            project: project.into(),
+            tab: tab.into(),
+            node,
+        })
+    }
+
+    fn tab_native_paths(app: &App, project: &str, tab: &str) -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        if let Some(workspace) = app.layouts.get(project)
+            && let Some(tab_state) = workspace.tabs.iter().find(|tab_state| tab_state.id == tab)
+        {
+            for (_, tab) in tab_state.layout.iter_all_tabs() {
+                if let Tab::NativeEditor { path } = tab {
+                    paths.push(path.clone());
+                }
+            }
+        }
+        paths
+    }
+
     #[test]
     fn plain_close_keeps_other_docked_copies() {
-        use crate::native_editor::CloseIssuer;
         let (mut app, _, _dir) = fixture();
         let path = PathBuf::from("/a/shared.md");
         app.native_docs.insert(
@@ -343,7 +365,8 @@ mod tests {
         );
         // A plain close issued in `a` removes one copy there; the other
         // split and project `b` keep theirs, and the buffer survives.
-        app.close_native_tab(&path, false, Some(CloseIssuer::Docked("a".into())));
+        let tab = app.layouts.get("a").expect("workspace").active.clone();
+        app.close_native_tab(&path, false, docked_issuer("a", &tab, None));
         assert_eq!(docked_copies(&app, "a", &path), 1);
         assert_eq!(docked_copies(&app, "b", &path), 1);
         assert!(app.native_docs.contains_key(&path));
@@ -351,7 +374,6 @@ mod tests {
 
     #[test]
     fn plain_close_takes_focused_split_not_first_match() {
-        use crate::native_editor::CloseIssuer;
         let (mut app, _, _dir) = fixture();
         let path = PathBuf::from("/a/focused.md");
         let other = PathBuf::from("/a/other.md");
@@ -384,8 +406,10 @@ mod tests {
             });
         app.layouts.insert("a".into(), workspace);
         // `:q` in the focused split removes that copy: the focused leaf
-        // keeps only the other tab, the first leaf keeps the file.
-        app.close_native_tab(&path, false, Some(CloseIssuer::Docked("a".into())));
+        // keeps only the other tab, the first leaf keeps the file. No
+        // recorded pane here, so the focused copy goes.
+        let tab = app.layouts.get("a").expect("workspace").active.clone();
+        app.close_native_tab(&path, false, docked_issuer("a", &tab, None));
         let workspace = app.layouts.get("a").expect("workspace");
         let mut focused_tabs = Vec::new();
         let mut copies = 0;
@@ -402,6 +426,93 @@ mod tests {
         }
         assert_eq!(copies, 1);
         assert_eq!(focused_tabs, vec![other]);
+        assert!(app.native_docs.contains_key(&path));
+    }
+
+    #[test]
+    fn plain_close_keeps_twin_tab_copies() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/twin.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        // Same file open in two top-level tabs of one project.
+        let editor = || Tab::NativeEditor { path: path.clone() };
+        let mut workspace = Workspace::from_layout(DockState::new(vec![editor()]));
+        let first = workspace.tabs[0].id.clone();
+        workspace.tabs.push(crate::workspace::WorkspaceTab {
+            id: "second".into(),
+            primary: Some(editor()),
+            layout: DockState::new(vec![editor()]),
+        });
+        workspace.active = "second".into();
+        app.layouts.insert("a".into(), workspace);
+        // `:q` in the second tab removes only that copy: the first tab
+        // keeps the file, and the buffer survives.
+        app.close_native_tab(&path, false, docked_issuer("a", "second", None));
+        assert_eq!(tab_native_paths(&app, "a", &first), vec![path.clone()]);
+        assert!(tab_native_paths(&app, "a", "second").is_empty());
+        assert!(app.native_docs.contains_key(&path));
+    }
+
+    #[test]
+    fn plain_close_prefers_recorded_pane_over_current_focus() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/recorded.md");
+        let other = PathBuf::from("/a/other.md");
+        for file in [&path, &other] {
+            app.native_docs.insert(
+                file.clone(),
+                crate::native_editor::NativeDoc::dirty_for_test(file.clone()),
+            );
+        }
+        // Left leaf holds only the file; the right leaf holds the file
+        // plus another tab. Focus sits left, but the recorded pane is
+        // right (focus moved after the command started).
+        let mut workspace = Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
+            path: path.clone(),
+        }]));
+        let [left, right] = workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![
+                Tab::NativeEditor {
+                    path: other.clone(),
+                },
+                Tab::NativeEditor { path: path.clone() },
+            ],
+        );
+        workspace.tabs[0]
+            .layout
+            .set_focused_node_and_surface(egui_dock::NodePath {
+                surface: egui_dock::SurfaceIndex::main(),
+                node: left,
+            });
+        app.layouts.insert("a".into(), workspace);
+        let tab = app.layouts.get("a").expect("workspace").active.clone();
+        let recorded = egui_dock::NodePath {
+            surface: egui_dock::SurfaceIndex::main(),
+            node: right,
+        };
+        app.close_native_tab(&path, false, docked_issuer("a", &tab, Some(recorded)));
+        // The recorded right leaf loses the file and keeps the other tab;
+        // the focused left leaf is untouched.
+        let workspace = app.layouts.get("a").expect("workspace");
+        let mut right_tabs = Vec::new();
+        let mut copies = 0;
+        for (at, tab) in workspace.tabs[0].layout.iter_all_tabs() {
+            if let Tab::NativeEditor { path: current } = tab {
+                if current.as_path() == path.as_path() {
+                    copies += 1;
+                }
+                if at.node == right {
+                    right_tabs.push(current.clone());
+                }
+            }
+        }
+        assert_eq!(copies, 1);
+        assert_eq!(right_tabs, vec![other]);
         assert!(app.native_docs.contains_key(&path));
     }
 

@@ -228,6 +228,8 @@ mod tests {
             app: &mut app,
             strip: true,
             project: None,
+            tab: None,
+            node: None,
         };
         let agent_width = viewer.tab_leading_width(&Tab::Terminal("agent".into()));
         let plain_width = viewer.tab_leading_width(&Tab::Terminal("plain".into()));
@@ -280,6 +282,8 @@ mod tests {
             app: &mut app,
             strip: true,
             project: None,
+            tab: None,
+            node: None,
         };
         let muse = viewer.tab_leading_width(&Tab::Terminal("muse".into()));
         let plain = viewer.tab_leading_width(&Tab::Terminal("plain".into()));

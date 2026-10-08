@@ -14,6 +14,12 @@ pub(crate) struct Viewer<'a> {
     /// remember their issuing view. Floating windows pass none (the
     /// viewport identifies them instead).
     pub(crate) project: Option<String>,
+    /// Top-level tab under render, if any: same-file twin tabs need it
+    /// to tell the issuing copy apart.
+    pub(crate) tab: Option<String>,
+    /// Focused leaf under render, if any: the issuing split inside its
+    /// tab, recorded before later focus moves.
+    pub(crate) node: Option<egui_dock::NodePath>,
 }
 impl TabViewer for Viewer<'_> {
     fn on_add(&mut self, path: egui_dock::NodePath) {
@@ -402,10 +408,13 @@ impl TabViewer for Viewer<'_> {
                 ui.close();
             }
             Tab::Diff { .. } => self.app.diff_view(ui, tab),
-            Tab::NativeEditor { path } => {
-                self.app
-                    .native_editor_view(ui, path, self.project.as_deref())
-            }
+            Tab::NativeEditor { path } => self.app.native_editor_view(
+                ui,
+                path,
+                self.project.as_deref(),
+                self.tab.as_deref(),
+                self.node,
+            ),
             Tab::CommitLog { .. } => self.app.commit_log_view(ui, tab),
             Tab::Blame { .. } => self.app.blame_view(ui, tab),
             Tab::Terminal(sid) => {

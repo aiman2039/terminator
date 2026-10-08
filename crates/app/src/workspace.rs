@@ -5,4 +5,5 @@ mod model;
 mod query;
 
 pub(crate) use model::Workspace;
+pub(crate) use model::WorkspaceTab;
 pub(crate) use query::validate_layout;

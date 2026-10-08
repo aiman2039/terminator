@@ -370,6 +370,16 @@ impl App {
     pub(crate) fn paint_dock(&mut self, ui: &mut egui::Ui, project: &str, dock: &mut Workspace) {
         let style = self.dock_style(ui);
         self.refresh_pane_maps(project, dock);
+        // Issuing tab and leaf for close requests: the rendered tab
+        // (mirroring `Deref` selection) and its focused leaf, captured
+        // before rendering so later focus moves cannot redirect closes.
+        let (tab, node) = dock
+            .tabs
+            .get(dock.active_index())
+            .or(dock.tabs.first())
+            .map(|tab| (tab.id.clone(), tab.layout.focused_leaf()))
+            .unzip();
+        let node: Option<egui_dock::NodePath> = node.flatten();
         DockArea::new(dock)
             .style(style)
             .show_add_buttons(true)
@@ -381,6 +391,8 @@ impl App {
                     app: self,
                     strip: false,
                     project: Some(project.to_owned()),
+                    tab,
+                    node,
                 },
             );
         self.finish_pane_drop(ui, dock);

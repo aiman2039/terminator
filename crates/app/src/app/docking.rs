@@ -550,6 +550,9 @@ impl App {
                         app: self,
                         strip: false,
                         project: None,
+                        // Floating panes identify by viewport instead.
+                        tab: None,
+                        node: None,
                     }
                     .ui(ui, &mut tab);
                 },
