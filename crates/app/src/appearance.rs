@@ -440,6 +440,8 @@ pub fn menu_button<R>(
             .config(config)
             .ui(ui, add_contents)
     };
+    #[cfg(feature = "test-support")]
+    crate::diagnostics::record(ui.ctx(), title, response.rect);
     egui::InnerResponse::new(inner.map(|shown| shown.inner), response)
 }
 

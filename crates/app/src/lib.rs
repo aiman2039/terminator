@@ -513,6 +513,15 @@ impl TerminalFind {
     }
 }
 
+/// A main-dock pane detached into its own OS window. The daemon keeps
+/// owning the session; the window dies with the GUI like every other
+/// GUI-only surface. `tab` is `None` only while the viewport renders it.
+struct FloatingPane {
+    viewport: egui::ViewportId,
+    tab: Option<Tab>,
+    home: (String, String),
+}
+
 pub struct App {
     file_activation: Option<FileActivation>,
     git_commit: String,
@@ -638,6 +647,25 @@ pub struct App {
     /// Main-pane shell to move into the strip once the workspace dock is
     /// checked back in. The caption menu runs while that dock is checked out.
     move_main_to_strip: Option<String>,
+    /// Main-dock pane queued for detach into a fresh top-level tab. The
+    /// pane menu runs while the workspace dock is checked out for paint,
+    /// so the move waits until it is checked back in.
+    detach_pane: Option<Tab>,
+    /// Main-dock pane plus destination top-level tab id, queued by the
+    /// pane menu to dock a detached pane back. Same checkout reason as
+    /// [`Self::detach_pane`].
+    dock_back_pane: Option<(Tab, String)>,
+    /// Sibling top-level tabs as (id, label, icon), snapshotted by the
+    /// workspace strip before the main dock paints so the pane menu can
+    /// offer dock-back targets while the workspace is checked out.
+    /// Excludes the active tab.
+    dock_back_targets: Vec<(String, String, &'static str)>,
+    /// Main-dock pane queued for floating outside the app window. Same
+    /// checkout reason as [`Self::detach_pane`].
+    float_pane: Option<Tab>,
+    /// Panes detached into their own OS windows, rendered every frame by
+    /// [`Self::paint_floating`]. Closing a window docks its pane back.
+    floating: Vec<FloatingPane>,
     /// Strip tab whose drag has started. Promoted to [`Self::pane_drag`] once
     /// the pointer leaves the strip, so reordering inside the strip stays
     /// with the dock.
@@ -999,6 +1027,11 @@ impl App {
             focus_strip_tab: None,
             move_strip_to_main: None,
             move_main_to_strip: None,
+            detach_pane: None,
+            dock_back_pane: None,
+            dock_back_targets: Vec::new(),
+            float_pane: None,
+            floating: Vec::new(),
             strip_tab_drag: None,
             strip_pane_by_tab: HashMap::new(),
             strip_pane_tabs: HashMap::new(),
@@ -2444,6 +2477,22 @@ impl App {
         }
         self.info = Some("Project removed from the sidebar. Add the folder again to restore it; its files and sessions are kept.".into());
     }
+    /// Split marker that stacks the new tab into the focused leaf instead
+    /// of opening a side split or a new top-level tab. It travels the
+    /// existing `Option<&str>` split plumbing untouched.
+    const SPLIT_HERE: &str = "here";
+
+    /// Maps a file action to its split routing. `Here` stacks into the
+    /// focused leaf; `Split` opens a side split; anything else opens a
+    /// new top-level tab.
+    fn split_for(action: FileAction) -> Option<&'static str> {
+        match action {
+            FileAction::Split => Some("right"),
+            FileAction::Here => Some(Self::SPLIT_HERE),
+            _ => None,
+        }
+    }
+
     fn insert(&mut self, project: &str, tab: Tab, split: Option<&str>) {
         let dock = self
             .layouts
@@ -2456,6 +2505,10 @@ impl App {
             return;
         }
         if let Some(direction) = split {
+            if direction == Self::SPLIT_HERE {
+                dock.push_to_focused_leaf(tab);
+                return;
+            }
             let tree = dock.main_surface_mut();
             if !tree.is_empty() {
                 let node = tree.focused_leaf().unwrap_or(NodeIndex::root());
@@ -4547,6 +4600,8 @@ impl App {
         for workspace in self.layouts.values_mut() {
             workspace.remove_session(sid);
         }
+        self.floating
+            .retain(|pane| !matches!(&pane.tab, Some(Tab::Terminal(floated)) if floated == sid));
         self.backends.remove(sid);
         self.drop_strip_session(sid);
         if self.active_session.as_deref() == Some(sid) {
@@ -4577,23 +4632,21 @@ impl App {
                     return;
                 }
                 if image_preview::supported(path)
-                    && matches!(action, FileAction::Open | FileAction::Split)
+                    && matches!(
+                        action,
+                        FileAction::Open | FileAction::Split | FileAction::Here
+                    )
                 {
-                    self.open_image(
-                        &session.project_id,
-                        path.clone(),
-                        (action == FileAction::Split).then_some("right"),
-                    );
+                    self.open_image(&session.project_id, path.clone(), Self::split_for(action));
                     return;
                 }
                 if crate::browser::supported_file(path)
-                    && matches!(action, FileAction::Open | FileAction::Split)
+                    && matches!(
+                        action,
+                        FileAction::Open | FileAction::Split | FileAction::Here
+                    )
                 {
-                    self.open_html(
-                        &session.project_id,
-                        path.clone(),
-                        (action == FileAction::Split).then_some("right"),
-                    );
+                    self.open_html(&session.project_id, path.clone(), Self::split_for(action));
                     return;
                 }
                 if action == FileAction::External
@@ -4605,14 +4658,14 @@ impl App {
                         &session.project_id,
                         path.clone(),
                         *line,
-                        (action == FileAction::Split).then_some("right"),
+                        Self::split_for(action),
                     );
                 } else {
                     let origin = Tab::Terminal(session.id.clone());
                     let after = self.editor_target(
                         &session.project_id,
                         Some(&origin),
-                        (action == FileAction::Split).then_some("right"),
+                        Self::split_for(action),
                     );
                     let _ = self.jobs.send(Job::rpc(
                         Request::Create {
@@ -4640,6 +4693,7 @@ impl App {
             FileAction::Open => self.open_file(path.into(), line, None, false),
             FileAction::Text => self.open_file_mode(path.into(), line, None, false, true),
             FileAction::Split => self.open_file(path.into(), line, Some("right"), false),
+            FileAction::Here => self.open_file(path.into(), line, Some(Self::SPLIT_HERE), false),
             FileAction::External => self.open_file(path.into(), line, None, true),
             FileAction::Copy => ui.ctx().copy_text(path.display().to_string()),
             FileAction::StagedDiff | FileAction::WorkingDiff => {
@@ -5279,6 +5333,9 @@ impl App {
         }
         self.apply_focus_tab(&mut dock);
         self.apply_add_tab(&project, &mut dock);
+        self.apply_detach_pane(&mut dock);
+        self.apply_dock_back(&mut dock);
+        self.apply_float_pane(&project, &mut dock);
         self.paint_session_focus(ui, &dock);
         self.layouts.insert(project.clone(), dock);
         if self.pending_layout_save {
@@ -5733,17 +5790,198 @@ impl App {
                 column: None,
                 editor: false,
             },
-            if split.is_none() {
-                After::Workspace(id(), vec![])
-            } else {
-                After::CreateAt(
-                    dock.leaf(path)
-                        .map(|leaf| leaf.tabs.clone())
-                        .unwrap_or_default(),
-                    split,
-                )
-            },
+            // The leaf `+` always opens stacked inside that split; the
+            // workspace-strip `+` (a new top-level tab) arrives through
+            // `create_workspace_tab`, not here.
+            After::CreateAt(
+                dock.leaf(path)
+                    .map(|leaf| leaf.tabs.clone())
+                    .unwrap_or_default(),
+                split,
+            ),
         ));
+    }
+
+    /// Detach the queued pane into a fresh top-level tab at the end of the
+    /// strip. Runs after the workspace dock is checked back in; unknown or
+    /// already-moved panes are a silent no-op via the move primitive.
+    fn apply_detach_pane(&mut self, dock: &mut Workspace) {
+        let Some(pane) = self.detach_pane.take() else {
+            return;
+        };
+        if dock
+            .move_pane_to_new_group_at(&pane, dock.tabs.len())
+            .is_some()
+        {
+            if let Tab::Terminal(sid) = &pane {
+                self.active_session = Some(sid.clone());
+                self.focus_tab = Some(pane);
+            }
+            self.pane_index = None;
+            self.pending_layout_save = true;
+        }
+    }
+
+    /// Panes allowed outside the app window. The browser mounts a native
+    /// webview in the main window and the player is a global singleton
+    /// view; everything else renders in any viewport.
+    fn floatable(tab: &Tab) -> bool {
+        !matches!(tab, Tab::Browser { .. } | Tab::Player)
+    }
+
+    /// Float the queued pane into its own OS window. Runs after the
+    /// workspace dock is checked back in; panes that left the dock or
+    /// cannot float are a silent no-op.
+    fn apply_float_pane(&mut self, project: &str, dock: &mut Workspace) {
+        let Some(pane) = self.float_pane.take() else {
+            return;
+        };
+        if !Self::floatable(&pane) {
+            return;
+        }
+        let Some(home) = dock.take_pane(&pane) else {
+            return;
+        };
+        let viewport = egui::ViewportId::from_hash_of(format!("floating:{}", pane.key()));
+        self.floating.push(FloatingPane {
+            viewport,
+            tab: Some(pane),
+            home: (project.to_owned(), home),
+        });
+        self.pane_index = None;
+        self.pending_layout_save = true;
+    }
+
+    /// Returns one floating pane to its workspace: the home tab when that
+    /// still exists, else the project's active leaf.
+    fn dock_back_floating(&mut self, project: String, home: String, tab: Tab) {
+        self.layouts
+            .entry(project)
+            .or_insert_with(Workspace::empty)
+            .dock_back(tab, &home);
+        self.pane_index = None;
+        self.pending_layout_save = true;
+    }
+
+    /// Returns every floating pane to its workspace, e.g. before the exit
+    /// checkpoint so the saved layout stays complete.
+    fn dock_back_all_floating(&mut self) {
+        for pane in std::mem::take(&mut self.floating) {
+            if let (Some(tab), (project, home)) = (pane.tab, pane.home) {
+                self.dock_back_floating(project, home, tab);
+            }
+        }
+    }
+
+    /// Live window title for a floating pane, mirroring the tab captions.
+    fn floating_title(&self, tab: &Tab) -> String {
+        match tab {
+            Tab::Terminal(sid) => {
+                let label = self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == *sid)
+                    .map(|s| s.label.clone())
+                    .unwrap_or_else(|| "Terminal".into());
+                let presented = self.present_session(sid);
+                if presented.attention.waiting() > 0 {
+                    format!("● {label}")
+                } else if presented.attention.failed > 0 {
+                    format!("▲ {label}")
+                } else {
+                    label
+                }
+            }
+            Tab::NativeEditor { path } => format!(
+                "{}{}",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                if self.native_dirty(path) { " ●" } else { "" }
+            ),
+            Tab::Image { path } => path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            Tab::Diff { path, staged, .. } => format!(
+                "{} {}",
+                if *staged { "Staged:" } else { "Diff:" },
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ),
+            Tab::CommitLog { .. } => "Commit Log".into(),
+            Tab::Blame { path, .. } => format!(
+                "Blame {}",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ),
+            Tab::Browser { .. } | Tab::Player => "Terminator".into(),
+        }
+    }
+
+    /// Renders every floating pane in its own OS window. A closed window
+    /// docks its pane back instead of closing it.
+    fn paint_floating(&mut self, ctx: &egui::Context) {
+        if self.floating.is_empty() {
+            return;
+        }
+        // The vec is checked out while viewports render so the viewer can
+        // borrow the app; windows that stay open move back afterwards.
+        let mut closed: Vec<(String, String, Tab)> = Vec::new();
+        for mut pane in std::mem::take(&mut self.floating) {
+            let Some(mut tab) = pane.tab.take() else {
+                continue;
+            };
+            let title = self.floating_title(&tab);
+            let mut close = false;
+            ctx.show_viewport_immediate(
+                pane.viewport,
+                egui::ViewportBuilder::default()
+                    .with_title(title)
+                    .with_inner_size([960.0, 600.0])
+                    .with_min_inner_size([420.0, 300.0]),
+                |ui, _| {
+                    close = ui.ctx().input(|i| i.viewport().close_requested());
+                    // Fixture driver for window-close dock-back: the file's
+                    // presence closes every float through the same path as
+                    // the OS close button. Inert unless the env var is set.
+                    #[cfg(feature = "test-support")]
+                    if std::env::var_os("TERMINATOR_TEST_CLOSE_FLOATING")
+                        .is_some_and(|path| std::path::Path::new(&path).exists())
+                    {
+                        close = true;
+                    }
+                    crate::workspace_ui::Viewer {
+                        app: self,
+                        strip: false,
+                    }
+                    .ui(ui, &mut tab);
+                },
+            );
+            if close {
+                closed.push((pane.home.0, pane.home.1, tab));
+            } else {
+                pane.tab = Some(tab);
+                self.floating.push(pane);
+            }
+        }
+        for (project, home, tab) in closed {
+            self.dock_back_floating(project, home, tab);
+        }
+    }
+
+    /// Dock the queued pane back into its chosen sibling tab. Same
+    /// checked-back-in contract as [`Self::apply_detach_pane`].
+    fn apply_dock_back(&mut self, dock: &mut Workspace) {
+        let Some((pane, dest)) = self.dock_back_pane.take() else {
+            return;
+        };
+        if dock.move_pane_to_group(&pane, &dest) {
+            if let Tab::Terminal(sid) = &pane {
+                self.active_session = Some(sid.clone());
+                self.focus_tab = Some(pane);
+            }
+            self.pane_index = None;
+            self.pending_layout_save = true;
+        }
     }
 
     fn paint_session_focus(&mut self, ui: &mut egui::Ui, dock: &Workspace) {
@@ -6192,6 +6430,9 @@ impl eframe::App for App {
         self.apply_browser_submit();
         self.reconcile_gui_resources();
         self.sync_browsers(frame);
+        // Floating panes render in their own OS windows after every dock
+        // is checked back in, so a closed window can dock straight back.
+        self.paint_floating(&ctx);
         self.popups.end_frame();
         if self.hover_popup.as_ref().is_some_and(|popup| {
             !self.visible_sessions.contains(&popup.session)
@@ -10931,6 +11172,155 @@ mod navigation_tests {
     }
 
     #[test]
+    fn leaf_plus_opens_stacked_in_that_split() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.selected = Some("a".into());
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("two".into())],
+        );
+        app.layouts.insert("a".into(), workspace);
+        let path = app.layouts["a"]
+            .find_tab(&Tab::Terminal("two".into()))
+            .expect("right leaf present")
+            .node_path();
+        app.add_tab = Some((path, None));
+        let mut dock = app.layouts.remove("a").unwrap();
+        app.apply_add_tab("a", &mut dock);
+        app.layouts.insert("a".into(), dock);
+        let Job::Control(_, After::CreateAt(_, split)) = received.try_recv().unwrap() else {
+            panic!("leaf plus stacks into the split");
+        };
+        assert_eq!(split, None);
+    }
+
+    #[test]
+    fn insert_here_stacks_into_focused_leaf() {
+        let (mut app, _, _dir) = fixture();
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("two".into())],
+        );
+        app.layouts.insert("a".into(), workspace);
+        let editor = Tab::NativeEditor {
+            path: "/a/note.md".into(),
+        };
+        app.insert("a", editor.clone(), Some(App::SPLIT_HERE));
+        // No new top-level tab and no side split: the file stacks into
+        // the focused leaf alongside its existing pane.
+        assert_eq!(app.layouts["a"].tabs.len(), 1);
+        let path = app.layouts["a"]
+            .find_tab(&editor)
+            .expect("editor placed")
+            .node_path();
+        let leaf = app.layouts["a"].leaf(path).expect("leaf present");
+        assert_eq!(leaf.tabs.len(), 2);
+    }
+
+    #[test]
+    fn file_open_here_routes_stacked_create() {
+        let (mut app, ctx, _dir) = fixture();
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        let session = session_fixture("one", SessionKind::Shell);
+        app.state.sessions.push(session.clone());
+        let target = services::Target::File("/a/note.md".into(), None, None);
+        app.terminal_action(&ctx, &session, &target, FileAction::Here);
+        let Job::Control(_, After::CreateAt(_, split)) = received.try_recv().unwrap() else {
+            panic!("Here opens stacked in the current split");
+        };
+        assert_eq!(split.as_deref(), Some("here"));
+    }
+
+    #[test]
+    fn floatable_excludes_browser_and_player() {
+        assert!(App::floatable(&Tab::Terminal("one".into())));
+        assert!(App::floatable(&Tab::NativeEditor {
+            path: "/a/note.md".into()
+        }));
+        assert!(App::floatable(&Tab::Diff {
+            cwd: "/a".into(),
+            path: "/a/note.md".into(),
+            staged: false,
+        }));
+        assert!(!App::floatable(&Tab::browser_file("/a/page.html".into())));
+        assert!(!App::floatable(&Tab::Player));
+    }
+
+    #[test]
+    fn float_pane_applies_to_window_and_docks_back() {
+        let (mut app, _, _dir) = fixture();
+        app.selected = Some("a".into());
+        let workspace = Workspace::from_layout(DockState::new(vec![
+            Tab::Terminal("one".into()),
+            Tab::Terminal("two".into()),
+        ]));
+        app.layouts.insert("a".into(), workspace);
+        app.float_pane = Some(Tab::Terminal("one".into()));
+        let mut dock = app.layouts.remove("a").unwrap();
+        app.apply_float_pane("a", &mut dock);
+        app.layouts.insert("a".into(), dock);
+        // The dock loses the pane; the window gains it with its home.
+        assert!(
+            app.layouts["a"]
+                .find_tab(&Tab::Terminal("one".into()))
+                .is_none()
+        );
+        assert!(
+            app.layouts["a"]
+                .find_tab(&Tab::Terminal("two".into()))
+                .is_some()
+        );
+        assert_eq!(app.floating.len(), 1);
+        assert_eq!(app.floating[0].home.0, "a");
+        // Closing the window (or quitting) docks the pane back.
+        app.dock_back_all_floating();
+        assert!(app.floating.is_empty());
+        assert!(
+            app.layouts["a"]
+                .find_tab(&Tab::Terminal("one".into()))
+                .is_some()
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn caption_menu_floats_pane() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.state
+            .sessions
+            .push(session_fixture("one", SessionKind::Shell));
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())])),
+        );
+        let secondary = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Secondary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        combined_frame(&mut app, &ctx, vec![]);
+        let caption = frame_center(&app, &ctx, "pane-caption:one");
+        combined_frame(&mut app, &ctx, vec![secondary(caption, true)]);
+        combined_frame(&mut app, &ctx, vec![secondary(caption, false)]);
+        combined_frame(&mut app, &ctx, vec![]);
+        let item = frame_center(&app, &ctx, "Float window");
+        combined_frame(&mut app, &ctx, vec![frame_press(item, true)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(item, false)]);
+        assert_eq!(app.float_pane, Some(Tab::Terminal("one".into())));
+    }
+
+    #[test]
     fn add_tab_to_the_left_records_insert_index() {
         let (mut app, _, _dir) = fixture();
         let (jobs, received) = mpsc::channel();
@@ -12196,6 +12586,50 @@ mod navigation_tests {
             "wash must cover the landing leaf at real size, got {wash:?}"
         );
     }
+    /// Dragging a pane caption onto the strip + opens it in a fresh
+    /// top-level tab (the GUI drag-detach flow: press-hold on the
+    /// caption, glide to the strip +, release).
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn pane_drag_onto_strip_plus_opens_new_tab() {
+        let (mut app, ctx, _dir) = fixture();
+        for sid in ["one", "two"] {
+            app.state
+                .sessions
+                .push(session_fixture(sid, SessionKind::Shell));
+        }
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::Terminal("two".into())],
+        );
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        app.active_session = Some("one".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let start = frame_center(&app, &ctx, "pane-caption:one");
+        let dest = frame_center(&app, &ctx, "workspace-plus");
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        frame_glide(&mut app, &ctx, start, dest, 4);
+        assert_eq!(app.pane_drag, Some(Tab::Terminal("one".into())));
+        combined_frame(&mut app, &ctx, vec![frame_press(dest, false)]);
+        assert!(app.pane_drag.is_none());
+        let dock = app.layouts.get("a").unwrap();
+        assert_eq!(dock.tabs.len(), 2, "drop missed the strip +");
+        assert!(
+            dock.tabs
+                .iter()
+                .any(|tab| tab.layout.find_tab(&Tab::Terminal("one".into())).is_some())
+                && dock
+                    .tabs
+                    .iter()
+                    .any(|tab| tab.layout.find_tab(&Tab::Terminal("two".into())).is_some()),
+            "panes lost in the detach"
+        );
+    }
     /// A tab reorder drag paints a tab-sized ghost that tracks the pointer.
     #[cfg(feature = "test-support")]
     #[test]
@@ -12289,7 +12723,11 @@ mod navigation_tests {
             "underline must sit inside the tab, tab={one:?} bar={underline:?}"
         );
         assert!(
-            app.fixture_rect(&ctx, "pane-caption:one").is_none(),
+            app.fixture_rect(&ctx, "pane-caption:one").is_some(),
+            "a lone pane row stays addressable for its menu"
+        );
+        assert!(
+            app.fixture_rect(&ctx, "pane-title:one").is_none(),
             "a lone pane must not repeat the workspace tab title"
         );
     }

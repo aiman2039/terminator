@@ -13,6 +13,7 @@ use std::{
 };
 mod agents;
 mod codex;
+mod float;
 mod folder_access;
 mod generations;
 mod hover_menu;
@@ -186,6 +187,7 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "control" => control(&opts)?,
             "workspace-tabs" => workspace_tabs(&opts)?,
             "split-file-opening" => split_file_opening(&opts)?,
+            "float-window" => float::run(&opts)?,
             "markdown" => markdown::run(&opts)?,
             "markdown-busy" => markdown::busy(&opts)?,
             "updates" => updates::run(&opts)?,

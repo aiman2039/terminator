@@ -1,9 +1,14 @@
 //! Opt-in renderer capture for native integration tests. Never enabled in normal builds.
 use eframe::egui;
 use std::time::{Duration, Instant};
+
+/// How long after the capture deadline to wait for a screenshot event
+/// before closing anyway. Occluded windows never deliver screenshots.
+const GRACE: Duration = Duration::from_secs(10);
 pub struct Diagnostics {
     started: Instant,
     requested: bool,
+    force_closed: bool,
     scale_configured: bool,
     sized: bool,
     input_phase: u8,
@@ -11,6 +16,7 @@ pub struct Diagnostics {
     actions: Vec<FixtureAction>,
     action_index: usize,
     release: Option<(egui::Pos2, egui::PointerButton)>,
+    held: Option<egui::PointerButton>,
     pointer: Option<egui::Pos2>,
     ticking: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
@@ -19,6 +25,7 @@ impl Default for Diagnostics {
         Self {
             started: Instant::now(),
             requested: false,
+            force_closed: false,
             scale_configured: false,
             sized: false,
             input_phase: 0,
@@ -29,6 +36,7 @@ impl Default for Diagnostics {
                 .unwrap_or_default(),
             action_index: 0,
             release: None,
+            held: None,
             pointer: None,
             ticking: std::sync::Arc::default(),
         }
@@ -136,13 +144,30 @@ impl Diagnostics {
                 } else {
                     egui::PointerButton::Primary
                 };
-                input.events.push(egui::Event::PointerButton {
-                    pos,
-                    button,
-                    pressed: true,
-                    modifiers: egui::Modifiers::default(),
-                });
-                self.release = Some((pos, button));
+                if action.release_button {
+                    // Ends a held drag (see `hold`): the press stays down
+                    // across the hover moves between the two actions.
+                    if let Some(held) = self.held.take() {
+                        input.events.push(egui::Event::PointerButton {
+                            pos,
+                            button: held,
+                            pressed: false,
+                            modifiers: egui::Modifiers::default(),
+                        });
+                    }
+                } else {
+                    input.events.push(egui::Event::PointerButton {
+                        pos,
+                        button,
+                        pressed: true,
+                        modifiers: egui::Modifiers::default(),
+                    });
+                    if action.hold {
+                        self.held = Some(button);
+                    } else {
+                        self.release = Some((pos, button));
+                    }
+                }
             }
             if action.capture {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
@@ -303,18 +328,39 @@ impl Diagnostics {
         if self.path.is_none() || ctx.will_discard() {
             return;
         }
-        if !self.requested
-            && self.started.elapsed()
-                > Duration::from_millis(
-                    std::env::var("TERMINATOR_CAPTURE_AFTER_MS")
-                        .ok()
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(3000),
-                )
+        // Driver-signaled graceful exit: the file's presence closes the
+        // fixture once outside observation is complete. Inert unless the
+        // env var names a path, and unlike screenshots it does not need a
+        // rendered frame, so it also works while occluded.
+        if std::env::var_os("TERMINATOR_TEST_EXIT_MARKER")
+            .is_some_and(|path| std::path::Path::new(&path).exists())
         {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+        let after = Duration::from_millis(
+            std::env::var("TERMINATOR_CAPTURE_AFTER_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3000),
+        );
+        if !self.requested && self.started.elapsed() > after {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
             self.requested = true;
             eprintln!("Native fixture requested capture");
+        } else if self.requested
+            && !self.force_closed
+            && after
+                .checked_add(GRACE)
+                .is_some_and(|deadline| self.started.elapsed() > deadline)
+        {
+            // An occluded window never delivers the screenshot, so the
+            // normal screenshot-then-close exit never fires. Close anyway
+            // once the deadline is well past; step captures taken while
+            // visible already wrote the artifact.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.force_closed = true;
+            eprintln!("Native fixture forced close without capture");
         }
     }
 }
@@ -331,6 +377,12 @@ struct FixtureAction {
     hover_offset: Option<[f32; 2]>,
     #[serde(default)]
     right_click: bool,
+    /// Keep the press down across later hover moves (pane drags).
+    #[serde(default)]
+    hold: bool,
+    /// Release a held press at this action's position.
+    #[serde(default)]
+    release_button: bool,
     #[serde(default)]
     scroll: Option<f32>,
     #[serde(default)]
