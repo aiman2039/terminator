@@ -349,6 +349,62 @@ mod tests {
         assert!(app.native_docs.contains_key(&path));
     }
 
+    #[test]
+    fn plain_close_takes_focused_split_not_first_match() {
+        use crate::native_editor::CloseIssuer;
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/focused.md");
+        let other = PathBuf::from("/a/other.md");
+        for file in [&path, &other] {
+            app.native_docs.insert(
+                file.clone(),
+                crate::native_editor::NativeDoc::dirty_for_test(file.clone()),
+            );
+        }
+        // Left leaf holds only the file; the focused right leaf holds
+        // the file plus another tab.
+        let mut workspace = Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
+            path: path.clone(),
+        }]));
+        let [_, right] = workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![
+                Tab::NativeEditor {
+                    path: other.clone(),
+                },
+                Tab::NativeEditor { path: path.clone() },
+            ],
+        );
+        workspace.tabs[0]
+            .layout
+            .set_focused_node_and_surface(egui_dock::NodePath {
+                surface: egui_dock::SurfaceIndex::main(),
+                node: right,
+            });
+        app.layouts.insert("a".into(), workspace);
+        // `:q` in the focused split removes that copy: the focused leaf
+        // keeps only the other tab, the first leaf keeps the file.
+        app.close_native_tab(&path, false, Some(CloseIssuer::Docked("a".into())));
+        let workspace = app.layouts.get("a").expect("workspace");
+        let mut focused_tabs = Vec::new();
+        let mut copies = 0;
+        for (at, tab) in workspace.tabs[0].layout.iter_all_tabs() {
+            if matches!(tab, Tab::NativeEditor { path: current } if current.as_path() == path.as_path())
+            {
+                copies += 1;
+            }
+            if at.node == right
+                && let Tab::NativeEditor { path: current } = tab
+            {
+                focused_tabs.push(current.clone());
+            }
+        }
+        assert_eq!(copies, 1);
+        assert_eq!(focused_tabs, vec![other]);
+        assert!(app.native_docs.contains_key(&path));
+    }
+
     #[cfg(feature = "test-support")]
     #[test]
     fn wq_close_uses_view_issuing_the_save() {
@@ -377,6 +433,14 @@ mod tests {
         // A docked view renders first. The queued close must still target
         // the issuing floating pane — not the rendering docked copy.
         combined_frame(&mut app, &ctx, vec![]);
+        // A second frame before the drain must not queue a second close
+        // for the same request: it is consumed when first queued.
+        combined_frame(&mut app, &ctx, vec![]);
+        assert_eq!(
+            app.pending_native_close.len(),
+            1,
+            "one close per :wq, not one per rendering copy"
+        );
         app.drain_pending_native_close();
         assert!(app.floating.is_empty());
         assert_eq!(docked_copies(&app, "a", &path), 1);

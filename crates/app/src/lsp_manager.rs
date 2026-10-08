@@ -1360,14 +1360,16 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         let problems = manager.problems_for(&file);
+        // Error severity at the `bad` binding (line 1), not message
+        // text: wording varies across server versions, but a type error
+        // there is the point of the fixture.
         assert!(
+            problems.iter().any(|item| item.severity == Some(L::Severity::Error)
+                && item.range.start.line == 1),
+            "type error reported at line 1: {:?}",
             problems
                 .iter()
-                .any(|item| item.message.contains("mismatch")),
-            "type error reported: {:?}",
-            problems
-                .iter()
-                .map(|item| &item.message)
+                .map(|item| (&item.message, item.range.start.line))
                 .collect::<Vec<_>>()
         );
         assert!(!manager.row_marks(&file).is_empty());

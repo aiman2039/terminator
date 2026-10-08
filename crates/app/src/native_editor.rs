@@ -361,7 +361,9 @@ impl App {
         }
     }
 
-    /// Remove one docked copy of `path` from `workspace`. Returns whether
+    /// Remove one docked copy of `path` from `workspace`: the copy in
+    /// the focused leaf, which is the split that issued the close. Only
+    /// when focus is elsewhere does the first match go. Returns whether
     /// a copy was there.
     fn remove_one_docked_copy(workspace: &mut Workspace, path: &Path) -> bool {
         let target = Tab::NativeEditor {
@@ -369,7 +371,18 @@ impl App {
         };
         let mut removed = false;
         for tab in &mut workspace.tabs {
-            if let Some(found) = tab.layout.find_tab(&target) {
+            let focused = tab.layout.focused_leaf();
+            let pick = tab
+                .layout
+                .iter_all_tabs()
+                .filter(|(_, tab)| **tab == target)
+                .map(|(at, _)| at)
+                .find(|at| {
+                    focused
+                        .is_some_and(|focus| at.surface == focus.surface && at.node == focus.node)
+                })
+                .or_else(|| tab.layout.find_tab(&target));
+            if let Some(found) = pick {
                 tab.layout.remove_tab(found);
                 if tab.primary == Some(target.clone()) {
                     tab.primary = tab
@@ -540,11 +553,12 @@ impl App {
             if settled {
                 // Deferred: the workspace is checked out of `layouts` while
                 // this view renders; closing runs after it is checked back in.
-                self.pending_native_close.push((
-                    path.to_owned(),
-                    false,
-                    self.native_close_after_save_issuer.clone(),
-                ));
+                // Consumed here: every other copy rendering later must not
+                // queue its own close for the same request.
+                let issuer = self.native_close_after_save_issuer.take();
+                self.native_close_after_save = None;
+                self.pending_native_close
+                    .push((path.to_owned(), false, issuer));
                 return;
             }
         }
