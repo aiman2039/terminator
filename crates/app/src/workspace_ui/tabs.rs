@@ -60,12 +60,12 @@ pub(super) fn tab_tooltip(label: &str, cwd: Option<&std::path::Path>) -> String 
 }
 
 /// Focused-terminal face for a workspace strip tab.
-pub(super) struct TabFace {
-    pub(super) label: String,
-    pub(super) icon: &'static str,
-    pub(super) sid: Option<String>,
-    pub(super) brand: Option<&'static str>,
-    pub(super) status: Option<(AgentState, &'static str, Color32)>,
+pub(crate) struct TabFace {
+    pub(crate) label: String,
+    pub(crate) icon: &'static str,
+    pub(crate) sid: Option<String>,
+    pub(crate) brand: Option<&'static str>,
+    pub(crate) status: Option<(AgentState, &'static str, Color32)>,
 }
 
 /// Leading icons for one terminal tab, shared by the main-canvas caption,

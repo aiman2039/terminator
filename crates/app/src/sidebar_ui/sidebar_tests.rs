@@ -575,6 +575,51 @@ mod tests {
         assert!(recorded_target(&narrow, "git-compare-refresh").is_none());
     }
 
+    #[test]
+    fn sidebar_groups_live_sessions_per_workspace_tab_in_layout_order() {
+        use super::super::explorer_projects::group_session_ids_by_tab;
+        let tabs = vec![
+            (
+                "tab-a".to_string(),
+                vec!["s2".to_string(), "s1".to_string()],
+            ),
+            ("tab-b".to_string(), vec!["s3".to_string()]),
+            ("tab-empty".to_string(), vec!["gone".to_string()]),
+        ];
+        // Live order differs from layout order; s4 is in no tab (background).
+        let live = vec![
+            "s1".to_string(),
+            "s2".to_string(),
+            "s3".to_string(),
+            "s4".to_string(),
+        ];
+        let (groups, overflow) = group_session_ids_by_tab(&tabs, &live);
+        // Layout order wins inside each tab; empty tabs are skipped.
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].0, "tab-a");
+        assert_eq!(groups[0].1, vec!["s2".to_string(), "s1".to_string()]);
+        assert_eq!(groups[1].0, "tab-b");
+        assert_eq!(groups[1].1, vec!["s3".to_string()]);
+        assert_eq!(overflow, vec!["s4".to_string()]);
+    }
+
+    #[test]
+    fn sidebar_dedupes_a_session_listed_in_two_tabs() {
+        use super::super::explorer_projects::group_session_ids_by_tab;
+        let tabs = vec![
+            ("tab-a".to_string(), vec!["s1".to_string()]),
+            (
+                "tab-b".to_string(),
+                vec!["s1".to_string(), "s2".to_string()],
+            ),
+        ];
+        let live = vec!["s1".to_string(), "s2".to_string()];
+        let (groups, overflow) = group_session_ids_by_tab(&tabs, &live);
+        assert_eq!(groups[0].1, vec!["s1".to_string()]);
+        assert_eq!(groups[1].1, vec!["s2".to_string()]);
+        assert!(overflow.is_empty());
+    }
+
     #[cfg(feature = "test-support")]
     #[test]
     fn explorer_segmented_switches_to_contents_mode() {
