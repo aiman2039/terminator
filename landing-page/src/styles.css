@@ -998,6 +998,12 @@ textarea {
 .status .link {
   cursor: pointer;
 }
+.status .vsep {
+  width: 1px;
+  height: 14px;
+  background: var(--border);
+  flex: none;
+}
 .status .link:hover {
   color: var(--text);
 }

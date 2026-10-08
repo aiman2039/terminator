@@ -20,6 +20,13 @@ const starters: Record<string, Line[]> = {
     { t: "test result: ok. 42 passed; 0 failed; 0 ignored", cls: "ok" },
     { t: "" },
   ],
+  "s-api": [
+    { t: "git status", cls: "cmd" },
+    { t: "" },
+    { t: "On branch main" },
+    { t: "nothing to commit, working tree clean", cls: "ok" },
+    { t: "" },
+  ],
   "s-term": [
     { t: "claude", cls: "cmd" },
     { t: "" },

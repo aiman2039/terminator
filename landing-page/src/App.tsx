@@ -86,7 +86,7 @@ export default function App() {
         type: "split",
         id: "split-tour",
         dir: "row",
-        children: [leaf({ kind: "tour" }, "lf-tour"), leaf({ kind: "term", sid: "s-term" }, "lf-tour-term")],
+        children: [leaf({ kind: "tour" }, "lf-tour"), leaf({ kind: "term", sid: "s-api" }, "lf-tour-term")],
       },
       activeLeaf: "lf-tour",
     },
@@ -491,6 +491,10 @@ export default function App() {
             <span className="pane-branch">
               {s ? (
                 <>
+                  <span
+                    className={`dot ${s.status}`}
+                    style={{ display: "inline-block", verticalAlign: "middle", marginRight: 5 }}
+                  />
                   <Icon name="GitBranch" size={13} style={{ display: "inline-block", verticalAlign: "-2px", marginRight: 3 }} />
                   {s.branch}
                 </>
@@ -711,8 +715,11 @@ export default function App() {
           <span className="dot running" style={{ display: "inline-block" }} />
           Connected
         </span>
-        <span>{sessions.filter((s) => s.kind === "shell").length} sessions running</span>
-        <span>{projects.find((p) => p.id === selectedProject)?.branch}</span>
+        <span className="vsep" />
+        <span>
+          {sessions.filter((s) => s.kind === "shell").length} sessions running{" "}
+          {projects.find((p) => p.id === selectedProject)?.branch}
+        </span>
         <span className="grow" />
         {ideMode && (
           <>
@@ -724,14 +731,7 @@ export default function App() {
             </button>
           </>
         )}
-        <span className="mono" style={{ fontSize: 11 }}>108%</span>
-        <span className="mono" style={{ fontSize: 11 }}>974 MB</span>
-        <button className="link" onClick={() => window.open(DOWNLOAD, "_blank")}>
-          Download
-        </button>
-        <button className="link" onClick={() => window.open(REPO, "_blank")}>
-          GitHub
-        </button>
+        <span className="mono" style={{ fontSize: 11 }}>108% · 974 MB</span>
       </footer>
 
       {paletteOpen && <Palette commands={commands} close={() => setPaletteOpen(false)} />}
