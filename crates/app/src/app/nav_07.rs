@@ -323,6 +323,195 @@ mod tests {
     }
 
     #[test]
+    fn dock_close_button_names_exact_pane() {
+        use egui_dock::TabViewer;
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/exact-pane.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        let left = egui_dock::NodePath {
+            surface: egui_dock::SurfaceIndex::main(),
+            node: egui_dock::NodeIndex(0),
+        };
+        let right = egui_dock::NodePath {
+            surface: egui_dock::SurfaceIndex::main(),
+            node: egui_dock::NodeIndex(1),
+        };
+        // Main dock: the clicked leaf travels into the prompt, not a
+        // focus sample.
+        let mut main = crate::workspace_ui::Viewer {
+            app: &mut app,
+            strip: false,
+            project: Some("a".into()),
+            tab: Some("tab".into()),
+            window: None,
+            render_path: None,
+        };
+        let mut tab = Tab::NativeEditor { path: path.clone() };
+        assert_eq!(
+            main.on_close(&mut tab, left),
+            crate::OnCloseResponse::Ignore
+        );
+        assert!(matches!(
+            &main.app.native_close_prompt,
+            Some((prompt, Some(crate::native_editor::CloseIssuer::Docked { node, .. })))
+                if prompt == &path && *node == Some(left)
+        ));
+        // Floating dock: same, through the window issuer.
+        let viewport = egui::ViewportId::from_hash_of("exact-pane-float");
+        let mut float = crate::workspace_ui::Viewer {
+            app: main.app,
+            strip: false,
+            project: Some("a".into()),
+            tab: None,
+            window: Some(viewport),
+            render_path: None,
+        };
+        let mut tab = Tab::NativeEditor { path: path.clone() };
+        assert_eq!(
+            float.on_close(&mut tab, right),
+            crate::OnCloseResponse::Ignore
+        );
+        assert!(matches!(
+            &float.app.native_close_prompt,
+            Some((prompt, Some(crate::native_editor::CloseIssuer::Floating { node, .. })))
+                if prompt == &path && *node == Some(right)
+        ));
+    }
+
+    #[test]
+    fn modal_choice_carries_issuing_float_pane() {
+        use crate::native_editor::{CloseIssuer, NativeCloseChoice};
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/modal-float.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        let editor = || Tab::NativeEditor { path: path.clone() };
+        let mut dock = DockState::new(vec![editor()]);
+        let [_, right] =
+            dock.main_surface_mut()
+                .split_right(egui_dock::NodeIndex::root(), 0.5, vec![editor()]);
+        app.floating
+            .push(float_window("modal-float", "a", "home", vec![]));
+        app.floating[0].dock = Some(dock);
+        let viewport = app.floating[0].viewport;
+        let issuer = CloseIssuer::Floating {
+            viewport,
+            node: Some(egui_dock::NodePath {
+                surface: egui_dock::SurfaceIndex::main(),
+                node: right,
+            }),
+            delayed: false,
+        };
+        // Discard closes only the issuing copy: the left split keeps
+        // the file and its buffer.
+        app.apply_native_close_choice(&path, NativeCloseChoice::Discard, Some(issuer));
+        let dock = app.floating[0].dock.as_ref().expect("window kept");
+        assert_eq!(dock.iter_all_tabs().count(), 1);
+        assert!(app.native_docs.contains_key(&path));
+    }
+
+    #[test]
+    fn modal_save_close_stores_float_issuer_deferred() {
+        use crate::native_editor::{CloseIssuer, NativeCloseChoice};
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/modal-save-float.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        // Save-and-close records the deferred issuer so the settled save
+        // closes the issuing float copy instead of every docked copy.
+        let issuer = CloseIssuer::Floating {
+            viewport: egui::ViewportId::from_hash_of("modal-save-float"),
+            node: None,
+            delayed: false,
+        };
+        app.apply_native_close_choice(&path, NativeCloseChoice::SaveClose, Some(issuer));
+        assert_eq!(app.native_close_after_save.as_deref(), Some(path.as_path()));
+        assert!(matches!(
+            app.native_close_after_save_issuer,
+            Some(CloseIssuer::Floating { delayed: true, .. })
+        ));
+    }
+
+    #[test]
+    fn float_delayed_close_with_live_pane_closes_only_it() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/float-live-delayed.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        let editor = || Tab::NativeEditor { path: path.clone() };
+        let mut dock = DockState::new(vec![editor()]);
+        let [_, right] =
+            dock.main_surface_mut()
+                .split_right(egui_dock::NodeIndex::root(), 0.5, vec![editor()]);
+        app.floating
+            .push(float_window("float-live-delayed", "a", "home", vec![]));
+        app.floating[0].dock = Some(dock);
+        let viewport = app.floating[0].viewport;
+        // A settled `:wq`-style close names a live pane: exactly that
+        // copy goes, never a fallback, never both.
+        let issuer = crate::native_editor::CloseIssuer::Floating {
+            viewport,
+            node: Some(egui_dock::NodePath {
+                surface: egui_dock::SurfaceIndex::main(),
+                node: right,
+            }),
+            delayed: true,
+        };
+        app.close_native_tab(&path, false, Some(issuer));
+        let dock = app.floating[0].dock.as_ref().expect("window kept");
+        assert_eq!(dock.iter_all_tabs().count(), 1);
+        assert!(app.native_docs.contains_key(&path));
+    }
+
+    #[test]
+    fn float_terminal_ignores_center_overlays() {
+        let (mut app, _, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("float-gated", SessionKind::Shell));
+        // Settings and Player cover the main window, never a float.
+        app.settings_open = true;
+        app.player_open = true;
+        let viewport = egui::ViewportId::from_hash_of("float-gated");
+        let float_input = {
+            let viewer = crate::workspace_ui::Viewer {
+                app: &mut app,
+                strip: false,
+                project: Some("a".into()),
+                tab: None,
+                window: Some(viewport),
+                render_path: None,
+            };
+            viewer.terminal_input_for("float-gated")
+        };
+        let main_input = {
+            let viewer = crate::workspace_ui::Viewer {
+                app: &mut app,
+                strip: false,
+                project: Some("a".into()),
+                tab: Some("tab".into()),
+                window: None,
+                render_path: None,
+            };
+            viewer.terminal_input_for("float-gated")
+        };
+        assert!(float_input);
+        assert!(!main_input);
+        // A true modal suspends every terminal.
+        app.close_session = Some("other".into());
+        assert!(!app.float_terminal_input_enabled("float-gated"));
+    }
+
+    #[test]
     fn go_session_keeps_floated_terminal() {
         let (mut app, _, _dir) = fixture();
         let mut session = session_fixture("float-agent", SessionKind::Shell);

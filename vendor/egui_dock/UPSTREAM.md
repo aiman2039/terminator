@@ -17,6 +17,15 @@ leaf whose tab body is about to render. The leaf calls it immediately before
 one file need their own identity. Terminator records it as the issuing pane
 for close commands instead of sampling dock focus.
 
+`TabViewer::on_close` takes the closing tab's owning `NodePath`. Every call
+site knows it: the context-menu close button, the deferred tab-removal drain
+(X buttons, middle-click), the leaf-removal drain (which already holds the
+node), and the surface-removal drain (which resolves each tab's path via
+`iter_all_tabs` first, since the tree iterator hides node indices).
+Terminator stores that pane in dirty-editor close prompts so Save/Discard
+close the clicked copy. A focus sample cannot work here: the deferred drain
+runs after rendering, long after focus may have moved.
+
 Leading tab icons add default `tab_leading_width` (0.0) and `paint_tab_leading`
 (no-op) TabViewer callbacks. `tab_title` reserves the width before the title,
 shifts the title right, and returns the icon rect; the leaf paints it through

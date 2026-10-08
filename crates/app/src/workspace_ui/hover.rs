@@ -56,6 +56,23 @@ impl App {
             && self.worktree_remove.is_none()
     }
 
+    /// Terminals in floating windows live outside the main window, so the
+    /// same center-only views never cover them. Same gate shape as the
+    /// strip: true modals still suspend them.
+    pub(crate) fn float_terminal_input_enabled(&self, sid: &str) -> bool {
+        !self.picker_active
+            && self.hover_popup.is_none()
+            && !self.hover_popup_blocks_input
+            && !self.add_project
+            && !self.notice_detail_modal_open()
+            && (self.close_session.is_none() || self.idle_close_pending.is_some())
+            && !self.editor_close_sessions.contains(sid)
+            && (self.close_workspace.is_none() || self.idle_close_pending.is_some())
+            && !self.rename_blocks_input()
+            && !self.open_path
+            && self.worktree_remove.is_none()
+    }
+
     /// A pointer press on a terminal. Drops the Explorer name field's keyboard
     /// focus without saving or cancelling that prompt.
     pub(crate) fn terminal_pressed(&mut self, ctx: &egui::Context, sid: &str) {

@@ -143,7 +143,7 @@ impl App {
             return;
         }
         if let Some(path) = self.dirty_native_path() {
-            self.native_close_prompt = Some(path);
+            self.native_close_prompt = Some((path, None));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             return;
         }
@@ -508,7 +508,12 @@ mod tests {
         );
         app.accept_app_quit(&ctx);
         assert!(app.pending_app_quit);
-        assert_eq!(app.native_close_prompt.as_deref(), Some(path.as_path()));
+        assert_eq!(
+            app.native_close_prompt
+                .as_ref()
+                .map(|(prompt, _)| prompt.as_path()),
+            Some(path.as_path())
+        );
         assert!(!app.exit.active());
         app.native_close_prompt = None;
         app.native_docs.clear();

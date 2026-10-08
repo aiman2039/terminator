@@ -294,7 +294,10 @@ pub struct App {
     pub(crate) native_pending_line: HashMap<PathBuf, usize>,
     pub(crate) native_pending_col: HashMap<PathBuf, usize>,
     pub(crate) lsp: lsp_manager::LspManager,
-    pub(crate) native_close_prompt: Option<PathBuf>,
+    /// Dirty-editor close prompt: the file plus the issuing pane, if the
+    /// prompt came from a view (dock X). Flow-issued prompts (quit,
+    /// workspace close) carry no issuer and keep legacy removal.
+    pub(crate) native_close_prompt: Option<(PathBuf, Option<native_editor::CloseIssuer>)>,
     pub(crate) native_close_after_save: Option<PathBuf>,
     /// Quit is waiting on the unsaved-native prompt. Save or discard continues it.
     pub(crate) pending_app_quit: bool,

@@ -257,6 +257,14 @@ pub(super) enum CloseIssuer {
     },
 }
 
+/// Dirty-editor dialog decision for one path, applied by
+/// [`App::apply_native_close_choice`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NativeCloseChoice {
+    Discard,
+    SaveClose,
+}
+
 impl CloseIssuer {
     /// Mark an issuer as save-deferred (`:wq` queued at save start,
     /// closing frames later): exact issuing pane or no-op.
@@ -345,7 +353,7 @@ impl App {
         if self
             .native_close_prompt
             .as_ref()
-            .is_some_and(|path| !live.contains(path))
+            .is_some_and(|(path, _)| !live.contains(path))
         {
             self.native_close_prompt = None;
         }
@@ -656,7 +664,11 @@ impl App {
         if !self.all_native_tab_paths().contains(&path.to_owned()) {
             self.native_docs.remove(path);
         }
-        if self.native_close_prompt.as_deref() == Some(path) {
+        if self
+            .native_close_prompt
+            .as_ref()
+            .is_some_and(|(prompt, _)| prompt == path)
+        {
             self.native_close_prompt = None;
         }
         if self.native_close_after_save.as_deref() == Some(path) {
@@ -1234,12 +1246,40 @@ impl App {
         }
     }
 
+    /// Apply a dirty-editor dialog choice for one path. Discard closes the
+    /// issuing view when the prompt names one (scoped like `:q`, never
+    /// every copy) and keeps legacy removal for flow-issued prompts.
+    /// Save-and-close defers the issuing pane through the save so the
+    /// settled close lands on the view that asked instead of every
+    /// docked copy — or instead of leaving a float open.
+    pub(super) fn apply_native_close_choice(
+        &mut self,
+        path: &Path,
+        choice: NativeCloseChoice,
+        issuer: Option<CloseIssuer>,
+    ) {
+        match choice {
+            NativeCloseChoice::Discard => match issuer {
+                Some(issuer) => self.close_native_tab(path, false, Some(issuer)),
+                None => self.close_native_tab(path, true, None),
+            },
+            NativeCloseChoice::SaveClose => {
+                self.native_close_after_save = Some(path.to_owned());
+                self.native_close_after_save_issuer = issuer.map(CloseIssuer::deferred);
+                if let Some(doc) = self.native_docs.get_mut(path) {
+                    doc.force_save = false;
+                    doc.start_save(&self.services.clone());
+                }
+            }
+        }
+    }
+
     pub(super) fn native_close_modal(&mut self, ctx: &egui::Context) {
-        let Some(path) = self.native_close_prompt.clone() else {
+        let Some((path, issuer)) = self.native_close_prompt.clone() else {
             return;
         };
         if !self.native_dirty(&path) {
-            self.close_native_tab(&path, false, None);
+            self.close_native_tab(&path, false, issuer);
             return;
         }
         let name = path
@@ -1274,13 +1314,9 @@ impl App {
             open = false;
         }
         if discard {
-            self.close_native_tab(&path, true, None);
+            self.apply_native_close_choice(&path, NativeCloseChoice::Discard, issuer);
         } else if save_close {
-            self.native_close_after_save = Some(path.clone());
-            if let Some(doc) = self.native_docs.get_mut(&path) {
-                doc.force_save = false;
-                doc.start_save(&self.services.clone());
-            }
+            self.apply_native_close_choice(&path, NativeCloseChoice::SaveClose, issuer);
         } else if !open {
             // Dismissing the prompt is the quit's Cancel. Sparkle keeps
             // waiting if we only hide the prompt.

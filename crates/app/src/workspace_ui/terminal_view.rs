@@ -93,11 +93,7 @@ impl Viewer<'_> {
             }
         }
         self.terminal_find_bar(ui, sid);
-        let input_enabled = if self.strip {
-            self.app.strip_terminal_input_enabled(sid)
-        } else {
-            self.app.terminal_input_enabled(sid)
-        };
+        let input_enabled = self.terminal_input_for(sid);
         let find_open = self.app.terminal_find.contains_key(sid);
         let focused = input_enabled
             && !find_open

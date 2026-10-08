@@ -50,8 +50,12 @@ pub trait TabViewer {
 
     /// This is called when the `_tab` gets closed by the user.
     ///
+    /// `_path` is the leaf that owns the tab: close handling runs after
+    /// rendering (including deferred removals), so sampling dock focus
+    /// instead would name the wrong pane.
+    ///
     /// Returns an `OnCloseResponse` which determines what happens to the tab after this function gets called.
-    fn on_close(&mut self, _tab: &mut Self::Tab) -> OnCloseResponse {
+    fn on_close(&mut self, _tab: &mut Self::Tab, _path: NodePath) -> OnCloseResponse {
         OnCloseResponse::Close
     }
 

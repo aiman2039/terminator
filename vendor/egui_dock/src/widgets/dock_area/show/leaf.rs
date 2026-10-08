@@ -542,7 +542,7 @@ impl<Tab> DockArea<'_, Tab> {
                             ui.close();
                         }
                         if show_close_button && ui.add(close_button).clicked() {
-                            match tab_viewer.on_close(tab) {
+                            match tab_viewer.on_close(tab, path) {
                                 OnCloseResponse::Close => self.to_remove.push(TabRemoval::Tab(
                                     (path, tab_index).into(),
                                     ForcedRemoval(false),

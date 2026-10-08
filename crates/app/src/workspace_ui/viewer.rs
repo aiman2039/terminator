@@ -47,6 +47,17 @@ impl Viewer<'_> {
             self.app.focus_tab = Some(tab);
         }
     }
+    /// Whether the terminal under render accepts input: floating windows
+    /// use their own gate so center-only overlays never suspend them.
+    pub(crate) fn terminal_input_for(&self, sid: &str) -> bool {
+        if self.strip {
+            self.app.strip_terminal_input_enabled(sid)
+        } else if self.window.is_some() {
+            self.app.float_terminal_input_enabled(sid)
+        } else {
+            self.app.terminal_input_enabled(sid)
+        }
+    }
     /// Leaf path for a tab key in the dock under render, if any.
     pub(super) fn pane_for(&self, key: &str) -> Option<egui_dock::NodePath> {
         if self.strip {
@@ -251,7 +262,7 @@ impl TabViewer for Viewer<'_> {
     fn scroll_bars(&self, _: &Tab) -> [bool; 2] {
         [false, false]
     }
-    fn on_close(&mut self, tab: &mut Tab) -> OnCloseResponse {
+    fn on_close(&mut self, tab: &mut Tab, pane: egui_dock::NodePath) -> OnCloseResponse {
         if let Tab::Terminal(sid) = tab {
             if self
                 .app
@@ -267,7 +278,26 @@ impl TabViewer for Viewer<'_> {
         }
         if let Tab::NativeEditor { path } = tab {
             if self.app.native_dirty(path) {
-                self.app.native_close_prompt = Some(path.clone());
+                // The dock passes the closing tab's owning leaf: the
+                // dialog and save completion close exactly the clicked
+                // copy instead of a focus sample or every twin.
+                let issuer = match (self.window, self.project.as_deref(), self.tab.as_deref()) {
+                    (Some(viewport), _, _) => Some(crate::native_editor::CloseIssuer::Floating {
+                        viewport,
+                        node: Some(pane),
+                        delayed: false,
+                    }),
+                    (None, Some(project), Some(tab)) => {
+                        Some(crate::native_editor::CloseIssuer::Docked {
+                            project: project.to_owned(),
+                            tab: tab.to_owned(),
+                            node: Some(pane),
+                            delayed: false,
+                        })
+                    }
+                    _ => None,
+                };
+                self.app.native_close_prompt = Some((path.clone(), issuer));
                 return OnCloseResponse::Ignore;
             }
             self.app.native_docs.remove(path);

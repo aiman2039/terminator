@@ -10,7 +10,7 @@ use crate::dock_area::tab_removal::ForcedRemoval;
 use crate::tab_viewer::OnCloseResponse;
 use crate::{
     AllowedSplits, DockArea, Node, NodeIndex, OverlayType, Style, SurfaceIndex, TabDestination,
-    TabViewer,
+    TabPath, TabViewer,
     utils::{expand_to_pixel, fade_dock_style, map_to_pixel},
 };
 
@@ -101,7 +101,8 @@ impl<Tab> DockArea<'_, Tab> {
                         self.dock_state.remove_tab(path);
                     } else {
                         let leaf = &mut self.dock_state.leaf_mut(path.node_path()).unwrap();
-                        match tab_viewer.on_close(&mut leaf.tabs[path.tab.0]) {
+                        match tab_viewer.on_close(&mut leaf.tabs[path.tab.0], path.node_path())
+                        {
                             OnCloseResponse::Close => {
                                 self.dock_state.remove_tab(path);
                             }
@@ -119,7 +120,10 @@ impl<Tab> DockArea<'_, Tab> {
                     let mut all_tabs_are_closable = true;
                     for tab in self.dock_state[path].iter_tabs_mut() {
                         if !(tab_viewer.is_closeable(tab)
-                            && matches!(tab_viewer.on_close(tab), OnCloseResponse::Close))
+                            && matches!(
+                                tab_viewer.on_close(tab, path),
+                                OnCloseResponse::Close
+                            ))
                         {
                             all_tabs_are_closable = false;
                         }
@@ -130,13 +134,25 @@ impl<Tab> DockArea<'_, Tab> {
                 }
                 TabRemoval::Window(surface) => {
                     let mut all_tabs_are_closable = true;
-                    for node in self.dock_state[surface].iter_mut() {
-                        for tab in node.iter_tabs_mut() {
-                            if !(tab_viewer.is_closeable(tab)
-                                && matches!(tab_viewer.on_close(tab), OnCloseResponse::Close))
-                            {
-                                all_tabs_are_closable = false;
-                            }
+                    // The viewer needs each tab's owning leaf, but the tree
+                    // iterator hides node indices: resolve the paths first.
+                    let paths: Vec<TabPath> = self
+                        .dock_state
+                        .iter_all_tabs()
+                        .filter(|(at, _)| at.surface == surface)
+                        .map(|(at, _)| at)
+                        .collect();
+                    for at in paths {
+                        let leaf =
+                            &mut self.dock_state.leaf_mut(at.node_path()).unwrap();
+                        let tab = &mut leaf.tabs[at.tab.0];
+                        if !(tab_viewer.is_closeable(tab)
+                            && matches!(
+                                tab_viewer.on_close(tab, at.node_path()),
+                                OnCloseResponse::Close
+                            ))
+                        {
+                            all_tabs_are_closable = false;
                         }
                     }
                     if all_tabs_are_closable {

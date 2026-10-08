@@ -430,7 +430,7 @@ impl App {
             // so guard them before the session checks below.
             let dirty = self.dirty_native_in_tab(&project, &tab_id);
             if let Some(path) = dirty.first() {
-                self.native_close_prompt = Some(path.clone());
+                self.native_close_prompt = Some((path.clone(), None));
                 self.abort_workspace_close();
                 return;
             }
