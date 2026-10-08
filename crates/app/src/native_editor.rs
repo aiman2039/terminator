@@ -11,9 +11,11 @@ use anyhow::Context as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
-use terminator_native_edit::doc::Doc;
+use terminator_native_edit::doc::{Buffer, Doc};
+use terminator_native_edit::highlight::{HighlightCache, Language, language_for_path};
+use terminator_native_edit::lsp as native_lsp;
 use terminator_native_edit::view::{
-    SourceOptions, mode_color, mode_name, show_source, source_focus_id,
+    DiagnosticMark, SourceOptions, mode_color, mode_name, show_source, source_focus_id,
 };
 use terminator_native_edit::vim::{Effect, Key as VimKey, ModalEngine, VimEngine};
 
@@ -52,6 +54,7 @@ pub struct NativeDoc {
     pub path: PathBuf,
     doc: Option<Doc>,
     engine: VimEngine,
+    highlight: HighlightCache,
     insert_first: bool,
     saved_text: String,
     loaded_mtime: Option<SystemTime>,
@@ -70,6 +73,7 @@ impl NativeDoc {
             path,
             doc: None,
             engine: VimEngine::new(),
+            highlight: HighlightCache::default(),
             insert_first,
             saved_text: String::new(),
             loaded_mtime: None,
@@ -151,7 +155,7 @@ impl NativeDoc {
             match result {
                 Ok(mtime) => {
                     if let Some(doc) = self.doc.as_ref() {
-                        self.saved_text = doc.text().to_owned();
+                        self.saved_text = doc.text();
                     }
                     self.loaded_mtime = mtime;
                     self.save_error = None;
@@ -176,7 +180,7 @@ impl NativeDoc {
         self.saving = true;
         self.save_error = None;
         let path = self.path.clone();
-        let text = doc.text().to_owned();
+        let text = doc.text();
         let expected = self.loaded_mtime;
         let force = self.force_save;
         let service = services.clone();
@@ -217,6 +221,19 @@ impl NativeDoc {
 enum PostEdit {
     Keep,
     Close,
+}
+
+/// Deferred `:split` / `:vsplit` / `:tabnew`: which layout change a drained
+/// engine effect asks for. The engine never touches layout; the GUI maps
+/// these onto its own tabs, preserving the originating project.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum NativeSplit {
+    /// `:split`: same file in a pane below the current view.
+    Below,
+    /// `:vsplit`: same file in a pane beside the current view.
+    Beside,
+    /// `:tabnew`: same file in a new top-level tab.
+    NewTab,
 }
 
 impl App {
@@ -265,6 +282,9 @@ impl App {
         self.native_docs.retain(|path, _| live.contains(path));
         self.native_pending_line
             .retain(|path, _| live.contains(path));
+        self.native_pending_col
+            .retain(|path, _| live.contains(path));
+        self.lsp.prune(&live);
         if self
             .native_close_prompt
             .as_ref()
@@ -326,7 +346,12 @@ impl App {
             // workspace); a bare retain panics the next dock access.
             workspace.drop_empty_tabs();
         }
-        self.native_docs.remove(path);
+        // Split views (`:split` / `:vsplit` / `:tabnew`) share the one
+        // buffer: dropping it while another view stays open would reload
+        // from disk on the next frame and lose unsaved changes.
+        if !self.all_native_tab_paths().contains(&path.to_owned()) {
+            self.native_docs.remove(path);
+        }
         if self.native_close_prompt.as_deref() == Some(path) {
             self.native_close_prompt = None;
         }
@@ -373,17 +398,22 @@ impl App {
             doc.ensure_loading(&services);
             doc.poll();
         }
+        // Language servers pump even while the file loads: slow serving
+        // must never stall typing, and diagnostics arrive when they do.
+        self.lsp.poll();
         if let Some(line) = self.native_pending_line.remove(path) {
+            let col = self.native_pending_col.remove(path).unwrap_or(0);
             let mut keep = false;
             if let Some(doc) = self.native_docs.get_mut(path) {
                 if let Some(buffer) = doc.doc.as_mut() {
-                    doc.engine.place_cursor(buffer, line, 0);
+                    doc.engine.place_cursor(buffer, line, col);
                 } else if doc.load_error.is_none() {
                     keep = true;
                 }
             }
             if keep {
                 self.native_pending_line.insert(path.to_owned(), line);
+                self.native_pending_col.insert(path.to_owned(), col);
             }
         }
 
@@ -406,6 +436,18 @@ impl App {
         // Deferred closes run after the borrow below ends.
         let mut defer_close_after_save = false;
         let mut quit_all: Option<bool> = None;
+        // Same for splits/tabs: the workspace is checked out while this
+        // renders, so layout changes wait for the drain below. Hover/goto
+        // answers are async too: effects only queue requests, handled
+        // after the drain.
+        let mut splits: Vec<NativeSplit> = Vec::new();
+        let mut hover_at: Option<(native_lsp::Position, (usize, usize))> = None;
+        let mut goto_at: Option<native_lsp::Position> = None;
+        let language: Language = language_for_path(&path.to_string_lossy());
+        // Diagnostics snapshots for this frame: the manager borrow ends
+        // before the buffer borrow below begins.
+        let marks: Vec<DiagnosticMark> = self.lsp.row_marks(path);
+        let problems = self.lsp.problems_for(path);
         let post = {
             let doc = self.native_doc(path, vim);
             let mut post = PostEdit::Keep;
@@ -475,7 +517,13 @@ impl App {
                 ui,
                 buffer,
                 &mut doc.engine,
-                &SourceOptions::default(),
+                &SourceOptions {
+                    vim,
+                    diagnostics: marks,
+                    ..SourceOptions::default()
+                },
+                &mut doc.highlight,
+                language,
                 &path.to_string_lossy(),
             );
             #[cfg(feature = "test-support")]
@@ -512,7 +560,82 @@ impl App {
                     Effect::QuitAll { force } => {
                         quit_all = Some(force);
                     }
+                    Effect::Split => {
+                        splits.push(NativeSplit::Below);
+                    }
+                    Effect::Vsplit => {
+                        splits.push(NativeSplit::Beside);
+                    }
+                    Effect::TabNew => {
+                        splits.push(NativeSplit::NewTab);
+                    }
+                    Effect::Hover => {
+                        let cursor = doc.engine.cursor();
+                        let row = doc
+                            .doc
+                            .as_ref()
+                            .map(|live| live.line_text(cursor.line))
+                            .unwrap_or_default();
+                        hover_at = Some((
+                            native_lsp::Position {
+                                line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
+                                character: native_lsp::char_col_to_utf16(&row, cursor.col),
+                            },
+                            (cursor.line, cursor.col),
+                        ));
+                    }
+                    Effect::GotoDefinition => {
+                        let cursor = doc.engine.cursor();
+                        let row = doc
+                            .doc
+                            .as_ref()
+                            .map(|live| live.line_text(cursor.line))
+                            .unwrap_or_default();
+                        goto_at = Some(native_lsp::Position {
+                            line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
+                            character: native_lsp::char_col_to_utf16(&row, cursor.col),
+                        });
+                    }
                     Effect::Bell => {}
+                }
+            }
+            // Problems panel: click targets under the header. Clicks
+            // place the cursor directly; the buffer is borrowed here.
+            if !problems.is_empty() {
+                let mut jumps: Vec<(usize, usize)> = Vec::new();
+                ui.horizontal(|ui| {
+                    ui.weak(format!(
+                        "{} problem{}",
+                        problems.len(),
+                        if problems.len() == 1 { "" } else { "s" }
+                    ));
+                });
+                for problem in problems.iter().take(5) {
+                    let line = usize::try_from(problem.range.start.line).unwrap_or(usize::MAX);
+                    let row = doc
+                        .doc
+                        .as_ref()
+                        .map(|live| live.line_text(line))
+                        .unwrap_or_default();
+                    let col = native_lsp::utf16_to_char_col(&row, problem.range.start.character);
+                    let tag = match problem.severity {
+                        Some(native_lsp::Severity::Error) => "E",
+                        Some(native_lsp::Severity::Warning) => "W",
+                        _ => "·",
+                    };
+                    let label = format!(
+                        "{tag} {}: {}",
+                        line.saturating_add(1),
+                        problem.message.lines().next().unwrap_or("")
+                    );
+                    if ui.small_button(label).clicked() {
+                        jumps.push((line, col));
+                    }
+                }
+                for (line, col) in jumps {
+                    if let Some(live) = doc.doc.as_mut() {
+                        doc.engine.place_cursor(live, line, col);
+                    }
                 }
             }
             post
@@ -521,6 +644,30 @@ impl App {
             self.pending_native_close.push(path.to_owned());
             return;
         }
+        // Language-server sync for the visible buffer: clone the text
+        // only when the manager actually wants it.
+        if let Some(revision) = self
+            .native_docs
+            .get(path)
+            .and_then(|doc| doc.doc.as_ref())
+            .map(|buffer| buffer.revision())
+            && self.lsp.sync_doc(path, language, revision)
+            && let Some(text) = self
+                .native_docs
+                .get(path)
+                .and_then(|doc| doc.doc.as_ref())
+                .map(|buffer| buffer.text())
+        {
+            self.lsp.submit_text(path, language, revision, &text);
+        }
+        if let Some((position, cursor)) = hover_at {
+            self.lsp.request_hover(path, position, cursor);
+        }
+        if let Some(position) = goto_at {
+            self.lsp.request_definition(path, position);
+        }
+        self.drain_goto_jump();
+        self.show_hover_popup(ui, path);
         if defer_close_after_save {
             self.native_close_after_save = Some(path.to_owned());
         }
@@ -530,15 +677,99 @@ impl App {
         if quit_all.is_some() {
             self.pending_quit_all = quit_all;
         }
+        for split in splits {
+            self.pending_native_splits.push((path.to_owned(), split));
+        }
+    }
+
+    /// Open finished goto jumps: same file places the cursor, other
+    /// files open at the target line and column through the pending
+    /// machinery (`open_native` carries the line, `native_pending_col`
+    /// the column).
+    fn drain_goto_jump(&mut self) {
+        let Some(jump) = self.lsp.take_goto() else {
+            return;
+        };
+        let Some(target) = jump.targets.first() else {
+            return;
+        };
+        let Some(target_path) = native_lsp::uri_to_path(&target.uri) else {
+            return;
+        };
+        let line = usize::try_from(target.range.start.line).unwrap_or(usize::MAX);
+        // Column from live text when possible (the same-file buffer
+        // converts unsaved edits exactly), else the file on disk.
+        let row = self
+            .native_docs
+            .get(&target_path)
+            .and_then(|doc| doc.doc.as_ref())
+            .map(|buffer| buffer.line_text(line))
+            .or_else(|| {
+                std::fs::read_to_string(&target_path)
+                    .ok()
+                    .and_then(|text| text.lines().nth(line).map(str::to_owned))
+            })
+            .unwrap_or_default();
+        let col = native_lsp::utf16_to_char_col(&row, target.range.start.character);
+        if target_path == jump.from
+            && let Some(doc) = self.native_docs.get_mut(&target_path)
+            && let Some(buffer) = doc.doc.as_mut()
+        {
+            doc.engine.place_cursor(buffer, line, col);
+            return;
+        }
+        if target_path == jump.from {
+            return;
+        }
+        let Some(project) = self.project_with_native_tab(&jump.from) else {
+            return;
+        };
+        self.open_native(
+            &project,
+            target_path.clone(),
+            target.range.start.line.checked_add(1),
+            None,
+        );
+        let absolute = std::path::absolute(&target_path).unwrap_or(target_path);
+        self.native_pending_col.insert(absolute, col);
+    }
+
+    /// Hover answer window for one file: cursor moves and the X both
+    /// dismiss; the manager owns the text.
+    fn show_hover_popup(&mut self, ui: &mut egui::Ui, path: &Path) {
+        let cursor = self.native_docs.get(path).map(|doc| doc.engine.cursor());
+        let Some(cursor) = cursor else {
+            return;
+        };
+        let Some(text) = self.lsp.hover_popup(path, (cursor.line, cursor.col)) else {
+            return;
+        };
+        let mut open = true;
+        self.popups
+            .window(ui.ctx(), "Hover")
+            .open(&mut open)
+            .collapsible(false)
+            .show(ui.ctx(), |ui| {
+                ui.monospace(&text);
+            });
+        if !open {
+            self.lsp.close_hover();
+        }
     }
 
     /// Run deferred native closes after the workspace is checked back into
     /// `layouts`. Call sites render outside the checkout (modals, quit
-    /// flows) keep calling `close_native_tab` directly.
+    /// flows) keep calling `close_native_tab` directly. Deferred `:split`
+    /// / `:vsplit` / `:tabnew` drain here too: the workspace is checked
+    /// out while the file view renders, so layout changes wait for it.
     pub(super) fn drain_pending_native_close(&mut self) {
         let pending = std::mem::take(&mut self.pending_native_close);
         for path in &pending {
             self.close_native_tab(path);
+        }
+        let splits = std::mem::take(&mut self.pending_native_splits);
+        for (path, split) in splits {
+            self.split_native_view(&path, split);
         }
         if let Some(force) = self.pending_quit_all.take() {
             let paths = self.all_native_tab_paths();
@@ -559,6 +790,58 @@ impl App {
             }
             for path in &paths {
                 self.close_native_tab(path);
+            }
+        }
+    }
+
+    /// Project owning a live native view of `path`, for deferred splits:
+    /// the originating project is preserved, never the selected one.
+    fn project_with_native_tab(&self, path: &Path) -> Option<String> {
+        self.layouts.iter().find_map(|(project, workspace)| {
+            workspace
+                .tabs
+                .iter()
+                .flat_map(|tab| tab.layout.iter_all_tabs())
+                .any(|(_, tab)| {
+                    matches!(tab, Tab::NativeEditor { path: current } if current == path)
+                })
+                .then(|| project.clone())
+        })
+    }
+
+    /// Carry out a deferred `:split` / `:vsplit` / `:tabnew`: the same
+    /// file opens beside, below, or in a new top-level tab of its own
+    /// project. Both views share the one buffer and engine for now (one
+    /// cursor across panes); per-view cursors are future work.
+    fn split_native_view(&mut self, path: &Path, split: NativeSplit) {
+        let Some(project) = self.project_with_native_tab(path) else {
+            return;
+        };
+        let tab = Tab::NativeEditor {
+            path: path.to_owned(),
+        };
+        if split == NativeSplit::NewTab {
+            self.place_gui_tab(
+                project,
+                tab,
+                After::Workspace(terminator_core::id(), Vec::new()),
+            );
+            return;
+        }
+        let Some(dock) = self.layouts.get_mut(&project) else {
+            return;
+        };
+        // Focus the issuing view first so the split lands next to it.
+        if let Some(found) = dock.find_tab(&tab) {
+            dock.set_focused_node_and_surface(found.node_path());
+            let tree = dock.main_surface_mut();
+            if !tree.is_empty() {
+                let node = tree.focused_leaf().unwrap_or(NodeIndex::root());
+                let placed = match split {
+                    NativeSplit::Below => tree.split_below(node, 0.5, vec![tab]),
+                    _ => tree.split_right(node, 0.5, vec![tab]),
+                };
+                tree.set_focused_node(placed[1]);
             }
         }
     }

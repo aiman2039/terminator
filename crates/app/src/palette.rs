@@ -1,5 +1,6 @@
 //! Fuzzy jump list across projects, sessions, files, and settings.
 use super::*;
+use terminator_native_edit::finder::{MAX_INDEX_FILES, spawn_scan};
 
 #[derive(Clone, Debug)]
 pub(crate) enum PaletteItem {
@@ -100,8 +101,67 @@ impl App {
         items
     }
 
+    /// Watched directory roots driving the file index, sorted.
+    fn file_index_roots(&self) -> Vec<PathBuf> {
+        let mut roots: Vec<PathBuf> = self.dirs.keys().cloned().collect();
+        roots.sort();
+        roots
+    }
+
+    /// Kick a background index rescan when roots changed or the index is
+    /// older than 30s; at most one scan flies at a time.
+    pub(super) fn refresh_file_index(&mut self) {
+        if self.file_index_rx.is_some() {
+            return;
+        }
+        let roots = self.file_index_roots();
+        let stale = self
+            .file_index_at
+            .is_none_or(|at| at.elapsed().as_secs() >= 30);
+        if roots == self.file_index_roots && !stale {
+            return;
+        }
+        self.file_index_roots.clone_from(&roots);
+        self.file_index_rx = Some(spawn_scan(roots, MAX_INDEX_FILES));
+    }
+
+    /// Adopt a finished background scan (non-blocking).
+    pub(super) fn poll_file_index(&mut self) {
+        if let Some(rx) = self.file_index_rx.as_ref() {
+            match rx.try_recv() {
+                Ok(index) => {
+                    self.file_index = index;
+                    self.file_index_at = Some(std::time::Instant::now());
+                    self.file_index_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.file_index_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+    }
+
     pub(super) fn filtered_palette(&self) -> Vec<PaletteItem> {
         let query = self.palette_query.trim().to_lowercase();
+        // Fuzzy go-to-file: a fresh index ranks files by match quality
+        // (matches need not contain the query verbatim); otherwise the
+        // watched-dirs substring list below applies.
+        if !query.is_empty() && !self.file_index.is_empty() {
+            let mut out: Vec<PaletteItem> = self
+                .palette_items()
+                .into_iter()
+                .filter(|item| !matches!(item, PaletteItem::File(_)))
+                .filter(|item| item.label().to_lowercase().contains(&query))
+                .collect();
+            out.extend(
+                self.file_index
+                    .query(&query, 40)
+                    .into_iter()
+                    .map(PaletteItem::File),
+            );
+            return out;
+        }
         let mut files: i32 = 0;
         self.palette_items()
             .into_iter()
@@ -118,6 +178,8 @@ impl App {
     }
 
     pub(super) fn palette_center(&mut self, ui: &mut egui::Ui) {
+        // Adopt finished background scans while the palette is open.
+        self.poll_file_index();
         ui.set_min_size(ui.available_size());
         ui.horizontal(|ui| {
             ui.strong("Command palette");
@@ -262,6 +324,54 @@ mod tests {
         assert!(
             matches!(matches.as_slice(), [PaletteItem::File(path)] if path.ends_with("file-49.rs"))
         );
+    }
+
+    #[test]
+    fn fuzzy_index_ranks_go_to_file() {
+        use terminator_native_edit::finder::FileIndex;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("proj");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "").unwrap();
+        std::fs::write(root.join("src/lib.rs"), "").unwrap();
+        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+        app.file_index = FileIndex::scan(&[root], MAX_INDEX_FILES);
+        app.palette_query = "main".into();
+        let files: Vec<PathBuf> = app
+            .filtered_palette()
+            .into_iter()
+            .filter_map(|item| match item {
+                PaletteItem::File(path) => Some(path),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with("src/main.rs"));
+    }
+
+    #[test]
+    fn background_refresh_delivers_an_index() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.rs"), "").unwrap();
+        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+        app.dirs.insert(
+            dir.path().into(),
+            vec![terminator_git::Entry {
+                path: dir.path().join("a.rs"),
+                directory: false,
+                ignored: false,
+            }],
+        );
+        app.refresh_file_index();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.file_index_rx.is_some() && std::time::Instant::now() < deadline {
+            app.poll_file_index();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!app.file_index.is_empty());
+        // A second refresh with unchanged roots and a fresh index is a no-op.
+        app.refresh_file_index();
+        assert!(app.file_index_rx.is_none());
     }
 
     #[test]

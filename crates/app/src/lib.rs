@@ -24,6 +24,7 @@ mod workspace_ops;
 pub(crate) use browser::{BrowserTarget, rewrite_html_tabs};
 mod icons;
 mod image_preview;
+mod lsp_manager;
 mod markdown;
 mod markdown_images;
 mod metadata_refresh;
@@ -765,11 +766,18 @@ pub struct App {
     history_filter: HashMap<String, String>,
     native_docs: HashMap<PathBuf, native_editor::NativeDoc>,
     native_pending_line: HashMap<PathBuf, usize>,
+    native_pending_col: HashMap<PathBuf, usize>,
+    lsp: lsp_manager::LspManager,
     native_close_prompt: Option<PathBuf>,
     native_close_after_save: Option<PathBuf>,
     /// Quit is waiting on the unsaved-native prompt. Save or discard continues it.
     pending_app_quit: bool,
     pending_native_close: Vec<PathBuf>,
+    pending_native_splits: Vec<(PathBuf, native_editor::NativeSplit)>,
+    file_index: terminator_native_edit::finder::FileIndex,
+    file_index_rx: Option<std::sync::mpsc::Receiver<terminator_native_edit::finder::FileIndex>>,
+    file_index_roots: Vec<PathBuf>,
+    file_index_at: Option<std::time::Instant>,
     pending_unavailable_close: Vec<String>,
     pending_quit_all: Option<bool>,
     open_path: bool,
@@ -1090,10 +1098,17 @@ impl App {
             history_filter: HashMap::new(),
             native_docs: HashMap::new(),
             native_pending_line: HashMap::new(),
+            native_pending_col: HashMap::new(),
+            lsp: lsp_manager::LspManager::new(),
             native_close_prompt: None,
             native_close_after_save: None,
             pending_app_quit: false,
             pending_native_close: Vec::new(),
+            pending_native_splits: Vec::new(),
+            file_index: terminator_native_edit::finder::FileIndex::empty(),
+            file_index_rx: None,
+            file_index_roots: Vec::new(),
+            file_index_at: None,
             pending_unavailable_close: Vec::new(),
             pending_quit_all: None,
             open_path: false,
@@ -3335,6 +3350,9 @@ impl App {
         self.palette_open = true;
         self.palette_query.clear();
         self.palette_index = 0;
+        // Go-to-file stays fresh: a background rescan starts here when
+        // roots changed or the index aged out.
+        self.refresh_file_index();
     }
 
     fn find_in_active_terminal(&mut self, ctx: &egui::Context) {
@@ -8123,6 +8141,8 @@ mod navigation_tests {
         }
     }
 
+    // Kept for upcoming native-rendering assertions; no test calls it yet.
+    #[allow(dead_code)]
     fn placeholder_center(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
         fn walk(shape: &egui::Shape, needle: &str) -> Option<f32> {
             match shape {

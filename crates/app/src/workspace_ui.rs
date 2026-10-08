@@ -712,6 +712,9 @@ impl App {
         let width = Self::WINDOW_CONTROL_RESERVE * native / ui.ctx().pixels_per_point();
         let row = ui.cursor();
         let height = 28.0_f32.min(row.height());
+        // Only consumed under test-support / non-macOS below; bare macOS
+        // builds reserve the space without reading it back.
+        #[allow(unused_variables)]
         let rect = egui::Rect::from_min_size(
             egui::pos2(row.left(), row.center().y - height * 0.5),
             egui::vec2(width, height),
