@@ -23,9 +23,24 @@ pub trait Buffer {
     fn delete(&mut self, range: Range<usize>);
     fn undo(&mut self) -> bool;
     fn redo(&mut self) -> bool;
+    /// Monotonic edit counter: every text mutation (insert, delete,
+    /// undo, redo) bumps it. Views use it to invalidate cached
+    /// derivations (highlighting) without rehashing the buffer.
+    /// Backends without a counter report `0` (always re-derive).
+    fn revision(&self) -> u64 {
+        0
+    }
     /// End the coalescing run: the next edit starts a fresh undo unit.
     /// Call after cursor moves, mode changes, saves, and remote updates.
     fn end_run(&mut self);
+    /// Begin an explicit undo unit (one vim change = one undo step):
+    /// every edit until [`Buffer::end_undo_group`] lands on a single
+    /// undo entry. Nesting closes out at the outermost end; the default
+    /// is no grouping (each edit stays its own step).
+    fn begin_undo_group(&mut self) {}
+    /// Close the unit opened by [`Buffer::begin_undo_group`]. An empty
+    /// unit records nothing.
+    fn end_undo_group(&mut self) {}
 }
 
 #[derive(Clone, Debug)]
@@ -88,58 +103,99 @@ impl EditRun {
     }
 }
 
-/// `String`-backed [`Buffer`] with a cached line-start table.
+/// One undo-stack entry: a single edit or an explicit group of edits
+/// (one vim change) that undoes and redoes atomically.
+#[derive(Clone, Debug)]
+enum UndoEntry {
+    Op(UndoOp),
+    Group(Vec<UndoOp>),
+}
+
+/// Rope-backed [`Buffer`]: `ropey` owns storage and line indexing, so
+/// edits stay cheap on large files. Char indices are the unit everywhere,
+/// exactly as before the migration.
 #[derive(Clone, Debug, Default)]
 pub struct Doc {
-    text: String,
-    line_starts: Vec<usize>,
-    undo: Vec<UndoOp>,
-    redo: Vec<UndoOp>,
+    rope: ropey::Rope,
+    revision: u64,
+    undo: Vec<UndoEntry>,
+    redo: Vec<UndoEntry>,
     run: EditRun,
+    group_depth: usize,
+    group: Vec<UndoOp>,
 }
 
 impl Doc {
     pub fn new(text: impl Into<String>) -> Self {
-        let mut doc = Self {
-            text: text.into(),
-            line_starts: Vec::new(),
+        Self {
+            rope: ropey::Rope::from(text.into()),
+            revision: 0,
             undo: Vec::new(),
             redo: Vec::new(),
             run: EditRun::default(),
-        };
-        doc.reindex();
-        doc
-    }
-
-    #[must_use]
-    pub fn text(&self) -> &str {
-        &self.text
-    }
-
-    fn reindex(&mut self) {
-        self.line_starts.clear();
-        self.line_starts.push(0);
-        for (i, c) in self.text.char_indices() {
-            if c == '\n'
-                && let Some(next) = i.checked_add(1)
-            {
-                self.line_starts.push(next);
-            }
+            group_depth: 0,
+            group: Vec::new(),
         }
     }
 
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.rope.to_string()
+    }
+
+    fn bump(&mut self) {
+        self.revision = self.revision.saturating_add(1);
+    }
+
+    /// Line `line` without its terminator (a lone `\n` is stripped; a
+    /// `\r` is kept, matching the old `String` backend).
+    fn raw_line(&self, line: usize) -> String {
+        if line >= self.rope.len_lines() {
+            return String::new();
+        }
+        let mut text = self.rope.line(line).to_string();
+        if text.ends_with('\n') {
+            text.pop();
+        }
+        text
+    }
+
     fn commit(&mut self, op: UndoOp) {
+        if self.group_depth > 0 {
+            // Inside an explicit unit every edit is banked verbatim; the
+            // run merger stays closed so nothing leaks into neighbors.
+            self.run.op = None;
+            self.group.push(op);
+            self.redo.clear();
+            return;
+        }
         if self.run.push(op.clone()) {
             let last = self.undo.len().saturating_sub(1);
             if let Some(stored) = self.run.op.clone()
-                && let Some(slot) = self.undo.get_mut(last)
+                && let Some(UndoEntry::Op(slot)) = self.undo.get_mut(last)
             {
                 *slot = stored;
             }
         } else {
-            self.undo.push(op);
+            self.undo.push(UndoEntry::Op(op));
         }
         self.redo.clear();
+    }
+
+    /// Execute one undo entry (single op or whole group), returning the
+    /// entry that reverses it. Groups replay in reverse chronological
+    /// order, so the banked group redoes forward.
+    fn execute_entry(&mut self, entry: UndoEntry) -> UndoEntry {
+        match entry {
+            UndoEntry::Op(op) => UndoEntry::Op(self.execute(op)),
+            UndoEntry::Group(ops) => {
+                let mut inverses = Vec::with_capacity(ops.len());
+                for op in ops.into_iter().rev() {
+                    inverses.push(self.execute(op));
+                }
+                UndoEntry::Group(inverses)
+            }
+        }
     }
 
     /// Execute an inverse op, returning the inverse that reverses it.
@@ -148,88 +204,49 @@ impl Doc {
             UndoOp::Insert { at, text } => {
                 let at = at.min(self.len_chars());
                 let len = text.chars().count();
-                self.text.insert_str(byte_idx(&self.text, at), &text);
-                self.reindex();
+                self.rope.insert(at, &text);
+                self.bump();
                 UndoOp::Delete { at, len }
             }
             UndoOp::Delete { at, len } => {
                 let end = at
                     .checked_add(len)
                     .map_or(self.len_chars(), |sum| sum.min(self.len_chars()));
-                let removed: String = self
-                    .text
-                    .chars()
-                    .skip(at)
-                    .take(end.saturating_sub(at))
-                    .collect();
-                self.text.replace_range(byte_range(&self.text, at, end), "");
-                self.reindex();
+                let removed = self.rope.slice(at.min(end)..end).to_string();
+                self.rope.remove(at.min(end)..end);
+                self.bump();
                 UndoOp::Insert { at, text: removed }
             }
         }
     }
 }
 
-fn byte_idx(text: &str, char_idx: usize) -> usize {
-    text.char_indices()
-        .nth(char_idx)
-        .map_or(text.len(), |(b, _)| b)
-}
-
-fn byte_range(text: &str, start: usize, end: usize) -> std::ops::Range<usize> {
-    byte_idx(text, start)..byte_idx(text, end.min(text.chars().count()))
-}
-
 impl Buffer for Doc {
     fn len_chars(&self) -> usize {
-        self.text.chars().count()
+        self.rope.len_chars()
     }
 
     fn line_count(&self) -> usize {
-        self.line_starts.len()
+        self.rope.len_lines()
     }
 
     fn line_text(&self, line: usize) -> String {
-        let Some(&start_byte) = self.line_starts.get(line) else {
-            return String::new();
-        };
-        let start_char = char_idx_of_byte(&self.text, start_byte);
-        let end_char = line
-            .checked_add(1)
-            .and_then(|next| self.line_starts.get(next))
-            .map_or_else(
-                || self.text.chars().count(),
-                |b| char_idx_of_byte(&self.text, *b).saturating_sub(1),
-            );
-        self.text
-            .chars()
-            .skip(start_char)
-            .take(end_char.saturating_sub(start_char))
-            .collect()
+        self.raw_line(line)
     }
 
     fn char_at_line_col(&self, line: usize, col: usize) -> usize {
         let line = line.min(self.line_count().saturating_sub(1));
-        let start = char_idx_of_byte(&self.text, self.line_starts.get(line).copied().unwrap_or(0));
-        let len = self.line_text(line).chars().count();
-        start.checked_add(col.min(len)).unwrap_or(start)
+        let len = self.raw_line(line).chars().count();
+        self.rope
+            .line_to_char(line)
+            .checked_add(col.min(len))
+            .unwrap_or(0)
     }
 
     fn line_col_at(&self, char_idx: usize) -> (usize, usize) {
         let char_idx = char_idx.min(self.len_chars());
-        let byte = byte_idx(&self.text, char_idx);
-        let line = self
-            .line_starts
-            .iter()
-            .rposition(|s| *s <= byte)
-            .unwrap_or(0);
-        (
-            line,
-            char_idx.saturating_sub(char_idx_of_byte(
-                &self.text,
-                self.line_starts.get(line).copied().unwrap_or(0),
-            )),
-        )
+        let line = self.rope.char_to_line(char_idx);
+        (line, char_idx.saturating_sub(self.rope.line_to_char(line)))
     }
 
     fn insert(&mut self, char_idx: usize, text: &str) {
@@ -237,8 +254,8 @@ impl Buffer for Doc {
             return;
         }
         let at = char_idx.min(self.len_chars());
-        self.text.insert_str(byte_idx(&self.text, at), text);
-        self.reindex();
+        self.rope.insert(at, text);
+        self.bump();
         let len = text.chars().count();
         self.commit(UndoOp::Delete { at, len });
     }
@@ -249,39 +266,38 @@ impl Buffer for Doc {
         if start == end {
             return;
         }
-        let removed: String = self
-            .text
-            .chars()
-            .skip(start)
-            .take(end.saturating_sub(start))
-            .collect();
-        self.text
-            .replace_range(byte_range(&self.text, start, end), "");
-        self.reindex();
+        let removed = self.rope.slice(start..end).to_string();
+        self.rope.remove(start..end);
+        self.bump();
         self.commit(UndoOp::Insert {
             at: start,
             text: removed,
         });
     }
 
+    fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// Stored ops are already inverses: executing one undoes the edit, and
-    /// banking the new inverse makes redo exact.
+    /// banking the new inverse makes redo exact. A group replays in
+    /// reverse chronological order, so the banked group redoes forward.
     fn undo(&mut self) -> bool {
         self.end_run();
-        let Some(op) = self.undo.pop() else {
+        let Some(entry) = self.undo.pop() else {
             return false;
         };
-        let inverse = self.execute(op);
+        let inverse = self.execute_entry(entry);
         self.redo.push(inverse);
         true
     }
 
     fn redo(&mut self) -> bool {
         self.end_run();
-        let Some(op) = self.redo.pop() else {
+        let Some(entry) = self.redo.pop() else {
             return false;
         };
-        let inverse = self.execute(op);
+        let inverse = self.execute_entry(entry);
         self.undo.push(inverse);
         true
     }
@@ -289,10 +305,26 @@ impl Buffer for Doc {
     fn end_run(&mut self) {
         self.run.op = None;
     }
-}
 
-fn char_idx_of_byte(text: &str, byte: usize) -> usize {
-    text.char_indices().take_while(|(b, _)| *b < byte).count()
+    fn begin_undo_group(&mut self) {
+        self.end_run();
+        self.group_depth = self.group_depth.saturating_add(1);
+    }
+
+    fn end_undo_group(&mut self) {
+        if self.group_depth == 0 {
+            return;
+        }
+        // One unit, one entry: close out nesting so a change spanning
+        // delete-plus-insert (e.g. `cw`) never splits across steps.
+        self.group_depth = 0;
+        self.end_run();
+        if !self.group.is_empty() {
+            self.redo.clear();
+            self.undo
+                .push(UndoEntry::Group(std::mem::take(&mut self.group)));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -303,16 +335,16 @@ mod tests {
     fn insert_and_delete_round_trip() {
         let mut doc = Doc::new("hello");
         doc.insert(5, " world");
-        assert_eq!(doc.text(), "hello world");
+        assert_eq!(doc.text().as_str(), "hello world");
         doc.delete(5..11);
-        assert_eq!(doc.text(), "hello");
+        assert_eq!(doc.text().as_str(), "hello");
     }
 
     #[test]
     fn unicode_indices_are_char_based() {
         let mut doc = Doc::new("日本語");
         doc.insert(3, "テスト");
-        assert_eq!(doc.text(), "日本語テスト");
+        assert_eq!(doc.text().as_str(), "日本語テスト");
         assert_eq!(doc.line_col_at(4), (0, 4));
         assert_eq!(doc.char_at_line_col(0, 4), 4);
     }
@@ -333,7 +365,31 @@ mod tests {
         doc.insert(1, "b");
         doc.insert(2, "c");
         assert!(doc.undo());
-        assert_eq!(doc.text(), "");
+        assert_eq!(doc.text().as_str(), "");
+    }
+
+    #[test]
+    fn undo_group_is_one_step_and_redoes_forward() {
+        let mut doc = Doc::new(String::new());
+        doc.begin_undo_group();
+        doc.insert(0, "a");
+        doc.insert(1, "b");
+        doc.delete(0..1);
+        doc.end_undo_group();
+        assert_eq!(doc.text().as_str(), "b");
+        assert!(doc.undo());
+        assert_eq!(doc.text().as_str(), "");
+        assert!(doc.redo());
+        assert_eq!(doc.text().as_str(), "b");
+    }
+
+    #[test]
+    fn empty_group_records_nothing() {
+        let mut doc = Doc::new("x");
+        doc.begin_undo_group();
+        doc.end_undo_group();
+        assert!(!doc.undo());
+        assert_eq!(doc.text().as_str(), "x");
     }
 
     #[test]
@@ -343,29 +399,54 @@ mod tests {
         doc.end_run();
         doc.insert(1, "b");
         assert!(doc.undo());
-        assert_eq!(doc.text(), "a");
+        assert_eq!(doc.text().as_str(), "a");
         assert!(doc.undo());
-        assert_eq!(doc.text(), "");
+        assert_eq!(doc.text().as_str(), "");
     }
 
     #[test]
     fn undo_redo_delete_restores_text() {
         let mut doc = Doc::new("hello");
         doc.delete(1..4);
-        assert_eq!(doc.text(), "ho");
+        assert_eq!(doc.text().as_str(), "ho");
         assert!(doc.undo());
-        assert_eq!(doc.text(), "hello");
+        assert_eq!(doc.text().as_str(), "hello");
         assert!(doc.redo());
-        assert_eq!(doc.text(), "ho");
+        assert_eq!(doc.text().as_str(), "ho");
+    }
+
+    #[test]
+    fn revision_bumps_on_every_mutation() {
+        let mut doc = Doc::new("hello");
+        assert_eq!(doc.revision(), 0);
+        doc.insert(5, "!");
+        let after_insert = doc.revision();
+        assert!(after_insert > 0);
+        doc.delete(0..1);
+        assert!(doc.revision() > after_insert);
+        let before_undo = doc.revision();
+        assert!(doc.undo());
+        assert!(doc.revision() > before_undo);
+    }
+
+    #[test]
+    fn trailing_newline_keeps_empty_last_line() {
+        // Rope line tables must agree with the old backend: `a\nbb\n` is
+        // three lines, and out-of-range rows read empty.
+        let doc = Doc::new("a\nbb\n");
+        assert_eq!(doc.line_count(), 3);
+        assert_eq!(doc.line_text(2).as_str(), "");
+        assert_eq!(doc.line_text(9).as_str(), "");
+        assert_eq!(doc.char_at_line_col(9, 9), doc.len_chars());
     }
 
     #[test]
     fn out_of_range_edits_clamp() {
         let mut doc = Doc::new("hi");
         doc.insert(99, "!");
-        assert_eq!(doc.text(), "hi!");
+        assert_eq!(doc.text().as_str(), "hi!");
         doc.delete(5..50);
-        assert_eq!(doc.text(), "hi!");
+        assert_eq!(doc.text().as_str(), "hi!");
         assert!(!Doc::new("x").undo());
     }
 }
