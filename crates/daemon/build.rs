@@ -1,6 +1,25 @@
 //! Build the pinned `CodeDiff` library locally; never download executables at runtime.
 #![forbid(unsafe_code)]
-use std::{env, error::Error, fs, path::Path, process::Command};
+use std::{
+    env,
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+/// `canonicalize` returns verbatim `\\?\` paths on Windows, which MSVC
+/// (`cl`) cannot open. Strip the prefix so compiler and include args work.
+fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path
+    }
+}
 
 fn fail(error: impl std::fmt::Display) -> ! {
     eprintln!("daemon build failed: {error}");
@@ -34,7 +53,7 @@ fn collect(
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    let root = Path::new("../../vendor/codediff.nvim").canonicalize()?;
+    let root = without_verbatim_prefix(Path::new("../../vendor/codediff.nvim").canonicalize()?);
     println!("cargo:rerun-if-changed={}", root.display());
     let out = std::path::PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?);
     let source = root.join("libvscode-diff");

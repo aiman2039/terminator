@@ -8,7 +8,7 @@ impl App {
     /// Workspace strip tab face: the focused terminal's label, kind icon,
     /// stable agent brand, and hook lifecycle status, all from the shared
     /// agent presentation model.
-    pub(super) fn tab_face(&self, primary: Option<&Tab>) -> TabFace {
+    pub(crate) fn tab_face(&self, primary: Option<&Tab>) -> TabFace {
         match primary {
             Some(Tab::Terminal(sid)) => self
                 .state
