@@ -14,10 +14,15 @@ pane is lost.
 `float-missing`, `insplit`, `stacked-plus`, `stacked-switch`, `detach-dockback`,
 `drag-detach`. OS window-listing confirms the float appears with its pane
 title while the docked pane record disappears, and docks back on close with
-the daemon sessions intact. Float content pixels are best-effort in fixtures:
-background loops deny occluded second windows Metal drawables (main-window
-toggles are fixture-gated render flags, not shipped behavior), so captures are
-annotated `(unpainted: no pixels captured)`. Unit suite 577 passed, strict
+the daemon sessions intact. Float content pixels are best-effort in the
+standard background layout (the occluded float is denied Metal drawables, so
+captures there stay annotated `(unpainted: no pixels captured)`); raising the
+float above the fixture main window produced a clean painted capture — window
+title, caption bar, prompt and cursor all crisp — proving the viewport renders
+correctly. A floated backend used to be dropped by the end-of-frame prune and
+re-attached every frame, stuttering both windows; floated terminals, images,
+and markdown previews now seed the visibility sets first
+(`floated_panes_seed_visibility_before_prune`). Unit suite 580 passed, strict
 Clippy and `cargo fmt --check` clean. Captures and logs are in
 `target/validation/native/float-window/*`.
 
