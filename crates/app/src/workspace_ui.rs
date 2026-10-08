@@ -712,15 +712,17 @@ impl App {
         let width = Self::WINDOW_CONTROL_RESERVE * native / ui.ctx().pixels_per_point();
         let row = ui.cursor();
         let height = 28.0_f32.min(row.height());
-        let rect = egui::Rect::from_min_size(
+        // macOS without the fixture harness consumes neither use below;
+        // the underscore keeps plain builds warning-free.
+        let _rect = egui::Rect::from_min_size(
             egui::pos2(row.left(), row.center().y - height * 0.5),
             egui::vec2(width, height),
         );
         ui.add_space(width);
         #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "window-controls", rect);
+        diagnostics::record(ui.ctx(), "window-controls", _rect);
         #[cfg(not(target_os = "macos"))]
-        paint_window_controls(ui, rect);
+        paint_window_controls(ui, _rect);
     }
 
     /// Left-align the project name; spare width is drag space between the
@@ -3813,6 +3815,10 @@ impl TabViewer for Viewer<'_> {
                                 branch: branch.as_deref(),
                                 status: self.app.terminal_status_color(&session),
                                 git_tip: &git_tip,
+                                // No leaf tab bar on a lone pane, so its `+`
+                                // lives here instead. Hidden without a leaf
+                                // (e.g. a floated pane) to avoid dead clicks.
+                                stack_tip: pane.is_some().then_some("New tab in this split"),
                                 vertical_tip: &vertical_tip,
                                 horizontal_tip: &horizontal_tip,
                                 brand: leading.brand,
@@ -3829,7 +3835,7 @@ impl TabViewer for Viewer<'_> {
                         (
                             bar.bar,
                             Some(bar.close),
-                            Some((bar.git, bar.split_vertical, bar.split_horizontal)),
+                            Some((bar.git, bar.stack, bar.split_vertical, bar.split_horizontal)),
                         )
                     };
                     #[cfg(feature = "test-support")]
@@ -3855,7 +3861,7 @@ impl TabViewer for Viewer<'_> {
                     }
                     let controls_left = actions
                         .as_ref()
-                        .map(|(git, _, _)| git.rect.left() - 4.0)
+                        .map(|(git, _, _, _)| git.rect.left() - 4.0)
                         .unwrap_or_else(|| {
                             response.rect.right()
                                 - if close.is_some() && !is_markdown {
@@ -3876,25 +3882,36 @@ impl TabViewer for Viewer<'_> {
                         );
                     }
                     let closing = close.as_ref().is_some_and(eframe::egui::Response::clicked);
-                    let git_clicked = actions.as_ref().is_some_and(|(git, _, _)| git.clicked());
+                    let git_clicked = actions.as_ref().is_some_and(|(git, _, _, _)| git.clicked());
+                    let stack_clicked = actions.as_ref().is_some_and(|(_, stack, _, _)| {
+                        stack.as_ref().is_some_and(eframe::egui::Response::clicked)
+                    });
                     let split_vertical = actions
                         .as_ref()
-                        .is_some_and(|(_, split, _)| split.clicked());
+                        .is_some_and(|(_, _, split, _)| split.clicked());
                     let split_horizontal = actions
                         .as_ref()
-                        .is_some_and(|(_, _, split)| split.clicked());
+                        .is_some_and(|(_, _, _, split)| split.clicked());
                     let on_control = close.as_ref().is_some_and(eframe::egui::Response::hovered)
-                        || actions.as_ref().is_some_and(|(git, vertical, horizontal)| {
-                            git.hovered() || vertical.hovered() || horizontal.hovered()
-                        });
+                        || actions
+                            .as_ref()
+                            .is_some_and(|(git, stack, vertical, horizontal)| {
+                                git.hovered()
+                                    || stack.as_ref().is_some_and(eframe::egui::Response::hovered)
+                                    || vertical.hovered()
+                                    || horizontal.hovered()
+                            });
                     #[cfg(feature = "test-support")]
                     if let Some(close) = &close {
                         diagnostics::record(ui.ctx(), &format!("editor-close:{sid}"), close.rect);
                         diagnostics::record(ui.ctx(), &format!("pane-close:{sid}"), close.rect);
                     }
                     #[cfg(feature = "test-support")]
-                    if let Some((git, vertical, horizontal)) = &actions {
+                    if let Some((git, stack, vertical, horizontal)) = &actions {
                         diagnostics::record(ui.ctx(), &format!("pane-git:{sid}"), git.rect);
+                        if let Some(stack) = stack {
+                            diagnostics::record(ui.ctx(), &format!("pane-stack:{sid}"), stack.rect);
+                        }
                         diagnostics::record(
                             ui.ctx(),
                             &format!("pane-split-vertical:{sid}"),
@@ -3936,11 +3953,17 @@ impl TabViewer for Viewer<'_> {
                         self.app.focus_tab = Some(Tab::Terminal(sid.clone()));
                         self.app.show_git_sidebar();
                     }
-                    if split_vertical || split_horizontal {
+                    if split_vertical || split_horizontal || stack_clicked {
                         self.app.active_session = Some(sid.clone());
                         self.app.focus_tab = Some(Tab::Terminal(sid.clone()));
                     }
                     if let Some(pane) = pane {
+                        // The caption `+` queues the same leaf-anchored
+                        // request as the leaf tab bar `+`: a stacked tab in
+                        // this split, never a new top-level tab.
+                        if stack_clicked {
+                            self.app.add_tab = Some((pane, None));
+                        }
                         if split_vertical {
                             self.app.add_tab = Some((pane, Some("right".into())));
                         }

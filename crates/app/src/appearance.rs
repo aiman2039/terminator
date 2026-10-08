@@ -1235,6 +1235,7 @@ pub fn unsaved_close_bar(ui: &mut egui::Ui, input: UnsavedCloseBar<'_>) -> Unsav
 pub struct TerminalBar {
     pub bar: egui::Response,
     pub git: egui::Response,
+    pub stack: Option<egui::Response>,
     pub split_vertical: egui::Response,
     pub split_horizontal: egui::Response,
     pub close: egui::Response,
@@ -1246,6 +1247,10 @@ pub struct TerminalBarSpec<'a> {
     pub branch: Option<&'a str>,
     pub status: Option<Color32>,
     pub git_tip: &'a str,
+    /// Stack-new-tab affordance for lone panes (whose leaf tab bar, with
+    /// its own `+`, is hidden). None hides the button, e.g. when the pane
+    /// has no leaf to stack into.
+    pub stack_tip: Option<&'a str>,
     pub vertical_tip: &'a str,
     pub horizontal_tip: &'a str,
     /// Stable agent brand glyph, painted bright at the caption's left edge.
@@ -1285,6 +1290,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
         branch,
         status,
         git_tip,
+        stack_tip,
         vertical_tip,
         horizontal_tip,
         brand,
@@ -1320,6 +1326,9 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
     let close_rect = slot(&mut cursor, TERMINAL_BUTTON);
     let horizontal_rect = slot(&mut cursor, TERMINAL_BUTTON);
     let vertical_rect = slot(&mut cursor, TERMINAL_BUTTON);
+    let stack_rect = stack_tip
+        .is_some()
+        .then(|| slot(&mut cursor, TERMINAL_BUTTON));
     let git_rect = slot(&mut cursor, git_width);
     let tint = if active {
         ui.visuals().selection.stroke.color
@@ -1427,6 +1436,9 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
             ui.visuals().weak_text_color(),
         );
     }
+    let stack = stack_rect
+        .zip(stack_tip)
+        .map(|(rect, tip)| button(rect, "stack-tab", "Plus", tip, None));
     let split_vertical = button(
         vertical_rect,
         "split-vertical",
@@ -1456,6 +1468,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
             bar.on_hover_text(title)
         },
         git,
+        stack,
         split_vertical,
         split_horizontal,
         close,
@@ -1744,6 +1757,7 @@ mod row_tests {
                                 branch: None,
                                 status: None,
                                 git_tip: "Open Git",
+                                stack_tip: None,
                                 vertical_tip: "Split vertically",
                                 horizontal_tip: "Split horizontally",
                                 brand: None,
@@ -1794,6 +1808,7 @@ mod row_tests {
                         branch: None,
                         status: None,
                         git_tip: "Open Git",
+                        stack_tip: None,
                         vertical_tip: "Split vertically",
                         horizontal_tip: "Split horizontally",
                         brand,

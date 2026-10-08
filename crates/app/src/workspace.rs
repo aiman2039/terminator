@@ -1534,6 +1534,19 @@ mod tests {
     }
 
     #[test]
+    fn take_pane_of_last_pane_keeps_one_empty_group_for_dock_access() {
+        let shell = Tab::Terminal("one".into());
+        let mut workspace = Workspace::from_layout(DockState::new(vec![shell.clone()]));
+        let home = workspace.take_pane(&shell).expect("pane present");
+        assert_eq!(home, workspace.active);
+        // Not a new tab: the emptied group is replaced by the single empty
+        // group the dock accessors require, holding zero panes. The pane
+        // itself survives in the float window for dock-back.
+        assert_eq!(workspace.tabs.len(), 1);
+        assert_eq!(workspace.iter_all_tabs().count(), 0);
+    }
+
+    #[test]
     fn dock_back_float_prefers_home_then_active_leaf() {
         let shell = Tab::Terminal("one".into());
         let editor = Tab::NativeEditor {

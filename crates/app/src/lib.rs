@@ -5917,6 +5917,33 @@ impl App {
         }
     }
 
+    /// Marks floated panes visible before the end-of-frame prunes. Floats
+    /// paint after [`Self::paint_floating`], so without this their backends,
+    /// images, and markdown previews would be dropped and re-attached every
+    /// frame. Tested by `floated_panes_seed_visibility_before_prune`.
+    fn seed_floating_visibility(&mut self) {
+        for pane in &self.floating {
+            match pane.tab.as_ref() {
+                Some(Tab::Terminal(sid)) => {
+                    self.visible_sessions.insert(sid.clone());
+                    if self
+                        .state
+                        .sessions
+                        .iter()
+                        .find(|session| &session.id == sid)
+                        .is_some_and(markdown::available)
+                    {
+                        self.markdown.retain(sid);
+                    }
+                }
+                Some(Tab::Image { path }) => {
+                    self.visible_images.insert(path.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Renders every floating pane in its own OS window. A closed window
     /// docks its pane back instead of closing it.
     fn paint_floating(&mut self, ctx: &egui::Context) {
@@ -6349,6 +6376,12 @@ impl eframe::App for App {
             .show(ui, |ui| self.center_pane(ui));
         self.note_rename_frame(&ctx);
         self.preview_appearance(&ctx);
+        // Floating panes render after these prunes (`paint_floating` runs
+        // last), so a frame that only marked docked panes would drop every
+        // floated backend/image/preview and re-attach it on the next paint:
+        // an attach storm that stutters the whole window. Count floats as
+        // visible up front; the float paint re-marks them anyway.
+        self.seed_floating_visibility();
         self.images
             .retain(|path, _| self.visible_images.contains(path));
         self.markdown.end_frame(&ctx);
@@ -11291,6 +11324,45 @@ mod navigation_tests {
         );
     }
 
+    #[test]
+    fn floated_panes_seed_visibility_before_prune() {
+        let (mut app, _, _dir) = fixture();
+        app.selected = Some("a".into());
+        app.floating.push(FloatingPane {
+            viewport: egui::ViewportId::from_hash_of("float-terminal"),
+            tab: Some(Tab::Terminal("one".into())),
+            home: ("a".into(), "home".into()),
+        });
+        app.floating.push(FloatingPane {
+            viewport: egui::ViewportId::from_hash_of("float-image"),
+            tab: Some(Tab::Image {
+                path: "/tmp/a.png".into(),
+            }),
+            home: ("a".into(), "home".into()),
+        });
+        let mut doc = session_fixture("doc", SessionKind::Editor);
+        doc.file = Some("/a/doc.md".into());
+        app.state.sessions.push(doc);
+        app.floating.push(FloatingPane {
+            viewport: egui::ViewportId::from_hash_of("float-doc"),
+            tab: Some(Tab::Terminal("doc".into())),
+            home: ("a".into(), "home".into()),
+        });
+        app.seed_floating_visibility();
+        // The end-of-frame prunes keep exactly what these sets contain, so
+        // a floated terminal keeps its backend instead of re-attaching
+        // every frame, and floated images and markdown previews survive.
+        assert!(app.visible_sessions.contains("one"));
+        assert!(app.visible_sessions.contains("doc"));
+        assert!(
+            app.visible_images
+                .contains(std::path::Path::new("/tmp/a.png"))
+        );
+        assert!(app.markdown.entries.contains_key("doc"));
+        // Docked-but-unrendered sessions stay unmarked.
+        assert!(!app.visible_sessions.contains("two"));
+    }
+
     #[cfg(feature = "test-support")]
     #[test]
     fn caption_menu_floats_pane() {
@@ -12629,6 +12701,33 @@ mod navigation_tests {
                     .any(|tab| tab.layout.find_tab(&Tab::Terminal("two".into())).is_some()),
             "panes lost in the detach"
         );
+    }
+
+    /// A lone terminal pane offers a caption `+` that stacks a tab in its
+    /// own split: the same leaf-anchored request as the leaf tab bar `+`,
+    /// which a lone pane hides.
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn caption_stack_button_queues_in_split_tab() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("one", SessionKind::Shell));
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("one".into())])),
+        );
+        app.selected = Some("a".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        let at = frame_center(&app, &ctx, "pane-stack:one");
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(at)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(at, true)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(at, false)]);
+        let path = app.layouts["a"]
+            .find_tab(&Tab::Terminal("one".into()))
+            .expect("pane placed")
+            .node_path();
+        assert_eq!(app.add_tab, Some((path, None)));
     }
     /// A tab reorder drag paints a tab-sized ghost that tracks the pointer.
     #[cfg(feature = "test-support")]
