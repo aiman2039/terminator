@@ -362,10 +362,13 @@ fn float_close(
         ]),
         after,
         exit,
-        |child| {
-            let pid = child.id();
+        |_child| {
             #[cfg(target_os = "macos")]
             {
+                // Both bindings are macOS-only (window lookup below);
+                // the underscores keep Linux Clippy clean, where the
+                // close is a marker write with no process lookup.
+                let pid = _child.id();
                 // The standalone window must appear outside the app.
                 let output = std::path::absolute(&o.output)?;
                 poll(
