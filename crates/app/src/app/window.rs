@@ -170,11 +170,14 @@ impl TerminalFind {
     }
 }
 
-/// A main-dock pane detached into its own OS window. The daemon keeps
-/// owning the session; the window dies with the GUI like every other
-/// GUI-only surface. `tab` is `None` only while the viewport renders it.
-pub(crate) struct FloatingPane {
+/// A detached dock in its own OS window: one `DockState` with its own
+/// splits and tab bars, rendered by the normal dock renderer. The daemon
+/// keeps owning the sessions; the window dies with the GUI like every
+/// other GUI-only surface. `dock` is `None` only while the viewport
+/// renders it. `home` is the (project, top-level tab) the window docks
+/// back to when its OS window closes.
+pub(crate) struct FloatingWindow {
     pub(crate) viewport: egui::ViewportId,
-    pub(crate) tab: Option<Tab>,
+    pub(crate) dock: Option<egui_dock::DockState<Tab>>,
     pub(crate) home: (String, String),
 }

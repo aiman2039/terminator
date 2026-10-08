@@ -126,6 +126,231 @@ mod tests {
     }
 
     #[test]
+    fn float_split_layout_docks_back_whole() {
+        let (mut app, _, _dir) = fixture();
+        let first = Tab::Terminal("float-one".into());
+        let second = Tab::Terminal("float-two".into());
+        let mut dock = DockState::new(vec![first.clone()]);
+        dock.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![second.clone()],
+        );
+        app.layouts.insert("a".into(), Workspace::empty());
+        let home = app.layouts["a"].tabs[0].id.clone();
+        // Closing the window adopts the whole split layout instead of
+        // scattering its panes: the empty tab is reused, both panes
+        // arrive with their split.
+        app.dock_back_window("a".into(), home, dock);
+        let workspace = app.layouts.get("a").expect("workspace");
+        assert_eq!(workspace.tabs.len(), 1);
+        let panes = workspace.tabs[0]
+            .layout
+            .iter_all_tabs()
+            .map(|(_, pane)| pane.clone())
+            .collect::<Vec<_>>();
+        assert!(panes.contains(&first));
+        assert!(panes.contains(&second));
+        assert_eq!(workspace.tabs[0].layout.iter_leaves().count(), 2);
+    }
+
+    #[test]
+    fn float_created_lands_in_originating_window() {
+        let (mut app, ctx, _dir) = fixture();
+        let old = Tab::Terminal("float-old".into());
+        app.floating
+            .push(float_window("float-origin", "a", "home", vec![old.clone()]));
+        let viewport = app.floating[0].viewport;
+        let mut session = session_fixture("float-new", SessionKind::Shell);
+        session.project_id = "a".into();
+        // The user selected another project while the shell started.
+        app.selected = Some("b".into());
+        app.update_tx
+            .send(Update::FloatCreated(
+                session,
+                viewport,
+                Some("right".into()),
+                vec![old.clone()],
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        // The new shell splits the originating window, not the newly
+        // selected project; nothing falls back to the main dock.
+        let dock = app.floating[0].dock.as_ref().expect("window kept");
+        assert_eq!(dock.iter_all_tabs().count(), 2);
+        assert!(dock.find_tab(&Tab::Terminal("float-new".into())).is_some());
+        assert!(app.layouts.get("a").is_none_or(|workspace| {
+            workspace
+                .find_tab(&Tab::Terminal("float-new".into()))
+                .is_none()
+        }));
+        assert_eq!(app.active_session.as_deref(), Some("float-new"));
+    }
+
+    #[test]
+    fn float_created_falls_back_to_project_dock() {
+        let (mut app, ctx, _dir) = fixture();
+        let mut session = session_fixture("float-gone", SessionKind::Shell);
+        session.project_id = "a".into();
+        app.selected = Some("a".into());
+        let viewport = egui::ViewportId::from_hash_of("float-closed");
+        app.update_tx
+            .send(Update::FloatCreated(session, viewport, None, Vec::new()))
+            .unwrap();
+        app.process_updates(&ctx);
+        // The window closed mid-flight: the tab still lands in its
+        // project instead of nowhere.
+        let workspace = app.layouts.get("a").expect("project dock");
+        assert!(
+            workspace
+                .find_tab(&Tab::Terminal("float-gone".into()))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn float_native_split_stays_in_window() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/float-split.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        let editor = Tab::NativeEditor { path: path.clone() };
+        app.floating.push(float_window(
+            "float-split",
+            "a",
+            "home",
+            vec![editor.clone()],
+        ));
+        let viewport = app.floating[0].viewport;
+        // `:vsplit` typed in the floating window defers through the same
+        // drain as main-dock splits but lands in the issuing window.
+        app.pending_native_splits.push((
+            viewport,
+            path.clone(),
+            crate::native_editor::NativeSplit::Beside,
+        ));
+        app.drain_pending_native_close();
+        let dock = app.floating[0].dock.as_ref().expect("window kept");
+        assert_eq!(dock.iter_all_tabs().count(), 2);
+        assert!(app.layouts.get("a").is_none_or(|workspace| {
+            workspace
+                .find_tab(&Tab::NativeEditor { path: path.clone() })
+                .is_none()
+        }));
+    }
+
+    #[test]
+    fn float_plain_close_takes_issuing_copy_only() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/float-copy.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        let editor = || Tab::NativeEditor { path: path.clone() };
+        let mut dock = DockState::new(vec![editor()]);
+        let [_, right] =
+            dock.main_surface_mut()
+                .split_right(egui_dock::NodeIndex::root(), 0.5, vec![editor()]);
+        app.floating
+            .push(float_window("float-copies", "a", "home", vec![]));
+        app.floating[0].dock = Some(dock);
+        let viewport = app.floating[0].viewport;
+        // `:q` in the right split removes that copy: the left keeps the
+        // file and its buffer.
+        let issuer = crate::native_editor::CloseIssuer::Floating {
+            viewport,
+            node: Some(egui_dock::NodePath {
+                surface: egui_dock::SurfaceIndex::main(),
+                node: right,
+            }),
+            delayed: false,
+        };
+        app.close_native_tab(&path, false, Some(issuer));
+        let dock = app.floating[0].dock.as_ref().expect("window kept");
+        assert_eq!(dock.iter_all_tabs().count(), 1);
+        assert!(app.native_docs.contains_key(&path));
+    }
+
+    #[test]
+    fn float_stale_delayed_wq_closes_nothing() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/float-stale.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        let editor = || Tab::NativeEditor { path: path.clone() };
+        let mut dock = DockState::new(vec![editor()]);
+        dock.main_surface_mut()
+            .split_right(egui_dock::NodeIndex::root(), 0.5, vec![editor()]);
+        app.floating
+            .push(float_window("float-stale", "a", "home", vec![]));
+        app.floating[0].dock = Some(dock);
+        let viewport = app.floating[0].viewport;
+        // The issuing view closed while the `:wq` save settled: no
+        // fallback may take the surviving copy.
+        let issuer = crate::native_editor::CloseIssuer::Floating {
+            viewport,
+            node: Some(egui_dock::NodePath {
+                surface: egui_dock::SurfaceIndex::main(),
+                node: egui_dock::NodeIndex(999),
+            }),
+            delayed: true,
+        };
+        app.close_native_tab(&path, false, Some(issuer));
+        let dock = app.floating[0].dock.as_ref().expect("window kept");
+        assert_eq!(dock.iter_all_tabs().count(), 2);
+        assert!(app.native_docs.contains_key(&path));
+    }
+
+    #[test]
+    fn remove_tab_drops_emptied_float_window() {
+        let (mut app, _, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("float-solo", SessionKind::Shell));
+        app.floating.push(float_window(
+            "float-solo",
+            "a",
+            "home",
+            vec![Tab::Terminal("float-solo".into())],
+        ));
+        app.remove_tab("float-solo");
+        assert!(app.floating.is_empty());
+    }
+
+    #[test]
+    fn go_session_keeps_floated_terminal() {
+        let (mut app, _, _dir) = fixture();
+        let mut session = session_fixture("float-agent", SessionKind::Shell);
+        session.project_id = "a".into();
+        app.state.sessions.push(session);
+        app.state.projects.push(terminator_core::Project {
+            id: "a".into(),
+            name: "a".into(),
+            path: PathBuf::from("/a"),
+            layout: serde_json::Value::Null,
+        });
+        app.floating.push(float_window(
+            "float-agent",
+            "a",
+            "home",
+            vec![Tab::Terminal("float-agent".into())],
+        ));
+        app.go_session("float-agent");
+        // No duplicate tab in the main dock; the window keeps the view.
+        assert!(app.layouts.get("a").is_none_or(|workspace| {
+            workspace
+                .find_tab(&Tab::Terminal("float-agent".into()))
+                .is_none()
+        }));
+        assert_eq!(app.active_session.as_deref(), Some("float-agent"));
+    }
+
+    #[test]
     fn float_pane_applies_to_window_and_docks_back() {
         let (mut app, _, _dir) = fixture();
         app.selected = Some("a".into());
@@ -176,15 +401,16 @@ mod tests {
                 path: path.clone(),
             }])),
         );
-        app.floating.push(FloatingPane {
-            viewport: egui::ViewportId::from_hash_of("float-native"),
-            tab: Some(Tab::NativeEditor { path: path.clone() }),
-            home: ("a".into(), "home".into()),
-        });
+        app.floating.push(float_window(
+            "float-native",
+            "a",
+            "home",
+            vec![Tab::NativeEditor { path: path.clone() }],
+        ));
         // A plain close issued from the dock removes that copy and keeps
         // the floated buffer: the floating window stays open.
         let tab = app.layouts.get("a").expect("workspace").active.clone();
-        app.close_native_tab(&path, false, docked_issuer("a", &tab, None));
+        app.close_native_tab(&path, false, docked_issuer("a", &tab, None, false));
         assert_eq!(app.floating.len(), 1);
         assert!(
             app.native_docs.contains_key(&path),
@@ -213,11 +439,12 @@ mod tests {
                 path: path.clone(),
             }])),
         );
-        app.floating.push(FloatingPane {
-            viewport: egui::ViewportId::from_hash_of("float-forced"),
-            tab: Some(Tab::NativeEditor { path: path.clone() }),
-            home: ("a".into(), "home".into()),
-        });
+        app.floating.push(float_window(
+            "float-forced",
+            "a",
+            "home",
+            vec![Tab::NativeEditor { path: path.clone() }],
+        ));
         // `:q!` closes every view of the file, floating included.
         app.close_native_tab(&path, true, None);
         assert!(app.floating.is_empty());
@@ -234,16 +461,23 @@ mod tests {
         );
         let first = egui::ViewportId::from_hash_of("float-first");
         let second = egui::ViewportId::from_hash_of("float-second");
-        for viewport in [first, second] {
-            app.floating.push(FloatingPane {
-                viewport,
-                tab: Some(Tab::NativeEditor { path: path.clone() }),
-                home: ("a".into(), "home".into()),
-            });
+        for (name, viewport) in [("float-first", first), ("float-second", second)] {
+            let mut window = float_window(
+                name,
+                "a",
+                "home",
+                vec![Tab::NativeEditor { path: path.clone() }],
+            );
+            window.viewport = viewport;
+            app.floating.push(window);
         }
         // `:q` from the first floating view closes that window only:
         // the second view — and its unsaved buffer — survive.
-        let floating = crate::native_editor::CloseIssuer::Floating;
+        let floating = |viewport| crate::native_editor::CloseIssuer::Floating {
+            viewport,
+            node: None,
+            delayed: false,
+        };
         app.close_native_tab(&path, false, Some(floating(first)));
         assert_eq!(app.floating.len(), 1);
         assert_eq!(app.floating[0].viewport, second);
@@ -263,11 +497,12 @@ mod tests {
             crate::native_editor::NativeDoc::new(path.clone(), false),
         );
         assert!(!app.native_dirty(&path));
-        app.floating.push(FloatingPane {
-            viewport: egui::ViewportId::from_hash_of("float-qa"),
-            tab: Some(Tab::NativeEditor { path: path.clone() }),
-            home: ("a".into(), "home".into()),
-        });
+        app.floating.push(float_window(
+            "float-qa",
+            "a",
+            "home",
+            vec![Tab::NativeEditor { path: path.clone() }],
+        ));
         // Plain `:qa` on clean buffers leaves no floating window and no
         // buffer behind, even with no workspace tab showing the file.
         app.pending_quit_all = Some(false);
@@ -284,11 +519,12 @@ mod tests {
             path.clone(),
             crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
         );
-        app.floating.push(FloatingPane {
-            viewport: egui::ViewportId::from_hash_of("float-only"),
-            tab: Some(Tab::NativeEditor { path: path.clone() }),
-            home: ("a".into(), "home".into()),
-        });
+        app.floating.push(float_window(
+            "float-only",
+            "a",
+            "home",
+            vec![Tab::NativeEditor { path: path.clone() }],
+        ));
         // `:qa!` leaves no floating window and no buffer behind, even
         // when no workspace tab shows the file.
         app.pending_quit_all = Some(true);
@@ -313,15 +549,25 @@ mod tests {
             .unwrap_or(0)
     }
 
+    fn float_window(name: &str, project: &str, home: &str, tabs: Vec<Tab>) -> FloatingWindow {
+        FloatingWindow {
+            viewport: egui::ViewportId::from_hash_of(name),
+            dock: Some(DockState::new(tabs)),
+            home: (project.into(), home.into()),
+        }
+    }
+
     fn docked_issuer(
         project: &str,
         tab: &str,
         node: Option<egui_dock::NodePath>,
+        delayed: bool,
     ) -> Option<crate::native_editor::CloseIssuer> {
         Some(crate::native_editor::CloseIssuer::Docked {
             project: project.into(),
             tab: tab.into(),
             node,
+            delayed,
         })
     }
 
@@ -366,7 +612,7 @@ mod tests {
         // A plain close issued in `a` removes one copy there; the other
         // split and project `b` keep theirs, and the buffer survives.
         let tab = app.layouts.get("a").expect("workspace").active.clone();
-        app.close_native_tab(&path, false, docked_issuer("a", &tab, None));
+        app.close_native_tab(&path, false, docked_issuer("a", &tab, None, false));
         assert_eq!(docked_copies(&app, "a", &path), 1);
         assert_eq!(docked_copies(&app, "b", &path), 1);
         assert!(app.native_docs.contains_key(&path));
@@ -409,7 +655,7 @@ mod tests {
         // keeps only the other tab, the first leaf keeps the file. No
         // recorded pane here, so the focused copy goes.
         let tab = app.layouts.get("a").expect("workspace").active.clone();
-        app.close_native_tab(&path, false, docked_issuer("a", &tab, None));
+        app.close_native_tab(&path, false, docked_issuer("a", &tab, None, false));
         let workspace = app.layouts.get("a").expect("workspace");
         let mut focused_tabs = Vec::new();
         let mut copies = 0;
@@ -450,7 +696,7 @@ mod tests {
         app.layouts.insert("a".into(), workspace);
         // `:q` in the second tab removes only that copy: the first tab
         // keeps the file, and the buffer survives.
-        app.close_native_tab(&path, false, docked_issuer("a", "second", None));
+        app.close_native_tab(&path, false, docked_issuer("a", "second", None, false));
         assert_eq!(tab_native_paths(&app, "a", &first), vec![path.clone()]);
         assert!(tab_native_paths(&app, "a", "second").is_empty());
         assert!(app.native_docs.contains_key(&path));
@@ -495,7 +741,11 @@ mod tests {
             surface: egui_dock::SurfaceIndex::main(),
             node: right,
         };
-        app.close_native_tab(&path, false, docked_issuer("a", &tab, Some(recorded)));
+        app.close_native_tab(
+            &path,
+            false,
+            docked_issuer("a", &tab, Some(recorded), false),
+        );
         // The recorded right leaf loses the file and keeps the other tab;
         // the focused left leaf is untouched.
         let workspace = app.layouts.get("a").expect("workspace");
@@ -516,6 +766,132 @@ mod tests {
         assert!(app.native_docs.contains_key(&path));
     }
 
+    #[test]
+    fn delayed_wq_with_live_pane_closes_only_it() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/delayed.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        // Same file in two splits; the delayed `:wq` names the right
+        // pane (recorded when the save started).
+        let mut workspace = Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
+            path: path.clone(),
+        }]));
+        let [_, right] = workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::NativeEditor { path: path.clone() }],
+        );
+        app.layouts.insert("a".into(), workspace);
+        let tab = app.layouts.get("a").expect("workspace").active.clone();
+        let recorded = egui_dock::NodePath {
+            surface: egui_dock::SurfaceIndex::main(),
+            node: right,
+        };
+        app.close_native_tab(&path, false, docked_issuer("a", &tab, Some(recorded), true));
+        assert_eq!(docked_copies(&app, "a", &path), 1);
+        assert!(app.native_docs.contains_key(&path));
+    }
+
+    #[test]
+    fn stale_delayed_wq_closes_nothing() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/stale-delayed.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        // Same file in two splits; the issuing view was closed while
+        // the `:wq` save settled, so its recorded pane is stale.
+        let mut workspace = Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
+            path: path.clone(),
+        }]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::NativeEditor { path: path.clone() }],
+        );
+        app.layouts.insert("a".into(), workspace);
+        let tab = app.layouts.get("a").expect("workspace").active.clone();
+        let stale = egui_dock::NodePath {
+            surface: egui_dock::SurfaceIndex::main(),
+            node: egui_dock::NodeIndex(999),
+        };
+        app.close_native_tab(&path, false, docked_issuer("a", &tab, Some(stale), true));
+        // No fallback may take a copy that never asked to close: both
+        // stay open with the buffer.
+        assert_eq!(docked_copies(&app, "a", &path), 2);
+        assert!(app.native_docs.contains_key(&path));
+    }
+
+    #[test]
+    fn dock_reports_each_rendered_pane_to_viewer() {
+        let (mut app, ctx, _dir) = fixture();
+        let path = PathBuf::from("/a/rendered.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::new(path.clone(), false),
+        );
+        // Same file in two splits; dock focus sits on the left leaf
+        // while both panes render.
+        let mut workspace = Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
+            path: path.clone(),
+        }]));
+        let [left, right] = workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::NativeEditor { path: path.clone() }],
+        );
+        let main = egui_dock::SurfaceIndex::main();
+        workspace.tabs[0]
+            .layout
+            .set_focused_node_and_surface(egui_dock::NodePath {
+                surface: main,
+                node: left,
+            });
+        let tab = workspace.tabs[0].id.clone();
+        let mut viewer = crate::workspace_ui::Viewer {
+            app: &mut app,
+            strip: false,
+            project: Some("a".into()),
+            tab: Some(tab),
+            window: None,
+            render_path: None,
+        };
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 480.0),
+                )),
+                ..Default::default()
+            },
+            |ui| egui_dock::DockArea::new(&mut workspace).show_inside(ui, &mut viewer),
+        );
+        output.textures_delta.clear();
+        // Each tab body reports its own leaf before drawing, so the
+        // viewer holds an actually rendered pane — never dock focus
+        // sampled up front (one fixed value for both panes here).
+        let leaves = [
+            egui_dock::NodePath {
+                surface: main,
+                node: left,
+            },
+            egui_dock::NodePath {
+                surface: main,
+                node: right,
+            },
+        ];
+        assert!(
+            viewer
+                .render_path
+                .is_some_and(|seen| leaves.contains(&seen)),
+            "viewer records an actually rendered pane"
+        );
+    }
+
     #[cfg(feature = "test-support")]
     #[test]
     fn wq_close_uses_view_issuing_the_save() {
@@ -527,11 +903,12 @@ mod tests {
             crate::native_editor::NativeDoc::new(path.clone(), false),
         );
         let float = egui::ViewportId::from_hash_of("wq-float");
-        app.floating.push(FloatingPane {
-            viewport: float,
-            tab: Some(Tab::NativeEditor { path: path.clone() }),
-            home: ("a".into(), "home".into()),
-        });
+        app.floating.push(float_window(
+            "wq-float",
+            "a",
+            "home",
+            vec![Tab::NativeEditor { path: path.clone() }],
+        ));
         app.layouts.insert(
             "a".into(),
             Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
@@ -540,7 +917,11 @@ mod tests {
         );
         // `:wq` typed in the floating window: the save settles later.
         app.native_close_after_save = Some(path.clone());
-        app.native_close_after_save_issuer = Some(CloseIssuer::Floating(float));
+        app.native_close_after_save_issuer = Some(CloseIssuer::Floating {
+            viewport: float,
+            node: None,
+            delayed: true,
+        });
         // A docked view renders first. The queued close must still target
         // the issuing floating pane — not the rendering docked copy.
         combined_frame(&mut app, &ctx, vec![]);
@@ -567,11 +948,12 @@ mod tests {
             path.clone(),
             crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
         );
-        app.floating.push(FloatingPane {
-            viewport: egui::ViewportId::from_hash_of("hidden-float"),
-            tab: Some(Tab::NativeEditor { path: path.clone() }),
-            home: ("a".into(), "home".into()),
-        });
+        app.floating.push(float_window(
+            "hidden-float",
+            "a",
+            "home",
+            vec![Tab::NativeEditor { path: path.clone() }],
+        ));
         // Hiding the last project must not stall floating closes: with
         // nothing checked out, the drain still runs.
         app.pending_native_close.push((path.clone(), true, None));
@@ -642,26 +1024,29 @@ mod tests {
     fn floated_panes_seed_visibility_before_prune() {
         let (mut app, _, _dir) = fixture();
         app.selected = Some("a".into());
-        app.floating.push(FloatingPane {
-            viewport: egui::ViewportId::from_hash_of("float-terminal"),
-            tab: Some(Tab::Terminal("one".into())),
-            home: ("a".into(), "home".into()),
-        });
-        app.floating.push(FloatingPane {
-            viewport: egui::ViewportId::from_hash_of("float-image"),
-            tab: Some(Tab::Image {
+        app.floating.push(float_window(
+            "float-terminal",
+            "a",
+            "home",
+            vec![Tab::Terminal("one".into())],
+        ));
+        app.floating.push(float_window(
+            "float-image",
+            "a",
+            "home",
+            vec![Tab::Image {
                 path: "/tmp/a.png".into(),
-            }),
-            home: ("a".into(), "home".into()),
-        });
+            }],
+        ));
         let mut doc = session_fixture("doc", SessionKind::Editor);
         doc.file = Some("/a/doc.md".into());
         app.state.sessions.push(doc);
-        app.floating.push(FloatingPane {
-            viewport: egui::ViewportId::from_hash_of("float-doc"),
-            tab: Some(Tab::Terminal("doc".into())),
-            home: ("a".into(), "home".into()),
-        });
+        app.floating.push(float_window(
+            "float-doc",
+            "a",
+            "home",
+            vec![Tab::Terminal("doc".into())],
+        ));
         app.seed_floating_visibility();
         // The end-of-frame prunes keep exactly what these sets contain, so
         // a floated terminal keeps its backend instead of re-attaching

@@ -27,25 +27,6 @@ mod row_tests {
     }
 
     #[test]
-    fn font_atlas_side_is_capped_to_4096() {
-        let mut input = egui::RawInput {
-            max_texture_side: Some(16_384),
-            ..Default::default()
-        };
-        cap_max_texture_side(&mut input);
-        assert_eq!(input.max_texture_side, Some(FONT_ATLAS_MAX_SIDE));
-        let mut input = egui::RawInput {
-            max_texture_side: Some(2048),
-            ..Default::default()
-        };
-        cap_max_texture_side(&mut input);
-        assert_eq!(input.max_texture_side, Some(2048));
-        let mut missing = egui::RawInput::default();
-        cap_max_texture_side(&mut missing);
-        assert_eq!(missing.max_texture_side, Some(FONT_ATLAS_MAX_SIDE));
-    }
-
-    #[test]
     fn app_and_terminal_fonts_cover_hebrew_letters() {
         let ctx = egui::Context::default();
         install(&ctx);

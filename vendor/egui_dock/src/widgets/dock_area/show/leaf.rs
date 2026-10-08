@@ -1432,6 +1432,7 @@ impl<Tab> DockArea<'_, Tab> {
                         }
                         let available_rect = ui.available_rect_before_wrap();
                         ui.expand_to_include_rect(available_rect);
+                        tab_viewer.set_render_path(path);
                         tab_viewer.ui(ui, tab);
                     });
             });

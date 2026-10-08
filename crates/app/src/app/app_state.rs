@@ -152,9 +152,19 @@ pub struct App {
     /// Main-dock pane queued for floating outside the app window. Same
     /// checkout reason as [`Self::detach_pane`].
     pub(crate) float_pane: Option<Tab>,
-    /// Panes detached into their own OS windows, rendered every frame by
-    /// [`Self::paint_floating`]. Closing a window docks its pane back.
-    pub(crate) floating: Vec<FloatingPane>,
+    /// Floating tab creation queued by a floating window's own `+`/split
+    /// controls: the issuing window plus the leaf path inside its dock.
+    /// Consumed after that window's dock is checked back in.
+    pub(crate) add_float_tab: Option<(egui::ViewportId, egui_dock::NodePath, Option<String>)>,
+    /// Floating-dock tab to focus after its window renders.
+    pub(crate) focus_float_tab: Option<(egui::ViewportId, Tab)>,
+    /// Docks detached into their own OS windows, rendered every frame by
+    /// [`Self::paint_floating`]. Closing a window docks its layout back.
+    pub(crate) floating: Vec<FloatingWindow>,
+    /// Floating-dock pane lookup, rebuilt every floating render (small
+    /// docks; no cache). Reads the window under render only.
+    pub(crate) float_pane_by_tab: HashMap<String, egui_dock::NodePath>,
+    pub(crate) float_pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
     /// Strip tab whose drag has started. Promoted to [`Self::pane_drag`] once
     /// the pointer leaves the strip, so reordering inside the strip stays
     /// with the dock.
@@ -296,7 +306,7 @@ pub struct App {
     /// starts, since the save settles frames later under whichever view
     /// renders first.
     pub(crate) native_close_after_save_issuer: Option<native_editor::CloseIssuer>,
-    pub(crate) pending_native_splits: Vec<(PathBuf, native_editor::NativeSplit)>,
+    pub(crate) pending_native_splits: Vec<(egui::ViewportId, PathBuf, native_editor::NativeSplit)>,
     /// Finished cross-file goto jumps waiting for the workspace to be
     /// checked back in: the file view renders while its workspace is
     /// checked out, so looking up the originating project there always

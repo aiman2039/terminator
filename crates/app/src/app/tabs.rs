@@ -73,7 +73,7 @@ impl App {
     /// Drop cached split-pane scroll for diffs with no live tab. Data-level tab
     /// removal bypasses per-document cleanup, so call it after tabs close.
     pub(crate) fn prune_diff_docs(&mut self) {
-        let live: HashSet<String> = self
+        let mut live: HashSet<String> = self
             .layouts
             .values()
             .flat_map(|workspace| &workspace.tabs)
@@ -81,6 +81,14 @@ impl App {
             .filter(|(_, tab)| matches!(tab, Tab::Diff { .. }))
             .map(|(_, tab)| tab.key())
             .collect();
+        live.extend(
+            self.floating
+                .iter()
+                .filter_map(|window| window.dock.as_ref())
+                .flat_map(|dock| dock.iter_all_tabs())
+                .filter(|(_, tab)| matches!(tab, Tab::Diff { .. }))
+                .map(|(_, tab)| tab.key()),
+        );
         self.diff_split_scroll.retain(|key, _| live.contains(key));
     }
     pub(crate) fn advance_workspace_close(&mut self, project: &str) {

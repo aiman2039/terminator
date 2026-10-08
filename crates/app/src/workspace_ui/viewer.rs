@@ -17,14 +17,56 @@ pub(crate) struct Viewer<'a> {
     /// Top-level tab under render, if any: same-file twin tabs need it
     /// to tell the issuing copy apart.
     pub(crate) tab: Option<String>,
-    /// Focused leaf under render, if any: the issuing split inside its
-    /// tab, recorded before later focus moves.
-    pub(crate) node: Option<egui_dock::NodePath>,
+    /// Floating window under render, if any: pane actions (splits, focus,
+    /// creation) route to this window's dock instead of the main dock.
+    pub(crate) window: Option<egui::ViewportId>,
+    /// Leaf currently rendering, reported by the dock before each tab
+    /// body: native close requests remember their issuing pane. Starts
+    /// empty for direct (non-dock) renders such as floating panes.
+    pub(crate) render_path: Option<egui_dock::NodePath>,
+}
+impl Viewer<'_> {
+    /// Queue tab creation in the dock under render: strip, floating
+    /// window, or main dock. Floating splits land in the issuing window.
+    fn queue_add_tab(&mut self, pane: egui_dock::NodePath, split: Option<String>) {
+        if self.strip {
+            self.app.add_strip_tab = Some((pane, split));
+        } else if let Some(viewport) = self.window {
+            self.app.add_float_tab = Some((viewport, pane, split));
+        } else {
+            self.app.add_tab = Some((pane, split));
+        }
+    }
+    /// Focus a tab in the dock under render.
+    fn queue_focus_tab(&mut self, tab: Tab) {
+        if self.strip {
+            self.app.focus_strip_tab = Some(tab);
+        } else if let Some(viewport) = self.window {
+            self.app.focus_float_tab = Some((viewport, tab));
+        } else {
+            self.app.focus_tab = Some(tab);
+        }
+    }
+    /// Leaf path for a tab key in the dock under render, if any.
+    pub(super) fn pane_for(&self, key: &str) -> Option<egui_dock::NodePath> {
+        if self.strip {
+            self.app.strip_pane_by_tab.get(key).copied()
+        } else if self.window.is_some() {
+            self.app.float_pane_by_tab.get(key).copied()
+        } else {
+            self.app.pane_by_tab.get(key).copied()
+        }
+    }
 }
 impl TabViewer for Viewer<'_> {
+    fn set_render_path(&mut self, path: egui_dock::NodePath) {
+        self.render_path = Some(path);
+    }
     fn on_add(&mut self, path: egui_dock::NodePath) {
         if self.strip {
             self.app.add_strip_tab = Some((path, None));
+        } else if let Some(viewport) = self.window {
+            self.app.add_float_tab = Some((viewport, path, None));
         } else {
             self.app.add_tab = Some((path, None));
         }
@@ -33,13 +75,18 @@ impl TabViewer for Viewer<'_> {
     fn show_tab_bar(&self, path: egui_dock::NodePath) -> bool {
         // Stacked leaves read as nested tabs: a leaf holding more than
         // one pane shows its bar even in the main dock, whose single
-        // panes keep the workspace strip as their only tab row.
-        self.strip
-            || self
-                .app
-                .pane_tabs
-                .get(&path)
-                .is_some_and(|tabs| tabs.len() > 1)
+        // panes keep the workspace strip as their only tab row. Floating
+        // windows read their own maps; a lone floated pane keeps the OS
+        // window title as its only tab row, like before.
+        if self.strip {
+            return true;
+        }
+        let tabs = if self.window.is_some() {
+            &self.app.float_pane_tabs
+        } else {
+            &self.app.pane_tabs
+        };
+        tabs.get(&path).is_some_and(|tabs| tabs.len() > 1)
     }
     fn trailing_controls_width(&self) -> f32 {
         let actions = if self.strip {
@@ -91,11 +138,7 @@ impl TabViewer for Viewer<'_> {
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), label, response.rect);
                 if response.clicked() {
-                    if self.strip {
-                        self.app.add_strip_tab = Some((path, direction.map(str::to_owned)));
-                    } else {
-                        self.app.add_tab = Some((path, direction.map(str::to_owned)));
-                    }
+                    self.queue_add_tab(path, direction.map(str::to_owned));
                     ui.close();
                 }
             }
@@ -296,9 +339,13 @@ impl TabViewer for Viewer<'_> {
             self.app.rename_action(ui, sid, RenameSurface::Pane);
             ui.separator();
         }
-        self.app.new_terminal_menu(ui, Some(pane), self.strip);
+        self.app
+            .new_terminal_menu(ui, Some(pane), self.strip, self.window);
         ui.separator();
-        if !self.strip {
+        // Detach, dock-back, and float ops reshape main-dock top-level
+        // tabs; a floating window owns a single dock with no tab layer,
+        // so they stay hidden there.
+        if !self.strip && self.window.is_none() {
             // Detach tears this pane off into a fresh top-level tab;
             // dock-back returns it to a sibling tab. Both queue while
             // the workspace is checked out and apply once it is back.
@@ -355,8 +402,10 @@ impl TabViewer for Viewer<'_> {
                 self.app.queue_strip_move(sid);
                 ui.close();
             }
+            // Main/strip moves have no meaning inside a floating window.
             if !self.strip
                 && shell
+                && self.window.is_none()
                 && self.app.preferences.ide_mode
                 && appearance::menu_item(
                     ui,
@@ -413,7 +462,7 @@ impl TabViewer for Viewer<'_> {
                 path,
                 self.project.as_deref(),
                 self.tab.as_deref(),
-                self.node,
+                self.render_path,
             ),
             Tab::CommitLog { .. } => self.app.commit_log_view(ui, tab),
             Tab::Blame { .. } => self.app.blame_view(ui, tab),
@@ -446,20 +495,25 @@ impl TabViewer for Viewer<'_> {
                             .inline_rename(ui, sid, RenameSurface::Pane, slot.rect);
                     }
                 } else {
-                    let pane = self
-                        .app
-                        .pane_by_tab
-                        .get(&Tab::Terminal(sid.clone()).key())
-                        .copied();
+                    let pane = self.pane_for(&Tab::Terminal(sid.clone()).key());
                     ui.spacing_mut().item_spacing.y = 2.0;
                     let is_markdown = markdown::available(&session);
                     // A lone pane's name is already the workspace tab. Keep the
                     // drag and close row, but don't paint the title again.
-                    let lone = self
-                        .app
-                        .pane_index
-                        .as_ref()
-                        .is_some_and(|index| index.tabs == 1);
+                    // A lone floated pane shows the OS window title instead.
+                    let lone = if self.window.is_some() {
+                        self.app
+                            .float_pane_tabs
+                            .values()
+                            .map(Vec::len)
+                            .sum::<usize>()
+                            == 1
+                    } else {
+                        self.app
+                            .pane_index
+                            .as_ref()
+                            .is_some_and(|index| index.tabs == 1)
+                    };
                     let branch = self.app.branch_at(&session.cwd);
                     let git_tip = match &branch {
                         Some(name) => format!("{name}\nOpen Git"),
@@ -482,7 +536,7 @@ impl TabViewer for Viewer<'_> {
                                 git_tip: &git_tip,
                                 // No leaf tab bar on a lone pane, so its `+`
                                 // lives here instead. Hidden without a leaf
-                                // (e.g. a floated pane) to avoid dead clicks.
+                                // to avoid dead clicks.
                                 stack_tip: pane.is_some().then_some("New tab in this split"),
                                 vertical_tip: &vertical_tip,
                                 horizontal_tip: &horizontal_tip,
@@ -593,7 +647,14 @@ impl TabViewer for Viewer<'_> {
                     // Caption drag starts a pane move. The drop lands on another
                     // split leaf (rearrange) or a workspace strip tab (move
                     // across top-level tabs); clicks still focus as before.
-                    if response.drag_started() && !editing && !closing && !on_control {
+                    // Floating windows opt out: cross-window drops are
+                    // unsupported, so a drag starting here could never land.
+                    if response.drag_started()
+                        && self.window.is_none()
+                        && !editing
+                        && !closing
+                        && !on_control
+                    {
                         self.app.pane_drag = Some(Tab::Terminal(sid.clone()));
                         // Snapshot once: the ghost reuses it every frame instead
                         // of re-reading the live grid while it scrolls.
@@ -615,30 +676,31 @@ impl TabViewer for Viewer<'_> {
                     }
                     if git_clicked {
                         self.app.active_session = Some(sid.clone());
-                        self.app.focus_tab = Some(Tab::Terminal(sid.clone()));
+                        self.queue_focus_tab(Tab::Terminal(sid.clone()));
                         self.app.show_git_sidebar();
                     }
                     if split_vertical || split_horizontal || stack_clicked {
                         self.app.active_session = Some(sid.clone());
-                        self.app.focus_tab = Some(Tab::Terminal(sid.clone()));
+                        self.queue_focus_tab(Tab::Terminal(sid.clone()));
                     }
                     if let Some(pane) = pane {
                         // The caption `+` queues the same leaf-anchored
                         // request as the leaf tab bar `+`: a stacked tab in
-                        // this split, never a new top-level tab.
+                        // this split, never a new top-level tab. Floating
+                        // splits land in the issuing window's dock.
                         if stack_clicked {
-                            self.app.add_tab = Some((pane, None));
+                            self.queue_add_tab(pane, None);
                         }
                         if split_vertical {
-                            self.app.add_tab = Some((pane, Some("right".into())));
+                            self.queue_add_tab(pane, Some("right".into()));
                         }
                         if split_horizontal {
-                            self.app.add_tab = Some((pane, Some("down".into())));
+                            self.queue_add_tab(pane, Some("down".into()));
                         }
                     }
                     if response.clicked() && !closing && !editing && !git_clicked && !on_control {
                         self.app.active_session = Some(sid.clone());
-                        self.app.focus_tab = Some(Tab::Terminal(sid.clone()));
+                        self.queue_focus_tab(Tab::Terminal(sid.clone()));
                     }
                     if response.double_clicked() && !closing && !editing && !on_control {
                         self.app.begin_rename(sid, RenameSurface::Pane);
@@ -678,21 +740,28 @@ impl TabViewer for Viewer<'_> {
                         }
                     }
                     if ui.button("Open a fresh shell here").clicked() {
-                        let _ = self.app.jobs.send(Job::rpc(
-                            Request::Create {
-                                project: session.project_id.clone(),
-                                cwd: Some(session.cwd.clone()),
-                                file: None,
-                                line: None,
-                                column: None,
-                                editor: false,
-                            },
-                            if self.strip {
-                                After::Strip
-                            } else {
-                                After::Create(None)
-                            },
-                        ));
+                        let pane = self.pane_for(&Tab::Terminal(sid.clone()).key());
+                        if let (Some(viewport), Some(pane)) = (self.window, pane) {
+                            // A fresh shell for a dead floated session stays
+                            // in its window instead of the main dock.
+                            self.app.add_float_tab = Some((viewport, pane, None));
+                        } else {
+                            let _ = self.app.jobs.send(Job::rpc(
+                                Request::Create {
+                                    project: session.project_id.clone(),
+                                    cwd: Some(session.cwd.clone()),
+                                    file: None,
+                                    line: None,
+                                    column: None,
+                                    editor: false,
+                                },
+                                if self.strip {
+                                    After::Strip
+                                } else {
+                                    After::Create(None)
+                                },
+                            ));
+                        }
                     }
                     if session.truncated {
                         ui.weak("Some saved output was pruned or unavailable.");

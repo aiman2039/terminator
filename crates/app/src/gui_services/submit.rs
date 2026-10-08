@@ -461,6 +461,9 @@ impl Services {
                         After::StripAt(anchors, split) => {
                             updates.push(Update::StripCreated(session, split, anchors));
                         }
+                        After::Float(viewport, anchors, split) => {
+                            updates.push(Update::FloatCreated(session, viewport, split, anchors));
+                        }
                         _ => {}
                     }
                 }

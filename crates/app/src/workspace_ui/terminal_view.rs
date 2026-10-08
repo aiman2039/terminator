@@ -345,12 +345,9 @@ impl Viewer<'_> {
             }
             ui.separator();
             let key = Tab::Terminal(sid.clone()).key();
-            let pane = if self.strip {
-                self.app.strip_pane_by_tab.get(&key).copied()
-            } else {
-                self.app.pane_by_tab.get(&key).copied()
-            };
-            self.app.new_terminal_menu(ui, pane, self.strip);
+            let pane = self.pane_for(&key);
+            self.app
+                .new_terminal_menu(ui, pane, self.strip, self.window);
             ui.separator();
             let key = ui
                 .ctx()

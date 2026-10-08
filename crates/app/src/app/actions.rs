@@ -12,8 +12,20 @@ impl App {
         for workspace in self.layouts.values_mut() {
             workspace.remove_session(sid);
         }
-        self.floating
-            .retain(|pane| !matches!(&pane.tab, Some(Tab::Terminal(floated)) if floated == sid));
+        let target = Tab::Terminal(sid.into());
+        for window in &mut self.floating {
+            if let Some(dock) = window.dock.as_mut() {
+                while let Some(path) = dock.find_tab(&target) {
+                    dock.remove_tab(path);
+                }
+            }
+        }
+        self.floating.retain(|window| {
+            window
+                .dock
+                .as_ref()
+                .is_none_or(|dock| dock.iter_all_tabs().next().is_some())
+        });
         self.backends.remove(sid);
         self.drop_strip_session(sid);
         if self.active_session.as_deref() == Some(sid) {

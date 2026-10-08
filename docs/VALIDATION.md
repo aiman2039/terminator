@@ -1,5 +1,37 @@
 # Validation evidence — 2026-09-08
 
+## Floating-window docks + shared font-atlas limit (2026-10-08)
+
+Floating windows now own a `DockState<Tab>` rendered by the normal dock
+renderer (splits, tab bars, caption `+`/split controls all land in the
+issuing window; async creation completes into the originating window via
+`After::Float` even after focus/project changes, with project-dock fallback;
+OS-window close adopts split layouts whole and lone panes home; emptied
+windows go away; editor closes name the window pane with the same
+exact-or-nothing delayed-`:wq` rule as the main dock). The parent-only
+4096 font-atlas cap is removed: eframe 0.36.1 builds immediate-viewport input
+without calling the app's `raw_input_hook` (`epi_integration.rs:362` is the
+only hook call site, on the root path), so the cap alternated the shared
+atlas between 4096 and the renderer limit every frame (`Context::begin_pass`
+stores each viewport's own input before `update_fonts_mut`;
+`Fonts::begin_pass` recreates the atlas and drops the galley cache on any
+`TextOptions` change). Every viewport now uses the renderer limit
+consistently; the cap had no recorded incident behind it.
+
+Eight new `nav_07` regressions (whole-layout dock-back preserving splits,
+`FloatCreated` routing + fallback, in-window native splits, issuing-copy
+closes, stale delayed-`:wq` no-op, emptied-window drop, `go_session`
+no-duplicate) plus the updated hook test, each mutation-checked against its
+fix (strict guard off, `insert_float` forced miss, dock-back forced
+single-pane, vendor hook call removed — the test fails, then passes
+restored). Full workspace suite green, strict Clippy and `cargo fmt --check`
+clean, live Rust Analyzer diagnostics green. NOT run here (no desktop):
+`cargo xtask gui float-window` — the existing `float-home`/`float-missing`
+scenarios exercise the new single-pane float and dock-back paths and should
+run in CI; a float-split click scenario needs multi-viewport fixture support
+(the action player injects into root-viewport input only), so `float.rs` is
+deliberately unchanged. No captures were produced in this environment.
+
 ## In-split tabs, in-dock detach/dock-back, float windows (2026-10-08)
 
 Opening a tab inside a split stacks it in that leaf (`leaf-tab:*` records, leaf

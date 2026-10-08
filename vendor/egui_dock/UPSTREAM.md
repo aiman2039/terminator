@@ -11,6 +11,12 @@ panes reserve no header height and do not show the upstream header-reveal contro
 Tabs and focus remain in the dock state; lower-pane tab selection and creation are
 available through the application context menu.
 
+A default no-op `set_render_path(NodePath)` TabViewer callback reports the
+leaf whose tab body is about to render. The leaf calls it immediately before
+`TabViewer::ui` so the viewer knows which pane it is drawing; panes sharing
+one file need their own identity. Terminator records it as the issuing pane
+for close commands instead of sampling dock focus.
+
 Leading tab icons add default `tab_leading_width` (0.0) and `paint_tab_leading`
 (no-op) TabViewer callbacks. `tab_title` reserves the width before the title,
 shifts the title right, and returns the icon rect; the leaf paints it through

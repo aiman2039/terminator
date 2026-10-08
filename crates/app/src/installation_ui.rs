@@ -127,11 +127,19 @@ impl App {
                 }
                 _ => None,
             })
-            .chain(self.floating.iter().filter_map(|pane| match &pane.tab {
-                Some(Tab::Terminal(sid)) if !self.state.sessions.iter().any(|s| s.id == *sid) => {
-                    Some(sid.clone())
-                }
-                _ => None,
+            .chain(self.floating.iter().flat_map(|window| {
+                window
+                    .dock
+                    .as_ref()
+                    .map(|dock| dock.iter_all_tabs())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(_, tab)| match tab {
+                        Tab::Terminal(sid) if !self.state.sessions.iter().any(|s| s.id == *sid) => {
+                            Some(sid.clone())
+                        }
+                        _ => None,
+                    })
             }))
             .collect();
         missing.sort();

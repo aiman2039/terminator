@@ -32,6 +32,13 @@ pub trait TabViewer {
     /// Actual tab content.
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab);
 
+    /// Leaf path of the tab body about to render.
+    ///
+    /// Called before [`TabViewer::ui`] for each visible tab so the viewer
+    /// knows which pane it is drawing; panes sharing one file need their
+    /// own identity. The default ignores it.
+    fn set_render_path(&mut self, _path: NodePath) {}
+
     /// Content inside the context menu shown when the tab is right-clicked.
     ///
     /// `_path` specifies which [`Surface`](crate::Surface) and [`Node`](crate::Node)

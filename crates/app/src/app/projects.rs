@@ -105,6 +105,54 @@ impl App {
         }
         dock.push_to_focused_leaf(tab);
     }
+    /// Place a tab into a floating window's dock: stacked for plain
+    /// tabs, beside the anchored leaf for splits. Returns false when the
+    /// window is gone, so callers can fall back to the project dock.
+    pub(crate) fn insert_float(
+        &mut self,
+        viewport: egui::ViewportId,
+        tab: Tab,
+        split: Option<&str>,
+        anchors: &[Tab],
+    ) -> bool {
+        let Some(window) = self
+            .floating
+            .iter_mut()
+            .find(|window| window.viewport == viewport)
+        else {
+            return false;
+        };
+
+        let Some(dock) = window.dock.as_mut() else {
+            return false;
+        };
+        if let Some(path) = dock.find_tab(&tab) {
+            let _ = dock.set_active_tab(path);
+            dock.set_focused_node_and_surface(path.node_path());
+            return true;
+        }
+        // Focus the issuing leaf first so the split lands next to it,
+        // mirroring the main-dock completion.
+        if let Some(path) = anchors.iter().find_map(|anchor| dock.find_tab(anchor)) {
+            dock.set_focused_node_and_surface(path.node_path());
+        }
+        if let Some(direction) = split {
+            let tree = dock.main_surface_mut();
+            if !tree.is_empty() {
+                let node = tree.focused_leaf().unwrap_or(NodeIndex::root());
+                let result = match direction {
+                    "left" => tree.split_left(node, 0.5, vec![tab]),
+                    "up" => tree.split_above(node, 0.5, vec![tab]),
+                    "down" => tree.split_below(node, 0.5, vec![tab]),
+                    _ => tree.split_right(node, 0.5, vec![tab]),
+                };
+                tree.set_focused_node(result[1]);
+                return true;
+            }
+        }
+        dock.push_to_focused_leaf(tab);
+        true
+    }
     pub(crate) fn selected_project(&self) -> Option<&Project> {
         self.state
             .projects
@@ -201,14 +249,24 @@ impl App {
             }
             self.select_project(s.project_id.clone());
             let pane = Tab::Terminal(sid.into());
-            let workspace = self
-                .layouts
-                .entry(s.project_id.clone())
-                .or_insert_with(Workspace::empty);
-            if !workspace.activate_containing(&pane) {
-                workspace.add(id(), pane.clone());
+            // A session already visible in a floating window stays there:
+            // adopting it into the main dock as well would duplicate it.
+            let floated = self.floating.iter().any(|window| {
+                window
+                    .dock
+                    .as_ref()
+                    .is_some_and(|dock| dock.find_tab(&pane).is_some())
+            });
+            if !floated {
+                let workspace = self
+                    .layouts
+                    .entry(s.project_id.clone())
+                    .or_insert_with(Workspace::empty);
+                if !workspace.activate_containing(&pane) {
+                    workspace.add(id(), pane.clone());
+                }
+                self.insert(&s.project_id, pane, None);
             }
-            self.insert(&s.project_id, pane, None);
             self.active_session = Some(s.id.clone());
             self.send(Request::SelectProject {
                 project: s.project_id,

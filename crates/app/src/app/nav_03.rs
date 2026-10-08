@@ -706,17 +706,20 @@ mod tests {
     }
 
     #[test]
-    fn raw_input_hook_caps_font_atlas_side() {
+    fn raw_input_hook_preserves_renderer_texture_limit() {
         let (mut app, ctx, _dir) = fixture();
+        // The hook must not rewrite the renderer limit: immediate
+        // (floating) viewports bypass the hook, so a parent-only value
+        // would alternate the shared font atlas every frame.
         let mut input = egui::RawInput {
             max_texture_side: Some(16_384),
             ..Default::default()
         };
         eframe::App::raw_input_hook(&mut app, &ctx, &mut input);
-        assert_eq!(
-            input.max_texture_side,
-            Some(appearance::FONT_ATLAS_MAX_SIDE)
-        );
+        assert_eq!(input.max_texture_side, Some(16_384));
+        let mut missing = egui::RawInput::default();
+        eframe::App::raw_input_hook(&mut app, &ctx, &mut missing);
+        assert_eq!(missing.max_texture_side, None);
     }
 
     #[test]

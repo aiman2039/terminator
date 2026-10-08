@@ -367,19 +367,73 @@ impl App {
         style
     }
 
+    /// Pane lookup for the floating window under render, rebuilt every
+    /// time (small docks; no cache). Only the window under render may
+    /// read these; the main-dock maps are untouched.
+    pub(crate) fn refresh_float_pane_maps(&mut self, dock: &egui_dock::DockState<Tab>) {
+        self.float_pane_by_tab = dock
+            .iter_all_tabs()
+            .map(|(path, tab)| (tab.key(), path.node_path()))
+            .collect();
+        self.float_pane_tabs = self
+            .float_pane_by_tab
+            .values()
+            .map(|path| {
+                (
+                    *path,
+                    dock.leaf(*path)
+                        .map(|leaf| leaf.tabs.clone())
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+    }
+
+    /// Renders one floating window's dock with the normal theme, tab bars,
+    /// and pane controls. Cross-window drag-drop is unsupported, so no
+    /// drop landing runs here; a main-dock drag released over a float is
+    /// cancelled by the main window's own release handling.
+    pub(crate) fn paint_float_dock(
+        &mut self,
+        ui: &mut egui::Ui,
+        viewport: egui::ViewportId,
+        project: &str,
+        dock: &mut egui_dock::DockState<Tab>,
+    ) {
+        let style = self.dock_style(ui);
+        self.refresh_float_pane_maps(dock);
+        DockArea::new(dock)
+            .style(style)
+            .show_add_buttons(true)
+            .show_leaf_close_all_buttons(false)
+            .show_leaf_collapse_buttons(false)
+            .show_inside(
+                ui,
+                &mut Viewer {
+                    app: self,
+                    strip: false,
+                    project: Some(project.to_owned()),
+                    tab: None,
+                    window: Some(viewport),
+                    render_path: None,
+                },
+            );
+        self.apply_add_float_tab(viewport, project, dock);
+        self.apply_focus_float_tab(viewport, dock);
+    }
+
     pub(crate) fn paint_dock(&mut self, ui: &mut egui::Ui, project: &str, dock: &mut Workspace) {
         let style = self.dock_style(ui);
         self.refresh_pane_maps(project, dock);
-        // Issuing tab and leaf for close requests: the rendered tab
-        // (mirroring `Deref` selection) and its focused leaf, captured
-        // before rendering so later focus moves cannot redirect closes.
-        let (tab, node) = dock
+        // Issuing tab for close requests: the rendered tab (mirroring
+        // `Deref` selection). The issuing pane needs no capture here:
+        // the dock reports each rendered leaf to the viewer directly,
+        // so a focus move mid-frame cannot misattribute a close.
+        let tab = dock
             .tabs
             .get(dock.active_index())
             .or(dock.tabs.first())
-            .map(|tab| (tab.id.clone(), tab.layout.focused_leaf()))
-            .unzip();
-        let node: Option<egui_dock::NodePath> = node.flatten();
+            .map(|tab| tab.id.clone());
         DockArea::new(dock)
             .style(style)
             .show_add_buttons(true)
@@ -392,7 +446,8 @@ impl App {
                     strip: false,
                     project: Some(project.to_owned()),
                     tab,
-                    node,
+                    window: None,
+                    render_path: None,
                 },
             );
         self.finish_pane_drop(ui, dock);

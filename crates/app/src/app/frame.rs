@@ -39,11 +39,15 @@ impl RepaintProbe {
 
 impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
-        appearance::cap_max_texture_side(input);
+        // No per-viewport `max_texture_side` override here: eframe builds
+        // immediate-viewport (floating) input without calling this hook,
+        // so a parent-only cap would alternate the shared font atlas
+        // between two sizes every frame and damage main-window text.
+        // Every viewport uses the renderer limit consistently.
         #[cfg(feature = "test-support")]
         self.diagnostics.input(ctx, input);
         #[cfg(not(feature = "test-support"))]
-        let _ = ctx;
+        let _ = (ctx, input);
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {

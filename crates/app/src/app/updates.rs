@@ -501,6 +501,33 @@ impl App {
                         self.active_session = Some(session.id.clone());
                     }
                 }
+                Update::FloatCreated(session, viewport, split, anchors) => {
+                    if session.kind == SessionKind::Editor {
+                        self.editor_origins
+                            .insert(session.id.clone(), anchors.clone());
+                    }
+                    if !self.state.sessions.iter().any(|s| s.id == session.id) {
+                        self.state.sessions.push(session.clone());
+                        self.reconcile_presentations();
+                    }
+                    // The originating window wins even after focus or
+                    // project changes. A window closed mid-flight falls
+                    // back to the project dock so the tab is not lost.
+                    if self.insert_float(
+                        viewport,
+                        Tab::Terminal(session.id.clone()),
+                        split.as_deref(),
+                        &anchors,
+                    ) {
+                        self.active_session = Some(session.id.clone());
+                    } else {
+                        self.insert(
+                            &session.project_id,
+                            Tab::Terminal(session.id.clone()),
+                            split.as_deref(),
+                        );
+                    }
+                }
                 Update::Text(key, text) => {
                     self.loading.remove(&key);
                     self.texts.insert(key, text);

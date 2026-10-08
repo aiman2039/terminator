@@ -147,6 +147,10 @@ pub(crate) enum After {
     Workspace(String, Vec<Tab>),
     Strip,
     StripAt(Vec<Tab>, Option<String>),
+    /// Creation issued from a floating window: the originating viewport
+    /// plus leaf anchors and split. Completion lands in that window's
+    /// dock even after focus or project changes.
+    Float(egui::ViewportId, Vec<Tab>, Option<String>),
     Text(String),
 }
 pub(crate) enum Job {
@@ -254,6 +258,7 @@ pub(crate) enum Update {
     Created(Session, Option<String>, Option<Vec<Tab>>),
     WorkspaceCreated(Session, String, Vec<Tab>),
     StripCreated(Session, Option<String>, Vec<Tab>),
+    FloatCreated(Session, egui::ViewportId, Option<String>, Vec<Tab>),
     Text(String, String),
     Diff(String, Result<diff::DiffDocument, String>),
     Workspace(workspace_ops::Op, Result<workspace_ops::Report, String>),

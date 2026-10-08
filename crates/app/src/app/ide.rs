@@ -413,7 +413,8 @@ impl App {
                         // Strip tabs carry no top-level id: closes from
                         // here fall back to legacy docked removal.
                         tab: None,
-                        node: None,
+                        window: None,
+                        render_path: None,
                     },
                 );
             self.apply_add_strip_tab(&project, &mut strip);

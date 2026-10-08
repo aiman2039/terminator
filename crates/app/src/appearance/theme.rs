@@ -4,17 +4,11 @@ use terminator_core::appearance::{AppearanceConfig, rgb};
 /// Keep small navigation/action glyphs legible independently of secondary text.
 pub const ICON_COLOR: Color32 = Color32::from_rgb(242, 244, 248);
 
-/// Cap the egui font atlas. Glow reports 16384 on Metal; epaint allocates that width.
-pub const FONT_ATLAS_MAX_SIDE: usize = 4096;
-
-pub fn cap_max_texture_side(input: &mut egui::RawInput) {
-    input.max_texture_side = Some(
-        input
-            .max_texture_side
-            .unwrap_or(FONT_ATLAS_MAX_SIDE)
-            .min(FONT_ATLAS_MAX_SIDE),
-    );
-}
+// No font-atlas cap: the renderer limit (16384 on Metal) applies to every
+// viewport. A parent-only `max_texture_side` cannot reach immediate
+// (floating) viewports — eframe builds their input without calling the
+// app's `raw_input_hook` — so capping only the main window alternates the
+// shared font atlas between two sizes every frame and damages its text.
 
 /// Orca dark context menu fill: `--background` `#0a0a0a`, used as the solid
 /// stand-in for `dark:bg-[rgba(0,0,0,0.12)]` + `backdrop-blur-2xl`.

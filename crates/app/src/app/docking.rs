@@ -1,6 +1,5 @@
 use super::super::appearance;
 use eframe::egui::{self};
-use egui_dock::TabViewer;
 use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -372,6 +371,90 @@ impl App {
         ));
     }
 
+    /// Create the queued floating tab: same leaf-anchored request as the
+    /// main dock, but completing into the issuing window via `After::Float`
+    /// so a focus or project change mid-flight cannot redirect it.
+    pub(crate) fn apply_add_float_tab(
+        &mut self,
+        viewport: egui::ViewportId,
+        project: &str,
+        dock: &mut egui_dock::DockState<Tab>,
+    ) {
+        let Some((queued, path, split)) = self.add_float_tab.take() else {
+            return;
+        };
+        if queued != viewport {
+            self.add_float_tab = Some((queued, path, split));
+            return;
+        }
+        let cwd = dock
+            .leaf(path)
+            .ok()
+            .and_then(|leaf| leaf.tabs.get(leaf.active.0))
+            .and_then(|tab| match tab {
+                Tab::Terminal(id) => self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .map(|s| s.cwd.clone()),
+                Tab::Diff { cwd, .. } => Some(cwd.clone()),
+                Tab::Image { path } | Tab::NativeEditor { path } => {
+                    path.parent().map(PathBuf::from)
+                }
+                Tab::Browser { target, .. } => {
+                    target.file().and_then(Path::parent).map(PathBuf::from)
+                }
+                Tab::Player => None,
+                Tab::CommitLog { cwd } | Tab::Blame { cwd, .. } => Some(cwd.clone()),
+            })
+            .or_else(|| {
+                self.state
+                    .projects
+                    .iter()
+                    .find(|p| p.id == project)
+                    .map(|p| p.path.clone())
+            })
+            .or_else(|| self.selected_project().map(|p| p.path.clone()));
+        let _ = self.jobs.send(Job::rpc(
+            Request::Create {
+                project: project.to_owned(),
+                cwd,
+                file: None,
+                line: None,
+                column: None,
+                editor: false,
+            },
+            After::Float(
+                viewport,
+                dock.leaf(path)
+                    .map(|leaf| leaf.tabs.clone())
+                    .unwrap_or_default(),
+                split,
+            ),
+        ));
+    }
+
+    /// Focus the queued tab in its floating window. Runs after that
+    /// window's dock is checked back in.
+    pub(crate) fn apply_focus_float_tab(
+        &mut self,
+        viewport: egui::ViewportId,
+        dock: &mut egui_dock::DockState<Tab>,
+    ) {
+        let Some((queued, tab)) = self.focus_float_tab.take() else {
+            return;
+        };
+        if queued != viewport {
+            self.focus_float_tab = Some((queued, tab));
+            return;
+        }
+        if let Some(path) = dock.find_tab(&tab) {
+            let _ = dock.set_active_tab(path);
+            dock.set_focused_node_and_surface(path.node_path());
+        }
+    }
+
     /// Detach the queued pane into a fresh top-level tab at the end of the
     /// strip. Runs after the workspace dock is checked back in; unknown or
     /// already-moved panes are a silent no-op via the move primitive.
@@ -399,9 +482,9 @@ impl App {
         !matches!(tab, Tab::Browser { .. } | Tab::Player)
     }
 
-    /// Float the queued pane into its own OS window. Runs after the
-    /// workspace dock is checked back in; panes that left the dock or
-    /// cannot float are a silent no-op.
+    /// Float the queued pane into its own OS window with a dock holding
+    /// just that pane. Runs after the workspace dock is checked back in;
+    /// panes that left the dock or cannot float are a silent no-op.
     pub(crate) fn apply_float_pane(&mut self, project: &str, dock: &mut Workspace) {
         let Some(pane) = self.float_pane.take() else {
             return;
@@ -413,32 +496,47 @@ impl App {
             return;
         };
         let viewport = egui::ViewportId::from_hash_of(format!("floating:{}", pane.key()));
-        self.floating.push(FloatingPane {
+        self.floating.push(FloatingWindow {
             viewport,
-            tab: Some(pane),
+            dock: Some(egui_dock::DockState::new(vec![pane])),
             home: (project.to_owned(), home),
         });
         self.pane_index = None;
         self.pending_layout_save = true;
     }
 
-    /// Returns one floating pane to its workspace: the home tab when that
-    /// still exists, else the project's active leaf.
-    pub(crate) fn dock_back_floating(&mut self, project: String, home: String, tab: Tab) {
-        self.layouts
-            .entry(project)
-            .or_insert_with(Workspace::empty)
-            .dock_back(tab, &home);
+    /// Returns one floating window's layout to its workspace: a lone pane
+    /// rejoins its home leaf exactly like before, while a split layout is
+    /// adopted whole as a new top-level tab so its structure survives.
+    pub(crate) fn dock_back_window(
+        &mut self,
+        project: String,
+        home: String,
+        dock: egui_dock::DockState<Tab>,
+    ) {
+        let workspace = self.layouts.entry(project).or_insert_with(Workspace::empty);
+        let mut tabs = dock
+            .iter_all_tabs()
+            .map(|(_, tab)| tab.clone())
+            .collect::<Vec<_>>();
+        if tabs.len() == 1 {
+            // Length checked above; the pop cannot miss.
+            if let Some(tab) = tabs.pop() {
+                workspace.dock_back(tab, &home);
+            }
+        } else if !tabs.is_empty() {
+            workspace.adopt_dock(dock, true);
+        }
         self.pane_index = None;
         self.pending_layout_save = true;
     }
 
-    /// Returns every floating pane to its workspace, e.g. before the exit
-    /// checkpoint so the saved layout stays complete.
+    /// Returns every floating window to its workspace, e.g. before the
+    /// exit checkpoint so the saved layout stays complete.
     pub(crate) fn dock_back_all_floating(&mut self) {
-        for pane in std::mem::take(&mut self.floating) {
-            if let (Some(tab), (project, home)) = (pane.tab, pane.home) {
-                self.dock_back_floating(project, home, tab);
+        for window in std::mem::take(&mut self.floating) {
+            if let (Some(dock), (project, home)) = (window.dock, window.home) {
+                self.dock_back_window(project, home, dock);
             }
         }
     }
@@ -492,45 +590,57 @@ impl App {
     /// images, and markdown previews would be dropped and re-attached every
     /// frame. Tested by `floated_panes_seed_visibility_before_prune`.
     pub(crate) fn seed_floating_visibility(&mut self) {
-        for pane in &self.floating {
-            match pane.tab.as_ref() {
-                Some(Tab::Terminal(sid)) => {
-                    self.visible_sessions.insert(sid.clone());
-                    if self
-                        .state
-                        .sessions
-                        .iter()
-                        .find(|session| &session.id == sid)
-                        .is_some_and(markdown::available)
-                    {
-                        self.markdown.retain(sid);
+        for window in &self.floating {
+            let Some(dock) = window.dock.as_ref() else {
+                continue;
+            };
+            for (_, tab) in dock.iter_all_tabs() {
+                match tab {
+                    Tab::Terminal(sid) => {
+                        self.visible_sessions.insert(sid.clone());
+                        if self
+                            .state
+                            .sessions
+                            .iter()
+                            .find(|session| &session.id == sid)
+                            .is_some_and(markdown::available)
+                        {
+                            self.markdown.retain(sid);
+                        }
                     }
+                    Tab::Image { path } => {
+                        self.visible_images.insert(path.clone());
+                    }
+                    _ => {}
                 }
-                Some(Tab::Image { path }) => {
-                    self.visible_images.insert(path.clone());
-                }
-                _ => {}
             }
         }
     }
 
-    /// Renders every floating pane in its own OS window. A closed window
-    /// docks its pane back instead of closing it.
+    /// Renders every floating window's dock in its own OS window. A closed
+    /// window docks its whole layout back; an emptied one goes away.
     pub(crate) fn paint_floating(&mut self, ctx: &egui::Context) {
         if self.floating.is_empty() {
             return;
         }
-        // The vec is checked out while viewports render so the viewer can
+        // Docks are checked out while viewports render so the viewer can
         // borrow the app; windows that stay open move back afterwards.
-        let mut closed: Vec<(String, String, Tab)> = Vec::new();
-        for mut pane in std::mem::take(&mut self.floating) {
-            let Some(mut tab) = pane.tab.take() else {
+        let mut closed: Vec<(String, String, egui_dock::DockState<Tab>)> = Vec::new();
+        let mut keep: Vec<FloatingWindow> = Vec::with_capacity(self.floating.len());
+        for mut window in std::mem::take(&mut self.floating) {
+            let Some(mut dock) = window.dock.take() else {
+                keep.push(window);
                 continue;
             };
-            let title = self.floating_title(&tab);
+            if dock.iter_all_tabs().next().is_none() {
+                continue;
+            }
+            let viewport = window.viewport;
+            let project = window.home.0.clone();
+            let title = self.floating_title_for_dock(&mut dock);
             let mut close = false;
             ctx.show_viewport_immediate(
-                pane.viewport,
+                viewport,
                 egui::ViewportBuilder::default()
                     .with_title(title)
                     .with_inner_size([960.0, 600.0])
@@ -546,27 +656,41 @@ impl App {
                     {
                         close = true;
                     }
-                    crate::workspace_ui::Viewer {
-                        app: self,
-                        strip: false,
-                        project: None,
-                        // Floating panes identify by viewport instead.
-                        tab: None,
-                        node: None,
-                    }
-                    .ui(ui, &mut tab);
+                    self.paint_float_dock(ui, viewport, &project, &mut dock);
                 },
             );
             if close {
-                closed.push((pane.home.0, pane.home.1, tab));
-            } else {
-                pane.tab = Some(tab);
-                self.floating.push(pane);
+                closed.push((window.home.0, window.home.1, dock));
+            } else if dock.iter_all_tabs().next().is_some() {
+                window.dock = Some(dock);
+                keep.push(window);
             }
+            // An emptied window drops its dock and goes away with it.
         }
-        for (project, home, tab) in closed {
-            self.dock_back_floating(project, home, tab);
+        self.floating = keep;
+        for (project, home, dock) in closed {
+            self.dock_back_window(project, home, dock);
         }
+        // Queues for windows that closed without rendering are dead;
+        // dropping them keeps one stuck request from blocking later ones.
+        if let Some((viewport, _, _)) = &self.add_float_tab
+            && !self.floating.iter().any(|w| &w.viewport == viewport)
+        {
+            self.add_float_tab = None;
+        }
+        if let Some((viewport, _)) = &self.focus_float_tab
+            && !self.floating.iter().any(|w| &w.viewport == viewport)
+        {
+            self.focus_float_tab = None;
+        }
+    }
+
+    /// Live window title for a floating dock, mirroring the tab captions.
+    fn floating_title_for_dock(&self, dock: &mut egui_dock::DockState<Tab>) -> String {
+        dock.main_surface_mut()
+            .find_active_focused()
+            .map(|(_, tab)| self.floating_title(tab))
+            .unwrap_or_else(|| "Terminator".into())
     }
 
     /// Dock the queued pane back into its chosen sibling tab. Same

@@ -38,6 +38,7 @@ impl App {
         ui: &mut egui::Ui,
         pane: Option<egui_dock::NodePath>,
         strip: bool,
+        window: Option<egui::ViewportId>,
     ) {
         for (label, split) in [
             ("New tab", None),
@@ -62,6 +63,9 @@ impl App {
                     } else {
                         self.create_strip_split(split);
                     }
+                } else if let (Some(viewport), Some(pane)) = (window, pane) {
+                    // Floating splits land in the issuing window's dock.
+                    self.add_float_tab = Some((viewport, pane, split.map(str::to_owned)));
                 } else if let Some(pane) = pane {
                     self.add_tab = Some((pane, split.map(str::to_owned)));
                 } else {
@@ -73,6 +77,8 @@ impl App {
         let tabs_in_pane = pane.and_then(|pane| {
             if strip {
                 self.strip_pane_tabs.get(&pane).cloned()
+            } else if window.is_some() {
+                self.float_pane_tabs.get(&pane).cloned()
             } else {
                 self.pane_tabs.get(&pane).cloned()
             }
@@ -110,6 +116,8 @@ impl App {
                 if appearance::menu_item(ui, &label, "Terminal", "").clicked() {
                     if strip {
                         self.focus_strip_tab = Some(tab);
+                    } else if let Some(viewport) = window {
+                        self.focus_float_tab = Some((viewport, tab));
                     } else {
                         self.focus_tab = Some(tab);
                     }
