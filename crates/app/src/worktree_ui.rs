@@ -1,5 +1,7 @@
 //! GUI client for `worktrees-v1`. Git still owns the checkout.
 use super::*;
+#[cfg(test)]
+use anyhow::Context;
 
 #[derive(Clone)]
 pub(crate) struct WorktreeDraft {
@@ -289,6 +291,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn draft(dest: PathBuf) -> WorktreeDraft {
         WorktreeDraft {

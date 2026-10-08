@@ -2,9 +2,11 @@
 use crate::transport::AsyncStream;
 use crate::{
     Context, Duration, Envelope, MAX_FRAME, PROTOCOL_VERSION, PathBuf, Paths, Request, Response,
-    Result, SnapshotHint, State, archived_generation,
+    Result, SnapshotHint, State,
     async_service::{CancellationToken, NativePool},
-    bail, ensure, generations, redirect_allowed, snapshot,
+    bail, ensure, generations,
+    ipc::{archived_generation, redirect_allowed},
+    snapshot,
 };
 use futures_util::{StreamExt, stream};
 use std::{

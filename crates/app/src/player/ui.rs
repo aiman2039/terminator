@@ -1,4 +1,5 @@
 //! Flat Terminator-themed player. One center-pane singleton.
+use super::eq::{EqPreset, eq_bass, eq_flat, eq_treble, format_clock};
 use super::*;
 use eframe::egui::{self, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
 use engine::Status;

@@ -286,6 +286,8 @@ impl JobQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::sync::mpsc::{self, Receiver};
     fn fixture() -> (App, egui::Context, tempfile::TempDir, Receiver<Job>) {
         let directory = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
