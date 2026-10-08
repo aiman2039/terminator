@@ -9,6 +9,28 @@ use terminator::{App, daemon_connection, installation};
 use terminator_core::{Paths, crash, generations};
 mod renderer;
 
+/// Fixture runs render on a schedule while occluded; without a held
+/// activity macOS App Nap suspends their timers mid-case (stalled
+/// screenshots, windows that never register). Test builds only.
+#[cfg(all(target_os = "macos", feature = "test-support"))]
+fn hold_fixture_activity() {
+    use std::sync::OnceLock;
+    if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_none() {
+        return;
+    }
+    // Leaked: the activity must stay alive for the whole process.
+    static ACTIVITY: OnceLock<()> = OnceLock::new();
+    ACTIVITY.get_or_init(|| {
+        let reason = objc2_foundation::NSString::from_str("fixture rendering");
+        let activity = objc2_foundation::NSProcessInfo::processInfo()
+            .beginActivityWithOptions_reason(
+                objc2_foundation::NSActivityOptions::UserInitiated,
+                &reason,
+            );
+        std::mem::forget(activity);
+    });
+}
+
 fn main() -> Result<()> {
     let renderer_name = std::env::var_os("TERMINATOR_RENDERER")
         .map(|name| {
@@ -32,6 +54,8 @@ fn main() -> Result<()> {
     };
     let paths = generations::workspace_paths(&paths)?;
     paths.init()?;
+    #[cfg(all(target_os = "macos", feature = "test-support"))]
+    hold_fixture_activity();
     crash::install(crash::CrashInstall {
         binary: "terminator",
         version: env!("CARGO_PKG_VERSION"),
@@ -77,7 +101,8 @@ fn main() -> Result<()> {
             .with_active(
                 !(cfg!(feature = "test-support")
                     && std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
-                    && std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some()),
+                    && std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some()
+                    && std::env::var_os("TERMINATOR_TEST_FOREGROUND").is_none()),
             )
             .with_mouse_passthrough(
                 cfg!(feature = "test-support")

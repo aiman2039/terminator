@@ -116,6 +116,9 @@ impl App {
         if self.exit.active() {
             return;
         }
+        // Floating panes rejoin their workspaces first, so dirty-buffer
+        // prompts and the exit checkpoint see the complete layout.
+        self.dock_back_all_floating();
         let waiting_on_native = self.dirty_native_path().is_some()
             || self.native_close_prompt.is_some()
             || self.native_close_after_save.is_some()

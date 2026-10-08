@@ -712,18 +712,17 @@ impl App {
         let width = Self::WINDOW_CONTROL_RESERVE * native / ui.ctx().pixels_per_point();
         let row = ui.cursor();
         let height = 28.0_f32.min(row.height());
-        // Only consumed under test-support / non-macOS below; bare macOS
-        // builds reserve the space without reading it back.
-        #[allow(unused_variables)]
-        let rect = egui::Rect::from_min_size(
+        // macOS without the fixture harness consumes neither use below;
+        // the underscore keeps plain builds warning-free.
+        let _rect = egui::Rect::from_min_size(
             egui::pos2(row.left(), row.center().y - height * 0.5),
             egui::vec2(width, height),
         );
         ui.add_space(width);
         #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), "window-controls", rect);
+        diagnostics::record(ui.ctx(), "window-controls", _rect);
         #[cfg(not(target_os = "macos"))]
-        paint_window_controls(ui, rect);
+        paint_window_controls(ui, _rect);
     }
 
     /// Left-align the project name; spare width is drag space between the
@@ -1189,6 +1188,23 @@ impl App {
                             },
                         attention,
                     )
+                })
+                .collect();
+            // Sibling tabs for the pane menu's dock-back targets, refreshed
+            // every frame before the main dock paints (which checks the
+            // workspace out, so the menu cannot read it then).
+            self.dock_back_targets = workspace
+                .tabs
+                .iter()
+                .filter(|group| group.id != workspace.active)
+                .map(|group| {
+                    let primary = group
+                        .primary
+                        .as_ref()
+                        .filter(|tab| group.layout.find_tab(tab).is_some())
+                        .or_else(|| group.layout.iter_all_tabs().next().map(|(_, tab)| tab));
+                    let face = self.tab_face(primary);
+                    (group.id.clone(), face.label, face.icon)
                 })
                 .collect();
             // Gap between tabs is a UI coordinate; the count can exceed the f32 mantissa.
@@ -3341,8 +3357,9 @@ pub(super) struct Viewer<'a> {
     pub(super) app: &'a mut App,
     /// True when rendering the IDE strip dock instead of the main dock.
     /// Creation queues, pane maps, and focus targets switch docks; the
-    /// strip shows native tab bars (the main dock titles panes with
-    /// captions because its tabs live in the workspace strip).
+    /// strip always shows native tab bars, while the main dock shows
+    /// them only on stacked leaves (nested tabs) and otherwise titles
+    /// single panes with captions under the workspace strip.
     pub(super) strip: bool,
 }
 impl TabViewer for Viewer<'_> {
@@ -3354,8 +3371,16 @@ impl TabViewer for Viewer<'_> {
         }
     }
     type Tab = Tab;
-    fn show_tab_bar(&self, _path: egui_dock::NodePath) -> bool {
+    fn show_tab_bar(&self, path: egui_dock::NodePath) -> bool {
+        // Stacked leaves read as nested tabs: a leaf holding more than
+        // one pane shows its bar even in the main dock, whose single
+        // panes keep the workspace strip as their only tab row.
         self.strip
+            || self
+                .app
+                .pane_tabs
+                .get(&path)
+                .is_some_and(|tabs| tabs.len() > 1)
     }
     fn trailing_controls_width(&self) -> f32 {
         let actions = if self.strip {
@@ -3596,6 +3621,16 @@ impl TabViewer for Viewer<'_> {
             #[cfg(feature = "test-support")]
             diagnostics::record(&response.ctx, &format!("strip-tab:{sid}"), response.rect);
         }
+        // Main-dock stacked tab buttons, so fixtures can switch the
+        // nested tabs of a split leaf by recorded name.
+        #[cfg(feature = "test-support")]
+        if !self.strip {
+            diagnostics::record(
+                &response.ctx,
+                &format!("leaf-tab:{}", tab.key()),
+                response.rect,
+            );
+        }
     }
     fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Tab, pane: egui_dock::NodePath) {
         if let Tab::Terminal(sid) = tab {
@@ -3604,6 +3639,43 @@ impl TabViewer for Viewer<'_> {
         }
         self.app.new_terminal_menu(ui, Some(pane), self.strip);
         ui.separator();
+        if !self.strip {
+            // Detach tears this pane off into a fresh top-level tab;
+            // dock-back returns it to a sibling tab. Both queue while
+            // the workspace is checked out and apply once it is back.
+            let stacked = self
+                .app
+                .pane_tabs
+                .get(&pane)
+                .is_some_and(|tabs| tabs.len() > 1);
+            let detachable = stacked || !self.app.dock_back_targets.is_empty();
+            let floatable = crate::App::floatable(tab);
+            if detachable {
+                if appearance::menu_item(ui, "Detach to new tab", "PanelsTopLeft", "").clicked() {
+                    self.app.detach_pane = Some(tab.clone());
+                    ui.close();
+                }
+                let targets = self.app.dock_back_targets.clone();
+                if !targets.is_empty() {
+                    let _ = appearance::text_menu_button(ui, "Move to tab", |ui| {
+                        for (id, label, icon) in targets {
+                            if appearance::menu_item(ui, &label, icon, "").clicked() {
+                                self.app.dock_back_pane = Some((tab.clone(), id));
+                                ui.close();
+                            }
+                        }
+                    });
+                }
+            }
+            if floatable && appearance::menu_item(ui, "Float window", "ExternalLink", "").clicked()
+            {
+                self.app.float_pane = Some(tab.clone());
+                ui.close();
+            }
+            if detachable || floatable {
+                ui.separator();
+            }
+        }
         if let Tab::Terminal(sid) = tab {
             let shell = self
                 .app
@@ -3743,6 +3815,10 @@ impl TabViewer for Viewer<'_> {
                                 branch: branch.as_deref(),
                                 status: self.app.terminal_status_color(&session),
                                 git_tip: &git_tip,
+                                // No leaf tab bar on a lone pane, so its `+`
+                                // lives here instead. Hidden without a leaf
+                                // (e.g. a floated pane) to avoid dead clicks.
+                                stack_tip: pane.is_some().then_some("New tab in this split"),
                                 vertical_tip: &vertical_tip,
                                 horizontal_tip: &horizontal_tip,
                                 brand: leading.brand,
@@ -3759,20 +3835,33 @@ impl TabViewer for Viewer<'_> {
                         (
                             bar.bar,
                             Some(bar.close),
-                            Some((bar.git, bar.split_vertical, bar.split_horizontal)),
+                            Some((bar.git, bar.stack, bar.split_vertical, bar.split_horizontal)),
                         )
                     };
                     #[cfg(feature = "test-support")]
-                    if !is_markdown && !lone && !editing {
+                    if !is_markdown && !editing {
+                        // Recorded even for lone panes (whose title the
+                        // workspace tab already shows) so fixtures can
+                        // address their caption menus.
                         diagnostics::record(
                             ui.ctx(),
                             &format!("pane-caption:{}", session.label),
                             response.rect,
                         );
+                        // The bar paints no title for lone panes (see the
+                        // `title` argument above), so only titled panes
+                        // record one: fixtures can tell title duplication.
+                        if !lone {
+                            diagnostics::record(
+                                ui.ctx(),
+                                &format!("pane-title:{}", session.label),
+                                response.rect,
+                            );
+                        }
                     }
                     let controls_left = actions
                         .as_ref()
-                        .map(|(git, _, _)| git.rect.left() - 4.0)
+                        .map(|(git, _, _, _)| git.rect.left() - 4.0)
                         .unwrap_or_else(|| {
                             response.rect.right()
                                 - if close.is_some() && !is_markdown {
@@ -3793,25 +3882,36 @@ impl TabViewer for Viewer<'_> {
                         );
                     }
                     let closing = close.as_ref().is_some_and(eframe::egui::Response::clicked);
-                    let git_clicked = actions.as_ref().is_some_and(|(git, _, _)| git.clicked());
+                    let git_clicked = actions.as_ref().is_some_and(|(git, _, _, _)| git.clicked());
+                    let stack_clicked = actions.as_ref().is_some_and(|(_, stack, _, _)| {
+                        stack.as_ref().is_some_and(eframe::egui::Response::clicked)
+                    });
                     let split_vertical = actions
                         .as_ref()
-                        .is_some_and(|(_, split, _)| split.clicked());
+                        .is_some_and(|(_, _, split, _)| split.clicked());
                     let split_horizontal = actions
                         .as_ref()
-                        .is_some_and(|(_, _, split)| split.clicked());
+                        .is_some_and(|(_, _, _, split)| split.clicked());
                     let on_control = close.as_ref().is_some_and(eframe::egui::Response::hovered)
-                        || actions.as_ref().is_some_and(|(git, vertical, horizontal)| {
-                            git.hovered() || vertical.hovered() || horizontal.hovered()
-                        });
+                        || actions
+                            .as_ref()
+                            .is_some_and(|(git, stack, vertical, horizontal)| {
+                                git.hovered()
+                                    || stack.as_ref().is_some_and(eframe::egui::Response::hovered)
+                                    || vertical.hovered()
+                                    || horizontal.hovered()
+                            });
                     #[cfg(feature = "test-support")]
                     if let Some(close) = &close {
                         diagnostics::record(ui.ctx(), &format!("editor-close:{sid}"), close.rect);
                         diagnostics::record(ui.ctx(), &format!("pane-close:{sid}"), close.rect);
                     }
                     #[cfg(feature = "test-support")]
-                    if let Some((git, vertical, horizontal)) = &actions {
+                    if let Some((git, stack, vertical, horizontal)) = &actions {
                         diagnostics::record(ui.ctx(), &format!("pane-git:{sid}"), git.rect);
+                        if let Some(stack) = stack {
+                            diagnostics::record(ui.ctx(), &format!("pane-stack:{sid}"), stack.rect);
+                        }
                         diagnostics::record(
                             ui.ctx(),
                             &format!("pane-split-vertical:{sid}"),
@@ -3853,11 +3953,17 @@ impl TabViewer for Viewer<'_> {
                         self.app.focus_tab = Some(Tab::Terminal(sid.clone()));
                         self.app.show_git_sidebar();
                     }
-                    if split_vertical || split_horizontal {
+                    if split_vertical || split_horizontal || stack_clicked {
                         self.app.active_session = Some(sid.clone());
                         self.app.focus_tab = Some(Tab::Terminal(sid.clone()));
                     }
                     if let Some(pane) = pane {
+                        // The caption `+` queues the same leaf-anchored
+                        // request as the leaf tab bar `+`: a stacked tab in
+                        // this split, never a new top-level tab.
+                        if stack_clicked {
+                            self.app.add_tab = Some((pane, None));
+                        }
                         if split_vertical {
                             self.app.add_tab = Some((pane, Some("right".into())));
                         }

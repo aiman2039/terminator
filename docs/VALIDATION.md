@@ -1,5 +1,26 @@
 # Validation evidence — 2026-09-08
 
+## In-split tabs, in-dock detach/dock-back, float windows (2026-10-08)
+
+Opening a tab inside a split stacks it in that leaf (`leaf-tab:*` records, leaf
+`+` appends, `Open in current split` file action routes opens to the active
+leaf instead of a new top-level tab). In-dock detach moves a pane to a new tab
+and `Move to tab` re-homes it via existing move primitives, without a layout
+version bump. `Float window` moves a terminal/file pane to a standalone OS
+window; closing it docks the pane back, and quit docks all floats first, so no
+pane is lost.
+
+`cargo xtask gui float-window` passed 7/7 scenarios: `float-home`,
+`float-missing`, `insplit`, `stacked-plus`, `stacked-switch`, `detach-dockback`,
+`drag-detach`. OS window-listing confirms the float appears with its pane
+title while the docked pane record disappears, and docks back on close with
+the daemon sessions intact. Float content pixels are best-effort in fixtures:
+background loops deny occluded second windows Metal drawables (main-window
+toggles are fixture-gated render flags, not shipped behavior), so captures are
+annotated `(unpainted: no pixels captured)`. Unit suite 577 passed, strict
+Clippy and `cargo fmt --check` clean. Captures and logs are in
+`target/validation/native/float-window/*`.
+
 ## Terminal file-menu input and dismissal (2026-10-07)
 
 An open terminal hover menu keeps its first file target until it closes. Mouse

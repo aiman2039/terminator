@@ -127,6 +127,12 @@ impl App {
                 }
                 _ => None,
             })
+            .chain(self.floating.iter().filter_map(|pane| match &pane.tab {
+                Some(Tab::Terminal(sid)) if !self.state.sessions.iter().any(|s| s.id == *sid) => {
+                    Some(sid.clone())
+                }
+                _ => None,
+            }))
             .collect();
         missing.sort();
         missing.dedup();

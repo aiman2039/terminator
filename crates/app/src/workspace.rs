@@ -483,6 +483,38 @@ impl Workspace {
         true
     }
 
+    /// Remove a pane for floating outside the dock in its own window,
+    /// dropping an emptied top-level tab. Returns the originating group id
+    /// so closing the window can dock the pane back. Returns None when the
+    /// pane is not in this workspace.
+    pub(crate) fn take_pane(&mut self, pane: &Tab) -> Option<String> {
+        let src = self.group_with_pane(pane)?;
+        let home = self.tabs.get(src)?.id.clone();
+        let path = self.tabs.get(src)?.layout.find_tab(pane)?;
+        self.tabs.get_mut(src)?.layout.remove_tab(path);
+        self.refresh_primary(src, pane);
+        let previous = self.active_index();
+        self.tabs
+            .retain(|tab| tab.layout.iter_all_tabs().next().is_some());
+        self.normalize(previous);
+        Some(home)
+    }
+
+    /// Dock a formerly floating pane back: into its home group when that
+    /// still exists, else into the active tab's focused leaf. Never opens
+    /// a new top-level tab; readers tolerate a stale `primary`.
+    pub(crate) fn dock_back(&mut self, pane: Tab, home: &str) {
+        if self.contains(&pane) {
+            self.activate_containing(&pane);
+            return;
+        }
+        self.version = self.version.max(pane.layout_version());
+        if self.tabs.iter().any(|tab| tab.id == home) {
+            home.clone_into(&mut self.active);
+        }
+        self.push_to_focused_leaf(pane);
+    }
+
     /// Move a pane out of its group into a fresh top-level tab at `index`,
     /// which becomes active. Dropping a pane between two strip tabs lands
     /// the new tab exactly there; an emptied source group is dropped first,
@@ -1446,5 +1478,116 @@ mod tests {
         assert!(!workspace.contains(&Tab::Terminal("shell".into())));
         assert!(workspace.contains(&Tab::Terminal("edit".into())));
         assert!(workspace.contains(&Tab::Terminal("other".into())));
+    }
+
+    #[test]
+    fn detach_file_window_moves_pane_to_fresh_top_level_tab() {
+        let shell = Tab::Terminal("one".into());
+        let editor = Tab::NativeEditor {
+            path: "/tmp/note.md".into(),
+        };
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![shell.clone(), editor.clone()]));
+        // Detach tears the file window off into a new tab at the end of
+        // the strip; the source tab keeps the remaining terminal.
+        let id = workspace
+            .move_pane_to_new_group_at(&editor, workspace.tabs.len())
+            .expect("detach creates a tab");
+        assert_eq!(workspace.tabs.len(), 2);
+        assert_eq!(workspace.active, id);
+        assert!(workspace.tabs[0].layout.find_tab(&shell).is_some());
+        assert!(workspace.tabs[0].layout.find_tab(&editor).is_none());
+        assert!(workspace.tabs[1].layout.find_tab(&editor).is_some());
+        assert!(
+            !workspace
+                .move_pane_to_new_group_at(
+                    &Tab::NativeEditor {
+                        path: "/tmp/ghost.md".into()
+                    },
+                    0
+                )
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn take_pane_for_float_drops_emptied_tab_and_reports_home() {
+        let shell = Tab::Terminal("one".into());
+        let editor = Tab::NativeEditor {
+            path: "/tmp/note.md".into(),
+        };
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![shell.clone(), editor.clone()]));
+        // A lone pane's tab goes away; the home id survives for dock-back.
+        workspace.add("lone".into(), Tab::Terminal("solo".into()));
+        let home = workspace
+            .take_pane(&Tab::Terminal("solo".into()))
+            .expect("pane present");
+        assert_eq!(home, "lone");
+        assert!(workspace.tabs.iter().all(|tab| tab.id != "lone"));
+        // Taking from a shared leaf keeps the tab with the other pane.
+        let home = workspace.take_pane(&editor).expect("pane present");
+        assert_eq!(workspace.tabs.len(), 1);
+        assert_eq!(workspace.active, home);
+        assert!(workspace.tabs[0].layout.find_tab(&shell).is_some());
+        assert!(workspace.take_pane(&editor).is_none());
+    }
+
+    #[test]
+    fn take_pane_of_last_pane_keeps_one_empty_group_for_dock_access() {
+        let shell = Tab::Terminal("one".into());
+        let mut workspace = Workspace::from_layout(DockState::new(vec![shell.clone()]));
+        let home = workspace.take_pane(&shell).expect("pane present");
+        assert_eq!(home, workspace.active);
+        // Not a new tab: the emptied group is replaced by the single empty
+        // group the dock accessors require, holding zero panes. The pane
+        // itself survives in the float window for dock-back.
+        assert_eq!(workspace.tabs.len(), 1);
+        assert_eq!(workspace.iter_all_tabs().count(), 0);
+    }
+
+    #[test]
+    fn dock_back_float_prefers_home_then_active_leaf() {
+        let shell = Tab::Terminal("one".into());
+        let editor = Tab::NativeEditor {
+            path: "/tmp/note.md".into(),
+        };
+        let mut workspace = Workspace::from_layout(DockState::new(vec![shell.clone()]));
+        let home = workspace.tabs[0].id.clone();
+        // Home group still exists: the pane stacks there, no new tab.
+        workspace.dock_back(editor.clone(), &home);
+        assert_eq!(workspace.tabs.len(), 1);
+        assert_eq!(workspace.active, home);
+        assert!(workspace.tabs[0].layout.find_tab(&editor).is_some());
+        // Home group gone: the pane lands in the active leaf instead.
+        let mut workspace = Workspace::from_layout(DockState::new(vec![shell.clone()]));
+        workspace.dock_back(editor.clone(), "missing");
+        assert_eq!(workspace.tabs.len(), 1);
+        assert!(workspace.tabs[0].layout.find_tab(&editor).is_some());
+        // Already docked: focuses instead of duplicating.
+        let before = workspace.tabs[0].layout.iter_all_tabs().count();
+        workspace.dock_back(editor.clone(), "missing");
+        assert_eq!(workspace.tabs[0].layout.iter_all_tabs().count(), before);
+    }
+
+    #[test]
+    fn dock_back_file_window_returns_to_source_group() {
+        let shell = Tab::Terminal("one".into());
+        let editor = Tab::NativeEditor {
+            path: "/tmp/note.md".into(),
+        };
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![shell.clone(), editor.clone()]));
+        workspace
+            .move_pane_to_new_group_at(&editor, workspace.tabs.len())
+            .expect("detach creates a tab");
+        let home = workspace.tabs[0].id.clone();
+        // Both tabs hold a single pane, so dock-back exchanges them: the
+        // file window returns to its tab and selects it.
+        assert!(workspace.move_pane_to_group(&editor, &home));
+        assert_eq!(workspace.active, home);
+        assert!(workspace.tabs[0].layout.find_tab(&editor).is_some());
+        assert!(workspace.tabs[1].layout.find_tab(&shell).is_some());
+        assert!(!workspace.move_pane_to_group(&editor, "missing"));
     }
 }

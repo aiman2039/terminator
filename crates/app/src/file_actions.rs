@@ -8,6 +8,7 @@ pub enum FileAction {
     Open,
     Text,
     Split,
+    Here,
     External,
     Browser,
     Copy,
@@ -84,6 +85,7 @@ pub fn items(
         (file, "Open file", FileAction::Open),
         (file, "Open as text", FileAction::Text),
         (file, "Open in editor split", FileAction::Split),
+        (file, "Open in current split", FileAction::Here),
         (file, "Open externally", FileAction::External),
         (browser, "Open in browser", FileAction::Browser),
         (true, "Copy target", FileAction::Copy),
@@ -117,6 +119,7 @@ pub fn menu_with(ui: &mut egui::Ui, spec: FileMenu, open: &str, split: &str) -> 
         let icon = match action {
             FileAction::Open | FileAction::Text => "FileCode",
             FileAction::Split => "PanelRightClose",
+            FileAction::Here => "PanelsTopLeft",
             FileAction::External | FileAction::Browser => "ExternalLink",
             FileAction::Copy => "Copy",
             FileAction::StagedDiff
