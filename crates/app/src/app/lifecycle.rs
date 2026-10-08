@@ -62,6 +62,11 @@ impl App {
         let image_jobs = gui_services::ImageJobs(services.clone());
         let _ = jobs.send(Job::HookStatus);
         let (pty_tx, pty_rx) = mpsc::channel();
+        // Language servers run as actors on the GUI service supervisor:
+        // without this, per-frame sync would spawn Tokio processes from
+        // the GUI thread, which owns no runtime and panics.
+        let mut lsp = lsp_manager::LspManager::new();
+        lsp.set_services(services.clone());
         Self {
             file_activation: None,
             git_commit: String::new(),
@@ -258,12 +263,14 @@ impl App {
             native_docs: HashMap::new(),
             native_pending_line: HashMap::new(),
             native_pending_col: HashMap::new(),
-            lsp: lsp_manager::LspManager::new(),
+            lsp,
             native_close_prompt: None,
             native_close_after_save: None,
+            native_close_after_save_issuer: None,
             pending_app_quit: false,
             pending_native_close: Vec::new(),
             pending_native_splits: Vec::new(),
+            pending_goto: Vec::new(),
             file_index: terminator_native_edit::finder::FileIndex::empty(),
             file_index_rx: None,
             file_index_roots: Vec::new(),

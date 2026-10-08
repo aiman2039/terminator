@@ -235,13 +235,15 @@ impl App {
                 .unwrap_or_else(Workspace::empty);
             self.workspace_bar(ui, &project, &mut workspace);
             self.layouts.insert(project, workspace);
-            // Deferred native closes (`:q`, `:wq`, `:qa` from the file
-            // view) run here: the workspace is checked back in, so the
-            // tabs resolve again.
-            self.drain_pending_native_close();
         } else {
             header_drag_space(ui);
         }
+        // Deferred native closes (`:q`, `:wq`, `:qa` from the file view)
+        // run here: workspaces are checked back in, so the tabs resolve
+        // again. Unconditional: with no project selected there is no
+        // checkout, so floating close requests must still drain instead
+        // of stalling with their windows open.
+        self.drain_pending_native_close();
     }
 
     pub(super) fn header_tools(&mut self, ui: &mut egui::Ui) {

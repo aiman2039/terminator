@@ -409,6 +409,7 @@ impl App {
                     &mut Viewer {
                         app: self,
                         strip: true,
+                        project: Some(project.clone()),
                     },
                 );
             self.apply_add_strip_tab(&project, &mut strip);

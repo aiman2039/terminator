@@ -549,6 +549,7 @@ impl App {
                     crate::workspace_ui::Viewer {
                         app: self,
                         strip: false,
+                        project: None,
                     }
                     .ui(ui, &mut tab);
                 },

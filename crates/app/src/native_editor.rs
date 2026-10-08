@@ -220,12 +220,26 @@ impl NativeDoc {
 
 enum PostEdit {
     Keep,
-    Close,
+    /// Close every view of the file. `force` (`:q!`) also takes floating
+    /// windows; a plain `:q` leaves them (and their buffer) alone.
+    Close {
+        force: bool,
+    },
 }
 
 /// Deferred `:split` / `:vsplit` / `:tabnew`: which layout change a drained
 /// engine effect asks for. The engine never touches layout; the GUI maps
 /// these onto its own tabs, preserving the originating project.
+/// View that asked for a deferred native close. Plain closes remove
+/// only this view; every other copy of the file stays open.
+#[derive(Clone, Debug)]
+pub(super) enum CloseIssuer {
+    /// A docked pane in `project`: plain closes remove one copy there.
+    Docked(String),
+    /// A floating window: plain closes remove that pane.
+    Floating(egui::ViewportId),
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum NativeSplit {
     /// `:split`: same file in a pane below the current view.
@@ -268,6 +282,9 @@ impl App {
 
     /// Drop buffers (and pending lines/prompts) for paths with no tab left.
     /// Data-level tab removal bypasses `on_close`, so call it after those.
+    /// Floating windows hold their panes outside the docks: a floated
+    /// editor keeps its buffer even when no workspace tab shows it, or
+    /// closing an unrelated tab would discard unsaved changes.
     pub(super) fn prune_native_docs(&mut self) {
         let mut live = std::collections::HashSet::new();
         for workspace in self.layouts.values() {
@@ -277,6 +294,11 @@ impl App {
                         live.insert(path.clone());
                     }
                 }
+            }
+        }
+        for pane in &self.floating {
+            if let Some(Tab::NativeEditor { path }) = pane.tab.as_ref() {
+                live.insert(path.clone());
             }
         }
         self.native_docs.retain(|path, _| live.contains(path));
@@ -298,10 +320,13 @@ impl App {
             .is_some_and(|path| !live.contains(path))
         {
             self.native_close_after_save = None;
+            self.native_close_after_save_issuer = None;
         }
     }
 
-    /// Every path with a live native editor tab, de-duplicated.
+    /// Every path with a live native editor tab, de-duplicated. Floating
+    /// windows count: closing the docked copy of a floated file must
+    /// retain its buffer.
     fn all_native_tab_paths(&self) -> Vec<PathBuf> {
         let mut paths = Vec::new();
         for workspace in self.layouts.values() {
@@ -315,36 +340,120 @@ impl App {
                 }
             }
         }
+        for pane in &self.floating {
+            if let Some(Tab::NativeEditor { path }) = pane.tab.as_ref()
+                && !paths.contains(path)
+            {
+                paths.push(path.clone());
+            }
+        }
         paths
     }
 
+    /// Issuing view for a close requested from a file view: the floating
+    /// window it renders in, else the docked project it renders under.
+    fn close_issuer(ui: &egui::Ui, project: Option<&str>) -> Option<CloseIssuer> {
+        let viewport = ui.ctx().viewport_id();
+        if viewport != egui::ViewportId::ROOT {
+            Some(CloseIssuer::Floating(viewport))
+        } else {
+            project.map(|project| CloseIssuer::Docked(project.to_owned()))
+        }
+    }
+
+    /// Remove one docked copy of `path` from `workspace`. Returns whether
+    /// a copy was there.
+    fn remove_one_docked_copy(workspace: &mut Workspace, path: &Path) -> bool {
+        let target = Tab::NativeEditor {
+            path: path.to_owned(),
+        };
+        let mut removed = false;
+        for tab in &mut workspace.tabs {
+            if let Some(found) = tab.layout.find_tab(&target) {
+                tab.layout.remove_tab(found);
+                if tab.primary == Some(target.clone()) {
+                    tab.primary = tab
+                        .layout
+                        .iter_all_tabs()
+                        .next()
+                        .map(|(_, tab)| tab.clone());
+                }
+                removed = true;
+                break;
+            }
+        }
+        // Restores the non-empty invariant (`:qa` can empty a
+        // workspace); a bare retain panics the next dock access.
+        workspace.drop_empty_tabs();
+        removed
+    }
+
     /// Close a native tab and drop its buffer. Callers confirm dirty tabs first.
+    /// `force` (`:q!`, `:qa!`, explicit discard) closes every view of the
+    /// file. A plain close removes only its issuing view (`issuer`):
+    /// one docked copy in the issuing project, or the issuing floating
+    /// pane; every other copy stays open with its buffer.
     ///
     /// Callers rendering inside the workspace checkout
     /// (`native_editor_view`) must defer through `pending_native_close`:
     /// the workspace is removed from `layouts` while it renders, so a
     /// direct close finds no tab, drops the buffer, and the tab springs
     /// back on the next frame.
-    pub(super) fn close_native_tab(&mut self, path: &Path) {
-        for workspace in self.layouts.values_mut() {
-            for tab in &mut workspace.tabs {
-                let target = Tab::NativeEditor {
-                    path: path.to_owned(),
-                };
-                if let Some(found) = tab.layout.find_tab(&target) {
-                    tab.layout.remove_tab(found);
-                    if tab.primary == Some(target) {
-                        tab.primary = tab
-                            .layout
-                            .iter_all_tabs()
-                            .next()
-                            .map(|(_, tab)| tab.clone());
+    pub(super) fn close_native_tab(
+        &mut self,
+        path: &Path,
+        force: bool,
+        issuer: Option<CloseIssuer>,
+    ) {
+        let issuer_viewport = match &issuer {
+            Some(CloseIssuer::Floating(viewport)) => Some(*viewport),
+            _ => None,
+        };
+        if force {
+            for workspace in self.layouts.values_mut() {
+                while Self::remove_one_docked_copy(workspace, path) {}
+            }
+        } else {
+            match issuer {
+                // One copy in the issuing project; other projects and
+                // splits keep theirs.
+                Some(CloseIssuer::Docked(project)) => {
+                    if !self
+                        .layouts
+                        .get_mut(&project)
+                        .is_some_and(|workspace| Self::remove_one_docked_copy(workspace, path))
+                    {
+                        // Project gone since the request queued: take one
+                        // copy anywhere rather than dropping the close.
+                        for workspace in self.layouts.values_mut() {
+                            if Self::remove_one_docked_copy(workspace, path) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                // Only the issuing pane; docked views keep the file.
+                Some(CloseIssuer::Floating(_)) => {}
+                // Not view-issued (modal, quit flows): legacy removal of
+                // every docked copy.
+                None => {
+                    for workspace in self.layouts.values_mut() {
+                        while Self::remove_one_docked_copy(workspace, path) {}
                     }
                 }
             }
-            // Restores the non-empty invariant (`:qa` can empty a
-            // workspace); a bare retain panics the next dock access.
-            workspace.drop_empty_tabs();
+        }
+        // Floating views hold the path outside the docks. Force closes
+        // take all of them; a plain close takes only its issuing pane.
+        if force {
+            self.floating.retain(|pane| {
+                !matches!(&pane.tab, Some(Tab::NativeEditor { path: current }) if current == path)
+            });
+        } else if let Some(viewport) = issuer_viewport {
+            self.floating.retain(|pane| {
+                pane.viewport != viewport
+                    || !matches!(&pane.tab, Some(Tab::NativeEditor { path: current }) if current == path)
+            });
         }
         // Split views (`:split` / `:vsplit` / `:tabnew`) share the one
         // buffer: dropping it while another view stays open would reload
@@ -357,6 +466,7 @@ impl App {
         }
         if self.native_close_after_save.as_deref() == Some(path) {
             self.native_close_after_save = None;
+            self.native_close_after_save_issuer = None;
         }
         self.save_layouts();
     }
@@ -388,8 +498,15 @@ impl App {
             .send(Update::OpenNativeEditor(project.into(), path, after));
     }
 
-    /// Render the native editor pane for an open file.
-    pub(super) fn native_editor_view(&mut self, ui: &mut egui::Ui, path: &Path) {
+    /// Render the native editor pane for an open file. `project` is the
+    /// docked project under render, if any: close requests remember
+    /// their issuing view so plain closes take only that copy.
+    pub(super) fn native_editor_view(
+        &mut self,
+        ui: &mut egui::Ui,
+        path: &Path,
+        project: Option<&str>,
+    ) {
         let vim = self.state.settings.native_vim;
         let failed_color = appearance::color(&self.theme.status_failed);
         let services = self.services.clone();
@@ -423,7 +540,11 @@ impl App {
             if settled {
                 // Deferred: the workspace is checked out of `layouts` while
                 // this view renders; closing runs after it is checked back in.
-                self.pending_native_close.push(path.to_owned());
+                self.pending_native_close.push((
+                    path.to_owned(),
+                    false,
+                    self.native_close_after_save_issuer.clone(),
+                ));
                 return;
             }
         }
@@ -435,6 +556,9 @@ impl App {
             .into_owned();
         // Deferred closes run after the borrow below ends.
         let mut defer_close_after_save = false;
+        // The view issuing `:wq`: the save settles frames later, when a
+        // different view of the file may render first.
+        let mut wq_issuer = None;
         let mut quit_all: Option<bool> = None;
         // Same for splits/tabs: the workspace is checked out while this
         // renders, so layout changes wait for the drain below. Hover/goto
@@ -543,11 +667,11 @@ impl App {
                             doc.save_error =
                                 Some("No write since last change (add ! to override)".into());
                         } else {
-                            post = PostEdit::Close;
+                            post = PostEdit::Close { force: false };
                         }
                     }
                     Effect::QuitForce => {
-                        post = PostEdit::Close;
+                        post = PostEdit::Close { force: true };
                     }
                     Effect::WriteQuit { force } => {
                         // The write is async: closing here would always see
@@ -556,6 +680,7 @@ impl App {
                         doc.force_save = force;
                         doc.start_save(&services);
                         defer_close_after_save = true;
+                        wq_issuer = Self::close_issuer(ui, project);
                     }
                     Effect::QuitAll { force } => {
                         quit_all = Some(force);
@@ -640,8 +765,12 @@ impl App {
             }
             post
         };
-        if matches!(post, PostEdit::Close) {
-            self.pending_native_close.push(path.to_owned());
+        if let PostEdit::Close { force } = post {
+            self.pending_native_close.push((
+                path.to_owned(),
+                force,
+                Self::close_issuer(ui, project),
+            ));
             return;
         }
         // Language-server sync for the visible buffer: clone the text
@@ -666,10 +795,16 @@ impl App {
         if let Some(position) = goto_at {
             self.lsp.request_definition(path, position);
         }
-        self.drain_goto_jump();
+        // Finished jumps queue until the workspace is checked back in:
+        // this view renders while it is checked out, so opening the
+        // target now would miss its project and drop the jump.
+        if let Some(jump) = self.lsp.take_goto() {
+            self.pending_goto.push(jump);
+        }
         self.show_hover_popup(ui, path);
         if defer_close_after_save {
             self.native_close_after_save = Some(path.to_owned());
+            self.native_close_after_save_issuer = wq_issuer;
         }
         // `:qa` resolves at drain time: the current workspace is checked
         // out of `layouts` here, so its tabs are invisible to the dirty
@@ -682,14 +817,12 @@ impl App {
         }
     }
 
-    /// Open finished goto jumps: same file places the cursor, other
+    /// Open one finished goto jump: same file places the cursor, other
     /// files open at the target line and column through the pending
     /// machinery (`open_native` carries the line, `native_pending_col`
-    /// the column).
-    fn drain_goto_jump(&mut self) {
-        let Some(jump) = self.lsp.take_goto() else {
-            return;
-        };
+    /// the column). Runs after the workspace is checked back in, when
+    /// the originating project resolves again.
+    fn apply_goto_jump(&mut self, jump: lsp_manager::GotoJump) {
         let Some(target) = jump.targets.first() else {
             return;
         };
@@ -762,14 +895,21 @@ impl App {
     /// flows) keep calling `close_native_tab` directly. Deferred `:split`
     /// / `:vsplit` / `:tabnew` drain here too: the workspace is checked
     /// out while the file view renders, so layout changes wait for it.
+    /// Finished goto jumps drain here as well: opening a cross-file
+    /// target needs the originating project, which is missing while the
+    /// workspace is checked out for rendering.
     pub(super) fn drain_pending_native_close(&mut self) {
         let pending = std::mem::take(&mut self.pending_native_close);
-        for path in &pending {
-            self.close_native_tab(path);
+        for (path, force, issuer) in &pending {
+            self.close_native_tab(path, *force, issuer.clone());
         }
         let splits = std::mem::take(&mut self.pending_native_splits);
         for (path, split) in splits {
             self.split_native_view(&path, split);
+        }
+        let jumps = std::mem::take(&mut self.pending_goto);
+        for jump in jumps {
+            self.apply_goto_jump(jump);
         }
         if let Some(force) = self.pending_quit_all.take() {
             let paths = self.all_native_tab_paths();
@@ -788,25 +928,37 @@ impl App {
                     return;
                 }
             }
+            // `:qa` takes every view including floating ones; the dirty
+            // guard above already ran for the non-force case.
             for path in &paths {
-                self.close_native_tab(path);
+                self.close_native_tab(path, true, None);
             }
         }
     }
 
     /// Project owning a live native view of `path`, for deferred splits:
     /// the originating project is preserved, never the selected one.
+    /// Floating windows count too: a jump issued from a floated editor
+    /// opens in its home project.
     fn project_with_native_tab(&self, path: &Path) -> Option<String> {
-        self.layouts.iter().find_map(|(project, workspace)| {
-            workspace
-                .tabs
-                .iter()
-                .flat_map(|tab| tab.layout.iter_all_tabs())
-                .any(|(_, tab)| {
-                    matches!(tab, Tab::NativeEditor { path: current } if current == path)
+        self.layouts
+            .iter()
+            .find_map(|(project, workspace)| {
+                workspace
+                    .tabs
+                    .iter()
+                    .flat_map(|tab| tab.layout.iter_all_tabs())
+                    .any(|(_, tab)| {
+                        matches!(tab, Tab::NativeEditor { path: current } if current == path)
+                    })
+                    .then(|| project.clone())
+            })
+            .or_else(|| {
+                self.floating.iter().find_map(|pane| {
+                    matches!(&pane.tab, Some(Tab::NativeEditor { path: current }) if current == path)
+                        .then(|| pane.home.0.clone())
                 })
-                .then(|| project.clone())
-        })
+            })
     }
 
     /// Carry out a deferred `:split` / `:vsplit` / `:tabnew`: the same
@@ -851,7 +1003,7 @@ impl App {
             return;
         };
         if !self.native_dirty(&path) {
-            self.close_native_tab(&path);
+            self.close_native_tab(&path, false, None);
             return;
         }
         let name = path
@@ -886,7 +1038,7 @@ impl App {
             open = false;
         }
         if discard {
-            self.close_native_tab(&path);
+            self.close_native_tab(&path, true, None);
         } else if save_close {
             self.native_close_after_save = Some(path.clone());
             if let Some(doc) = self.native_docs.get_mut(&path) {

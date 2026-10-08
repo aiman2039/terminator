@@ -380,6 +380,7 @@ impl App {
                 &mut Viewer {
                     app: self,
                     strip: false,
+                    project: Some(project.to_owned()),
                 },
             );
         self.finish_pane_drop(ui, dock);

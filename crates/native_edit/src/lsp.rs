@@ -498,9 +498,17 @@ pub fn server_candidates(language: Language) -> &'static [&'static str] {
 }
 
 /// First candidate found on `PATH`: `path_env` is the raw `PATH` value so
-/// tests can pass a fake one; the host passes its real environment.
+/// tests can pass a fake one; the host passes its real environment. On
+/// Windows each stem is also probed with every `PATHEXT` extension, since
+/// `PATH` entries hold `rust-analyzer.exe` rather than `rust-analyzer`.
 #[must_use]
 pub fn find_server(candidates: &[&str], path_env: &str) -> Option<PathBuf> {
+    find_server_with(candidates, path_env, &platform_extensions())
+}
+
+/// [`find_server`] with explicit executable extensions: the seam that
+/// lets non-Windows tests prove `.exe` discovery end to end.
+fn find_server_with(candidates: &[&str], path_env: &str, extensions: &[String]) -> Option<PathBuf> {
     #[cfg(windows)]
     const SEPARATOR: char = ';';
     #[cfg(not(windows))]
@@ -510,13 +518,58 @@ pub fn find_server(candidates: &[&str], path_env: &str) -> Option<PathBuf> {
             continue;
         }
         for candidate in candidates {
-            let full = Path::new(dir).join(candidate);
-            if full.is_file() {
-                return Some(full);
+            for name in candidate_file_names(candidate, extensions) {
+                let full = Path::new(dir).join(name);
+                if full.is_file() {
+                    return Some(full);
+                }
             }
         }
     }
     None
+}
+
+/// File names to probe for one server stem: the stem itself, plus the
+/// stem with each executable extension. A stem that already carries an
+/// extension is used as-is, so explicit `rust-analyzer.exe` candidates
+/// never gain a doubled suffix.
+fn candidate_file_names(candidate: &str, extensions: &[String]) -> Vec<String> {
+    if extensions.is_empty() || Path::new(candidate).extension().is_some() {
+        return vec![candidate.to_owned()];
+    }
+    extensions
+        .iter()
+        .map(|extension| format!("{candidate}{extension}"))
+        .collect()
+}
+
+/// Executable extensions to probe alongside the bare stem: `PATHEXT` on
+/// Windows (mirroring the host resolver), none elsewhere. Empty means
+/// the bare stem is the only name.
+fn platform_extensions() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("PATHEXT")
+            .map(|value| {
+                std::env::split_paths(&value)
+                    .filter_map(|path| {
+                        let extension = path.to_str()?.trim().to_owned();
+                        (!extension.is_empty()).then_some(extension)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .filter(|extensions| !extensions.is_empty())
+            .unwrap_or_else(|| {
+                [".COM", ".EXE", ".BAT", ".CMD"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect()
+            })
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
 }
 
 /// `file://` URI for a path, percent-encoding special characters.
@@ -838,6 +891,31 @@ mod tests {
         assert_eq!(found, Some(fake));
         assert!(find_server(&["rust-analyzer"], "/nonexistent-dir-xyz").is_none());
         assert!(find_server(&["rust-analyzer"], "").is_none());
+    }
+
+    #[test]
+    fn exe_stems_resolve_through_extension_probing() {
+        // Windows `PATH` entries hold `rust-analyzer.exe`, never the bare
+        // stem: prove the probing finds it using explicit extensions so
+        // the test holds on every platform.
+        let extensions = [".EXE", ".BAT"].map(str::to_owned);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let exe = dir.path().join("rust-analyzer.EXE");
+        std::fs::write(&exe, "fake").expect("write fake");
+        let path_env = dir.path().to_string_lossy().into_owned();
+        assert_eq!(
+            find_server_with(&["rust-analyzer"], &path_env, &extensions),
+            Some(exe)
+        );
+        // A stem that already carries an extension is used as-is: no
+        // doubled suffix, no probing.
+        assert_eq!(
+            candidate_file_names("rust-analyzer.EXE", &extensions),
+            vec!["rust-analyzer.EXE".to_owned()]
+        );
+        // Unknown stems still miss, even with extensions configured.
+        assert!(find_server_with(&["pylsp"], &path_env, &extensions).is_none());
+        assert!(find_server_with(&["rust-analyzer"], "", &extensions).is_none());
     }
 
     #[test]

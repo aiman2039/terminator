@@ -4,7 +4,7 @@ use eframe::egui::{self};
 use egui_dock::DockState;
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::mpsc::{self},
 };
 use terminator_core::*;
@@ -159,6 +159,308 @@ mod tests {
                 .find_tab(&Tab::Terminal("one".into()))
                 .is_some()
         );
+    }
+
+    #[test]
+    fn prune_and_close_keep_floated_native_buffers() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/floated.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        assert!(app.native_dirty(&path));
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
+                path: path.clone(),
+            }])),
+        );
+        app.floating.push(FloatingPane {
+            viewport: egui::ViewportId::from_hash_of("float-native"),
+            tab: Some(Tab::NativeEditor { path: path.clone() }),
+            home: ("a".into(), "home".into()),
+        });
+        // A plain close issued from the dock removes that copy and keeps
+        // the floated buffer: the floating window stays open.
+        app.close_native_tab(
+            &path,
+            false,
+            Some(crate::native_editor::CloseIssuer::Docked("a".into())),
+        );
+        assert_eq!(app.floating.len(), 1);
+        assert!(
+            app.native_docs.contains_key(&path),
+            "floated buffer survives docked close"
+        );
+        // Pruning with only the float left still keeps it: dropping it
+        // here would reload from disk and lose unsaved changes.
+        app.prune_native_docs();
+        assert!(
+            app.native_docs.contains_key(&path),
+            "floated buffer survives prune"
+        );
+    }
+
+    #[test]
+    fn force_close_takes_floating_views_and_buffers() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/forced.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
+                path: path.clone(),
+            }])),
+        );
+        app.floating.push(FloatingPane {
+            viewport: egui::ViewportId::from_hash_of("float-forced"),
+            tab: Some(Tab::NativeEditor { path: path.clone() }),
+            home: ("a".into(), "home".into()),
+        });
+        // `:q!` closes every view of the file, floating included.
+        app.close_native_tab(&path, true, None);
+        assert!(app.floating.is_empty());
+        assert!(!app.native_docs.contains_key(&path));
+    }
+
+    #[test]
+    fn plain_close_takes_issuing_float_and_keeps_other_views() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/issuing.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        let first = egui::ViewportId::from_hash_of("float-first");
+        let second = egui::ViewportId::from_hash_of("float-second");
+        for viewport in [first, second] {
+            app.floating.push(FloatingPane {
+                viewport,
+                tab: Some(Tab::NativeEditor { path: path.clone() }),
+                home: ("a".into(), "home".into()),
+            });
+        }
+        // `:q` from the first floating view closes that window only:
+        // the second view — and its unsaved buffer — survive.
+        let floating = crate::native_editor::CloseIssuer::Floating;
+        app.close_native_tab(&path, false, Some(floating(first)));
+        assert_eq!(app.floating.len(), 1);
+        assert_eq!(app.floating[0].viewport, second);
+        assert!(app.native_docs.contains_key(&path));
+        // Closing the last view drops the buffer.
+        app.close_native_tab(&path, false, Some(floating(second)));
+        assert!(app.floating.is_empty());
+        assert!(!app.native_docs.contains_key(&path));
+    }
+
+    #[test]
+    fn quit_all_clean_closes_floating_only_editors() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/qa-float.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::new(path.clone(), false),
+        );
+        assert!(!app.native_dirty(&path));
+        app.floating.push(FloatingPane {
+            viewport: egui::ViewportId::from_hash_of("float-qa"),
+            tab: Some(Tab::NativeEditor { path: path.clone() }),
+            home: ("a".into(), "home".into()),
+        });
+        // Plain `:qa` on clean buffers leaves no floating window and no
+        // buffer behind, even with no workspace tab showing the file.
+        app.pending_quit_all = Some(false);
+        app.drain_pending_native_close();
+        assert!(app.floating.is_empty());
+        assert!(!app.native_docs.contains_key(&path));
+    }
+
+    #[test]
+    fn quit_all_force_closes_floating_only_editors() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/floated-only.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        app.floating.push(FloatingPane {
+            viewport: egui::ViewportId::from_hash_of("float-only"),
+            tab: Some(Tab::NativeEditor { path: path.clone() }),
+            home: ("a".into(), "home".into()),
+        });
+        // `:qa!` leaves no floating window and no buffer behind, even
+        // when no workspace tab shows the file.
+        app.pending_quit_all = Some(true);
+        app.drain_pending_native_close();
+        assert!(app.floating.is_empty());
+        assert!(!app.native_docs.contains_key(&path));
+    }
+
+    fn docked_copies(app: &App, project: &str, path: &Path) -> usize {
+        app.layouts
+            .get(project)
+            .map(|workspace| {
+                workspace
+                    .tabs
+                    .iter()
+                    .flat_map(|tab| tab.layout.iter_all_tabs())
+                    .filter(|(_, tab)| {
+                        matches!(tab, Tab::NativeEditor { path: current } if current == path)
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn plain_close_keeps_other_docked_copies() {
+        use crate::native_editor::CloseIssuer;
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/shared.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        // Two splits on the same file in `a`, one copy in `b`.
+        let mut workspace = Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
+            path: path.clone(),
+        }]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![Tab::NativeEditor { path: path.clone() }],
+        );
+        app.layouts.insert("a".into(), workspace);
+        app.layouts.insert(
+            "b".into(),
+            Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
+                path: path.clone(),
+            }])),
+        );
+        // A plain close issued in `a` removes one copy there; the other
+        // split and project `b` keep theirs, and the buffer survives.
+        app.close_native_tab(&path, false, Some(CloseIssuer::Docked("a".into())));
+        assert_eq!(docked_copies(&app, "a", &path), 1);
+        assert_eq!(docked_copies(&app, "b", &path), 1);
+        assert!(app.native_docs.contains_key(&path));
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn wq_close_uses_view_issuing_the_save() {
+        use crate::native_editor::CloseIssuer;
+        let (mut app, ctx, _dir) = fixture();
+        let path = PathBuf::from("/a/wq-issuer.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::new(path.clone(), false),
+        );
+        let float = egui::ViewportId::from_hash_of("wq-float");
+        app.floating.push(FloatingPane {
+            viewport: float,
+            tab: Some(Tab::NativeEditor { path: path.clone() }),
+            home: ("a".into(), "home".into()),
+        });
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
+                path: path.clone(),
+            }])),
+        );
+        // `:wq` typed in the floating window: the save settles later.
+        app.native_close_after_save = Some(path.clone());
+        app.native_close_after_save_issuer = Some(CloseIssuer::Floating(float));
+        // A docked view renders first. The queued close must still target
+        // the issuing floating pane — not the rendering docked copy.
+        combined_frame(&mut app, &ctx, vec![]);
+        app.drain_pending_native_close();
+        assert!(app.floating.is_empty());
+        assert_eq!(docked_copies(&app, "a", &path), 1);
+        assert!(app.native_docs.contains_key(&path));
+    }
+
+    #[test]
+    fn pending_closes_drain_with_no_project_selected() {
+        let (mut app, ctx, _dir) = fixture();
+        app.selected = None;
+        let path = PathBuf::from("/a/hidden-float.md");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        app.floating.push(FloatingPane {
+            viewport: egui::ViewportId::from_hash_of("hidden-float"),
+            tab: Some(Tab::NativeEditor { path: path.clone() }),
+            home: ("a".into(), "home".into()),
+        });
+        // Hiding the last project must not stall floating closes: with
+        // nothing checked out, the drain still runs.
+        app.pending_native_close.push((path.clone(), true, None));
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 480.0),
+                )),
+                ..Default::default()
+            },
+            |ui| app.window_header_tabs(ui),
+        );
+        output.textures_delta.clear();
+        assert!(app.pending_native_close.is_empty());
+        assert!(app.floating.is_empty());
+        assert!(!app.native_docs.contains_key(&path));
+    }
+
+    #[test]
+    fn deferred_goto_jump_opens_cross_file_target() {
+        use terminator_native_edit::lsp::{GotoTarget, Position, Range};
+        let (mut app, _, _dir) = fixture();
+        let from = PathBuf::from("/a/from.rs");
+        let to = PathBuf::from("/a/to.rs");
+        let jump = || crate::lsp_manager::GotoJump {
+            from: from.clone(),
+            targets: vec![GotoTarget {
+                uri: "file:///a/to.rs".into(),
+                range: Range {
+                    start: Position {
+                        line: 4,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 4,
+                        character: 1,
+                    },
+                },
+            }],
+        };
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(DockState::new(vec![Tab::NativeEditor {
+                path: from.clone(),
+            }])),
+        );
+        // One frame: the workspace is checked out for rendering, so the
+        // finished jump queues instead of resolving against the missing
+        // project (which dropped it before).
+        let dock = app.layouts.remove("a").expect("checked out");
+        app.pending_goto.push(jump());
+        app.layouts.insert("a".into(), dock);
+        // Deferred work runs with the workspace checked back in: the
+        // jump resolves and opens the target.
+        app.drain_pending_native_close();
+        assert_eq!(app.native_pending_line.get(&to), Some(&4));
+        let absolute = std::path::absolute(&to).unwrap();
+        assert_eq!(app.native_pending_col.get(&absolute), Some(&0));
+        // A jump whose project is truly gone applies nothing.
+        app.layouts.remove("a");
+        app.pending_goto.push(jump());
+        app.drain_pending_native_close();
+        assert_eq!(app.native_pending_line.len(), 1);
     }
 
     #[test]

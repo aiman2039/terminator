@@ -288,8 +288,20 @@ pub struct App {
     pub(crate) native_close_after_save: Option<PathBuf>,
     /// Quit is waiting on the unsaved-native prompt. Save or discard continues it.
     pub(crate) pending_app_quit: bool,
-    pub(crate) pending_native_close: Vec<PathBuf>,
+    /// Deferred native closes: path, force flag, and the issuing view.
+    /// `:q!` takes every view; a plain close removes only its issuing
+    /// view, preserving other copies of the same file.
+    pub(crate) pending_native_close: Vec<(PathBuf, bool, Option<native_editor::CloseIssuer>)>,
+    /// View that issued the pending `:wq`: captured when the save
+    /// starts, since the save settles frames later under whichever view
+    /// renders first.
+    pub(crate) native_close_after_save_issuer: Option<native_editor::CloseIssuer>,
     pub(crate) pending_native_splits: Vec<(PathBuf, native_editor::NativeSplit)>,
+    /// Finished cross-file goto jumps waiting for the workspace to be
+    /// checked back in: the file view renders while its workspace is
+    /// checked out, so looking up the originating project there always
+    /// misses and drops the jump.
+    pub(crate) pending_goto: Vec<lsp_manager::GotoJump>,
     pub(crate) file_index: terminator_native_edit::finder::FileIndex,
     pub(crate) file_index_rx:
         Option<std::sync::mpsc::Receiver<terminator_native_edit::finder::FileIndex>>,

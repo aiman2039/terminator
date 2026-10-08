@@ -10,6 +10,10 @@ pub(crate) struct Viewer<'a> {
     /// them only on stacked leaves (nested tabs) and otherwise titles
     /// single panes with captions under the workspace strip.
     pub(crate) strip: bool,
+    /// Docked project under render, if any: native close requests
+    /// remember their issuing view. Floating windows pass none (the
+    /// viewport identifies them instead).
+    pub(crate) project: Option<String>,
 }
 impl TabViewer for Viewer<'_> {
     fn on_add(&mut self, path: egui_dock::NodePath) {
@@ -398,7 +402,10 @@ impl TabViewer for Viewer<'_> {
                 ui.close();
             }
             Tab::Diff { .. } => self.app.diff_view(ui, tab),
-            Tab::NativeEditor { path } => self.app.native_editor_view(ui, path),
+            Tab::NativeEditor { path } => {
+                self.app
+                    .native_editor_view(ui, path, self.project.as_deref())
+            }
             Tab::CommitLog { .. } => self.app.commit_log_view(ui, tab),
             Tab::Blame { .. } => self.app.blame_view(ui, tab),
             Tab::Terminal(sid) => {

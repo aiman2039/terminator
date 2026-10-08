@@ -1,20 +1,26 @@
 //! GUI-owned language servers for native editor tabs.
 //!
-//! The engine stays I/O-free: this manager spawns one server per
-//! (language, project root), pumps its stdio on tokio tasks, and keeps
-//! diagnostics plus pending hover/goto answers for the views to poll.
-//! Servers die with the GUI (stdin EOF on task drop, `start_kill` on
-//! prune); a missing binary or a crash loop surfaces as a hover message,
-//! never a modal error. Only Rust and Python have servers (see
+//! The engine stays I/O-free: this manager tracks one server per
+//! (language, project root), while the actual child processes and their
+//! stdio pumps run as actors on the GUI service supervisor. Nothing here
+//! needs a Tokio runtime on the calling thread, so per-frame sync from
+//! the GUI thread can never panic it into existence. Diagnostics plus
+//! pending hover/goto answers stay here for the views to poll. Servers
+//! die with the GUI (inbox drop plus actor cancellation on prune); a
+//! missing binary or a crash loop surfaces as a hover message, never a
+//! modal error. Only Rust and Python have servers (see
 //! `terminator_native_edit::lsp::server_candidates`); every other
 //! language edits exactly as before, without LSP.
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
 use terminator_native_edit::highlight::Language;
 use terminator_native_edit::lsp as L;
 use terminator_native_edit::view::DiagnosticMark;
+
+use crate::gui_services::Services;
 
 /// Full-text sync at most this often after the last edit: diagnostics
 /// lag typing by ~1s instead of hammering the server per keystroke.
@@ -31,14 +37,32 @@ struct ServerKey {
     root: PathBuf,
 }
 
+/// Supervisor resource for one server: language plus project root, so a
+/// second project's server admits alongside the first instead of
+/// queueing behind its never-ending lifetime.
+fn server_resource(key: &ServerKey) -> String {
+    format!("{}:{}", key.language, key.root.display())
+}
+
 struct OpenDoc {
     uri: url::Url,
     version: i32,
     server: ServerKey,
     /// Buffer revision of the last submitted text.
     submitted: u64,
+    /// Buffer revision last seen by [`LspManager::sync_doc`]. The debounce
+    /// timer restarts only when this changes: while an edit waits out the
+    /// delay, `sync_doc` runs every frame with the same revision and must
+    /// not push `last_change` forward, or the delay never ends and edited
+    /// text never reaches the server.
+    observed: u64,
     last_change: Instant,
     opened: bool,
+    /// Latest text submitted while the server was still starting. The
+    /// handshake flushes it as `didOpen` on completion, so a buffer
+    /// submitted once (no further frames) still opens. Latest wins:
+    /// every pre-ready submit overwrites it.
+    pending_text: Option<String>,
 }
 
 enum Pending {
@@ -53,7 +77,14 @@ enum Pending {
 
 struct Server {
     inbox: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
-    child: tokio::process::Child,
+    /// Directly spawned child (test path without services): the GUI
+    /// kills it on prune. Supervised servers leave this empty; their
+    /// child is owned by the supervisor actor, killed via `cancel`.
+    child: Option<tokio::process::Child>,
+    /// Supervisor actor kill handle. Cancelling it stops the pumps and
+    /// reaps the child without a `Down` event, so deliberate shutdowns
+    /// never count as crashes.
+    cancel: Option<CancellationToken>,
     ids: L::IdGen,
     pending: HashMap<i64, Pending>,
     init_id: Option<i64>,
@@ -80,6 +111,7 @@ pub struct GotoJump {
 enum PumpEvent {
     Body { key: ServerKey, body: Vec<u8> },
     Down { key: ServerKey },
+    SpawnFailed { key: ServerKey, note: String },
 }
 
 pub struct LspManager {
@@ -95,6 +127,10 @@ pub struct LspManager {
     cooled: HashMap<&'static str, Instant>,
     pump_tx: tokio::sync::mpsc::UnboundedSender<PumpEvent>,
     pump_rx: tokio::sync::mpsc::UnboundedReceiver<PumpEvent>,
+    /// GUI service supervisor: server processes and stdio pumps run as
+    /// its actors, never on the calling thread. `None` keeps the direct
+    /// spawn path for tests that own their Tokio runtime.
+    services: Option<Services>,
 }
 
 impl LspManager {
@@ -111,7 +147,15 @@ impl LspManager {
             cooled: HashMap::new(),
             pump_tx,
             pump_rx,
+            services: None,
         }
+    }
+
+    /// Attach the GUI service supervisor. After this, server startup and
+    /// stdio run as supervised actors; the calling thread only passes
+    /// channels, so sync from the GUI thread needs no Tokio runtime.
+    pub fn set_services(&mut self, services: Services) {
+        self.services = Some(services);
     }
 
     /// Drain pump events: route diagnostics, answers, and server deaths.
@@ -121,6 +165,7 @@ impl LspManager {
             match event {
                 PumpEvent::Body { key, body } => self.on_body(&key, &body),
                 PumpEvent::Down { key } => self.on_server_down(&key),
+                PumpEvent::SpawnFailed { key, note } => self.on_spawn_failed(&key, &note),
             }
         }
     }
@@ -138,7 +183,8 @@ impl LspManager {
         match self.docs.get_mut(path) {
             None => true,
             Some(doc) => {
-                if doc.submitted != revision {
+                if doc.observed != revision {
+                    doc.observed = revision;
                     doc.last_change = Instant::now();
                 }
                 if !doc.opened {
@@ -152,8 +198,10 @@ impl LspManager {
     }
 
     /// Open or refresh one buffer on its server. Always records the
-    /// revision (latest text wins); sends `didOpen`/`didChange` only
-    /// through a ready server, so a slow start never blocks typing.
+    /// revision (latest text wins). Text submitted while the server is
+    /// still starting parks on the doc and flushes as `didOpen` when the
+    /// handshake completes, so a slow start neither blocks typing nor
+    /// drops the open.
     pub fn submit_text(&mut self, path: &Path, language: Language, revision: u64, text: &str) {
         let Some(language_id) = L::language_id(language) else {
             return;
@@ -172,8 +220,10 @@ impl LspManager {
             version: 0,
             server: key.clone(),
             submitted: revision,
+            observed: revision,
             last_change: now,
             opened: false,
+            pending_text: None,
         });
         if doc.server != key {
             doc.server = key.clone();
@@ -181,8 +231,17 @@ impl LspManager {
         }
         let was_submitted = doc.submitted;
         doc.submitted = revision;
+        doc.observed = revision;
         if !self.servers.get(&key).is_some_and(|server| server.ready) {
             let _ = self.ensure_server(&key);
+            // Park the latest text for the handshake flush, but only
+            // while a server is actually starting: an unavailable server
+            // would pile a copy per frame with nobody to flush it.
+            if self.servers.contains_key(&key)
+                && let Some(doc) = self.docs.get_mut(path)
+            {
+                doc.pending_text = Some(text.to_owned());
+            }
             return;
         }
         let inbox = self.servers.get(&key).map(|server| server.inbox.clone());
@@ -192,6 +251,9 @@ impl LspManager {
         let Some(doc) = self.docs.get_mut(path) else {
             return;
         };
+        // A parked open is already flushed or superseded; either way the
+        // live text below is what the server must hold.
+        doc.pending_text = None;
         if !doc.opened {
             doc.version = doc.version.saturating_add(1);
             let bytes = L::did_open(&doc.uri, language_id, doc.version, text);
@@ -402,7 +464,10 @@ impl LspManager {
             );
             return None;
         };
-        match spawn_server(key, &path, self.pump_tx.clone()) {
+        if self.services.is_some() {
+            return self.spawn_supervised(key, &path);
+        }
+        match spawn_server_direct(key, &path, self.pump_tx.clone()) {
             Ok(server) => {
                 self.servers.insert(key.clone(), server);
                 self.servers.get_mut(key)
@@ -411,6 +476,87 @@ impl LspManager {
                 self.note_failure(key.language);
                 self.unavailable.insert(key.language, note);
                 None
+            }
+        }
+    }
+
+    /// Insert an optimistic entry for `key` and start its process plus
+    /// stdio pumps as a supervisor actor. Needs no Tokio runtime on the
+    /// calling thread: channels and the submit are plain sends. The
+    /// handshake (`initialize`) queues on the inbox at once, so a slow
+    /// start behaves exactly like the direct path; a failed `exec`
+    /// reports back as [`PumpEvent::SpawnFailed`].
+    fn spawn_supervised(&mut self, key: &ServerKey, binary: &Path) -> Option<&mut Server> {
+        let services = self.services.clone()?;
+        let (inbox, incoming) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+        let cancel = CancellationToken::new();
+        let actor_cancel = cancel.clone();
+        self.servers.insert(
+            key.clone(),
+            Server {
+                inbox,
+                child: None,
+                cancel: Some(cancel),
+                ids: L::IdGen::default(),
+                pending: HashMap::new(),
+                init_id: None,
+                ready: false,
+            },
+        );
+        let actor_key = key.clone();
+        let root = key.root.clone();
+        let binary = binary.to_owned();
+        let pump = self.pump_tx.clone();
+        // One supervised task per (language, root): the supervisor
+        // admits a single active task per key, so keying by language
+        // alone would park every second project's server behind the
+        // first forever.
+        let context = OperationContext::new("lsp", server_resource(key), Policy::ServiceLifetime);
+        if services
+            .handle()
+            .submit(context, actor_cancel.clone(), async move {
+                run_server_actor(actor_key, binary, root, incoming, pump, actor_cancel).await?;
+                Ok(Vec::new())
+            })
+            .is_err()
+        {
+            self.servers.remove(key);
+            self.note_failure(key.language);
+            self.unavailable
+                .insert(key.language, format!("Could not start {}", key.language));
+            return None;
+        }
+        let server = self.servers.get_mut(key)?;
+        let L::RequestId::Number(init) = server.ids.next_id() else {
+            self.servers.remove(key);
+            self.note_failure(key.language);
+            return None;
+        };
+        let root_uri = L::file_uri(&key.root);
+        let Some(root_uri) = root_uri else {
+            self.servers.remove(key);
+            self.note_failure(key.language);
+            return None;
+        };
+        let bytes = L::initialize(&L::RequestId::Number(init), std::process::id(), &root_uri);
+        if server.inbox.send(bytes).is_err() {
+            self.servers.remove(key);
+            self.note_failure(key.language);
+            return None;
+        }
+        server.init_id = Some(init);
+        self.servers.get_mut(key)
+    }
+
+    /// A supervised spawn that failed inside the actor: same outcome as a
+    /// direct spawn error, reported asynchronously. Parked text survives
+    /// for the next respawn's handshake flush.
+    fn on_spawn_failed(&mut self, key: &ServerKey, note: &str) {
+        if self.servers.remove(key).is_some() {
+            self.note_failure(key.language);
+            self.unavailable.insert(key.language, note.to_owned());
+            for doc in self.docs.values_mut().filter(|doc| doc.server == *key) {
+                doc.opened = false;
             }
         }
     }
@@ -473,9 +619,19 @@ impl LspManager {
             server.init_id = None;
             server.ready = true;
             let _ = server.inbox.send(L::initialized());
-            // Docs synced while starting open now.
+            let inbox = server.inbox.clone();
+            let language = key.language;
+            // Buffers submitted while starting open now, in order behind
+            // `initialized`: a single pre-ready submit is enough, and no
+            // further frame is needed to get its `didOpen` out.
             for doc in self.docs.values_mut().filter(|doc| doc.server == *key) {
-                doc.opened = false;
+                if let Some(text) = doc.pending_text.take() {
+                    doc.version = doc.version.saturating_add(1);
+                    let _ = inbox.send(L::did_open(&doc.uri, language, doc.version, &text));
+                    doc.opened = true;
+                } else {
+                    doc.opened = false;
+                }
             }
             self.failures.remove(key.language);
             return;
@@ -522,7 +678,11 @@ impl LspManager {
     }
 
     fn on_server_down(&mut self, key: &ServerKey) {
-        self.servers.remove(key);
+        // Stray exits (a supervised actor reaped just after a deliberate
+        // shutdown removed the entry) are not crashes.
+        if self.servers.remove(key).is_none() {
+            return;
+        }
         self.note_failure(key.language);
         // Docs re-open (and the server respawns, cooldown permitting)
         // on the next sync; pending answers are dead with their ids.
@@ -536,7 +696,12 @@ impl LspManager {
             let id = server.ids.next_id();
             let _ = server.inbox.send(L::shutdown(&id));
             let _ = server.inbox.send(L::exit());
-            let _ = server.child.start_kill();
+            if let Some(mut child) = server.child {
+                let _ = child.start_kill();
+            }
+            if let Some(cancel) = server.cancel {
+                cancel.cancel();
+            }
         }
         for doc in self.docs.values_mut().filter(|doc| doc.server == *key) {
             doc.opened = false;
@@ -606,10 +771,110 @@ fn project_root(path: &Path, language: Language) -> PathBuf {
     fallback.unwrap_or_else(|| path.parent().map(Path::to_path_buf).unwrap_or_default())
 }
 
+/// Supervisor actor for one server: spawn the child with piped stdio
+/// in `root` and pump both directions. Runs on the supervisor's Tokio
+/// runtime, so process startup and `tokio::spawn` never touch the GUI
+/// thread. A failed `exec` reports [`PumpEvent::SpawnFailed`]; a live
+/// child forwards framed bodies and reports [`PumpEvent::Down`] when it
+/// exits. Cancellation (deliberate shutdown) kills the child, reaps it,
+/// and stays silent, so prunes never count as crashes.
+async fn run_server_actor(
+    key: ServerKey,
+    binary: PathBuf,
+    root: PathBuf,
+    mut incoming: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    pump: tokio::sync::mpsc::UnboundedSender<PumpEvent>,
+    cancel: CancellationToken,
+) -> anyhow::Result<()> {
+    let mut child = match tokio::process::Command::new(&binary)
+        .current_dir(&root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = pump.send(PumpEvent::SpawnFailed {
+                key: key.clone(),
+                note: format!("Could not start {}: {error:#}", key.language),
+            });
+            return Ok(());
+        }
+    };
+    let stdin = child.stdin.take();
+    let stdout = child.stdout.take();
+    let writer = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt as _;
+        let mut stdin = stdin;
+        while let Some(bytes) = incoming.recv().await {
+            let ok = match stdin.as_mut() {
+                Some(pipe) => pipe.write_all(&bytes).await.is_ok() && pipe.flush().await.is_ok(),
+                None => false,
+            };
+            if !ok {
+                break;
+            }
+        }
+    });
+    let reader_pump = pump.clone();
+    let reader_key = key.clone();
+    let reader = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt as _;
+        let mut stdout = stdout;
+        let mut decoder = L::FrameDecoder::default();
+        let mut chunk = [0u8; 8192];
+        while let Some(pipe) = stdout.as_mut() {
+            match pipe.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let mut stop = false;
+                    for body in decoder.feed(chunk.get(..n).unwrap_or(&[])) {
+                        if reader_pump
+                            .send(PumpEvent::Body {
+                                key: reader_key.clone(),
+                                body,
+                            })
+                            .is_err()
+                        {
+                            stop = true;
+                            break;
+                        }
+                    }
+                    if stop {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    // The child outlives the pumps on crash: wait for the process
+    // itself, then tear the pumps down.
+    let exited = tokio::select! {
+        result = child.wait() => {
+            let _ = result;
+            true
+        }
+        () = cancel.cancelled() => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            false
+        }
+    };
+    writer.abort();
+    reader.abort();
+    if exited && !cancel.is_cancelled() {
+        let _ = pump.send(PumpEvent::Down { key });
+    }
+    Ok(())
+}
+
 /// Spawn one server with piped stdio in `root`, handshake it, and pump
-/// both directions on background tasks. Needs a running tokio runtime
-/// (the GUI always has one; tests use `#[tokio::test]`).
-fn spawn_server(
+/// both directions on background tasks. Needs a running tokio runtime;
+/// only the no-services test path uses this (tests use `#[tokio::test]`).
+/// The GUI path goes through [`LspManager::spawn_supervised`] instead.
+fn spawn_server_direct(
     key: &ServerKey,
     binary: &Path,
     pump: tokio::sync::mpsc::UnboundedSender<PumpEvent>,
@@ -671,7 +936,8 @@ fn spawn_server(
     });
     let mut server = Server {
         inbox,
-        child,
+        child: Some(child),
+        cancel: None,
         ids: L::IdGen::default(),
         pending: HashMap::new(),
         init_id: None,
@@ -779,6 +1045,199 @@ mod tests {
         assert_eq!(marks[1].severity, L::Severity::Error);
     }
 
+    #[test]
+    fn debounce_fires_without_further_edits() {
+        let mut manager = LspManager::new();
+        let path = PathBuf::from("/tmp/debounced.rs");
+        tracked(&mut manager, &path);
+        // Nothing new to send for the already-submitted revision.
+        assert!(!manager.sync_doc(&path, Language::Rust, 1));
+        // A fresh edit starts the delay...
+        assert!(!manager.sync_doc(&path, Language::Rust, 2));
+        // ...and frames with no further edits must not extend it:
+        // backdated past the delay, the same revision submits.
+        manager.docs.get_mut(&path).expect("doc").last_change = Instant::now()
+            .checked_sub(SYNC_DEBOUNCE + Duration::from_secs(1))
+            .expect("backdate");
+        assert!(manager.sync_doc(&path, Language::Rust, 2));
+    }
+
+    /// Server startup and stdio must not need a Tokio runtime on the
+    /// calling thread: the GUI thread owns none, and spawning from it
+    /// panicked. Supervised startup only passes channels, so spawning a
+    /// (promptly exiting) server here must complete its lifecycle with
+    /// events, never a panic.
+    #[cfg(unix)]
+    #[test]
+    fn supervised_spawn_needs_no_caller_runtime() {
+        assert!(
+            tokio::runtime::Handle::try_current().is_err(),
+            "regression needs a runtime-less thread"
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ctx = eframe::egui::Context::default();
+        let (tx, _rx) = std::sync::mpsc::channel::<crate::Update>();
+        let paths = terminator_core::Paths::at(dir.path().to_owned());
+        let (services, _owner) =
+            crate::gui_services::Services::new(paths, ctx, tx).expect("services");
+        let mut manager = LspManager::new();
+        manager.set_services(services);
+        let key = ServerKey {
+            language: "rust",
+            root: dir.path().to_owned(),
+        };
+        manager
+            .spawn_supervised(&key, Path::new("/bin/true"))
+            .expect("spawn accepted");
+        let start = Instant::now();
+        while manager.servers.contains_key(&key) {
+            manager.poll();
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "exited server is reaped"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        manager.poll();
+    }
+
+    #[test]
+    fn server_resources_scope_by_root() {
+        let first = ServerKey {
+            language: "rust",
+            root: PathBuf::from("/proj-a"),
+        };
+        let second = ServerKey {
+            language: "rust",
+            root: PathBuf::from("/proj-b"),
+        };
+        assert_ne!(server_resource(&first), server_resource(&second));
+        assert_eq!(server_resource(&first), server_resource(&first.clone()));
+    }
+
+    /// Two projects, one language: the second server must admit
+    /// alongside the first. The supervisor runs a single active task
+    /// per key, so a language-only key parks the second spawn forever.
+    #[cfg(unix)]
+    #[test]
+    fn second_project_server_starts_alongside_first() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ctx = eframe::egui::Context::default();
+        let (tx, _rx) = std::sync::mpsc::channel::<crate::Update>();
+        let paths = terminator_core::Paths::at(dir.path().to_owned());
+        let (services, _owner) =
+            crate::gui_services::Services::new(paths, ctx, tx).expect("services");
+        let mut manager = LspManager::new();
+        manager.set_services(services.clone());
+        // `/bin/cat` stays alive on its piped stdin, so both actors are
+        // long-lived: without root-scoped keys the second never admits.
+        // (The supervisor's own processes actor is already admitted, so
+        // the first server brings the count to two, the second to three.)
+        let first = ServerKey {
+            language: "rust",
+            root: dir.path().join("proj-a"),
+        };
+        std::fs::create_dir_all(&first.root).expect("root");
+        manager
+            .spawn_supervised(&first, Path::new("/bin/cat"))
+            .expect("spawn accepted");
+        let start = Instant::now();
+        while services.handle().diagnostics().actors < 2 {
+            manager.poll();
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "first server admits"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let second = ServerKey {
+            language: "rust",
+            root: dir.path().join("proj-b"),
+        };
+        std::fs::create_dir_all(&second.root).expect("root");
+        manager
+            .spawn_supervised(&second, Path::new("/bin/cat"))
+            .expect("spawn accepted");
+        let start = Instant::now();
+        while services.handle().diagnostics().actors < 3 {
+            manager.poll();
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "second project's server admits alongside the first"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        manager.prune(&std::collections::HashSet::new());
+        manager.poll();
+    }
+
+    /// Text submitted while the server starts must open at handshake
+    /// completion: `initialized` first, then the parked `didOpen`, with
+    /// no further submit needed.
+    #[test]
+    fn parked_text_opens_at_handshake_completion() {
+        let mut manager = LspManager::new();
+        let path = PathBuf::from("/tmp/pending.rs");
+        tracked(&mut manager, &path);
+        let key = manager.docs.get(&path).expect("doc").server.clone();
+        let (inbox, mut outbox) = tokio::sync::mpsc::unbounded_channel();
+        manager.servers.insert(
+            key.clone(),
+            Server {
+                inbox,
+                child: None,
+                cancel: None,
+                ids: L::IdGen::default(),
+                pending: HashMap::new(),
+                init_id: Some(7),
+                ready: false,
+            },
+        );
+        let doc = manager.docs.get_mut(&path).expect("doc");
+        doc.opened = false;
+        doc.version = 0;
+        doc.pending_text = Some("fn main() {}".into());
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "result": {"capabilities": {}},
+        })
+        .to_string();
+        manager.on_body(&key, body.as_bytes());
+        let doc = manager.docs.get(&path).expect("doc");
+        assert!(doc.opened);
+        assert!(doc.pending_text.is_none());
+        assert!(manager.servers.get(&key).is_some_and(|server| server.ready));
+        // Inbox traffic is framed for the wire: decode before parsing.
+        let mut decoder = L::FrameDecoder::default();
+        let framed = outbox.try_recv().expect("initialized");
+        let bodies = decoder.feed(&framed);
+        assert_eq!(bodies.len(), 1);
+        let first: serde_json::Value = serde_json::from_slice(&bodies[0]).expect("json");
+        assert_eq!(
+            first.get("method").and_then(|m| m.as_str()),
+            Some("initialized")
+        );
+        let framed = outbox.try_recv().expect("didOpen");
+        let bodies = decoder.feed(&framed);
+        assert_eq!(bodies.len(), 1);
+        let second: serde_json::Value = serde_json::from_slice(&bodies[0]).expect("json");
+        assert_eq!(
+            second.get("method").and_then(|m| m.as_str()),
+            Some("textDocument/didOpen")
+        );
+        let document = second
+            .get("params")
+            .and_then(|params| params.get("textDocument"))
+            .expect("document");
+        assert_eq!(
+            document.get("text").and_then(|text| text.as_str()),
+            Some("fn main() {}")
+        );
+        assert_eq!(document.get("version").and_then(|v| v.as_i64()), Some(1));
+        assert!(outbox.try_recv().is_err());
+    }
+
     fn tracked(manager: &mut LspManager, path: &Path) {
         let root = project_root(path, Language::Rust);
         manager.docs.insert(
@@ -791,8 +1250,10 @@ mod tests {
                     root,
                 },
                 submitted: 1,
+                observed: 1,
                 last_change: Instant::now(),
                 opened: true,
+                pending_text: None,
             },
         );
     }

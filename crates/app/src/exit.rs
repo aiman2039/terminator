@@ -156,6 +156,7 @@ impl App {
         }
         self.pending_app_quit = false;
         self.native_close_after_save = None;
+        self.native_close_after_save_issuer = None;
         crate::updater::cancel_termination();
     }
     pub(super) fn native_installation_cancelled(&mut self) {
