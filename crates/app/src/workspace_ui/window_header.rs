@@ -1,8 +1,6 @@
 use super::super::*;
 #[cfg(not(target_os = "macos"))]
 use super::header::paint_window_controls;
-#[cfg(not(target_os = "macos"))]
-use super::header::paint_window_controls;
 use super::header::{
     HEADER_ACTIONS, HEADER_GAP, HEADER_MENU_SLOT, HEADER_SLOT, HeaderAction, HeaderActionView,
     HeaderIconButton, HeaderToolBounds, PROJECT_HEADER_GAP, PROJECT_HEADER_SLOT,
