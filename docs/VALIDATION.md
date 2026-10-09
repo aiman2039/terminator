@@ -1,5 +1,34 @@
 # Validation evidence — 2026-09-08
 
+## Scorecard analysis on release tags (2026-10-10)
+
+Release run `37999768976`, job `114054752994`, failed at Scorecard option
+validation: `only default branch is supported`. The run was dispatched on
+`v0.103.0`, commit `f757ab017f9a00ed6ddf904b74b648795c0962da`.
+The pinned scorecard-action v2.4.4 rejects non-default refs before consulting
+its publishing option, so disabling publication alone cannot fix tag runs.
+
+The reusable workflow now runs the official Scorecard 5.5.0 CLI, matching
+the action's core version. The Linux archive is pinned with its upstream
+SHA-256 digest. A commit-specific scan covers nine checks on `github.sha`;
+a separate scan covers the nine repository-level checks against current
+settings/history. Both use the original action's SARIF policy, copied with
+its license notice into `.github/scorecard-policy.yml`. Both reports are
+saved as artifacts and uploaded with separate code-scanning categories.
+The unused OIDC permission is removed from caller and callee. Tag scans do
+not publish to the public Scorecard badge/API service.
+
+Validation: the checksum-verified Linux CLI successfully scans the failed
+release commit and the live public repository with read-only API access.
+Both outputs parse as SARIF 2.1.0; their rule sets cover all 18 checks.
+Reports are under `/tmp/terminator-scorecard-check/`. The Scorecard workflow
+passes actionlint 1.7.12 and its shell passes `bash -n`. The caller passes
+actionlint after flattening its existing parallel step group in a temporary
+lint copy: that actionlint version does not recognize GitHub's newer parallel
+step syntax. Actual caller concurrency is unchanged. Whitespace checks pass.
+GitHub-hosted execution, artifact upload, and code-scanning upload of the new
+workflow have not been run; rerunning the old tag retains its old workflow.
+
 ## Fish idle-close and real child-process checks (2026-10-10)
 
 Release attempt `run-70HVaP` failed on the initial fish shell. The same failure

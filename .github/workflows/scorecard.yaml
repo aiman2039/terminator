@@ -17,7 +17,6 @@ jobs:
     if: github.event.repository.fork == false
     permissions:
       security-events: write
-      id-token: write
       contents: read
     steps:
       - name: Checkout
@@ -25,18 +24,51 @@ jobs:
         with:
           persist-credentials: false
       - name: Run analysis
-        uses: ossf/scorecard-action@v2.4.4
-        with:
-          results_file: results.sarif
-          results_format: sarif
-          publish_results: true
+        # scorecard-action rejects release tags, even with publishing disabled.
+        # Its CLI supports an explicit commit and does not publish badge results.
+        env:
+          GITHUB_AUTH_TOKEN: ${{ github.token }}
+          SCORECARD_REPOSITORY: github.com/${{ github.repository }}
+          SCORECARD_COMMIT: ${{ github.sha }}
+          ENABLE_SARIF: 'true'
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/scorecard_5.5.0_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location \
+            https://github.com/ossf/scorecard/releases/download/v5.5.0/scorecard_5.5.0_linux_amd64.tar.gz \
+            --output "$archive"
+          printf '%s  %s\n' \
+            83b90a05c1540ef1390db1cd5711e5fd04be9c1d8537fb84d39d02092d6a8dff \
+            "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP" scorecard
+          "$RUNNER_TEMP/scorecard" \
+            --repo="$SCORECARD_REPOSITORY" \
+            --commit="$SCORECARD_COMMIT" \
+            --format=sarif --show-details \
+            --policy=.github/scorecard-policy.yml \
+            --output=results.sarif
+          # These checks assess current repository settings/history, not a commit.
+          "$RUNNER_TEMP/scorecard" \
+            --repo="$SCORECARD_REPOSITORY" \
+            --checks=Branch-Protection,Contributors,Dependency-Update-Tool,Fuzzing,CII-Best-Practices,Packaging,SAST,Signed-Releases,Maintained \
+            --format=sarif --show-details \
+            --policy=.github/scorecard-policy.yml \
+            --output=repository-results.sarif
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: SARIF file
-          path: results.sarif
+          path: |
+            results.sarif
+            repository-results.sarif
           retention-days: 5
       - name: Upload to code scanning
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: results.sarif
+          category: scorecard-release
+      - name: Upload repository checks to code scanning
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: repository-results.sarif
+          category: scorecard-repository
