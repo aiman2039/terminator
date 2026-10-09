@@ -285,7 +285,24 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         #[cfg(unix)]
         std::fs::set_permissions(&invalid, std::fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(launch(invalid.to_str().unwrap(), &[], Path::new("file"), |_| {}).is_err());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let started = launch(
+            invalid.to_str().unwrap(),
+            &[],
+            Path::new("file"),
+            move |result| {
+                tx.send(result).unwrap();
+            },
+        );
+        // Binary translators may acknowledge spawning before reporting an
+        // invalid interpreter through the child's exit status.
+        if started.is_ok() {
+            assert!(
+                rx.recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap()
+                    .is_err()
+            );
+        }
     }
     #[test]
     #[cfg(unix)]

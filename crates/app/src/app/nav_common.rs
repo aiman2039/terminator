@@ -228,6 +228,34 @@ pub(super) fn pump_until(app: &mut App, ctx: &egui::Context, mut ready: impl FnM
     panic!("timed out waiting for a queued update");
 }
 
+/// Wait for every already-queued local update to be handled, including updates
+/// whose expected result is no state change. Keep the real per-frame budget.
+pub(crate) fn drain_updates(app: &mut App, ctx: &egui::Context) {
+    let (reply, completed) = mpsc::channel();
+    app.update_tx.send(Update::TestBarrier(reply)).unwrap();
+    pump_until(app, ctx, |_| completed.try_recv().is_ok());
+}
+
+#[test]
+fn update_barrier_waits_across_frame_budget_boundaries() {
+    let (mut app, ctx, _dir) = fixture();
+    for index in 0..256 {
+        app.update_tx
+            .send(Update::Info(format!("queued-{index}")))
+            .unwrap();
+    }
+    let (reply, completed) = mpsc::channel();
+    app.update_tx.send(Update::TestBarrier(reply)).unwrap();
+    app.process_updates(&ctx);
+    assert!(matches!(
+        completed.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    drain_updates(&mut app, &ctx);
+    completed.try_recv().unwrap();
+    assert_eq!(app.info.as_deref(), Some("queued-255"));
+}
+
 /// Drive one headless frame with the IDE strip painted before the main
 /// dock, matching `App::ui`, so a release is seen by both drop targets.
 #[cfg(feature = "test-support")]

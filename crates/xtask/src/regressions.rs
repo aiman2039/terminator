@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::{
     fs,
     io::Read,
-    path::PathBuf,
+    path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
 };
@@ -159,10 +159,10 @@ fn relaunch_stub(h: &Harness) -> Result<PathBuf> {
     Ok(stub)
 }
 
-fn wait_relaunch_marker(h: &Harness) -> Result<String> {
-    let marker = h.root.join("relaunched");
+fn wait_relaunch_marker(root: &Path, timeout: Duration) -> Result<String> {
+    let marker = root.join("relaunched");
     let end = Instant::now()
-        .checked_add(Duration::from_secs(5))
+        .checked_add(timeout)
         .ok_or_else(|| anyhow!("deadline overflow"))?;
     loop {
         if marker.is_file() {
@@ -171,7 +171,12 @@ fn wait_relaunch_marker(h: &Harness) -> Result<String> {
                 return Ok(text);
             }
         }
-        ensure!(Instant::now() < end, "Relaunch stub did not run");
+        ensure!(
+            Instant::now() < end,
+            "Relaunch stub did not complete: {} (restart.log: {})",
+            marker.display(),
+            fs::read_to_string(root.join("restart.log")).unwrap_or_default()
+        );
         thread::sleep(Duration::from_millis(30));
     }
 }
@@ -226,7 +231,7 @@ fn relaunch_shutdown() -> Result<()> {
                 .is_some_and(|relaunched| relaunched.as_bool() == Some(true)),
         "Relaunch did not report both sessions"
     );
-    let marker = wait_relaunch_marker(&h)?;
+    let marker = wait_relaunch_marker(&h.root, Duration::from_secs(5))?;
     let socket = h.root.join("run/daemon.sock");
     ensure!(
         marker.contains(&format!("data={}", h.root.display()))
@@ -261,7 +266,7 @@ fn relaunch_shutdown() -> Result<()> {
         .get("generation")
         .cloned()
         .ok_or_else(|| anyhow!("missing generation"))?;
-    let _ = fs::remove_file(h.root.join("relaunched"));
+    fs::remove_file(h.root.join("relaunched"))?;
     let output = h
         .command("terminator-hook")
         .args([
@@ -288,9 +293,12 @@ fn relaunch_shutdown() -> Result<()> {
             .is_some_and(|current| current == &generation),
         "Timed-out relaunch replaced the daemon"
     );
+    let marker = wait_relaunch_marker(&h.root, Duration::from_secs(5))?;
     ensure!(
-        h.root.join("relaunched").exists(),
-        "Timed-out relaunch did not reopen"
+        marker.contains(&format!("data={}\n", h.root.display()))
+            && marker.contains(&format!("runtime={}\n", h.root.join("run").display()))
+            && marker.contains("session=\n"),
+        "Timed-out relaunch missed isolated env: {marker:?}"
     );
     println!(
         "{}",
@@ -694,4 +702,39 @@ fn missing_helper_health() -> Result<()> {
         json!({"app_removal_preserves_helper":true,"new_session_after_removal":true,"pinned_hook_executes":true,"missing_helper_detected":true,"permission_change_invalidates_snapshot":true,"live_sessions_preserved":true})
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relaunch_waits_for_delayed_process_output() {
+        let root = tempfile::tempdir().unwrap();
+        let marker = root.path().join("relaunched");
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            fs::write(marker, "data=isolated\nruntime=isolated/run\nsession=\n").unwrap();
+        });
+        let result = wait_relaunch_marker(root.path(), Duration::from_secs(5));
+        writer.join().unwrap();
+        assert_eq!(
+            result.unwrap(),
+            "data=isolated\nruntime=isolated/run\nsession=\n"
+        );
+    }
+
+    #[test]
+    fn relaunch_rejects_missing_or_incomplete_output_and_reports_child_log() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("restart.log"), "stub could not start").unwrap();
+        for output in [None, Some("data=isolated\n")] {
+            if let Some(output) = output {
+                fs::write(root.path().join("relaunched"), output).unwrap();
+            }
+            let error = wait_relaunch_marker(root.path(), Duration::ZERO).unwrap_err();
+            assert!(error.to_string().contains("Relaunch stub did not complete"));
+            assert!(error.to_string().contains("stub could not start"));
+        }
+    }
 }

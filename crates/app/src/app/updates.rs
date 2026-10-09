@@ -72,6 +72,10 @@ impl App {
                 break;
             };
             match update {
+                #[cfg(test)]
+                Update::TestBarrier(reply) => {
+                    let _ = reply.send(());
+                }
                 Update::LayoutsPrepared(generation, layouts) => {
                     if generation == self.layout_generation && !self.exit.active() {
                         for (project, value, text) in layouts {

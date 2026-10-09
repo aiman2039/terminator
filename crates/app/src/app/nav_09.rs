@@ -481,33 +481,48 @@ mod tests {
     #[test]
     fn attention_migration_retries_without_ack_and_preserves_later_choices() {
         let (mut app, ctx, dir) = fixture();
+        let (jobs, requests) = std::sync::mpsc::channel();
+        app.jobs = jobs.into();
         app.preferences_writable = true;
         app.migrate_attention();
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Job::MigrateAttention
+        ));
         assert!(app.attention_requested.is_some());
         assert!(!app.preferences.attention_migrated);
-        app.attention_requested = Some(
-            Instant::now()
-                .checked_sub(Duration::from_secs(6))
-                .unwrap_or_else(Instant::now),
-        );
+        let unacknowledged = Instant::now().checked_sub(Duration::from_secs(6)).unwrap();
+        app.attention_requested = Some(unacknowledged);
         app.migrate_attention();
-        assert!(app.attention_requested.unwrap().elapsed() >= Duration::from_secs(6));
+        assert_eq!(app.attention_requested, Some(unacknowledged));
+        assert!(
+            requests.try_recv().is_err(),
+            "Pending migration must not be duplicated"
+        );
         app.update_tx
             .send(Update::AttentionMigrated(Err("rejected".into())))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(!app.preferences.attention_migrated);
+        assert!(!app.attention_pending);
+        assert!(app.error.as_deref().unwrap().contains("rejected"));
         app.attention_requested = Some(
             Instant::now()
                 .checked_sub(Duration::from_secs(6))
                 .unwrap_or_else(Instant::now),
         );
+        let previous_request = app.attention_requested.unwrap();
         app.migrate_attention();
-        assert!(app.attention_requested.unwrap().elapsed() < Duration::from_secs(1));
+        assert!(matches!(
+            requests.try_recv().unwrap(),
+            Job::MigrateAttention
+        ));
+        assert!(app.attention_pending);
+        assert!(app.attention_requested.unwrap() > previous_request);
         app.update_tx
             .send(Update::AttentionMigrated(Ok(())))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         app.preferences.save(dir.path()).unwrap();
         assert!(UiPreferences::load(dir.path()).unwrap().attention_migrated);
         app.state.settings.notifications_side = false;
@@ -515,6 +530,10 @@ mod tests {
         app.migrate_attention();
         assert!(app.attention_requested.is_none());
         assert!(!app.state.settings.notifications_side);
+        assert!(
+            requests.try_recv().is_err(),
+            "Acknowledged migration must preserve later choices"
+        );
     }
 
     #[test]
@@ -537,10 +556,10 @@ mod tests {
         app.update_tx
             .send(Update::Error("Settings rejected".into()))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(!app.preferences.typography_migrated);
         app.update_tx.send(Update::TypographyMigrated).unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(app.preferences.typography_migrated);
     }
 

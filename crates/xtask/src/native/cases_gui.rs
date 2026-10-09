@@ -38,14 +38,15 @@ pub(crate) fn external(o: &Options) -> Result<()> {
         &h,
         o,
         "external-failure",
-        json!([{"at_ms":1100,"target":"explorer-file:space file.rs","right_click":true},{"at_ms":1600,"target":"Open externally"},{"at_ms":2100,"target":"settings"}]),
+        json!([{"at_ms":1100,"target":"explorer-file:space file.rs","right_click":true},{"at_ms":1600,"target":"Open externally"},{"at_ms":2100,"target":"header-overflow"},{"at_ms":2400,"target":"settings"}]),
         4900,
     )?;
     let error = logs
-        .find("Fixture error External editor /bin/sh exited with")
+        .find("Fixture error External editor exited with")
         .context("Exit failure not displayed")?;
     ensure!(
-        logs.contains("fixture external exit failure")
+        logs.contains("exit status: 7")
+            && logs.contains("fixture external exit failure")
             && logs.find("Fixture action: settings").unwrap() < error,
         "Launch blocked Settings or discarded stderr"
     );
@@ -241,17 +242,27 @@ pub(crate) fn terminal_actions(o: &Options) -> Result<()> {
     fs::write(&source, "fn changed() {}\n")?;
     fs::write(root.join("README.md"), "untracked\n")?;
     let ended = h.shell(&p)?;
+    // History keeps resumable sessions. Plain ended shells are pruned.
+    // Record fixture metadata only; no agent process is launched.
+    h.rpc(json!({"Hook": {
+        "protocol_version":1,"event_id":"native-history-retain",
+        "terminal_session_id":id(&ended),"agent_invocation_id":"native-history",
+        "agent_kind":"custom","provider_session_id":"native-history",
+        "state":"waiting_input","request_id":"native-history","sequence":1,
+        "summary":"History fixture","details":"",
+        "resume":{"program":"codex","args":["resume","native-history"]}
+    }}))?;
     h.rpc(json!({"Stop":{"session":id(&ended)}}))?;
     h.wait(|st| session(st, id(&ended))["lifecycle"] == "ended", 5)?;
     plain(
         &h,
         o,
         "history",
-        json!([{"at_ms":1100,"target":"tool-History"}]),
+        json!([{"at_ms":900,"target":"header-overflow"},{"at_ms":1100,"target":"tool-History"}]),
         2500,
     )?;
     ensure!(
-        prefs(&h)?.get("tool").is_some_and(|tool| tool == "History"),
+        prefs(&h)?.get("tool").is_some_and(|tool| tool == "history"),
         "Global History selection not saved"
     );
     plain(

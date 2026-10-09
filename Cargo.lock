@@ -2347,6 +2347,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
+
+[[package]]
 name = "globset"
 version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6249,7 +6255,7 @@ dependencies = [
 
 [[package]]
 name = "terminator"
-version = "0.102.0"
+version = "0.103.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -6309,7 +6315,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-core"
-version = "0.102.0"
+version = "0.103.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -6334,7 +6340,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-daemon"
-version = "0.102.0"
+version = "0.103.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -6359,7 +6365,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-git"
-version = "0.102.0"
+version = "0.103.0"
 dependencies = [
  "anyhow",
  "tempfile",
@@ -6368,7 +6374,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-hook"
-version = "0.102.0"
+version = "0.103.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -6389,7 +6395,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-integrations"
-version = "0.102.0"
+version = "0.103.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -6400,7 +6406,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-native-edit"
-version = "0.102.0"
+version = "0.103.0"
 dependencies = [
  "base64 0.22.1",
  "egui",
@@ -6424,7 +6430,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-sys"
-version = "0.102.0"
+version = "0.103.0"
 dependencies = [
  "core-foundation 0.10.1",
  "core-graphics",
@@ -6434,7 +6440,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-updater"
-version = "0.102.0"
+version = "0.103.0"
 dependencies = [
  "dispatch2",
  "eframe",
@@ -8350,7 +8356,7 @@ checksum = "32ac00cd3f8ec9c1d33fb3e7958a82df6989c42d747bd326c822b1d625283547"
 
 [[package]]
 name = "xtask"
-version = "0.102.0"
+version = "0.103.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -8358,17 +8364,23 @@ dependencies = [
  "core-foundation 0.10.1",
  "core-graphics",
  "flate2",
+ "fs2",
+ "glob",
  "image",
  "plist",
  "resvg",
  "rustix 1.1.5",
+ "semver",
  "serde",
  "serde_json",
+ "sha2",
  "tar",
  "tempfile",
  "terminator-core",
  "terminator-sys",
+ "toml_edit 0.25.15+spec-1.1.0",
  "tungstenite",
+ "uuid",
  "x11rb",
  "xshell",
 ]

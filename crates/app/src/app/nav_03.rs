@@ -147,6 +147,7 @@ mod tests {
             app.jobs = jobs.into();
             let (updates, rx) = mpsc::channel();
             app.updates = rx;
+            app.update_tx = updates.clone();
             updates
                 .send(Update::WorktreeCreated(
                     Box::new(app.state.clone()),
@@ -154,7 +155,7 @@ mod tests {
                     open_terminal,
                 ))
                 .unwrap();
-            app.process_updates(&ctx);
+            drain_updates(&mut app, &ctx);
             assert_eq!(app.selected.as_deref(), Some("b"));
             let creates: Vec<_> = requests
                 .try_iter()

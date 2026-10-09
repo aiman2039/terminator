@@ -1,6 +1,6 @@
 use super::{
     Context, Duration, Harness, Options, Path, PathBuf, Result, Value, ensure, fs, git, id, json,
-    output, plain, save_prefs, session, session_ids, sessions, thread,
+    output, plain, save_prefs, session_closed, session_ids, sessions, thread,
 };
 use std::{
     io,
@@ -86,7 +86,7 @@ pub fn run(o: &Options) -> Result<()> {
         .as_object_mut()
         .ok_or_else(|| anyhow::anyhow!("settings is not an object"))?;
     settings_object.insert("editor_program".into(), json!("/missing/user-editor"));
-    settings_object.insert("review_mode".into(), json!("native"));
+    settings_object.insert("review_mode".into(), json!("neovim"));
     h.rpc(json!({"Settings":settings}))?;
     let p = h.project("review")?;
     let root = PathBuf::from(
@@ -145,7 +145,7 @@ pub fn run(o: &Options) -> Result<()> {
             "Layout toggle made review writable"
         );
         h.write(&mut stream, "q")?;
-        h.wait(|st| session(st, id(&s))["lifecycle"] == "ended", 5)?;
+        h.wait(|st| session_closed(st, id(&s)), 5)?;
         h.wait(
             |_| !h.root.join(format!("run/review-{}", id(&s))).exists(),
             5,
@@ -171,7 +171,7 @@ pub fn run(o: &Options) -> Result<()> {
         &h,
         o,
         "review",
-        json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1600,"target":"Neovim diff"}]),
+        json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1600,"target":"Open changes"}]),
         3500,
     )?;
     let state = h.state()?;
@@ -206,7 +206,7 @@ pub fn run(o: &Options) -> Result<()> {
         json!([{"at_ms":1200,"target":"workspace-close:Diff: review.rs"}]),
         3000,
     )?;
-    h.wait(|s| session(s, id(review))["lifecycle"] == "ended", 5)?;
+    h.wait(|s| session_closed(s, id(review)), 5)?;
     ensure!(
         session_ids(
             h.state()?
@@ -217,19 +217,30 @@ pub fn run(o: &Options) -> Result<()> {
         ) == [id(&shell)],
         "Closing review affected shell"
     );
+    let mut settings = h
+        .state()?
+        .get("settings")
+        .cloned()
+        .context("Missing settings")?;
+    settings
+        .as_object_mut()
+        .context("Settings are not an object")?
+        .insert("review_mode".into(), json!("native"));
+    h.rpc(json!({"Settings":settings}))?;
+    let before_native = sessions(&h.state()?).len();
     plain(
         &h,
         o,
         "native-side-by-side",
         json!([
             {"at_ms":1200,"target":"git-file-review.rs","right_click":true},
-            {"at_ms":1600,"target":"Native diff"},
+            {"at_ms":1600,"target":"Open changes"},
             {"at_ms":2200,"target":"diff-side-by-side"}
         ]),
         3500,
     )?;
     ensure!(
-        sessions(&h.state()?).len() == sessions(&state).len(),
+        sessions(&h.state()?).len() == before_native,
         "Native diff allocated a PTY"
     );
     h.assert_pids(&[shell])
@@ -318,6 +329,16 @@ pub(super) fn proxy(root: &Path) -> Result<Proxy> {
 pub fn legacy(o: &Options) -> Result<()> {
     let mut h = Harness::new()?;
     h.setup()?;
+    let mut settings = h
+        .state()?
+        .get("settings")
+        .cloned()
+        .context("Missing settings")?;
+    settings
+        .as_object_mut()
+        .context("Settings are not an object")?
+        .insert("review_mode".into(), json!("neovim"));
+    h.rpc(json!({"Settings":settings}))?;
     let p = h.project("legacy-diff")?;
     let root = PathBuf::from(
         p.get("path")
@@ -347,7 +368,7 @@ pub fn legacy(o: &Options) -> Result<()> {
         &h,
         o,
         "legacy-diff",
-        json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1700,"target":"Neovim diff"}]),
+        json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1700,"target":"Open changes"}]),
         3500,
     )?;
     ensure!(

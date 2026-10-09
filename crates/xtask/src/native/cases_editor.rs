@@ -1,5 +1,5 @@
 use super::super::harness::{
-    Harness, bin, git, id, session, session_ids, session_present, sessions,
+    Harness, bin, git, id, session, session_closed, session_ids, sessions,
 };
 use super::dispatch::{Options, capture, plain, prefs, setup};
 use anyhow::{Result, anyhow, ensure};
@@ -57,7 +57,7 @@ pub(crate) fn editor_lifecycle(o: &Options) -> Result<()> {
             5,
         )?;
         h.write(&mut h.attach(editor)?, ":q\r")?;
-        h.wait(|s| session(s, id(editor))["lifecycle"] == "ended", 5)?;
+        h.wait(|s| session_closed(s, id(editor)), 5)?;
         h.wait(
             |s| {
                 s.get("projects")
@@ -320,10 +320,7 @@ pub(crate) fn focus_close(o: &Options) -> Result<()> {
         json!([{"at_ms":1100,"target":format!("editor-close:{}",id(&editor))}]),
         3500,
     )?;
-    h.wait(
-        |st| !session_present(st, id(&editor)) || session(st, id(&editor))["lifecycle"] == "ended",
-        5,
-    )?;
+    h.wait(|st| session_closed(st, id(&editor)), 5)?;
     ensure!(
         !session_ids(
             h.state()?
@@ -510,7 +507,7 @@ pub(crate) fn cleanup(o: &Options) -> Result<()> {
         &h,
         o,
         "editor-settings",
-        json!([{"at_ms":900,"target":"tool-Git"},{"at_ms":1400,"target":"settings"},{"at_ms":2000,"target":"settings-section:Terminal & Editor"},{"at_ms":2300,"target":"external-program"},{"at_ms":2600,"target":"external-program","text":"/draft/editor with spaces"}]),
+        json!([{"at_ms":900,"target":"tool-Git"},{"at_ms":1200,"target":"header-overflow"},{"at_ms":1400,"target":"settings"},{"at_ms":2000,"target":"settings-section:Terminal & Editor"},{"at_ms":2300,"target":"external-program"},{"at_ms":2600,"target":"external-program","text":"/draft/editor with spaces"}]),
         4300,
     )?;
     ensure!(
@@ -525,7 +522,7 @@ pub(crate) fn cleanup(o: &Options) -> Result<()> {
         "Unsaved draft changed settings"
     );
     ensure!(
-        prefs(&h)?.get("tool").is_some_and(|tool| tool == "Git"),
+        prefs(&h)?.get("tool").is_some_and(|tool| tool == "git"),
         "Settings changed sidebar tool"
     );
     let mut settings = h

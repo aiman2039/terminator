@@ -28,7 +28,7 @@ mod tests {
                 vec![],
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert_eq!(
             app.layouts["a"]
                 .tabs
@@ -173,7 +173,7 @@ mod tests {
                 vec![old.clone()],
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         // The new shell splits the originating window, not the newly
         // selected project; nothing falls back to the main dock.
         let dock = app.floating[0].dock.as_ref().expect("window kept");
@@ -197,7 +197,7 @@ mod tests {
         app.update_tx
             .send(Update::FloatCreated(session, viewport, None, Vec::new()))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         // The window closed mid-flight: the tab still lands in its
         // project instead of nowhere.
         let workspace = app.layouts.get("a").expect("project dock");
@@ -1519,7 +1519,7 @@ mod tests {
                 false,
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert_eq!(app.dirs[&path].len(), 1);
         assert!(app.directory_errors.contains_key(&path));
         app.update_tx
@@ -1530,7 +1530,7 @@ mod tests {
                 false,
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(app.dirs[&path].is_empty());
         assert!(!app.directory_errors.contains_key(&path));
     }
@@ -1561,7 +1561,7 @@ mod tests {
                 false,
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(app.context.is_none());
     }
 
@@ -1576,7 +1576,7 @@ mod tests {
                 Ok(workspace_ops::Report::Message("Staged".into())),
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert_eq!(app.git_list_root, Some(root.clone()));
         app.update_tx
             .send(Update::Workspace(
@@ -1584,7 +1584,7 @@ mod tests {
                 Err("commit failed".into()),
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert_eq!(app.git_list_root, Some(root.clone()));
         app.update_tx
             .send(Update::Workspace(
@@ -1592,7 +1592,7 @@ mod tests {
                 Ok(workspace_ops::Report::Message("Committed".into())),
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(app.git_list_root.is_none());
         app.git_list_root = Some(root.clone());
         app.update_tx
@@ -1601,7 +1601,7 @@ mod tests {
                 Ok(workspace_ops::Report::Message("Switched".into())),
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(app.git_list_root.is_none());
         app.git_list_root = Some(root.clone());
         let mut output = ctx.run_ui(
@@ -1655,7 +1655,7 @@ mod tests {
                 Some(vec![Tab::Terminal("anchor".into())]),
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert_eq!(app.selected.as_deref(), Some("b"));
         assert!(
             app.layouts["a"]
@@ -1672,7 +1672,7 @@ mod tests {
         app.update_tx
             .send(Update::Error("folder unavailable".into()))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert_eq!(app.selected.as_deref(), Some("a"));
         assert!(
             app.layouts["a"]
@@ -1693,7 +1693,7 @@ mod tests {
                 0,
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert_eq!(app.selected.as_deref(), Some("a"));
         app.update_tx
             .send(Update::OpenedProject(
@@ -1702,7 +1702,7 @@ mod tests {
                 app.selection_generation,
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert_eq!(app.selected.as_deref(), Some("b"));
     }
 

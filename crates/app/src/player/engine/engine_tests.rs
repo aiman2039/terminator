@@ -291,25 +291,53 @@ mod tests {
     }
     #[tokio::test]
     async fn slow_headers_and_stalled_reads_have_separate_deadlines() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let headers = b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n";
-        for (header_delay, gaps, expected) in [
-            (Duration::from_millis(100), vec![], "header"),
-            (Duration::ZERO, vec![Duration::from_millis(100)], "stalled"),
-        ] {
-            let (url, server) = server(header_delay, gaps, headers).await;
+        for (block_headers, expected) in [(true, "header"), (false, "stalled")] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (release, blocked) = tokio::sync::oneshot::channel::<()>();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                let _ = socket.read(&mut request).await;
+                if !block_headers && socket.write_all(headers).await.is_err() {
+                    return;
+                }
+                // Keep the selected phase blocked until the client reports
+                // its deadline. A delayed executor cannot make data race it.
+                let _ = blocked.await;
+                if block_headers {
+                    let _ = socket.write_all(headers).await;
+                }
+                let _ = socket.write_all(b"x").await;
+            });
             let (tx, _rx) = mpsc::channel(COMPRESSED_SLOTS);
-            let error = download(
-                &client,
-                url,
-                tx,
-                Duration::from_millis(30),
-                Duration::from_millis(30),
+            let result = tokio::time::timeout(
+                Duration::from_secs(10),
+                download(
+                    &client,
+                    format!("http://{address}"),
+                    tx,
+                    if block_headers {
+                        Duration::from_millis(100)
+                    } else {
+                        Duration::from_secs(5)
+                    },
+                    Duration::from_millis(100),
+                ),
             )
-            .await
-            .unwrap_err();
+            .await;
+            let _ = release.send(());
+            server.abort();
+            if let Err(error) = server.await {
+                assert!(error.is_cancelled(), "Fixture server failed: {error}");
+            }
+            let error = result
+                .expect("Client did not enforce its deadline")
+                .unwrap_err();
             assert!(error.to_string().contains(expected), "{error:#}");
-            server.await.unwrap();
         }
     }
     #[tokio::test]
@@ -317,20 +345,20 @@ mod tests {
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let (url, server) = server(
             Duration::ZERO,
-            vec![Duration::from_millis(35); 4],
+            vec![Duration::from_millis(750); 4],
             b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n",
         )
         .await;
         let (tx, mut rx) = mpsc::channel(COMPRESSED_SLOTS);
-        download(
-            &client,
-            url,
-            tx,
-            Duration::from_millis(80),
-            Duration::from_millis(80),
-        )
-        .await
-        .unwrap();
+        let read_deadline = Duration::from_secs(2);
+        let started = Instant::now();
+        download(&client, url, tx, Duration::from_secs(5), read_deadline)
+            .await
+            .unwrap();
+        assert!(
+            started.elapsed() > read_deadline,
+            "Fixture must outlive a single read deadline"
+        );
         let mut bytes = Vec::new();
         while let Some(chunk) = rx.recv().await {
             bytes.extend(chunk);

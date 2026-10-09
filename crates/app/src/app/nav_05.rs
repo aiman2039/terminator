@@ -563,7 +563,7 @@ mod tests {
                 vec![Tab::Terminal("shell".into())],
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         app.editors_closed(
             editor_close::Target::Workspace("a".into(), "file".into()),
             vec!["editor".into()],
@@ -641,7 +641,7 @@ mod tests {
         app.update_tx
             .send(Update::ProjectDirectories(directories()))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert_eq!(app.selected.as_deref(), Some("b"));
         assert!(!app.visible_projects().iter().any(|p| p.id == "a"));
         app.apply_state(app.state.clone());
@@ -654,7 +654,7 @@ mod tests {
                 app.selection_generation,
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert_eq!(app.selected.as_deref(), Some("a"));
         app.apply_project_directories(directories());
         assert!(app.visible_projects().iter().any(|p| p.id == "a"));
@@ -789,7 +789,7 @@ mod tests {
                 vec![Tab::Terminal("shell".into())],
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         app.layouts.get_mut("a").unwrap().active = original.clone();
         app.insert("a", Tab::Terminal("other".into()), Some("right"));
         app.layouts.get_mut("a").unwrap().active = "file".into();

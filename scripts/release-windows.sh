@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-exec python3 "$(dirname -- "${BASH_SOURCE[0]}")/release_windows.py" "$@"
+cd "$(dirname -- "${BASH_SOURCE[0]}")/.."
+exec cargo xtask release-windows "$@"

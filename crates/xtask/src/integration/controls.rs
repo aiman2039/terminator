@@ -4,6 +4,13 @@ use anyhow::{Context, Result, anyhow, ensure};
 use serde_json::{Value, json};
 use std::{fs, path::PathBuf};
 use terminator_core::quote as shell_quote;
+
+// Do not put a complete readiness marker in PTY input: input echo can arrive
+// before the shell executes the command. Adjacent quoted words join at runtime.
+const CONTROL_SIGNAL: &str = "printf '%s\\n' 'CONTROL_SEND_''PROOF'";
+const CROSS_PROJECT_SIGNAL: &str = "printf '%s\\n' 'CROSS_PROJECT_''READY'";
+const CHILD_SIGNAL: &str = "printf '%s\\n' 'CHILD_''READY'";
+const CHILD_STOPPED_SIGNAL: &str = "printf '%s\\n' 'CHILD_''STOPPED'";
 /// Additional daemon/CLI features use a fresh instance, including live-session
 /// rejection on worktree removal and OSC separation from hook state.
 pub fn controls() -> Result<()> {
@@ -54,13 +61,7 @@ pub fn controls() -> Result<()> {
         "Removed a worktree with live sessions"
     );
     let mut send = h.command("terminator-hook");
-    send.args([
-        "ctl",
-        "send",
-        id(&s),
-        "printf 'CONTROL_SEND_PROOF\\n'",
-        "--enter",
-    ]);
+    send.args(["ctl", "send", id(&s), CONTROL_SIGNAL, "--enter"]);
     output(send)?;
     h.wait(
         |_| {
@@ -160,7 +161,7 @@ pub fn controls() -> Result<()> {
     h.write(
         &mut outside_stream,
         &format!(
-            "stty -echo; cd {}; printf 'CROSS_PROJECT_READY\\n'\n",
+            "stty -echo; cd {} && {CROSS_PROJECT_SIGNAL}\n",
             shell_quote(&alias.to_string_lossy())
         ),
     )?;
@@ -198,7 +199,7 @@ pub fn controls() -> Result<()> {
     h.write(
         &mut outside_stream,
         &format!(
-            "cd {}; (cd {}; printf 'CHILD_READY\\n'; exec sleep 30) &\n",
+            "cd {} && {{ (cd {} && {CHILD_SIGNAL} && exec sleep 30) & }}\n",
             shell_quote(&repo.to_string_lossy()),
             shell_quote(&destination.to_string_lossy())
         ),
@@ -219,7 +220,7 @@ pub fn controls() -> Result<()> {
     );
     h.write(
         &mut outside_stream,
-        "kill %1; wait; printf 'CHILD_STOPPED\\n'\n",
+        &format!("kill %1; wait; {CHILD_STOPPED_SIGNAL}\n"),
     )?;
     h.wait(
         |_| {
@@ -348,4 +349,40 @@ pub fn controls() -> Result<()> {
         json!({"worktree_registry":true,"live_and_dirty_removal_rejected":true,"cross_project_and_descendant_removal_rejected":true,"locked_removal_rejected":true,"branch_preserved":true,"cli_send_read":true,"osc_and_cli_notifications":true,"metadata":true})
     );
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn readiness_markers_require_execution_and_cannot_match_input_echo() {
+        for (command, marker) in [
+            (CONTROL_SIGNAL, "CONTROL_SEND_PROOF"),
+            (CROSS_PROJECT_SIGNAL, "CROSS_PROJECT_READY"),
+            (CHILD_SIGNAL, "CHILD_READY"),
+            (CHILD_STOPPED_SIGNAL, "CHILD_STOPPED"),
+        ] {
+            assert!(!command.contains(marker), "Input echo could match {marker}");
+            let output = Command::new("sh").args(["-c", command]).output().unwrap();
+            assert!(output.status.success());
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!("{marker}\n")
+            );
+        }
+    }
+
+    #[test]
+    fn failed_directory_change_does_not_emit_readiness() {
+        let dir = tempfile::tempdir().unwrap();
+        let command = format!(
+            "cd {} && {CROSS_PROJECT_SIGNAL}",
+            shell_quote(&dir.path().join("missing").to_string_lossy())
+        );
+        let output = Command::new("sh").args(["-c", &command]).output().unwrap();
+        assert!(!output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("CROSS_PROJECT_READY"));
+    }
 }

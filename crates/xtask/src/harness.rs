@@ -49,6 +49,17 @@ pub fn session<'a>(state: &'a Value, sid: &str) -> &'a Value {
 pub fn session_present(state: &Value, sid: &str) -> bool {
     sessions(state).iter().any(|s| id(s) == sid)
 }
+/// Closed sessions may remain as ended history or be pruned from inventory.
+pub fn session_closed(state: &Value, sid: &str) -> bool {
+    sessions(state)
+        .iter()
+        .find(|session| id(session) == sid)
+        .is_none_or(|session| {
+            session
+                .get("lifecycle")
+                .is_some_and(|value| value == "ended")
+        })
+}
 fn session_summary(state: &Value) -> String {
     let Some(list) = state["sessions"].as_array() else {
         return "no session inventory".into();
@@ -457,6 +468,31 @@ fn clear_inherited_terminator(
 #[cfg(test)]
 mod isolation_tests {
     use super::*;
+    #[test]
+    fn closed_session_accepts_ended_history_or_a_pruned_record() {
+        for state in [
+            json!({"sessions":[]}),
+            json!({"sessions":[{"id":"editor","lifecycle":"ended"}]}),
+        ] {
+            assert!(session_closed(&state, "editor"));
+        }
+    }
+
+    #[test]
+    fn closed_session_rejects_live_stopping_and_unknown_records() {
+        for lifecycle in ["running", "stopping", "starting", "unknown"] {
+            let state = json!({"sessions":[
+                {"id":"other","lifecycle":"ended"},
+                {"id":"editor","lifecycle":lifecycle}
+            ]});
+            assert!(!session_closed(&state, "editor"), "Accepted {lifecycle}");
+        }
+        assert!(!session_closed(
+            &json!({"sessions":[{"id":"editor"}]}),
+            "editor"
+        ));
+    }
+
     #[test]
     fn inherited_catalog_generation_and_session_routing_cannot_escape_fixture() {
         let mut command = Command::new("fixture");

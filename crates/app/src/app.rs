@@ -35,6 +35,8 @@ mod nav_10;
 mod nav_11;
 #[cfg(test)]
 mod nav_common;
+#[cfg(test)]
+pub(crate) use nav_common::drain_updates;
 mod projects;
 #[cfg(test)]
 mod repaint_tests;

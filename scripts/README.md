@@ -2,23 +2,26 @@
 
 ## Local release checks
 
-`bash scripts/git-release.sh` now validates an isolated source copy with the
+`cargo xtask release` validates an isolated source copy with the
 next version before it changes the checkout. It includes staged, unstaged,
 deleted, and untracked files that Git does not ignore. Check the files before
 running it: a successful release still commits all of them, as before.
 
-The default requires macOS, Linux Docker execution, and a Windows runner.
-Missing runners stop the flow. To validate without committing or pushing:
+The Rust command requires host checks, Linux Docker execution, and a Windows
+runner unless a platform is explicitly skipped. The existing
+`scripts/git-release.sh` wrapper keeps its default `--skip-windows` setting.
+Missing required runners stop the flow. To validate all configured platforms
+without committing or pushing:
 
 ```sh
 export TERMINATOR_WINDOWS_HOST=your-windows-ssh-alias
-bash scripts/git-release.sh --check-only
+cargo xtask release --check-only
 ```
 
 For an explicit partial run on this Mac:
 
 ```sh
-bash scripts/git-release.sh --check-only --skip-linux --skip-windows
+cargo xtask release --check-only --skip-linux --skip-windows
 ```
 
 Remove `--check-only` to commit and release from `master`. The script checks
@@ -34,17 +37,42 @@ Host checks include the shared compiler, formatting, Clippy, workspace tests,
 audit, license/source checks, real-PTY integration, idle-close, `gui all`, and
 a release package build. macOS also cross-checks Windows with Clippy; this
 requires zig 0.14.x and the installed `x86_64-pc-windows-msvc` Rust target.
-Python 3.11+, Neovim, `cargo-audit`, and `cargo-deny` must be installed locally.
+Neovim, `cargo-audit`, and `cargo-deny` must be installed locally. The local
+release flow does not require Python.
 Native GUI checks require a desktop and any permissions required by the fixtures.
 Live-provider tests, ignored tests, soak tests, signing, and notarization are
 outside this local gate.
 
 Linux uses an Ubuntu 24.04 image, the repository Rust version, Neovim v0.11.6,
 Xvfb/Openbox, software rendering, the same checks and package build, and CI's
-50% line-coverage threshold. It uses `linux/amd64` to match the CI test jobs;
-this is emulated on Apple Silicon. Docker must be running. The image and
-separate Cargo build/registry volumes are cached. Linux ARM packaging and
-host-specific GPU/desktop behavior still need their own validation.
+50% line-coverage threshold. It uses the Docker server's native architecture:
+`linux/arm64` on Apple Silicon, or `linux/amd64` on x64 hosts. Emulation changes
+the shell executable reported by the kernel and cannot pass the strict
+idle-close identity checks. ARM64 local tests do not replace CI's x64 tests.
+Docker must be running. Images and Cargo build volumes are separate for each
+architecture; registry and Git source caches are shared. The image imports
+the installed toolchain from the official Rust image while keeping Ubuntu as
+its runtime. Required components come from `rust-toolchain.toml`, with LLVM
+tools added for coverage, so fresh containers do not need to install missing
+components. Audit, deny, coverage, and Neovim use pinned upstream binaries
+with SHA-256 checksums for each architecture; the three Cargo tools have
+independent build stages. Bash, zsh, and fish are installed for idle-close tests.
+An empty build context keeps source edits from invalidating setup layers.
+The local image tag includes a SHA-256 digest of the Dockerfile, Rust version,
+required components, and platform. An exact local match skips `docker build`
+and Docker Hub authentication. Setup changes create a new tag and run the
+build, reusing unchanged layers. Use `--rebuild-linux-image` to run the image
+build explicitly. The first build needs registry access; an older image with
+a different configuration is never used as a fallback. The run records its
+Linux platform in `results.json`. Other CPU architectures and host-specific
+GPU/desktop behavior still need their own validation.
+
+During a registry outage, explicitly select an image that is already installed:
+`./scripts/git-release.sh --linux-image YOUR_NATIVE_LINUX_IMAGE`.
+This overrides the Dockerfile configuration check; the release checks still
+run inside the selected image. Missing images or an architecture mismatch stop
+before host tests. The old x64 image cannot be used on Apple Silicon. Containers
+use `--pull never`. This option conflicts with `--rebuild-linux-image`.
 
 The built-in Windows runner uses `ssh` and `scp` with existing SSH key access.
 Configure the Windows OpenSSH server and install Git Bash, Rust 1.97.1 with
@@ -59,19 +87,34 @@ replace the x64 Windows Server CI environment.
 
 For another VM or runner tool, set `TERMINATOR_WINDOWS_RUNNER` to an executable.
 It receives `SOURCE_DIRECTORY ARTIFACT_DIRECTORY`, must copy the source
-unchanged, run `bash scripts/release-check.sh` on Windows with an isolated
+unchanged, run `cargo xtask release-check` on Windows with an isolated
 `RUNNER_TEMP`, collect artifacts, and return a nonzero status on any failure.
 
 Logs, screenshots, packages, and `results.json` remain under
 `.artifacts/releases/run-*`; skips are explicit in the summary. The release
-lock prevents two local flows from running together. After a forced process
-kill, remove `.artifacts/release.lock` only after the old flow has stopped.
+file lock prevents two local flows from running together and is released by
+the OS when the process exits, including a forced stop. The file remains on
+disk; do not delete it. For an empty legacy lock directory from the older
+implementation, first confirm no release process is running, then remove
+that directory with `rmdir .artifacts/release.lock` once.
 A commit or push failure leaves local files, commits, and tags for inspection.
 If dispatch fails after a successful push, retry only the printed
 `gh workflow run release.yaml --ref vVERSION` command; do not bump again.
 GitHub Actions retains its final checks and hosted security/signing steps.
 
-Offline flow regressions: `python3 -m unittest discover -s scripts -p test_release_flow.py`.
+The release commands are implemented in `crates/xtask/src/release/`:
+
+- `cargo xtask release`: validate, commit, push, and dispatch.
+- `cargo xtask release-check --output DIRECTORY`: check this operating system;
+  `RUNNER_TEMP` can provide the output directory instead.
+- `cargo xtask release-windows SOURCE ARTIFACTS --host HOST`: run the Windows
+  SSH checks. `TERMINATOR_WINDOWS_HOST` can provide the host instead.
+- `cargo xtask bump-version`: bump the workspace minor version and local
+  lockfile entries without resolving dependencies.
+
+The matching shell scripts remain wrappers. Offline Rust regressions:
+`cargo test -p xtask --locked release::`. They use disposable Git repositories
+and local bare remotes; they do not publish releases.
 
 ## Quality checks
 

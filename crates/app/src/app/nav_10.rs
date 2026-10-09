@@ -401,7 +401,7 @@ mod tests {
             .lifecycle = Lifecycle::Ended;
         app.service_ready.push_back(Update::State(Box::new(stale)));
         *app.service_owner.snapshot.lock().unwrap() = Some(Box::new(ended));
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(
             app.layouts["a"]
                 .find_tab(&Tab::Terminal("shell".into()))

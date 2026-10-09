@@ -305,6 +305,7 @@ impl JobQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::drain_updates;
     use std::fs;
     use std::sync::mpsc::{self, Receiver};
     fn fixture() -> (App, egui::Context, tempfile::TempDir, Receiver<Job>) {
@@ -483,12 +484,12 @@ mod tests {
         app.update_tx
             .send(Update::ExitSaved(1, Err("disk full".into())))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(!app.exit.active());
         assert!(app.error.as_ref().unwrap().contains("disk full"));
         app.begin_exit();
         app.update_tx.send(Update::ExitSaved(1, Ok(()))).unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(matches!(app.exit, Exit::Waiting(_)));
         assert_eq!(app.exit_attempt, 2);
     }
@@ -515,7 +516,7 @@ mod tests {
             session: "created-asynchronously".into(),
         });
         app.update_tx.send(Update::ExitDrained(id, serial)).unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(matches!(requests.recv().unwrap(), Job::Control(..)));
         assert!(matches!(requests.recv().unwrap(), Job::ExitDrain(..)));
         assert!(matches!(app.exit, Exit::Draining(..)));
@@ -532,7 +533,7 @@ mod tests {
         assert!(matches!(requests.recv().unwrap(), Job::ExitDrain(2, _)));
         // A late success from the cancelled installation cannot close the retry.
         app.update_tx.send(Update::ExitSaved(1, Ok(()))).unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(matches!(app.exit, Exit::Draining(_, 2)));
     }
     #[test]
@@ -560,7 +561,7 @@ mod tests {
                 Err("Unknown project".into()),
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(app.exit.active());
         assert!(app.error.is_none());
     }
@@ -627,7 +628,7 @@ mod tests {
             ))
             .unwrap();
         app.update_tx.send(Update::ExitDrained(id, serial)).unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         let checkpoint = app.exit_checkpoint().unwrap();
         assert!(
             checkpoint

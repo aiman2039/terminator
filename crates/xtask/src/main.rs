@@ -13,6 +13,7 @@ mod native;
 mod notification_perf;
 mod package;
 mod regressions;
+mod release;
 mod zip_writer;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -26,6 +27,29 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Task {
+    /// Validate a versioned source copy, then commit, push and release it.
+    #[command(args_override_self = true)]
+    Release(release::Options),
+    /// Run the local platform's isolated release checks.
+    ReleaseCheck {
+        #[arg(long, env = "RUNNER_TEMP")]
+        output: PathBuf,
+    },
+    /// Execute release checks on a Windows OpenSSH host.
+    ReleaseWindows {
+        source: PathBuf,
+        artifacts: PathBuf,
+        #[arg(long, env = "TERMINATOR_WINDOWS_HOST")]
+        host: String,
+        #[arg(
+            long,
+            env = "TERMINATOR_WINDOWS_BASH",
+            default_value = "C:/Program Files/Git/bin/bash.exe"
+        )]
+        bash: String,
+    },
+    /// Bump the workspace minor version without resolving dependencies.
+    BumpVersion,
     /// Reject disallowed blocking adapters in GUI and async-client sources.
     AsyncBoundary,
     /// Compose local launch assets from validated native captures.
@@ -200,6 +224,15 @@ fn main() -> Result<()> {
         return integration::git_shim();
     }
     match Args::parse().task {
+        Task::Release(options) => release::run(options),
+        Task::ReleaseCheck { output } => release::checks::run(&output),
+        Task::ReleaseWindows {
+            source,
+            artifacts,
+            host,
+            bash,
+        } => release::windows::run(&source, &artifacts, &host, &bash),
+        Task::BumpVersion => release::version::bump(&harness::root()).map(|_| ()),
         Task::AsyncBoundary => async_boundary::run(),
         Task::LaunchAssets => launch::run(),
         Task::IdleClose => idle_fixture::run(),

@@ -27,6 +27,11 @@ pub fn run() -> Result<()> {
         let mut h = Harness::new()?;
         let home = h.root.join("home");
         fs::create_dir_all(&home)?;
+        if name == "fish" {
+            // A fresh fish profile otherwise starts a background Python job
+            // to generate completions. Test an initialized, idle profile.
+            fs::create_dir_all(h.root.join("data/fish/generated_completions"))?;
+        }
         h.env
             .insert("HOME".into(), home.to_string_lossy().into_owned());
         h.env
@@ -114,8 +119,18 @@ pub fn run() -> Result<()> {
         let outcome = close(&h, &[&background], &generation)?;
         ensure!(!closed(&outcome), "Background job mistaken for idle");
         h.assert_pids(std::slice::from_ref(&background))?;
-        h.write(&mut bg, "kill -STOP $!\r")?;
-        thread::sleep(Duration::from_millis(300));
+        let last_pid = if name == "fish" { "$last_pid" } else { "$!" };
+        h.write(
+            &mut bg,
+            &format!("kill -STOP {last_pid} && printf '%s\\n' 'IDLE_STOPPED_''JOB'\r"),
+        )?;
+        h.wait(
+            |_| {
+                h.history(id(&background))
+                    .is_ok_and(|s| s.contains("IDLE_STOPPED_JOB"))
+            },
+            5,
+        )?;
         ensure!(
             !closed(&close(&h, &[&background], &generation)?),
             "Stopped job mistaken for idle"

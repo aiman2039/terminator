@@ -106,7 +106,13 @@ mod tests {
                 Vec::new(),
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        pump_until(&mut app, &ctx, |app| {
+            app.preferences
+                .ide_strip_docks
+                .0
+                .get("a")
+                .is_some_and(|dock| dock.find_tab(&Tab::Terminal("new-strip".into())).is_some())
+        });
         assert!(
             app.preferences
                 .ide_strip_docks
@@ -145,7 +151,13 @@ mod tests {
                 vec![Tab::Terminal("one".into())],
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        pump_until(&mut app, &ctx, |app| {
+            app.preferences
+                .ide_strip_docks
+                .0
+                .get("a")
+                .is_some_and(|dock| dock.find_tab(&Tab::Terminal("two".into())).is_some())
+        });
         let dock = app.preferences.ide_strip_docks.0.get("a").unwrap();
         assert_eq!(dock.iter_leaves().count(), 2);
         assert!(dock.find_tab(&Tab::Terminal("two".into())).is_some());
@@ -193,7 +205,13 @@ mod tests {
                 anchors,
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        pump_until(&mut app, &ctx, |app| {
+            app.preferences
+                .ide_strip_docks
+                .0
+                .get("a")
+                .is_some_and(|dock| dock.find_tab(&Tab::Terminal("new".into())).is_some())
+        });
         let dock = app.preferences.ide_strip_docks.0.get("a").unwrap();
         let path = dock.find_tab(&Tab::Terminal("new".into())).unwrap();
         assert_eq!(path.node_path().node, right);

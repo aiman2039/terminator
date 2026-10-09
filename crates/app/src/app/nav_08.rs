@@ -122,7 +122,7 @@ mod tests {
         app.jobs = jobs.into();
         app.open_file(crate::test_path("/a/song.MP3"), None, None, false);
         app.select_project("b".into());
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert_eq!(app.selected.as_deref(), Some("b"));
         assert!(!app.layouts["a"].contains(&Tab::Player));
         assert_eq!(app.player.project.as_deref(), Some("a"));
@@ -175,7 +175,19 @@ mod tests {
         let original = dock.active.clone();
         dock.add("other".into(), Tab::Terminal("other".into()));
         app.layouts.insert("a".into(), dock);
-        app.process_updates(&ctx);
+        pump_until(&mut app, &ctx, |app| {
+            app.layouts.get("a").is_some_and(|workspace| {
+                workspace.tabs.iter().any(|tab| {
+                    tab.id == original
+                        && tab
+                            .layout
+                            .find_tab(&Tab::Image {
+                                path: crate::test_path("/a/picture.png"),
+                            })
+                            .is_some()
+                })
+            })
+        });
         assert_eq!(app.layouts["a"].active, "other");
         let source = app.layouts["a"]
             .tabs

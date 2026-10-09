@@ -1,5 +1,293 @@
 # Validation evidence — 2026-09-08
 
+## Fish idle-close and real child-process checks (2026-10-10)
+
+Release attempt `run-70HVaP` failed on the initial fish shell. The same failure
+was reproduced in the cached native ARM64 Ubuntu release image. Fish starts
+`create_manpage_completions.py` in the background for a fresh profile; a probe
+confirmed that Python child and its later zombie state. Separately, sysinfo's
+default Linux inventory lists worker threads as children, so fish's own
+threads can also cause a false busy result.
+
+The fixture now creates an empty generated-completions cache in its isolated
+XDG data directory before starting fish. Core idle-close inventories exclude
+thread task entries while preserving real child processes and all existing
+identity, wait-state, agent, and generation checks. A Linux regression creates
+a live thread and child process and verifies that only the child is included.
+The stopped-job fixture uses fish's `$last_pid` and requires an output marker
+after successful SIGSTOP delivery; other shells retain `$!`.
+
+Validation: all 113 core tests and strict core Clippy pass on native ARM64
+Linux. Idle-close passes for zsh, bash, fish, unsupported sh refusal, and the
+zsh prompt framework, including foreground/background/stopped jobs. The full
+Linux real-PTY integration suite passes. macOS idle-close passes for zsh,
+bash, sh refusal, and the prompt framework; fish is not installed on the host.
+Strict macOS core/xtask Clippy, formatting, and whitespace checks pass.
+Logs: `/tmp/terminator-fish-{baseline,fixed-linux,fixed-macos,clippy}.log`.
+The complete release, GUI, packaging, and coverage stages were not rerun.
+
+## Native Linux process identity on Apple Silicon (2026-10-10)
+
+Release attempt `run-o99Tit` used an x64 Linux container on an ARM64 Docker
+server. A fresh probe confirmed `/proc/$$/exe` resolves to
+`/run/rosetta/rosetta`, not bash. The existing idle-close executable-identity
+check correctly returned unknown and preserved the shell.
+
+The release runner now selects the Docker server's native ARM64 or x64
+platform. Unsupported architectures stop the run. Explicit images with the
+wrong architecture fail before host tests. Image fingerprints include the
+platform, Cargo build volumes are separate per architecture, and results
+record the selected platform. The Ubuntu Dockerfile selects pinned,
+checksum-verified ARM64/x64 tools and installs zsh and fish alongside bash.
+Core shell identity and idle-close refusal checks are unchanged. Local ARM64
+coverage does not establish GitHub x64 behavior.
+
+Validation: 61 macOS xtask tests, strict xtask Clippy, formatting, and whitespace
+checks pass. New tests cover architecture aliases/refusal, platform-specific
+image keys, ARM64 build/runtime commands and cache, and early refusal of an
+emulated explicit image. Docker's installed frontend parses the architecture
+stages. The existing native ARM64 `rust:1.97.1` image builds the fixture binaries
+and passes bash idle-close, unsupported-shell refusal, and the complete
+real-PTY integration suite. Its zsh/fish cases are skipped because that
+validation image does not contain those shells.
+
+The complete new Ubuntu ARM64 image remains unverified: Docker Hub returned
+HTTP 504 fetching the Dockerfile frontend. Linux native GUI, packaging, and
+coverage were not run. Logs: `/tmp/terminator-native-linux-{runtime,tests,clippy}.log`.
+
+## Local Linux image reuse during registry outages (2026-10-10)
+
+Release attempt `run-gW6muD` failed during Docker Hub authentication with
+HTTP 500. A direct image-build check also failed with HTTP 504, before any
+Linux tests ran. Previously every release invoked Docker BuildKit, which can
+contact the registry even when installation layers are cached.
+
+The automatic image tag now hashes the Dockerfile, Rust version, required
+components, and platform using SHA-256. An exact local match skips the build
+and records a cached result. Setup changes select a new tag. The explicit
+`--rebuild-linux-image` option invokes the build again. `--linux-image IMAGE`
+selects an existing local image explicitly, bypassing recipe matching; a
+missing selected image stops the run. Container execution uses `--pull never`.
+
+Validation: 58 macOS xtask unit tests pass, covering local reuse, cache-key
+changes, explicit rebuilds, build failure, and present/missing explicit images.
+Strict xtask Clippy, formatting, and whitespace checks pass. The existing
+`terminator-release-check:rust-1.97.1` image starts with `--pull never` and
+`--network none`; Rust 1.97.1, audit 0.22.2, deny 0.20.2, llvm-cov 0.8.7, and
+Neovim 0.11.6 report their expected versions. Building the new automatic tag
+remains unverified because Docker Hub authentication failed. Full release
+checks were not rerun; the separate Rosetta idle-close limitation remains.
+Unit and Clippy logs: `/tmp/terminator-image-cache-{tests,clippy}.log`.
+
+## Relaunch fixture waits for process output (2026-10-10)
+
+Release attempt `.artifacts/releases/run-wRovWD` failed because the timeout
+case checked the relaunch marker immediately. The hook returns after spawning
+the replacement process; the process can still be writing its marker.
+Both relaunch cases now use the existing five-second bounded wait. The timeout
+case also checks the isolated data/runtime paths and cleared session variable.
+Removing the old marker must succeed, and a wait failure includes `restart.log`.
+Production shutdown deadlines and daemon-preservation checks are unchanged.
+
+Validation: complete real-PTY integration passes on macOS and linux/amd64.
+All 54 macOS and 57 Linux xtask unit tests pass, including delayed marker output
+and rejection of missing/incomplete output with child-log diagnostics.
+Strict xtask Clippy, formatting, and whitespace checks pass. Logs:
+`/tmp/terminator-relaunch-{macos,linux,unit,clippy}.log`.
+This does not validate the complete release flow. The separate Linux idle-close
+process-identity failure under x64 Rosetta emulation remains unresolved.
+
+## Worktree-removal fixture readiness (2026-10-09)
+
+Release attempt `.artifacts/releases/run-5bzPCk` stopped in the cross-project
+worktree-removal fixture. The failure was reproduced in the linux/amd64
+container. Its PTY input contained the complete `CROSS_PROJECT_READY` marker,
+so input echo could satisfy the wait before `stty -echo` and `cd` executed.
+The removal could therefore run while the process was still outside the
+checkout. The old command also emitted readiness after a failed `cd`.
+
+The CLI, cross-project, child-ready, and child-stopped signals now concatenate
+quoted marker fragments at shell execution time. Full markers cannot appear
+in input echo. Directory changes must succeed before readiness is emitted;
+the child's marker follows its own `cd`, while its parent first returns to
+the original repository. Removal assertions still require the strict process
+cwd refusal, preserved checkout/registry/branch, and successful removal only
+after processes leave and the Git lock is cleared. Production guards were
+not changed.
+
+Validation: the complete real-PTY `cargo xtask integration` suite passes on
+Linux and macOS. All 52 macOS xtask tests pass, including two new regressions
+that execute the marker commands and reject readiness after failed `cd`.
+Strict xtask Clippy, formatting, and whitespace checks pass. Logs are
+`/tmp/terminator-worktree-{linux-baseline,linux-fixed,macos-fixed}.log`.
+
+The next Linux step, `idle-close`, exposed a separate emulation limitation.
+An actual process probe returned `/run/rosetta/rosetta` for `/proc/$$/exe`
+while `uname -m` reported x86_64. The strict shell-identity guard returned
+`unknown: Shell executable changed`, so the idle-close fixture did not pass.
+No identity guard was weakened. Linux native GUI, packaging, and coverage
+steps were not reached in this follow-up run. Native Linux runtime execution
+is needed to verify the expected executable identity without emulation.
+
+## Queued-update acknowledgments in GUI tests (2026-10-09)
+
+Release attempt `.artifacts/releases/run-ctUXDP` saved test preferences before
+the queued successful attention-migration acknowledgment had been processed.
+The navigation/exit tests now use a test-only update barrier: they append an
+acknowledgment to the same local queue and pump the normal budgeted dispatcher
+until it arrives. This proves that earlier events were handled even when the
+expected outcome is no state change. Production still limits each pass to
+64 items or 2 ms; the barrier variant and helper are excluded from normal
+application builds. Fixtures that replace the update receiver also pair it
+with the matching sender where the barrier is used.
+
+The attention-migration fixture now controls its job channel and injected
+acknowledgments. It checks no duplicate request while pending, rejection
+without setting the marker, a retry with a newer request timestamp, persisted
+success, and preservation of later user choices without another migration.
+It no longer relies on a request timestamp being less than one second old.
+A new regression queues 256 updates, confirms one frame cannot acknowledge
+them all, then checks that the barrier drains them without changing their
+result. Remaining direct single-pass navigation and exit drains were migrated
+to the same helper instead of fixing only the reported assertion.
+
+Validation: full Cargo workspace suites passed on macOS (1,063 tests) and in
+the cached linux/amd64 Ubuntu container (1,060 tests); each had 4 ignored and
+0 failed. The strengthened migration timestamp check was also rerun on both
+platforms. Strict workspace Clippy with all targets/features, formatting, and
+whitespace checks pass. Logs: `/tmp/terminator-update-barrier-macos-workspace.log`,
+`/tmp/terminator-update-barrier-linux.log`, and
+`/tmp/terminator-migration-clock-{macos,linux}.log`. No native GUI fixture
+commands or production release were run for this test-only change.
+
+## Linux release test failures under amd64 emulation (2026-10-09)
+
+Release attempt `.artifacts/releases/run-M3cVtF` reported seven application
+test failures. A baseline in the cached Ubuntu linux/amd64 container reproduced
+the strip, spawn, and radio failures and also exposed a race in the negative
+radio deadline test. The selected-project and image-placement failures were
+intermittent instances of the same single-update-pass assumption.
+
+The five navigation tests now use the existing bounded `pump_until` helper
+before asserting their results. Production still processes at most 64 items
+or 2 ms per pass; tests wait through frames instead of expecting an entire
+queue to drain at once. Original placement, project, layout, and identity
+assertions remain. The invalid-interpreter test accepts an immediate spawn
+error or a failed child reported by the completion callback, with a bounded
+wait; a successful child still fails the test.
+
+Radio negative fixtures withhold headers or body data until the deadline
+result is known. This removes the race between a late executor and a finite
+server sleep. An outer test deadline and explicit server cancellation prevent
+hangs if enforcement regresses. The healthy fixture allows a slower handshake
+and reads, still transfers all four bytes, and asserts that the transfer lasts
+longer than one read deadline. Production timeouts and retry behavior are
+unchanged; no tests were disabled.
+
+Validation: `cargo test --workspace --all-features --locked` in the cached
+Ubuntu linux/amd64 image passed 1,059 tests, with 4 ignored and 0 failed.
+The macOS application suite passed all 643 active tests, with 4 ignored.
+Strict application Clippy with all targets/features, formatting, and whitespace
+checks pass. Logs: `/tmp/terminator-linux-failures-baseline.log`,
+`/tmp/terminator-linux-workspace-fixed.log`, and
+`/tmp/terminator-linux-failures-macos-tests.log`. This verification covers
+Cargo tests; separate Linux real-PTY and native GUI commands were not run here.
+
+## Release lock recovery after process exit (2026-10-09)
+
+The directory-based release lock could remain after interruption and block
+the next run. No current release process was found, and the empty legacy
+`.artifacts/release.lock` directory was removed with `rmdir`.
+The release flow now holds an exclusive fs2 lock on a persistent file at
+that path. It locks before changing the owner PID text and never unlinks the
+file, avoiding separate-inode races. Normal drop explicitly unlocks it;
+the OS releases it after forced process termination. Legacy directories
+remain a blocking error instead of being silently removed while an older
+release may still be running.
+
+All 50 xtask tests pass. Coverage includes competing callers without owner
+file changes, release on drop, a real child process holding the lock and
+being forcibly killed, reuse of the existing file, and refusal to bypass a
+legacy directory. The current release executable also acquired the actual
+repository lock twice and stopped at a deliberately unconfigured Windows
+preflight, without running tests, bumping versions, committing, or pushing.
+Strict xtask Clippy, formatting, and whitespace checks pass.
+
+## Cached Linux release image (2026-10-09)
+
+The Ubuntu 24.04 test image imports the installed Rust 1.97.1 toolchain from
+the official `rust:1.97.1-slim-bookworm` image. Required components come from
+the repository toolchain file, plus LLVM tools for coverage; rust-analyzer
+is installed in the image instead of fetched by each fresh container.
+Audit 0.22.2, deny 0.20.2, coverage 0.8.7, and Neovim 0.11.6 use pinned
+upstream archives with published SHA-256 checksums. Each Cargo tool has an
+independent stage, and no Cargo tool is compiled during image setup.
+An empty build context isolates dependency layers from source changes.
+Cargo target, registry, and Git directories use separate persistent volumes.
+
+Actual linux/amd64 Docker validation on this ARM Mac: the final image build
+took 29.50 seconds using already-provisioned Ubuntu/Rust setup layers. The
+identical repeat took 1.53 seconds, with every installation step cached.
+A different Dockerfile/context path also reused the layers in 1.41 seconds.
+These are warm-cache measurements, not clean-host provisioning times.
+Fresh containers with networking disabled successfully ran Rust, Cargo,
+rustfmt, Clippy, rust-analyzer, audit, deny, coverage version checks, and
+headless Neovim using the repository toolchain file. A small Rust fixture
+built offline in two fresh containers sharing a target volume: 0.95 seconds
+for the first build, then `Fresh` and 0.12 seconds for the second.
+
+All 47 xtask tests pass, including component/config validation and assertions
+for the empty Docker context, read-only source, and persistent cache volumes.
+Strict xtask Clippy, formatting, and whitespace checks pass. Logs are under
+`/tmp/terminator-linux-image-*.log`. The application Linux suite was not run
+as part of this image/cache check.
+
+## Native release fixtures and removed session records (2026-10-09)
+
+Release attempt `.artifacts/releases/run-z1DCfX` stopped in `workspace-tabs`
+because its close check called `session()` after the daemon had removed the
+ended editor. Fixture close checks now accept an ended or removed record.
+Two regressions verify both outcomes and reject running, stopping, unknown,
+or incomplete records. Workspace, editor, Markdown, and review fixtures use
+the shared check; their file-content, layout, and shell-identity checks remain.
+
+The complete native run exposed other outdated fixture assumptions. Settings
+and History now open through the toolbar overflow menu. Preference assertions
+use the current lowercase serialized names. The History fixture records a
+resume handle so its ended shell remains available; it does not launch an
+agent. External-editor checks require exit code 7 and stderr with the current
+error wording. Diff fixtures select the viewer through Settings and use
+`Open changes`; the legacy fixture explicitly selects Neovim and verifies
+native fallback without unsupported requests or extra PTYs. Native diff
+inventory is compared after the closed review has been removed.
+
+Validation: all 45 xtask tests pass. All 19 cases in `gui all` passed locally
+with Glow, using the initial full run and focused reruns after fixture fixes.
+Screenshots and logs are under `/tmp/terminator-pruned-sessions-native`;
+suite logs are `/tmp/terminator-pruned-sessions-native.log` and
+`/tmp/terminator-pruned-sessions-remainder-v*.log`. Strict xtask Clippy,
+formatting, and diff whitespace checks pass. No release was published.
+Linux and Windows native execution remain unverified.
+
+## Release automation moved to xtask (2026-10-09)
+
+The local release flow, Windows SSH runner, platform checks, version bump,
+and regression tests now live in `crates/xtask/src/release/`. The shell entry
+points call `cargo xtask`; the three release Python files were removed, and
+the Linux release image no longer installs Python for these tasks.
+The existing `git-release.sh` default `--skip-windows` is preserved. Direct
+`cargo xtask release` requires Windows configuration or an explicit skip.
+
+Validation: all 43 xtask tests pass, including 28 release regressions using
+temporary source repositories and local bare remotes. These cover preserved
+staged/unstaged/deleted/untracked files, failure isolation, concurrent edits,
+commit-hook changes, atomic push rejection, dispatch retry instructions,
+explicit Windows skips, Docker's read-only source mount, Windows artifact
+retrieval after failure, and version/lockfile validation with retained TOML
+comments. Strict xtask Clippy, workspace formatting, shell checks, and diff
+whitespace checks pass. No real release or version bump was performed.
+Actual Docker and Windows execution remain unverified for this port.
+
 ## Release run 37962988746: Windows locks and macOS file-close (2026-10-09)
 
 The failed run used local HEAD `b514ec05bf2091c333361686fb067ddafb8d36d6`.
@@ -33,6 +321,14 @@ Workspace Clippy with all targets/features and warnings denied, formatting,
 and whitespace checks pass. The suite ran with isolated state outside the
 sandbox because socket-binding fixtures receive EPERM inside it.
 Fresh Windows runtime and hosted-run verification remain pending.
+
+Job `113930313193` was checked again against its downloaded log. A fresh
+test-support build and both native macOS fixtures pass on the current local
+tree, headed by `ae728600e15383d04c4d9315c09b9cea2d97d29c`. Their logs and
+screenshots are under `/tmp/terminator-requested-macos-job-check`.
+GitHub master was read back and still points to the failed run's `b514ec0`;
+the committed fixture-input fix is local. A new release must include that
+fix; rerunning the old job still tests the old revision.
 
 ## Local release flow (2026-10-09)
 

@@ -1,4 +1,4 @@
-use super::super::harness::{Harness, id, session, session_ids, sessions};
+use super::super::harness::{Harness, id, session, session_closed, session_ids, sessions};
 use super::dispatch::{Options, plain, prefs, save_prefs, setup};
 use anyhow::{Context, Result, anyhow, ensure};
 use serde_json::json;
@@ -197,7 +197,7 @@ pub(crate) fn workspace_tabs(o: &Options) -> Result<()> {
         },
         3500,
     )?;
-    h.wait(|s| session(s, id(editor))["lifecycle"] == "ended", 5)?;
+    h.wait(|s| session_closed(s, id(editor)), 5)?;
     ensure!(
         session_ids(
             h.state()?

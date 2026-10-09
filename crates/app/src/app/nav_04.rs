@@ -22,7 +22,7 @@ mod tests {
                 "Attachment helper unavailable: /AppTranslocation/old/terminator-hook".into(),
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(app.installation_problem());
         app.error = None; // Dismissing a general error must not hide recovery.
         app.apply_state(app.state.clone());
@@ -45,12 +45,12 @@ mod tests {
             "Session daemon unavailable: No such file or directory (os error 2)",
         ] {
             app.update_tx.send(Update::Error(message.into())).unwrap();
-            app.process_updates(&ctx);
+            drain_updates(&mut app, &ctx);
             assert!(!app.connected);
             app.update_tx
                 .send(Update::State(Box::new(app.state.clone())))
                 .unwrap();
-            app.process_updates(&ctx);
+            drain_updates(&mut app, &ctx);
             assert!(app.connected);
             assert!(app.error.is_none());
         }
@@ -59,7 +59,7 @@ mod tests {
             "Could not save workspace before repair",
         ] {
             app.update_tx.send(Update::Error(message.into())).unwrap();
-            app.process_updates(&ctx);
+            drain_updates(&mut app, &ctx);
             app.apply_state(app.state.clone());
             assert_eq!(app.error.as_deref(), Some(message));
         }
@@ -71,13 +71,13 @@ mod tests {
         let message = "No such file or directory (os error 2)";
         for _ in 0..2 {
             app.update_tx.send(Update::Error(message.into())).unwrap();
-            app.process_updates(&ctx);
+            drain_updates(&mut app, &ctx);
             assert_eq!(app.error.as_deref(), Some(message));
         }
         app.dismiss_status_error();
         assert!(app.error.is_none());
         app.update_tx.send(Update::Error(message.into())).unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(
             app.error.is_none(),
             "dismissed missing-path error must stay dismissed"
@@ -85,7 +85,7 @@ mod tests {
         app.update_tx
             .send(Update::Error("Settings rejected".into()))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert_eq!(app.error.as_deref(), Some("Settings rejected"));
     }
 
@@ -95,12 +95,12 @@ mod tests {
         let message = "No such file or directory (os error 2)";
         for _ in 0..retry_budget::MISSING_PATH_RETRY_LIMIT {
             app.update_tx.send(Update::Error(message.into())).unwrap();
-            app.process_updates(&ctx);
+            drain_updates(&mut app, &ctx);
             assert_eq!(app.error.as_deref(), Some(message));
             app.error = None;
         }
         app.update_tx.send(Update::Error(message.into())).unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(app.error.is_none());
     }
 
@@ -110,11 +110,11 @@ mod tests {
         let message = "No such file or directory (os error 2)";
         for _ in 0..retry_budget::MISSING_PATH_RETRY_LIMIT {
             app.update_tx.send(Update::Error(message.into())).unwrap();
-            app.process_updates(&ctx);
+            drain_updates(&mut app, &ctx);
             app.error = None;
         }
         app.update_tx.send(Update::Error(message.into())).unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(app.error.is_none());
         let mut session = session_fixture("shell", SessionKind::Shell);
         session.cwd = "/gone".into();
@@ -122,7 +122,7 @@ mod tests {
         app.selected = Some("a".into());
         app.active_session = Some("shell".into());
         app.update_tx.send(Update::Error(message.into())).unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert_eq!(app.error.as_deref(), Some(message));
     }
 
@@ -171,7 +171,7 @@ mod tests {
                     .unwrap_or_else(Instant::now),
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(result.recv().unwrap().unwrap_err().contains("expired"));
         assert_eq!(app.selected.as_deref(), Some("a"));
         assert!(!app.open_path);
@@ -244,9 +244,10 @@ mod tests {
         let (mut app, ctx, _dir) = fixture();
         let (tx, rx) = mpsc::channel();
         app.updates = rx;
+        app.update_tx = tx.clone();
         app.restart_pending = true;
         tx.send(Update::RestartFinished(String::new())).unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(!app.restart_pending);
         assert!(app.error.as_deref().unwrap().contains("restart.log"));
     }
@@ -286,13 +287,14 @@ mod tests {
         app.connected = false;
         let (tx, rx) = mpsc::channel();
         app.updates = rx;
+        app.update_tx = tx.clone();
         tx.send(Update::ServiceStarted(Ok(()))).unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(!app.service_start_pending);
         assert!(app.info.as_deref().unwrap().contains("Reconnecting"));
         app.service_start_pending = true;
         tx.send(Update::ServiceStarted(Err("gone".into()))).unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(!app.service_start_pending);
         assert!(
             app.error
@@ -597,7 +599,7 @@ mod tests {
         app.update_tx
             .send(Update::Refresh(6, context.clone(), vec![], false))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(std::sync::Arc::ptr_eq(&rows, &app.explorer_rows(&root)));
         assert!(app.sidebar_cache.borrow().git.is_some());
         app.update_tx
@@ -615,7 +617,7 @@ mod tests {
                 false,
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(app.sidebar_cache.borrow().git.is_none());
         let updated = app.explorer_rows(&root);
         assert!(!std::sync::Arc::ptr_eq(&rows, &updated));
@@ -744,7 +746,7 @@ mod tests {
                 app.selection_generation,
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        pump_until(&mut app, &ctx, |app| app.selected.as_deref() == Some("a"));
         assert_eq!(app.selected.as_deref(), Some("a"));
         assert!(!app.preferences.hidden_projects.contains("a"));
         assert_eq!(serde_json::to_value(&app.layouts).unwrap(), layouts);
@@ -763,7 +765,7 @@ mod tests {
                 generation,
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(app.preferences.hidden_projects.contains("a"));
         assert_eq!(app.selected.as_deref(), Some("b"));
     }

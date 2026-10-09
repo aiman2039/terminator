@@ -14,7 +14,13 @@ terminator-core.workspace = true
 terminator-sys = { workspace = true, features = ["desktop"] }
 rustix.workspace = true
 tempfile = "3"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
+glob = "0.3"
+fs2 = "0.4"
+semver = "1"
+sha2 = "0.10"
+toml_edit = "0.25"
+uuid.workspace = true
 xshell = "0.2"
 plist = "1"
 tar = "0.4"

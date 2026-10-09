@@ -162,7 +162,7 @@ mod tests {
         // click's update. On a loaded runner the click can be deferred past a
         // single call, so pump until it lands instead of asserting after one.
         for _ in 0..100 {
-            app.process_updates(&ctx);
+            drain_updates(&mut app, &ctx);
             if app.layouts["a"].contains(&expected) {
                 break;
             }
@@ -217,7 +217,7 @@ mod tests {
             app.update_tx
                 .send(Update::WorkspaceCreated(session, id, anchors))
                 .unwrap();
-            app.process_updates(&ctx);
+            drain_updates(&mut app, &ctx);
             assert_eq!(app.selected.as_deref(), Some("b"));
         }
         assert_ne!(ids[0], ids[1]);
@@ -392,7 +392,7 @@ mod tests {
                 Some(vec![Tab::Terminal("one".into())]),
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert_eq!(app.layouts["a"].active, "second");
         assert_eq!(app.active_session.as_deref(), Some("two"));
         assert_eq!(
@@ -493,7 +493,7 @@ mod tests {
                     anchors,
                 ))
                 .unwrap();
-            app.process_updates(&ctx);
+            drain_updates(&mut app, &ctx);
             assert!(app.layouts["a"].contains(&Tab::Terminal(original.into())));
             assert_eq!(app.layouts["a"].tabs.len(), 2);
             assert_eq!(app.layouts["a"].iter_all_tabs().count(), 1);
@@ -542,7 +542,7 @@ mod tests {
                 Some(vec![Tab::Terminal("shell".into())]),
             ))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         app.select_project("b".into());
         app.insert("b", Tab::Terminal("other".into()), None);
         app.active_session = Some("other".into());
@@ -646,7 +646,7 @@ mod tests {
                 source: "external".into(),
             })))
             .unwrap();
-        app.process_updates(&ctx);
+        drain_updates(&mut app, &ctx);
         assert!(app.theme_conflict);
         assert_eq!(app.theme_draft.text, "#123456");
         assert_eq!(app.theme_committed, external);

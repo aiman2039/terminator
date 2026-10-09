@@ -202,6 +202,8 @@ impl Job {
     }
 }
 pub(crate) enum Update {
+    #[cfg(test)]
+    TestBarrier(mpsc::Sender<()>),
     ProjectDirectories(Vec<(String, PathBuf, bool)>),
     LayoutsPrepared(u64, Vec<(String, serde_json::Value, String)>),
     LayoutSaved(String, String, Result<(), String>),

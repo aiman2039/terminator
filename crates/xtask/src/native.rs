@@ -21,7 +21,8 @@ mod updates;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod windows;
 pub(super) use super::harness::{
-    Harness, Process, bin, git, id, output, root, session, session_ids, sessions, wait_child,
+    Harness, Process, bin, git, id, output, root, session, session_closed, session_ids, sessions,
+    wait_child,
 };
 pub(super) use anyhow::{Context, Result, ensure};
 pub use dispatch::{Options, run};

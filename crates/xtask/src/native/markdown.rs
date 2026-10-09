@@ -1,6 +1,6 @@
 use super::{
     Context, Harness, Options, PathBuf, Result, Value, capture, ensure, fs, id, json, output,
-    plain, prefs, session, session_ids, sessions,
+    plain, prefs, session_closed, session_ids, sessions,
 };
 use terminator_core::{Paths, transport, ui_control};
 
@@ -355,7 +355,7 @@ pub fn run(o: &Options) -> Result<()> {
         ]),
         3300,
     )?;
-    h.wait(|s| session(s, id(&editor))["lifecycle"] == "ended", 5)?;
+    h.wait(|s| session_closed(s, id(&editor)), 5)?;
     ensure!(
         fs::read_to_string(&path)?.starts_with("# Back in editor\n"),
         "Save and close lost Markdown edits"
@@ -427,10 +427,7 @@ pub fn run(o: &Options) -> Result<()> {
         ]),
         3500,
     )?;
-    h.wait(
-        |s| session(s, id(&discard_editor))["lifecycle"] == "ended",
-        5,
-    )?;
+    h.wait(|s| session_closed(s, id(&discard_editor)), 5)?;
     ensure!(
         fs::read_to_string(&discard_path)? == discard_text,
         "Discard wrote Markdown edits"
