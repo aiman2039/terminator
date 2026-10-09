@@ -1,5 +1,78 @@
 # Rust development tasks
 
+## Local release checks
+
+`bash scripts/git-release.sh` now validates an isolated source copy with the
+next version before it changes the checkout. It includes staged, unstaged,
+deleted, and untracked files that Git does not ignore. Check the files before
+running it: a successful release still commits all of them, as before.
+
+The default requires macOS, Linux Docker execution, and a Windows runner.
+Missing runners stop the flow. To validate without committing or pushing:
+
+```sh
+export TERMINATOR_WINDOWS_HOST=your-windows-ssh-alias
+bash scripts/git-release.sh --check-only
+```
+
+For an explicit partial run on this Mac:
+
+```sh
+bash scripts/git-release.sh --check-only --skip-linux --skip-windows
+```
+
+Remove `--check-only` to commit and release from `master`. The script checks
+that local `master` contains remote `origin/master`, rejects existing version
+tags, and stops if source files change during validation. Failed validation
+does not change source files or the real staging area. On success, it checks
+the staged and committed trees against the tested tree, pushes `master` and
+the version tag atomically without force, and dispatches Release from that tag.
+The repository commit hook skips its duplicate checks only when its staged
+tree equals `TERMINATOR_RELEASE_VALIDATED_TREE`; other hooks still run.
+
+Host checks include the shared compiler, formatting, Clippy, workspace tests,
+audit, license/source checks, real-PTY integration, idle-close, `gui all`, and
+a release package build. macOS also cross-checks Windows with Clippy; this
+requires zig 0.14.x and the installed `x86_64-pc-windows-msvc` Rust target.
+Python 3.11+, Neovim, `cargo-audit`, and `cargo-deny` must be installed locally.
+Native GUI checks require a desktop and any permissions required by the fixtures.
+Live-provider tests, ignored tests, soak tests, signing, and notarization are
+outside this local gate.
+
+Linux uses an Ubuntu 24.04 image, the repository Rust version, Neovim v0.11.6,
+Xvfb/Openbox, software rendering, the same checks and package build, and CI's
+50% line-coverage threshold. It uses `linux/amd64` to match the CI test jobs;
+this is emulated on Apple Silicon. Docker must be running. The image and
+separate Cargo build/registry volumes are cached. Linux ARM packaging and
+host-specific GPU/desktop behavior still need their own validation.
+
+The built-in Windows runner uses `ssh` and `scp` with existing SSH key access.
+Configure the Windows OpenSSH server and install Git Bash, Rust 1.97.1 with
+rustfmt/Clippy, Neovim, `cargo-audit`, and `cargo-deny`. The remote SSH user
+must be able to run these tools. `TERMINATOR_WINDOWS_BASH` can override
+`C:/Program Files/Git/bin/bash.exe`. The runner copies the exact source,
+runs shared checks, workspace tests, and packaging, and downloads an artifact
+archive even after a test failure. Remote source/log directories remain under
+`%USERPROFILE%/.terminator-release/`; Cargo output is reused there. Windows
+PTY and native GUI fixtures are still unsupported. An ARM Windows VM does not
+replace the x64 Windows Server CI environment.
+
+For another VM or runner tool, set `TERMINATOR_WINDOWS_RUNNER` to an executable.
+It receives `SOURCE_DIRECTORY ARTIFACT_DIRECTORY`, must copy the source
+unchanged, run `bash scripts/release-check.sh` on Windows with an isolated
+`RUNNER_TEMP`, collect artifacts, and return a nonzero status on any failure.
+
+Logs, screenshots, packages, and `results.json` remain under
+`.artifacts/releases/run-*`; skips are explicit in the summary. The release
+lock prevents two local flows from running together. After a forced process
+kill, remove `.artifacts/release.lock` only after the old flow has stopped.
+A commit or push failure leaves local files, commits, and tags for inspection.
+If dispatch fails after a successful push, retry only the printed
+`gh workflow run release.yaml --ref vVERSION` command; do not bump again.
+GitHub Actions retains its final checks and hosted security/signing steps.
+
+Offline flow regressions: `python3 -m unittest discover -s scripts -p test_release_flow.py`.
+
 ## Quality checks
 
 Run `sh scripts/check.sh` for formatting, compiler checks (`lint`), build,

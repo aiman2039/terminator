@@ -444,9 +444,9 @@ impl App {
         );
         #[cfg(feature = "test-support")]
         {
-            diagnostics::record(ui.ctx(), "Save and close", bar.save.rect);
-            diagnostics::record(ui.ctx(), "Discard changes", bar.discard.rect);
-            diagnostics::record(ui.ctx(), "Cancel", bar.cancel.rect);
+            diagnostics::record_response(ui.ctx(), "Save and close", &bar.save);
+            diagnostics::record_response(ui.ctx(), "Discard changes", &bar.discard);
+            diagnostics::record_response(ui.ctx(), "Cancel", &bar.cancel);
         }
         if let Some(choice) = bar.choice() {
             self.apply_unsaved_close_choice(choice, target, ids);

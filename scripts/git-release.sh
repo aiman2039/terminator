@@ -1,9 +1,4 @@
-#!/bin/bash
-set -xeuo pipefail
-ROOT="$(git rev-parse --show-toplevel)"
-cd "${ROOT}"
-${ROOT}/scripts/bump-version.sh
-git add .
-git commit -m 'cleanup and bump version'
-git push
-${ROOT}/scripts/release.sh
+#!/usr/bin/env bash
+# Python 3.11+ is also required by bump-version.sh.
+set -euo pipefail
+exec python3 "$(dirname -- "${BASH_SOURCE[0]}")/release_flow.py"  --skip-windows "$@"

@@ -1,5 +1,59 @@
 # Validation evidence — 2026-09-08
 
+## Release run 37962988746: Windows locks and macOS file-close (2026-10-09)
+
+The failed run used local HEAD `b514ec05bf2091c333361686fb067ddafb8d36d6`.
+Two jobs failed: Windows workspace tests and the macOS native file-close
+fixture. Linux checks, coverage, real-PTY integration, and native fixtures
+passed in that run.
+
+The Windows failure was
+`shutdown::tests::failed_gui_checkpoint_sends_no_session_stop_or_daemon_shutdown`.
+The shutdown helper treated only `ErrorKind::WouldBlock` as lock contention.
+fs2 returns Windows `ERROR_LOCK_VIOLATION`, which need not have that kind.
+It now compares the OS error to `fs2::lock_contended_error()`. New tests cover
+an actual held lock, acquisition after release, platform contention errors,
+and preservation of permission errors. The existing failed-save test still
+checks that no daemon stop/shutdown request is sent; its assertion now includes
+the actual error chain.
+
+The macOS artifact reported `Save-and-close lost buffer`, but its screenshot
+showed the unsaved buffer still open. Fixture actions could use rectangles
+from hidden or disabled controls after Cancel. Recorded targets now carry the
+rendered frame number, and disabled close-bar responses remove their targets.
+Synthetic input waits for a current enabled control. New tests cover hidden
+and disabled controls. Existing native saved-text, editor-exit, Cancel,
+Discard, and shell-preservation assertions remain in place.
+
+Local evidence: all 17 hook tests pass. Both release-gating native macOS
+fixtures (`file-close` and `focus-editor-close`) pass with Glow and isolated
+state; artifacts are under `/tmp/terminator-ci-fix-native/terminator-native-gui`.
+The full workspace suite passes: 1,027 tests passed, 4 ignored, 0 failed.
+Workspace Clippy with all targets/features and warnings denied, formatting,
+and whitespace checks pass. The suite ran with isolated state outside the
+sandbox because socket-binding fixtures receive EPERM inside it.
+Fresh Windows runtime and hosted-run verification remain pending.
+
+## Local release flow (2026-10-09)
+
+`git-release.sh` now tests a versioned source copy before it changes the real
+checkout, compares the staged/committed tree to that copy, atomically pushes
+the branch and tag, and dispatches Release from the tag. Shared local checks
+include workspace tests, Unix PTY/native fixtures, and release packaging;
+Linux adds coverage. Windows execution uses a configured SSH host or runner.
+
+Validation: 17 offline regression tests pass in disposable repositories.
+They cover preserved staged/unstaged files, failed checks, source changes,
+existing tags, wrong branches, commit-hook changes, rejected atomic pushes,
+tag-based dispatch, dispatch retry instructions, retained failure logs, and
+Windows artifact retrieval after test failure. ShellCheck, Python compilation,
+and diff whitespace checks pass. No real release, commit, or push was made
+from this repository. The application suites and Docker image have not been
+run through this new flow. Windows needs a configured host; Docker socket
+access is restricted in this session. Local Zig is 0.16.0; the existing
+Windows cross-compiler shims require 0.14.x. These runtime checks remain
+unverified until their prerequisites are available.
+
 ## Windows daemon test failures (2026-10-09)
 
 Release run `37960253513`, job `113921055276`, failed the notification POST

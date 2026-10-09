@@ -45,9 +45,15 @@ fn check_scope(state: &State, targets: &HashSet<String>) -> Result<()> {
 }
 
 fn try_lock(file: &File) -> Result<bool> {
-    match file.try_lock_exclusive() {
+    lock_result(file.try_lock_exclusive())
+}
+
+fn lock_result(result: std::io::Result<()>) -> Result<bool> {
+    match result {
         Ok(()) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
+        // Windows reports ERROR_LOCK_VIOLATION, which need not map to
+        // WouldBlock. Use fs2's platform-specific contention error.
+        Err(e) if e.raw_os_error() == fs2::lock_contended_error().raw_os_error() => Ok(false),
         Err(e) => Err(e.into()),
     }
 }
@@ -428,6 +434,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn held_lock_is_busy_and_can_be_acquired_after_release() {
+        let (_dir, paths) = fixture();
+        let path = paths.runtime.join("ui.lock");
+        let owner = File::create(&path).unwrap();
+        owner.lock_exclusive().unwrap();
+        let contender = OpenOptions::new().write(true).open(&path).unwrap();
+        assert!(!try_lock(&contender).unwrap());
+        FileExt::unlock(&owner).unwrap();
+        assert!(try_lock(&contender).unwrap());
+    }
+
+    #[test]
+    fn platform_lock_contention_is_busy() {
+        assert!(!lock_result(Err(fs2::lock_contended_error())).unwrap());
+    }
+
+    #[test]
+    fn lock_permission_errors_are_reported_instead_of_treated_as_busy() {
+        let error = lock_result(Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "fixture lock permission denied",
+        )))
+        .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
+
     #[cfg(unix)]
     fn stub_exe(dir: &Path, name: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
@@ -519,7 +555,10 @@ mod tests {
             ..Default::default()
         };
         let error = run(&paths, state, options(true, None)).unwrap_err();
-        assert!(format!("{error:#}").contains("Workspace save failed"));
+        assert!(
+            format!("{error:#}").contains("Workspace save failed"),
+            "Expected the GUI checkpoint error, got: {error:#}"
+        );
         server.join().unwrap();
         daemon.set_nonblocking(true).unwrap();
         assert!(daemon.accept().is_err());

@@ -1,4 +1,9 @@
 #!/bin/sh
 set -eu
 cd "$(git rev-parse --show-toplevel)"
+# git-release already checked this exact tree in an isolated checkout.
+if [ -n "${TERMINATOR_RELEASE_VALIDATED_TREE:-}" ] && \
+    [ "$(git write-tree)" = "$TERMINATOR_RELEASE_VALIDATED_TREE" ]; then
+    exit 0
+fi
 exec sh scripts/check.sh

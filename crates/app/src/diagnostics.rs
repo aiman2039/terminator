@@ -69,6 +69,7 @@ impl Diagnostics {
         if let Some(pos) = self.pointer {
             input.events.push(egui::Event::PointerMoved(pos));
         }
+        let current_frame = ctx.cumulative_frame_nr();
         if let Some((pos, button)) = self.release.take() {
             input.events.push(egui::Event::PointerButton {
                 pos,
@@ -80,6 +81,10 @@ impl Diagnostics {
             && self.started.elapsed().as_millis() >= u128::from(action.at_ms)
             && let Some(rect) = ctx.data(|d| {
                 d.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", &action.target)))
+                    .filter(|_| {
+                        d.get_temp::<u64>(egui::Id::new(("fixture-target-frame", &action.target)))
+                            .is_none_or(|frame| frame.checked_add(1) == Some(current_frame))
+                    })
             })
         {
             let pos = if let Some([x, y]) = action.hover_offset {
@@ -401,7 +406,21 @@ struct FixtureAction {
     key: Option<String>,
 }
 pub fn record(ctx: &egui::Context, name: &str, rect: egui::Rect) {
-    ctx.data_mut(|data| data.insert_temp(egui::Id::new(("fixture-target", name)), rect));
+    let frame = ctx.cumulative_frame_nr();
+    ctx.data_mut(|data| {
+        data.insert_temp(egui::Id::new(("fixture-target", name)), rect);
+        data.insert_temp(egui::Id::new(("fixture-target-frame", name)), frame);
+    });
+}
+
+pub fn record_response(ctx: &egui::Context, name: &str, response: &egui::Response) {
+    if response.enabled() {
+        record(ctx, name, response.rect);
+    } else {
+        ctx.data_mut(|data| {
+            data.remove::<egui::Rect>(egui::Id::new(("fixture-target", name)));
+        });
+    }
 }
 
 impl Drop for Diagnostics {
@@ -414,6 +433,70 @@ impl Drop for Diagnostics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn render(ctx: &egui::Context, draw: impl FnMut(&mut egui::Ui)) {
+        let mut output = ctx.run_ui(egui::RawInput::default(), draw);
+        output.textures_delta.clear();
+    }
+
+    fn click_save() -> Diagnostics {
+        let mut diagnostics = Diagnostics::default();
+        diagnostics.path = Some("fixture.png".into());
+        diagnostics.actions = serde_json::from_value(serde_json::json!([
+            {"at_ms":0,"target":"Save and close"}
+        ]))
+        .unwrap();
+        diagnostics
+    }
+
+    #[test]
+    fn hidden_control_does_not_consume_a_fixture_click() {
+        let ctx = egui::Context::default();
+        let mut diagnostics = click_save();
+        render(&ctx, |ui| {
+            let response = ui.button("Save and close");
+            record(ui.ctx(), "Save and close", response.rect);
+        });
+        // Cancel has hidden the prompt; its saved rectangle must not be used.
+        render(&ctx, |_| {});
+        let mut input = egui::RawInput::default();
+        diagnostics.input(&ctx, &mut input);
+        assert_eq!(diagnostics.actions_completed(), 0);
+        assert!(
+            !input
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::PointerButton { pressed: true, .. }))
+        );
+    }
+
+    #[test]
+    fn disabled_control_waits_until_enabled_before_fixture_click() {
+        let ctx = egui::Context::default();
+        let mut diagnostics = click_save();
+        for enabled in [true, false] {
+            render(&ctx, |ui| {
+                let response = ui.add_enabled(enabled, egui::Button::new("Save and close"));
+                record_response(ui.ctx(), "Save and close", &response);
+            });
+        }
+        diagnostics.input(&ctx, &mut egui::RawInput::default());
+        assert_eq!(diagnostics.actions_completed(), 0);
+        render(&ctx, |ui| {
+            let response = ui.button("Save and close");
+            record_response(ui.ctx(), "Save and close", &response);
+        });
+        let mut input = egui::RawInput::default();
+        diagnostics.input(&ctx, &mut input);
+        assert_eq!(diagnostics.actions_completed(), 1);
+        assert!(
+            input
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::PointerButton { pressed: true, .. }))
+        );
+    }
+
     #[test]
     fn capture_waits_for_the_final_layout_pass() {
         let ctx = egui::Context::default();
