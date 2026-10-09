@@ -53,7 +53,7 @@ impl Ping {
             "--max-time",
             "8",
             "--output",
-            "/dev/null",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
             "--header",
             "Content-Type: application/json",
             "--data-binary",

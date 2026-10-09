@@ -169,6 +169,7 @@ mod tests {
     fn repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         command(dir.path(), &["init", "-q"]);
+        command(dir.path(), &["config", "core.autocrlf", "false"]);
         command(
             dir.path(),
             &["config", "user.email", "fixture@example.invalid"],
@@ -180,7 +181,11 @@ mod tests {
     fn staged_and_worktree_snapshots_preserve_partial_staging_and_renames() {
         let dir = repo();
         let root = dir.path();
-        let name = Path::new("space | ' 日本.rs");
+        let name = if cfg!(windows) {
+            Path::new("space & ' 日本.rs")
+        } else {
+            Path::new("space | ' 日本.rs")
+        };
         fs::write(root.join(name), b"base\n").unwrap();
         command(root, &["add", "."]);
         command(root, &["commit", "-qm", "base"]);

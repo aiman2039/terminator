@@ -1,5 +1,19 @@
 # Validation evidence — 2026-09-08
 
+## Windows daemon test failures (2026-10-09)
+
+Release run `37960253513`, job `113921055276`, failed the notification POST
+and staged/working review tests on `windows-2025`. Daemon notification delivery
+now uses `NUL` on Windows. The review fixture uses a valid Windows filename
+while retaining spaces, shell metacharacters, and Unicode; Unix keeps the pipe
+character. Fixture repositories disable `core.autocrlf` for exact byte checks.
+
+Validation: all 48 daemon tests passed on macOS with all features, including
+the local HTTP POST and all review snapshot tests. Strict daemon Clippy,
+formatting, and diff whitespace checks passed. Windows-target Clippy could not
+complete because the local C toolchain lacks Windows headers (`stdlib.h` while
+compiling bundled SQLite). Windows execution requires a fresh CI run.
+
 ## Windows core test failures (2026-10-09)
 
 Release run `37957301908`, job `113911078781`, failed 27 core tests on
