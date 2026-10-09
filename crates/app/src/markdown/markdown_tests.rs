@@ -1,10 +1,14 @@
 use super::html::{Link, prepare};
 use super::previews::{Preview, Previews};
-use super::source::{MAX_DOCUMENT, Mode, Revision, Snapshot, Source, read_source, supported};
+#[cfg(unix)]
+use super::source::{MAX_DOCUMENT, Source, read_source, supported};
+use super::source::{Mode, Revision, Snapshot};
 use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use pulldown_cmark::{Event, Parser, Tag};
-use std::{path::Path, time::Duration};
+use std::path::Path;
+#[cfg(unix)]
+use std::time::Duration;
 #[cfg(test)]
 mod tests {
     use super::*;

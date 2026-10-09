@@ -1,11 +1,13 @@
 use super::submit::Services;
-use crate::{Job, Update, player};
+#[cfg(unix)]
+use crate::player;
+use crate::{Job, Update};
 use eframe::egui;
-use std::{
-    path::PathBuf,
-    time::{Duration, Instant},
-};
+use std::path::PathBuf;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 use terminator_core::Paths;
+#[cfg(unix)]
 use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
 
 #[cfg(test)]

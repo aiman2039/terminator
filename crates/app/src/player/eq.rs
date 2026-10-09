@@ -1,6 +1,6 @@
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use super::engine;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use anyhow::Result;
 use std::time::Duration;
 #[derive(Clone, Copy)]
