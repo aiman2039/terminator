@@ -1,5 +1,36 @@
 # Validation evidence — 2026-09-08
 
+## Attachment and quit after service loss (2026-10-09)
+
+Read-only inspection found the registered active daemon PID absent, its auth file
+missing, and two sessions still recorded as running. Aggregate snapshots returned
+saved state successfully. The GUI treated that response as a live connection,
+and startup could hide a failed activation behind the same saved response.
+
+The GUI now checks active-owner health, stops attachment attempts against an
+unavailable owner, and resets attachment failures when that owner returns. A
+background check every five seconds also runs after unchanged snapshots. Recovery
+requires kernel proof that the recorded daemon process is gone and the existing
+owner-lock checks. It marks old sessions interrupted and starts an empty service;
+it does not restart saved commands. Quit performs the same recovery check before
+saving and omits transient focus updates for unavailable or interrupted sessions.
+Focus and heartbeat failures cannot veto closing after durable writes succeed;
+layout, project-selection, and preference write failures still cancel closing.
+Authentication read errors now identify the missing file without showing tokens.
+
+The connection regression failed before the fix. The real-daemon regression
+`cargo test -p terminator --lib dead_service_recovers_attachment_and_exit_checkpoint
+--all-features --locked --offline -- --ignored --nocapture` passed. It kills only
+an isolated fixture daemon, removes its auth file, verifies recovery and preserved
+session identity, attaches a new PTY, and verifies layout and preference writes.
+It requires prebuilt workspace binaries. Tests also verify that missing auth does
+not recover a live process and that failed activation remains an error.
+The workspace suite passed 1,021 tests. After the heartbeat regression was added,
+the final app suite passed 641 tests (four ignored, including this separately run
+real-daemon case). Strict workspace Clippy and the final app Clippy check passed,
+as did the workspace build, formatting, and diff checks. No installed app or user service was
+replaced. Native GUI rendering was not tested for this change.
+
 ## New-tab directories, file-close focus, and deleted worktrees (2026-10-09)
 
 Ordinary workspace and IDE-strip tabs start at their project's root, including
@@ -49,7 +80,12 @@ explicitly and install pinned Neovim 0.11.6. The fixtures run serially, and both
 are attempted after a successful build even when the first fails. Logs and
 screenshots are uploaded on success or failure. The release workflow already
 requires the reusable CI workflow to pass before building release packages.
-Hosted execution of this new CI job is not yet verified.
+Both CI-wrapper commands passed locally on macOS with Glow (local Neovim 0.12.5).
+Shell syntax, ShellCheck, and actionlint validation of the new job passed; release
+dependencies were checked for all three package targets. Linux wrapper argument
+forwarding, log capture, invalid-case rejection, and nonzero exit propagation were
+checked with stub commands. Full Linux desktop execution and hosted execution of
+the new CI job, including its pinned Neovim version, are not yet verified.
 
 ## Floating-window docks + shared font-atlas limit (2026-10-08)
 

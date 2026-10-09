@@ -315,7 +315,15 @@ impl Paths {
             .join(format!("{}.nvim", session.get(..8).unwrap_or(session)))
     }
     pub fn token(&self) -> Result<String> {
-        Ok(fs::read_to_string(self.auth())?.trim().into())
+        Ok(fs::read_to_string(self.auth())
+            .with_context(|| {
+                format!(
+                    "Cannot read session service authentication file {}",
+                    self.auth().display()
+                )
+            })?
+            .trim()
+            .into())
     }
 }
 

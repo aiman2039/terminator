@@ -23,6 +23,22 @@ pub(super) struct Checkpoint {
     focused: Option<String>,
 }
 impl Checkpoint {
+    pub(crate) fn for_state(mut self, state: &State) -> Self {
+        // Focus is transient owner state, not layout persistence. A dead or
+        // retired owner cannot acknowledge it and must not block closing.
+        self.focused = self.focused.filter(|id| {
+            state.sessions.iter().any(|session| {
+                session.id == *id
+                    && session.lifecycle.live()
+                    && state.generations.iter().all(|health| {
+                        health.owner.id != session.generation
+                            || (health.error.is_none()
+                                && health.owner.status != generations::Status::Retired)
+                    })
+            })
+        });
+        self
+    }
     #[cfg(test)]
     pub fn save(self, paths: &Paths) -> Result<()> {
         let mut requests = self
@@ -38,10 +54,6 @@ impl Checkpoint {
         if let Some(project) = self.selected {
             requests.push(Request::SelectProject { project });
         }
-        if let Some(session) = self.focused {
-            requests.push(Request::Focus { session });
-        }
-        requests.push(Request::Heartbeat { focused: false });
         for request in requests {
             anyhow::ensure!(
                 matches!(rpc(paths, request)?, Response::Ok),
@@ -51,6 +63,12 @@ impl Checkpoint {
         if let Some(preferences) = self.preferences {
             preferences.save(&paths.data)?;
         }
+        if let Some(session) = self.focused {
+            let _ = rpc(paths, Request::Focus { session });
+        }
+        // Heartbeat is transient visibility, not a persistence acknowledgment.
+        // An unavailable draining owner must not veto an already saved exit.
+        let _ = rpc(paths, Request::Heartbeat { focused: false });
         Ok(())
     }
     pub async fn save_async(self, client: &async_client::Client) -> Result<()> {
@@ -71,10 +89,6 @@ impl Checkpoint {
         if let Some(project) = self.selected {
             requests.push(Request::SelectProject { project });
         }
-        if let Some(session) = self.focused {
-            requests.push(Request::Focus { session });
-        }
-        requests.push(Request::Heartbeat { focused: false });
         for request in requests {
             anyhow::ensure!(
                 matches!(client.rpc(request).await?, Response::Ok),
@@ -90,6 +104,10 @@ impl Checkpoint {
                 })
                 .await?;
         }
+        if let Some(session) = self.focused {
+            let _ = client.rpc(Request::Focus { session }).await;
+        }
+        let _ = client.rpc(Request::Heartbeat { focused: false }).await;
         Ok(())
     }
 }
@@ -298,6 +316,156 @@ mod tests {
         (app, ctx, directory, requests)
     }
     #[test]
+    fn checkpoint_does_not_focus_an_interrupted_session() {
+        let checkpoint = Checkpoint {
+            layouts: vec![],
+            preferences: None,
+            selected: None,
+            focused: Some("missing-owner-session".into()),
+        };
+        assert!(checkpoint.for_state(&State::default()).focused.is_none());
+    }
+    #[tokio::test]
+    #[ignore = "requires workspace binaries; uses isolated real daemon and PTY"]
+    async fn dead_service_recovers_attachment_and_exit_checkpoint() {
+        let dir = tempfile::Builder::new()
+            .prefix("exit-recovery-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let paths = Paths::at(dir.path().into());
+        paths.init().unwrap();
+        struct Cleanup(Paths);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                if let Ok(catalog) = generations::Catalog::open(&self.0) {
+                    for owner in catalog.generations().unwrap_or_default() {
+                        let _ = rpc(&owner.paths(), Request::Shutdown);
+                    }
+                }
+            }
+        }
+        let _cleanup = Cleanup(paths.clone());
+        let bins = std::env::var_os("TERMINATOR_TEST_BIN_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug")
+            });
+        let exe = bins.join(exe_name("terminator"));
+        daemon_connection::ensure_running(&paths, &exe).unwrap();
+        rpc(
+            &paths,
+            Request::AddProject {
+                path: dir.path().into(),
+            },
+        )
+        .unwrap();
+        let Response::State(state) = rpc(&paths, Request::Snapshot).unwrap() else {
+            panic!()
+        };
+        let project = state.projects[0].id.clone();
+        let create = || Request::Create {
+            project: project.clone(),
+            cwd: None,
+            file: None,
+            line: None,
+            column: None,
+            editor: false,
+        };
+        let Response::Created(old) = rpc(&paths, create()).unwrap() else {
+            panic!()
+        };
+        let Response::State(before) = rpc(&paths, Request::Snapshot).unwrap() else {
+            panic!()
+        };
+        let owner = before
+            .generations
+            .iter()
+            .find(|health| health.owner.id == before.generation)
+            .unwrap()
+            .owner
+            .clone();
+        // Kill only this fixture's daemon; its owned PTY disappears with it.
+        signals::signal_process(owner.pid.unwrap(), signals::ProcSignal::Kill).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !signals::process_gone(owner.pid.unwrap()) {
+            assert!(Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // Reproduce the reported missing-auth path as well as daemon death.
+        fs::remove_file(owner.paths().auth()).unwrap();
+        let Response::State(unavailable) = rpc(&paths, Request::Snapshot).unwrap() else {
+            panic!()
+        };
+        assert!(!daemon_connection::active_service_available(&unavailable));
+        assert!(daemon_connection::recover_unavailable(&paths, &unavailable, &exe).unwrap());
+        let Response::State(after) = rpc(&paths, Request::Snapshot).unwrap() else {
+            panic!()
+        };
+        assert!(daemon_connection::active_service_available(&after));
+        assert_ne!(before.generation, after.generation);
+        let historical = after
+            .sessions
+            .iter()
+            .find(|session| session.id == old.id)
+            .unwrap();
+        assert_eq!(historical.lifecycle, Lifecycle::Interrupted);
+        assert!(historical.pid.is_none());
+        assert!(
+            !after
+                .sessions
+                .iter()
+                .any(|session| session.lifecycle.live())
+        );
+        // A new, user-requested terminal must attach to the replacement.
+        let Response::Created(new) = rpc(&paths, create()).unwrap() else {
+            panic!()
+        };
+        let mut stream = connect(
+            &paths,
+            Request::Attach {
+                session: new.id.clone(),
+                rows: 24,
+                cols: 80,
+            },
+            None,
+        )
+        .unwrap();
+        let response: Response = read_frame(&mut stream).unwrap();
+        assert!(matches!(response, Response::Data(_)));
+        drop(stream);
+        let client = async_client::Client::new(
+            paths.clone(),
+            async_service::NativePool::new("exit-catalog-test", 1).unwrap(),
+            async_service::NativePool::new("exit-cpu-test", 1).unwrap(),
+        );
+        let checkpoint = Checkpoint {
+            layouts: vec![(project.clone(), Workspace::empty())],
+            preferences: Some(UiPreferences::default()),
+            selected: Some(project.clone()),
+            focused: Some(old.id),
+        };
+        checkpoint
+            .for_state(&after)
+            .save_async(&client)
+            .await
+            .unwrap();
+        assert!(paths.data.join("ui-preferences.json").exists());
+        let Response::State(saved) = rpc(&paths, Request::Snapshot).unwrap() else {
+            panic!()
+        };
+        assert_eq!(saved.selected_project.as_deref(), Some(project.as_str()));
+        assert!(
+            saved
+                .projects
+                .iter()
+                .find(|p| p.id == project)
+                .unwrap()
+                .layout
+                .is_object()
+        );
+        rpc(&paths, Request::Stop { session: new.id }).unwrap();
+    }
+    #[test]
     fn duplicate_restart_requests_reuse_the_pending_attempt() {
         let (mut app, ctx, _dir, requests) = fixture();
         app.begin_exit();
@@ -483,7 +651,7 @@ mod tests {
             write_frame(&mut socket, &Response::Error("disk full".into())).unwrap();
         });
         let checkpoint = Checkpoint {
-            layouts: vec![],
+            layouts: vec![("project".into(), Workspace::empty())],
             preferences: Some(UiPreferences::default()),
             selected: None,
             focused: None,
@@ -497,6 +665,46 @@ mod tests {
         );
         server.join().unwrap();
         assert!(!paths.data.join("ui-preferences.json").exists());
+    }
+    #[tokio::test]
+    async fn failed_heartbeat_does_not_veto_a_saved_exit() {
+        let directory = tempfile::Builder::new()
+            .prefix("exit-heartbeat-")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let paths = Paths::at(directory.path().into());
+        paths.init().unwrap();
+        fs::write(paths.auth(), "fixture").unwrap();
+        let listener = transport::Listener::bind_ipc(&paths.socket()).unwrap();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let request: Envelope = read_frame(&mut socket).unwrap();
+            assert!(matches!(request.request, Request::SaveLayout { .. }));
+            write_frame(&mut socket, &Response::Ok).unwrap();
+            let (mut socket, _) = listener.accept().unwrap();
+            let request: Envelope = read_frame(&mut socket).unwrap();
+            assert!(matches!(
+                request.request,
+                Request::Heartbeat { focused: false }
+            ));
+            write_frame(&mut socket, &Response::Error("Owner unavailable".into())).unwrap();
+        });
+        let client = async_client::Client::new(
+            paths.clone(),
+            async_service::NativePool::new("heartbeat-catalog-test", 1).unwrap(),
+            async_service::NativePool::new("heartbeat-cpu-test", 1).unwrap(),
+        );
+        Checkpoint {
+            layouts: vec![("project".into(), Workspace::empty())],
+            preferences: Some(UiPreferences::default()),
+            selected: None,
+            focused: None,
+        }
+        .save_async(&client)
+        .await
+        .unwrap();
+        server.join().unwrap();
+        assert!(paths.data.join("ui-preferences.json").exists());
     }
     #[test]
     fn dirty_native_buffer_holds_quit_until_the_buffer_is_gone() {

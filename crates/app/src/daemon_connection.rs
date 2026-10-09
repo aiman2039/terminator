@@ -10,7 +10,49 @@ use std::{
 use terminator_core::*;
 
 pub fn is_connection_error(error: &str) -> bool {
-    error.starts_with("Reconnecting:") || error.starts_with("Session daemon unavailable")
+    error.starts_with("Reconnecting:")
+        || error.starts_with("Session daemon unavailable")
+        || error.starts_with("Session service recovery failed:")
+}
+
+/// An aggregate can contain only saved records when its active daemon is gone.
+pub fn active_service_available(state: &State) -> bool {
+    state.generations.is_empty()
+        || state.generations.iter().any(|health| {
+            health.owner.id == state.generation
+                && health.error.is_none()
+                && health.owner.status == generations::Status::Active
+        })
+}
+
+/// Recover only owners whose recorded process is proved absent. A timeout,
+/// missing token, held lock, or reused PID alone never permits recovery.
+pub fn recover_unavailable(paths: &Paths, state: &State, executable: &Path) -> Result<bool> {
+    if !generations::exists(paths) {
+        return Ok(false);
+    }
+    let catalog = generations::Catalog::open(paths)?;
+    let active = catalog.active()?;
+    let mut changed = false;
+    let mut replace = false;
+    for owner in catalog.generations()? {
+        if owner.status == generations::Status::Prepared
+            || !state
+                .generations
+                .iter()
+                .any(|health| health.owner.id == owner.id && health.error.is_some())
+            || !owner.pid.is_some_and(signals::process_gone)
+        {
+            continue;
+        }
+        let recovered = generations::recover_exited(paths, &owner)?;
+        changed |= recovered;
+        replace |= recovered && active.as_deref() == Some(owner.id.as_str());
+    }
+    if replace {
+        crate::daemon_upgrade::activate(paths, executable)?;
+    }
+    Ok(changed)
 }
 
 pub fn can_replace_daemon(state: &State) -> bool {
@@ -80,7 +122,8 @@ pub fn ensure_running(paths: &Paths, executable: &Path) -> Result<()> {
                 let _ = fs::remove_file(paths.data.join("service-upgrade-error.txt"));
                 return Ok(());
             }
-            Err(error) if rpc(paths, Request::Snapshot).is_ok() => {
+            Err(error) if matches!(rpc(paths, Request::Snapshot), Ok(Response::State(state)) if active_service_available(&state)) =>
+            {
                 atomic_write(&paths.data.join("service-upgrade-error.txt"), format!("Service upgrade pending: {error:#}. Existing sessions were preserved; retry in Settings → Updates.").as_bytes())?;
                 return Ok(());
             }
@@ -175,6 +218,68 @@ mod tests {
         }
         let exe = dir.path().join("terminator");
         (dir, paths, exe)
+    }
+
+    fn unavailable_owner(paths: &Paths, pid: u32) -> (generations::Generation, State) {
+        generations::migrate_idle(paths).unwrap();
+        let mut catalog = generations::Catalog::open(paths).unwrap();
+        let owner = generations::Generation {
+            id: id(),
+            data: paths.data.join("owner"),
+            runtime: paths.runtime.join("owner"),
+            version: env!("CARGO_PKG_VERSION").into(),
+            build: "fixture".into(),
+            protocol: PROTOCOL_VERSION,
+            catalog: generations::CATALOG_VERSION,
+            status: generations::Status::Prepared,
+            pid: None,
+        };
+        owner.paths().init().unwrap();
+        let state = State {
+            generation: owner.id.clone(),
+            ..State::default()
+        };
+        let db = rusqlite::Connection::open(owner.data.join("state.sqlite3")).unwrap();
+        db.execute_batch("CREATE TABLE app_state(id INTEGER PRIMARY KEY,json TEXT NOT NULL)")
+            .unwrap();
+        db.execute(
+            "INSERT INTO app_state VALUES(1,?1)",
+            [serde_json::to_string(&state).unwrap()],
+        )
+        .unwrap();
+        catalog.register(&owner).unwrap();
+        catalog.set_pid(&owner.id, pid).unwrap();
+        catalog.activate(&owner.id).unwrap();
+        let state = generations::snapshot(paths).unwrap();
+        (owner, state)
+    }
+
+    #[test]
+    fn missing_auth_does_not_recover_a_live_process() {
+        let (_dir, paths, exe) = fixture();
+        let (owner, state) = unavailable_owner(&paths, std::process::id());
+        assert!(!active_service_available(&state));
+        assert!(!recover_unavailable(&paths, &state, &exe).unwrap());
+        assert_eq!(
+            generations::Catalog::open(&paths)
+                .unwrap()
+                .generations()
+                .unwrap()[0]
+                .status,
+            generations::Status::Active
+        );
+        assert_eq!(state.generation, owner.id);
+    }
+
+    #[test]
+    fn failed_activation_cannot_be_hidden_by_saved_snapshot_success() {
+        let (_dir, paths, exe) = fixture();
+        let (_owner, state) = unavailable_owner(&paths, i32::MAX as u32);
+        assert!(!active_service_available(&state));
+        // Fixture executables cannot start a service. The saved aggregate must
+        // not turn this into success or create an upgrade-pending notification.
+        assert!(ensure_running(&paths, &exe).is_err());
+        assert!(!paths.data.join("service-upgrade-error.txt").exists());
     }
 
     #[test]

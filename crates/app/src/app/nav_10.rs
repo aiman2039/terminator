@@ -441,7 +441,11 @@ mod tests {
         state.revision = 19;
         state.generations[0].revision = 19;
         state.generations[0].error = Some("Owner unavailable".into());
-        app.apply_state(state);
+        app.apply_state(state.clone());
+        assert!(
+            !app.connected,
+            "A saved snapshot is not a live service connection"
+        );
         assert!(
             app.state
                 .sessions
@@ -449,6 +453,28 @@ mod tests {
                 .any(|session| session.id == "last-observed")
         );
         assert!(app.state.generations[0].error.is_some());
+        let session = app
+            .state
+            .sessions
+            .iter()
+            .find(|s| s.id == "last-observed")
+            .unwrap();
+        let mut budget = retry_budget::RetryBudget::default();
+        for _ in 0..retry_budget::MISSING_PATH_RETRY_LIMIT {
+            budget.record(&session.cwd, 0, true);
+        }
+        app.attach_budget.insert(session.id.clone(), budget);
+        app.attach_error
+            .insert(session.id.clone(), "attachment failed".into());
+        state.sessions = app.state.sessions.clone();
+        state.revision = 21;
+        state.generations[0].revision = 21;
+        state.generations[0].error = None;
+        app.apply_state(state);
+        assert!(app.connected);
+        assert!(!app.attach_budget.contains_key("last-observed"));
+        assert!(!app.attach_error.contains_key("last-observed"));
+        assert!(app.state.generations[0].error.is_none());
     }
 
     #[test]

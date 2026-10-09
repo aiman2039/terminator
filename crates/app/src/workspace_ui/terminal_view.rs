@@ -7,6 +7,19 @@ impl Viewer<'_> {
     pub(crate) fn terminal_view(&mut self, ui: &mut egui::Ui, session: &Session) {
         let sid = &session.id;
         self.app.visible_sessions.insert(sid.clone());
+        if let Some(owner) = self
+            .app
+            .state
+            .generations
+            .iter()
+            .find(|health| health.owner.id == session.generation && health.error.is_some())
+        {
+            let message = owner.error.clone().unwrap_or_default();
+            self.app.backends.remove(sid);
+            ui.colored_label(appearance::color(&self.app.theme.status_failed), message);
+            self.app.start_service_button(ui, true);
+            return;
+        }
         if !self.app.backends.contains_key(sid)
             && self
                 .app

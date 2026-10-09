@@ -74,6 +74,7 @@ features = ["png", "jpeg", "webp", "gif", "bmp", "ico", "tiff"]
 [dev-dependencies]
 base64.workspace = true
 rustix.workspace = true
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 [dev-dependencies.cargo-husky]
 version = "1.5.0"

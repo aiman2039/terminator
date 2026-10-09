@@ -99,10 +99,26 @@ impl App {
         if self.state_loaded && inventory_is_stale(&self.state, &state) {
             return;
         }
-        if self
-            .error
-            .as_deref()
-            .is_some_and(daemon_connection::is_connection_error)
+        let connected = daemon_connection::active_service_available(&state);
+        for session in &state.sessions {
+            let recovered = state.generations.iter().any(|health| {
+                health.owner.id == session.generation
+                    && health.error.is_none()
+                    && health.owner.status != generations::Status::Retired
+                    && self.state.generations.iter().any(|previous| {
+                        previous.owner.id == health.owner.id && previous.error.is_some()
+                    })
+            });
+            if recovered {
+                self.attach_budget.remove(&session.id);
+                self.attach_error.remove(&session.id);
+            }
+        }
+        if connected
+            && self
+                .error
+                .as_deref()
+                .is_some_and(daemon_connection::is_connection_error)
         {
             self.error = None;
         }
@@ -118,7 +134,7 @@ impl App {
                 self.error = None;
             }
         }
-        self.connected = true;
+        self.connected = connected;
         let initial = !self.state_loaded;
         self.state_loaded = true;
         let removed_projects: HashSet<_> = state

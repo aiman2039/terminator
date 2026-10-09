@@ -197,6 +197,22 @@ impl Services {
     pub fn reads_paused(&self) -> bool {
         self.0.paused.load(std::sync::atomic::Ordering::Acquire)
     }
+    async fn recover_service(&self, state: State, cancel: &CancellationToken) -> Result<bool> {
+        if !state
+            .generations
+            .iter()
+            .any(|health| health.error.is_some())
+        {
+            return Ok(false);
+        }
+        let paths = self.client().paths.clone();
+        self.0
+            .platform
+            .run(cancel, move || {
+                daemon_connection::recover_unavailable(&paths, &state, &std::env::current_exe()?)
+            })
+            .await
+    }
     pub async fn emit_read(&self, update: Update) -> Result<()> {
         if !self.reads_paused() {
             self.emit(update).await?;
@@ -315,6 +331,10 @@ impl Services {
         context.deadline = None;
         self.0.handle.submit(context, cancel, async move {
             let mut revision = None;
+            let mut recovery_check = Instant::now()
+                .checked_sub(Duration::from_secs(5))
+                .unwrap_or_else(Instant::now);
+            let mut unavailable_owners = Vec::new();
             let mut projects = Vec::new();
             let mut previous_directories = Vec::new();
             let mut directory_check = Instant::now();
@@ -339,6 +359,27 @@ impl Services {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner) =
                         Some(Instant::now());
+                }
+                if let Ok(Response::State(state)) = &result {
+                    unavailable_owners = state.generations.iter()
+                        .filter(|health| health.error.is_some()).cloned().collect();
+                }
+                // A missing auth file can produce unchanged fallback snapshots
+                // even after its daemon later exits. Recheck process death on
+                // the timer, including unchanged replies.
+                if recovery_check.elapsed() >= Duration::from_secs(5)
+                    && !unavailable_owners.is_empty()
+                    && matches!(&result, Ok(Response::State(_) | Response::Unchanged))
+                {
+                    recovery_check = Instant::now();
+                    let state = State { generations: unavailable_owners.clone(), ..State::default() };
+                    match service.recover_service(state, &token).await {
+                        Ok(true) => { revision = None; continue; }
+                        Ok(false) => {}
+                        Err(error) => {
+                            service.emit(Update::Error(format!("Session service recovery failed: {error:#}"))).await?;
+                        }
+                    }
                 }
                 let update = match result {
                     Ok(Response::State(state)) => {
@@ -549,13 +590,20 @@ impl Services {
                 updates.push(Update::Appearance(Box::new(file)));
             }
             Job::ExitSave(id, checkpoint) => {
-                updates.push(Update::ExitSaved(
-                    id,
-                    checkpoint
-                        .save_async(client)
-                        .await
-                        .map_err(|e| format!("{e:#}")),
-                ));
+                let result = async {
+                    // Quit pauses polling. Recheck owners here as the daemon can
+                    // have exited since the last accepted GUI snapshot.
+                    let Response::State(state) = client.snapshot(None).await? else {
+                        anyhow::bail!("Could not verify the session service before closing")
+                    };
+                    self.recover_service(*state, &cancel).await?;
+                    let Response::State(state) = client.snapshot(None).await? else {
+                        anyhow::bail!("Could not verify the recovered session service")
+                    };
+                    checkpoint.for_state(&state).save_async(client).await
+                }
+                .await;
+                updates.push(Update::ExitSaved(id, result.map_err(|e| format!("{e:#}"))));
             }
             Job::ExitDrain(id, serial) => updates.push(Update::ExitDrained(id, serial)),
             Job::ResolveTarget(key, text, cwd) => {
