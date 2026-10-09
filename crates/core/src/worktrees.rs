@@ -27,7 +27,10 @@ pub struct Registration {
 fn run(common: &Path, args: &[&std::ffi::OsStr]) -> Result<Vec<u8>> {
     let mut command =
         Command::new(crate::find_executable("git").context("Git executable not found")?);
-    command.arg("--git-dir").arg(common).args(args);
+    command
+        .arg("--git-dir")
+        .arg(dunce::simplified(common))
+        .args(args);
     Ok(run_command(
         command,
         CommandOptions {
@@ -114,6 +117,7 @@ fn parse(bytes: &[u8]) -> Result<Vec<GitWorktree>> {
     Ok(result)
 }
 pub fn add(common: &Path, path: &Path, branch: Option<&str>, start: &str) -> Result<GitWorktree> {
+    let path = dunce::simplified(path);
     ensure!(path.is_absolute(), "Worktree path must be absolute");
     ensure!(path.to_str().is_some(), "Worktree path must be UTF-8");
     ensure!(!path.exists(), "Worktree destination already exists");
@@ -152,13 +156,14 @@ pub fn add(common: &Path, path: &Path, branch: Option<&str>, start: &str) -> Res
     }
     args.extend(["--".as_ref(), path.as_os_str(), start.as_ref()]);
     run(common, &args)?;
-    let canonical = path.canonicalize()?;
+    let canonical = dunce::canonicalize(path)?;
     list(common)?
         .into_iter()
         .find(|w| w.path == canonical)
         .context("Git created checkout but did not return it in worktree list")
 }
 pub fn remove(common: &Path, path: &Path) -> Result<()> {
+    let path = dunce::simplified(path);
     let list = list(common)?;
     let record = list
         .iter()
@@ -276,16 +281,22 @@ mod tests {
         std::fs::write(repo.join("file"), "base").unwrap();
         git(&repo, &["add", "."]);
         git(&repo, &["commit", "-qm", "base"]);
-        let common = common_dir(&repo).unwrap();
-        let path = dir.path().canonicalize().unwrap().join("space checkout");
-        let record = add(&common, &path, Some("task-fixture"), "HEAD").unwrap();
+        // std canonicalization supplies a verbatim path on Windows. Git must
+        // receive a compatible path even when callers supply that form.
+        let common = common_dir(&repo).unwrap().canonicalize().unwrap();
+        let path = dunce::canonicalize(dir.path())
+            .unwrap()
+            .join("space checkout");
+        let requested = dir.path().canonicalize().unwrap().join("space checkout");
+        let record = add(&common, &requested, Some("task-fixture"), "HEAD").unwrap();
+        assert_eq!(record.path, path);
         assert_eq!(record.branch.as_deref(), Some("task-fixture"));
         assert_eq!(list(&common).unwrap().len(), 2);
         std::fs::write(path.join("untracked"), "keep").unwrap();
-        assert!(remove(&common, &path).is_err());
+        assert!(remove(&common, &requested).is_err());
         assert!(path.join("untracked").exists());
         std::fs::remove_file(path.join("untracked")).unwrap();
-        remove(&common, &path).unwrap();
+        remove(&common, &requested).unwrap();
         assert!(!path.exists());
         git(&repo, &["show-ref", "--verify", "refs/heads/task-fixture"]);
         assert!(add(&common, &repo, Some("other"), "HEAD").is_err());
@@ -302,8 +313,12 @@ mod tests {
         std::fs::write(repo.join("file"), "base").unwrap();
         git(&repo, &["add", "."]);
         git(&repo, &["commit", "-qm", "base"]);
-        let common = common_dir(&repo).unwrap();
-        let path = dir.path().canonicalize().unwrap().join("locked checkout");
+        // std canonicalization supplies a verbatim path on Windows. Git must
+        // receive a compatible path even when callers supply that form.
+        let common = common_dir(&repo).unwrap().canonicalize().unwrap();
+        let path = dunce::canonicalize(dir.path())
+            .unwrap()
+            .join("locked checkout");
         add(&common, &path, Some("locked-fixture"), "HEAD").unwrap();
         let head = resolve_start(&repo, "refs/heads/locked-fixture").unwrap();
         git(

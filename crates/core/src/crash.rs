@@ -300,7 +300,7 @@ mod tests {
         for i in 0..=KEEP {
             let path = dir.join(format!("terminator-{i}.log"));
             fs::write(&path, b"x").unwrap();
-            let file = fs::File::open(&path).unwrap();
+            let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
             file.set_modified(UNIX_EPOCH + Duration::from_secs(i as u64))
                 .unwrap();
         }

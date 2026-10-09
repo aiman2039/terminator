@@ -411,13 +411,25 @@ mod tests {
         assert!(find_executable_in("nvim", &paths).is_none());
         std::fs::write(dir.path().join("nvim.exe"), b"fixture").unwrap();
         assert_eq!(
-            find_executable_in("nvim", &paths),
-            Some(dir.path().join("nvim.exe"))
+            find_executable_in("nvim", &paths).map(|path| path.canonicalize().unwrap()),
+            Some(dir.path().join("nvim.exe").canonicalize().unwrap())
         );
         assert_eq!(
             find_executable_in("nvim.exe", &paths),
             Some(dir.path().join("nvim.exe"))
         );
+    }
+
+    /// Keep Unix socket paths short; Windows uses the system temporary directory.
+    pub(crate) fn tempdir(prefix: &str) -> tempfile::TempDir {
+        #[cfg(unix)]
+        let root = PathBuf::from("/tmp");
+        #[cfg(not(unix))]
+        let root = std::env::temp_dir();
+        tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir_in(root)
+            .unwrap()
     }
 
     pub(crate) fn setup() -> State {

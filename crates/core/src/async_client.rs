@@ -623,10 +623,7 @@ mod tests {
     #[tokio::test]
     async fn catalog_snapshot_short_circuits_unchanged_without_rebuilding() {
         use crate::generations::{self, Catalog, Generation, Status};
-        let dir = tempfile::Builder::new()
-            .prefix("snap-")
-            .tempdir_in("/tmp")
-            .unwrap();
+        let dir = crate::tests::tempdir("snap-");
         let root = Paths::at(dir.path().into());
         root.init().unwrap();
         generations::migrate_idle(&root).unwrap();
@@ -745,10 +742,7 @@ mod tests {
     #[tokio::test]
     async fn archived_notice_dismissal_is_visible_to_the_next_snapshot() {
         use crate::generations::{self, Catalog, Generation, Status};
-        let dir = tempfile::Builder::new()
-            .prefix("archived-notice-")
-            .tempdir_in("/tmp")
-            .unwrap();
+        let dir = crate::tests::tempdir("archived-notice-");
         let root = Paths::at(dir.path().into());
         root.init().unwrap();
         generations::migrate_idle(&root).unwrap();

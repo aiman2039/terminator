@@ -35,10 +35,7 @@ mod tests {
 
     #[test]
     fn legacy_exit_recovery_requires_lock_and_preserves_original_records() {
-        let dir = tempfile::Builder::new()
-            .prefix("legacy-")
-            .tempdir_in("/tmp")
-            .unwrap();
+        let dir = crate::tests::tempdir("legacy-");
         let paths = Paths::at(dir.path().into());
         paths.init().unwrap();
         let mut old = session("legacy-owner", Lifecycle::Running);
@@ -99,10 +96,7 @@ mod tests {
     }
 
     fn fixture() -> (tempfile::TempDir, Paths, Catalog) {
-        let dir = tempfile::Builder::new()
-            .prefix("gen-")
-            .tempdir_in("/tmp")
-            .unwrap();
+        let dir = crate::tests::tempdir("gen-");
         let paths = Paths::at(dir.path().into());
         paths.init().unwrap();
         migrate_idle(&paths).unwrap();

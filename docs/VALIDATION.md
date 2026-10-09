@@ -1,5 +1,25 @@
 # Validation evidence — 2026-09-08
 
+## Windows core test failures (2026-10-09)
+
+Release run `37957301908`, job `113911078781`, failed 27 core tests on
+`windows-2025`. Core IPC fixtures now use the Windows temporary directory while
+retaining short Unix socket paths. The crash retention fixture opens files with
+write access before setting timestamps. Executable lookup compares canonical
+paths so Windows extension case does not change the assertion.
+
+Git worktree commands use `dunce` to simplify Windows verbatim path prefixes at
+the subprocess boundary and when matching created checkouts against Git output.
+Regression fixtures pass standard canonical paths to Git helpers and still check
+that dirty and locked worktrees, file contents, and branch references survive.
+
+Validation: all 128 core tests passed on macOS with all features; all three
+worktree tests passed again after the final path change. Strict core Clippy,
+strict Windows-target workspace Clippy (all targets and features), formatting,
+and diff whitespace checks passed. Cross-target checks do not execute Windows
+binaries. Windows runtime validation requires a fresh CI run; no release was
+published.
+
 ## Windows CI test portability (2026-10-09)
 
 Release run `37954331518`, job `113900943582`, failed 30 app tests on
