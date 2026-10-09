@@ -94,7 +94,7 @@ export function ProjectsTree({
                         <Icon name={s.kind === "editor" ? "FileCode" : "Terminal"} size={15} />
                       )}
                     </span>
-                    <span className="row-label mono">{s.label}</span>
+                    <span className="row-label">{s.label}</span>
                     <span className="row-trail">
                       {s.agent && <span className={`dot ${s.status}`} style={{ display: "inline-block", marginRight: 6 }} />}
                       {!s.visible ? "background" : ""}

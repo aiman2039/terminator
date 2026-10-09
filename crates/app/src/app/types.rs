@@ -202,6 +202,7 @@ impl Job {
     }
 }
 pub(crate) enum Update {
+    ProjectDirectories(Vec<(String, PathBuf, bool)>),
     LayoutsPrepared(u64, Vec<(String, serde_json::Value, String)>),
     LayoutSaved(String, String, Result<(), String>),
     RadioCatalog(std::sync::Arc<Vec<player::radio::Station>>),

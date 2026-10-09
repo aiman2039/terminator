@@ -54,7 +54,7 @@ impl App {
             let _ = self.jobs.send(Job::rpc(
                 Request::Create {
                     project: project.clone(),
-                    cwd: self.cwd(),
+                    cwd: None,
                     file: Some(path),
                     line,
                     column: None,
@@ -176,10 +176,14 @@ impl App {
                 self.active_session = None;
             }
         } else {
+            let anchors = match after {
+                After::Workspace(_, anchors) => anchors,
+                _ => Vec::new(),
+            };
             self.layouts
                 .entry(project.clone())
                 .or_insert_with(Workspace::empty)
-                .add(id(), tab);
+                .add_from(id(), tab, &anchors);
             if self.selected.as_deref() == Some(&project) {
                 self.active_session = None;
             }

@@ -7,6 +7,7 @@ use crate::{
     image_preview, installation, notify_test, player, search, services, workspace_ops,
 };
 use anyhow::{Context, Result};
+
 use eframe::egui;
 use std::{
     collections::HashMap,
@@ -25,6 +26,23 @@ use terminator_core::{
     async_service::{CancellationToken, Handle, NativePool, OperationContext, Policy, Supervisor},
 };
 
+pub(crate) fn project_directories(
+    projects: Vec<(String, PathBuf)>,
+) -> Vec<(String, PathBuf, bool)> {
+    projects
+        .into_iter()
+        .map(|(id, path)| {
+            let available = match fs::metadata(&path) {
+                Ok(metadata) => metadata.is_dir(),
+                Err(error) => !matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ),
+            };
+            (id, path, available)
+        })
+        .collect()
+}
 #[derive(Clone)]
 pub struct Services(Arc<Inner>);
 struct Inner {
@@ -297,6 +315,9 @@ impl Services {
         context.deadline = None;
         self.0.handle.submit(context, cancel, async move {
             let mut revision = None;
+            let mut projects = Vec::new();
+            let mut previous_directories = Vec::new();
+            let mut directory_check = Instant::now();
             let mut appearance_source = None;
             let mut config_check = Instant::now()
                 .checked_sub(Duration::from_secs(3))
@@ -334,6 +355,7 @@ impl Services {
                 };
                 let update = match update.filter(|_| !service.reads_paused()) {
                     Some(Update::State(state)) => {
+                        projects = state.projects.iter().map(|p| (p.id.clone(), p.path.clone())).collect();
                         let previous = service
                             .0
                             .snapshot
@@ -349,6 +371,16 @@ impl Services {
                 if let Some(update) = update {
                     tokio::select! { () = token.cancelled() => break, result = events.send(update) => { if result.is_err() { break; } } }
                     service.0.ctx.request_repaint();
+                }
+                if directory_check.elapsed() >= Duration::from_secs(1) {
+                    directory_check = Instant::now();
+                    let paths = projects.clone();
+                    let directories = service.client().catalog.run(&token, move || Ok(project_directories(paths))).await?;
+                    if directories != previous_directories {
+                        previous_directories = directories.clone();
+                        if events.send(Update::ProjectDirectories(directories)).await.is_err() { break; }
+                        service.0.ctx.request_repaint();
+                    }
                 }
                 // Catalog/persistence has its own worker, separate from bulk reads.
                 let paths = service.client().paths.clone();

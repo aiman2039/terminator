@@ -166,6 +166,19 @@ impl Shared {
                 if let Some(record) = state.worktrees.iter_mut().find(|w| w.project_id == project) {
                     record.removed = true;
                 }
+                if state.selected_project.as_ref() == Some(&project) {
+                    state.selected_project = state
+                        .projects
+                        .iter()
+                        .find(|candidate| {
+                            candidate.id != project
+                                && !state
+                                    .worktrees
+                                    .iter()
+                                    .any(|w| w.project_id == candidate.id && w.removed)
+                        })
+                        .map(|candidate| candidate.id.clone());
+                }
                 state.revision = state.revision.saturating_add(1);
             }
             Request::Screen { session } => {
@@ -224,6 +237,12 @@ impl Shared {
                 let mut s = relock(&self.state);
                 if let Some(project) = s.projects.iter().find(|p| p.path == path) {
                     let project = project.id.clone();
+                    let previous = s.worktrees.len();
+                    s.worktrees
+                        .retain(|w| w.project_id != project || !w.removed);
+                    if previous != s.worktrees.len() {
+                        s.revision = s.revision.saturating_add(1);
+                    }
                     if s.selected_project.as_ref() != Some(&project) {
                         s.selected_project = Some(project);
                         s.revision = s.revision.saturating_add(1);
@@ -259,6 +278,12 @@ impl Shared {
             }
             Request::SelectProject { project } => {
                 let mut s = relock(&self.state);
+                ensure!(
+                    !s.worktrees
+                        .iter()
+                        .any(|w| w.project_id == project && w.removed),
+                    "Worktree was removed"
+                );
                 ensure!(
                     s.projects.iter().any(|p| p.id == project),
                     "Unknown project"

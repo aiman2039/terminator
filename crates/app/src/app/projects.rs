@@ -11,6 +11,9 @@ impl App {
         self.apply_project_selection(project, true);
     }
     pub(crate) fn apply_project_selection(&mut self, project: String, force_activity: bool) {
+        if !self.project_available(&project) {
+            return;
+        }
         let restored = self.preferences.hidden_projects.remove(&project);
         if restored || force_activity {
             self.touch_project_activity(&project);
@@ -157,7 +160,53 @@ impl App {
         self.state
             .projects
             .iter()
-            .find(|p| Some(&p.id) == self.selected.as_ref())
+            .find(|p| Some(&p.id) == self.selected.as_ref() && self.project_available(&p.id))
+    }
+    pub(crate) fn project_available(&self, project: &str) -> bool {
+        self.state.projects.iter().any(|p| p.id == project)
+            && !self
+                .state
+                .worktrees
+                .iter()
+                .any(|w| w.project_id == project && w.removed)
+            && (!self.missing_projects.contains(project)
+                || self
+                    .state
+                    .sessions
+                    .iter()
+                    .any(|s| s.project_id == project && s.lifecycle.live()))
+    }
+
+    pub(crate) fn apply_project_directories(&mut self, directories: Vec<(String, PathBuf, bool)>) {
+        for (project, path, available) in directories {
+            // A delayed read cannot hide a project that was opened at a new path.
+            if !self
+                .state
+                .projects
+                .iter()
+                .any(|p| p.id == project && p.path == path)
+            {
+                continue;
+            }
+            if available {
+                self.missing_projects.remove(&project);
+            } else {
+                self.missing_projects.insert(project.clone());
+                self.terminal_context.remove(&project);
+            }
+        }
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|project| !self.project_available(project))
+        {
+            self.selection_generation = self.selection_generation.wrapping_add(1);
+            self.selected = None;
+            self.active_session = None;
+            if let Some(next) = self.visible_projects().first().map(|p| p.id.clone()) {
+                self.select_project(next);
+            }
+        }
     }
     pub(crate) fn context_session(&self) -> Option<&Session> {
         self.state
@@ -166,14 +215,23 @@ impl App {
             .find(|s| {
                 Some(&s.id) == self.active_session.as_ref()
                     && s.kind == SessionKind::Shell
+                    && s.lifecycle.live()
                     && Some(&s.project_id) == self.selected.as_ref()
             })
             .or_else(|| {
                 self.selected
                     .as_ref()
                     .and_then(|p| self.terminal_context.get(p))
-                    .and_then(|id| self.state.sessions.iter().find(|s| &s.id == id))
+                    .and_then(|id| {
+                        self.state.sessions.iter().find(|s| {
+                            &s.id == id
+                                && s.lifecycle.live()
+                                && s.kind == SessionKind::Shell
+                                && Some(&s.project_id) == self.selected.as_ref()
+                        })
+                    })
             })
+            .filter(|s| self.project_available(&s.project_id))
     }
     pub(crate) fn cwd(&self) -> Option<PathBuf> {
         self.context_session()
@@ -289,6 +347,8 @@ impl App {
     }
     pub(crate) fn reconcile_project_inventory(&mut self, projects: &[Project]) {
         let known: HashSet<&str> = projects.iter().map(|project| project.id.as_str()).collect();
+        self.missing_projects
+            .retain(|id| known.contains(id.as_str()));
         self.layouts.retain(|id, _| known.contains(id.as_str()));
         self.layout_saved
             .retain(|id, _| known.contains(id.as_str()));

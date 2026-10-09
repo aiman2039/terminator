@@ -11,6 +11,37 @@ use terminator_core::async_service::{CancellationToken, OperationContext, Policy
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn directory_checks_reject_files_missing_parents_and_broken_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, "fixture").unwrap();
+        let paths = vec![
+            ("directory".into(), dir.path().to_owned()),
+            ("missing".into(), dir.path().join("deleted")),
+            ("file".into(), file.clone()),
+            ("parent-is-file".into(), file.join("child")),
+        ];
+        let result = crate::gui_services::project_directories(paths);
+        assert_eq!(
+            result
+                .iter()
+                .map(|(_, _, available)| *available)
+                .collect::<Vec<_>>(),
+            vec![true, false, false, false]
+        );
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("alias");
+            std::os::unix::fs::symlink(dir.path().join("target"), &link).unwrap();
+            let check =
+                || crate::gui_services::project_directories(vec![("alias".into(), link.clone())]);
+            assert!(!check()[0].2);
+            std::fs::create_dir(dir.path().join("target")).unwrap();
+            assert!(check()[0].2);
+        }
+    }
+
     #[cfg(unix)]
     use crate::nvim_rpc;
     use crate::preferences::UiPreferences;

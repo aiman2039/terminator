@@ -311,6 +311,7 @@ impl App {
                 }
                 Update::IdleClosed(target, ids, result) => self.idle_closed(target, ids, result),
                 Update::OpenedProject(state, project, generation) => {
+                    self.missing_projects.remove(&project);
                     self.preferences.setup_completed = true;
                     self.refresh_request = None;
                     self.apply_state(*state);
@@ -406,19 +407,23 @@ impl App {
                 Update::State(state) => {
                     self.apply_state(*state);
                 }
+                Update::ProjectDirectories(directories) => {
+                    self.apply_project_directories(directories)
+                }
                 Update::WorkspaceCreated(session, id, anchors) => {
                     let project = session.project_id.clone();
                     if self.selected.as_ref() == Some(&project) {
                         self.finish_rename(true);
                     }
                     if session.kind == SessionKind::Editor {
-                        self.editor_origins.insert(session.id.clone(), anchors);
+                        self.editor_origins
+                            .insert(session.id.clone(), anchors.clone());
                     }
                     let index = self.workspace_insert.remove(&id).unwrap_or(usize::MAX);
                     self.layouts
                         .entry(project.clone())
                         .or_insert_with(Workspace::empty)
-                        .add_at(index, id, Tab::Terminal(session.id.clone()));
+                        .add_at_from(index, id, Tab::Terminal(session.id.clone()), &anchors);
                     if self.selected.as_ref() == Some(&project) {
                         self.active_session = Some(session.id.clone());
                     }
@@ -606,6 +611,7 @@ impl App {
                     }
                 }
                 Update::WorktreeCreated(state, project, open_terminal) => {
+                    self.missing_projects.remove(&project);
                     self.apply_state(*state);
                     self.reveal_project(project);
                     if open_terminal {

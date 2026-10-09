@@ -1,5 +1,56 @@
 # Validation evidence — 2026-09-08
 
+## New-tab directories, file-close focus, and deleted worktrees (2026-10-09)
+
+Ordinary workspace and IDE-strip tabs start at their project's root, including
+managed worktree roots. Splits retain the live shell's directory. File editors
+opened through Explorer use the project root. Ended shells cannot supply remembered
+directories. Removed worktrees cannot be selected or create sessions, even with
+an explicit directory outside the deleted checkout. Explicit Add project clears
+the removal marker when the folder has been restored.
+
+The GUI checks project directories on a background worker once per second,
+including during unchanged daemon snapshots. Missing folders without live sessions
+leave the selectable project list; restored folders return. Live sessions remain
+accessible, but new tabs are blocked until their project folder exists. These
+checks do not delete persisted projects, layouts, or session history.
+
+File tabs retain the originating workspace-tab identity across reordering and
+layout reload. Closing an active file returns to that tab's current pane focus;
+closing a background file keeps the current selection. A removed origin uses
+the existing neighbor fallback. Older layouts load without the optional return map.
+
+Validation: four regression tests failed before implementation. The follow-up
+review added positive and negative cases for strip tabs versus splits, invalid
+remembered sessions, stale directory results, failed/cancelled closes, files in
+place of directories, and broken/restored symlinks. The parent-replaced-by-file
+case failed and exposed a missing `NotADirectory` check, which is now fixed.
+Fourteen new regressions now pass. `cargo test --workspace --all-features --locked`
+passed 1,018 tests (3 ignored). Workspace build, strict all-target/all-feature Clippy,
+formatting, and diff checks passed. `cargo xtask integration` passed the real-PTY
+suite, including worktree deletion refusal and explicit folder restoration.
+`cargo xtask gui focus-editor-close --output /private/tmp/terminator-folder-review-native`
+passed on macOS/Metal, including a three-tab far-left file-open/close case;
+the fixture must observe a running file editor before closing it, so an open
+no-op cannot pass. The captured image shows Terminal 1 selected after close.
+It also changes a real shell's directory, reports its new cwd through the hook,
+opens a GUI tab, and verifies the new session starts at the project root.
+`cargo xtask gui file-close` also passed clean close, Cancel, Save and close,
+Discard, and live-shell preservation. Both fixtures accept the daemon pruning
+ended editor records. No installed app or live daemon was
+replaced. Native Linux and Windows checks were not run.
+
+CI already runs the unit suite on macOS, Linux, and Windows, and real-PTY
+integration on macOS and Linux (`.github/workflows/ci.yaml`). These regressions
+therefore run with the existing CI commands. The required `native-gui` CI job now
+runs `focus-editor-close` and `file-close` on macOS and Linux before release builds.
+Linux uses Xvfb, D-Bus, Openbox, and software OpenGL; both platforms select Glow
+explicitly and install pinned Neovim 0.11.6. The fixtures run serially, and both
+are attempted after a successful build even when the first fails. Logs and
+screenshots are uploaded on success or failure. The release workflow already
+requires the reusable CI workflow to pass before building release packages.
+Hosted execution of this new CI job is not yet verified.
+
 ## Floating-window docks + shared font-atlas limit (2026-10-08)
 
 Floating windows now own a `DockState<Tab>` rendered by the normal dock

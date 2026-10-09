@@ -15,6 +15,9 @@ pub(crate) struct Workspace {
     pub version: u32,
     pub active: String,
     pub tabs: Vec<WorkspaceTab>,
+    /// Tab identities survive reordering and a GUI restart.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub return_tabs: std::collections::HashMap<String, String>,
 }
 
 impl Deref for Workspace {

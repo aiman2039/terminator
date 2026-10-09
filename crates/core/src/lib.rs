@@ -362,6 +362,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(unix)]
     fn shell_preference_skips_missing_and_nonexecutable_files() {
         let dir = tempfile::tempdir().unwrap();
         let paths = vec![dir.path().to_path_buf()];

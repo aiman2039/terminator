@@ -3,7 +3,7 @@ use super::query::{contains_browser, validate_layout};
 use crate::Tab;
 use anyhow::{Context, Result, ensure};
 use egui_dock::DockState;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 impl Workspace {
     pub fn from_layout(layout: DockState<Tab>) -> Self {
@@ -12,6 +12,7 @@ impl Workspace {
         Self {
             version: 2,
             active: id.clone(),
+            return_tabs: HashMap::default(),
             tabs: vec![WorkspaceTab {
                 id,
                 primary,
@@ -106,7 +107,35 @@ impl Workspace {
         self.add_at(self.tabs.len(), id, pane);
     }
 
+    pub fn add_from(&mut self, id: String, pane: Tab, anchors: &[Tab]) {
+        self.add_at_from(self.tabs.len(), id, pane, anchors);
+    }
+
+    pub fn add_at_from(&mut self, index: usize, id: String, pane: Tab, anchors: &[Tab]) {
+        let origin = anchors.iter().find_map(|anchor| {
+            self.tabs
+                .iter()
+                .find(|tab| tab.layout.find_tab(anchor).is_some())
+                .map(|tab| tab.id.clone())
+        });
+        self.add_at(index, id.clone(), pane);
+        if !anchors.is_empty() {
+            self.return_tabs.remove(&id);
+            if let Some(origin) = origin {
+                self.return_tabs.insert(id, origin);
+            }
+        }
+    }
+
     pub fn add_at(&mut self, index: usize, id: String, mut pane: Tab) {
+        if self.active != id
+            && self
+                .tabs
+                .iter()
+                .any(|tab| tab.id == self.active && tab.layout.iter_all_tabs().next().is_some())
+        {
+            self.return_tabs.insert(id.clone(), self.active.clone());
+        }
         if let Tab::Browser { id, .. } = &mut pane
             && id.is_empty()
         {
@@ -626,12 +655,20 @@ impl Workspace {
                 self.active = id;
             }
         } else if !self.tabs.iter().any(|tab| tab.id == self.active) {
-            let fallback = previous
-                .saturating_sub(1)
-                .min(self.tabs.len().saturating_sub(1));
+            let origin = self
+                .return_tabs
+                .get(&self.active)
+                .and_then(|origin| self.tabs.iter().position(|tab| &tab.id == origin));
+            let fallback = origin.unwrap_or_else(|| {
+                previous
+                    .saturating_sub(1)
+                    .min(self.tabs.len().saturating_sub(1))
+            });
             if let Some(tab) = self.tabs.get(fallback) {
                 self.active.clone_from(&tab.id);
             }
         }
+        self.return_tabs
+            .retain(|id, _| self.tabs.iter().any(|tab| &tab.id == id));
     }
 }

@@ -116,6 +116,70 @@ jobs:
           TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-e2e-state
         run: cargo xtask idle-close
 
+  native-gui:
+    name: Native GUI (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Explicit software-compatible renderer; no automatic renderer fallback.
+      TERMINATOR_FIXTURE_RENDERER: glow
+      LIBGL_ALWAYS_SOFTWARE: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install Linux native GUI dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libfontconfig1-dev \
+            libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev \
+            libgl1-mesa-dev libgl1-mesa-dri libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libasound2-dev libwebkit2gtk-4.1-dev xvfb xauth dbus-x11 openbox
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: v0.11.6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: native-gui-${{ matrix.os }}
+          cache-bin: false
+      - name: Build native fixture binaries
+        id: native_build
+        run: |
+          mkdir -p "$RUNNER_TEMP/terminator-native-gui"
+          cargo build --workspace --bins --examples --features terminator/test-support --locked \
+            2>&1 | tee "$RUNNER_TEMP/terminator-native-gui/build.log"
+      # Release builds depend on this reusable workflow. Neither fixture may fail.
+      # Try both fixtures after a successful build, even if the first one fails.
+      - name: Native focus and new-tab directory
+        if: ${{ !cancelled() && steps.native_build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/native-gui-ci.sh focus-editor-close
+      - name: Native file-close, Save, Cancel, and Discard
+        if: ${{ !cancelled() && steps.native_build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: bash scripts/native-gui-ci.sh file-close
+      - name: Upload native GUI logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-gui-${{ matrix.os }}
+          path: ${{ runner.temp }}/terminator-native-gui
+          if-no-files-found: warn
+          retention-days: 14
+
   coverage:
     name: Coverage
     runs-on: ubuntu-24.04

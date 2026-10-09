@@ -1,4 +1,6 @@
-use super::super::harness::{Harness, git, id, session, session_ids, sessions};
+use super::super::harness::{
+    Harness, bin, git, id, session, session_ids, session_present, sessions,
+};
 use super::dispatch::{Options, capture, plain, prefs, setup};
 use anyhow::{Result, anyhow, ensure};
 use serde_json::{Value, json};
@@ -81,12 +83,26 @@ pub(crate) fn file_close(o: &Options) -> Result<()> {
     let (h, _, shells, root) = setup("file-close")?;
     let source = root.join("source.rs");
     fs::write(&source, "fn main() {}\n")?;
-    let close_log = plain(
+    let close_log = capture(
         &h,
         o,
         "clean-file-close",
         json!([{"at_ms":1100,"target":"explorer-file:source.rs"},{"at_ms":1250,"target":"explorer-file:source.rs"},{"at_ms":2700,"target":"workspace-close:source.rs"}]),
         4000,
+        |_| {
+            h.wait(
+                |state| {
+                    sessions(state).iter().any(|session| {
+                        session.get("kind").is_some_and(|kind| kind == "editor")
+                            && session
+                                .get("lifecycle")
+                                .is_some_and(|lifecycle| lifecycle == "running")
+                    })
+                },
+                3,
+            )?;
+            Ok(())
+        },
     )?;
     let state = h.state()?;
     let editors = sessions(&state)
@@ -94,10 +110,7 @@ pub(crate) fn file_close(o: &Options) -> Result<()> {
         .filter(|s| s["kind"] == "editor")
         .collect::<Vec<_>>();
     ensure!(
-        editors.len() == 1
-            && editors
-                .first()
-                .is_some_and(|editor| editor["lifecycle"] == "ended"),
+        editors.iter().all(|editor| editor["lifecycle"] == "ended"),
         "Double click or clean close failed: editor lifecycles {:?}; {close_log}",
         editors
             .iter()
@@ -307,7 +320,10 @@ pub(crate) fn focus_close(o: &Options) -> Result<()> {
         json!([{"at_ms":1100,"target":format!("editor-close:{}",id(&editor))}]),
         3500,
     )?;
-    h.wait(|st| session(st, id(&editor))["lifecycle"] == "ended", 5)?;
+    h.wait(
+        |st| !session_present(st, id(&editor)) || session(st, id(&editor))["lifecycle"] == "ended",
+        5,
+    )?;
     ensure!(
         !session_ids(
             h.state()?
@@ -318,6 +334,116 @@ pub(crate) fn focus_close(o: &Options) -> Result<()> {
         )
         .contains(&id(&editor).into()),
         "Closed editor remains in layout"
+    );
+    h.assert_pids(&shells)?;
+    let tabs = shells
+        .iter()
+        .take(3)
+        .enumerate()
+        .map(|(index, shell)| {
+            Ok(json!({
+                "id":format!("origin-{index}"),
+                "primary":{"Terminal":id(shell)},
+                "layout":h.layout(&p, std::slice::from_ref(shell))?
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    h.rpc(json!({"SaveLayout":{"project":id(&p),"layout":{"version":2,"active":"origin-0","tabs":tabs}}}))?;
+    capture(
+        &h,
+        o,
+        "leftmost-file-close",
+        json!([
+            {"at_ms":1100,"target":"explorer-file:source.rs"},
+            {"at_ms":2700,"target":"workspace-close:source.rs"}
+        ]),
+        4200,
+        |_| {
+            h.wait(
+                |state| {
+                    sessions(state).iter().any(|session| {
+                        session.get("kind").is_some_and(|kind| kind == "editor")
+                            && session
+                                .get("lifecycle")
+                                .is_some_and(|lifecycle| lifecycle == "running")
+                            && session
+                                .get("file")
+                                .is_some_and(|file| file == path.to_string_lossy().as_ref())
+                    })
+                },
+                3,
+            )?;
+            Ok(())
+        },
+    )?;
+    let state = h.state()?;
+    let layout = state
+        .get("projects")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find(|project| id(project) == id(&p))
+        .and_then(|project| project.get("layout"))
+        .ok_or_else(|| anyhow!("Project layout missing"))?;
+    ensure!(
+        layout
+            .get("active")
+            .is_some_and(|active| active == "origin-0"),
+        "File close did not restore the far-left tab: {layout}"
+    );
+    ensure!(
+        layout
+            .get("tabs")
+            .and_then(Value::as_array)
+            .is_some_and(|tabs| tabs.len() == 3),
+        "File tab remained after close"
+    );
+    let source = shells
+        .first()
+        .ok_or_else(|| anyhow!("Original shell missing"))?;
+    let subdir = h.root.join("focus-close/subdir");
+    fs::create_dir(&subdir)?;
+    let subdir = subdir.canonicalize()?;
+    h.write(
+        &mut h.attach(source)?,
+        &format!(
+            "cd {}; {} cwd \"$PWD\"\n",
+            terminator_core::quote(&subdir.to_string_lossy()),
+            terminator_core::quote(&bin().join("terminator-hook").to_string_lossy())
+        ),
+    )?;
+    h.wait(
+        |state| {
+            session(state, id(source))
+                .get("cwd")
+                .is_some_and(|cwd| cwd == subdir.to_string_lossy().as_ref())
+        },
+        5,
+    )?;
+    plain(
+        &h,
+        o,
+        "new-tab-after-cd",
+        json!([{"at_ms":1100,"target":"workspace-plus"}]),
+        3200,
+    )?;
+    let state = h.state()?;
+    let new_shell = sessions(&state)
+        .iter()
+        .find(|session| {
+            session.get("kind").is_some_and(|kind| kind == "shell")
+                && !shells.iter().any(|old| id(old) == id(session))
+        })
+        .ok_or_else(|| anyhow!("New workspace tab did not create a shell"))?;
+    ensure!(
+        new_shell.get("cwd") == p.get("path"),
+        "New GUI tab inherited the shell directory"
+    );
+    ensure!(
+        new_shell
+            .get("project_id")
+            .is_some_and(|project| project == id(&p)),
+        "New GUI tab changed project identity"
     );
     h.assert_pids(&shells)
 }

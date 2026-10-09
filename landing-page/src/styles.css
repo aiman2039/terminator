@@ -754,6 +754,12 @@ textarea {
 .md-preview a {
   color: var(--accent);
 }
+.md-preview a.btn {
+  color: #fff;
+}
+.md-preview a.btn.ghost {
+  color: var(--text);
+}
 .md-preview code {
   font-family: "JetBrains Mono", monospace;
   font-size: 12px;

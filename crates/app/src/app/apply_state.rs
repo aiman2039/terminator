@@ -121,6 +121,21 @@ impl App {
         self.connected = true;
         let initial = !self.state_loaded;
         self.state_loaded = true;
+        let removed_projects: HashSet<_> = state
+            .worktrees
+            .iter()
+            .filter(|worktree| worktree.removed)
+            .map(|worktree| worktree.project_id.as_str())
+            .collect();
+        self.terminal_context.retain(|project, sid| {
+            !removed_projects.contains(project.as_str())
+                && state.sessions.iter().any(|session| {
+                    &session.id == sid
+                        && &session.project_id == project
+                        && session.kind == SessionKind::Shell
+                        && session.lifecycle.live()
+                })
+        });
         let ended_sessions: Vec<_> = state
             .sessions
             .iter()
@@ -135,7 +150,13 @@ impl App {
             })
             .cloned()
             .collect();
-        for p in &state.projects {
+        let available_projects: Vec<_> = state
+            .projects
+            .iter()
+            .filter(|project| !removed_projects.contains(project.id.as_str()))
+            .cloned()
+            .collect();
+        for p in &available_projects {
             if !self.layouts.contains_key(&p.id) {
                 let dock = match Workspace::load(p.layout.clone()) {
                     Ok(workspace) => workspace,
@@ -152,7 +173,17 @@ impl App {
                 self.layouts.insert(p.id.clone(), dock);
             }
         }
-        self.reconcile_project_inventory(&state.projects);
+        self.reconcile_project_inventory(&available_projects);
+        if self.selected.as_ref().is_some_and(|project| {
+            self.missing_projects.contains(project)
+                && !state
+                    .sessions
+                    .iter()
+                    .any(|session| &session.project_id == project && session.lifecycle.live())
+        }) {
+            self.selected = None;
+            self.active_session = None;
+        }
         for ended in ended_sessions {
             if self
                 .rename_session
@@ -248,13 +279,27 @@ impl App {
                 .clone()
                 .filter(|id| {
                     !self.preferences.hidden_projects.contains(id)
+                        && !removed_projects.contains(id.as_str())
+                        && (!self.missing_projects.contains(id)
+                            || state
+                                .sessions
+                                .iter()
+                                .any(|s| &s.project_id == id && s.lifecycle.live()))
                         && state.projects.iter().any(|project| &project.id == id)
                 })
                 .or_else(|| {
                     state
                         .projects
                         .iter()
-                        .find(|p| !self.preferences.hidden_projects.contains(&p.id))
+                        .find(|p| {
+                            !self.preferences.hidden_projects.contains(&p.id)
+                                && !removed_projects.contains(p.id.as_str())
+                                && (!self.missing_projects.contains(&p.id)
+                                    || state
+                                        .sessions
+                                        .iter()
+                                        .any(|s| s.project_id == p.id && s.lifecycle.live()))
+                        })
                         .map(|p| p.id.clone())
                 });
         }

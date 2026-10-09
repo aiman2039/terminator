@@ -515,6 +515,265 @@ mod tests {
     }
 
     #[test]
+    fn new_workspace_tabs_use_the_project_root_after_cd() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        let mut shell = session_fixture("shell", SessionKind::Shell);
+        shell.cwd = "/a/worktree/subdir".into();
+        app.state.sessions.push(shell);
+        app.active_session = Some("shell".into());
+        app.terminal_context.insert("a".into(), "shell".into());
+        for active in [Some("shell".to_owned()), None] {
+            app.active_session = active;
+            app.create_workspace_tab(None);
+            let Job::Control(request, _) = requests.try_recv().unwrap() else {
+                panic!("Expected session creation");
+            };
+            assert!(matches!(*request, Request::Create { cwd: None, .. }));
+        }
+    }
+
+    #[test]
+    fn ended_shells_do_not_supply_a_remembered_working_directory() {
+        let (mut app, _, _dir) = fixture();
+        let mut shell = session_fixture("shell", SessionKind::Shell);
+        shell.cwd = "/deleted-worktree".into();
+        shell.lifecycle = Lifecycle::Ended;
+        app.state.sessions.push(shell);
+        app.active_session = Some("shell".into());
+        app.terminal_context.insert("a".into(), "shell".into());
+        assert_eq!(app.cwd(), Some("/a".into()));
+    }
+
+    #[test]
+    fn closing_a_file_from_the_leftmost_tab_restores_its_origin() {
+        let (mut app, ctx, _dir) = fixture();
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        let origin = app.layouts["a"].active.clone();
+        app.layouts
+            .get_mut("a")
+            .unwrap()
+            .add("right".into(), Tab::Terminal("right".into()));
+        app.layouts.get_mut("a").unwrap().active = origin.clone();
+        app.update_tx
+            .send(Update::WorkspaceCreated(
+                session_fixture("editor", SessionKind::Editor),
+                "file".into(),
+                vec![Tab::Terminal("shell".into())],
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        app.editors_closed(
+            editor_close::Target::Workspace("a".into(), "file".into()),
+            vec!["editor".into()],
+            Ok(()),
+        );
+        assert_eq!(app.layouts["a"].active, origin);
+        assert_eq!(app.active_session.as_deref(), Some("shell"));
+    }
+
+    #[test]
+    fn removed_worktrees_cannot_remain_selected_or_supply_folder_memory() {
+        let (mut app, _, _dir) = fixture();
+        app.terminal_context.insert("a".into(), "old".into());
+        let mut state = app.state.clone();
+        state.worktrees.push(worktrees::Registration {
+            project_id: "a".into(),
+            common_dir: "/repo/.git".into(),
+            path: "/a".into(),
+            created: 0,
+            removed: true,
+        });
+        app.apply_state(state);
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        assert!(!app.visible_projects().iter().any(|p| p.id == "a"));
+        assert!(!app.terminal_context.contains_key("a"));
+        app.select_project("a".into());
+        assert_eq!(app.selected.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn gui_file_views_restore_the_issuing_tab_after_navigation() {
+        for file in [
+            Tab::Image {
+                path: "/a/image.png".into(),
+            },
+            Tab::browser_file("/a/page.html".into()),
+            Tab::NativeEditor {
+                path: "/a/file.rs".into(),
+            },
+        ] {
+            let (mut app, _, _dir) = fixture();
+            app.insert("a", Tab::Terminal("shell".into()), None);
+            let origin = app.layouts["a"].active.clone();
+            let after = app.editor_target("a", None, None);
+            app.layouts
+                .get_mut("a")
+                .unwrap()
+                .add("right".into(), Tab::Terminal("right".into()));
+            app.place_gui_tab("a".into(), file.clone(), after);
+            let file_id = app.layouts["a"].active.clone();
+            if let Tab::NativeEditor { path } = file {
+                app.close_native_tab(&path, false, None);
+            } else {
+                app.close_workspace_tab_now("a", &file_id);
+            }
+            assert_eq!(app.layouts["a"].active, origin);
+        }
+    }
+
+    #[test]
+    fn externally_deleted_folders_stop_new_tabs_and_restored_folders_reappear() {
+        let (mut app, ctx, dir) = fixture();
+        let root = dir.path().join("worktree");
+        std::fs::create_dir(&root).unwrap();
+        app.state
+            .projects
+            .iter_mut()
+            .find(|p| p.id == "a")
+            .unwrap()
+            .path = root.clone();
+        let directories =
+            || crate::gui_services::project_directories(vec![("a".into(), root.clone())]);
+        assert!(app.visible_projects().iter().any(|p| p.id == "a"));
+        std::fs::remove_dir(&root).unwrap();
+        app.update_tx
+            .send(Update::ProjectDirectories(directories()))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        assert!(!app.visible_projects().iter().any(|p| p.id == "a"));
+        app.apply_state(app.state.clone());
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        std::fs::create_dir(&root).unwrap();
+        app.update_tx
+            .send(Update::OpenedProject(
+                Box::new(app.state.clone()),
+                "a".into(),
+                app.selection_generation,
+            ))
+            .unwrap();
+        app.process_updates(&ctx);
+        assert_eq!(app.selected.as_deref(), Some("a"));
+        app.apply_project_directories(directories());
+        assert!(app.visible_projects().iter().any(|p| p.id == "a"));
+    }
+
+    #[test]
+    fn missing_project_folders_keep_live_sessions_accessible_but_block_new_tabs() {
+        let (mut app, _, _dir) = fixture();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.active_session = Some("shell".into());
+        app.apply_project_directories(vec![("a".into(), "/a".into(), false)]);
+        assert_eq!(app.selected.as_deref(), Some("a"));
+        assert_eq!(app.active_session.as_deref(), Some("shell"));
+        assert!(app.visible_projects().iter().any(|p| p.id == "a"));
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.create_workspace_tab(None);
+        app.create_strip();
+        app.create(Some("right"));
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn new_strip_tabs_use_the_project_root_but_splits_keep_the_shell_directory() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, requests) = mpsc::channel();
+        app.jobs = jobs.into();
+        let mut shell = session_fixture("shell", SessionKind::Shell);
+        shell.cwd = "/a/subdir".into();
+        app.state.sessions.push(shell);
+        app.active_session = Some("shell".into());
+        app.create_strip();
+        let Job::Control(request, after) = requests.try_recv().unwrap() else {
+            panic!("Expected new strip tab");
+        };
+        assert!(
+            matches!(*request, Request::Create { ref project, cwd: None, .. } if project == "a")
+        );
+        assert!(matches!(after, After::Strip));
+        app.create_strip_split(Some("right"));
+        let Job::Control(request, _) = requests.try_recv().unwrap() else {
+            panic!("Expected strip split");
+        };
+        assert!(
+            matches!(*request, Request::Create { cwd: Some(ref cwd), .. } if cwd == Path::new("/a/subdir"))
+        );
+        app.create(Some("right"));
+        let Job::Control(request, _) = requests.try_recv().unwrap() else {
+            panic!("Expected workspace split");
+        };
+        assert!(
+            matches!(*request, Request::Create { cwd: Some(ref cwd), .. } if cwd == Path::new("/a/subdir"))
+        );
+    }
+
+    #[test]
+    fn remembered_editors_and_other_projects_cannot_supply_a_shell_directory() {
+        for (kind, project) in [(SessionKind::Editor, "a"), (SessionKind::Shell, "b")] {
+            let (mut app, _, _dir) = fixture();
+            let mut session = session_fixture("other", kind);
+            session.project_id = project.into();
+            session.cwd = "/other".into();
+            app.state.sessions.push(session);
+            app.active_session = Some("other".into());
+            app.terminal_context.insert("a".into(), "other".into());
+            assert_eq!(app.cwd(), Some("/a".into()));
+        }
+    }
+
+    #[test]
+    fn stale_directory_results_do_not_hide_a_project_opened_at_another_path() {
+        let (mut app, _, _dir) = fixture();
+        app.state
+            .projects
+            .iter_mut()
+            .find(|p| p.id == "a")
+            .unwrap()
+            .path = "/new-location".into();
+        app.apply_project_directories(vec![
+            ("a".into(), "/a".into(), false),
+            ("unknown".into(), "/gone".into(), false),
+        ]);
+        assert_eq!(app.selected.as_deref(), Some("a"));
+        assert!(app.missing_projects.is_empty());
+        assert!(app.visible_projects().iter().any(|p| p.id == "a"));
+    }
+
+    #[test]
+    fn failed_or_cancelled_file_close_keeps_the_file_and_focus() {
+        let (mut app, _, _dir) = fixture();
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        app.layouts
+            .get_mut("a")
+            .unwrap()
+            .add("file".into(), Tab::Terminal("editor".into()));
+        app.active_session = Some("editor".into());
+        let target = editor_close::Target::Workspace("a".into(), "file".into());
+        app.editors_closed(
+            target.clone(),
+            vec!["editor".into()],
+            Err("Unsaved changes".into()),
+        );
+        assert_eq!(app.layouts["a"].active, "file");
+        assert_eq!(app.active_session.as_deref(), Some("editor"));
+        assert!(app.unsaved_close_prompt("editor").is_some());
+        app.apply_unsaved_close_choice(
+            appearance::UnsavedCloseChoice::Cancel,
+            target,
+            vec!["editor".into()],
+        );
+        assert_eq!(app.layouts["a"].active, "file");
+        assert_eq!(app.active_session.as_deref(), Some("editor"));
+        assert!(app.layouts["a"].contains(&Tab::Terminal("editor".into())));
+        assert!(app.unsaved_close_prompt("editor").is_none());
+    }
+
+    #[test]
     fn closing_editor_tab_restores_the_other_tabs_latest_pane_focus() {
         let (mut app, ctx, _dir) = fixture();
         app.state.sessions.extend([

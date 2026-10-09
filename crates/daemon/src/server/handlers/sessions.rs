@@ -31,6 +31,12 @@ impl Shared {
         let is_review = matches!(launch, Launch::Review { .. });
         let (settings, root, generation) = {
             let s = relock(&self.state);
+            ensure!(
+                !s.worktrees
+                    .iter()
+                    .any(|worktree| worktree.project_id == project && worktree.removed),
+                "Worktree was removed; open an existing project before creating a session"
+            );
             (
                 s.settings.clone(),
                 s.projects
@@ -42,6 +48,11 @@ impl Shared {
                 s.generation.clone(),
             )
         };
+        ensure!(
+            root.is_dir(),
+            "Project directory unavailable: {}. If it was moved, restore access at this path or open the project at its new location",
+            root.display()
+        );
         let requested_cwd = cwd.unwrap_or(root);
         let cwd = requested_cwd.canonicalize().with_context(|| {
             format!(

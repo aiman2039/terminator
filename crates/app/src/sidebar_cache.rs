@@ -55,6 +55,7 @@ pub(super) struct Index {
 }
 #[derive(PartialEq, Eq)]
 struct ProjectKey {
+    missing: HashSet<String>,
     hidden: HashSet<String>,
     sort: ProjectSort,
     filter: String,
@@ -294,6 +295,7 @@ impl App {
         let mut cache = self.sidebar_cache.borrow_mut();
         if let Some((key, rows)) = &cache.projects
             && key.hidden == self.preferences.hidden_projects
+            && key.missing == self.missing_projects
             && key.sort == self.preferences.project_sort
             && key.filter == self.preferences.project_filter
             && key.activity == self.preferences.project_activity
@@ -313,11 +315,13 @@ impl App {
                 terminal_notices: &self.state.terminal_notices,
             })
             .into_iter()
+            .filter(|project| self.project_available(&project.id))
             .map(|p| self.sidebar_project(p))
             .collect(),
         );
         cache.projects = Some((
             ProjectKey {
+                missing: self.missing_projects.clone(),
                 hidden: self.preferences.hidden_projects.clone(),
                 sort: self.preferences.project_sort,
                 filter: self.preferences.project_filter.clone(),

@@ -308,6 +308,42 @@ mod tests {
     }
 
     #[test]
+    fn closing_a_reordered_file_restores_its_origin_after_layout_reload() {
+        let origin_pane = Tab::Terminal("origin".into());
+        let mut workspace = Workspace::from_layout(DockState::new(vec![origin_pane.clone()]));
+        let origin = workspace.active.clone();
+        workspace.add("right".into(), Tab::Terminal("right".into()));
+        workspace.add_from(
+            "file".into(),
+            Tab::Image {
+                path: "/image.png".into(),
+            },
+            &[origin_pane],
+        );
+        workspace.reorder_group(&origin, 1);
+        let mut restored = Workspace::load(serde_json::to_value(workspace).unwrap()).unwrap();
+        restored.close("file");
+        assert_eq!(restored.active, origin);
+        assert!(!restored.return_tabs.contains_key("file"));
+    }
+
+    #[test]
+    fn closing_a_background_file_keeps_focus_and_a_missing_origin_uses_a_neighbor() {
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("shell".into())]));
+        let origin = workspace.active.clone();
+        workspace.add("file".into(), Tab::Terminal("editor".into()));
+        workspace.add("right".into(), Tab::Terminal("right".into()));
+        workspace.close("file");
+        assert_eq!(workspace.active, "right");
+        workspace.add("next-file".into(), Tab::Terminal("next-editor".into()));
+        workspace.close("right");
+        assert_eq!(workspace.active, "next-file");
+        workspace.close("next-file");
+        assert_eq!(workspace.active, origin);
+    }
+
+    #[test]
     fn closing_one_tab_keeps_other_layouts_and_focus() {
         let mut workspace =
             Workspace::from_layout(DockState::new(vec![Tab::Terminal("shell".into())]));

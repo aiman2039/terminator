@@ -18,8 +18,12 @@ lockfile and do not rewrite files. Pre-commit uses the same `all` path; install
 (for example, `cargo test -p terminator --no-run --locked`). The hook runs
 `sh scripts/check.sh` against the working tree; stage any fixes before committing.
 Existing non-cargo-husky hooks are preserved. CI skips hook installation and runs
-all checks plus tests on native macOS and Linux for pushes and pull requests to
-`master`, or via manual dispatch. Local checks, CI, and releases use Rust 1.97.1, pinned locally by
+all checks plus tests on native macOS, Linux, and Windows through the reusable
+CI workflow called by Release. Native `focus-editor-close` and `file-close`
+fixtures must pass on macOS and Linux before release builds. The CI wrapper
+(`bash scripts/native-gui-ci.sh CASE`) keeps logs and screenshots under
+`$RUNNER_TEMP/terminator-native-gui`; CI uploads them even on failure. Linux uses
+Xvfb and Openbox, and both runners explicitly select Glow. Local checks, CI, and releases use Rust 1.97.1, pinned locally by
 `rust-toolchain.toml` with rustfmt and Clippy.
 
 ## Renderer comparison

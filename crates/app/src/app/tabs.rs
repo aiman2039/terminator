@@ -5,6 +5,13 @@ use terminator_core::*;
 use super::super::*;
 impl App {
     pub(crate) fn create(&mut self, split: Option<&str>) {
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|project| self.missing_projects.contains(project))
+        {
+            return;
+        }
         self.hide_center_overlay();
         if split.is_some() && self.strip_focused() {
             self.create_strip_split(split);
@@ -33,6 +40,9 @@ impl App {
         let Some(project) = self.selected.clone() else {
             return;
         };
+        if self.selected_project().is_none() || self.missing_projects.contains(&project) {
+            return;
+        }
         let tab_id = id();
         if let Some(index) = index {
             self.workspace_insert.insert(tab_id.clone(), index);
@@ -40,7 +50,7 @@ impl App {
         let _ = self.jobs.send(Job::rpc(
             Request::Create {
                 project,
-                cwd: self.cwd(),
+                cwd: None,
                 file: None,
                 line: None,
                 column: None,
@@ -64,7 +74,15 @@ impl App {
     }
     pub(crate) fn close_workspace_tab_now(&mut self, project: &str, tab_id: &str) {
         if let Some(workspace) = self.layouts.get_mut(project) {
+            let previous = workspace.active.clone();
             workspace.close(tab_id);
+            if self.selected.as_deref() == Some(project) && workspace.active != previous {
+                self.active_session = match workspace.active_pane() {
+                    Some(Tab::Terminal(sid)) => Some(sid.clone()),
+                    _ => None,
+                };
+                self.non_terminal_selected = self.active_session.is_none();
+            }
         }
         self.prune_native_docs();
         self.prune_diff_docs();

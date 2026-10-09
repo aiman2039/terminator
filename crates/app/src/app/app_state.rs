@@ -208,6 +208,7 @@ pub struct App {
     pub(crate) strip_new_tab_hover: bool,
     pub(crate) focus_tab: Option<Tab>,
     pub(crate) terminal_context: HashMap<String, String>,
+    pub(crate) missing_projects: HashSet<String>,
     pub(crate) texts: HashMap<String, String>,
     pub(crate) diffs: HashMap<String, Result<std::sync::Arc<diff::DiffDocument>, String>>,
     pub(crate) diff_split: HashSet<String>,

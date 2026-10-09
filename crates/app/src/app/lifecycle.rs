@@ -192,6 +192,7 @@ impl App {
             drop_preview_origin: None,
             focus_tab: None,
             terminal_context: HashMap::new(),
+            missing_projects: HashSet::new(),
             texts: HashMap::new(),
             diffs: HashMap::new(),
             diff_split: HashSet::new(),

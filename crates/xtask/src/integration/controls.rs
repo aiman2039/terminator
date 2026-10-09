@@ -312,6 +312,37 @@ pub fn controls() -> Result<()> {
         git(&repo, &["rev-parse", "refs/heads/fixture-task"])? == branch,
         "Removal changed branch reference"
     );
+    ensure!(
+        h.state()?
+            .get("selected_project")
+            .is_some_and(|selected| selected != id(&p)),
+        "Removed worktree remains selected"
+    );
+    ensure!(
+        h.rpc(json!({"SelectProject":{"project":id(&p)}})).is_err(),
+        "Removed worktree can be selected"
+    );
+    ensure!(
+        h.rpc(json!({"Create":{"project":id(&p),"cwd":repo,"editor":false}}))
+            .is_err(),
+        "Removed worktree can create a session in another directory"
+    );
+    // Explicitly opening a restored folder must not inherit the removal marker.
+    fs::create_dir(&destination)?;
+    h.rpc(json!({"AddProject":{"path":destination}}))?;
+    ensure!(
+        h.state()?
+            .get("selected_project")
+            .is_some_and(|selected| selected == id(&p)),
+        "Restored project was not selected"
+    );
+    let restored = h.shell(&p)?;
+    ensure!(
+        restored
+            .get("cwd")
+            .is_some_and(|cwd| cwd == destination.to_string_lossy().as_ref()),
+        "Restored shell used a stale folder"
+    );
     println!(
         "{}",
         json!({"worktree_registry":true,"live_and_dirty_removal_rejected":true,"cross_project_and_descendant_removal_rejected":true,"locked_removal_rejected":true,"branch_preserved":true,"cli_send_read":true,"osc_and_cli_notifications":true,"metadata":true})

@@ -249,6 +249,13 @@ impl App {
 
     /// Open a shell in the strip dock, splitting the focused strip leaf when asked.
     pub(crate) fn create_strip_split(&mut self, split: Option<&str>) {
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|project| self.missing_projects.contains(project))
+        {
+            return;
+        }
         self.hide_center_overlay();
         if let Some(project) = self.selected.clone() {
             let after = self.strip_target(&project, None, split);
@@ -268,12 +275,19 @@ impl App {
 
     /// Open a shell owned by the IDE strip (never inserted as a dock tab).
     pub(crate) fn create_strip(&mut self) {
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|project| self.missing_projects.contains(project))
+        {
+            return;
+        }
         self.hide_center_overlay();
         if let Some(project) = self.selected.clone() {
             let _ = self.jobs.send(Job::rpc(
                 Request::Create {
                     project,
-                    cwd: self.cwd(),
+                    cwd: None,
                     file: None,
                     line: None,
                     column: None,
