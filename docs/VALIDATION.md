@@ -1,5 +1,25 @@
 # Validation evidence — 2026-09-08
 
+## Native-editor Windows test fixtures (2026-10-10)
+
+Release run `37999768976`, Windows job `114054753486`, passed build and Clippy
+but failed three native-editor tests (131 passed). The file-finder assertion
+assumed `/` separators, the file-URI fixture used a Unix-rooted `/tmp` path,
+and the PATH fixture omitted Windows' executable suffix.
+
+Tests now construct the expected display path with native path joins, create
+the URI from the platform temporary directory, and include `EXE_SUFFIX` in
+the fake server filename. Executable comparisons canonicalize both paths so
+PATHEXT casing does not cause a false mismatch. URI assertions retain special
+character encoding and path round-trip checks, and reject relative paths,
+non-file schemes, and malformed URIs. Runtime finder and LSP code is unchanged.
+
+Validation: all 134 native-editor tests pass locally on macOS. Strict native
+editor Clippy and the complete workspace Windows-target Clippy pass, including
+test targets. Formatting and whitespace checks pass. These checks do not
+execute Windows binaries; a fresh Windows job must confirm runtime results.
+Logs: `/tmp/terminator-native-edit-portability-{tests,clippy,windows-clippy}.log`.
+
 ## Scorecard analysis on release tags (2026-10-10)
 
 Release run `37999768976`, job `114054752994`, failed at Scorecard option

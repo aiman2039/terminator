@@ -885,10 +885,19 @@ mod tests {
     #[test]
     fn path_probe_finds_fake_server() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let fake = dir.path().join("rust-analyzer");
+        let fake = dir
+            .path()
+            .join(format!("rust-analyzer{}", std::env::consts::EXE_SUFFIX));
         std::fs::write(&fake, "#!/bin/sh\n").expect("write fake");
         let found = find_server(&["rust-analyzer"], &dir.path().to_string_lossy());
-        assert_eq!(found, Some(fake));
+        // PATHEXT can spell .EXE differently from the file's .exe suffix.
+        assert_eq!(
+            found
+                .expect("fake server")
+                .canonicalize()
+                .expect("found path"),
+            fake.canonicalize().expect("fixture path")
+        );
         assert!(find_server(&["rust-analyzer"], "/nonexistent-dir-xyz").is_none());
         assert!(find_server(&["rust-analyzer"], "").is_none());
     }
@@ -937,10 +946,12 @@ mod tests {
 
     #[test]
     fn file_uri_round_trips_special_chars() {
-        let path = Path::new("/tmp/some dir/f Gö.rs");
-        let uri = file_uri(path).expect("uri");
-        assert_eq!(uri.as_str(), "file:///tmp/some%20dir/f%20G%C3%B6.rs");
-        assert_eq!(uri_to_path(uri.as_str()), Some(path.to_path_buf()));
+        let path = std::env::temp_dir().join("some dir/f Gö.rs");
+        let uri = file_uri(&path).expect("uri");
+        assert_eq!(uri.scheme(), "file");
+        assert!(uri.as_str().ends_with("/some%20dir/f%20G%C3%B6.rs"));
+        assert_eq!(uri_to_path(uri.as_str()), Some(path));
+        assert!(file_uri(Path::new("relative/file.rs")).is_none());
         assert!(uri_to_path("https://example.com/x").is_none());
         assert!(uri_to_path(":::").is_none());
     }

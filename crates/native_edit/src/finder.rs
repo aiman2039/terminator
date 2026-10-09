@@ -161,7 +161,8 @@ mod tests {
             .map(|file| file.display.as_str())
             .collect();
         assert!(!displays.iter().any(|path| path.contains("ignored")));
-        assert!(displays.contains(&"src/main.rs"));
+        let main = Path::new("src").join("main.rs");
+        assert!(displays.contains(&main.to_str().expect("display path")));
         let mut sorted = displays.clone();
         sorted.sort_unstable();
         assert_eq!(displays, sorted);

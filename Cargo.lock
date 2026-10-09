@@ -6255,7 +6255,7 @@ dependencies = [
 
 [[package]]
 name = "terminator"
-version = "0.104.0"
+version = "0.105.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -6315,7 +6315,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-core"
-version = "0.104.0"
+version = "0.105.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -6340,7 +6340,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-daemon"
-version = "0.104.0"
+version = "0.105.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -6365,7 +6365,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-git"
-version = "0.104.0"
+version = "0.105.0"
 dependencies = [
  "anyhow",
  "tempfile",
@@ -6374,7 +6374,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-hook"
-version = "0.104.0"
+version = "0.105.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -6395,7 +6395,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-integrations"
-version = "0.104.0"
+version = "0.105.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -6406,7 +6406,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-native-edit"
-version = "0.104.0"
+version = "0.105.0"
 dependencies = [
  "base64 0.22.1",
  "egui",
@@ -6430,7 +6430,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-sys"
-version = "0.104.0"
+version = "0.105.0"
 dependencies = [
  "core-foundation 0.10.1",
  "core-graphics",
@@ -6440,7 +6440,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-updater"
-version = "0.104.0"
+version = "0.105.0"
 dependencies = [
  "dispatch2",
  "eframe",
@@ -8356,7 +8356,7 @@ checksum = "32ac00cd3f8ec9c1d33fb3e7958a82df6989c42d747bd326c822b1d625283547"
 
 [[package]]
 name = "xtask"
-version = "0.104.0"
+version = "0.105.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
