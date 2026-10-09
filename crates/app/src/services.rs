@@ -148,7 +148,11 @@ pub fn context_cached(
         cached.clone()
     } else {
         let root = match git(cwd, &["rev-parse", "--show-toplevel"]) {
-            Ok(v) => PathBuf::from(String::from_utf8_lossy(&v).trim()),
+            Ok(v) => {
+                let root = PathBuf::from(String::from_utf8_lossy(&v).trim());
+                // Match filesystem paths, including Windows verbatim prefixes.
+                root.canonicalize().unwrap_or(root)
+            }
             Err(_) => return result,
         };
         let metadata = ["--absolute-git-dir", "--git-common-dir"]

@@ -1166,12 +1166,12 @@ mod tests {
     fn deferred_goto_jump_opens_cross_file_target() {
         use terminator_native_edit::lsp::{GotoTarget, Position, Range};
         let (mut app, _, _dir) = fixture();
-        let from = PathBuf::from("/a/from.rs");
-        let to = PathBuf::from("/a/to.rs");
+        let from = crate::test_path("/a/from.rs");
+        let to = crate::test_path("/a/to.rs");
         let jump = || crate::lsp_manager::GotoJump {
             from: from.clone(),
             targets: vec![GotoTarget {
-                uri: "file:///a/to.rs".into(),
+                uri: url::Url::from_file_path(&to).unwrap().into(),
                 range: Range {
                     start: Position {
                         line: 4,
@@ -1746,16 +1746,16 @@ mod tests {
         let (mut app, ctx, _dir) = fixture();
         let (jobs, requests) = mpsc::channel();
         app.jobs = jobs.into();
-        app.open_file("/a/image.PNG".into(), None, None, false);
+        app.open_file(crate::test_path("/a/image.PNG"), None, None, false);
         app.select_project("b".into());
         pump_until(&mut app, &ctx, |app| {
             app.layouts["a"].contains(&Tab::Image {
-                path: "/a/image.PNG".into(),
+                path: crate::test_path("/a/image.PNG"),
             })
         });
         assert_eq!(app.selected.as_deref(), Some("b"));
         assert!(app.layouts["a"].contains(&Tab::Image {
-            path: "/a/image.PNG".into()
+            path: crate::test_path("/a/image.PNG")
         }));
         assert_eq!(app.layouts["a"].version, 3);
         assert!(app.state.sessions.is_empty());
@@ -1767,13 +1767,13 @@ mod tests {
         let (mut app, ctx, _dir) = fixture();
         let (jobs, requests) = mpsc::channel();
         app.jobs = jobs.into();
-        app.open_file("/a/index.HTML".into(), None, None, false);
+        app.open_file(crate::test_path("/a/index.HTML"), None, None, false);
         app.select_project("b".into());
         pump_until(&mut app, &ctx, |app| {
-            app.layouts["a"].contains(&Tab::browser_file("/a/index.HTML".into()))
+            app.layouts["a"].contains(&Tab::browser_file(crate::test_path("/a/index.HTML")))
         });
         assert_eq!(app.selected.as_deref(), Some("b"));
-        assert!(app.layouts["a"].contains(&Tab::browser_file("/a/index.HTML".into())));
+        assert!(app.layouts["a"].contains(&Tab::browser_file(crate::test_path("/a/index.HTML"))));
         assert_eq!(app.layouts["a"].version, 6);
         assert!(app.state.sessions.is_empty());
         assert!(!requests.try_iter().any(|j|matches!(j,Job::Control(request,_) if matches!(*request,Request::Create { editor:true,.. }))));

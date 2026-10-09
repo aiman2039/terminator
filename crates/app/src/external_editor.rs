@@ -253,7 +253,8 @@ mod tests {
             "a b; $(touch unwanted)".into(),
             String::new(),
         ];
-        let cmd = command("/bin/echo", &args, Path::new("a b;$x.rs")).unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let cmd = command(executable.to_str().unwrap(), &args, Path::new("a b;$x.rs")).unwrap();
         let actual: Vec<_> = cmd.get_args().map(std::ffi::OsStr::to_os_string).collect();
         assert_eq!(
             &actual[..3],

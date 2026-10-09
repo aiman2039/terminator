@@ -150,8 +150,9 @@ mod tests {
                 "{blocked}"
             );
         }
-        assert!(super::navigation_target("file:///tmp/page.html", false).is_none());
-        assert!(super::navigation_target("file:///tmp/page.html", true).is_some());
+        let href = url::Url::from_file_path(crate::test_path("/tmp/page.html")).unwrap();
+        assert!(super::navigation_target(href.as_str(), false).is_none());
+        assert!(super::navigation_target(href.as_str(), true).is_some());
         assert!(super::navigation_target("https://example.com/next", false).is_some());
     }
 
@@ -201,7 +202,7 @@ mod tests {
             Path::new("/tmp/terminator-data/webview")
         );
         assert!(
-            super::href(&BrowserTarget::File("/tmp/page.html".into()))
+            super::href(&BrowserTarget::File(crate::test_path("/tmp/page.html")))
                 .unwrap()
                 .starts_with("file:")
         );

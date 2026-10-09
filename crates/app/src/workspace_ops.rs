@@ -474,6 +474,7 @@ mod tests {
     fn repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         git(dir.path(), &["init", "-q", "-b", "main"]);
+        git(dir.path(), &["config", "core.autocrlf", "false"]);
         git(dir.path(), &["config", "user.email", "ops@example.com"]);
         git(dir.path(), &["config", "user.name", "Ops"]);
         fs::write(dir.path().join("a.txt"), "base\n").unwrap();

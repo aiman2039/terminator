@@ -980,7 +980,7 @@ mod tests {
     #[test]
     fn unsupported_language_never_syncs() {
         let mut manager = LspManager::new();
-        let path = PathBuf::from("/tmp/note.md");
+        let path = crate::test_path("/tmp/note.md");
         assert!(!manager.sync_doc(&path, Language::Markdown, 1));
         assert!(manager.row_marks(&path).is_empty());
         assert!(manager.problems_for(&path).is_empty());
@@ -989,7 +989,7 @@ mod tests {
     #[test]
     fn marks_keep_worst_severity_per_row_sorted() {
         let mut manager = LspManager::new();
-        let path = PathBuf::from("/tmp/main.rs");
+        let path = crate::test_path("/tmp/main.rs");
         manager.diagnostics.insert(
             path.clone(),
             vec![
@@ -1048,7 +1048,7 @@ mod tests {
     #[test]
     fn debounce_fires_without_further_edits() {
         let mut manager = LspManager::new();
-        let path = PathBuf::from("/tmp/debounced.rs");
+        let path = crate::test_path("/tmp/debounced.rs");
         tracked(&mut manager, &path);
         // Nothing new to send for the already-submitted revision.
         assert!(!manager.sync_doc(&path, Language::Rust, 1));
@@ -1177,7 +1177,7 @@ mod tests {
     #[test]
     fn parked_text_opens_at_handshake_completion() {
         let mut manager = LspManager::new();
-        let path = PathBuf::from("/tmp/pending.rs");
+        let path = crate::test_path("/tmp/pending.rs");
         tracked(&mut manager, &path);
         let key = manager.docs.get(&path).expect("doc").server.clone();
         let (inbox, mut outbox) = tokio::sync::mpsc::unbounded_channel();
@@ -1261,14 +1261,14 @@ mod tests {
     #[test]
     fn diagnostics_route_to_tracked_docs_only() {
         let mut manager = LspManager::new();
-        let path = PathBuf::from("/tmp/routed.rs");
+        let path = crate::test_path("/tmp/routed.rs");
         tracked(&mut manager, &path);
         let key = ServerKey {
             language: "rust",
             root: project_root(&path, Language::Rust),
         };
         let params = serde_json::json!({
-            "uri": "file:///tmp/routed.rs",
+            "uri": L::file_uri(&path).unwrap().as_str(),
             "diagnostics": [{
                 "range": {"start": {"line": 0, "character": 0},
                           "end": {"line": 0, "character": 1}},
@@ -1288,13 +1288,13 @@ mod tests {
         let unknown = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "textDocument/publishDiagnostics",
-            "params": {"uri": "file:///tmp/ghost.rs", "diagnostics": []},
+            "params": {"uri": L::file_uri(&crate::test_path("/tmp/ghost.rs")).unwrap().as_str(), "diagnostics": []},
         })
         .to_string();
         manager.on_body(&key, unknown.as_bytes());
         assert!(
             manager
-                .problems_for(&PathBuf::from("/tmp/ghost.rs"))
+                .problems_for(&crate::test_path("/tmp/ghost.rs"))
                 .is_empty()
         );
     }
@@ -1302,7 +1302,7 @@ mod tests {
     #[test]
     fn prune_closes_docs_and_clears_state() {
         let mut manager = LspManager::new();
-        let path = PathBuf::from("/tmp/gone.rs");
+        let path = crate::test_path("/tmp/gone.rs");
         tracked(&mut manager, &path);
         manager.diagnostics.insert(
             path.clone(),

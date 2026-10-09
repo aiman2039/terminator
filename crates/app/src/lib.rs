@@ -95,3 +95,9 @@ pub(crate) use std::{
     time::{Duration, Instant},
 };
 pub(crate) use terminator_core::*;
+
+/// Give synthetic test paths a drive prefix on Windows.
+#[cfg(test)]
+fn test_path(path: &str) -> std::path::PathBuf {
+    std::path::absolute(path).expect("absolute test path")
+}

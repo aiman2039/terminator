@@ -670,7 +670,11 @@ mod tests {
     async fn failed_heartbeat_does_not_veto_a_saved_exit() {
         let directory = tempfile::Builder::new()
             .prefix("exit-heartbeat-")
-            .tempdir_in("/tmp")
+            .tempdir_in(if cfg!(unix) {
+                std::path::PathBuf::from("/tmp")
+            } else {
+                std::env::temp_dir()
+            })
             .unwrap();
         let paths = Paths::at(directory.path().into());
         paths.init().unwrap();

@@ -187,7 +187,10 @@ impl Catalog {
                 {
                     let destination = archive_paths.history_dir().join(entry.file_name());
                     fs::copy(entry.path(), &destination)?;
-                    fs::File::open(destination)?.sync_all()?;
+                    fs::OpenOptions::new()
+                        .write(true)
+                        .open(destination)?
+                        .sync_all()?;
                 }
             }
             let record = Generation {
@@ -207,8 +210,13 @@ impl Catalog {
             )?;
         }
         drop(conn);
-        fs::File::open(&temporary)?.sync_all()?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&temporary)?
+            .sync_all()?;
         fs::rename(&temporary, paths.data.join("catalog.sqlite3"))?;
+        // Windows does not support opening a directory with File::open.
+        #[cfg(unix)]
         fs::File::open(&paths.data)?.sync_all()?;
         Ok(())
     }

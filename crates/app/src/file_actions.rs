@@ -237,10 +237,12 @@ mod tests {
 
     #[test]
     fn file_url_uses_the_file_scheme_and_resolves_relative_paths() {
-        let absolute = file_url(Path::new("/tmp/page.html"), Path::new("/")).expect("absolute");
+        let root = crate::test_path("/tmp");
+        let path = root.join("page.html");
+        let absolute = file_url(&path, &root).expect("absolute");
         assert!(absolute.starts_with("file://"));
         assert!(absolute.ends_with("/tmp/page.html"));
-        let relative = file_url(Path::new("page.html"), Path::new("/tmp")).expect("relative");
+        let relative = file_url(Path::new("page.html"), &root).expect("relative");
         assert_eq!(relative, absolute);
     }
 

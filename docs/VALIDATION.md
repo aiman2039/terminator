@@ -1,5 +1,27 @@
 # Validation evidence — 2026-09-08
 
+## Windows CI test portability (2026-10-09)
+
+Release run `37954331518`, job `113900943582`, failed 30 app tests on
+`windows-2025`. Fixtures now use absolute paths with platform drive prefixes,
+file URLs derived from those paths, native executable names, a real available
+executable, and the Windows temporary directory. Unix socket fixtures retain
+short `/tmp` paths. Git fixtures set `core.autocrlf=false` locally; the diff test
+uses a legal Windows filename while retaining shell metacharacters and Unicode.
+All affected tests remain enabled on Windows.
+
+Notification POSTs use Windows `NUL` instead of `/dev/null`. Catalog migration
+flushes copied files and the temporary database through writable handles; parent
+directory syncing remains Unix-only. The blocking Git context fixture now
+canonicalizes the Git root, matching the asynchronous implementation and Windows
+filesystem paths with verbatim prefixes.
+
+Validation: all 1,022 workspace tests passed on macOS (four ignored), including
+641 app tests. Strict workspace Clippy and strict Windows-target workspace Clippy
+passed. The latter includes all
+targets and features; it does not execute Windows binaries. A fresh Windows CI
+run is still required. No release was published.
+
 ## Attachment and quit after service loss (2026-10-09)
 
 Read-only inspection found the registered active daemon PID absent, its auth file

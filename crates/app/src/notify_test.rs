@@ -10,6 +10,9 @@ use terminator_core::{
     process::{CommandOptions, run_command},
 };
 
+// curl opens its output itself, so use the native null device.
+const NULL_DEVICE: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
+
 pub const ENDPOINT: &str = "https://ntfy.sh";
 
 /// Same channel/machine rules as [`terminator_core::Settings::validate`]; the
@@ -56,7 +59,7 @@ pub fn payload(channel: &str, machine: &str) -> Vec<u8> {
 pub fn curl_command(channel: &str, machine: &str) -> String {
     let body = String::from_utf8_lossy(&payload(channel, machine)).into_owned();
     format!(
-        "curl --disable --silent --show-error --fail --max-time 8 --output /dev/null --header 'Content-Type: application/json' --data-binary {} --url {ENDPOINT}",
+        "curl --disable --silent --show-error --fail --max-time 8 --output {NULL_DEVICE} --header 'Content-Type: application/json' --data-binary {} --url {ENDPOINT}",
         terminator_core::quote(&body)
     )
 }
@@ -73,7 +76,7 @@ pub fn send(endpoint: &str, channel: &str, machine: &str) -> anyhow::Result<()> 
         "--max-time",
         "8",
         "--output",
-        "/dev/null",
+        NULL_DEVICE,
         "--header",
         "Content-Type: application/json",
         "--data-binary",

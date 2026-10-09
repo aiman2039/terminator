@@ -225,7 +225,11 @@ mod tests {
     fn replaceable_read_admission_failure_does_not_emit_status_error() {
         let directory = tempfile::Builder::new()
             .prefix("busy-banner-")
-            .tempdir_in("/tmp")
+            .tempdir_in(if cfg!(unix) {
+                std::path::PathBuf::from("/tmp")
+            } else {
+                std::env::temp_dir()
+            })
             .unwrap();
         let (updates, rx) = mpsc::channel();
         let (service, _owner) = Services::new(
@@ -275,7 +279,11 @@ mod tests {
     fn rejected_service_start_reports_without_status_error() {
         let directory = tempfile::Builder::new()
             .prefix("busy-service-start-")
-            .tempdir_in("/tmp")
+            .tempdir_in(if cfg!(unix) {
+                std::path::PathBuf::from("/tmp")
+            } else {
+                std::env::temp_dir()
+            })
             .unwrap();
         let (updates, rx) = mpsc::channel();
         let (service, _owner) = Services::new(

@@ -6,6 +6,7 @@ use super::source::{Mode, Revision, Snapshot};
 use eframe::egui;
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use pulldown_cmark::{Event, Parser, Tag};
+#[cfg(unix)]
 use std::path::Path;
 #[cfg(unix)]
 use std::time::Duration;
@@ -18,7 +19,7 @@ mod tests {
 
     fn snapshot(text: &str) -> Snapshot {
         Snapshot {
-            path: "/docs/read me.md".into(),
+            path: crate::test_path("/docs/read me.md"),
             text: text.into(),
             revision: None,
             paused: false,
@@ -64,7 +65,7 @@ mod tests {
     fn diff_snapshots_resolve_links_refresh_and_release_resources() {
         let ctx = egui::Context::default();
         let mut previews = Previews::new(&ctx);
-        let path = Path::new("/repo/docs/readme.md");
+        let path = &crate::test_path("/repo/docs/readme.md");
         previews.begin_frame();
         previews.snapshot(
             "diff:left",
@@ -76,13 +77,13 @@ mod tests {
         let doc = preview.document.as_ref().unwrap();
         assert_eq!(
             doc.links["../next.md"],
-            Some(Link::File("/repo/next.md".into()))
+            Some(Link::File(crate::test_path("/repo/next.md")))
         );
         assert_eq!(doc.links["command:run"], None);
-        assert!(
-            doc.images
-                .contains("markdown-image:file:///repo/docs/images/a.png")
-        );
+        assert!(doc.images.contains(&format!(
+            "markdown-image:{}",
+            url::Url::from_file_path(crate::test_path("/repo/docs/images/a.png")).unwrap()
+        )));
         assert_eq!(preview.cache.get_link_hook("../next.md"), Some(false));
         previews.snapshot("diff:right", path, "# Right snapshot");
         previews.end_frame(&ctx);
@@ -263,15 +264,20 @@ mod tests {
         ));
         assert_eq!(
             doc.links["nested/next%20file.md"],
-            Some(Link::File("/docs/nested/next file.md".into()))
+            Some(Link::File(crate::test_path("/docs/nested/next file.md")))
         );
         assert!(
-            doc.images
-                .contains("markdown-image:file:///docs/images/a%20)%20b.png"),
+            doc.images.contains(&format!(
+                "markdown-image:{}",
+                url::Url::from_file_path(crate::test_path("/docs/images/a ) b.png")).unwrap()
+            )),
             "{:?}",
             doc.images
         );
-        assert!(doc.images.contains("markdown-image:file:///photo.png"));
+        assert!(doc.images.contains(&format!(
+            "markdown-image:{}",
+            url::Url::from_file_path(crate::test_path("/photo.png")).unwrap()
+        )));
         let rendered_images = Parser::new(&doc.text)
             .filter(|e| matches!(e, Event::Start(Tag::Image { .. })))
             .count();

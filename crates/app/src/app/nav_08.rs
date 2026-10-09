@@ -1,10 +1,7 @@
 use eframe::egui::{self};
 #[cfg(test)]
 use egui_dock::DockState;
-use std::{
-    path::PathBuf,
-    sync::mpsc::{self},
-};
+use std::sync::mpsc::{self};
 use terminator_core::*;
 
 use super::super::*;
@@ -123,7 +120,7 @@ mod tests {
         let (mut app, ctx, _dir) = fixture();
         let (jobs, requests) = mpsc::channel();
         app.jobs = jobs.into();
-        app.open_file("/a/song.MP3".into(), None, None, false);
+        app.open_file(crate::test_path("/a/song.MP3"), None, None, false);
         app.select_project("b".into());
         app.process_updates(&ctx);
         assert_eq!(app.selected.as_deref(), Some("b"));
@@ -134,7 +131,7 @@ mod tests {
         assert_eq!(app.preferences.selected_playlist, "Default");
         assert_eq!(
             app.preferences.selected_tracks(),
-            [PathBuf::from("/a/song.MP3")].as_slice()
+            [crate::test_path("/a/song.MP3")].as_slice()
         );
     }
 
@@ -142,16 +139,20 @@ mod tests {
     fn adding_audio_files_appends_to_the_selected_playlist() {
         let (mut app, _, _dir) = fixture();
         app.add_audio_files(vec![
-            "/a/one.MP3".into(),
-            "/a/two.flac".into(),
-            "/a/notes.txt".into(),
+            crate::test_path("/a/one.MP3"),
+            crate::test_path("/a/two.flac"),
+            crate::test_path("/a/notes.txt"),
         ]);
         assert_eq!(
             app.preferences.selected_tracks(),
-            [PathBuf::from("/a/one.MP3"), PathBuf::from("/a/two.flac")].as_slice()
+            [
+                crate::test_path("/a/one.MP3"),
+                crate::test_path("/a/two.flac")
+            ]
+            .as_slice()
         );
         assert_eq!(app.player.project.as_deref(), Some("a"));
-        app.add_audio_files(vec!["/a/three.ogg".into()]);
+        app.add_audio_files(vec![crate::test_path("/a/three.ogg")]);
         assert_eq!(app.preferences.selected_tracks().len(), 3);
         assert_eq!(app.player.project.as_deref(), Some("a"));
     }
@@ -170,7 +171,7 @@ mod tests {
             .insert(Tab::Terminal("shell".into()).key(), path);
         app.pane_tabs
             .insert(path, vec![Tab::Terminal("shell".into())]);
-        app.open_image("a", "/a/picture.png".into(), Some("right"));
+        app.open_image("a", crate::test_path("/a/picture.png"), Some("right"));
         let original = dock.active.clone();
         dock.add("other".into(), Tab::Terminal("other".into()));
         app.layouts.insert("a".into(), dock);
@@ -185,7 +186,7 @@ mod tests {
             source
                 .layout
                 .find_tab(&Tab::Image {
-                    path: "/a/picture.png".into()
+                    path: crate::test_path("/a/picture.png")
                 })
                 .is_some()
         );

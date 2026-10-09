@@ -528,6 +528,7 @@ mod tests {
     fn repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         git_cmd(dir.path(), &["init", "-q"]);
+        git_cmd(dir.path(), &["config", "core.autocrlf", "false"]);
         git_cmd(
             dir.path(),
             &["config", "user.email", "fixture@example.invalid"],
@@ -540,7 +541,11 @@ mod tests {
     fn staged_and_working_sides_and_word_highlights() {
         let dir = repo();
         let root = dir.path();
-        let name = Path::new("space | ' 日本.rs");
+        let name = if cfg!(windows) {
+            Path::new("space & ' 日本.rs")
+        } else {
+            Path::new("space | ' 日本.rs")
+        };
         std::fs::write(root.join(name), "fn main() { base(); }\n").unwrap();
         git_cmd(root, &["add", "."]);
         git_cmd(root, &["commit", "-qm", "base"]);

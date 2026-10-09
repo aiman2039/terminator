@@ -496,7 +496,7 @@ mod tests {
     fn replacement_must_match_bundled_path_version_and_helper() {
         let dir = tempfile::tempdir().unwrap();
         let exe = dir.path().join("terminator");
-        let daemon = dir.path().join("terminator-daemon");
+        let daemon = dir.path().join(exe_name("terminator-daemon"));
         std::fs::write(&daemon, "fixture").unwrap();
         let mut state = terminator_core::State {
             daemon_executable: Some(daemon),
@@ -621,7 +621,7 @@ mod tests {
     fn gui_uses_only_an_advertised_available_private_helper() {
         use terminator_core::{STABLE_HELPER_CAPABILITY, State};
         let mut state = State {
-            attachment_helper_executable: Some("/private/pinned/terminator-hook".into()),
+            attachment_helper_executable: Some(crate::test_path("/private/pinned/terminator-hook")),
             attachment_helper_available: Some(true),
             ..State::default()
         };
