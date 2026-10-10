@@ -5,8 +5,77 @@ fn gui(h: &Harness) -> Result<Value> {
     ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)
 }
 
+fn toggle_agents(h: &Harness, o: &Options, name: &str, open: bool, project: &Value) -> Result<()> {
+    let path = h.root.join("agent-toggle.json");
+    terminator_core::atomic_write(&path, b"[]")?;
+    let result = capture(h, o, name, json!([]), 3500, |_| {
+        h.wait(
+            |_| {
+                gui(h).is_ok_and(|s| {
+                    (s.pointer("/controls/left-agent-bar")
+                        .is_some_and(Value::is_array)
+                        || s.pointer("/controls/project-header-menu")
+                            .is_some_and(Value::is_array))
+                        && s.get("agent_bar_badge")
+                            .and_then(Value::as_str)
+                            .is_some_and(|badge| badge.starts_with("1 waiting"))
+                })
+            },
+            5,
+        )?;
+        let snapshot = gui(h)?;
+        let actions = if snapshot
+            .pointer("/controls/left-agent-bar")
+            .is_some_and(Value::is_array)
+        {
+            json!([{"at_ms":900,"target":"left-agent-bar"}])
+        } else {
+            ensure!(
+                snapshot
+                    .pointer("/controls/project-header-menu")
+                    .is_some_and(Value::is_array),
+                "Missing Agents button and header menu"
+            );
+            let badge = snapshot
+                .get("agent_bar_badge")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let label = if badge.is_empty() {
+                "Agents".to_owned()
+            } else {
+                format!("Agents · {badge}")
+            };
+            json!([{"at_ms":900,"target":"project-header-menu"},{"at_ms":1400,"target":label}])
+        };
+        terminator_core::atomic_write(&path, &serde_json::to_vec(&actions)?)?;
+        h.wait(
+            |_| {
+                gui(h).is_ok_and(|s| {
+                    s.get("left_agents").and_then(Value::as_bool) == Some(open)
+                        && s.get("selected_project").and_then(Value::as_str) == Some(id(project))
+                        && s.get("agent_bar_badge")
+                            .and_then(Value::as_str)
+                            .is_some_and(|badge| badge.starts_with("1 waiting"))
+                })
+            },
+            8,
+        )?;
+        Ok(())
+    });
+    let _ = std::fs::remove_file(path);
+    result?;
+    Ok(())
+}
+
 pub fn run(o: &Options) -> Result<()> {
-    let h = Harness::new()?;
+    let mut h = Harness::new()?;
+    h.env.insert(
+        "TERMINATOR_TEST_ACTIONS_PATH".into(),
+        h.root
+            .join("agent-toggle.json")
+            .to_string_lossy()
+            .into_owned(),
+    );
     h.setup()?;
     // Keep the pending event through navigation so this fixture can test resolve updates.
     let mut settings = h
@@ -71,28 +140,7 @@ pub fn run(o: &Options) -> Result<()> {
             Ok(())
         },
     )?;
-    capture(
-        &h,
-        o,
-        "agents-open",
-        json!([{"at_ms":900,"target":"left-agent-bar"}]),
-        2300,
-        |_| {
-            h.wait(
-                |_| {
-                    gui(&h).is_ok_and(|s| {
-                        s.get("left_agents")
-                            .is_some_and(|value| value == &json!(true))
-                            && s.get("selected_project").is_some_and(|project| {
-                                second.get("id").is_some_and(|id| project == id)
-                            })
-                    })
-                },
-                8,
-            )?;
-            Ok(())
-        },
-    )?;
+    toggle_agents(&h, o, "agents-open", true, &second)?;
     ensure!(
         prefs(&h)?
             .get("left_agents")
@@ -134,28 +182,7 @@ pub fn run(o: &Options) -> Result<()> {
         },
         5,
     )?;
-    capture(
-        &h,
-        o,
-        "projects-restored",
-        json!([{"at_ms":900,"target":"left-agent-bar"}]),
-        2300,
-        |_| {
-            h.wait(
-                |_| {
-                    gui(&h).is_ok_and(|s| {
-                        s.get("left_agents")
-                            .is_some_and(|value| value == &json!(false))
-                            && s.get("agent_bar_badge")
-                                .and_then(Value::as_str)
-                                .is_some_and(|badge| badge.starts_with("1 waiting"))
-                    })
-                },
-                8,
-            )?;
-            Ok(())
-        },
-    )?;
+    toggle_agents(&h, o, "projects-restored", false, &first)?;
     ensure!(
         prefs(&h)?
             .get("left_agents")

@@ -339,11 +339,6 @@ fn restart_relaunch(o: &Options) -> Result<()> {
             ])
             .to_string(),
         );
-    if cfg!(target_os = "macos") {
-        command
-            .env("TERMINATOR_TEST_BACKGROUND", "1")
-            .env("TERMINATOR_TEST_RENDER_OCCLUDED", "1");
-    }
     command.stdout(log.try_clone()?).stderr(log);
     let mut child = Process(command.spawn()?);
     h.wait(
@@ -466,7 +461,6 @@ fn cleanup_closes_gui(o: &Options, minimized: bool) -> Result<()> {
             o.output.join("cleanup-gui-unused.png"),
         )
         .env("TERMINATOR_CAPTURE_AFTER_MS", "60000")
-        .env("TERMINATOR_TEST_BACKGROUND", "1")
         .stdout(log.try_clone()?)
         .stderr(log);
     let mut child = Process(command.spawn()?);

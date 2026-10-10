@@ -65,6 +65,22 @@ impl App {
                 }
                 #[cfg(feature = "test-support")]
                 {
+                    if let Some(controls) = snapshot.get_mut("controls") {
+                        for key in ["left-agent-bar", "project-header-menu"] {
+                            insert(
+                                controls,
+                                key,
+                                serde_json::json!(
+                                    crate::diagnostics::current_rect(ctx, key).map(|r| [
+                                        r.min.x,
+                                        r.min.y,
+                                        r.width(),
+                                        r.height()
+                                    ])
+                                ),
+                            );
+                        }
+                    }
                     insert(
                         &mut snapshot,
                         "updater_available",

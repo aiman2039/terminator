@@ -172,7 +172,9 @@ impl Desktop {
     }
     pub fn minimize(&mut self) -> Result<()> {
         let r = self.geometry()?;
-        self.click(r[0] + 52.0, r[1] + 20.0)
+        // Current custom title-bar button centers are x=16, 40, and 64.
+        // x=52 is the minimize/maximize boundary, not the minimize button.
+        self.click(r[0] + 40.0, r[1] + 20.0)
     }
     pub fn minimized(&self) -> Result<bool> {
         Ok(self

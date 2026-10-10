@@ -66,8 +66,6 @@ fn gui(h: &Harness, output: &Path, mode: &str) -> Result<Process> {
             output.join(format!("{mode}.png")),
         )
         .env("TERMINATOR_CAPTURE_AFTER_MS", "600000")
-        .env("TERMINATOR_TEST_BACKGROUND", "1")
-        .env("TERMINATOR_TEST_RENDER_OCCLUDED", "1")
         .env("TERMINATOR_TEST_KEEP_OPEN", "1")
         .env("TERMINATOR_TEST_SIZE", "[1440,800]")
         .env("TERMINATOR_TEST_ACTIONS_PATH", h.root.join("actions.json"))

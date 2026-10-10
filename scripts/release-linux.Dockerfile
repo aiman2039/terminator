@@ -63,9 +63,20 @@ RUN tar -xzf /tmp/nvim.tar.gz -C /opt && mv /opt/nvim-linux-arm64 /opt/nvim
 
 FROM nvim-${TARGETARCH} AS nvim
 
+FROM toolchain AS nextest-amd64
+ADD --checksum=sha256:4ee9aaa0d0171a985a5d0eb735b87355894c1c455972e9674fb9fdbd1387c9a3 https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.140/cargo-nextest-0.9.140-x86_64-unknown-linux-gnu.tar.gz /tmp/nextest.tar.gz
+RUN tar -xzf /tmp/nextest.tar.gz -C /root/.cargo/bin cargo-nextest
+
+FROM toolchain AS nextest-arm64
+ADD --checksum=sha256:8b3f4d4560b6b0f83774fecc6be07e47716dbad0eb0bb6c3890f478f4affe4b6 https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.140/cargo-nextest-0.9.140-aarch64-unknown-linux-gnu.tar.gz /tmp/nextest.tar.gz
+RUN tar -xzf /tmp/nextest.tar.gz -C /root/.cargo/bin cargo-nextest
+
+FROM nextest-${TARGETARCH} AS nextest
+
 FROM toolchain AS final
 COPY --from=audit /root/.cargo/bin/cargo-audit /root/.cargo/bin/cargo-audit
 COPY --from=deny /root/.cargo/bin/cargo-deny /root/.cargo/bin/cargo-deny
 COPY --from=coverage /root/.cargo/bin/cargo-llvm-cov /root/.cargo/bin/cargo-llvm-cov
 COPY --from=nvim /opt/nvim /opt/nvim
+COPY --from=nextest /root/.cargo/bin/cargo-nextest /root/.cargo/bin/cargo-nextest
 WORKDIR /src

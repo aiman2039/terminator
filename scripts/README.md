@@ -37,7 +37,7 @@ Host checks include the shared compiler, formatting, Clippy, workspace tests,
 audit, license/source checks, real-PTY integration, idle-close, `gui all`, and
 a release package build. macOS also cross-checks Windows with Clippy; this
 requires zig 0.14.x and the installed `x86_64-pc-windows-msvc` Rust target.
-Neovim, `cargo-audit`, and `cargo-deny` must be installed locally. The local
+Neovim, `cargo-audit`, `cargo-deny`, and `cargo-nextest` must be installed locally. The local
 release flow does not require Python.
 Native GUI checks require a desktop and any permissions required by the fixtures.
 Live-provider tests, ignored tests, soak tests, signing, and notarization are
@@ -54,8 +54,8 @@ architecture; registry and Git source caches are shared. The image imports
 the installed toolchain from the official Rust image while keeping Ubuntu as
 its runtime. Required components come from `rust-toolchain.toml`, with LLVM
 tools added for coverage, so fresh containers do not need to install missing
-components. Audit, deny, coverage, and Neovim use pinned upstream binaries
-with SHA-256 checksums for each architecture; the three Cargo tools have
+components. Audit, deny, coverage, nextest, and Neovim use pinned upstream binaries
+with SHA-256 checksums for each architecture; the Cargo tools have
 independent build stages. Bash, zsh, and fish are installed for idle-close tests.
 An empty build context keeps source edits from invalidating setup layers.
 The local image tag includes a SHA-256 digest of the Dockerfile, Rust version,
@@ -76,7 +76,7 @@ use `--pull never`. This option conflicts with `--rebuild-linux-image`.
 
 The built-in Windows runner uses `ssh` and `scp` with existing SSH key access.
 Configure the Windows OpenSSH server and install Git Bash, Rust 1.97.1 with
-rustfmt/Clippy, Neovim, `cargo-audit`, and `cargo-deny`. The remote SSH user
+rustfmt/Clippy, Neovim, `cargo-audit`, `cargo-deny`, and `cargo-nextest` 0.9.140. The remote SSH user
 must be able to run these tools. `TERMINATOR_WINDOWS_BASH` can override
 `C:/Program Files/Git/bin/bash.exe`. The runner copies the exact source,
 runs shared checks, workspace tests, and packaging, and downloads an artifact
@@ -155,8 +155,8 @@ Compare both renderers with the same release executable:
 
 ```sh
 cargo build --release --workspace --bins --examples --features terminator/test-support --locked
-TERMINATOR_FIXTURE_RENDERER=glow TERMINATOR_TEST_BIN_DIR="$PWD/target/release" target/release/xtask gui renderer-perf --seconds 15 --output target/validation/renderer-glow
-TERMINATOR_FIXTURE_RENDERER=wgpu TERMINATOR_TEST_BIN_DIR="$PWD/target/release" target/release/xtask gui renderer-perf --seconds 15 --output target/validation/renderer-wgpu
+TERMINATOR_FIXTURE_VISIBLE=1 TERMINATOR_FIXTURE_RENDERER=glow TERMINATOR_TEST_BIN_DIR="$PWD/target/release" target/release/xtask gui renderer-perf --seconds 15 --output target/validation/renderer-glow
+TERMINATOR_FIXTURE_VISIBLE=1 TERMINATOR_FIXTURE_RENDERER=wgpu TERMINATOR_TEST_BIN_DIR="$PWD/target/release" target/release/xtask gui renderer-perf --seconds 15 --output target/validation/renderer-wgpu
 ```
 
 Run measurements serially after builds finish. Each command uses disposable
@@ -169,9 +169,20 @@ that the native GUI ran. `OUTPUT/renderer-perf/renderer-perf.json` contains raw 
 medians and repeat in reverse order to check order effects.
 
 These results do not measure GPU time, power use, startup, or input delay. The
-fixture uses visible, inactive windows with mouse passthrough and a fixed scale.
+fixture uses an explicitly visible desktop and a fixed scale.
 Keep the screen unlocked during the test. Wgpu captures can time out behind
 another window on macOS. This is not a measurement of the installed application.
+
+## Workspace tests
+
+`sh scripts/check.sh test` runs unit and integration test binaries through
+nextest, then runs doctests with Cargo. CI and Docker install prebuilt nextest
+0.9.140. Install the same version locally with
+`cargo install cargo-nextest --version 0.9.140 --locked`, or use the official
+prebuilt binaries. Nextest runs tests across crates in parallel; it does not
+reduce compile time. The CI profile disables retries, collects all failures,
+and writes `target/nextest/ci/junit.xml`. Real-PTY and GUI xtasks remain separate.
+Coverage keeps its existing Cargo/llvm-cov checks and exclusions.
 
 ## Dependency security
 
@@ -234,6 +245,20 @@ New cases: `cargo xtask gui images`, `cargo xtask gui browser`, `cargo xtask gui
 `cargo xtask gui all` runs the ordinary native fixture suite. All GUI cases accept
 `--scale 1|2`, `--narrow`, and `--output PATH`. Captures default to the Cargo target
 validation directory; earlier committed screenshots are not overwritten.
+
+GUI fixtures default to Glow and quiet background windows. Run
+`cargo xtask gui smoke --sessions 6 --seconds 3` or `cargo xtask gui all` without
+extra renderer flags. The launcher keeps scripted capture windows inactive,
+below ordinary windows, and mouse-transparent. The regular application's
+renderer selection is independent of these fixture defaults.
+
+macOS `window-controls` and `float-window` require
+`TERMINATOR_FIXTURE_VISIBLE=1` on a VM or dedicated desktop. Explicit Metal
+checks also require visible mode:
+`TERMINATOR_FIXTURE_VISIBLE=1 TERMINATOR_FIXTURE_RENDERER=wgpu cargo xtask gui smoke`.
+Quiet Metal fails before opening a fixture because occluded Metal surfaces do
+not deliver screenshots. Real-input Linux tests require an isolated
+Xvfb/Openbox display, Docker `--init`, and `TERMINATOR_X11_TEST=1`.
 
 `cargo xtask gui hover-menu` checks that adjacent terminal file paths cannot
 replace an open menu. It checks Escape, X, outside-click dismissal and opening

@@ -118,12 +118,6 @@ fn drive(
     } else {
         command.env_remove("TERMINATOR_TEST_NARROW");
     }
-    if cfg!(target_os = "macos") {
-        command
-            .env("TERMINATOR_TEST_BACKGROUND", "1")
-            .env("TERMINATOR_TEST_VISIBLE_CAPTURE", "1")
-            .env("TERMINATOR_TEST_RENDER_OCCLUDED", "1");
-    }
     command.stdout(log.try_clone()?).stderr(log);
     let mut gui = Process(command.spawn()?);
     if let Err(error) = observe(&mut gui.0) {
@@ -426,11 +420,7 @@ pub fn run(o: &Options) -> Result<()> {
     let t0 = Instant::now();
     let mut h = Harness::new()?;
     h.setup()?;
-    // Foreground every fixture in this case (steals focus briefly):
-    // background windows are denied Metal drawables, so in-app
-    // screenshots never render without it.
-    h.env
-        .insert("TERMINATOR_TEST_FOREGROUND".into(), "1".into());
+    // The dispatcher requires an explicit visible desktop for this OS-window case.
     // Shared graceful-exit marker (see `drive`); removed before each
     // scenario so a stale file can never close a fresh fixture.
     let exit = o.output.join("exit-marker");

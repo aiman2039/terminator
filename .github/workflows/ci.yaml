@@ -50,6 +50,9 @@ jobs:
             with:
               toolchain: '1.97.1'
               components: rustfmt, clippy
+          - uses: taiki-e/install-action@v2
+            with:
+              tool: cargo-nextest@0.9.140
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-${{ matrix.os }}
@@ -70,6 +73,14 @@ jobs:
         env:
           TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-state
         run: sh scripts/check.sh test
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tests-${{ matrix.os }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: warn
+          retention-days: 14
 
   e2e:
     name: E2E (${{ matrix.os }})

@@ -206,10 +206,12 @@ impl Harness {
             .env_remove("VIMINIT")
             .env_remove("EXINIT")
             .envs(&self.env);
-        if name == "terminator"
-            && let Some(renderer) = std::env::var_os("TERMINATOR_FIXTURE_RENDERER")
-        {
-            c.env("TERMINATOR_RENDERER", renderer);
+        if name == "terminator" {
+            configure_gui(
+                &mut c,
+                std::env::var_os("TERMINATOR_FIXTURE_RENDERER"),
+                fixture_visible(),
+            );
         }
         c
     }
@@ -414,6 +416,27 @@ impl Harness {
         Ok(())
     }
 }
+
+pub(crate) fn fixture_visible() -> bool {
+    std::env::var("TERMINATOR_FIXTURE_VISIBLE").is_ok_and(|value| value == "1")
+}
+
+fn configure_gui(command: &mut Command, renderer: Option<std::ffi::OsString>, visible: bool) {
+    command
+        .env(
+            "TERMINATOR_RENDERER",
+            renderer.unwrap_or_else(|| "glow".into()),
+        )
+        .env("TERMINATOR_TEST_RENDER_OCCLUDED", "1")
+        .env_remove("TERMINATOR_TEST_NATIVE_INPUT")
+        .env_remove("TERMINATOR_TEST_VISIBLE_CAPTURE")
+        .env_remove("TERMINATOR_TEST_FOREGROUND");
+    if visible {
+        command.env_remove("TERMINATOR_TEST_BACKGROUND");
+    } else {
+        command.env("TERMINATOR_TEST_BACKGROUND", "1");
+    }
+}
 impl Drop for Harness {
     fn drop(&mut self) {
         if let Ok(state) = self.state() {
@@ -468,6 +491,57 @@ fn clear_inherited_terminator(
 #[cfg(test)]
 mod isolation_tests {
     use super::*;
+    fn gui_env(command: &Command, name: &str) -> Option<std::ffi::OsString> {
+        command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new(name))
+            .and_then(|(_, value)| value.map(std::borrow::ToOwned::to_owned))
+    }
+
+    #[test]
+    fn gui_defaults_to_glow_without_inherited_foreground_or_native_input() {
+        let mut command = Command::new("fixture");
+        for key in [
+            "TERMINATOR_TEST_VISIBLE_CAPTURE",
+            "TERMINATOR_TEST_FOREGROUND",
+            "TERMINATOR_TEST_NATIVE_INPUT",
+        ] {
+            command.env(key, "1");
+        }
+        configure_gui(&mut command, None, false);
+        assert_eq!(
+            gui_env(&command, "TERMINATOR_RENDERER"),
+            Some("glow".into())
+        );
+        assert_eq!(
+            gui_env(&command, "TERMINATOR_TEST_BACKGROUND"),
+            Some("1".into())
+        );
+        assert_eq!(
+            gui_env(&command, "TERMINATOR_TEST_RENDER_OCCLUDED"),
+            Some("1".into())
+        );
+        for key in [
+            "TERMINATOR_TEST_VISIBLE_CAPTURE",
+            "TERMINATOR_TEST_FOREGROUND",
+            "TERMINATOR_TEST_NATIVE_INPUT",
+        ] {
+            assert_eq!(gui_env(&command, key), None);
+        }
+    }
+
+    #[test]
+    fn explicit_visible_renderer_test_preserves_renderer_selection() {
+        let mut command = Command::new("fixture");
+        command.env("TERMINATOR_TEST_BACKGROUND", "1");
+        configure_gui(&mut command, Some("wgpu".into()), true);
+        assert_eq!(
+            gui_env(&command, "TERMINATOR_RENDERER"),
+            Some("wgpu".into())
+        );
+        assert_eq!(gui_env(&command, "TERMINATOR_TEST_BACKGROUND"), None);
+    }
+
     #[test]
     fn closed_session_accepts_ended_history_or_a_pruned_record() {
         for state in [

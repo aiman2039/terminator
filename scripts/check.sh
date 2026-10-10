@@ -33,7 +33,11 @@ case "${1:-all}" in
     lint) cargo check --workspace --all-targets --all-features --locked ;;
     build) cargo build --workspace --all-targets --all-features --locked ;;
     clippy) cargo clippy --workspace --all-targets --all-features --locked -- -D warnings ;;
-    test) cargo test --workspace --all-features --locked ;;
+    test)
+        need_plugin nextest
+        cargo nextest run --workspace --all-features --locked --profile ci
+        cargo test --workspace --all-features --locked --doc
+        ;;
     windows-check) windows_toolchain cargo check --workspace --target x86_64-pc-windows-msvc --locked ;;
     windows-clippy) windows_toolchain cargo clippy --workspace --all-targets --all-features --target x86_64-pc-windows-msvc --locked -- -D warnings ;;
     audit)

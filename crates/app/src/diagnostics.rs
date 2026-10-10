@@ -51,6 +51,9 @@ impl Diagnostics {
             && let Ok(bytes) = std::fs::read(path)
             && let Ok(actions) = serde_json::from_slice::<Vec<FixtureAction>>(&bytes)
         {
+            if self.actions.len() != actions.len() {
+                eprintln!("Fixture loaded {} dynamic actions", actions.len());
+            }
             self.actions = actions;
         }
         // A fixture owns its input. Do not let concurrent desktop typing or
@@ -355,6 +358,9 @@ impl Diagnostics {
             eprintln!("Native fixture requested capture");
         } else if self.requested
             && !self.force_closed
+            // Native-input drivers own their lifetime and enforce their own
+            // deadlines. A completed screenshot must not close their window.
+            && std::env::var_os("TERMINATOR_TEST_KEEP_OPEN").is_none()
             && after
                 .checked_add(GRACE)
                 .is_some_and(|deadline| self.started.elapsed() > deadline)
@@ -413,6 +419,16 @@ pub fn record(ctx: &egui::Context, name: &str, rect: egui::Rect) {
     });
 }
 
+pub fn current_rect(ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
+    let current = ctx.cumulative_frame_nr();
+    ctx.data(|data| {
+        let frame = data.get_temp::<u64>(egui::Id::new(("fixture-target-frame", name)))?;
+        (frame == current || frame.checked_add(1) == Some(current))
+            .then(|| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+            .flatten()
+    })
+}
+
 pub fn record_response(ctx: &egui::Context, name: &str, response: &egui::Response) {
     if response.enabled() {
         record(ctx, name, response.rect);
@@ -457,8 +473,10 @@ mod tests {
             let response = ui.button("Save and close");
             record(ui.ctx(), "Save and close", response.rect);
         });
+        assert!(current_rect(&ctx, "Save and close").is_some());
         // Cancel has hidden the prompt; its saved rectangle must not be used.
         render(&ctx, |_| {});
+        assert!(current_rect(&ctx, "Save and close").is_none());
         let mut input = egui::RawInput::default();
         diagnostics.input(&ctx, &mut input);
         assert_eq!(diagnostics.actions_completed(), 0);

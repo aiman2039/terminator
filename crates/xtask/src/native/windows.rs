@@ -81,6 +81,8 @@ pub fn run(o: &Options) -> Result<()> {
     let log = fs::File::create(o.output.join("window.log"))?;
     let mut command = h.command("terminator");
     command
+        // Desktop preflight requires an explicit macOS opt-in or isolated X11.
+        .env_remove("TERMINATOR_TEST_BACKGROUND")
         .env("TERMINATOR_CAPTURE_PATH", &capture)
         .env("TERMINATOR_CAPTURE_AFTER_MS", "2200")
         .env("TERMINATOR_TEST_KEEP_OPEN", "1")

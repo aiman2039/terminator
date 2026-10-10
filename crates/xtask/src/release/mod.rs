@@ -127,7 +127,7 @@ pub fn run(mut options: Options) -> Result<()> {
             &["info", "--format", "{{.Architecture}}"],
         ))?)?;
     }
-    for plugin in ["audit", "deny"] {
+    for plugin in ["audit", "deny", "nextest"] {
         System.run(&mut cmd(&root, "cargo", &[plugin, "--version"]))?;
     }
     execute(&root, &options, &System, |source, artifacts| {

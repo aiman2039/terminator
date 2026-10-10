@@ -1,5 +1,47 @@
 # Validation evidence — 2026-09-08
 
+## Background and isolated native GUI samples (2026-10-10)
+
+An opt-in `TERMINATOR_TEST_QUIET_CAPTURE=1` mode removes the visible-capture
+and foreground overrides from shared macOS scripted captures. Existing
+background activation, mouse passthrough, bottom window level, and occluded
+UI passes remain active. No renderer fallback is added.
+
+With the explicit Glow renderer, smoke (six sessions), workspace-tabs, and
+file-close all pass, including fresh screenshots and existing layout, PID,
+save/cancel/discard assertions. A read-only AppKit/CoreGraphics monitor samples
+foreground PID and fixture window metadata at roughly 50 ms intervals. Across
+899 observations of ten fixture processes, none became foreground; the
+foreground PID stayed constant. Every observed on-screen fixture window used
+level -1, below ordinary windows. The smoke screenshot was visually inspected
+and contains rendered terminal/editor content. This sampling does not prove
+that a shorter-than-sample activation cannot occur or validate mouse routing.
+
+A separate Wgpu smoke sample fails with `Missing fresh native capture`.
+Its Apple M5 Max Metal adapter repeatedly reports `Occluded`; 243 focus
+observations also show no fixture foreground activation. This is explicit
+negative evidence: quiet Metal capture is not validated by the Glow result.
+
+The native-input `window-controls` sample passes inside native ARM64 Linux
+Docker with Xvfb, D-Bus, and Openbox. It checks real drag/resize, maximize,
+minimize/restore, file selection/cancellation, folder selection, and native
+close while preserving the shell. Initial attempts exposed three fixture
+issues: Xvfb startup as container PID 1 (resolved by Docker `--init`), a stale
+minimize coordinate at a button boundary (corrected from x=52 to x=40), and
+the screenshot deadline closing a keep-open fixture mid-picker (the test-only
+deadline now honors `TERMINATOR_TEST_KEEP_OPEN`). Existing real-input and PID
+assertions remain required. No macOS native-input test was run on the host.
+
+No local macOS VM tool or configured VM was found. The macOS VM sample remains
+untested pending an existing VM/remote Mac or a setup choice. Linux isolation
+does not establish macOS focus, native-picker, or Metal behavior.
+
+Strict app/xtask Clippy with test-support, formatting, and whitespace checks
+pass. Evidence, monitor source, logs, and screenshots are retained under
+`.artifacts/gui-isolation-sample-2026-10-10/`; no fixture auth/state files were
+copied there. Quiet capture is experimental and opt-in; the complete suite
+has not been run in that mode. Nextest migration was not started.
+
 ## Native-editor Windows test fixtures (2026-10-10)
 
 Release run `37999768976`, Windows job `114054753486`, passed build and Clippy

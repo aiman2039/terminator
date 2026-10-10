@@ -52,12 +52,6 @@ pub(crate) fn capture(
     } else {
         command.env_remove("TERMINATOR_TEST_NARROW");
     }
-    if cfg!(target_os = "macos") {
-        command
-            .env("TERMINATOR_TEST_BACKGROUND", "1")
-            .env("TERMINATOR_TEST_VISIBLE_CAPTURE", "1")
-            .env("TERMINATOR_TEST_RENDER_OCCLUDED", "1");
-    }
     command.stdout(log.try_clone()?).stderr(log);
     let mut gui = Process(command.spawn()?);
     if let Err(error) = during(&mut gui.0) {
@@ -120,6 +114,20 @@ pub(crate) fn setup(name: &str) -> Result<(Harness, Value, Vec<Value>, PathBuf)>
     Ok((h, p, sessions, root))
 }
 pub fn run(case: &str, opts: Options) -> Result<()> {
+    ensure!(
+        !cfg!(target_os = "macos")
+            || !matches!(case, "window-controls" | "float-window")
+            || crate::harness::fixture_visible(),
+        "{case} needs a visible macOS desktop. Set TERMINATOR_FIXTURE_VISIBLE=1 on a VM or dedicated runner"
+    );
+    ensure!(
+        crate::harness::fixture_visible()
+            || !cfg!(target_os = "macos")
+            || std::env::var("TERMINATOR_FIXTURE_RENDERER")
+                .is_ok_and(|renderer| renderer == "glow")
+            || std::env::var_os("TERMINATOR_FIXTURE_RENDERER").is_none(),
+        "Quiet macOS GUI fixtures require Glow. Use TERMINATOR_FIXTURE_VISIBLE=1 for an explicit renderer test on a dedicated desktop"
+    );
     ensure!(
         (1.0..=2.0).contains(&opts.scale),
         "Scale must be between 1 and 2"

@@ -40,8 +40,6 @@ pub fn run(opts: &Options) -> Result<()> {
             h.setup()?;
             h.env
                 .insert("TERMINATOR_TEST_PASSIVE_CAPTURE".into(), "1".into());
-            h.env
-                .insert("TERMINATOR_TEST_VISIBLE_CAPTURE".into(), "1".into());
             let project = h.project("renderer-perf")?;
             let mut sessions = Vec::new();
             for _ in 0..6 {

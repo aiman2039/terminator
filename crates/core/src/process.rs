@@ -355,7 +355,7 @@ mod tests {
         let staging = dir.path().join("ready.tmp");
         let mut command = Command::new("sh");
         command.arg("-c").arg(format!(
-            "echo $$ > {staging} && mv {staging} {ready}; sleep 8",
+            "echo $$ > {staging} && mv {staging} {ready}; exec sleep 8",
             staging = staging.display(),
             ready = ready.display()
         ));
