@@ -1773,6 +1773,18 @@ pub fn process_viewport_commands(
     actions_requested: &mut Vec<ActionRequested>,
 ) {
     for command in commands {
+        #[cfg(feature = "test-support")]
+        if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
+            && std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some()
+            && matches!(
+                command,
+                ViewportCommand::Focus | ViewportCommand::RequestUserAttention(_)
+            )
+        {
+            // Quiet fixture windows must not activate an app or switch macOS
+            // Spaces when ordinary GUI code requests focus or attention.
+            continue;
+        }
         process_viewport_command(egui_ctx, window, command, info, actions_requested);
     }
 }

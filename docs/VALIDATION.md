@@ -1,5 +1,51 @@
 # Validation evidence — 2026-09-08
 
+## Five-worker quiet GUI execution and macOS Spaces (2026-10-10)
+
+Scripted GUI fixtures now default to five workers, scheduled through Rayon's
+bounded thread pool. `--jobs 1` preserves serial execution; accepted worker
+counts are 1–16. Each case retains its isolated daemon, paths, and screenshots.
+All failures are collected. Single-case and explicitly visible suites run on
+the calling thread; visible multi-case suites require `--jobs 1`.
+
+Window inactivity alone did not prevent macOS Spaces switching. Quiet
+test-support builds now use Winit's accessory activation policy and disable
+activation ignoring other applications at event-loop startup. The vendored
+egui-winit test-support adapter ignores later Focus/RequestUserAttention
+commands only for background captures. Explicitly visible fixtures preserve
+native activation. The upstream patch is documented in the vendor UPSTREAM.md.
+
+Validation: all 19 GUI cases pass concurrently on macOS in 69.996 seconds.
+The public AppKit Spaces observer records zero active-Space changes; 1,178
+foreground/window samples record zero fixture activations and a peak of five
+visible fixture processes. Evidence is under `.artifacts/quiet-gui-five-workers/`.
+All 19 cases also pass with five workers on native ARM64 Linux under
+Xvfb/D-Bus/Openbox. All 63 macOS and 66 Linux xtask tests pass via nextest.
+Invalid worker counts and visible parallel suites are refused before launching
+a GUI. Strict app/xtask Clippy, workspace/vendor formatting, and whitespace
+checks pass. This is one timing measurement, not a serial/parallel benchmark.
+macOS native-input/visible Metal execution still needs a dedicated desktop.
+
+## Nextest workspace test runner (2026-10-10)
+
+`sh scripts/check.sh test` now runs nextest with a CI profile, then Cargo
+doctests. Retries are disabled and all failures are collected. CI installs
+nextest 0.9.140 and uploads JUnit reports; both Linux image architectures use
+checksum-pinned prebuilt binaries. Release preflight checks nextest availability.
+Coverage, real-PTY, and GUI tasks keep their separate execution paths.
+
+During this change, complete nextest checks pass on macOS (1,076 tests) and
+native ARM64 Linux (1,074 tests), with four skipped tests per platform and
+separate doctests passing. Nextest exposed an orphaned sleep process in the
+session-leader fixture; using `exec sleep` preserves identity and permits full
+cleanup. The later macOS run reports no leaks. Warm macOS commands measured
+15.072 seconds for Cargo versus 12.328 seconds for nextest, about 18% less wall
+time for test execution. The initial 123-second Cargo run had startup costs and
+is excluded from the comparison. Data: `.artifacts/nextest-benchmark/results.json`.
+Compilation speed and hosted Windows execution were not established by this
+benchmark. CI syntax was checked with actionlint using a temporary flattened
+copy because actionlint does not recognize the existing parallel-step syntax.
+
 ## Background and isolated native GUI samples (2026-10-10)
 
 An opt-in `TERMINATOR_TEST_QUIET_CAPTURE=1` mode removes the visible-capture

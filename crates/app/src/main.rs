@@ -136,6 +136,24 @@ fn main() -> Result<()> {
         renderer,
         ..Default::default()
     };
+    #[cfg(all(target_os = "macos", feature = "test-support"))]
+    let options = {
+        let mut options = options;
+        if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
+            && std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some()
+        {
+            options.event_loop_builder = Some(Box::new(|builder| {
+                use egui_winit::winit::platform::macos::{
+                    ActivationPolicy, EventLoopBuilderExtMacOS,
+                };
+                builder
+                    .with_activation_policy(ActivationPolicy::Accessory)
+                    .with_activate_ignoring_other_apps(false)
+                    .with_default_menu(false);
+            }));
+        }
+        options
+    };
     #[cfg(all(feature = "test-support", feature = "wgpu"))]
     let options = {
         let mut options = options;

@@ -114,7 +114,7 @@ enum Task {
     },
     /// Real-PTY, auth, hooks, reconnect, and daemon-recovery checks.
     Integration,
-    /// Native renderer and input fixtures. Requires a desktop and test-support build.
+    /// Quiet Glow GUI fixtures. Requires a desktop and test-support build.
     Gui {
         #[arg(default_value = "all")]
         case: String,
@@ -128,6 +128,9 @@ enum Task {
         sessions: usize,
         #[arg(long, default_value = "5")]
         seconds: u64,
+        /// Parallel quiet GUI workers; native-input cases always run alone.
+        #[arg(long, default_value = "5")]
+        jobs: usize,
     },
     /// Bounded daemon transport/PTY load (does not measure GUI FPS).
     Load {
@@ -279,6 +282,7 @@ fn main() -> Result<()> {
             output,
             sessions,
             seconds,
+            jobs,
         } => native::run(
             &case,
             native::Options {
@@ -287,6 +291,7 @@ fn main() -> Result<()> {
                 output: output.unwrap_or(harness::artifacts().join("native")),
                 sessions,
                 seconds,
+                jobs,
             },
         ),
         Task::Load {

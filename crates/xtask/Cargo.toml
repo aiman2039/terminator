@@ -16,6 +16,7 @@ rustix.workspace = true
 tempfile = "3"
 clap = { version = "4", features = ["derive", "env"] }
 glob = "0.3"
+rayon = "1"
 fs2 = "0.4"
 semver = "1"
 sha2 = "0.10"

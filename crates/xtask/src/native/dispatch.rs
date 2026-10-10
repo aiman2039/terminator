@@ -4,6 +4,7 @@ use super::cases_editor::{cleanup, editor_lifecycle, file_close, focus_close, in
 use super::cases_gui::{browser, control, external, images, terminal_actions};
 use super::cases_startup::{smoke, split_file_opening, workspace_tabs};
 use anyhow::{Context, Result, anyhow, ensure};
+use rayon::prelude::*;
 use serde_json::{Value, json};
 use std::{fs, path::PathBuf, process::Child, time::Duration};
 #[derive(Clone)]
@@ -13,6 +14,7 @@ pub struct Options {
     pub output: PathBuf,
     pub sessions: usize,
     pub seconds: u64,
+    pub jobs: usize,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -22,6 +24,7 @@ impl Default for Options {
             output: artifacts().join("native"),
             sessions: 50,
             seconds: 5,
+            jobs: 5,
         }
     }
 }
@@ -115,6 +118,10 @@ pub(crate) fn setup(name: &str) -> Result<(Harness, Value, Vec<Value>, PathBuf)>
 }
 pub fn run(case: &str, opts: Options) -> Result<()> {
     ensure!(
+        (1..=16).contains(&opts.jobs),
+        "GUI jobs must be between 1 and 16"
+    );
+    ensure!(
         !cfg!(target_os = "macos")
             || !matches!(case, "window-controls" | "float-window")
             || crate::harness::fixture_visible(),
@@ -161,109 +168,142 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
     } else {
         vec![case]
     };
-    for case in cases {
-        let mut opts = opts.clone();
-        opts.output = opts.output.join(case);
-        println!("Running native {case}");
-        match case {
-            "smoke" => smoke(&opts)?,
-            "codex-live" => super::codex::run(&opts)?,
-            "launch" => super::launch::run(&opts)?,
-            "folder-access" => super::folder_access::run(&opts)?,
-            "idle-close" => super::idle_close::run(&opts)?,
-            "scrolling" => scrolling(&opts)?,
-            "agent-wheel" => agent_wheel(&opts)?,
-            "agent-wheel-legacy" => agent_wheel_legacy(&opts)?,
-            "agent-wheel-live" => agent_wheel_live(&opts)?,
-            "control" => control(&opts)?,
-            "workspace-tabs" => workspace_tabs(&opts)?,
-            "split-file-opening" => split_file_opening(&opts)?,
-            "float-window" => super::float::run(&opts)?,
-            "markdown" => super::markdown::run(&opts)?,
-            "markdown-busy" => super::markdown::busy(&opts)?,
-            "updates" => super::updates::run(&opts)?,
-            "installation" => super::installation::run(&opts)?,
-            "generations" => super::generations::run(&opts)?,
-            "project-sidebar" => super::projects::run(&opts)?,
-            "agent-sidebar" => super::agents::run(&opts)?,
-            "pane-close" => {
-                let (h, _, originals, _) = setup("pane-close")?;
-                let first = originals.first().ok_or_else(|| anyhow!("missing pane"))?;
-                let target = format!("pane-close:{}", id(first));
-                plain(
-                    &h,
-                    &opts,
-                    "confirmation",
-                    json!([
-                        {"at_ms":1100,"target":target}
-                    ]),
-                    2500,
-                )?;
-                h.assert_pids(&originals)?;
-                plain(
-                    &h,
-                    &opts,
-                    "backgrounded",
-                    json!([
-                        {"at_ms":1100,"target":target},
-                        {"at_ms":1800,"target":"close-session-keep"}
-                    ]),
-                    3000,
-                )?;
-                let state = h.state()?;
-                let remaining = session_ids(
-                    state
-                        .get("projects")
-                        .and_then(|projects| projects.get(0))
-                        .and_then(|project| project.get("layout"))
-                        .ok_or_else(|| anyhow!("missing projects[0].layout"))?,
-                );
-                ensure!(
-                    remaining.len() == originals.len().saturating_sub(1)
-                        && !remaining.contains(&id(first).to_owned()),
-                    "Pane close removed the wrong session"
-                );
-                h.assert_pids(&originals)?;
-            }
-            "popup" => {
-                let (h, _, originals, _) = setup("popup")?;
-                plain(
-                    &h,
-                    &opts,
-                    "shell-close-dialog",
-                    json!([
-                        {"at_ms":1100,"target":"workspace-close:Terminal 1"}
-                    ]),
-                    3000,
-                )?;
-                h.assert_pids(&originals)?;
-            }
-            "inline-rename" => inline_rename(&opts)?,
-            "editor-lifecycle" => editor_lifecycle(&opts)?,
-            "file-close" => file_close(&opts)?,
-            "focus-editor-close" => focus_close(&opts)?,
-            "ui-cleanup" => cleanup(&opts)?,
-            "external-editor" => external(&opts)?,
-            "images" => images(&opts)?,
-            "responsiveness" => super::responsiveness::run(&opts)?,
-            "browser" => browser(&opts)?,
-            "terminal-actions" | "ui-flat" | "ui-plan3" => terminal_actions(&opts)?,
-            "reviews" => super::reviews::run(&opts)?,
-            "legacy-diff" => super::reviews::legacy(&opts)?,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
-            "window-controls" => super::windows::run(&opts)?,
-            #[cfg(windows)]
-            "window-controls" => {
-                anyhow::bail!("window-controls needs a macOS or X11 desktop driver")
-            }
-            "renderer-perf" => super::renderer_perf::run(&opts)?,
-            "hover-menu" => super::hover_menu::run(&opts)?,
-            _ => anyhow::bail!("Unknown native fixture: {case}"),
+    ensure!(
+        cases.len() == 1 || !crate::harness::fixture_visible() || opts.jobs == 1,
+        "Visible GUI suites require --jobs 1; parallel workers require quiet fixtures"
+    );
+    let workers = opts.jobs.min(cases.len());
+    println!("Running {} GUI cases with {workers} worker(s)", cases.len());
+    let results = if workers == 1 {
+        // Keep native desktop APIs on the calling thread for serial runs.
+        cases
+            .iter()
+            .map(|case| (case, run_case(case, opts.clone())))
+            .collect::<Vec<_>>()
+    } else {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()?
+            .install(|| {
+                cases
+                    .par_iter()
+                    .map(|case| (case, run_case(case, opts.clone())))
+                    .collect::<Vec<_>>()
+            })
+    };
+    let failures = results
+        .into_iter()
+        .filter_map(|(case, result)| result.err().map(|error| format!("{case}: {error:#}")))
+        .collect::<Vec<_>>();
+    ensure!(
+        failures.is_empty(),
+        "GUI failures:\n{}",
+        failures.join("\n")
+    );
+    Ok(())
+}
+
+fn run_case(case: &str, mut opts: Options) -> Result<()> {
+    opts.output = opts.output.join(case);
+    println!("Running native {case}");
+    match case {
+        "smoke" => smoke(&opts)?,
+        "codex-live" => super::codex::run(&opts)?,
+        "launch" => super::launch::run(&opts)?,
+        "folder-access" => super::folder_access::run(&opts)?,
+        "idle-close" => super::idle_close::run(&opts)?,
+        "scrolling" => scrolling(&opts)?,
+        "agent-wheel" => agent_wheel(&opts)?,
+        "agent-wheel-legacy" => agent_wheel_legacy(&opts)?,
+        "agent-wheel-live" => agent_wheel_live(&opts)?,
+        "control" => control(&opts)?,
+        "workspace-tabs" => workspace_tabs(&opts)?,
+        "split-file-opening" => split_file_opening(&opts)?,
+        "float-window" => super::float::run(&opts)?,
+        "markdown" => super::markdown::run(&opts)?,
+        "markdown-busy" => super::markdown::busy(&opts)?,
+        "updates" => super::updates::run(&opts)?,
+        "installation" => super::installation::run(&opts)?,
+        "generations" => super::generations::run(&opts)?,
+        "project-sidebar" => super::projects::run(&opts)?,
+        "agent-sidebar" => super::agents::run(&opts)?,
+        "pane-close" => {
+            let (h, _, originals, _) = setup("pane-close")?;
+            let first = originals.first().ok_or_else(|| anyhow!("missing pane"))?;
+            let target = format!("pane-close:{}", id(first));
+            plain(
+                &h,
+                &opts,
+                "confirmation",
+                json!([
+                    {"at_ms":1100,"target":target}
+                ]),
+                2500,
+            )?;
+            h.assert_pids(&originals)?;
+            plain(
+                &h,
+                &opts,
+                "backgrounded",
+                json!([
+                    {"at_ms":1100,"target":target},
+                    {"at_ms":1800,"target":"close-session-keep"}
+                ]),
+                3000,
+            )?;
+            let state = h.state()?;
+            let remaining = session_ids(
+                state
+                    .get("projects")
+                    .and_then(|projects| projects.get(0))
+                    .and_then(|project| project.get("layout"))
+                    .ok_or_else(|| anyhow!("missing projects[0].layout"))?,
+            );
+            ensure!(
+                remaining.len() == originals.len().saturating_sub(1)
+                    && !remaining.contains(&id(first).to_owned()),
+                "Pane close removed the wrong session"
+            );
+            h.assert_pids(&originals)?;
         }
-        println!(
-            "{}",
-            json!({"fixture":case,"passed":true,"scale":opts.scale,"narrow":opts.narrow,"captures":opts.output})
-        );
+        "popup" => {
+            let (h, _, originals, _) = setup("popup")?;
+            plain(
+                &h,
+                &opts,
+                "shell-close-dialog",
+                json!([
+                    {"at_ms":1100,"target":"workspace-close:Terminal 1"}
+                ]),
+                3000,
+            )?;
+            h.assert_pids(&originals)?;
+        }
+        "inline-rename" => inline_rename(&opts)?,
+        "editor-lifecycle" => editor_lifecycle(&opts)?,
+        "file-close" => file_close(&opts)?,
+        "focus-editor-close" => focus_close(&opts)?,
+        "ui-cleanup" => cleanup(&opts)?,
+        "external-editor" => external(&opts)?,
+        "images" => images(&opts)?,
+        "responsiveness" => super::responsiveness::run(&opts)?,
+        "browser" => browser(&opts)?,
+        "terminal-actions" | "ui-flat" | "ui-plan3" => terminal_actions(&opts)?,
+        "reviews" => super::reviews::run(&opts)?,
+        "legacy-diff" => super::reviews::legacy(&opts)?,
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        "window-controls" => super::windows::run(&opts)?,
+        #[cfg(windows)]
+        "window-controls" => {
+            anyhow::bail!("window-controls needs a macOS or X11 desktop driver")
+        }
+        "renderer-perf" => super::renderer_perf::run(&opts)?,
+        "hover-menu" => super::hover_menu::run(&opts)?,
+        _ => anyhow::bail!("Unknown native fixture: {case}"),
     }
+    println!(
+        "{}",
+        json!({"fixture":case,"passed":true,"scale":opts.scale,"narrow":opts.narrow,"captures":opts.output})
+    );
     Ok(())
 }

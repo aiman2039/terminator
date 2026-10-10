@@ -248,14 +248,20 @@ validation directory; earlier committed screenshots are not overwritten.
 
 GUI fixtures default to Glow and quiet background windows. Run
 `cargo xtask gui smoke --sessions 6 --seconds 3` or `cargo xtask gui all` without
-extra renderer flags. The launcher keeps scripted capture windows inactive,
+extra renderer flags. `gui all` runs five cases in parallel by default;
+`--jobs N` selects 1–16 workers, and `--jobs 1` runs serially. Each case owns
+its daemon, temporary state, and capture directory. All case failures are
+collected before the command fails. The launcher keeps scripted capture windows inactive,
 below ordinary windows, and mouse-transparent. The regular application's
 renderer selection is independent of these fixture defaults.
+On macOS, quiet fixtures use accessory-app activation, disable activation on
+launch, and ignore later focus/attention requests so they do not switch Spaces.
 
 macOS `window-controls` and `float-window` require
 `TERMINATOR_FIXTURE_VISIBLE=1` on a VM or dedicated desktop. Explicit Metal
 checks also require visible mode:
 `TERMINATOR_FIXTURE_VISIBLE=1 TERMINATOR_FIXTURE_RENDERER=wgpu cargo xtask gui smoke`.
+Visible multi-case suites require `--jobs 1`; native-input cases run alone.
 Quiet Metal fails before opening a fixture because occluded Metal surfaces do
 not deliver screenshots. Real-input Linux tests require an isolated
 Xvfb/Openbox display, Docker `--init`, and `TERMINATOR_X11_TEST=1`.

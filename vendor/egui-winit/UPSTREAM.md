@@ -2,6 +2,15 @@ Vendored egui-winit 0.36.1 from https://github.com/emilk/egui at
 4c1f2fae95475a40e524884ebb298bcb1714b08e (crates/egui-winit).
 MIT and Apache-2.0 licenses retained. Cargo.toml is the published crate manifest.
 
+## Quiet fixture activation (2026-10-10)
+
+With `test-support`, capture fixtures marked `TERMINATOR_TEST_BACKGROUND`
+ignore viewport Focus and RequestUserAttention commands. Application code
+still runs its logical focus transitions; native focus tests use an explicit
+visible desktop. Normal builds and visible fixtures retain upstream behavior.
+This prevents later focus requests from undoing the fixture's inactive window
+configuration and triggering a macOS Spaces switch.
+
 ## Shift+Tab / Shift+Enter keep their identity (2026-09-27)
 
 `apply_control_character` mapped any C0 `text_with_all_modifiers` byte back to
