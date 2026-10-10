@@ -54,6 +54,15 @@ jobs:
             --format=sarif --show-details \
             --policy=.github/scorecard-policy.yml \
             --output=repository-results.sarif
+          # Scorecard supplies automationDetails.id, which overrides the upload
+          # action's category. Keep each check group, replace the timestamped
+          # suffix, and separate release and repository reports.
+          for report in results repository-results; do
+            jq --arg group "$report" \
+              '.runs |= map(.automationDetails.id = ($group + "/" + (.automationDetails.id | split("/") | .[:-1] | join("/")) + "/"))' \
+              "$report.sarif" > "$report.normalized.sarif"
+            mv "$report.normalized.sarif" "$report.sarif"
+          done
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:

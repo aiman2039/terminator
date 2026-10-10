@@ -378,6 +378,155 @@ mod tests {
         let Response::State(before) = rpc(&paths, Request::Snapshot).unwrap() else {
             panic!()
         };
+        // An expired retry delay must reconnect the GUI bridge to the existing
+        // real PTY, even after more than three failures, without a Retry click.
+        {
+            let ctx = egui::Context::default();
+            let mut app = App::with_context(&ctx, paths.clone());
+            app.apply_state(*before.clone());
+            let mut retry = retry_budget::AttachmentRetry::default();
+            for _ in 0..8 {
+                retry.record_failure(Instant::now().checked_sub(Duration::from_mins(1)).unwrap());
+            }
+            app.attach_budget.insert(old.id.clone(), retry);
+            let paint = |app: &mut App| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        workspace_ui::Viewer {
+                            app,
+                            strip: false,
+                            project: Some(project.clone()),
+                            tab: None,
+                            window: None,
+                            render_path: None,
+                        }
+                        .terminal_view(ui, &old);
+                    },
+                );
+                output.textures_delta.clear();
+            };
+            paint(&mut app);
+            app.backends.get_mut(&old.id).unwrap().process_command(
+                egui_term::BackendCommand::Write(b"printf 'AUTO_%s\\n' HEALED\r".to_vec()),
+            );
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                app.process_updates(&ctx);
+                let text: String = app
+                    .backends
+                    .get_mut(&old.id)
+                    .expect("Bridge must remain attached")
+                    .sync()
+                    .grid
+                    .display_iter()
+                    .map(|cell| cell.c)
+                    .collect();
+                if text.contains("AUTO_HEALED") {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "Reattached PTY must return shell output"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(app.backends.contains_key(&old.id));
+            assert!(!app.attach_error.contains_key(&old.id));
+            // A failed bridge exit after a slow attachment still preserves
+            // backoff. The daemon and its shell remain alive throughout.
+            #[cfg(unix)]
+            let failed = {
+                use std::os::unix::process::ExitStatusExt;
+                std::process::ExitStatus::from_raw(256)
+            };
+            #[cfg(windows)]
+            let failed = {
+                use std::os::windows::process::ExitStatusExt;
+                std::process::ExitStatus::from_raw(1)
+            };
+            let first_bridge = app.backends[&old.id].id();
+            app.attach_started.insert(
+                old.id.clone(),
+                Instant::now().checked_sub(Duration::from_secs(5)).unwrap(),
+            );
+            app.pty_tx
+                .send((first_bridge, egui_term::PtyEvent::ChildExit(failed)))
+                .unwrap();
+            app.pty_tx
+                .send((first_bridge, egui_term::PtyEvent::Exit))
+                .unwrap();
+            app.process_updates(&ctx);
+            assert!(!app.backends.contains_key(&old.id));
+            assert!(
+                app.attach_budget[&old.id]
+                    .remaining(Instant::now())
+                    .unwrap()
+                    > Duration::from_secs(25)
+            );
+            assert!(app.attach_error[&old.id].contains("Terminal attachment failed"));
+            let next = app.next_backend;
+            paint(&mut app);
+            assert_eq!(
+                app.next_backend, next,
+                "A failed bridge must wait before respawning"
+            );
+            let mut expired = retry_budget::AttachmentRetry::default();
+            expired.record_failure(Instant::now().checked_sub(Duration::from_mins(1)).unwrap());
+            app.attach_budget.insert(old.id.clone(), expired);
+            paint(&mut app);
+            let second_bridge = app.backends[&old.id].id();
+            assert_ne!(first_bridge, second_bridge);
+            // Late exit events from the first bridge must not remove the new one.
+            app.pty_tx
+                .send((first_bridge, egui_term::PtyEvent::ChildExit(failed)))
+                .unwrap();
+            app.pty_tx
+                .send((first_bridge, egui_term::PtyEvent::Exit))
+                .unwrap();
+            app.process_updates(&ctx);
+            assert_eq!(app.backends[&old.id].id(), second_bridge);
+            // A stable attachment resets the delay and clears the old error.
+            app.attach_started.insert(
+                old.id.clone(),
+                Instant::now()
+                    .checked_sub(retry_budget::ATTACH_STABLE_WINDOW)
+                    .unwrap(),
+            );
+            paint(&mut app);
+            assert!(!app.attach_budget.contains_key(&old.id));
+            assert!(!app.attach_error.contains_key(&old.id));
+            app.pty_tx
+                .send((second_bridge, egui_term::PtyEvent::ChildExit(failed)))
+                .unwrap();
+            app.pty_tx
+                .send((second_bridge, egui_term::PtyEvent::Exit))
+                .unwrap();
+            app.process_updates(&ctx);
+            assert!(
+                app.attach_budget[&old.id]
+                    .remaining(Instant::now())
+                    .unwrap()
+                    <= Duration::from_secs(1)
+            );
+            let Response::State(attached) = rpc(&paths, Request::Snapshot).unwrap() else {
+                panic!()
+            };
+            assert_eq!(attached.sessions.len(), before.sessions.len());
+            let same = attached
+                .sessions
+                .iter()
+                .find(|session| session.id == old.id)
+                .unwrap();
+            assert_eq!(same.pid, old.pid);
+            assert!(same.lifecycle.live());
+        }
         let owner = before
             .generations
             .iter()

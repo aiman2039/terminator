@@ -29,42 +29,36 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
-      # Provisioning touches disjoint state (apt, winget, rustup), so the
-      # independent installs overlap. rust-cache stays after: it reads the
-      # repo and rustc version for its cache key.
-      - parallel:
-          - name: Install Linux build dependencies
-            if: runner.os == 'Linux'
-            run: |
-              sudo apt-get update
-              sudo apt-get install -y --no-install-recommends \
-                build-essential pkg-config libssl-dev libfontconfig1-dev \
-                libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev \
-                libgl1-mesa-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
-                libasound2-dev libwebkit2gtk-4.1-dev
-          # Editor and upgrade fixtures spawn Neovim; the image has none.
-          - name: Install Neovim (Windows)
-            if: runner.os == 'Windows'
-            run: winget install -e --id Neovim.Neovim --silent --accept-source-agreements --accept-package-agreements
-          - uses: dtolnay/rust-toolchain@stable
-            with:
-              toolchain: '1.97.1'
-              components: rustfmt, clippy
-          - uses: taiki-e/install-action@v2
-            with:
-              tool: cargo-nextest@0.9.140
+      # Windows parallel step setup contends on the runner's event.json.
+      # Keep these steps sequential, including composite-action substeps.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev libfontconfig1-dev \
+            libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev \
+            libgl1-mesa-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libasound2-dev libwebkit2gtk-4.1-dev
+      # Editor and upgrade fixtures spawn Neovim; the image has none.
+      - name: Install Neovim (Windows)
+        if: runner.os == 'Windows'
+        run: winget install -e --id Neovim.Neovim --silent --accept-source-agreements --accept-package-agreements
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.97.1'
+          components: rustfmt, clippy
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9.140
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-${{ matrix.os }}
           cache-bin: false
-      # rustfmt --check only reads sources, so it overlaps the check without
-      # contending on target/. The remaining Cargo steps share target/ and
-      # stay sequential.
-      - parallel:
-          - name: Formatting
-            run: sh scripts/check.sh fmt
-          - name: Compiler checks
-            run: sh scripts/check.sh lint
+      - name: Formatting
+        run: sh scripts/check.sh fmt
+      - name: Compiler checks
+        run: sh scripts/check.sh lint
       - name: Build
         run: sh scripts/check.sh build
       - name: Clippy

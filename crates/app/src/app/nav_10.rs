@@ -7,6 +7,128 @@ use super::nav_common::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn paint_attachment(
+        app: &mut App,
+        ctx: &egui::Context,
+        session: &Session,
+        events: Vec<egui::Event>,
+    ) -> Option<egui::Pos2> {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                workspace_ui::Viewer {
+                    app,
+                    strip: false,
+                    project: Some("a".into()),
+                    tab: None,
+                    window: None,
+                    render_path: None,
+                }
+                .terminal_view(ui, session);
+            },
+        );
+        let retry = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Retry now" => {
+                Some(egui::Rect::from_min_size(text.pos, text.galley.size()).center())
+            }
+            _ => None,
+        });
+        output.textures_delta.clear();
+        retry
+    }
+
+    #[test]
+    fn retry_now_bypasses_the_delay_without_creating_a_session() {
+        let (mut app, ctx, _dir) = fixture();
+        let session = session_fixture("manual-retry", SessionKind::Shell);
+        app.state.sessions.push(session.clone());
+        let mut retry = retry_budget::AttachmentRetry::default();
+        for _ in 0..8 {
+            retry.record_failure(std::time::Instant::now());
+        }
+        app.attach_budget.insert(session.id.clone(), retry);
+        app.attach_error
+            .insert(session.id.clone(), "Temporary failure".into());
+        app.attach_started
+            .insert(session.id.clone(), std::time::Instant::now());
+        let backend = app.next_backend;
+        let pos = paint_attachment(&mut app, &ctx, &session, vec![]).expect("Retry button");
+        paint_attachment(
+            &mut app,
+            &ctx,
+            &session,
+            vec![egui::Event::PointerMoved(pos)],
+        );
+        for pressed in [true, false] {
+            paint_attachment(
+                &mut app,
+                &ctx,
+                &session,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            );
+        }
+        assert!(!app.attach_budget.contains_key(&session.id));
+        assert!(!app.attach_error.contains_key(&session.id));
+        assert!(!app.attach_started.contains_key(&session.id));
+        assert_eq!(app.next_backend, backend);
+        assert_eq!(app.state.sessions.len(), 1);
+        assert_eq!(app.state.sessions[0].id, session.id);
+    }
+    #[test]
+    fn terminal_retries_after_cooldown_without_a_click_or_new_session() {
+        let (mut app, ctx, dir) = fixture();
+        let session = session_fixture("retry-original-session", SessionKind::Shell);
+        app.state.sessions.push(session.clone());
+        // A missing executable makes spawning fail deterministically, without
+        // accessing a real daemon or starting a shell.
+        app.state.capabilities.push(STABLE_HELPER_CAPABILITY.into());
+        app.state.attachment_helper_available = Some(true);
+        app.state.attachment_helper_executable = Some(dir.path().join("missing-helper"));
+        let mut retry = retry_budget::AttachmentRetry::default();
+        retry.record_failure(std::time::Instant::now());
+        app.attach_budget.insert(session.id.clone(), retry);
+        let before = app.next_backend;
+        let paint = |app: &mut App| {
+            paint_attachment(app, &ctx, &session, vec![]);
+        };
+        paint(&mut app);
+        assert_eq!(app.next_backend, before, "No spawn during cooldown");
+        let mut expired = retry_budget::AttachmentRetry::default();
+        for _ in 0..8 {
+            expired.record_failure(
+                std::time::Instant::now()
+                    .checked_sub(std::time::Duration::from_mins(1))
+                    .unwrap(),
+            );
+        }
+        app.attach_budget.insert(session.id.clone(), expired);
+        paint(&mut app);
+        assert_eq!(app.next_backend, before + 1, "Retry without a user click");
+        assert!(app.attach_error[&session.id].starts_with("Cannot attach terminal:"));
+        paint(&mut app);
+        assert_eq!(
+            app.next_backend,
+            before + 1,
+            "Failed spawn starts a new cooldown"
+        );
+        assert_eq!(app.state.sessions.len(), 1);
+        assert_eq!(app.state.sessions[0].id, session.id);
+        assert!(app.state.sessions[0].lifecycle.live());
+    }
+
     /// Info paints the focused session and host meters, and hides a block when
     /// its section or the SYSTEM toggle is closed. A sample for another pid
     /// does not fill THIS SESSION.
@@ -411,7 +533,7 @@ mod tests {
 
     #[test]
     fn unavailable_owner_keeps_last_records_but_updates_health() {
-        let (mut app, _, directory) = fixture();
+        let (mut app, ctx, directory) = fixture();
         let mut state = app.state.clone();
         state.generation = "owner".into();
         state.revision = 20;
@@ -458,10 +580,18 @@ mod tests {
             .sessions
             .iter()
             .find(|s| s.id == "last-observed")
-            .unwrap();
-        let mut budget = retry_budget::RetryBudget::default();
+            .unwrap()
+            .clone();
+        let backend = app.next_backend;
+        paint_attachment(&mut app, &ctx, &session, vec![]);
+        assert_eq!(
+            app.next_backend, backend,
+            "An unavailable owner must not receive attachment attempts"
+        );
+        assert!(!app.backends.contains_key(&session.id));
+        let mut budget = retry_budget::AttachmentRetry::default();
         for _ in 0..retry_budget::MISSING_PATH_RETRY_LIMIT {
-            budget.record(&session.cwd, 0, true);
+            budget.record_failure(std::time::Instant::now());
         }
         app.attach_budget.insert(session.id.clone(), budget);
         app.attach_error

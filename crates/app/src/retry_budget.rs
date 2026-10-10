@@ -1,11 +1,34 @@
-//! Stop hammering a working directory that is gone.
+//! Bound retries for missing directories and pace terminal reattachment.
 use std::{
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub(crate) const MISSING_PATH_RETRY_LIMIT: u8 = 3;
 const ATTACH_FAILURE_WINDOW: Duration = Duration::from_secs(1);
+pub(crate) const ATTACH_STABLE_WINDOW: Duration = Duration::from_secs(10);
+
+/// Attachment failures never permanently disable a terminal. Each visible
+/// terminal retries independently, without restarting its daemon-owned shell.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct AttachmentRetry {
+    failures: u8,
+    retry_at: Option<Instant>,
+}
+
+impl AttachmentRetry {
+    pub(crate) fn record_failure(&mut self, now: Instant) {
+        let seconds = (1_u64 << self.failures.min(5)).min(30);
+        self.failures = self.failures.saturating_add(1);
+        self.retry_at = now.checked_add(Duration::from_secs(seconds));
+    }
+
+    pub(crate) fn remaining(&self, now: Instant) -> Option<Duration> {
+        self.retry_at
+            .and_then(|at| at.checked_duration_since(now))
+            .filter(|remaining| !remaining.is_zero())
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RetryBudget {
@@ -66,6 +89,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn attachment_retries_continue_after_three_failures_with_a_capped_delay() {
+        let mut retry = AttachmentRetry::default();
+        let mut now = Instant::now();
+        assert_eq!(retry.remaining(now), None);
+        for seconds in [1, 2, 4, 8, 16, 30, 30, 30] {
+            retry.record_failure(now);
+            let delay = Duration::from_secs(seconds);
+            assert_eq!(retry.remaining(now), Some(delay));
+            assert!(
+                retry
+                    .remaining((now + delay).checked_sub(Duration::from_nanos(1)).unwrap())
+                    .is_some()
+            );
+            now += delay;
+            assert_eq!(retry.remaining(now), None, "Retry needs no user action");
+        }
+        // Persistent failure cannot overflow the counter or increase the cap.
+        for _ in 0..300 {
+            retry.record_failure(now);
+        }
+        assert_eq!(retry.remaining(now), Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn attachment_failures_do_not_delay_other_terminals() {
+        let now = Instant::now();
+        let mut failed = AttachmentRetry::default();
+        failed.record_failure(now);
+        let healthy = AttachmentRetry::default();
+        assert!(failed.remaining(now).is_some());
+        assert!(healthy.remaining(now).is_none());
+    }
+
+    #[test]
     fn missing_path_stops_after_three_attempts_until_the_request_changes() {
         let gone = Path::new("/gone/worktree");
         let mut budget = RetryBudget::default();
@@ -93,17 +150,8 @@ mod tests {
     }
 
     #[test]
-    fn slow_failed_attachments_exhaust_the_retry_budget() {
-        let cwd = Path::new("/existing/worktree");
-        let mut budget = RetryBudget::default();
-        for _ in 0..MISSING_PATH_RETRY_LIMIT {
-            budget.record(
-                cwd,
-                0,
-                attach_exit_is_failure(Some(Duration::from_secs(5)), true),
-            );
-        }
-        assert!(budget.exhausted(cwd, 0));
+    fn slow_failed_attachments_still_count_as_failures() {
+        assert!(attach_exit_is_failure(Some(Duration::from_secs(5)), true));
     }
 
     #[test]

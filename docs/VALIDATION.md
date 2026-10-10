@@ -1,5 +1,30 @@
 # Validation evidence — 2026-09-08
 
+## Release CI failures in run 38077109878 (2026-10-10)
+
+The Windows checks job failed during parallel action setup because the runner
+could not open its shared `event.json`. The checks job now runs its steps
+sequentially. Scorecard supplied identical `automationDetails.id` values in
+both reports, overriding the upload action's distinct categories. Report IDs
+now retain their check group with a stable, distinct report prefix. Applying
+the workflow's normalization to the failed run's actual SARIF artifacts retains
+all 63 findings and produces five unique run IDs.
+
+The macOS clean-close fixture created two editors from two scheduled clicks.
+Those clicks cannot reliably stay within the double-click interval on a slow
+renderer. The native close fixture now opens once, checks that exactly one
+editor starts, and checks that no editor stays live after close. Rapid-repeat
+suppression remains covered by the focused app unit test, which also checks
+that a later click can open another editor.
+
+The rapid-repeat unit regression and isolated native file-close fixture pass
+locally on macOS. The native fixture covers clean close, Cancel, Save and close,
+Discard, unchanged shell PIDs, and preserved layout. Captures and logs are in
+`/tmp/terminator-ci-after-final/file-close`. Workflow validation passes with
+actionlint on temporary copies that flatten the remaining parallel groups.
+Formatting and whitespace checks pass.
+Hosted Windows setup and GitHub SARIF acceptance require a new Actions run.
+
 ## Five-worker quiet GUI execution and macOS Spaces (2026-10-10)
 
 Scripted GUI fixtures now default to five workers, scheduled through Rayon's
@@ -3988,3 +4013,38 @@ applies notification changes as snapshots, matching the production cache
 invalidation boundary rather than bypassing it with direct state writes.
 Native scrolling and before/after CPU with the changed binary have not been
 verified. The installed GUI and daemon were not replaced or restarted.
+
+## Automatic terminal attachment recovery (2026-10-10)
+
+Visible terminals now retry attachment after 1, 2, 4, 8, 16, then 30 seconds,
+without a permanent three-failure stop. A connection that remains open for
+10 seconds resets the delay. Retry now remains available. Helper lookup and
+spawn errors also use the delay. The GUI retains spawn errors and failed helper
+exit status. Attachment retries preserve the original session and never start
+a new shell. Existing process-death and owner-lock checks for daemon recovery
+remain in place; dead owners' sessions become interrupted.
+
+Validation: `cargo test -p terminator --lib --all-features --locked --offline`
+passed 648 tests, with four ignored, with local socket access. The sandbox run
+had 14 socket permission failures. Strict app all-target/all-feature Clippy,
+workspace binary build, formatting, and diff checks passed.
+
+New tests cover capped delays beyond three failures, independent terminal
+delays, and GUI retries without a click or a new session. The expanded ignored
+`dead_service_recovers_attachment_and_exit_checkpoint` test passed with isolated
+real daemon/PTY access: after eight simulated failures, the GUI bridge returned
+shell output through the original session, whose PID remained unchanged. It
+then verified dead-daemon replacement, interrupted old sessions, new attachment,
+and exit persistence. Native desktop rendering and affected users' installations
+were not tested. No installed app or live user daemon was replaced or restarted.
+
+Additional confidence checks passed for a real Retry now pointer click and no
+attachment attempts to an unavailable owner. The real daemon/PTY fixture also
+injects failed bridge exits after a slow connection, verifies the 30-second
+delay, reconnects with a new bridge, and checks that late exit events from the
+previous bridge cannot remove it. An injected 10-second connection age clears
+the delay and error; a subsequent failed exit starts at one second. Session ID,
+shell PID, and live session count remain unchanged across bridge failures.
+These time and exit-event injections test GUI handling deterministically;
+daemon startup, attachment transport, shell output, and daemon death recovery
+use real processes. Strict app Clippy passed again after these test additions.

@@ -710,6 +710,17 @@ impl App {
                 && !status.success()
             {
                 self.attach_failed.insert(id);
+                if let Some(session) = self.backend_ids.get(&id)
+                    && self
+                        .backends
+                        .get(session)
+                        .is_some_and(|backend| backend.id() == id)
+                {
+                    self.attach_error.insert(
+                        session.clone(),
+                        format!("Terminal attachment failed ({status})."),
+                    );
+                }
             }
             let failed = matches!(event, PtyEvent::Exit) && self.attach_failed.remove(&id);
             if let PtyEvent::Exit = event
@@ -719,20 +730,17 @@ impl App {
                 self.backends.remove(&session);
                 let started = self.attach_started.remove(&session);
                 if retry_budget::attach_exit_is_failure(started.map(|at| at.elapsed()), failed) {
-                    let cwd = self
-                        .state
-                        .sessions
-                        .iter()
-                        .find(|candidate| candidate.id == session)
-                        .map(|candidate| candidate.cwd.clone())
-                        .unwrap_or_default();
+                    if started.is_some_and(|at| at.elapsed() >= retry_budget::ATTACH_STABLE_WINDOW)
+                    {
+                        self.attach_budget.remove(&session);
+                    }
                     self.attach_budget
                         .entry(session.clone())
                         .or_default()
-                        .record(&cwd, 0, true);
-                    self.attach_error.entry(session).or_insert_with(|| {
-                        "Stopped retrying this terminal after repeated attachment failures. Check the session service, then retry.".into()
-                    });
+                        .record_failure(Instant::now());
+                    self.attach_error
+                        .entry(session)
+                        .or_insert_with(|| "Terminal attachment failed.".into());
                 } else {
                     self.attach_budget.remove(&session);
                     self.attach_error.remove(&session);

@@ -20,20 +20,37 @@ impl Viewer<'_> {
             self.app.start_service_button(ui, true);
             return;
         }
-        if !self.app.backends.contains_key(sid)
+        if self.app.backends.contains_key(sid)
             && self
+                .app
+                .attach_started
+                .get(sid)
+                .is_some_and(|started| started.elapsed() >= retry_budget::ATTACH_STABLE_WINDOW)
+        {
+            self.app.attach_budget.remove(sid);
+            self.app.attach_error.remove(sid);
+        }
+        if !self.app.backends.contains_key(sid)
+            && let Some(remaining) = self
                 .app
                 .attach_budget
                 .get(sid)
-                .is_some_and(|budget| budget.exhausted(&session.cwd, 0))
+                .and_then(|retry| retry.remaining(Instant::now()))
         {
-            let message = self.app.attach_error.get(sid).cloned().unwrap_or_else(|| {
-                "Stopped retrying this terminal after repeated attachment failures. Check the session service, then retry."
-                    .into()
-            });
+            let message = self
+                .app
+                .attach_error
+                .get(sid)
+                .cloned()
+                .unwrap_or_else(|| "Terminal connection closed.".into());
+            ui.ctx().request_repaint_after(remaining);
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(appearance::color(&self.app.theme.status_failed), message);
-                if ui.small_button("Retry").clicked() {
+                ui.label(format!(
+                    "Reconnecting automatically in {} s…",
+                    remaining.as_secs().saturating_add(1)
+                ));
+                if ui.small_button("Retry now").clicked() {
                     self.app.attach_budget.remove(sid);
                     self.app.attach_error.remove(sid);
                     self.app.attach_started.remove(sid);
@@ -60,7 +77,15 @@ impl Viewer<'_> {
             let helper = match helper_result {
                 Ok(p) => p,
                 Err(e) => {
-                    ui.label(e.to_string());
+                    let message = format!("Cannot load terminal helper: {e}");
+                    self.app
+                        .attach_budget
+                        .entry(sid.clone())
+                        .or_default()
+                        .record_failure(Instant::now());
+                    self.app.attach_error.insert(sid.clone(), message.clone());
+                    ui.label(message);
+                    ui.ctx().request_repaint_after(Duration::from_secs(1));
                     return;
                 }
             };
@@ -98,9 +123,10 @@ impl Viewer<'_> {
                         .attach_budget
                         .entry(sid.clone())
                         .or_default()
-                        .record(&session.cwd, 0, true);
+                        .record_failure(Instant::now());
                     self.app.attach_error.insert(sid.clone(), message.clone());
                     ui.colored_label(appearance::color(&self.app.theme.status_failed), message);
+                    ui.ctx().request_repaint_after(Duration::from_secs(1));
                     return;
                 }
             }

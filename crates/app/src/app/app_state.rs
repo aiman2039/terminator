@@ -113,7 +113,7 @@ pub struct App {
     pub(crate) backend_ids: HashMap<u64, String>,
     pub(crate) next_backend: u64,
     /// Failed attaches for a session, keyed by its working directory.
-    pub(crate) attach_budget: HashMap<String, retry_budget::RetryBudget>,
+    pub(crate) attach_budget: HashMap<String, retry_budget::AttachmentRetry>,
     pub(crate) attach_started: HashMap<String, Instant>,
     pub(crate) attach_failed: HashSet<u64>,
     pub(crate) attach_error: HashMap<String, String>,
