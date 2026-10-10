@@ -131,7 +131,12 @@ fn check_only_preserves_staged_unstaged_deleted_and_untracked_work() {
                 fs::read_to_string(source.join("Cargo.toml"))?
                     .contains("version = \"0.2.0\" # retain comment")
             );
-            assert_eq!(fs::read_to_string(source.join("tracked"))?, "unstaged\n");
+            // `git checkout-index` converts LF to CRLF on Windows
+            // (core.autocrlf), so compare line-ending-insensitively.
+            assert_eq!(
+                fs::read_to_string(source.join("tracked"))?.replace("\r\n", "\n"),
+                "unstaged\n"
+            );
             assert!(source.join("new").exists());
             assert!(!source.join("ignored").exists());
             assert!(!source.join("crates/sample/src/lib.rs").exists());
@@ -297,15 +302,17 @@ fn release_lock_is_exclusive_and_released_on_drop() {
     let fixture = Fixture::new();
     let lock = Lock::acquire(&fixture.root).unwrap();
     let path = fixture.root.join(".artifacts/release.lock");
-    let owner = fs::read(&path).unwrap();
     assert!(Lock::acquire(&fixture.root).is_err());
-    assert_eq!(
-        fs::read(&path).unwrap(),
-        owner,
-        "A contender changed the owner's lock file"
-    );
     drop(lock);
     assert!(path.is_file(), "The lock inode must remain in place");
+    // A second handle cannot read the byte range while the owner's exclusive
+    // lock is held on Windows (ERROR_LOCK_VIOLATION), so verify the owner's
+    // content only after releasing.
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        format!("pid={}\n", std::process::id()),
+        "A contender changed the owner's lock file"
+    );
     assert!(Lock::acquire(&fixture.root).is_ok());
 }
 

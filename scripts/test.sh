@@ -15,16 +15,15 @@ run() {
 
 run cargo test --workspace --all-features --locked
 # cargo test does not refresh target/debug binaries. xtask launches those.
-run cargo build --locked --bin terminator-daemon --bin terminator-hook
-run cargo xtask integration
-run cargo xtask idle-close
+run cargo build --workspace --bins --examples --all-features --locked
+run sh scripts/run-built-xtask.sh integration
+run sh scripts/run-built-xtask.sh idle-close
 
 if [ "$(uname -s)" != Darwin ] && [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
     echo "No display; native GUI fixtures need a desktop (or Xvfb/Weston)." >&2
     exit 1
 fi
 
-run cargo build --workspace --bins --examples --features terminator/test-support --locked
-run cargo xtask gui all
+run sh scripts/run-built-xtask.sh gui all
 
 echo "All tests passed."

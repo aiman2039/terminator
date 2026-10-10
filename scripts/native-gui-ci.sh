@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run one release-gating native fixture and keep its logs and screenshots.
 set -euo pipefail
+cd "$(dirname "$0")/.."
 
 case "${1:-}" in
     focus-editor-close|file-close) fixture_case="$1" ;;
@@ -21,10 +22,10 @@ run_fixture() {
                     manager_pid=$!
                     trap '\''kill "$manager_pid" 2>/dev/null || true'\'' EXIT
                     "$@"
-                ' _ cargo xtask gui "$fixture_case" --output "$artifact_dir"
+                ' _ sh scripts/run-built-xtask.sh gui "$fixture_case" --output "$artifact_dir"
             ;;
         Darwin)
-            cargo xtask gui "$fixture_case" --output "$artifact_dir"
+            sh scripts/run-built-xtask.sh gui "$fixture_case" --output "$artifact_dir"
             ;;
         *) echo "Native CI fixtures require macOS or Linux" >&2; return 2 ;;
     esac

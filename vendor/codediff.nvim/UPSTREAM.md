@@ -15,6 +15,12 @@ library and the Lua runtime into the daemon. No prebuilt binaries or runtime
 network installation are used. cc handles target/compiler selection; the supported
 native targets are macOS and Linux. Neovim itself is not bundled.
 
+The build script watches VERSION, the Lua/plugin runtime directories, and the
+native C/header inputs, including utf8proc_data.c. Documentation and upstream
+tests do not trigger a native rebuild. Runtime directories remain watched so
+new and removed assets update the embedded manifest. Generated version.h and
+review_assets.rs files are written only when their contents change.
+
 The app-owned daemon/src/review.lua profile uses the pinned internal
 codediff.commands.handlers.file_diff.run API to pass filenames literally. On
 upgrades, recheck this API, read-only enforcement after view creation/layout

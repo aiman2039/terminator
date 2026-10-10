@@ -121,10 +121,15 @@ mod tests {
         let marker =
             std::env::temp_dir().join(format!("terminator-sys-detach-{}", std::process::id()));
         let _ = std::fs::remove_file(&marker);
-        let mut command = Command::new("cmd");
+        // `cmd /c` misparses Rust-quoted redirection targets, so avoid the
+        // shell entirely: PowerShell takes the path as a real argument.
+        let mut command = Command::new("powershell.exe");
         command
-            .arg("/c")
-            .arg(format!("echo done > \"{}\"", marker.display()));
+            .args(["-NoProfile", "-NonInteractive", "-Command"])
+            .arg(format!(
+                "Set-Content -Path '{}' -Value done -NoNewline",
+                marker.display()
+            ));
         detach_session(&mut command);
         let mut direct = command.spawn().unwrap();
         direct.wait().unwrap();

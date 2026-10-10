@@ -1,5 +1,49 @@
 # Validation evidence — 2026-09-08
 
+## Packed versus unpacked GUI debug symbols — 2026-10-10
+
+A frozen source copy and separate fresh target directories built the full
+default-feature GUI with Rust 1.97.1 on macOS, debug=1 and incremental enabled.
+Only split-debuginfo differed. All 12 sequential builds passed. Cold builds took
+28.68 seconds unpacked and 32.00 seconds packed. Three small GUI-library edits
+took 3.87/1.93/1.80 seconds unpacked and 4.92/4.84/4.77 seconds packed. Final
+unchanged builds took 0.31/0.25 seconds and performed no compilation.
+
+Packed reduced final target files from 10,213 to 6,364 and debug/deps object
+files from 3,852 to zero. Allocated size, counting hard-linked inodes once,
+fell only from 3.167 to 3.041 GiB (about 4%). The extra edit time was mainly
+in the executable stage, which also packages debug symbols for packed builds.
+LLDB resolved GUI source breakpoints for both outputs. Separate panic fixtures
+retained function names and source lines in both modes.
+
+Recommendation: retain unpacked for development; the measured median small
+edit was 1.93 seconds unpacked versus 4.84 seconds packed. No profile setting
+was changed. Evidence and limitations are in
+`/private/tmp/terminator-packed-profile-20261010-231439/REPORT.md`, with raw
+results, logs, and Cargo timing reports alongside it. This is a local GUI-build
+comparison, not a Windows/Linux, native runtime, test-profile, or Developer
+Tools permission comparison. Cold cases ran once; other build activity and
+OS cache/security state can affect timings.
+
+## CodeDiff build invalidation — 2026-10-10
+
+An isolated fixture copied the daemon build script and vendored CodeDiff tree,
+then ran 15 Cargo build cases on macOS. Documentation and upstream test edits
+left all generated output timestamps unchanged (0.027 seconds, with no rebuild).
+Native source, header, included utf8proc data, VERSION, and Lua/plugin asset
+changes still triggered builds. Added and removed assets updated the manifest;
+unchanged version.h and review_assets.rs contents retained their timestamps.
+Invalid native source failed as expected, and the restored source built again.
+The final unchanged build took 0.028 seconds. Fixture cases and logs are under
+the path recorded in `/tmp/terminator-codediff-regression-root.txt`; the runner
+is `/tmp/terminator-codediff-build-regression.py`.
+
+The daemon build, daemon Clippy for all targets with warnings denied, isolated
+fixture Clippy with workspace lints, formatting, and whitespace checks pass.
+This fixture covers host build
+invalidation and generated files; it does not verify Windows/Linux execution
+or native Neovim behavior.
+
 ## Release CI failures in run 38077109878 (2026-10-10)
 
 The Windows checks job failed during parallel action setup because the runner

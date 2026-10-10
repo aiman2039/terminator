@@ -52,15 +52,46 @@ fn collect(
     Ok(())
 }
 
+fn write_if_changed(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    match fs::read(path) {
+        Ok(current) if current == contents => return Ok(()),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::write(path, contents)
+}
+
 fn run() -> Result<(), Box<dyn Error>> {
     let root = without_verbatim_prefix(Path::new("../../vendor/codediff.nvim").canonicalize()?);
-    println!("cargo:rerun-if-changed={}", root.display());
     let out = std::path::PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?);
     let source = root.join("libvscode-diff");
+    // Watch runtime directories so added and removed assets update the manifest.
+    for path in [
+        root.join("VERSION"),
+        root.join("lua"),
+        root.join("plugin"),
+        source.join("default_lines_diff_computer.c"),
+    ] {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+    // Include utf8proc_data.c and headers, but exclude documentation and tests.
+    let mut native_inputs = Vec::new();
+    for directory in ["src", "include", "vendor"] {
+        collect(&source, &source.join(directory), &mut native_inputs)?;
+    }
+    for (_, path) in native_inputs {
+        if matches!(
+            Path::new(&path).extension().and_then(|ext| ext.to_str()),
+            Some("c" | "h")
+        ) {
+            println!("cargo:rerun-if-changed={path}");
+        }
+    }
     let version = fs::read_to_string(root.join("VERSION"))?;
-    fs::write(
-        out.join("version.h"),
-        format!("#define VSCODE_DIFF_VERSION {:?}\n", version.trim()),
+    write_if_changed(
+        &out.join("version.h"),
+        format!("#define VSCODE_DIFF_VERSION {:?}\n", version.trim()).as_bytes(),
     )?;
     let target_os = env::var("CARGO_CFG_TARGET_OS")?;
     let ext = match target_os.as_str() {
@@ -159,7 +190,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         generated.push_str(&format!("({name:?}, include_bytes!({path:?})),\n"));
     }
     generated.push_str("];\n");
-    fs::write(out.join("review_assets.rs"), generated)?;
+    write_if_changed(&out.join("review_assets.rs"), generated.as_bytes())?;
     Ok(())
 }
 

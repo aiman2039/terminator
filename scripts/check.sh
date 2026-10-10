@@ -49,7 +49,8 @@ case "${1:-all}" in
         cargo deny check bans licenses sources
         ;;
     all)
-        for check in async-boundary fmt lint build clippy audit deny; do
+        # Clippy includes compilation checks; keep `lint` as a standalone command.
+        for check in async-boundary fmt build clippy audit deny; do
             sh "$0" "$check"
         done
         ;;

@@ -83,9 +83,9 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features --locked
 cargo build --workspace --bins --examples --features terminator/test-support --locked
-cargo xtask integration
-cargo xtask gui all
-cargo xtask gui ui-cleanup --output /tmp/terminator-ui-2x --scale 2
+sh scripts/run-built-xtask.sh integration
+sh scripts/run-built-xtask.sh gui all
+sh scripts/run-built-xtask.sh gui ui-cleanup --output /tmp/terminator-ui-2x --scale 2
 ```
 
 The `test-support` feature enables opt-in renderer capture and synthetic input only when the test environment requests them. Normal builds do not include that code. Tests use temporary directories and do not install hooks into your agent configurations.

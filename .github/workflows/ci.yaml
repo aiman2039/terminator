@@ -109,17 +109,17 @@ jobs:
           shared-key: e2e-${{ matrix.os }}
           cache-bin: false
       # cargo test does not refresh target/debug binaries. xtask launches those.
-      - name: Build sibling binaries
-        run: cargo build --locked --bin terminator-daemon --bin terminator-hook
+      - name: Build E2E binaries together
+        run: cargo build --locked -p terminator-daemon -p terminator-hook -p xtask --bins
       # Real PTYs, auth, hooks, reconnect, worktrees, shutdown, history, and snapshots.
       - name: Integration (real daemon)
         env:
           TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-e2e-state
-        run: cargo xtask integration
+        run: sh scripts/run-built-xtask.sh integration
       - name: Idle close (real shells)
         env:
           TERMINATOR_DATA_DIR: ${{ runner.temp }}/terminator-ci-e2e-state
-        run: cargo xtask idle-close
+        run: sh scripts/run-built-xtask.sh idle-close
 
   native-gui:
     name: Native GUI (${{ matrix.os }})

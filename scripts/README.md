@@ -118,9 +118,10 @@ and local bare remotes; they do not publish releases.
 
 ## Quality checks
 
-Run `sh scripts/check.sh` for formatting, compiler checks (`lint`), build,
+Run `sh scripts/check.sh` for the async-boundary check, formatting, build,
 Clippy with warnings denied, `cargo audit`, and `cargo deny` (bans, licenses,
-sources). Run `sh scripts/check.sh test` for workspace tests. Individual checks
+sources). Clippy includes compiler checks, so the full sequence skips the
+separate `lint` pass. Run `sh scripts/check.sh test` for workspace tests. Individual checks
 accept `fmt`, `lint`, `build`, `clippy`, `audit`, or `deny`. `windows-check`
 and `windows-clippy` cross-check `x86_64-pc-windows-msvc` from macOS/Linux via
 zig 0.14.x (`TERMINATOR_ZIG` when not on PATH; check-only, linking stays on
@@ -141,6 +142,14 @@ fixtures must pass on macOS and Linux before release builds. The CI wrapper
 `$RUNNER_TEMP/terminator-native-gui`; CI uploads them even on failure. Linux uses
 Xvfb and Openbox, and both runners explicitly select Glow. Local checks, CI, and releases use Rust 1.97.1, pinned locally by
 `rust-toolchain.toml` with rustfmt and Clippy.
+
+`sh scripts/test.sh` runs workspace tests, builds all fixture binaries and
+examples together with all features, then runs the built `xtask` for integration,
+idle-close, and native GUI fixtures. CI also builds each fixture group together.
+`sh scripts/run-built-xtask.sh TASK` runs the existing debug executable without
+another Cargo build; it honors `CARGO_TARGET_DIR` and fails if the executable is
+missing. The native CI wrapper uses this runner after its test-support build.
+`cargo xtask TASK` remains available for manual use and builds xtask as needed.
 
 ## Renderer comparison
 
