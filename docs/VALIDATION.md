@@ -1,5 +1,57 @@
 # Validation evidence — 2026-09-08
 
+## Developer Tools build recheck — 2026-10-10
+
+After the reported Developer Tools grants, the original workspace/default
+feature build at version 0.107.0 in the existing repository cache took 143.76 seconds, compiling
+only the GUI. Cargo recorded 132.37 seconds in its library frontend and 10.17
+seconds in the executable stage; total user/system CPU time was 11.91 seconds.
+During that run, rustc showed about 2.1% CPU and syspolicyd about 116.5% CPU.
+The next unchanged build took 0.66 seconds. A timestamp-only recheck of the
+updater and GUI then took 29.96 seconds, followed by an unchanged build at
+0.30 seconds. Source contents were not changed; timestamps were restored only
+after confirming the files still matched their original hashes.
+The version was subsequently bumped to 0.108.0 by separate release work;
+these measurements do not cover that new package identity.
+
+The earlier 223.14-second build also compiled the updater, so it is not a
+matched before/after permission benchmark. The new measurements still show
+a long mostly idle compiler phase; the permission change has not been proven
+to remove the macOS policy delay. Logs and results are under
+`/private/tmp/terminator-developer-tools-20261010-234438`.
+
+## Grouped fixture builds and direct xtask execution — 2026-10-10
+
+The local test script now builds workspace binaries/examples together with all
+features after unit tests, then runs the existing xtask executable. CI E2E
+builds daemon, hook, and xtask together; the E2E and native GUI wrappers use
+the same direct runner. The runner preserves argument boundaries and the
+fixture binary override, honors relative/absolute CARGO_TARGET_DIR paths, and
+fails if xtask is missing. It does not invoke Cargo.
+
+Shell syntax, ShellCheck, whitespace, and workflow YAML/command checks pass.
+Eighteen isolated shell fixture cases passed on macOS with mock tools: default
+and custom target paths with spaces, executable suffix fallback, missing binary,
+argument forwarding, macOS/Linux wrapper paths, failure propagation through
+tee, Linux window-manager cleanup, one grouped build, headless behavior, and
+unit/build/fixture failure boundaries. Evidence is under the path recorded in
+`/tmp/terminator-built-xtask-regression-root.txt`; the test runner is
+`/tmp/terminator-built-xtask-regression.py`.
+
+Both grouped build commands passed in the previous isolated Rust source
+snapshot. The current shell runners were copied there for real fixture checks.
+Real-daemon integration passed, as did idle-close for zsh, bash, sh refusal, and
+the zsh prompt framework; fish was not installed. The macOS native file-close
+fixture passed through the updated CI wrapper, with captures under
+`/private/tmp/terminator-built-xtask-native/terminator-native-gui/file-close`.
+Logs are `/tmp/terminator-built-xtask-integration.log`,
+`/tmp/terminator-built-xtask-idle-close.log`, and
+`/tmp/terminator-built-xtask-native-file-close.log`. The real fixtures required
+execution outside the sandbox because it blocked daemon IPC startup.
+
+The full Rust unit/native suite and hosted CI were not rerun. Linux wrapper
+control flow was simulated; this is not a Linux desktop run.
+
 ## Packed versus unpacked GUI debug symbols — 2026-10-10
 
 A frozen source copy and separate fresh target directories built the full
