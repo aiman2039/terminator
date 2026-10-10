@@ -31,6 +31,19 @@ jobs:
           persist-credentials: false
       # Windows parallel step setup contends on the runner's event.json.
       # Keep these steps sequential, including composite-action substeps.
+      - name: Prepare apt cache directory
+        if: runner.os == 'Linux'
+        run: |
+          sudo mkdir -p /var/cache/apt/archives
+          sudo chown -R "$(id -u):$(id -g)" /var/cache/apt/archives
+      - name: Restore apt package cache
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-checks-${{ matrix.os }}-${{ hashFiles('.github/workflows/ci.yaml') }}
+          restore-keys: |
+            apt-checks-${{ matrix.os }}-
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
@@ -41,9 +54,12 @@ jobs:
             libgl1-mesa-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
             libasound2-dev libwebkit2gtk-4.1-dev
       # Editor and upgrade fixtures spawn Neovim; the image has none.
-      - name: Install Neovim (Windows)
+      # Pinned download like the native-gui job, not a floating winget install.
+      - uses: rhysd/action-setup-vim@v1
         if: runner.os == 'Windows'
-        run: winget install -e --id Neovim.Neovim --silent --accept-source-agreements --accept-package-agreements
+        with:
+          neovim: true
+          version: v0.11.6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.97.1'
@@ -53,14 +69,17 @@ jobs:
           tool: cargo-nextest@0.9.140
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ci-${{ matrix.os }}
+          # Shared with the e2e and native-gui jobs: same OS, same dev
+          # profile, so dependency artifacts are reused across jobs.
+          shared-key: dev-${{ matrix.os }}
           cache-bin: false
       - name: Formatting
         run: sh scripts/check.sh fmt
       - name: Compiler checks
         run: sh scripts/check.sh lint
-      - name: Build
-        run: sh scripts/check.sh build
+      # No separate build step: clippy compiles every target with
+      # --all-targets --all-features, and the test runner rebuilds
+      # what it needs, so a plain build only recompiles everything.
       - name: Clippy
         run: sh scripts/check.sh clippy
       - name: Tests
@@ -90,6 +109,19 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Prepare apt cache directory
+        if: runner.os == 'Linux'
+        run: |
+          sudo mkdir -p /var/cache/apt/archives
+          sudo chown -R "$(id -u):$(id -g)" /var/cache/apt/archives
+      - name: Restore apt package cache
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-e2e-${{ matrix.os }}-${{ hashFiles('.github/workflows/ci.yaml') }}
+          restore-keys: |
+            apt-e2e-${{ matrix.os }}-
       # apt and rustup touch disjoint state, so they overlap.
       - parallel:
           - name: Install Linux build dependencies
@@ -106,7 +138,8 @@ jobs:
               toolchain: '1.97.1'
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: e2e-${{ matrix.os }}
+          # Shared with the checks and native-gui jobs (same dev profile).
+          shared-key: dev-${{ matrix.os }}
           cache-bin: false
       # cargo test does not refresh target/debug binaries. xtask launches those.
       - name: Build E2E binaries together
@@ -140,6 +173,19 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Prepare apt cache directory
+        if: runner.os == 'Linux'
+        run: |
+          sudo mkdir -p /var/cache/apt/archives
+          sudo chown -R "$(id -u):$(id -g)" /var/cache/apt/archives
+      - name: Restore apt package cache
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-native-gui-${{ matrix.os }}-${{ hashFiles('.github/workflows/ci.yaml') }}
+          restore-keys: |
+            apt-native-gui-${{ matrix.os }}-
       - name: Install Linux native GUI dependencies
         if: runner.os == 'Linux'
         run: |
@@ -158,7 +204,8 @@ jobs:
           version: v0.11.6
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: native-gui-${{ matrix.os }}
+          # Shared with the checks and e2e jobs (same dev profile).
+          shared-key: dev-${{ matrix.os }}
           cache-bin: false
       - name: Build native fixture binaries
         id: native_build
@@ -195,6 +242,17 @@ jobs:
           persist-credentials: false
       # apt and rustup touch disjoint state, so they overlap. The
       # cargo-llvm-cov installer stays after: it probes the toolchain.
+      - name: Prepare apt cache directory
+        run: |
+          sudo mkdir -p /var/cache/apt/archives
+          sudo chown -R "$(id -u):$(id -g)" /var/cache/apt/archives
+      - name: Restore apt package cache
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-coverage-${{ hashFiles('.github/workflows/ci.yaml') }}
+          restore-keys: |
+            apt-coverage-
       - parallel:
           - name: Install Linux build dependencies
             run: |

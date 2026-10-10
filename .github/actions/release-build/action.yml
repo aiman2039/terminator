@@ -16,6 +16,20 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Prepare apt cache directory
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo mkdir -p /var/cache/apt/archives
+        sudo chown -R "$(id -u):$(id -g)" /var/cache/apt/archives
+    - name: Restore apt package cache
+      if: runner.os == 'Linux'
+      uses: actions/cache@v4
+      with:
+        path: /var/cache/apt/archives
+        key: apt-release-${{ inputs.runner-label }}-${{ hashFiles('.github/actions/release-build/action.yml') }}
+        restore-keys: |
+          apt-release-${{ inputs.runner-label }}-
     - name: Install Linux build dependencies
       if: runner.os == 'Linux'
       shell: bash
@@ -74,7 +88,8 @@ runs:
         elif [[ "$RUNNER_OS" == Windows ]]; then
           mv "$package/terminator-windows.zip" "$artifacts/$asset.zip"
           mkdir -p "$package/verify"
-          tar -xf "$artifacts/$asset.zip" -C "$package/verify"
+          # Git Bash tar reads `D:...` as a remote host; force local paths.
+          tar --force-local -xf "$artifacts/$asset.zip" -C "$package/verify"
           for binary in terminator terminator-daemon terminator-hook; do
             path="$package/verify/terminator/$binary.exe"
             test -f "$path"

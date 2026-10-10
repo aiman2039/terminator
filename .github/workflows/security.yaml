@@ -29,16 +29,11 @@ jobs:
         run: cargo audit
 
   cargo-deny:
-    name: cargo-deny (${{ matrix.checks }})
+    name: cargo-deny
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        checks:
-          - advisories
-          - bans licenses sources
-    # Stays sequential: the deny action scans the checked-out repo.
+    # One invocation checks everything: separate matrix jobs only
+    # duplicated the checkout and action setup for the same lockfile.
     steps:
       - uses: actions/checkout@v6
         with:
@@ -46,7 +41,7 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
-          command-arguments: ${{ matrix.checks }}
+          command-arguments: advisories bans licenses sources
 
   osv-scheduled:
     name: OSV-Scanner
