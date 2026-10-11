@@ -88,8 +88,8 @@ runs:
         elif [[ "$RUNNER_OS" == Windows ]]; then
           mv "$package/terminator-windows.zip" "$artifacts/$asset.zip"
           mkdir -p "$package/verify"
-          # Git Bash tar reads `D:...` as a remote host; force local paths.
-          tar --force-local -xf "$artifacts/$asset.zip" -C "$package/verify"
+          # Windows tar supports ZIP; Git Bash's GNU tar does not.
+          "$WINDIR/System32/tar.exe" -xf "$artifacts/$asset.zip" -C "$package/verify"
           for binary in terminator terminator-daemon terminator-hook; do
             path="$package/verify/terminator/$binary.exe"
             test -f "$path"

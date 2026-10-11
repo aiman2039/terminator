@@ -1,5 +1,20 @@
 # Validation evidence — 2026-09-08
 
+## Windows release ZIP verification — 2026-10-11
+
+Release run `38110971207`, Windows job `114387440022`, built the package
+successfully, then failed during extraction with `tar: This does not look like
+a tar archive`. Git Bash selected GNU tar, which cannot extract ZIP archives.
+The release action now selects `$WINDIR/System32/tar.exe` explicitly and drops
+the GNU-only `--force-local` option.
+
+The exact archive-inspection script passed Bash syntax and ShellCheck checks.
+Its Windows branch passed locally with macOS bsdtar standing in for Windows
+tar, including paths with spaces and byte-for-byte extracted-file checks.
+Missing executable, empty executable, missing README, and corrupt ZIP cases
+all failed as required. This does not verify Windows execution; a new hosted
+Windows build is still required. No release workflow was started.
+
 ## Developer Tools build recheck — 2026-10-10
 
 After the reported Developer Tools grants, the original workspace/default
