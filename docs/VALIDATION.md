@@ -4144,3 +4144,17 @@ shell PID, and live session count remain unchanged across bridge failures.
 These time and exit-event injections test GUI handling deterministically;
 daemon startup, attachment transport, shell output, and daemon death recovery
 use real processes. Strict app Clippy passed again after these test additions.
+
+## Windows package metadata timeout (2026-10-11)
+
+GitHub Actions run 38090067722, job 114327082718, completed the Windows release
+build but failed during packaging with `Command timed out after 20s`. The
+Windows packaging path uses the 20-second fixture helper for `cargo metadata`
+to collect dependency licenses. That call now has a separate five-minute
+limit and error context. The dependency graph, license collection, output
+limit, and fixture command deadlines are unchanged.
+
+Local macOS validation: all 63 xtask tests passed with
+`cargo test -p xtask --locked --offline`. Strict xtask Clippy, formatting,
+and diff checks passed.
+The Windows package and hosted job have not been rerun.

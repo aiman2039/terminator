@@ -68,7 +68,19 @@ fn licenses(destination: &Path) -> Result<()> {
     let mut cmd = Command::new("cargo");
     cmd.current_dir(root())
         .args(["metadata", "--format-version", "1", "--locked"]);
-    let metadata: Value = serde_json::from_slice(&output(cmd)?)?;
+    // Metadata resolves the full dependency graph, including packages that
+    // the native build did not need. Cold CI caches can exceed the fixture
+    // helper's 20-second deadline while Cargo downloads those manifests.
+    let metadata = terminator_core::run_command(
+        cmd,
+        terminator_core::CommandOptions {
+            timeout: std::time::Duration::from_mins(5),
+            stdout_limit: 8 * 1024 * 1024,
+            ..Default::default()
+        },
+    )
+    .context("Collect package licenses with cargo metadata")?;
+    let metadata: Value = serde_json::from_slice(&metadata.stdout)?;
     for package in metadata
         .get("packages")
         .and_then(Value::as_array)
