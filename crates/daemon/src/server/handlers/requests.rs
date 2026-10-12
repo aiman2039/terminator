@@ -33,10 +33,13 @@ impl Shared {
                     | Request::ShutdownIfIdle
                     | Request::RetireIfDraining
             );
+        // Bounded wait: the client answers inside a 3 s deadline, so a
+        // contended lock must fail fast (certain, retryable) rather than
+        // hang the handler past the deadline (uncertain mutation).
         let _coordination = if coordinated {
             self.catalog_paths
                 .as_ref()
-                .map(generations::coordinate)
+                .map(|paths| generations::coordinate_timeout(paths, Duration::from_secs(2)))
                 .transpose()?
         } else {
             None

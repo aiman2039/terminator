@@ -1,10 +1,12 @@
 use super::super::*;
-use super::header::{HOVER_POPUP_DELAY, hover_popup_wake, should_replace_hover_popup};
+use super::hover::link_menu_modifier_pressed;
 use super::tabs::cached_terminal_theme;
 use super::viewer::Viewer;
 use egui_term::TerminalBackend;
 impl Viewer<'_> {
     pub(crate) fn terminal_view(&mut self, ui: &mut egui::Ui, session: &Session) {
+        let modifier_pressed = link_menu_modifier_pressed(ui.ctx());
+        self.app.copy_hovered_terminal_path(ui.ctx());
         let sid = &session.id;
         self.app.visible_sessions.insert(sid.clone());
         if let Some(owner) = self
@@ -134,6 +136,9 @@ impl Viewer<'_> {
         self.terminal_find_bar(ui, sid);
         let input_enabled = self.terminal_input_for(sid);
         let find_open = self.app.terminal_find.contains_key(sid);
+        if !find_open && self.terminal_copy_for(sid) {
+            self.app.copy_terminal_selection(ui.ctx(), sid);
+        }
         let focused = input_enabled
             && !find_open
             && self.app.active_session.as_ref() == Some(sid)
@@ -181,7 +186,7 @@ impl Viewer<'_> {
             self.app.terminal_pressed(ui.ctx(), sid);
         }
         let dragging = ui.input(|i| i.pointer.any_down());
-        let (mouse_reporting, target, dismissal_token) = {
+        let (mouse_reporting, target) = {
             let Some(backend) = self.app.backends.get(sid) else {
                 return;
             };
@@ -213,35 +218,10 @@ impl Viewer<'_> {
                     backend.target_at(pos.x - response.rect.left(), pos.y - response.rect.top())
                 })
             };
-            // A closing popup can still own egui's hover hit-test for this pass.
-            // Use the grid position to decide whether the pointer left its file.
-            let dismissal_token = self
-                .app
-                .dismissed_hover
-                .as_ref()
-                .filter(|(session, _)| session == sid)
-                .map(|_| {
-                    ui.ctx()
-                        .pointer_hover_pos()
-                        .filter(|pos| response.rect.contains(*pos))
-                        .and_then(|pos| {
-                            backend.target_at(
-                                pos.x - response.rect.left(),
-                                pos.y - response.rect.top(),
-                            )
-                        })
-                        .map_or_else(String::new, |target| target.text)
-                });
-            (mouse_reporting, target, dismissal_token)
+            (mouse_reporting, target)
         };
         let token = target.as_ref().map(|t| t.text.clone()).unwrap_or_default();
         let key = format!("target:{}:{}:{}", sid, session.cwd.display(), token);
-        let dismissal_key = dismissal_token
-            .map(|token| format!("target:{}:{}:{}", sid, session.cwd.display(), token));
-        let dismissed = self.app.hover_popup.is_none()
-            && self
-                .app
-                .hover_target_dismissed(sid, dismissal_key.as_deref().unwrap_or(&key));
         if !token.is_empty()
             && !self.app.targets.contains_key(&key)
             && self.app.loading.insert(key.clone())
@@ -253,72 +233,47 @@ impl Viewer<'_> {
             ));
         }
         let resolved = self.app.targets.get(&key).cloned().flatten();
-        if let (Some(target), Some(resolved)) = (&target, &resolved) {
-            if !ui.input(|i| i.pointer.any_down()) && !mouse_reporting {
-                for rect in &target.rects {
-                    let rect = rect.translate(response.rect.min.to_vec2());
-                    ui.painter().with_clip_rect(response.rect).line_segment(
-                        [rect.left_bottom(), rect.right_bottom()],
-                        egui::Stroke::new(1.0, appearance::color(&self.app.theme.accent)),
-                    );
-                }
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                let popup_key = self.app.hover_popup.as_ref().map(|popup| popup.key.clone());
-                if !dismissed
-                    && should_replace_hover_popup(
-                        &mut self.app.hover,
-                        &key,
-                        popup_key.as_deref(),
-                        HOVER_POPUP_DELAY,
-                    )
-                {
-                    let rect = target
-                        .rects
-                        .first()
-                        .copied()
-                        .unwrap_or(egui::Rect::ZERO)
-                        .translate(response.rect.min.to_vec2());
-                    self.app.hover_popup = Some(HoverPopup {
-                        session: sid.clone(),
-                        key: key.clone(),
-                        target: resolved.clone(),
-                        rect,
-                    });
-                    #[cfg(feature = "test-support")]
-                    eprintln!("Terminal file menu opened: {}", resolved.display());
-                }
-                if !dismissed
-                    && let Some(wake) = hover_popup_wake(
-                        &self.app.hover,
-                        &key,
-                        self.app
-                            .hover_popup
-                            .as_ref()
-                            .map(|popup| popup.key.as_str()),
-                        HOVER_POPUP_DELAY,
-                    )
-                {
-                    ui.ctx().request_repaint_after(wake);
-                }
-            }
-        } else if response.contains_pointer() {
-            self.app.hover = None;
-        }
-        if !mouse_reporting
-            && response.clicked()
-            && ui.input(|i| {
-                if cfg!(target_os = "macos") {
-                    i.modifiers.mac_cmd
-                } else {
-                    i.modifiers.ctrl
-                }
-            })
+        if let (Some(target), Some(resolved)) = (&target, &resolved)
+            && !ui.input(|i| i.pointer.any_down())
+            && !mouse_reporting
         {
-            if let Some(target) = &resolved {
-                self.app
-                    .terminal_action(ui.ctx(), session, target, FileAction::Open);
-            } else if !token.is_empty() {
-                self.app.pending_target_action = Some((key.clone(), session.clone()));
+            self.app.remember_hover_copy(
+                ui,
+                sid,
+                resolved,
+                target
+                    .rects
+                    .iter()
+                    .map(|rect| rect.translate(response.rect.min.to_vec2()))
+                    .collect(),
+                self.strip,
+            );
+            for rect in &target.rects {
+                let rect = rect.translate(response.rect.min.to_vec2());
+                ui.painter().with_clip_rect(response.rect).line_segment(
+                    [rect.left_bottom(), rect.right_bottom()],
+                    egui::Stroke::new(1.0, appearance::color(&self.app.theme.accent)),
+                );
+            }
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            if self.app.hover_popup.is_none()
+                && !self.app.text_input_focused(ui.ctx())
+                && (response.clicked() || modifier_pressed)
+            {
+                let rect = target
+                    .rects
+                    .first()
+                    .copied()
+                    .unwrap_or(egui::Rect::ZERO)
+                    .translate(response.rect.min.to_vec2());
+                self.app.hover_popup = Some(HoverPopup {
+                    session: sid.clone(),
+                    key: key.clone(),
+                    target: resolved.clone(),
+                    rect,
+                });
+                #[cfg(feature = "test-support")]
+                eprintln!("Terminal file menu opened: {}", resolved.display());
             }
         }
         let menu_key = egui::Id::new(("terminal-menu-target", sid.as_str()));

@@ -43,8 +43,6 @@ pub struct Events {
     chunks: BTreeMap<String, Notice>,
     extra_modes: BTreeMap<u16, bool>,
     escape_pending: bool,
-    scrollback_cap: usize,
-    scrollback_clear_pending: bool,
 }
 /// Feed the existing vt100 parser, clearing extension modes in stream order on
 /// RIS. vt100 handles RIS internally without a callback. ESC starts an escape
@@ -71,48 +69,37 @@ pub fn process(parser: &mut vt100::Parser<Events>, bytes: &[u8]) {
     if let Some(rest) = bytes.get(start..) {
         parser.process(rest);
     }
-    if parser.callbacks().scrollback_clear_pending {
-        rebuild_without_scrollback(parser);
-    }
     parser.callbacks_mut().escape_pending = escaped;
 }
 
-/// vt100 models ED 0-2 but offers no scrollback-clear primitive, so plain
-/// `CSI 3 J` (emitted by `clear`, and again by scrollback-clearing aliases)
-/// lands in `unhandled_csi`. Without this rebuild the attach snapshot keeps
-/// replaying pre-clear scrollback and every reattach resurrects cleared
-/// lines. The fresh parser replays the formatted screen, cursor, colors, and
-/// input modes; only saved scrollback is dropped. Callback state (replies,
-/// notices, extension modes) moves across untouched.
-///
-/// The rebuild runs after the chunk that carried E3, so same-chunk output
-/// scrolled after E3 is dropped from the model too; the live attach stream
-/// is raw passthrough and unaffected. Never rebuilds on the alternate
-/// screen: its grid holds no scrollback, and replaying alt-screen content
-/// onto a fresh primary grid would corrupt the model.
-fn rebuild_without_scrollback(parser: &mut vt100::Parser<Events>) {
-    parser.callbacks_mut().scrollback_clear_pending = false;
-    if parser.screen().alternate_screen() {
-        return;
+/// Replay retained rows before restoring the visible screen. Only generated
+/// screen state is sent; observational OSC effects are never replayed.
+pub fn attachment_snapshot(parser: &vt100::Parser<Events>) -> Vec<u8> {
+    let screen = parser.screen();
+    let (rows, cols) = screen.size();
+    let mut snapshot = Vec::new();
+    let mut history = screen.clone();
+    history.set_scrollback(10_000);
+    if history.scrollback() > 0 {
+        for offset in (1..=history.scrollback()).rev() {
+            history.set_scrollback(offset);
+            if let Some(row) = history.rows(0, cols).next() {
+                snapshot.extend_from_slice(row.as_bytes());
+                snapshot.extend_from_slice(b"\r\n");
+            }
+        }
+        // The last screenful is still visible. Push it into history before
+        // state_formatted() clears and replaces those rows.
+        for _ in 1..rows {
+            snapshot.extend_from_slice(b"\r\n");
+        }
     }
-    let (rows, cols) = parser.screen().size();
-    parser.screen_mut().set_scrollback(usize::MAX);
-    let len = parser.screen().scrollback();
-    parser.screen_mut().set_scrollback(0);
-    let cap = parser.callbacks().scrollback_cap.max(len);
-    let state = parser.screen().state_formatted();
-    let cursor = parser.screen().cursor_state_formatted();
-    let attrs = parser.screen().attributes_formatted();
-    let mut fresh = vt100::Parser::new_with_callbacks(rows, cols, cap, Events::default());
-    std::mem::swap(fresh.callbacks_mut(), parser.callbacks_mut());
-    fresh.process(&state);
-    fresh.process(&cursor);
-    fresh.process(&attrs);
-    *parser = fresh;
-}
-
-fn first_param(params: &[&[u16]]) -> u16 {
-    params.first().and_then(|p| p.first()).copied().unwrap_or(0)
+    if screen.alternate_screen() {
+        snapshot.extend_from_slice(b"\x1b[?1049h");
+    }
+    snapshot.extend(screen.state_formatted());
+    snapshot.extend(parser.callbacks().modes_formatted());
+    snapshot
 }
 
 fn text(bytes: &[u8], limit: usize) -> String {
@@ -123,9 +110,6 @@ fn text(bytes: &[u8], limit: usize) -> String {
         .collect()
 }
 impl Events {
-    pub fn set_scrollback_cap(&mut self, cap: usize) {
-        self.scrollback_cap = cap;
-    }
     pub fn modes_formatted(&self) -> Vec<u8> {
         self.extra_modes
             .iter()
@@ -329,11 +313,6 @@ impl vt100::Callbacks for Events {
                     }
                 }
             }
-            (None, None, 'J') if first_param(params) == 3 => {
-                if !screen.alternate_screen() {
-                    self.scrollback_clear_pending = true;
-                }
-            }
             (Some(b'?'), Some(b'$'), 'p') => self.reply_decrqm(screen, params),
             (_, Some(_), _) => {}
             (i1, None, c) => self.reply_csi(screen, i1, params, c),
@@ -375,6 +354,10 @@ impl vt100::Callbacks for Events {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "terminal_events/scrollback_tests.rs"]
+mod scrollback_tests;
 
 #[cfg(test)]
 mod tests {
@@ -536,9 +519,7 @@ mod tests {
     }
     #[test]
     fn e3_preserves_screen_cursor_colors_modes_and_future_scrollback() {
-        let mut events = Events::default();
-        events.set_scrollback_cap(100);
-        let mut p = vt100::Parser::new_with_callbacks(24, 80, 100, events);
+        let mut p = vt100::Parser::new_with_callbacks(24, 80, 100, Events::default());
         for i in 0..60 {
             process(&mut p, format!("FILL_{i}\r\n").as_bytes());
         }

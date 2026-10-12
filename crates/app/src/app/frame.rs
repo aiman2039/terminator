@@ -128,6 +128,8 @@ impl eframe::App for App {
         }
         self.hover_popup_blocks_input = self.hover_popup.is_some()
             || (ctx.current_pass_index() > 0 && self.hover_popup_blocks_input);
+        // Capture modifier-only intent before global shortcuts consume keys.
+        crate::workspace_ui::link_menu_modifier_pressed(&ctx);
         self.visible_dirs.clear();
         self.visible_sessions.clear();
         self.visible_images.clear();

@@ -72,11 +72,130 @@ pub fn take_image_paste(
     count
 }
 
+fn copy_key(event: &eframe::egui::Event) -> bool {
+    use eframe::egui::{Event, Key};
+    matches!(event, Event::Key { key: Key::C, modifiers, .. }
+        if !modifiers.alt && (modifiers.ctrl || modifiers.command || modifiers.mac_cmd))
+}
+
+pub fn terminal_copy_requested(
+    events: &[eframe::egui::Event],
+    modifiers: eframe::egui::Modifiers,
+) -> bool {
+    use eframe::egui::Event;
+    events.iter().any(|event| {
+        matches!(event, Event::Copy)
+            || matches!(event, Event::Key { pressed: true, .. } if copy_key(event))
+            || matches!(event, Event::Text(text) if text == "\u{3}" && !modifiers.alt)
+    })
+}
+
+/// Consume every representation of a copy chord only when text is available.
+/// In particular, Ctrl+C must not also deliver ETX to the shell.
+pub fn take_terminal_copy(
+    events: &mut Vec<eframe::egui::Event>,
+    modifiers: eframe::egui::Modifiers,
+    selection: &str,
+) -> Option<String> {
+    use eframe::egui::Event;
+    if selection.is_empty() || !terminal_copy_requested(events, modifiers) {
+        return None;
+    }
+    let control = modifiers.ctrl
+        || events.iter().any(|event| {
+            matches!(event, Event::Key { modifiers, .. } if copy_key(event) && modifiers.ctrl)
+        });
+    events.retain(|event| {
+        !matches!(event, Event::Copy)
+            && !copy_key(event)
+            && !matches!(event, Event::Text(text)
+                if text == "\u{3}" || (control && matches!(text.as_str(), "c" | "C")))
+    });
+    Some(selection.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use eframe::egui::{Event, Modifiers};
     use std::borrow::Cow;
+
+    fn key_c(modifiers: Modifiers, pressed: bool) -> Event {
+        Event::Key {
+            key: eframe::egui::Key::C,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn selected_terminal_path_copies_with_control_command_or_native_copy() {
+        let path = "src/a folder/日本.rs:17";
+        for (mut events, modifiers) in [
+            (vec![key_c(Modifiers::CTRL, true)], Modifiers::CTRL),
+            (vec![key_c(Modifiers::MAC_CMD, true)], Modifiers::MAC_CMD),
+            (vec![Event::Copy], Modifiers::NONE),
+            (vec![Event::Text("\u{3}".into())], Modifiers::NONE),
+        ] {
+            assert_eq!(
+                take_terminal_copy(&mut events, modifiers, path).as_deref(),
+                Some(path)
+            );
+            assert!(events.is_empty());
+        }
+    }
+
+    #[test]
+    fn copying_a_selection_consumes_duplicate_control_text_without_interrupting() {
+        let paste = Event::Paste("other".into());
+        let mut events = vec![
+            key_c(Modifiers::CTRL, true),
+            Event::Text("\u{3}".into()),
+            Event::Text("c".into()),
+            Event::Copy,
+            paste.clone(),
+        ];
+        assert_eq!(
+            take_terminal_copy(&mut events, Modifiers::CTRL, "path"),
+            Some("path".into())
+        );
+        assert_eq!(events, [paste]);
+        assert_eq!(
+            take_terminal_copy(&mut events, Modifiers::CTRL, "path"),
+            None
+        );
+    }
+
+    #[test]
+    fn no_selection_leaves_control_c_and_native_copy_for_the_focused_widget() {
+        let original = vec![
+            key_c(Modifiers::CTRL, true),
+            Event::Text("\u{3}".into()),
+            Event::Copy,
+        ];
+        let mut events = original.clone();
+        assert_eq!(take_terminal_copy(&mut events, Modifiers::CTRL, ""), None);
+        assert_eq!(events, original);
+    }
+
+    #[test]
+    fn selection_does_not_consume_ordinary_text_other_chords_or_key_release() {
+        for (event, modifiers) in [
+            (Event::Text("c".into()), Modifiers::NONE),
+            (
+                key_c(Modifiers::CTRL | Modifiers::ALT, true),
+                Modifiers::CTRL | Modifiers::ALT,
+            ),
+            (key_c(Modifiers::CTRL, false), Modifiers::CTRL),
+            (Event::Paste("path".into()), Modifiers::NONE),
+        ] {
+            let mut events = vec![event.clone()];
+            assert_eq!(take_terminal_copy(&mut events, modifiers, "selected"), None);
+            assert_eq!(events, [event]);
+        }
+    }
 
     #[test]
     fn image_paste_retains_unique_private_pngs_with_exact_pixels() {

@@ -86,6 +86,65 @@ pub(crate) fn scrolling(opts: &Options) -> Result<()> {
     Ok(())
 }
 
+/// Muse-like primary-screen output must still scroll after hiding and restoring
+/// its tab. The producer does not redraw on SIGWINCH, so resize cannot mask loss.
+pub(crate) fn scrolling_bounded(opts: &Options) -> Result<()> {
+    let h = Harness::new()?;
+    h.setup()?;
+    let project = h.project("bounded-scroll-sample")?;
+    let sample = h.shell(&project)?;
+    let other = h.shell(&project)?;
+    h.rpc(json!({"Rename":{"session":id(&sample),"label":"Muse sample"}}))?;
+    h.rpc(json!({"Rename":{"session":id(&other),"label":"Other"}}))?;
+    let first = h.layout(&project, std::slice::from_ref(&sample))?;
+    let second = h.layout(&project, std::slice::from_ref(&other))?;
+    h.rpc(json!({"SaveLayout":{"project":id(&project),"layout":{
+        "version":2,"active":"sample","tabs":[
+            {"id":"sample","primary":{"Terminal":id(&sample)},"layout":first},
+            {"id":"other","primary":{"Terminal":id(&other)},"layout":second}
+        ]
+    }}}))?;
+    h.write(
+        &mut h.attach(&sample)?,
+        "printf '\\033[2J\\033[H\\033[20;1HFIXED FOOTER\\033[1;19r\\033[H'; i=0; while [ $i -lt 80 ]; do printf 'PUBLIC BOUNDED SAMPLE %03d\\r\\n' \"$i\"; i=$((i+1)); done; printf '\\033[r'\n",
+    )?;
+    thread::sleep(Duration::from_millis(500));
+    let target = format!("terminal:{}", id(&sample));
+    let logs = capture(
+        &h,
+        opts,
+        "bounded-reconnect",
+        json!([
+            {"at_ms":1000,"target":target,"scroll":8.0,"wheel_unit":"line"},
+            {"at_ms":1600,"target":"workspace-tab:Other"},
+            {"at_ms":2200,"target":"workspace-tab:Muse sample"},
+            {"at_ms":2900,"target":target,"scroll":8.0,"wheel_unit":"line"},
+            {"at_ms":3400,"target":target,"scroll":-1000.0,"wheel_unit":"line"}
+        ]),
+        4000,
+        |_| Ok(()),
+    )?;
+    let prefix = format!("Scroll evidence: session={} ", id(&sample));
+    let offsets: Vec<usize> = logs
+        .lines()
+        .filter(|line| line.starts_with(&prefix))
+        .filter_map(|line| {
+            line.split(" offset=")
+                .nth(1)?
+                .split_whitespace()
+                .next()?
+                .parse()
+                .ok()
+        })
+        .collect();
+    ensure!(
+        offsets.windows(3).any(|offsets| offsets == [8, 0, 8]) && offsets.last() == Some(&0),
+        "Bounded-region scrollback failed before/after tab reconnect: {offsets:?}; {logs}"
+    );
+    h.assert_pids(&[sample, other])?;
+    Ok(())
+}
+
 /// Shared driver for the agent-wheel fixtures. The fake agent switches to
 /// the alternate screen, enables `init` mouse modes, then records every
 /// input byte it receives. `start_before_attach` covers the reattach

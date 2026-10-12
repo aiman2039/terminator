@@ -335,11 +335,8 @@ pub struct App {
     pub(crate) expanded_dirs: HashSet<PathBuf>,
     pub(crate) watch_fallback: bool,
     pub(crate) targets: HashMap<String, Option<services::Target>>,
-    pub(crate) hover: Option<(String, Instant)>,
     pub(crate) hover_popup: Option<HoverPopup>,
-    pub(crate) dismissed_hover: Option<(String, String)>,
     pub(crate) hover_popup_blocks_input: bool,
-    pub(crate) pending_target_action: Option<(String, Session)>,
     pub(crate) last_heartbeat: Instant,
     /// Env-gated (`TERMINATOR_REPAINT_LOG`) idle-CPU probe. `None` unless the
     /// variable is set, so release builds pay nothing for it.

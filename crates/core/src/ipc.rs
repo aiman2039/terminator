@@ -136,6 +136,52 @@ pub enum Request {
     ShutdownIfIdle,
     RetireIfDraining,
 }
+impl Request {
+    /// Short stable name for timeouts and diagnostics. Never includes IDs,
+    /// paths, or labels.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::PruneHistory { .. } => "PruneHistory",
+            Self::Archived { request, .. } => request.name(),
+            Self::CloseIdleSessions { .. } => "CloseIdleSessions",
+            Self::ShellCommand { .. } => "ShellCommand",
+            Self::ShellPrompt { .. } => "ShellPrompt",
+            Self::WorktreeList { .. } => "WorktreeList",
+            Self::WorktreeAdd { .. } => "WorktreeAdd",
+            Self::WorktreeRemove { .. } => "WorktreeRemove",
+            Self::Screen { .. } => "Screen",
+            Self::TerminalNotify { .. } => "TerminalNotify",
+            Self::DismissTerminalNotice { .. } => "DismissTerminalNotice",
+            Self::Snapshot => "Snapshot",
+            Self::CreateReview { .. } => "CreateReview",
+            Self::AddProject { .. } => "AddProject",
+            Self::SaveLayout { .. } => "SaveLayout",
+            Self::SelectProject { .. } => "SelectProject",
+            Self::Create { .. } => "Create",
+            Self::Stop { .. } => "Stop",
+            Self::Rename { .. } => "Rename",
+            Self::Remove { .. } => "Remove",
+            Self::Focus { .. } => "Focus",
+            Self::Notice { .. } => "Notice",
+            Self::Settings(_) => "Settings",
+            Self::Heartbeat { .. } => "Heartbeat",
+            Self::Hook(_) => "Hook",
+            Self::Cwd { .. } => "Cwd",
+            Self::Attach { .. } => "Attach",
+            Self::Input { .. } => "Input",
+            Self::Resize { .. } => "Resize",
+            Self::History { .. } => "History",
+            Self::ClearHistory { .. } => "ClearHistory",
+            Self::EditorCompare { .. } => "EditorCompare",
+            Self::EditorSave { .. } => "EditorSave",
+            Self::EditorStatus { .. } => "EditorStatus",
+            Self::Shutdown => "Shutdown",
+            Self::ShutdownIfIdle => "ShutdownIfIdle",
+            Self::RetireIfDraining => "RetireIfDraining",
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Envelope {
     pub version: u32,

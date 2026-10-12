@@ -119,14 +119,38 @@ impl Diagnostics {
                         ..Default::default()
                     },
                 });
+            } else if action.copy {
+                input.events.push(egui::Event::Copy);
+            } else if let Some(modifier) = &action.modifier {
+                let modifiers = match modifier.as_str() {
+                    "ctrl" => egui::Modifiers {
+                        ctrl: true,
+                        command: !cfg!(target_os = "macos"),
+                        ..Default::default()
+                    },
+                    "cmd" => egui::Modifiers {
+                        command: true,
+                        mac_cmd: cfg!(target_os = "macos"),
+                        ..Default::default()
+                    },
+                    _ => egui::Modifiers::default(),
+                };
+                input.events.push(egui::Event::ModifiersChanged(modifiers));
             } else if let Some(key) = &action.key {
                 if let Some(key) = egui::Key::from_name(key) {
+                    let modifiers = egui::Modifiers {
+                        ctrl: action.ctrl,
+                        command: action.command || (action.ctrl && !cfg!(target_os = "macos")),
+                        mac_cmd: action.command && cfg!(target_os = "macos"),
+                        shift: action.shift,
+                        ..Default::default()
+                    };
                     input.events.push(egui::Event::Key {
                         key,
                         physical_key: None,
                         pressed: true,
                         repeat: false,
-                        modifiers: egui::Modifiers::default(),
+                        modifiers,
                     });
                 }
             } else if let Some(text) = &action.input {
@@ -336,6 +360,20 @@ impl Diagnostics {
         if self.path.is_none() || ctx.will_discard() {
             return;
         }
+        if std::env::var_os("TERMINATOR_TEST_CAPTURE_COPY").is_some() {
+            // Fixtures inspect the native clipboard command without replacing
+            // the user's system clipboard with public sample text.
+            ctx.output_mut(|output| {
+                output.commands.retain(|command| {
+                    if let egui::OutputCommand::CopyText(text) = command {
+                        eprintln!("Fixture copied text: {text:?}");
+                        false
+                    } else {
+                        true
+                    }
+                });
+            });
+        }
         // Driver-signaled graceful exit: the file's presence closes the
         // fixture once outside observation is complete. Inert unless the
         // env var names a path, and unlike screenshots it does not need a
@@ -404,6 +442,14 @@ struct FixtureAction {
     wheel_phase: Option<String>,
     #[serde(default)]
     shift: bool,
+    #[serde(default)]
+    ctrl: bool,
+    #[serde(default)]
+    command: bool,
+    #[serde(default)]
+    copy: bool,
+    #[serde(default)]
+    modifier: Option<String>,
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]

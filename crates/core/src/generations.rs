@@ -8,7 +8,7 @@ mod recovery;
 
 pub use catalog::{
     CAPABILITY, CATALOG_VERSION, Catalog, Generation, Health, Status, build_identity, coordinate,
-    exists, workspace_paths,
+    coordinate_timeout, exists, workspace_paths,
 };
 pub use migration::{migrate_after_legacy_exit, migrate_idle};
 pub use ownership::{owner_for, validate_endpoint};

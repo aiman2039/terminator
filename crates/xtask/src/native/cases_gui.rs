@@ -333,7 +333,7 @@ pub(crate) fn terminal_actions(o: &Options) -> Result<()> {
         &h,
         o,
         "hover-editor",
-        json!([{"at_ms":1100,"target":"terminal","hover":true},{"at_ms":2400,"target":"Open in editor split"}]),
+        json!([{"at_ms":1100,"target":"terminal","hover":true},{"at_ms":1700,"target":"terminal","hover_offset":[45,10]},{"at_ms":2400,"target":"Open in editor split"}]),
         4000,
     )?;
     ensure!(

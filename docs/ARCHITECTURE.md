@@ -324,14 +324,20 @@ close gate; older generated shells may still emit them and the daemon ignores th
 DEC focus-reporting (1004) and alternate-scroll (1007) settings are retained through
 vt100 extension callbacks and replayed after the formatted attachment snapshot.
 A reset-boundary feeder clears extension modes in stream order on RIS; it does not
-create another screen model or infer lifecycle from text. vt100 has no
-scrollback-clear primitive, so plain `CSI 3 J` (from `clear` and
-scrollback-clearing aliases) rebuilds the single parser from its formatted
-state after the chunk, preserving callbacks, cursor, colors, and input modes;
-otherwise the attach snapshot replays pre-clear scrollback on every reattach.
-The rebuild never runs on the alternate screen. Long-running native
+create another screen model or infer lifecycle from text. The vendored vt100
+parser retains history from scrolling regions that start at the first row,
+matching the GUI parser when a TUI keeps a fixed footer. `CSI 3 J` clears history
+in stream order without rebuilding the parser or losing later output in the
+same read. Attachment snapshots flush all replayed rows into GUI scrollback
+before restoring the visible screen. Long-running native
 fixtures may opt into rendering while occluded through the test-support build;
 normal application occlusion/minimization behavior is preserved.
+
+Terminal file paths and URLs are underlined on hover. Their action menu opens
+only after a primary click or a fresh Ctrl/Cmd press over the link. There is no
+hover timer. Holding a modifier while moving onto a link, dragging a selection,
+and keyboard chords do not request a menu. An open menu keeps its original
+target. Copy remains available for selected text and hovered paths.
 
 Browser navigation uses persistent pane IDs (compatible with layout v6); legacy
 browser entries receive IDs when loaded. Links, redirects and history navigation

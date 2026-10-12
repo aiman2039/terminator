@@ -355,6 +355,13 @@ helper executable, original session identities and new terminal creation intact.
   target directory and never install or restart the live daemon.
 - `cargo xtask idle-close` exercises process-group idle close against isolated real shells.
 - `cargo xtask gui scrolling` exercises unfocused hover scrolling with sample history.
+- `cargo xtask gui scrolling-bounded` checks Muse-like primary-screen history
+  before and after a tab switch, without a resize or producer redraw.
+- `cargo xtask gui hover-menu` checks file-menu target retention, dismissal, and
+  Ctrl+C/Cmd+C hover-path and selection copy. Its copy fixture captures clipboard commands
+  without changing the system clipboard and checks that focused text fields
+  retain copy ownership. It also checks that passive hover stays quiet and that
+  a fresh Ctrl/Cmd press or a primary click opens file and URL action menus.
   Input fixtures support `wheel_unit` (`point`, `line`, `page`), `wheel_phase`
   (`start`, `move`, `end`, `cancel`), `scroll`, `scroll_x`, `shift`, and hover-only actions.
 - `cargo xtask gui agent-wheel` checks wheel input reaches a full-screen SGR-mouse

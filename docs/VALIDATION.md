@@ -4173,3 +4173,136 @@ Local macOS validation: all 63 xtask tests passed with
 `cargo test -p xtask --locked --offline`. Strict xtask Clippy, formatting,
 and diff checks passed.
 The Windows package and hosted job have not been rerun.
+
+## Muse scrollback after pane reconnect (2026-10-12)
+
+The daemon now uses a vendored vt100 0.16.2 with two narrow parser changes:
+retain history from regions starting at the first row, and handle `CSI 3 J`
+in stream order. Attachment snapshots move every replayed row into history
+before restoring the visible screen. This fixes scrolling after a terminal
+tab is hidden and shown, without requiring a resize. The daemon no longer
+rebuilds its parser after a clear, which previously lost history generated
+later in the same read.
+
+Validation on macOS:
+
+- `cargo test --workspace --all-features --locked`: 1,086 passed, 4 ignored.
+  The final daemon-only run passed all 54 tests. Six new regressions cover
+  bounded-region retention, fixed-header exclusion, small and capped history,
+  attachment replay through alacritty_terminal, same-read clear/output ordering,
+  and alternate-screen content, modes, colors, and notification exclusion.
+- Workspace Clippy with all targets/features and `-D warnings`, formatting,
+  and diff checks passed. The workspace binaries and examples were built with
+  `terminator/test-support`.
+- `target/debug/xtask integration` passed with isolated real PTYs, including
+  attachment, recovery, helper ownership, and editor/review paths.
+- Native `scrolling-bounded`, `scrolling`, and `agent-wheel` passed. The new
+  bounded-region fixture uses a producer that does not redraw on resize and
+  switches away from and back to its tab. Observed wheel offsets were
+  `0 → 8 → 0 → 8 → 0`, with unchanged shell PIDs.
+- Replayed the prior public offline-echo capture from installed Muse
+  `1.4.4-R5419.1` through the final daemon feeder and snapshot function.
+  Reattachment now restores all 179 daemon-retained rows and reaches offset 8
+  before a resize; the previous attachment had zero history. Reattaching after
+  the captured resize redraw retains 182 rows, including output after the clear.
+
+Artifacts are under `/tmp/terminator-muse-fix-native` and
+`/tmp/terminator-muse-fix-*.log`. No account-backed Muse call was made. The
+installed application and running user daemon were not replaced. Linux,
+Windows, and hosted CI were not run for this change.
+
+## Copy terminal paths while hovering or selecting (2026-10-12)
+
+The file-menu input gate also disabled terminal copy handling and removed
+terminal focus. Copy now uses the active terminal's selection or the underlined
+hover target independently of the hover-menu input gate. Cmd+C, native copy
+events, and Ctrl+C copy that text; duplicate control-key/text events are consumed
+so copy does not send an interrupt. Hover copy uses the resolved path, including
+line/column suffixes, just like the file menu's Copy action. It keeps the original
+menu target when the pointer crosses a nearby path. With neither selection nor
+hover target, events remain available to ordinary terminal Ctrl+C handling.
+Focused text fields and native editors keep copy ownership. Other modal and
+editor-close gates still apply. Main, IDE-strip, and floating terminal panes
+use the same copy rule.
+
+Validation on macOS:
+
+- Full workspace tests with all features: 1,091 passed, 4 ignored. Added positive
+  copy tests for Ctrl+C, Cmd+C, native copy, control-text input, and Unicode paths;
+  negative tests cover empty selections, key releases, ordinary text, Alt chords,
+  unrelated paste events, repeated consumption, and modal/editor-close gates.
+  The final app-only run passed 653 tests, with 4 ignored.
+- Workspace Clippy with all targets/features and `-D warnings`, formatting,
+  and diff checks passed. Final xtask Clippy passed after extending the fixture.
+- Native `hover-menu` passed all existing target-retention and dismissal cases.
+  Its new selection fixture copied `first-file.rs` three times with Ctrl+C and
+  Cmd+C while one original file menu stayed open, including movement over the
+  adjacent path. A focused Explorer search then copied `FIELD COPY SAMPLE`
+  instead of the terminal selection. No interrupt reached the shell, and its
+  PID stayed unchanged. The fixture records and removes CopyText output commands
+  before they reach the system clipboard.
+- The final hover-only fixture uses no selection and deliberately hovers a pane
+  rendered after the focused shell. Cmd+C copies the underlined path before its
+  menu opens. Ctrl+C and Cmd+C then copy the original resolved path three more
+  times while the pointer crosses an adjacent link and the menu stays fixed.
+  After closing the menu and moving onto blank terminal space, Ctrl+C triggers
+  the focused shell's interrupt trap exactly once. The native hover-menu fixture
+  is included in `gui all`.
+- Native `scrolling-bounded` passed again with the final copy build.
+
+Artifacts: `/tmp/terminator-copy-fix-native`,
+`/tmp/terminator-hover-copy-fix-native`, and their matching log files. These are
+synthetic input events processed by the native GUI. Physical keyboard input,
+Linux, Windows, and hosted CI were
+not tested. The installed application and running user daemon were not replaced.
+
+## Explicit terminal link menus (2026-10-12)
+
+Removed automatic file/URL hover menus and their timer state. Hover keeps the
+underline and pointing-hand cursor. A primary click or a fresh Ctrl/Cmd press
+over a recognized link opens its action menu; modified clicks use the same menu
+instead of opening a file directly. The modifier request is captured before
+global shortcuts consume their keys. Holding a modifier while moving onto a
+link does not open a menu, and a keyboard chord does not count as a standalone
+modifier press. Selection drags and terminal application mouse reporting keep
+their existing input path. Dismissal does not restart a hover timer.
+
+Validation on macOS:
+
+- Final workspace tests with all features: 1,090 passed, 4 ignored. Modifier
+  tests cover fresh Ctrl/Cmd presses, holding and release, copy chords, focus
+  loss, and reuse of the same activation across panes in one frame.
+- Workspace Clippy with all targets/features and `-D warnings`, formatting,
+  and diff checks passed. Workspace binaries/examples were built with
+  `terminator/test-support`.
+- Native `hover-menu` passed. Passive hover and modifier-held hover stayed
+  closed. Fresh Ctrl, Cmd, and primary clicks opened a menu. Existing target
+  retention, Escape/dismissal, selected/hovered copy, focused-field copy, and
+  ordinary Ctrl+C interrupt checks passed. A URL click opened its menu and
+  copied its URL without navigating. These fixtures are included in `gui all`.
+- Existing terminal-action and floating-pane fixture scripts now use explicit
+  clicks for their file menus. Those larger fixtures were not rerun here.
+
+Artifacts: `/tmp/terminator-explicit-link-menu-native` and matching test/build/
+Clippy logs. Input was injected into the native GUI. Physical keyboard input,
+Linux, Windows, and hosted CI were not tested. No installed app or running user
+daemon was replaced.
+
+## Linux hover-menu interrupt fixture (2026-10-12)
+
+The release run `run-m6hxEW` passed the hover-copy checks but timed out while
+waiting for the focused shell's interrupt trap. An isolated Linux PTY reproduced
+the cause: `/bin/sh` is dash, which does not run the INT trap at its interactive
+prompt. The same trap runs while a builtin `read` is active.
+
+The fixture now uses a read loop and waits for its ready marker before GUI
+actions. It still requires four path copies and exactly one ordinary Ctrl+C
+interrupt. No application input code changed for this fix.
+
+Validation: the complete native `hover-menu` fixture passed in the cached Linux
+ARM64 release image with Xvfb, D-Bus, Openbox, and Glow, and on macOS after a
+workspace test-support build. Formatting, diff checks, and xtask Clippy with
+all targets and `-D warnings` passed. The complete release suite was not rerun.
+
+Artifacts: `.artifacts/hover-menu-fix/native/hover-menu` (Linux) and
+`/tmp/terminator-hover-menu-fix-macos-rebuilt/hover-menu` (macOS).

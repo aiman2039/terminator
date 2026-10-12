@@ -331,24 +331,39 @@ mod tests {
         });
         assert!(!app.terminal_input_enabled("shell"));
         assert!(!app.strip_terminal_input_enabled("other-shell"));
+        assert!(app.terminal_copy_enabled("shell"));
+        assert!(app.strip_terminal_copy_enabled("shell"));
+        assert!(app.float_terminal_copy_enabled("shell"));
         app.hover_popup_blocks_input = true;
         app.dismiss_hover_popup(&ctx);
         assert!(!app.terminal_input_enabled("shell"));
         assert!(!app.strip_terminal_input_enabled("other-shell"));
+        assert!(app.terminal_copy_enabled("shell"));
+        assert!(app.strip_terminal_copy_enabled("shell"));
+        assert!(app.float_terminal_copy_enabled("shell"));
         app.hover_popup_blocks_input = false;
         assert!(app.terminal_input_enabled("shell"));
         assert!(app.strip_terminal_input_enabled("other-shell"));
     }
 
     #[test]
-    fn dismissed_hover_stays_closed_until_the_pointer_leaves_its_file() {
+    fn copy_still_respects_modal_and_editor_close_gates() {
         let (mut app, _ctx, _dir) = fixture();
-        app.dismissed_hover = Some(("shell".into(), "first-file".into()));
-        assert!(app.hover_target_dismissed("shell", "first-file"));
-        assert!(!app.hover_target_dismissed("other-shell", "different-file"));
-        assert!(app.hover_target_dismissed("shell", "first-file"));
-        assert!(!app.hover_target_dismissed("shell", "outside"));
-        assert!(!app.hover_target_dismissed("shell", "first-file"));
+        app.picker_active = true;
+        assert!(!app.terminal_copy_enabled("shell"));
+        assert!(!app.strip_terminal_copy_enabled("shell"));
+        assert!(!app.float_terminal_copy_enabled("shell"));
+        app.picker_active = false;
+        app.editor_close_sessions.insert("shell".into());
+        assert!(!app.terminal_copy_enabled("shell"));
+        assert!(!app.strip_terminal_copy_enabled("shell"));
+        assert!(!app.float_terminal_copy_enabled("shell"));
+        assert!(app.terminal_copy_enabled("other"));
+        app.editor_close_sessions.clear();
+        app.settings_open = true;
+        assert!(!app.terminal_copy_enabled("shell"));
+        assert!(app.strip_terminal_copy_enabled("shell"));
+        assert!(app.float_terminal_copy_enabled("shell"));
     }
 
     #[test]

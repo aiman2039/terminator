@@ -58,6 +58,16 @@ impl Viewer<'_> {
             self.app.terminal_input_enabled(sid)
         }
     }
+
+    pub(crate) fn terminal_copy_for(&self, sid: &str) -> bool {
+        if self.strip {
+            self.app.strip_terminal_copy_enabled(sid)
+        } else if self.window.is_some() {
+            self.app.float_terminal_copy_enabled(sid)
+        } else {
+            self.app.terminal_copy_enabled(sid)
+        }
+    }
     /// Leaf path for a tab key in the dock under render, if any.
     pub(super) fn pane_for(&self, key: &str) -> Option<egui_dock::NodePath> {
         if self.strip {

@@ -1,5 +1,4 @@
 use super::super::*;
-pub(super) const HOVER_POPUP_DELAY: Duration = Duration::from_millis(400);
 pub(super) const HEADER_SLOT: f32 = 36.0;
 pub(super) const HEADER_GAP: f32 = 4.0;
 pub(super) const HEADER_MENU_SLOT: f32 = 32.0;
@@ -231,43 +230,6 @@ pub(super) fn header_icon_button(
         .frame(false),
     )
     .on_hover_text(tip)
-}
-
-pub(super) fn should_replace_hover_popup(
-    hover: &mut Option<(String, Instant)>,
-    key: &str,
-    popup_key: Option<&str>,
-    delay: Duration,
-) -> bool {
-    if popup_key.is_some() {
-        return false;
-    }
-    let switched = hover.as_ref().is_none_or(|(old, _)| old != key);
-    if switched {
-        *hover = Some((key.to_owned(), Instant::now()));
-    }
-    hover
-        .as_ref()
-        .is_some_and(|(_, since)| since.elapsed() >= delay)
-}
-
-/// One wake for the remaining hover delay. An open popup for this key needs
-/// no further frame; pointer motion already repaints when the pointer leaves.
-pub(super) fn hover_popup_wake(
-    hover: &Option<(String, Instant)>,
-    key: &str,
-    popup_key: Option<&str>,
-    delay: Duration,
-) -> Option<Duration> {
-    if popup_key.is_some() {
-        return None;
-    }
-    let elapsed = hover
-        .as_ref()
-        .filter(|(stored, _)| stored == key)
-        .map(|(_, since)| since.elapsed())
-        .unwrap_or(Duration::ZERO);
-    Some(delay.saturating_sub(elapsed))
 }
 
 /// Case-insensitive substring filter for the saved-scrollback viewer.

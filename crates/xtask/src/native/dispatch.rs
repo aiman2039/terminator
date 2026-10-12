@@ -1,5 +1,7 @@
 use super::super::harness::{Harness, Process, artifacts, id, session_ids, wait_child};
-use super::cases_agents::{agent_wheel, agent_wheel_legacy, agent_wheel_live, scrolling};
+use super::cases_agents::{
+    agent_wheel, agent_wheel_legacy, agent_wheel_live, scrolling, scrolling_bounded,
+};
 use super::cases_editor::{cleanup, editor_lifecycle, file_close, focus_close, inline_rename};
 use super::cases_gui::{browser, control, external, images, terminal_actions};
 use super::cases_startup::{smoke, split_file_opening, workspace_tabs};
@@ -147,6 +149,7 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
         vec![
             "smoke",
             "workspace-tabs",
+            "scrolling-bounded",
             "split-file-opening",
             "markdown",
             "markdown-busy",
@@ -162,6 +165,7 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "browser",
             "control",
             "terminal-actions",
+            "hover-menu",
             "reviews",
             "legacy-diff",
         ]
@@ -213,6 +217,7 @@ fn run_case(case: &str, mut opts: Options) -> Result<()> {
         "folder-access" => super::folder_access::run(&opts)?,
         "idle-close" => super::idle_close::run(&opts)?,
         "scrolling" => scrolling(&opts)?,
+        "scrolling-bounded" => scrolling_bounded(&opts)?,
         "agent-wheel" => agent_wheel(&opts)?,
         "agent-wheel-legacy" => agent_wheel_legacy(&opts)?,
         "agent-wheel-live" => agent_wheel_live(&opts)?,

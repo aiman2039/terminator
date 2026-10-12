@@ -5,6 +5,7 @@ mod diff_tests;
 mod drag;
 mod header;
 mod hover;
+pub(crate) use hover::link_menu_modifier_pressed;
 mod menus;
 mod tab_menu;
 mod tabs;

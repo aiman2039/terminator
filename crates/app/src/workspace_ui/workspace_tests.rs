@@ -2,9 +2,10 @@ use super::super::*;
 use super::diff_paint::{DiffColors, paint_diff_document};
 use super::diff_tests::tests::{long_doc, painted_text};
 use super::header::{
-    HEADER_ACTIONS, HOVER_POPUP_DELAY, ProjectHeaderChrome, filter_history_lines, header_row_width,
-    header_visible_count, hover_popup_wake, project_header_chrome, should_replace_hover_popup,
+    HEADER_ACTIONS, ProjectHeaderChrome, filter_history_lines, header_row_width,
+    header_visible_count, project_header_chrome,
 };
+use super::hover::{advance_menu_modifier, link_menu_modifier_pressed};
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -19,49 +20,78 @@ mod tests {
     }
 
     #[test]
-    fn hover_popup_waits_before_the_first_open() {
-        let mut hover = None;
-        assert!(!should_replace_hover_popup(
-            &mut hover,
-            "a",
-            None,
-            HOVER_POPUP_DELAY
-        ));
-        assert_eq!(hover.as_ref().map(|(key, _)| key.as_str()), Some("a"));
-        hover.as_mut().unwrap().1 -= HOVER_POPUP_DELAY;
-        assert!(should_replace_hover_popup(
-            &mut hover,
-            "a",
-            None,
-            HOVER_POPUP_DELAY
-        ));
+    fn menu_modifier_requires_a_fresh_press_and_not_plain_hover() {
+        for modifiers in [egui::Modifiers::CTRL, egui::Modifiers::MAC_CMD] {
+            assert_eq!(advance_menu_modifier(false, &[]), (false, false));
+            assert_eq!(
+                advance_menu_modifier(false, &[egui::Event::ModifiersChanged(modifiers)]),
+                (true, true)
+            );
+            assert_eq!(advance_menu_modifier(true, &[]), (true, false));
+            assert_eq!(
+                advance_menu_modifier(
+                    true,
+                    &[egui::Event::ModifiersChanged(
+                        modifiers | egui::Modifiers::SHIFT
+                    )]
+                ),
+                (true, false)
+            );
+            assert_eq!(
+                advance_menu_modifier(
+                    true,
+                    &[egui::Event::ModifiersChanged(egui::Modifiers::NONE)]
+                ),
+                (false, false)
+            );
+        }
     }
 
     #[test]
-    fn hover_popup_wake_rests_once_the_popup_is_open() {
-        let hover = Some(("a".to_owned(), Instant::now()));
-        assert!(hover_popup_wake(&hover, "a", Some("a"), HOVER_POPUP_DELAY).is_none());
-        let wake = hover_popup_wake(&hover, "a", None, HOVER_POPUP_DELAY)
-            .expect("a fresh hover wakes once");
-        assert!(wake > Duration::from_millis(50) && wake <= HOVER_POPUP_DELAY);
+    fn copy_chords_do_not_request_a_link_menu() {
+        for chord in [
+            egui::Event::Copy,
+            egui::Event::Text("\u{3}".into()),
+            egui::Event::Key {
+                key: egui::Key::C,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::CTRL,
+            },
+        ] {
+            assert_eq!(
+                advance_menu_modifier(
+                    false,
+                    &[egui::Event::ModifiersChanged(egui::Modifiers::CTRL), chord]
+                ),
+                (true, false)
+            );
+        }
+        assert_eq!(
+            advance_menu_modifier(true, &[egui::Event::WindowFocused(false)]),
+            (false, false)
+        );
     }
 
     #[test]
-    fn an_open_hover_popup_keeps_its_target_when_the_pointer_crosses_another_file() {
-        let mut hover = Some(("a".into(), Instant::now()));
-        assert!(!should_replace_hover_popup(
-            &mut hover,
-            "b",
-            Some("a"),
-            HOVER_POPUP_DELAY
-        ));
-        assert_eq!(hover.as_ref().map(|(key, _)| key.as_str()), Some("a"));
-        assert!(!should_replace_hover_popup(
-            &mut hover,
-            "b",
-            Some("b"),
-            HOVER_POPUP_DELAY
-        ));
+    fn all_panes_observe_one_modifier_press_in_the_same_frame() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::ModifiersChanged(egui::Modifiers::CTRL)],
+                ..Default::default()
+            },
+            |ui| {
+                assert!(link_menu_modifier_pressed(ui.ctx()));
+                assert!(link_menu_modifier_pressed(ui.ctx()));
+            },
+        );
+        output.textures_delta.clear();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert!(!link_menu_modifier_pressed(ui.ctx()));
+        });
+        output.textures_delta.clear();
     }
 
     #[test]

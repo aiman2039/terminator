@@ -494,6 +494,7 @@ pub fn run(o: &Options) -> Result<()> {
         "insplit",
         json!([
             {"at_ms":1500,"target":"terminal","hover":true},
+            {"at_ms":2000,"target":"terminal","hover_offset":[45,10]},
             {"at_ms":2600,"target":"Open in current split"},
         ]),
         20000,

@@ -391,6 +391,9 @@ impl Client {
             .run(&CancellationToken::new(), move || token_paths.token())
             .await?;
         let mutation = !read_only(&request);
+        // Static operation name for the deadline below; the envelope takes
+        // ownership of the request afterwards.
+        let operation = request.name();
         let timeout = if matches!(request, Request::CloseIdleSessions { .. }) {
             Duration::from_secs(30)
         } else {
@@ -440,7 +443,7 @@ impl Client {
             Ok(response)
         })
         .await
-        .context("IPC response deadline exceeded")
+        .with_context(|| format!("IPC response deadline exceeded for {operation}"))
         .and_then(|r| r);
         if mutation {
             result.map_err(|e| e.context(UncertainMutation))
@@ -519,6 +522,12 @@ fn archived_mutation(request: &Request) -> Option<&str> {
 
 #[must_use]
 pub fn read_only(request: &Request) -> bool {
+    if let Request::Archived { request, .. } = request {
+        // A retired owner's disk reads (history text) change nothing; only
+        // retired writes must evict the snapshot cache. See
+        // [`archived_mutation`].
+        return read_only(request);
+    }
     matches!(
         request,
         Request::Snapshot
@@ -596,6 +605,29 @@ mod tests {
         assert!(
             error.downcast_ref::<UncertainMutation>().is_some(),
             "{error:#}"
+        );
+        server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn archived_history_read_loss_is_certain_and_retryable() {
+        let (_dir, client, listener) = fixture();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            envelope(&mut socket).await;
+            drop(socket);
+        });
+        let error = client
+            .rpc(Request::Archived {
+                generation: "retired".into(),
+                request: Box::new(Request::History {
+                    session: "s".into(),
+                }),
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            error.downcast_ref::<UncertainMutation>().is_none(),
+            "a retired-session read must stay retryable: {error:#}"
         );
         server.await.unwrap();
     }

@@ -891,6 +891,25 @@ mod tests {
     }
 
     #[test]
+    fn coordination_wait_is_bounded_while_the_lock_is_held() {
+        let (_dir, paths, _catalog) = fixture();
+        let _held = coordinate(&paths).unwrap();
+        let start = std::time::Instant::now();
+        let error = coordinate_timeout(&paths, Duration::from_millis(100)).unwrap_err();
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "a contended lock must fail fast instead of hanging the request"
+        );
+        assert!(
+            error.to_string().contains("busy"),
+            "expiry must be retryable, got: {error:#}"
+        );
+        drop(_held);
+        // Released locks are acquired immediately.
+        assert!(coordinate_timeout(&paths, Duration::from_secs(5)).is_ok());
+    }
+
+    #[test]
     fn retired_generation_with_live_records_is_never_pruned() {
         let (_dir, paths, catalog) = fixture();
         let live = owner(&paths, &catalog);

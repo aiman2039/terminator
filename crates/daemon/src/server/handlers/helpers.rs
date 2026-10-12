@@ -135,7 +135,9 @@ impl Shared {
             .catalog_paths
             .as_ref()
             .context("No generation catalog")?;
-        let _coordination = generations::coordinate(root)?;
+        // Same bounded wait as the live request path: fail fast and
+        // retryable instead of hanging past the client's deadline.
+        let _coordination = generations::coordinate_timeout(root, Duration::from_secs(2))?;
         let catalog = generations::Catalog::open(root)?;
         if catalog.active()?.as_deref() == Some(generation.as_str()) {
             drop(_coordination);

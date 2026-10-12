@@ -1,9 +1,9 @@
 [workspace]
 members = ["crates/*"]
-exclude = ["vendor/egui_term", "vendor/egui_dock", "vendor/egui-winit"]
+exclude = ["vendor/egui_term", "vendor/egui_dock", "vendor/egui-winit", "vendor/vt100"]
 resolver = "2"
 [workspace.package]
-version = "0.113.0"
+version = "0.114.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.97.1"
@@ -29,6 +29,7 @@ codegen-units = 8
 [patch.crates-io]
 egui_dock = { path = "vendor/egui_dock" }
 egui-winit = { path = "vendor/egui-winit" }
+vt100 = { path = "vendor/vt100" }
 
 # `scripts/check.sh clippy` uses `-D warnings`, so every warn here fails that check.
 # Pedantic is priority -1 so a later allow on one lint wins. Nursery stays off.

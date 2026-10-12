@@ -1,6 +1,6 @@
 use crate::{
     BTreeSet, Context, Deserialize, Duration, PROTOCOL_VERSION, Path, PathBuf, Paths, Read, Result,
-    Serialize, State, ensure, exe_name, fs, id,
+    Serialize, State, bail, ensure, exe_name, fs, id,
 };
 use fs2::FileExt;
 use rusqlite::{Connection, OpenFlags, params};
@@ -110,6 +110,29 @@ pub fn coordinate(paths: &Paths) -> Result<fs::File> {
     let file = options.open(paths.data.join("coordination.lock"))?;
     file.lock_exclusive()?;
     Ok(file)
+}
+
+/// Bounded coordination for latency-sensitive request paths. The daemon
+/// answers IPC inside a 3 s deadline, so a handler must never block
+/// indefinitely on a lock held by another generation's startup or recovery.
+/// On expiry this fails *before acting*, so the caller can report a certain,
+/// retryable error instead of an uncertain mutation.
+pub fn coordinate_timeout(paths: &Paths, wait: Duration) -> Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(false).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let file = options.open(paths.data.join("coordination.lock"))?;
+    let start = std::time::Instant::now();
+    loop {
+        if file.try_lock_exclusive().is_ok() {
+            return Ok(file);
+        }
+        if start.elapsed() >= wait {
+            bail!("Session service is busy; retry the action");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 pub struct Catalog(Connection);

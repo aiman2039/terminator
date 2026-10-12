@@ -174,17 +174,6 @@ impl App {
                     if self.targets.len() > 256 {
                         self.targets.clear();
                     }
-                    if let Some((pending, session)) = self.pending_target_action.take() {
-                        if pending == key {
-                            if let Some(target) = &target {
-                                self.terminal_action(ctx, &session, target, FileAction::Open);
-                            } else {
-                                self.error = Some("Target no longer exists".into());
-                            }
-                        } else {
-                            self.pending_target_action = Some((pending, session));
-                        }
-                    }
                     self.targets.insert(key, target);
                 }
                 Update::EditorsClosed(target, ids, result) => {

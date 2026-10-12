@@ -147,12 +147,15 @@ pub fn run(o: &Options) -> Result<()> {
             .is_some_and(|value| value == &json!(true)),
         "Opening Agents did not persist"
     );
+    // Cold start under parallel software rendering can push the first inbox
+    // paint past a tight window; the click below only dispatches on a fresh
+    // target rect, so allow room for paint, click, and settle.
     capture(
         &h,
         o,
         "agent-navigation",
-        json!([{"at_ms":1200,"target":format!("agent-go:{}",id(&agent))}]),
-        2700,
+        json!([{"at_ms":1500,"target":format!("agent-go:{}",id(&agent))}]),
+        4500,
         |_| {
             h.wait(
                 |_| {
