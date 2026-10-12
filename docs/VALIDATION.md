@@ -4306,3 +4306,19 @@ all targets and `-D warnings` passed. The complete release suite was not rerun.
 
 Artifacts: `.artifacts/hover-menu-fix/native/hover-menu` (Linux) and
 `/tmp/terminator-hover-menu-fix-macos-rebuilt/hover-menu` (macOS).
+
+## LSP startup test timing (2026-10-12)
+
+GitHub Actions job `114837924564` in run `38257094262` failed at the
+`spawn accepted` assertion in `supervised_spawn_needs_no_caller_runtime`.
+The `/bin/true` child can exit and close its input channel before the caller
+queues `initialize`. An immediate `None` and a later `Down` event are both
+valid results. The test now accepts either result and requires exactly one
+recorded failure after the server entry is removed. It still runs without a
+Tokio runtime on the caller thread. Application code did not change.
+
+Validation: all 12 LSP manager tests passed on macOS with all features. In the
+cached Linux ARM64 release container, nextest ran those 12 tests for 100
+iterations; all 1,200 test executions passed. Formatting, diff checks, and
+application library Clippy with all features and `-D warnings` passed.
+The hosted Ubuntu x86_64 job and complete workspace suite were not rerun.

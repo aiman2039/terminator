@@ -1086,9 +1086,9 @@ mod tests {
             language: "rust",
             root: dir.path().to_owned(),
         };
-        manager
-            .spawn_supervised(&key, Path::new("/bin/true"))
-            .expect("spawn accepted");
+        // /bin/true can exit before initialize is queued. Both an immediate
+        // None and a later Down event are valid; neither needs a caller runtime.
+        let _ = manager.spawn_supervised(&key, Path::new("/bin/true"));
         let start = Instant::now();
         while manager.servers.contains_key(&key) {
             manager.poll();
@@ -1099,6 +1099,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         manager.poll();
+        assert_eq!(
+            manager.failures.get(key.language),
+            Some(&1),
+            "the exited server is recorded exactly once"
+        );
     }
 
     #[test]
