@@ -4322,3 +4322,21 @@ cached Linux ARM64 release container, nextest ran those 12 tests for 100
 iterations; all 1,200 test executions passed. Formatting, diff checks, and
 application library Clippy with all features and `-D warnings` passed.
 The hosted Ubuntu x86_64 job and complete workspace suite were not rerun.
+
+## macOS stapler ticket lookup retry (2026-10-12)
+
+Release job `114895228969` in run `38272432277` signed and notarized the app
+and DMG successfully. DMG stapling then failed with error 68 after Apple's
+CloudKit ticket service connection was lost (`NSURLErrorDomain -1005`).
+
+The release workflow now retries app and DMG stapling only for error 68, with
+at most five attempts and delays of 15, 30, 45, and 60 seconds. Other errors
+stop at once. Exhausted retries retain the error status. Notarization acceptance,
+stapler validation, signature verification, and app Gatekeeper checks remain
+required.
+
+Validation: workflow YAML parsing, Bash syntax, ShellCheck, and diff checks
+passed. A stubbed stapler check covered immediate success, transient recovery,
+retry exhaustion, a permanent error, and a permanent error after a transient
+error. The checks also verified both app/DMG call sites and validation gates.
+No live signing, notarization, stapling, or hosted release rerun was performed.
