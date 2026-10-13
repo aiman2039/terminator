@@ -99,7 +99,14 @@ impl App {
         result: Result<Vec<Outcome>, String>,
     ) {
         self.idle_close_pending = None;
-        let changed = self.idle_target_tabs(&target) != self.idle_close_snapshot;
+        // The daemon's own state broadcast often prunes a closing shell's
+        // tab before this completion arrives; that removal is the close
+        // working, not a change. Only foreign additions/removals count.
+        let changed = idle_contents_changed(
+            &self.idle_close_snapshot,
+            &self.idle_target_tabs(&target),
+            &ids,
+        );
         self.idle_close_snapshot.clear();
         if idle_close_succeeded(&ids, &result, changed) {
             self.apply_idle_close(&target);
@@ -125,6 +132,18 @@ impl App {
             }
         }
     }
+}
+
+/// Whether the target's contents changed in a way the close did not
+/// cause: a tab appeared, or a tab vanished that is not one of the
+/// sessions being closed (those are pruned by the daemon's state sync
+/// before the close completion lands, notably when closing many tabs).
+fn idle_contents_changed(snapshot: &[Tab], current: &[Tab], ids: &[String]) -> bool {
+    current.iter().any(|tab| !snapshot.contains(tab))
+        || snapshot.iter().any(|tab| {
+            !current.contains(tab)
+                && !matches!(tab, Tab::Terminal(sid) if ids.iter().any(|id| id == sid))
+        })
 }
 
 fn idle_close_succeeded(

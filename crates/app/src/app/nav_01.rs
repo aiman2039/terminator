@@ -186,6 +186,163 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-support")]
+    fn sidebar_group_is_abstract_and_renames_without_touching_sessions() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state.sessions = vec![
+            session_fixture("s1", SessionKind::Shell),
+            session_fixture("s2", SessionKind::Shell),
+        ];
+        let tab = |id: &str, sid: &str| crate::workspace::WorkspaceTab {
+            id: id.into(),
+            name: None,
+            primary: Some(Tab::Terminal(sid.into())),
+            layout: egui_dock::DockState::new(vec![Tab::Terminal(sid.into())]),
+        };
+        let mut workspace =
+            Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal("s1".into())]));
+        workspace.tabs[0] = tab("g1", "s1");
+        workspace.tabs.push(tab("g2", "s2"));
+        workspace.active = "g1".into();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+
+        let mut time = 0.0_f64;
+        let paint = |app: &mut App, events: &[egui::Event], time: &mut f64| {
+            *time += 0.05;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(360.0, 600.0),
+                    )),
+                    time: Some(*time),
+                    events: events.to_vec(),
+                    ..Default::default()
+                },
+                |ui| app.projects(ui),
+            );
+            output.textures_delta.clear();
+        };
+        paint(&mut app, &[], &mut time);
+        paint(&mut app, &[], &mut time);
+        let header = header_target(&ctx)("sidebar-tab:g1").expect("group header");
+        let pos = header.center();
+        let press = |pressed: bool| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        // Double-click starts the rename; the group then owns its own text.
+        paint(&mut app, &[press(true)], &mut time);
+        paint(&mut app, &[press(false)], &mut time);
+        paint(&mut app, &[press(true)], &mut time);
+        paint(&mut app, &[press(false)], &mut time);
+        paint(&mut app, &[], &mut time);
+        assert_eq!(app.rename_group, Some(("a".to_string(), "g1".to_string())));
+        assert!(header_target(&ctx)("sidebar-tab-rename:g1").is_some());
+        paint(&mut app, &[egui::Event::Text("Agents".into())], &mut time);
+        paint(&mut app, &[key_press(egui::Key::Enter)], &mut time);
+        assert_eq!(app.rename_group, None);
+        assert_eq!(
+            app.layouts["a"].tabs[0].name.as_deref(),
+            Some("Agents"),
+            "group keeps its own name"
+        );
+        // Member terminal labels are untouched by the group rename.
+        assert_eq!(app.state.sessions[0].label, "s1");
+        // Renaming again starts from the custom name.
+        paint(&mut app, &[press(true)], &mut time);
+        paint(&mut app, &[press(false)], &mut time);
+        paint(&mut app, &[press(true)], &mut time);
+        paint(&mut app, &[press(false)], &mut time);
+        assert_eq!(app.rename_group_text, "Agents");
+        paint(&mut app, &[key_press(egui::Key::Escape)], &mut time);
+        assert_eq!(app.rename_group, None);
+        assert_eq!(app.layouts["a"].tabs[0].name.as_deref(), Some("Agents"));
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn toolbar_switches_projects_opens_git_and_search() {
+        let (mut app, ctx, _dir) = fixture();
+        app.metadata = Some(terminator_core::metadata::Metadata {
+            cwd: PathBuf::from("/a"),
+            branch: Some("main".into()),
+            ..Default::default()
+        });
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(egui_dock::DockState::new(vec![Tab::NativeEditor {
+                path: PathBuf::from("/a/src/main.rs"),
+            }])),
+        );
+        paint_header(&mut app, &ctx, &[]);
+        paint_header(&mut app, &ctx, &[]);
+        let project = header_target(&ctx)("toolbar-project").expect("project switcher");
+        let branch = header_target(&ctx)("toolbar-branch").expect("branch button");
+        let search = header_target(&ctx)("toolbar-search").expect("search button");
+        assert!(project.left() < branch.left() && branch.left() < search.left());
+        let click = |app: &mut App, rect: egui::Rect| {
+            let pos = rect.center();
+            paint_header(app, &ctx, &[egui::Event::PointerMoved(pos)]);
+            paint_header(
+                app,
+                &ctx,
+                &[egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            );
+            paint_header(
+                app,
+                &ctx,
+                &[egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            );
+        };
+        // The switcher menu lists projects; picking one selects it.
+        click(&mut app, project);
+        paint_header(&mut app, &ctx, &[]);
+        let other = header_target(&ctx)("b").expect("project b menu item");
+        click(&mut app, other);
+        assert_eq!(app.selected.as_deref(), Some("b"));
+        app.selected = Some("a".into());
+        click(&mut app, branch);
+        assert_eq!(app.preferences.tool, SidebarTool::Git);
+        assert!(app.preferences.visible);
+        assert!(!app.preferences.right_projects);
+        click(&mut app, search);
+        assert!(app.palette_open);
+        // Status context: breadcrumb names the project and active file.
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 40.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    app.status_context(ui);
+                });
+            },
+        );
+        output.textures_delta.clear();
+        paint_header(&mut app, &ctx, &[]);
+        assert!(header_target(&ctx)("status-breadcrumb").is_some());
+        assert!(header_target(&ctx)("status-breadcrumb-project").is_some());
+    }
+
+    #[test]
     fn first_state_load_in_ide_mode_moves_shells_to_the_strip() {
         let dir = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();

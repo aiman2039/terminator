@@ -287,6 +287,11 @@ pub struct App {
     pub(crate) rename_missed: bool,
     /// Last painted rename field, so a hidden field can drop keyboard focus.
     pub(crate) rename_field_id: Option<egui::Id>,
+    /// Sidebar group rename in progress: (project, workspace tab id) plus
+    /// the draft text. GUI-local; the name lives on the workspace tab.
+    pub(crate) rename_group: Option<(String, String)>,
+    pub(crate) rename_group_text: String,
+    pub(crate) rename_group_focus: bool,
     pub(crate) editor_origins: HashMap<String, Vec<Tab>>,
     pub(crate) search: String,
     pub(crate) search_session: Option<String>,

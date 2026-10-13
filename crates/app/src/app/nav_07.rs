@@ -878,6 +878,7 @@ mod tests {
         let first = workspace.tabs[0].id.clone();
         workspace.tabs.push(crate::workspace::WorkspaceTab {
             id: "second".into(),
+            name: None,
             primary: Some(editor()),
             layout: DockState::new(vec![editor()]),
         });

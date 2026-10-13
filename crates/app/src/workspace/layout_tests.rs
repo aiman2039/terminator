@@ -7,6 +7,37 @@ use std::collections::HashSet;
 mod tests {
     use super::*;
     #[test]
+    fn group_name_round_trips_and_legacy_layouts_default_to_tab_n() {
+        let mut workspace =
+            Workspace::from_layout(DockState::new(vec![Tab::Terminal("shell".into())]));
+        workspace.tabs[0].name = Some("Agent work".into());
+        let value = serde_json::to_value(&workspace).unwrap();
+        let loaded = Workspace::load(value.clone()).unwrap();
+        assert_eq!(loaded.tabs[0].name.as_deref(), Some("Agent work"));
+        assert_eq!(
+            super::super::group_display_name(loaded.tabs[0].name.as_deref(), 0),
+            "Agent work"
+        );
+        // Layouts written before group names existed load unnamed.
+        let mut legacy = value;
+        if let Some(tab) = legacy
+            .get_mut("tabs")
+            .and_then(serde_json::Value::as_array_mut)
+            .and_then(|tabs| tabs.first_mut())
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            tab.remove("name");
+        }
+        let loaded = Workspace::load(legacy).unwrap();
+        assert_eq!(loaded.tabs[0].name, None);
+        assert_eq!(
+            super::super::group_display_name(loaded.tabs[0].name.as_deref(), 2),
+            "Tab 3"
+        );
+        assert_eq!(super::super::group_display_name(Some("  "), 0), "Tab 1");
+    }
+
+    #[test]
     fn legacy_browser_ids_migrate_once_and_primary_matches_the_pane() {
         let mut workspace = Workspace::empty();
         workspace.add("browser".into(), Tab::browser_file("/tmp/page.html".into()));

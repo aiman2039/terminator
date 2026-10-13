@@ -15,6 +15,7 @@ impl Workspace {
             return_tabs: HashMap::default(),
             tabs: vec![WorkspaceTab {
                 id,
+                name: None,
                 primary,
                 layout,
             }],
@@ -149,6 +150,7 @@ impl Workspace {
             index,
             WorkspaceTab {
                 id: id.clone(),
+                name: None,
                 primary: Some(pane.clone()),
                 layout: DockState::new(vec![pane]),
             },
@@ -578,6 +580,7 @@ impl Workspace {
         let id = terminator_core::id();
         self.tabs.push(WorkspaceTab {
             id: id.clone(),
+            name: None,
             primary: Some(primary),
             layout,
         });

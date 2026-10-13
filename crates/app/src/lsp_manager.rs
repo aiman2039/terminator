@@ -398,6 +398,38 @@ impl LspManager {
         self.diagnostics.get(path).cloned().unwrap_or_default()
     }
 
+    /// `(errors, warnings, total)` across every tracked file, for the
+    /// status bar. Missing severity counts toward the total only.
+    #[must_use]
+    pub fn problem_counts(&self) -> (usize, usize, usize) {
+        let mut errors: usize = 0;
+        let mut warnings: usize = 0;
+        let mut total: usize = 0;
+        for items in self.diagnostics.values() {
+            for item in items {
+                total = total.saturating_add(1);
+                match item.severity {
+                    Some(L::Severity::Error) => errors = errors.saturating_add(1),
+                    Some(L::Severity::Warning) => warnings = warnings.saturating_add(1),
+                    _ => {}
+                }
+            }
+        }
+        (errors, warnings, total)
+    }
+
+    /// Whether a document is tracked for `path` (a server was consulted).
+    #[must_use]
+    pub fn tracked(&self, path: &Path) -> bool {
+        self.docs.contains_key(path)
+    }
+
+    /// Why `path` has no ready server, if tracked and not ready.
+    #[must_use]
+    pub fn server_note(&self, path: &Path) -> Option<String> {
+        self.server_status(path)
+    }
+
     /// Why `path` has no working server, if that is the case: missing
     /// binary, repeated crashes, or still starting. `None` means ready.
     fn server_status(&self, path: &Path) -> Option<String> {
@@ -1043,6 +1075,20 @@ mod tests {
         assert_eq!(marks[0].severity, L::Severity::Hint);
         assert_eq!(marks[1].line, 9);
         assert_eq!(marks[1].severity, L::Severity::Error);
+        // Status-bar counts: one error, one warning, one unseverity'd.
+        assert_eq!(manager.problem_counts(), (1, 1, 3));
+        assert!(manager.tracked(&path) || !manager.problems_for(&path).is_empty());
+    }
+
+    #[test]
+    fn problem_counts_start_empty_and_untracked() {
+        let manager = LspManager::new();
+        assert_eq!(manager.problem_counts(), (0, 0, 0));
+        assert!(!manager.tracked(std::path::Path::new("/tmp/never-opened.rs")));
+        assert_eq!(
+            manager.server_note(std::path::Path::new("/tmp/never-opened.rs")),
+            None
+        );
     }
 
     #[test]

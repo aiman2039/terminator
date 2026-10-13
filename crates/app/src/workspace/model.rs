@@ -7,8 +7,21 @@ use std::ops::{Deref, DerefMut};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct WorkspaceTab {
     pub id: String,
+    /// Sidebar-given group name. `None` renders as an abstract `Tab N`;
+    /// the group's identity never borrows a member terminal's label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub primary: Option<Tab>,
     pub layout: DockState<Tab>,
+}
+
+/// What the sidebar calls a workspace tab: its custom name, or the
+/// abstract position label `Tab N` (1-based, layout order).
+pub(crate) fn group_display_name(name: Option<&str>, index: usize) -> String {
+    match name {
+        Some(name) if !name.trim().is_empty() => name.to_string(),
+        _ => format!("Tab {}", index.saturating_add(1)),
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Workspace {
@@ -42,6 +55,7 @@ impl DerefMut for Workspace {
             self.active.clone_from(&id);
             self.tabs.push(WorkspaceTab {
                 id,
+                name: None,
                 primary: None,
                 layout: DockState::new(Vec::new()),
             });

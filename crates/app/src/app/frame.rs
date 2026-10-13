@@ -316,11 +316,12 @@ impl eframe::App for App {
                         }
                     }
                 }
+                self.status_context(ui);
                 if self.preferences.ide_mode {
                     ui.separator();
                     self.player_status_row(ui);
-                    self.notification_status_badge(ui);
                 }
+                self.notification_status_badge(ui);
                 // Single right-aligned block (see status_right_end): resource
                 // readout, sidebar-height toggle, then the strip collapse.
                 // Right-aligned app totals. Pure paint over the background
@@ -457,6 +458,90 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// Status-bar context after the branch block: breadcrumb
+    /// (project › active file or terminal), language-server diagnostics,
+    /// and the active editor's LSP state.
+    pub(crate) fn status_context(&mut self, ui: &mut egui::Ui) {
+        let Some(project_id) = self.selected.clone() else {
+            return;
+        };
+        let Some(project) = self.selected_project().cloned() else {
+            return;
+        };
+        let pane = self
+            .layouts
+            .get(&project_id)
+            .and_then(|workspace| workspace.active_pane().cloned());
+        let editor_path = match &pane {
+            Some(Tab::NativeEditor { path }) => Some(path.clone()),
+            _ => None,
+        };
+        let leaf = match &pane {
+            Some(Tab::NativeEditor { path } | Tab::Image { path }) => {
+                Some(path.strip_prefix(&project.path).map_or_else(
+                    |_| path.display().to_string(),
+                    |rel| rel.display().to_string(),
+                ))
+            }
+            Some(Tab::Terminal(sid)) => Some(
+                self.state
+                    .sessions
+                    .iter()
+                    .find(|session| &session.id == sid)
+                    .map_or_else(|| "Terminal".to_string(), |session| session.label.clone()),
+            ),
+            _ => None,
+        };
+        ui.separator();
+        let _crumb = ui.weak(&project.name);
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "status-breadcrumb-project", _crumb.rect);
+        if let Some(leaf) = leaf {
+            ui.weak("›");
+            let _leaf = ui.weak(leaf);
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "status-breadcrumb", _leaf.rect);
+        }
+        let (errors, warnings, total) = self.lsp.problem_counts();
+        if total > 0 {
+            ui.separator();
+            let mut parts = Vec::new();
+            if errors > 0 {
+                parts.push(format!("{errors} errors"));
+            }
+            if warnings > 0 {
+                parts.push(format!("{warnings} warnings"));
+            }
+            if errors == 0 && warnings == 0 {
+                parts.push(format!("{total} problems"));
+            }
+            let _diag = ui
+                .colored_label(
+                    appearance::color(if errors > 0 {
+                        &self.theme.status_failed
+                    } else {
+                        &self.theme.status_waiting
+                    }),
+                    parts.join(" · "),
+                )
+                .on_hover_text("Diagnostics from language servers for open files");
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "status-diagnostics", _diag.rect);
+        }
+        if let Some(path) = editor_path
+            && self.lsp.tracked(&path)
+        {
+            ui.separator();
+            let _lsp = if let Some(note) = self.lsp.server_note(&path) {
+                ui.weak("LSP unavailable").on_hover_text(note)
+            } else {
+                ui.weak("LSP ready")
+            };
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "status-lsp", _lsp.rect);
+        }
+    }
+
     /// Bring the window forward from the menu-bar status item.
     #[cfg(any(test, target_os = "macos"))]
     pub(crate) fn focus_window_from_menu(ctx: &egui::Context) {
