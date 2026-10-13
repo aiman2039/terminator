@@ -186,7 +186,7 @@ impl App {
                 let filter = ui.add_sized(
                     [ui.available_width(), appearance::TOOLBAR_BUTTON],
                     appearance::singleline(&mut self.preferences.project_filter)
-                        .id(egui::Id::new("project-filter"))
+                        .id(ui.id().with("project-filter"))
                         .hint_text("Filter projects"),
                 );
                 #[cfg(feature = "test-support")]

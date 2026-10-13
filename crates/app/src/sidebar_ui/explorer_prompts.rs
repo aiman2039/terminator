@@ -320,8 +320,10 @@ impl App {
         }
     }
 
-    pub(crate) fn explorer_name_prompt_id() -> egui::Id {
-        egui::Id::new("explorer-name-prompt")
+    /// Scoped to the hosting sidebar: Explorer can render on both sides in
+    /// one frame, and an absolute ID would clash between the two copies.
+    pub(crate) fn explorer_name_prompt_id(ui: &egui::Ui) -> egui::Id {
+        ui.id().with("explorer-name-prompt")
     }
 
     pub(crate) fn open_name_prompt(&mut self, prompt: workspace_ops::NamePrompt) {
@@ -347,6 +349,8 @@ impl App {
         let mut submit = false;
         let focus = self.name_prompt_focus;
         self.name_prompt_focus = false;
+        let prompt_id = Self::explorer_name_prompt_id(ui);
+        self.name_prompt_widget = Some(prompt_id);
         let save_w = prompt_button_width(ui, "Save");
         let cancel_w = prompt_button_width(ui, "Cancel");
         let gap = ui.spacing().item_spacing.x;
@@ -372,7 +376,7 @@ impl App {
             };
             let field = ui.add(
                 appearance::singleline(&mut name)
-                    .id(Self::explorer_name_prompt_id())
+                    .id(prompt_id)
                     .hint_text("Name")
                     .desired_width(field_w),
             );

@@ -418,11 +418,17 @@ impl App {
     }
 
     pub(crate) fn sidebar(&mut self, ui: &mut egui::Ui) {
-        if self.preferences.tool == SidebarTool::Info {
+        let tool = self.preferences.tool;
+        self.sidebar_tool(tool, ui);
+    }
+
+    /// One tool's content, hostable by either sidebar.
+    pub(crate) fn sidebar_tool(&mut self, tool: SidebarTool, ui: &mut egui::Ui) {
+        if tool == SidebarTool::Info {
             self.info_panel(ui);
             return;
         }
-        if self.preferences.tool == SidebarTool::History {
+        if tool == SidebarTool::History {
             let index = self.sidebar_index();
             let groups = self.cached_history();
             ui.horizontal(|ui| {
@@ -431,7 +437,7 @@ impl App {
                 let response = ui.add_sized(
                     egui::vec2(width, 22.0),
                     appearance::singleline(&mut self.preferences.history_filter)
-                        .id(egui::Id::new("history-filter"))
+                        .id(ui.id().with("history-filter"))
                         .hint_text("Filter by name"),
                 );
                 #[cfg(feature = "test-support")]
@@ -522,11 +528,11 @@ impl App {
             });
             return;
         }
-        if self.preferences.tool == SidebarTool::Agents {
+        if tool == SidebarTool::Agents {
             self.agents_view(ui);
             return;
         }
-        if self.preferences.tool == SidebarTool::Explorer {
+        if tool == SidebarTool::Explorer {
             self.pending_delete_bar(ui);
             if let Some(cwd) = self.cwd() {
                 self.explorer_toolbar(ui, &cwd);

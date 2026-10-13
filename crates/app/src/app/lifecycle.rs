@@ -86,6 +86,7 @@ impl App {
             explorer_query: String::new(),
             name_prompt: None,
             name_prompt_focus: false,
+            name_prompt_widget: None,
             pending_delete: None,
             services: services.clone(),
             service_owner,

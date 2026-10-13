@@ -37,6 +37,8 @@ pub(super) fn fixture() -> (App, egui::Context, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let ctx = egui::Context::default();
     let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+    // Classic dock is the baseline; IDE-mode tests opt in explicitly.
+    app.preferences.ide_mode = false;
     app.preferences_writable = false;
     let state = State {
         projects: ["a", "b"]

@@ -264,7 +264,7 @@ impl App {
             let response = ui.add_sized(
                 egui::vec2(width, 22.0),
                 appearance::singleline(&mut self.preferences.agents_search)
-                    .id(egui::Id::new("agents-search"))
+                    .id(ui.id().with("agents-search"))
                     .hint_text("Search agents"),
             );
             #[cfg(feature = "test-support")]

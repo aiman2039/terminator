@@ -9,6 +9,7 @@ use super::header::{
 };
 impl App {
     pub(super) fn show_git_sidebar(&mut self) {
+        self.preferences.right_projects = false;
         self.preferences.visible = true;
         self.preferences.tool = SidebarTool::Git;
     }
@@ -378,7 +379,10 @@ impl App {
 
     pub(super) fn run_header_action(&mut self, action: HeaderAction) {
         match action {
-            HeaderAction::Tool(tool) => self.preferences.toggle(tool),
+            HeaderAction::Tool(tool) => {
+                self.preferences.right_projects = false;
+                self.preferences.toggle(tool);
+            }
             HeaderAction::IdeMode => self.toggle_ide_mode(),
             HeaderAction::Settings => self.open_settings(),
             HeaderAction::Palette => self.open_command_palette(),

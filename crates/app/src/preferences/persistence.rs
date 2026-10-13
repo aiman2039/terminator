@@ -81,6 +81,12 @@ pub struct LayoutPreset {
     pub left_visible: bool,
     pub tool: SidebarTool,
     pub left_agents: bool,
+    /// Tool hosted by the left sidebar instead of Projects/Agents.
+    #[serde(default)]
+    pub left_tool: Option<SidebarTool>,
+    /// Projects list hosted by the right sidebar.
+    #[serde(default)]
+    pub right_projects: bool,
     pub sidebar_width: f32,
     pub left_width: f32,
 }
@@ -94,8 +100,8 @@ pub struct UiPreferences {
     pub history_expanded: HashMap<String, bool>,
     pub tool: SidebarTool,
     pub visible: bool,
-    /// IDE layout preset: fixed explorer/terminal zones instead of the
-    /// free-floating dock. Persisted so the user's preference survives restart.
+    /// IDE layout: tool stripes, editor center, terminal strip. Default on
+    /// for fresh preferences; a saved value (either way) is never overridden.
     pub ide_mode: bool,
     /// Bottom IDE terminal strip collapsed (IDE mode only).
     #[serde(default)]
@@ -114,6 +120,13 @@ pub struct UiPreferences {
     #[serde(default = "default_true")]
     pub left_visible: bool,
     pub left_agents: bool,
+    /// Tool hosted by the left sidebar instead of its native Projects/Agents
+    /// views. `None` keeps the native views; stripes set this per side.
+    #[serde(default)]
+    pub left_tool: Option<SidebarTool>,
+    /// Projects list hosted by the right sidebar instead of `tool`.
+    #[serde(default)]
+    pub right_projects: bool,
     pub width: f32,
     /// Selected Agents sidebar view.
     #[serde(default)]
@@ -191,13 +204,15 @@ impl Default for UiPreferences {
             history_expanded: HashMap::new(),
             tool: SidebarTool::Explorer,
             visible: true,
-            ide_mode: false,
+            ide_mode: true,
             ide_terminal_collapsed: false,
             ide_sidebars_full_height: true,
             named_layouts: HashMap::new(),
             active_layout: None,
             left_visible: true,
             left_agents: false,
+            left_tool: None,
+            right_projects: false,
             width: DEFAULT_SIDEBAR_WIDTH,
             agents_tab: AgentsTab::NeedsAttention,
             agents_search: String::new(),
@@ -336,6 +351,8 @@ impl UiPreferences {
             left_visible: self.left_visible,
             tool: self.tool,
             left_agents: self.left_agents,
+            left_tool: self.left_tool,
+            right_projects: self.right_projects,
             sidebar_width: self.width,
             left_width: 225.0,
         };
@@ -353,6 +370,8 @@ impl UiPreferences {
         self.left_visible = preset.left_visible;
         self.tool = preset.tool;
         self.left_agents = preset.left_agents;
+        self.left_tool = preset.left_tool;
+        self.right_projects = preset.right_projects;
         self.width = preset.sidebar_width;
         self.active_layout = Some(name.to_string());
         Some(preset)
@@ -489,10 +508,47 @@ mod tests {
     }
 
     #[test]
+    fn per_side_tools_round_trip_and_default_to_native_views() {
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = UiPreferences::load(dir.path()).unwrap();
+        assert_eq!(fresh.left_tool, None);
+        assert!(!fresh.right_projects);
+        // Files written before per-side tools existed load the same way.
+        fs::write(
+            dir.path().join("ui-preferences.json"),
+            r#"{"version":2,"ide_mode":true}"#,
+        )
+        .unwrap();
+        let legacy = UiPreferences::load(dir.path()).unwrap();
+        assert_eq!(legacy.left_tool, None);
+        assert!(!legacy.right_projects);
+        let mut prefs = legacy;
+        prefs.left_tool = Some(SidebarTool::Git);
+        prefs.right_projects = true;
+        prefs.save(dir.path()).unwrap();
+        let loaded = UiPreferences::load(dir.path()).unwrap();
+        assert_eq!(loaded.left_tool, Some(SidebarTool::Git));
+        assert!(loaded.right_projects);
+        // Layout presets carry the per-side assignment too.
+        let mut saved = loaded;
+        saved.save_current_layout("both-sides");
+        assert_eq!(
+            saved.named_layouts["both-sides"].left_tool,
+            Some(SidebarTool::Git)
+        );
+        assert!(saved.named_layouts["both-sides"].right_projects);
+        saved.left_tool = None;
+        saved.right_projects = false;
+        saved.apply_layout("both-sides").unwrap();
+        assert_eq!(saved.left_tool, Some(SidebarTool::Git));
+        assert!(saved.right_projects);
+    }
+
+    #[test]
     fn ide_mode_is_persisted_and_survives_restart() {
         let dir = tempfile::tempdir().unwrap();
         let prefs = UiPreferences::load(dir.path()).unwrap();
-        assert!(!prefs.ide_mode);
+        assert!(prefs.ide_mode, "fresh preferences default to IDE layout");
         assert!(!prefs.ide_terminal_collapsed);
         let mut prefs = prefs;
         prefs.ide_mode = true;

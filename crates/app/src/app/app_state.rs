@@ -35,6 +35,9 @@ pub struct App {
     pub(crate) name_prompt: Option<workspace_ops::NamePrompt>,
     /// The name field takes keyboard focus on its next paint, then this clears.
     pub(crate) name_prompt_focus: bool,
+    /// Widget ID of the name-prompt field as last painted. The ID is scoped
+    /// to the hosting sidebar, so focus handling must use the painted one.
+    pub(crate) name_prompt_widget: Option<egui::Id>,
     pub(crate) pending_delete: Option<PathBuf>,
     pub(crate) services: gui_services::Services,
     pub(crate) service_owner: gui_services::Owner,

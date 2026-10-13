@@ -237,7 +237,9 @@ impl App {
     /// focus without saving or cancelling that prompt.
     pub(crate) fn terminal_pressed(&mut self, ctx: &egui::Context, sid: &str) {
         self.name_prompt_focus = false;
-        ctx.memory_mut(|memory| memory.surrender_focus(Self::explorer_name_prompt_id()));
+        if let Some(id) = self.name_prompt_widget {
+            ctx.memory_mut(|memory| memory.surrender_focus(id));
+        }
         if let Some(preview) = self.markdown.entries.get_mut(sid) {
             preview.editor_focused = true;
         }

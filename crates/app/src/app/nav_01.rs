@@ -1,6 +1,9 @@
 use eframe::egui::{self};
 use egui_dock::NodeIndex;
-use std::sync::mpsc::{self};
+use std::{
+    path::PathBuf,
+    sync::mpsc::{self},
+};
 use terminator_core::*;
 
 use super::super::*;
@@ -69,6 +72,148 @@ mod tests {
         app.run_shortcut(&ctx, "toggle_right_sidebar");
         assert!((draw(&mut app) - both).abs() < 1.0);
         assert!(app.preferences.ide_mode);
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn ide_stripes_switch_views_and_toggle_tools() {
+        let (mut app, ctx, _dir) = fixture();
+        app.preferences.ide_mode = true;
+        let draw = |app: &mut App, events: &[egui::Event]| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 600.0),
+                    )),
+                    events: events.to_vec(),
+                    ..Default::default()
+                },
+                |ui| app.workspace_sidebars(ui),
+            );
+            output.textures_delta.clear();
+        };
+        draw(&mut app, &[]);
+        draw(&mut app, &[]);
+        let projects = header_target(&ctx)("stripe-projects").expect("projects stripe");
+        let agents = header_target(&ctx)("stripe-agents").expect("agents stripe");
+        let git = header_target(&ctx)("stripe-tool-Git").expect("git stripe");
+        let search = header_target(&ctx)("stripe-search").expect("search stripe");
+        assert!(projects.left() < 44.0 && agents.left() < 44.0);
+        assert!(git.right() > 1156.0 && search.left() < 44.0);
+        let click = |app: &mut App, rect: egui::Rect| {
+            let pos = rect.center();
+            draw(app, &[egui::Event::PointerMoved(pos)]);
+            draw(
+                app,
+                &[egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            );
+            draw(
+                app,
+                &[egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+            );
+        };
+        click(&mut app, agents);
+        assert!(app.preferences.left_visible && app.preferences.left_agents);
+        click(&mut app, projects);
+        assert!(app.preferences.left_visible && !app.preferences.left_agents);
+        click(&mut app, git);
+        assert_eq!(app.preferences.tool, SidebarTool::Git);
+        assert!(app.preferences.visible);
+        click(&mut app, git);
+        assert!(!app.preferences.visible);
+        click(&mut app, search);
+        assert!(app.palette_open);
+        // Classic mode keeps the same stripes; only the terminal strip
+        // is IDE-only. Regression: Explorer/Git had no access point here.
+        app.palette_open = false;
+        app.preferences.ide_mode = false;
+        draw(&mut app, &[]);
+        draw(&mut app, &[]);
+        let git_classic = header_target(&ctx)("stripe-tool-Git").expect("git stripe (classic)");
+        let explorer_classic =
+            header_target(&ctx)("stripe-tool-Explorer").expect("explorer stripe (classic)");
+        click(&mut app, git_classic);
+        assert!(app.preferences.visible);
+        assert_eq!(app.preferences.tool, SidebarTool::Git);
+        click(&mut app, explorer_classic);
+        assert_eq!(app.preferences.tool, SidebarTool::Explorer);
+        assert!(app.preferences.visible);
+        // Every tool is on both stripes; the side clicked hosts the view.
+        let left_git = header_target(&ctx)("stripe-left-Git").expect("left git stripe");
+        let right_projects =
+            header_target(&ctx)("stripe-right-Projects").expect("right projects stripe");
+        let right_search = header_target(&ctx)("stripe-right-Search").expect("right search");
+        click(&mut app, left_git);
+        assert_eq!(app.preferences.left_tool, Some(SidebarTool::Git));
+        assert!(app.preferences.left_visible);
+        assert_eq!(app.preferences.tool, SidebarTool::Explorer);
+        click(&mut app, left_git);
+        assert!(!app.preferences.left_visible);
+        click(&mut app, right_projects);
+        assert!(app.preferences.right_projects);
+        assert!(app.preferences.visible);
+        click(&mut app, explorer_classic);
+        assert!(!app.preferences.right_projects);
+        assert_eq!(app.preferences.tool, SidebarTool::Explorer);
+        click(&mut app, right_search);
+        assert!(app.palette_open);
+        // Same view on both sides at once (Projects left + right) must not
+        // clash widget IDs: the right copy's filter takes focus and text.
+        app.palette_open = false;
+        app.preferences.left_tool = None;
+        app.preferences.left_agents = false;
+        app.preferences.left_visible = true;
+        app.preferences.right_projects = true;
+        app.preferences.visible = true;
+        draw(&mut app, &[]);
+        draw(&mut app, &[]);
+        let right_filter = header_target(&ctx)("project-filter").expect("right filter");
+        click(&mut app, right_filter);
+        draw(&mut app, &[egui::Event::Text("b".into())]);
+        assert_eq!(app.preferences.project_filter, "b");
+        assert!(app.text_input_focused(&ctx));
+    }
+
+    #[test]
+    fn first_state_load_in_ide_mode_moves_shells_to_the_strip() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        app.preferences_writable = false;
+        assert!(app.preferences.ide_mode, "fresh preferences are IDE mode");
+        let main = egui_dock::DockState::new(vec![Tab::Terminal("shell".into())]);
+        let layout = serde_json::to_value(Workspace::from_layout(main)).unwrap();
+        app.apply_state(State {
+            projects: vec![Project {
+                id: "a".into(),
+                name: "a".into(),
+                path: PathBuf::from("/a"),
+                layout,
+            }],
+            sessions: vec![session_fixture("shell", SessionKind::Shell)],
+            selected_project: Some("a".into()),
+            ..Default::default()
+        });
+        assert!(app.is_strip_session("a", "shell"));
+        assert!(!app.layouts["a"].contains(&Tab::Terminal("shell".into())));
+        // A later state load must not drag shells back out of the main dock.
+        app.move_project_strip_to_main("a");
+        assert!(!app.is_strip_session("a", "shell"));
+        let mut again = app.state.clone();
+        again.revision = again.revision.wrapping_add(1);
+        app.apply_state(again);
+        assert!(!app.is_strip_session("a", "shell"));
     }
 
     #[test]

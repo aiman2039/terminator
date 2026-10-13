@@ -4,17 +4,33 @@ use egui_dock::{DockArea, NodeIndex};
 use terminator_core::*;
 
 use super::super::*;
+
+/// A stripe entry: the native Projects list, or one right-sidebar tool.
+/// Either stripe can host any of them; the side decides the sidebar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StripeTool {
+    Projects,
+    Tool(SidebarTool),
+}
+
 impl App {
     pub(crate) fn workspace_sidebars(&mut self, ui: &mut egui::Ui) {
+        // Stripes are the tool-window access point in both layouts; IDE
+        // mode only adds the bottom terminal strip on top of them.
+        self.tool_stripe(ui, false);
+        self.tool_stripe(ui, true);
         if self.preferences.left_visible {
             let projects_response = egui::Panel::left("projects")
+                .frame(appearance::panel_frame(&self.theme))
                 .resizable(true)
                 .default_size(225.0)
                 .size_range(170.0..=420.0)
                 .show(ui, |ui| {
                     self.agent_bar(ui);
                     ui.push_id("left-sidebar-content", |ui| {
-                        if self.preferences.left_agents {
+                        if let Some(tool) = self.preferences.left_tool {
+                            self.sidebar_tool(tool, ui);
+                        } else if self.preferences.left_agents {
                             self.agents_view(ui);
                         } else {
                             self.projects(ui);
@@ -31,15 +47,171 @@ impl App {
         }
         if self.preferences.visible {
             let response = egui::Panel::right("context")
+                .frame(appearance::panel_frame(&self.theme))
                 .resizable(true)
                 .default_size(self.preferences.width)
                 .size_range(220.0..=480.0)
                 .show(ui, |ui| {
-                    self.sidebar(ui);
+                    if self.preferences.right_projects {
+                        self.agent_bar(ui);
+                        self.projects(ui);
+                    } else {
+                        self.sidebar(ui);
+                    }
                 });
             self.preferences.width = response.response.rect.width().clamp(220.0, 480.0);
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "context-sidebar", response.response.rect);
+        }
+    }
+
+    /// Both stripes carry every tool; clicking renders it in that side's
+    /// sidebar. Registered before its sidebar so it stays on the window edge.
+    fn tool_stripe(&mut self, ui: &mut egui::Ui, right: bool) {
+        let panel = if right {
+            egui::Panel::right("tool-stripe-right")
+        } else {
+            egui::Panel::left("tool-stripe-left")
+        };
+        panel
+            .exact_size(44.0)
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(appearance::color(&self.theme.window))
+                    .inner_margin(egui::Margin::symmetric(2, 6)),
+            )
+            .show(ui, |ui| {
+                for (tool, icon, label) in [
+                    (StripeTool::Projects, "Folder", "Projects"),
+                    (StripeTool::Tool(SidebarTool::Explorer), "Files", "Explorer"),
+                    (StripeTool::Tool(SidebarTool::Agents), "Bell", "Agents"),
+                    (StripeTool::Tool(SidebarTool::Git), "GitBranch", "Git"),
+                    (StripeTool::Tool(SidebarTool::History), "History", "History"),
+                    (StripeTool::Tool(SidebarTool::Info), "Info", "Info"),
+                ] {
+                    let selected = self.stripe_selected(right, tool);
+                    let badge = if tool == StripeTool::Tool(SidebarTool::Agents) {
+                        let (waiting, unread) = self.attention_counts();
+                        (waiting.saturating_add(unread) > 0).then(|| {
+                            appearance::color(if waiting > 0 {
+                                &self.theme.status_waiting
+                            } else {
+                                &self.theme.text
+                            })
+                        })
+                    } else {
+                        None
+                    };
+                    let response = appearance::stripe_button(ui, icon, label, selected, badge);
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(
+                        ui.ctx(),
+                        &format!("stripe-{}-{label}", if right { "right" } else { "left" }),
+                        response.rect,
+                    );
+                    #[cfg(feature = "test-support")]
+                    if !right {
+                        let legacy = match label {
+                            "Projects" => Some("stripe-projects"),
+                            "Agents" => Some("stripe-agents"),
+                            _ => None,
+                        };
+                        if let Some(name) = legacy {
+                            diagnostics::record(ui.ctx(), name, response.rect);
+                        }
+                    }
+                    #[cfg(feature = "test-support")]
+                    if right {
+                        diagnostics::record(
+                            ui.ctx(),
+                            &format!("stripe-tool-{label}"),
+                            response.rect,
+                        );
+                    }
+                    if response.clicked() {
+                        self.stripe_activate(right, tool);
+                    }
+                }
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                    let search = appearance::stripe_button(ui, "Search", "Search", false, None);
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(
+                        ui.ctx(),
+                        &format!("stripe-{}-Search", if right { "right" } else { "left" }),
+                        search.rect,
+                    );
+                    #[cfg(feature = "test-support")]
+                    if !right {
+                        diagnostics::record(ui.ctx(), "stripe-search", search.rect);
+                    }
+                    if search.clicked() {
+                        self.open_command_palette();
+                    }
+                });
+            });
+    }
+
+    fn stripe_selected(&self, right: bool, tool: StripeTool) -> bool {
+        if right {
+            self.preferences.visible
+                && match tool {
+                    StripeTool::Projects => self.preferences.right_projects,
+                    StripeTool::Tool(tool) => {
+                        !self.preferences.right_projects && self.preferences.tool == tool
+                    }
+                }
+        } else {
+            self.preferences.left_visible
+                && match tool {
+                    StripeTool::Projects => {
+                        self.preferences.left_tool.is_none() && !self.preferences.left_agents
+                    }
+                    StripeTool::Tool(SidebarTool::Agents) => {
+                        self.preferences.left_tool == Some(SidebarTool::Agents)
+                            || (self.preferences.left_tool.is_none()
+                                && self.preferences.left_agents)
+                    }
+                    StripeTool::Tool(tool) => self.preferences.left_tool == Some(tool),
+                }
+        }
+    }
+
+    fn stripe_activate(&mut self, right: bool, tool: StripeTool) {
+        if self.stripe_selected(right, tool) {
+            // Clicking the active tool hides that side's sidebar.
+            if right {
+                self.preferences.visible = false;
+            } else {
+                self.preferences.left_visible = false;
+            }
+            return;
+        }
+        if right {
+            match tool {
+                StripeTool::Projects => self.preferences.right_projects = true,
+                StripeTool::Tool(tool) => {
+                    self.preferences.right_projects = false;
+                    self.preferences.tool = tool;
+                }
+            }
+            self.preferences.visible = true;
+        } else {
+            match tool {
+                StripeTool::Projects => {
+                    self.preferences.left_tool = None;
+                    self.preferences.left_agents = false;
+                }
+                StripeTool::Tool(SidebarTool::Agents) => {
+                    self.preferences.left_tool = None;
+                    if !self.preferences.left_agents {
+                        self.preferences.agents_tab = AgentsTab::NeedsAttention;
+                    }
+                    self.preferences.left_agents = true;
+                }
+                StripeTool::Tool(tool) => self.preferences.left_tool = Some(tool),
+            }
+            self.preferences.left_visible = true;
         }
     }
 
@@ -63,6 +235,7 @@ impl App {
         let max_height = (ui.available_height() * 0.8).max(80.0);
         #[cfg_attr(not(feature = "test-support"), allow(unused_variables))]
         let shown = egui::Panel::bottom("ide-terminal")
+            .frame(appearance::panel_frame(&self.theme))
             .resizable(true)
             .default_size(220.0)
             .size_range(80.0..=max_height)

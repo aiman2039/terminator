@@ -768,6 +768,37 @@ mod row_tests {
     }
 
     #[test]
+    fn intellij_theme_tokens_match_new_ui_geometry() {
+        let theme = AppearanceConfig::intellij_dark();
+        let ctx = egui::Context::default();
+        install(&ctx);
+        apply(&ctx, &theme);
+        let style = ctx.style_of(egui::Theme::Dark);
+        assert_eq!(style.visuals.panel_fill, color(&theme.surface));
+        assert_eq!(
+            style.visuals.window_corner_radius,
+            egui::CornerRadius::same(PANEL_RADIUS)
+        );
+        assert_eq!(
+            style.visuals.widgets.inactive.corner_radius,
+            egui::CornerRadius::same(WIDGET_RADIUS)
+        );
+        assert_eq!(
+            style.visuals.menu_corner_radius,
+            egui::CornerRadius::same(MENU_RADIUS)
+        );
+        assert!(style.visuals.popup_shadow.blur > 0);
+        let frame = panel_frame(&theme);
+        assert_eq!(frame.fill, color(&theme.surface));
+        // Abutting panels are flush: no outer gap, no rounded corners.
+        assert_eq!(frame.corner_radius, egui::CornerRadius::ZERO);
+        assert_eq!(frame.outer_margin, egui::Margin::ZERO);
+        assert_eq!(PANEL_RADIUS, 10);
+        assert_eq!(WIDGET_RADIUS, 6);
+        assert_eq!(MENU_RADIUS, 10);
+    }
+
+    #[test]
     fn menu_style_matches_orca_dark_tokens() {
         let mut style = egui::Style {
             visuals: egui::Visuals::dark(),
@@ -780,7 +811,7 @@ mod row_tests {
         assert_eq!(style.visuals.window_stroke.color, MENU_LINE);
         assert_eq!(
             style.visuals.menu_corner_radius,
-            egui::CornerRadius::same(11)
+            egui::CornerRadius::same(MENU_RADIUS)
         );
         assert_eq!(style.visuals.widgets.hovered.bg_fill, MENU_LINE);
         assert_eq!(

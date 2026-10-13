@@ -40,6 +40,43 @@ pub struct AppearanceConfig {
 }
 impl Default for AppearanceConfig {
     fn default() -> Self {
+        Self::intellij_dark()
+    }
+}
+impl AppearanceConfig {
+    /// `JetBrains` New UI dark palette: charcoal window, lighter panel
+    /// surface, muted blue selection. New default; saved user themes
+    /// load their explicit colors and are never rewritten to this.
+    #[must_use]
+    pub fn intellij_dark() -> Self {
+        Self {
+            version: 1,
+            window: "#1E1F22".into(),
+            surface: "#2B2D30".into(),
+            hover: "#393B40".into(),
+            border: "#393B40".into(),
+            text: "#DFE1E5".into(),
+            secondary: "#9DA1A8".into(),
+            accent: "#3574F0".into(),
+            selection: "#214283".into(),
+            terminal_background: "#1E1F22".into(),
+            terminal_foreground: "#DFE1E5".into(),
+            git_added: "#81B88B".into(),
+            git_modified: "#E2C08D".into(),
+            git_deleted: "#C74E39".into(),
+            git_untracked: "#73C991".into(),
+            git_ignored: "#6E6E6E".into(),
+            status_running: "#79BAA3".into(),
+            status_waiting: "#E2C08D".into(),
+            status_failed: "#C74E39".into(),
+            border_width: 1.0,
+            pane_divider_width: 8.0,
+            density: Density::Comfortable,
+        }
+    }
+    /// Pre-IDE palette, kept as a selectable preset.
+    #[must_use]
+    pub fn terminator_dark() -> Self {
         Self {
             version: 1,
             window: "#26282C".into(),
@@ -316,6 +353,19 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+    #[test]
+    fn intellij_dark_is_default_and_terminator_dark_is_preserved() {
+        let default = AppearanceConfig::default();
+        assert_eq!(default, AppearanceConfig::intellij_dark());
+        default.validate().unwrap();
+        assert_eq!(default.window, "#1E1F22");
+        assert_eq!(default.surface, "#2B2D30");
+        let legacy = AppearanceConfig::terminator_dark();
+        legacy.validate().unwrap();
+        assert_eq!(legacy.window, "#26282C");
+        assert!(!default.colors_match(&legacy));
+        assert!(default.colors_match(&AppearanceConfig::intellij_dark()));
     }
     #[test]
     fn high_contrast_and_density_round_trip() {
