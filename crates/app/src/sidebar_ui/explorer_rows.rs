@@ -202,6 +202,7 @@ pub fn explorer_file_row(
     theme: &AppearanceConfig,
     open_shortcut: &str,
     split_shortcut: &str,
+    selected: bool,
 ) -> ExplorerRowOutcome {
     let mut outcome = ExplorerRowOutcome::default();
     let color = if ignored {
@@ -213,7 +214,7 @@ pub fn explorer_file_row(
         ui,
         label,
         icons::file_icon(path),
-        false,
+        selected,
         24.0,
         &status.to_string(),
         color,

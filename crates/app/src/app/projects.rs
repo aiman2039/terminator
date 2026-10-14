@@ -20,6 +20,7 @@ impl App {
         }
         if self.selected.as_ref() != Some(&project) {
             self.finish_rename(true);
+            self.explorer_reveal = None;
         }
         self.selection_generation = self.selection_generation.wrapping_add(1);
         self.selected = Some(project.clone());

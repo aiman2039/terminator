@@ -322,7 +322,9 @@ pub(crate) fn native_rename(o: &Options) -> Result<()> {
             {"at_ms": 2100, "target": "rename-name"},
             {"at_ms": 2400, "target": "rename-name", "text": "renamed"},
             {"at_ms": 2900, "target": "rename-preview"},
-            {"at_ms": 6500, "target": "rename-apply"}
+            {"at_ms": 6500, "target": "rename-apply"},
+            {"at_ms": 9000, "target": "explorer-reveal-current"},
+            {"at_ms": 9400, "target": "explorer-reveal-active", "hover": true}
         ]),
         12000,
     )?;

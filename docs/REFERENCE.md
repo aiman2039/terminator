@@ -246,6 +246,14 @@ precedence, followed by working-tree status and then staged status. Folder
 badges aggregate descendants, prioritizing conflicts and deletions. Hover the
 Explorer icon for the effective directory and any last-known-directory qualifier.
 
+Explorer's Locate button reveals the focused local file: it clears Explorer
+search, selects Names, opens parent folders, and scrolls to the file. If the
+current shell directory does not contain that file, Explorer uses the selected
+project root for the reveal without changing the shell directory. Ignored
+parents and the target remain visible for that focused file. The button is
+disabled when no local file is focused or the file is outside the project and
+Explorer roots.
+
 ## Native previews and explicit controls
 
 Markdown editor tabs place the filename, flat **Edit / Preview / Split** tabs and

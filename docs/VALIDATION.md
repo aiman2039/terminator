@@ -4425,3 +4425,21 @@ The preview-only fixture also restarted the GUI with its native editor tab
 restored, then used F2 to reopen Rename. That exposed and fixed stale terminal
 input ownership: clicking the source now selects the native editor as the
 input target. The final restart-and-apply fixture passed against two files.
+
+## Explorer reveal of focused file (2026-10-14)
+
+Explorer has a Locate button in its shared toolbar. It is enabled for a
+focused local editor, image, HTML file, diff, or blame pane when that file is
+under the current Explorer directory or selected project root. It is disabled
+for a shell, URL, player, or file outside both roots. A click switches to
+Names, clears the Explorer query, opens the file's parent folders, and requests
+a scroll to its row. The clicked sidebar gets the root override; ignored
+ancestors and the target remain visible while that file stays focused.
+
+Validation: focused tests passed for nested ignored paths, search reset,
+ancestor expansion, scroll request, disabled shell/outside-project cases, and
+cache refresh. The isolated `cargo xtask gui native-rename` fixture clicked
+the enabled Locate button after Apply and observed its active state; its
+capture showed the one-row toolbar and selected file row. Formatting, strict
+Clippy, and the full workspace suite passed locally. The installed or running
+app was not replaced.

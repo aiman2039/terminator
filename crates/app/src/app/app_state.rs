@@ -344,6 +344,8 @@ pub struct App {
     pub(crate) refresh_generation: u64,
     pub(crate) visible_dirs: Vec<PathBuf>,
     pub(crate) expanded_dirs: HashSet<PathBuf>,
+    /// One Explorer pane's request to open and scroll to its focused file.
+    pub(crate) explorer_reveal: Option<sidebar_ui::ExplorerReveal>,
     pub(crate) watch_fallback: bool,
     pub(crate) targets: HashMap<String, Option<services::Target>>,
     pub(crate) hover_popup: Option<HoverPopup>,

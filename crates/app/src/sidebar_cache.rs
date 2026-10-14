@@ -72,6 +72,7 @@ pub(super) struct ExplorerCache {
     pub expanded: HashSet<PathBuf>,
     pub ignored: bool,
     pub query: String,
+    pub reveal_file: Option<PathBuf>,
     pub rows: Arc<Vec<ExplorerRow>>,
     pub dirs: Vec<PathBuf>,
 }
@@ -426,6 +427,13 @@ impl App {
         rows
     }
     pub(super) fn explorer_rows(&mut self, root: &std::path::Path) -> Arc<Vec<ExplorerRow>> {
+        let reveal_file = self
+            .explorer_reveal
+            .as_ref()
+            .filter(|reveal| {
+                reveal.root == root && self.selected.as_deref() == Some(reveal.project.as_str())
+            })
+            .map(|reveal| reveal.file.clone());
         let cache = self.sidebar_cache.get_mut();
         if let Some(model) = &cache.explorer
             && model.revision == cache.files_revision
@@ -433,6 +441,7 @@ impl App {
             && model.expanded == self.expanded_dirs
             && model.ignored == self.preferences.show_ignored
             && model.query == self.explorer_query
+            && model.reveal_file == reveal_file
         {
             self.visible_dirs.extend(model.dirs.iter().cloned());
             return Arc::clone(&model.rows);
@@ -442,6 +451,7 @@ impl App {
             path: &std::path::Path,
             depth: usize,
             query: Option<&str>,
+            reveal_file: Option<&std::path::Path>,
             rows: &mut Vec<ExplorerRow>,
             dirs: &mut Vec<PathBuf>,
         ) {
@@ -459,7 +469,10 @@ impl App {
             }
             if let Some(entries) = app.dirs.get(path) {
                 for entry in entries {
-                    if entry.ignored && !app.preferences.show_ignored {
+                    if entry.ignored
+                        && !app.preferences.show_ignored
+                        && !reveal_file.is_some_and(|file| file.starts_with(&entry.path))
+                    {
                         continue;
                     }
                     let label = entry
@@ -479,7 +492,15 @@ impl App {
                         depth,
                     });
                     if entry.directory && app.expanded_dirs.contains(&entry.path) {
-                        walk(app, &entry.path, depth.saturating_add(1), query, rows, dirs);
+                        walk(
+                            app,
+                            &entry.path,
+                            depth.saturating_add(1),
+                            query,
+                            reveal_file,
+                            rows,
+                            dirs,
+                        );
                     }
                 }
             }
@@ -487,7 +508,15 @@ impl App {
         let query = (!self.explorer_query.is_empty()).then(|| self.explorer_query.to_lowercase());
         let mut rows = Vec::new();
         let mut dirs = Vec::new();
-        walk(self, root, 0, query.as_deref(), &mut rows, &mut dirs);
+        walk(
+            self,
+            root,
+            0,
+            query.as_deref(),
+            reveal_file.as_deref(),
+            &mut rows,
+            &mut dirs,
+        );
         self.visible_dirs.extend(dirs.iter().cloned());
         let rows = Arc::new(rows);
         let cache = self.sidebar_cache.get_mut();
@@ -497,6 +526,7 @@ impl App {
             expanded: self.expanded_dirs.clone(),
             ignored: self.preferences.show_ignored,
             query: self.explorer_query.clone(),
+            reveal_file,
             rows: Arc::clone(&rows),
             dirs,
         });

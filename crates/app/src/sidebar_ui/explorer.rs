@@ -9,12 +9,104 @@ use crate::{
     workspace_ops,
 };
 use eframe::egui::{self, RichText};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use terminator_core::{
     AgentState, NVIM_REVIEW_CAPABILITY, Project, Request, Session, SessionKind, now,
 };
 
+pub(crate) struct ExplorerReveal {
+    pub project: String,
+    pub host: egui::Id,
+    pub root: PathBuf,
+    pub file: PathBuf,
+    pub pending_scroll: bool,
+}
+
 impl App {
+    /// The local file in the selected main pane. A focused strip shell
+    /// means the visible editor is in the background, so it is not the
+    /// current file for Reveal.
+    pub(crate) fn focused_local_file(&self) -> Option<PathBuf> {
+        let project = self.selected.as_ref()?;
+        if self.active_session.as_ref().is_some_and(|sid| {
+            self.state
+                .sessions
+                .iter()
+                .any(|session| &session.id == sid && session.kind == SessionKind::Shell)
+        }) {
+            return None;
+        }
+        let pane = self.layouts.get(project)?.active_pane()?;
+        match pane {
+            Tab::NativeEditor { path }
+            | Tab::Image { path }
+            | Tab::Diff { path, .. }
+            | Tab::Blame { path, .. } => Some(path.clone()),
+            Tab::Browser { target, .. } => target.file().map(Path::to_path_buf),
+            Tab::Terminal(sid) => self
+                .state
+                .sessions
+                .iter()
+                .find(|session| {
+                    &session.id == sid
+                        && &session.project_id == project
+                        && session.kind == SessionKind::Editor
+                        && !session.review
+                })
+                .and_then(|session| session.file.clone()),
+            Tab::CommitLog { .. } | Tab::Player => None,
+        }
+    }
+
+    /// Prefer the Explorer's current root. If a file is elsewhere in its
+    /// project, reveal it from the project root without changing the
+    /// shell's working directory.
+    pub(crate) fn explorer_reveal_candidate(&self) -> Option<(PathBuf, PathBuf)> {
+        let file = self.focused_local_file()?;
+        let project = self.selected_project()?;
+        let cwd = self.cwd().unwrap_or_else(|| project.path.clone());
+        let root = if file.starts_with(&cwd) {
+            cwd
+        } else if file.starts_with(&project.path) {
+            project.path.clone()
+        } else {
+            return None;
+        };
+        let relative = file.strip_prefix(&root).ok()?;
+        if relative.as_os_str().is_empty() || relative.components().count() > 20 {
+            return None;
+        }
+        Some((file, root))
+    }
+
+    pub(crate) fn reveal_current_file_in_explorer(&mut self, host: egui::Id) -> bool {
+        let Some((file, root)) = self.explorer_reveal_candidate() else {
+            return false;
+        };
+        let Some(project) = self.selected.clone() else {
+            return false;
+        };
+        let mut parent = file.parent();
+        while let Some(dir) = parent.filter(|dir| *dir != root) {
+            if !dir.starts_with(&root) {
+                return false;
+            }
+            self.expanded_dirs.insert(dir.to_path_buf());
+            parent = dir.parent();
+        }
+        self.preferences.explorer_search_mode = ExplorerSearchMode::Names;
+        self.explorer_query.clear();
+        self.explorer_search_last = None;
+        self.explorer_reveal = Some(ExplorerReveal {
+            project,
+            host,
+            root,
+            file,
+            pending_scroll: true,
+        });
+        self.refresh_request = None;
+        true
+    }
     pub(crate) fn explorer_tooltip(&self) -> String {
         let Some(cwd) = self.cwd() else {
             return "Explorer — no selected directory".into();
@@ -244,14 +336,34 @@ impl App {
         });
     }
 
+    #[cfg(test)]
     pub(crate) fn tree(&mut self, ui: &mut egui::Ui, path: &std::path::Path, _depth: usize) {
+        self.tree_with_host(ui, path, ui.id());
+    }
+
+    fn tree_with_host(&mut self, ui: &mut egui::Ui, path: &Path, host: egui::Id) {
         ui.spacing_mut().interact_size.y = 24.0;
         ui.spacing_mut().item_spacing.y = 0.0;
         let rows = self.explorer_rows(path);
+        let focused_file = self.focused_local_file();
         let open_shortcut = self.shortcut_label("open_file");
         let split_shortcut = self.shortcut_label("split_right");
         for row in rows.iter() {
             let mut rect = ui.available_rect_before_wrap();
+            if self.explorer_reveal.as_ref().is_some_and(|reveal| {
+                reveal.host == host
+                    && reveal.root == path
+                    && reveal.file == row.path
+                    && reveal.pending_scroll
+            }) {
+                ui.scroll_to_rect(
+                    egui::Rect::from_min_size(rect.min, egui::vec2(1.0, 24.0)),
+                    Some(egui::Align::Center),
+                );
+                if let Some(reveal) = self.explorer_reveal.as_mut() {
+                    reveal.pending_scroll = false;
+                }
+            }
             // Explorer indent is a UI coordinate; depth can exceed the f32 mantissa.
             #[allow(clippy::cast_precision_loss)]
             let indent = row.depth as f32 * ui.spacing().indent;
@@ -263,7 +375,14 @@ impl App {
                         if skip_clipped_row(ui, height) {
                             return;
                         }
-                        self.explorer_entry(ui, entry, &row.label, &open_shortcut, &split_shortcut);
+                        self.explorer_entry(
+                            ui,
+                            entry,
+                            &row.label,
+                            &open_shortcut,
+                            &split_shortcut,
+                            focused_file.as_deref(),
+                        );
                     } else {
                         self.explorer_directory_status(ui, &row.path);
                     }
@@ -313,6 +432,7 @@ impl App {
         label: &str,
         open_shortcut: &str,
         split_shortcut: &str,
+        focused_file: Option<&Path>,
     ) {
         if entry.directory {
             let expanded = self.expanded_dirs.contains(&entry.path);
@@ -406,6 +526,7 @@ impl App {
                 &self.theme,
                 open_shortcut,
                 split_shortcut,
+                focused_file == Some(entry.path.as_path()),
             );
             if let Some(action) = outcome.clicked {
                 self.activate_file_action(ui, &entry.path, action);
@@ -543,9 +664,26 @@ impl App {
             return;
         }
         if tool == SidebarTool::Explorer {
+            if self.explorer_reveal.as_ref().is_some_and(|reveal| {
+                self.selected.as_deref() != Some(&reveal.project)
+                    || self.focused_local_file().as_ref() != Some(&reveal.file)
+            }) {
+                self.explorer_reveal = None;
+            }
             self.pending_delete_bar(ui);
-            if let Some(cwd) = self.cwd() {
+            let host = ui.id();
+            let root_override = self
+                .explorer_reveal
+                .as_ref()
+                .filter(|reveal| reveal.host == host)
+                .map(|reveal| reveal.root.clone());
+            if let Some(cwd) = root_override.or_else(|| self.cwd()) {
                 self.explorer_toolbar(ui, &cwd);
+                let cwd = self
+                    .explorer_reveal
+                    .as_ref()
+                    .filter(|reveal| reveal.host == host)
+                    .map_or(cwd, |reveal| reveal.root.clone());
                 let contents =
                     self.preferences.explorer_search_mode == ExplorerSearchMode::Contents;
                 if contents {
@@ -555,7 +693,7 @@ impl App {
                 } else {
                     appearance::sidebar_scroll("files")
                         .max_height(ui.available_height())
-                        .show(ui, |ui| self.tree(ui, &cwd, 0));
+                        .show(ui, |ui| self.tree_with_host(ui, &cwd, host));
                 }
             }
             return;

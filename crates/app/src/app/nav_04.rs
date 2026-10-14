@@ -9,7 +9,7 @@ use terminator_core::*;
 
 use super::super::*;
 use super::nav_common::*;
-use crate::preferences::ProjectSort;
+use crate::preferences::{ExplorerSearchMode, ProjectSort};
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,6 +541,127 @@ mod tests {
         app.dirs.get_mut(&folder).unwrap()[0].path = folder.join("changed.rs");
         app.sidebar_cache.get_mut().clear_files();
         assert_eq!(app.explorer_rows(&root)[1].label, "changed.rs");
+    }
+
+    #[test]
+    fn reveal_current_file_opens_ancestors_and_shows_ignored_target() {
+        let (mut app, ctx, _dir) = fixture();
+        let root = PathBuf::from("/a");
+        let src = root.join("src");
+        let deep = src.join("deep");
+        let file = deep.join("agents.rs");
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(egui_dock::DockState::new(vec![Tab::NativeEditor {
+                path: file.clone(),
+            }])),
+        );
+        app.selected = Some("a".into());
+        app.active_session = None;
+        app.non_terminal_selected = true;
+        app.preferences.explorer_search_mode = ExplorerSearchMode::Contents;
+        app.explorer_query = "different".into();
+        app.dirs.insert(
+            root.clone(),
+            vec![terminator_git::Entry {
+                path: src.clone(),
+                directory: true,
+                ignored: false,
+            }],
+        );
+        app.dirs.insert(
+            src.clone(),
+            vec![terminator_git::Entry {
+                path: deep.clone(),
+                directory: true,
+                ignored: true,
+            }],
+        );
+        app.dirs.insert(
+            deep.clone(),
+            vec![terminator_git::Entry {
+                path: file.clone(),
+                directory: false,
+                ignored: true,
+            }],
+        );
+        let host = egui::Id::new("left-explorer");
+        assert!(app.reveal_current_file_in_explorer(host));
+        assert!(app.expanded_dirs.contains(&src));
+        assert!(app.expanded_dirs.contains(&deep));
+        assert_eq!(
+            app.preferences.explorer_search_mode,
+            ExplorerSearchMode::Names
+        );
+        assert!(app.explorer_query.is_empty());
+        assert!(app.explorer_rows(&root).iter().any(|row| row.path == file));
+        assert!(
+            app.explorer_reveal
+                .as_ref()
+                .is_some_and(|reveal| reveal.pending_scroll)
+        );
+        let mut long_root: Vec<terminator_git::Entry> = (0..40)
+            .map(|index| terminator_git::Entry {
+                path: root.join(format!("before-{index:02}.rs")),
+                directory: false,
+                ignored: false,
+            })
+            .collect();
+        long_root.push(terminator_git::Entry {
+            path: src.clone(),
+            directory: true,
+            ignored: false,
+        });
+        app.dirs.insert(root, long_root);
+        app.sidebar_cache.get_mut().clear_files();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500.0, 280.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                app.explorer_reveal.as_mut().unwrap().host = ui.id();
+                app.sidebar_tool(SidebarTool::Explorer, ui);
+            },
+        );
+        output.textures_delta.clear();
+        assert!(!app.explorer_reveal.as_ref().unwrap().pending_scroll);
+    }
+
+    #[test]
+    fn reveal_is_unavailable_for_shell_or_file_outside_project() {
+        let (mut app, _, _dir) = fixture();
+        let root = PathBuf::from("/a");
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal(
+                "shell".into(),
+            )])),
+        );
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.active_session = Some("shell".into());
+        assert!(app.explorer_reveal_candidate().is_none());
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(egui_dock::DockState::new(vec![Tab::NativeEditor {
+                path: PathBuf::from("/outside/file.rs"),
+            }])),
+        );
+        app.active_session = None;
+        app.non_terminal_selected = true;
+        assert!(app.explorer_reveal_candidate().is_none());
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(egui_dock::DockState::new(vec![Tab::NativeEditor {
+                path: root.join("src/file.rs"),
+            }])),
+        );
+        assert!(app.explorer_reveal_candidate().is_some());
     }
 
     #[test]

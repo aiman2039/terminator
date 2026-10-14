@@ -14,6 +14,7 @@ pub(crate) use attention::{
     AttentionAction, AttentionCard, NoticeGroup, attention_card, group_notices, notice_pending,
     notice_rank, notice_waiting, state_color,
 };
+pub(crate) use explorer::ExplorerReveal;
 pub(crate) use explorer_rows::explorer_query_keeps_file;
 #[cfg(test)]
 pub(crate) use git_panel::{GitPanelInput, git_click_action, git_panel};

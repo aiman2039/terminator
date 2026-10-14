@@ -298,6 +298,7 @@ impl App {
             refresh_generation: 0,
             visible_dirs: Vec::new(),
             expanded_dirs: HashSet::new(),
+            explorer_reveal: None,
             watch_fallback: false,
             targets: HashMap::new(),
             hover_popup: None,

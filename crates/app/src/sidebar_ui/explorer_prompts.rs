@@ -31,6 +31,13 @@ impl App {
     }
 
     pub(crate) fn explorer_toolbar(&mut self, ui: &mut egui::Ui, cwd: &std::path::Path) {
+        let host = ui.id();
+        let reveal_enabled = self.explorer_reveal_candidate().is_some();
+        let reveal_disabled_note = if self.focused_local_file().is_some() {
+            "The focused file is outside the Explorer folder"
+        } else {
+            "Focus a local file to reveal it in Explorer"
+        };
         let mut focus_find = false;
         // Pin the row height so the icon buttons, search field, and text
         // toggles all share one baseline.
@@ -83,6 +90,16 @@ impl App {
                     "Show ignored files (excluded by Git ignore rules and Git metadata)",
                     self.preferences.show_ignored,
                 );
+                let reveal = ui
+                    .add_enabled_ui(reveal_enabled, |ui| {
+                        appearance::sidebar_action(
+                            ui,
+                            "LocateFixed",
+                            "Reveal current file in Explorer",
+                        )
+                    })
+                    .inner
+                    .on_disabled_hover_text(reveal_disabled_note);
                 let refresh = appearance::sidebar_action(ui, "RefreshCw", "Refresh");
                 let collapse = appearance::sidebar_action(ui, "ChevronsDownUp", "Collapse all");
                 let new_folder = appearance::sidebar_action(ui, "Folder", "New folder");
@@ -93,11 +110,22 @@ impl App {
                     diagnostics::record(ui.ctx(), "explorer-new-folder", new_folder.rect);
                     diagnostics::record(ui.ctx(), "explorer-collapse", collapse.rect);
                     diagnostics::record(ui.ctx(), "explorer-refresh", refresh.rect);
+                    diagnostics::record(ui.ctx(), "explorer-reveal-current", reveal.rect);
+                    if self
+                        .explorer_reveal
+                        .as_ref()
+                        .is_some_and(|active| active.host == host)
+                    {
+                        diagnostics::record(ui.ctx(), "explorer-reveal-active", reveal.rect);
+                    }
                     diagnostics::record(ui.ctx(), "explorer-show-ignored", ignored.rect);
                 }
                 if ignored.clicked() {
                     self.preferences.show_ignored = !self.preferences.show_ignored;
                     self.explorer_search_last = None;
+                }
+                if reveal.clicked() && self.reveal_current_file_in_explorer(host) {
+                    ui.ctx().request_repaint();
                 }
                 if new_file.clicked() {
                     self.open_name_prompt(workspace_ops::NamePrompt::File {
