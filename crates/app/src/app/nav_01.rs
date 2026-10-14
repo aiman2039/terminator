@@ -196,6 +196,7 @@ mod tests {
         let tab = |id: &str, sid: &str| crate::workspace::WorkspaceTab {
             id: id.into(),
             name: None,
+            pinned: false,
             primary: Some(Tab::Terminal(sid.into())),
             layout: egui_dock::DockState::new(vec![Tab::Terminal(sid.into())]),
         };

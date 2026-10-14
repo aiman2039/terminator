@@ -324,6 +324,9 @@ pub struct App {
     /// checked out, so looking up the originating project there always
     /// misses and drops the jump.
     pub(crate) pending_goto: Vec<lsp_manager::GotoJump>,
+    /// Read-only reference list for the native editor.
+    pub(crate) native_references: Option<lsp_manager::ReferenceResults>,
+    pub(crate) native_rename: Option<native_editor::RenameDialog>,
     pub(crate) file_index: terminator_native_edit::finder::FileIndex,
     pub(crate) file_index_rx:
         Option<std::sync::mpsc::Receiver<terminator_native_edit::finder::FileIndex>>,

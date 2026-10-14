@@ -4,6 +4,11 @@ use egui_dock::DockState;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde skip_serializing_if requires a reference
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct WorkspaceTab {
     pub id: String,
@@ -11,6 +16,9 @@ pub(crate) struct WorkspaceTab {
     /// the group's identity never borrows a member terminal's label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Pinned top-level tabs stay open during bulk-close actions.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pinned: bool,
     pub primary: Option<Tab>,
     pub layout: DockState<Tab>,
 }
@@ -31,6 +39,9 @@ pub(crate) struct Workspace {
     /// Tab identities survive reordering and a GUI restart.
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub return_tabs: std::collections::HashMap<String, String>,
+    /// Most recently selected top-level tabs, newest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_tabs: Vec<String>,
 }
 
 impl Deref for Workspace {
@@ -56,6 +67,7 @@ impl DerefMut for Workspace {
             self.tabs.push(WorkspaceTab {
                 id,
                 name: None,
+                pinned: false,
                 primary: None,
                 layout: DockState::new(Vec::new()),
             });

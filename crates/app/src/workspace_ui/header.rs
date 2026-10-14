@@ -186,6 +186,18 @@ pub(super) fn header_action_view(action: HeaderAction) -> HeaderActionView {
             #[cfg(feature = "test-support")]
             target: "tool-Info",
         },
+        HeaderAction::Tool(SidebarTool::Problems) => HeaderActionView {
+            label: "Problems",
+            icon: "CircleAlert",
+            #[cfg(feature = "test-support")]
+            target: "tool-Problems",
+        },
+        HeaderAction::Tool(SidebarTool::Structure) => HeaderActionView {
+            label: "Structure",
+            icon: "ListTree",
+            #[cfg(feature = "test-support")]
+            target: "tool-Structure",
+        },
         HeaderAction::IdeMode => HeaderActionView {
             label: "IDE mode",
             icon: "LayoutDashboard",

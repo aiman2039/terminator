@@ -1,5 +1,6 @@
 use super::super::*;
 pub(super) struct WorkspaceTabMenu {
+    pub(super) toggle_pin: bool,
     pub(super) close: bool,
     pub(super) close_all: bool,
     pub(super) close_left: bool,
@@ -12,6 +13,7 @@ pub(super) struct WorkspaceTabMenuSpec<'a> {
     pub(super) sid: Option<&'a str>,
     pub(super) index: usize,
     pub(super) count: usize,
+    pub(super) pinned: bool,
 }
 
 pub(super) fn split_action(direction: Option<&str>) -> &'static str {

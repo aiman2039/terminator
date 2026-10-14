@@ -73,6 +73,18 @@ enum Pending {
     Definition {
         path: PathBuf,
     },
+    References {
+        path: PathBuf,
+    },
+    Rename {
+        path: PathBuf,
+        new_name: String,
+        revision: u64,
+    },
+    Symbols {
+        path: PathBuf,
+        revision: u64,
+    },
 }
 
 struct Server {
@@ -108,6 +120,18 @@ pub struct GotoJump {
     pub targets: Vec<L::GotoTarget>,
 }
 
+/// Reference locations returned for one native editor request.
+pub struct ReferenceResults {
+    pub from: PathBuf,
+    pub targets: Vec<L::GotoTarget>,
+}
+
+pub struct RenameResults {
+    pub from: PathBuf,
+    pub new_name: String,
+    pub edits: Result<Vec<L::RenameFileEdit>, String>,
+}
+
 enum PumpEvent {
     Body { key: ServerKey, body: Vec<u8> },
     Down { key: ServerKey },
@@ -120,6 +144,10 @@ pub struct LspManager {
     diagnostics: HashMap<PathBuf, Vec<L::Diagnostic>>,
     hover: Option<HoverPopup>,
     goto: Option<GotoJump>,
+    references: Option<ReferenceResults>,
+    rename: Option<RenameResults>,
+    symbols: std::collections::HashMap<PathBuf, Vec<L::Symbol>>,
+    symbols_rev: std::collections::HashMap<PathBuf, u64>,
     unavailable: HashMap<&'static str, String>,
     /// Consecutive crashes per language (reset on a good handshake).
     failures: HashMap<&'static str, u32>,
@@ -142,6 +170,10 @@ impl LspManager {
             diagnostics: HashMap::new(),
             hover: None,
             goto: None,
+            references: None,
+            rename: None,
+            symbols: std::collections::HashMap::new(),
+            symbols_rev: std::collections::HashMap::new(),
             unavailable: HashMap::new(),
             failures: HashMap::new(),
             cooled: HashMap::new(),
@@ -340,6 +372,132 @@ impl LspManager {
         server.pending.insert(number, Pending::Definition { path });
     }
 
+    /// Ask for references at a UTF-16 position. The response is available
+    /// through [`take_references`] and never changes files.
+    pub fn request_references(&mut self, path: &Path, position: L::Position) {
+        let Some(doc) = self.docs.get(path) else {
+            return;
+        };
+        let (key, uri) = (doc.server.clone(), doc.uri.clone());
+        let Some(server) = self.servers.get_mut(&key).filter(|server| server.ready) else {
+            return;
+        };
+        let L::RequestId::Number(number) = server.ids.next_id() else {
+            return;
+        };
+        if server
+            .inbox
+            .send(L::references(&L::RequestId::Number(number), &uri, position))
+            .is_ok()
+        {
+            server.pending.insert(
+                number,
+                Pending::References {
+                    path: path.to_owned(),
+                },
+            );
+        }
+    }
+
+    /// Request a preview of a symbol rename. No file is changed here.
+    pub fn request_rename(
+        &mut self,
+        path: &Path,
+        position: L::Position,
+        new_name: &str,
+    ) -> Result<(), String> {
+        if let Some(note) = self.server_status(path) {
+            return Err(note);
+        }
+        let doc = self
+            .docs
+            .get(path)
+            .ok_or("No language server tracks this file")?;
+        let (key, uri, revision) = (doc.server.clone(), doc.uri.clone(), doc.submitted);
+        let server = self
+            .servers
+            .get_mut(&key)
+            .filter(|server| server.ready)
+            .ok_or("Language server is not ready")?;
+        let L::RequestId::Number(number) = server.ids.next_id() else {
+            return Err("Could not allocate a language server request".into());
+        };
+        server
+            .inbox
+            .send(L::rename(
+                &L::RequestId::Number(number),
+                &uri,
+                position,
+                new_name,
+            ))
+            .map_err(|_| "Language server connection closed".to_string())?;
+        server.pending.insert(
+            number,
+            Pending::Rename {
+                path: path.to_owned(),
+                new_name: new_name.to_owned(),
+                revision,
+            },
+        );
+        Ok(())
+    }
+
+    pub fn document_version(&self, path: &Path) -> Option<i32> {
+        self.docs
+            .get(path)
+            .filter(|doc| doc.opened)
+            .map(|doc| doc.version)
+    }
+
+    pub fn invalidate_paths(&mut self, paths: &[PathBuf]) {
+        for path in paths {
+            self.close_path(path);
+        }
+    }
+
+    /// Ask for the document outline of a tracked buffer. Cheap to call
+    /// every frame: it only sends when the submitted revision moved past
+    /// the cached answer and no request for the file is in flight.
+    pub fn request_symbols(&mut self, path: &Path) {
+        let Some(doc) = self.docs.get(path) else {
+            return;
+        };
+        let (key, uri, revision) = (doc.server.clone(), doc.uri.clone(), doc.submitted);
+        if self.symbols_rev.get(path) == Some(&revision) {
+            return;
+        }
+        let Some(server) = self.servers.get_mut(&key) else {
+            return;
+        };
+        if !server.ready
+            || server
+                .pending
+                .values()
+                .any(|pending| matches!(pending, Pending::Symbols { path: p, .. } if p == path))
+        {
+            return;
+        }
+        let L::RequestId::Number(number) = server.ids.next_id() else {
+            return;
+        };
+        let _ = server
+            .inbox
+            .send(L::document_symbol(&L::RequestId::Number(number), &uri));
+        server.pending.insert(
+            number,
+            Pending::Symbols {
+                path: path.to_owned(),
+                revision,
+            },
+        );
+    }
+
+    /// Cached outline for `path`, in document order (depth-tagged).
+    #[must_use]
+    pub fn symbols_for(&self, path: &Path) -> Vec<L::Symbol> {
+        self.symbols.get(path).cloned().unwrap_or_default()
+    }
+
     /// Current hover popup for `path`, dismissed when the cursor moved
     /// on. Returns the text to show, if any.
     pub fn hover_popup(&mut self, path: &Path, cursor: (usize, usize)) -> Option<String> {
@@ -362,6 +520,14 @@ impl LspManager {
     /// Finished goto jump, if any.
     pub fn take_goto(&mut self) -> Option<GotoJump> {
         self.goto.take()
+    }
+
+    pub fn take_references(&mut self) -> Option<ReferenceResults> {
+        self.references.take()
+    }
+
+    pub fn take_rename(&mut self) -> Option<RenameResults> {
+        self.rename.take()
     }
 
     /// Worst severity per buffer row, sorted for the view's binary
@@ -396,6 +562,20 @@ impl LspManager {
     /// All diagnostics for one path, for the problems panel.
     pub fn problems_for(&self, path: &Path) -> Vec<L::Diagnostic> {
         self.diagnostics.get(path).cloned().unwrap_or_default()
+    }
+
+    /// Every tracked file's diagnostics, sorted by path, for the
+    /// global Problems panel.
+    #[must_use]
+    pub fn all_problems(&self) -> Vec<(PathBuf, Vec<L::Diagnostic>)> {
+        let mut files: Vec<(PathBuf, Vec<L::Diagnostic>)> = self
+            .diagnostics
+            .iter()
+            .filter(|(_, items)| !items.is_empty())
+            .map(|(path, items)| (path.clone(), items.clone()))
+            .collect();
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        files
     }
 
     /// `(errors, warnings, total)` across every tracked file, for the
@@ -452,8 +632,24 @@ impl LspManager {
             let _ = server.inbox.send(L::did_close(&doc.uri));
         }
         self.diagnostics.remove(path);
+        self.symbols.remove(path);
+        self.symbols_rev.remove(path);
         if self.hover.as_ref().is_some_and(|popup| popup.path == path) {
             self.hover = None;
+        }
+        if self
+            .references
+            .as_ref()
+            .is_some_and(|result| result.from == path)
+        {
+            self.references = None;
+        }
+        if self
+            .rename
+            .as_ref()
+            .is_some_and(|result| result.from == path)
+        {
+            self.rename = None;
         }
     }
 
@@ -613,8 +809,8 @@ impl LspManager {
                     self.diagnostics.insert(path, items);
                 }
             }
-            L::LspMessage::Response { id, result, .. } => {
-                self.on_response(key, id, result);
+            L::LspMessage::Response { id, result, error } => {
+                self.on_response(key, id, result, error);
             }
             // Answer server-to-client requests with null (progress and
             // registration prompts), like the probe verified: unanswered
@@ -640,6 +836,7 @@ impl LspManager {
         key: &ServerKey,
         id: L::RequestId,
         result: Option<serde_json::Value>,
+        error: Option<L::ResponseError>,
     ) {
         let L::RequestId::Number(number) = id else {
             return;
@@ -695,6 +892,12 @@ impl LspManager {
                     self.hover = None;
                 }
             }
+            Some(Pending::Symbols { path, revision }) => {
+                let result = result.unwrap_or(serde_json::Value::Null);
+                self.symbols
+                    .insert(path.clone(), L::parse_document_symbols(&result));
+                self.symbols_rev.insert(path, revision);
+            }
             Some(Pending::Definition { path }) => {
                 let result = result.unwrap_or(serde_json::Value::Null);
                 let targets = L::parse_definition(&result);
@@ -704,6 +907,35 @@ impl LspManager {
                         targets,
                     });
                 }
+            }
+            Some(Pending::References { path }) => {
+                let result = result.unwrap_or(serde_json::Value::Null);
+                self.references = Some(ReferenceResults {
+                    from: path,
+                    targets: L::parse_references(&result),
+                });
+            }
+            Some(Pending::Rename {
+                path,
+                new_name,
+                revision,
+            }) => {
+                let stale = self
+                    .docs
+                    .get(&path)
+                    .is_none_or(|doc| doc.observed != revision);
+                let edits = if stale {
+                    Err("The file changed while the rename was running. Try again.".into())
+                } else if let Some(error) = error {
+                    Err(error.message)
+                } else {
+                    L::parse_rename(&result.unwrap_or(serde_json::Value::Null))
+                };
+                self.rename = Some(RenameResults {
+                    from: path,
+                    new_name,
+                    edits,
+                });
             }
             None => {}
         }
@@ -1307,6 +1539,62 @@ mod tests {
                 pending_text: None,
             },
         );
+    }
+
+    #[test]
+    fn rename_response_is_preview_only_and_rejects_stale_buffer() {
+        let mut manager = LspManager::new();
+        let path = crate::test_path("/tmp/rename.rs");
+        tracked(&mut manager, &path);
+        let key = manager.docs.get(&path).unwrap().server.clone();
+        let (inbox, mut outbox) = tokio::sync::mpsc::unbounded_channel();
+        manager.servers.insert(
+            key.clone(),
+            Server {
+                inbox,
+                child: None,
+                cancel: None,
+                ids: L::IdGen::default(),
+                pending: HashMap::new(),
+                init_id: None,
+                ready: true,
+            },
+        );
+        let at = L::Position {
+            line: 0,
+            character: 4,
+        };
+        manager.request_rename(&path, at, "bar").unwrap();
+        let mut decoder = L::FrameDecoder::default();
+        let body = decoder.feed(&outbox.try_recv().unwrap()).remove(0);
+        let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(request["method"], "textDocument/rename");
+        assert_eq!(request["params"]["newName"], "bar");
+        let uri = L::file_uri(&path).unwrap().to_string();
+        let response = serde_json::json!({
+            "jsonrpc": "2.0", "id": request["id"],
+            "result": { "changes": {
+                (uri): [{
+                    "range": {
+                        "start": {"line": 0, "character": 4},
+                        "end": {"line": 0, "character": 7}
+                    },
+                    "newText": "bar"
+                }]
+            }}
+        });
+        manager.on_body(&key, response.to_string().as_bytes());
+        let result = manager.take_rename().unwrap();
+        assert_eq!(result.new_name, "bar");
+        assert_eq!(result.edits.unwrap()[0].edits[0].new_text, "bar");
+
+        manager.request_rename(&path, at, "baz").unwrap();
+        manager.docs.get_mut(&path).unwrap().observed = 2;
+        let body = decoder.feed(&outbox.try_recv().unwrap()).remove(0);
+        let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let response = serde_json::json!({"jsonrpc": "2.0", "id": request["id"], "result": null});
+        manager.on_body(&key, response.to_string().as_bytes());
+        assert!(manager.take_rename().unwrap().edits.is_err());
     }
 
     #[test]

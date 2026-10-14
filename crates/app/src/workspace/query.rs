@@ -47,6 +47,15 @@ impl Workspace {
             .skip(1)
             .collect()
     }
+
+    /// Bulk-close targets keep pinned editor groups. A direct close of one
+    /// tab still uses its ID and remains an explicit user action.
+    pub fn unpinned_ids(&self, candidates: Vec<String>) -> Vec<String> {
+        candidates
+            .into_iter()
+            .filter(|id| self.tabs.iter().any(|tab| tab.id == *id && !tab.pinned))
+            .collect()
+    }
 }
 
 // Serde restores raw docking indices without the checks used by UI setters.

@@ -249,6 +249,8 @@ Project-owned Python automation has moved to `crates/xtask`. Run commands from
 New cases: `cargo xtask gui images`, `cargo xtask gui browser`, `cargo xtask gui control`,
 `cargo xtask gui window-controls`, `cargo xtask gui split-file-opening`,
 `cargo xtask gui markdown`, `cargo xtask gui markdown-busy`, and `cargo xtask browser-check`.
+`cargo xtask gui native-rename` opens an isolated native editor, previews a
+real rust-analyzer rename without writing, then applies it across two files.
 `cargo xtask gui project-sidebar` covers project sort, removal and restoration.
 `cargo xtask gui agent-sidebar` covers the bell, waiting/unread counts, left Agents navigation, restart persistence, and live status updates.
 `cargo xtask gui all` runs the ordinary native fixture suite. All GUI cases accept

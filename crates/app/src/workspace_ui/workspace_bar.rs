@@ -147,7 +147,12 @@ impl App {
         let mut close_all = false;
         let mut close_left = None;
         let mut close_right = None;
+        let mut toggle_pin = None;
         let mut add_at = None;
+        if self.pane_drag.is_none() && self.tab_drag.is_none() && self.drop_preview_origin.is_none()
+        {
+            workspace.record_active();
+        }
         let current = (project.to_owned(), workspace.active.clone());
         let reveal = self.workspace_visible.as_ref() != Some(&current);
         self.workspace_visible = Some(current);
@@ -204,7 +209,7 @@ impl App {
             #[allow(clippy::cast_precision_loss)]
             let gaps = tab_layout.len().saturating_sub(1) as f32;
             let content_width = tab_layout.iter().map(|(width, _)| *width).sum::<f32>() + gaps;
-            let width = (ui.available_width() - 38.0).max(40.0);
+            let width = (ui.available_width() - 72.0).max(40.0);
             let overflow = content_width > width;
             let width = (width - if overflow { 58.0 } else { 0.0 }).max(1.0);
             let scroll_id = ui.make_persistent_id(egui::IdSalt::new(("workspace-tabs", project)));
@@ -464,7 +469,15 @@ impl App {
                                 )
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                                 .on_hover_text("Close tab");
-                            if response.hovered() || close_response.hovered() || active {
+                            if group.pinned && !close_response.hovered() {
+                                ui.painter().text(
+                                    close_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    "◆",
+                                    egui::FontId::proportional(12.0),
+                                    appearance::color(&self.theme.accent),
+                                );
+                            } else if response.hovered() || close_response.hovered() || active {
                                 egui::Image::new(icons::source("X"))
                                     .tint(appearance::ICON_COLOR)
                                     .paint_at(
@@ -538,8 +551,12 @@ impl App {
                                         sid: face.sid.as_deref(),
                                         index,
                                         count: tab_count,
+                                        pinned: group.pinned,
                                     },
                                 );
+                                if action.toggle_pin {
+                                    toggle_pin = Some(group.id.clone());
+                                }
                                 if action.close {
                                     close = Some(group.id.clone());
                                 }
@@ -608,6 +625,43 @@ impl App {
             if plus_response.clicked() && self.pane_drag.is_none() {
                 self.create(None);
             }
+            let recent: Vec<(String, String, bool)> = workspace
+                .recent_tabs
+                .iter()
+                .filter_map(|id| {
+                    workspace.tabs.iter().find(|tab| &tab.id == id).map(|tab| {
+                        let primary = tab
+                            .primary
+                            .as_ref()
+                            .filter(|pane| tab.layout.find_tab(pane).is_some())
+                            .or_else(|| tab.layout.iter_all_tabs().next().map(|(_, pane)| pane));
+                        (id.clone(), self.tab_face(primary).label, tab.pinned)
+                    })
+                })
+                .collect();
+            appearance::icon_menu_button(ui, "History", |ui| {
+                ui.weak("Recent tabs");
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        for (id, label, pinned) in &recent {
+                            let label = if *pinned {
+                                format!("◆ {label}")
+                            } else {
+                                label.clone()
+                            };
+                            if ui
+                                .selectable_label(workspace.active == *id, label)
+                                .clicked()
+                            {
+                                switch = Some(id.clone());
+                                ui.close();
+                            }
+                        }
+                    });
+            })
+            .response
+            .on_hover_text("Recent tabs");
             // Dropping a dragged terminal pane onto a strip tab moves it
             // into that tab (its focused split; the tab content was already
             // previewed on hover); dropping into a gap between tabs, onto
@@ -767,6 +821,7 @@ impl App {
                 self.finish_rename(true);
             }
             workspace.active = id;
+            workspace.record_active();
             self.hover_popup = None;
             self.hide_center_overlay();
         }
@@ -774,13 +829,24 @@ impl App {
             self.begin_workspace_close_tabs(project, vec![id]);
         }
         if close_all {
-            self.begin_workspace_close_tabs(project, workspace.ids());
+            self.begin_workspace_close_tabs(project, workspace.unpinned_ids(workspace.ids()));
         }
         if let Some(id) = close_left {
-            self.begin_workspace_close_tabs(project, workspace.ids_before(&id));
+            self.begin_workspace_close_tabs(
+                project,
+                workspace.unpinned_ids(workspace.ids_before(&id)),
+            );
         }
         if let Some(id) = close_right {
-            self.begin_workspace_close_tabs(project, workspace.ids_after(&id));
+            self.begin_workspace_close_tabs(
+                project,
+                workspace.unpinned_ids(workspace.ids_after(&id)),
+            );
+        }
+        if let Some(id) = toggle_pin
+            && let Some(tab) = workspace.tabs.iter_mut().find(|tab| tab.id == id)
+        {
+            tab.pinned = !tab.pinned;
         }
         if let Some(index) = add_at {
             self.create_workspace_tab(Some(index));

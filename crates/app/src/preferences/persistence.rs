@@ -26,6 +26,10 @@ pub enum SidebarTool {
     History,
     #[serde(alias = "Info")]
     Info,
+    #[serde(alias = "Problems")]
+    Problems,
+    #[serde(alias = "Structure")]
+    Structure,
 }
 
 /// Explorer search behavior: filter the visible tree by name, or search file
@@ -176,6 +180,12 @@ pub struct UiPreferences {
     pub history_sort: HistorySort,
     #[serde(default)]
     pub history_filter: String,
+    /// Most recently opened native editor files, newest first.
+    #[serde(default)]
+    pub recent_native_files: Vec<PathBuf>,
+    /// Files kept at the top of the native editor's recent menu.
+    #[serde(default)]
+    pub pinned_native_files: HashSet<PathBuf>,
     pub playlists: Vec<Playlist>,
     pub selected_playlist: String,
     #[serde(default, skip_serializing)]
@@ -238,6 +248,8 @@ impl Default for UiPreferences {
             project_activity: HashMap::new(),
             history_sort: HistorySort::LatestActivity,
             history_filter: String::new(),
+            recent_native_files: Vec::new(),
+            pinned_native_files: HashSet::new(),
             playlists: Vec::new(),
             selected_playlist: String::new(),
             player_playlists: HashMap::new(),
@@ -542,6 +554,18 @@ mod tests {
         saved.apply_layout("both-sides").unwrap();
         assert_eq!(saved.left_tool, Some(SidebarTool::Git));
         assert!(saved.right_projects);
+    }
+
+    #[test]
+    fn problems_and_structure_tools_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut prefs = UiPreferences::load(dir.path()).unwrap();
+        prefs.left_tool = Some(SidebarTool::Problems);
+        prefs.tool = SidebarTool::Structure;
+        prefs.save(dir.path()).unwrap();
+        let loaded = UiPreferences::load(dir.path()).unwrap();
+        assert_eq!(loaded.left_tool, Some(SidebarTool::Problems));
+        assert_eq!(loaded.tool, SidebarTool::Structure);
     }
 
     #[test]

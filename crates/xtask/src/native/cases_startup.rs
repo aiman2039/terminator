@@ -121,6 +121,13 @@ pub(crate) fn smoke(opts: &Options) -> Result<()> {
 }
 pub(crate) fn workspace_tabs(o: &Options) -> Result<()> {
     let (h, _p, originals, root) = setup("workspace-tabs")?;
+    // This fixture asserts classic top-level shell tabs. Fresh user
+    // preferences default to IDE mode, which moves those shells to the
+    // bottom strip before the scripted target is painted.
+    fs::write(
+        h.root.join("ui-preferences.json"),
+        serde_json::to_vec(&json!({"version": 2, "ide_mode": false}))?,
+    )?;
     fs::write(root.join("source.rs"), "fn main() {}\n")?;
     plain(
         &h,
@@ -167,6 +174,39 @@ pub(crate) fn workspace_tabs(o: &Options) -> Result<()> {
         layout["active"] == editor_group["id"],
         "Editor not selected"
     );
+    plain(
+        &h,
+        o,
+        "pinned-editor",
+        json!([
+            {"at_ms": 600, "target": "workspace-tab:source.rs", "right_click": true},
+            {"at_ms": 1050, "target": "Pin tab"}
+        ]),
+        2100,
+    )?;
+    ensure!(
+        h.state()?
+            .get("projects")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|projects| projects.first())
+            .and_then(|project| project.get("layout"))
+            .and_then(|layout| layout.get("tabs"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|tabs| tabs
+                .iter()
+                .any(|tab| { tab["id"] == editor_group["id"] && tab["pinned"] == true })),
+        "Editor tab pin did not persist"
+    );
+    plain(
+        &h,
+        o,
+        "unpinned-editor",
+        json!([
+            {"at_ms": 600, "target": "workspace-tab:source.rs", "right_click": true},
+            {"at_ms": 1050, "target": "Unpin tab"}
+        ]),
+        2100,
+    )?;
     plain(
         &h,
         o,
@@ -218,6 +258,83 @@ pub(crate) fn workspace_tabs(o: &Options) -> Result<()> {
         3000,
     )?;
     h.assert_pids(&originals)
+}
+
+/// Real native editor and rust-analyzer rename through the preview dialog.
+/// Uses an isolated project and applies the rename only after the fixture
+/// selects the reviewed Apply action.
+pub(crate) fn native_rename(o: &Options) -> Result<()> {
+    let h = Harness::new()?;
+    h.setup()?;
+    let p = h.project("native-rename")?;
+    let root = PathBuf::from(
+        p.get("path")
+            .and_then(serde_json::Value::as_str)
+            .context("project path")?,
+    );
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.0.0\"\nedition = \"2021\"\n[[bin]]\nname = \"probe\"\npath = \"main.rs\"\n",
+    )?;
+    fs::write(
+        root.join("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"1.97.1\"\n",
+    )?;
+    let helper = root.join("helper.rs");
+    let main = root.join("main.rs");
+    fs::write(&helper, "pub fn helper() {}\n")?;
+    fs::write(&main, "mod helper;\nfn main() { helper::helper(); }\n")?;
+    let mut settings = h.state()?.get("settings").cloned().context("settings")?;
+    settings
+        .as_object_mut()
+        .context("settings object")?
+        .insert("editor_mode".into(), json!("Native"));
+    h.rpc(json!({"Settings": settings}))?;
+    let shell = h.shell(&p)?;
+    h.layout(&p, &[shell])?;
+    plain(
+        &h,
+        o,
+        "rename-preview-only",
+        json!([
+            {"at_ms": 900, "target": "explorer-file:helper.rs"},
+            {"at_ms": 1600, "target": "native-file", "hover_offset": [96.0, 10.0]},
+            {"at_ms": 1900, "target": "native-file", "key": "F2"},
+            {"at_ms": 2300, "target": "rename-name"},
+            {"at_ms": 2500, "target": "rename-name", "text": "renamed"},
+            {"at_ms": 3000, "target": "rename-preview"},
+            {"at_ms": 5000, "target": "rename-apply", "hover": true}
+        ]),
+        7000,
+    )?;
+    ensure!(
+        fs::read_to_string(&helper)?.contains("pub fn helper()")
+            && fs::read_to_string(&main)?.contains("helper::helper()"),
+        "Rename preview changed a file before Apply"
+    );
+    plain(
+        &h,
+        o,
+        "reviewed-symbol-rename",
+        json!([
+            {"at_ms": 1200, "target": "native-file", "hover_offset": [96.0, 10.0]},
+            {"at_ms": 1700, "target": "native-file", "key": "F2"},
+            {"at_ms": 2100, "target": "rename-name"},
+            {"at_ms": 2400, "target": "rename-name", "text": "renamed"},
+            {"at_ms": 2900, "target": "rename-preview"},
+            {"at_ms": 6500, "target": "rename-apply"}
+        ]),
+        12000,
+    )?;
+    ensure!(
+        fs::read_to_string(&helper)?.contains("pub fn renamed()"),
+        "Definition was not renamed"
+    );
+    ensure!(
+        fs::read_to_string(&main)?.contains("helper::renamed()"),
+        "Reference was not renamed"
+    );
+    Ok(())
 }
 pub(crate) fn split_file_opening(o: &Options) -> Result<()> {
     let h = Harness::new()?;

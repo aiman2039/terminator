@@ -4340,3 +4340,88 @@ passed. A stubbed stapler check covered immediate success, transient recovery,
 retry exhaustion, a permanent error, and a permanent error after a transient
 error. The checks also verified both app/DMG call sites and validation gates.
 No live signing, notarization, stapling, or hosted release rerun was performed.
+
+## rustls and native editor follow-up (2026-10-14)
+
+`Cargo.lock` now resolves rustls 0.23.46 for the app's reqwest TLS path. The
+native editor gained a file/symbol breadcrumb, recent and pinned file access,
+and a read-only LSP References list with click navigation. This continues the
+IDE Phase 3 work. At this earlier validation point, cross-file rename was
+pending; the later Phase 3 entry records its implementation. Completion was
+optional in the original plan and remains outside the supported native LSP UI.
+
+Validation: `cargo fmt --all`, `cargo check --workspace --all-targets
+--all-features --locked`, `cargo clippy --workspace --all-targets --all-features
+--locked -- -D warnings`, and `cargo test --workspace --all-features --locked`
+passed locally. The references request and response parser has a focused test.
+`cargo tree -i rustls --locked` showed rustls 0.23.46 as the sole resolved
+version. Native GUI interaction was not rerun. A fresh `cargo audit` fetch
+could not write to the sandbox's read-only advisory database path; the local
+stale database reported no rustls findings and is not current audit proof.
+
+## Native editor colors and command footer (2026-10-14)
+
+The Tree-sitter color resolver now asks the bundled theme for concrete
+keyword and quoted-string scopes. JavaScript `import` and module strings
+render with colors distinct from plain text. The source scroll viewport now
+keeps its full pane height for short files and reserves one fixed footer row,
+so `:` and `/` prompts stay at the bottom for short and long files.
+
+Validation: focused JavaScript color and short/long footer geometry checks
+passed. `cargo fmt --all --check`, strict workspace Clippy, and the full
+workspace test suite passed. The first full test run had 14 local-socket
+permission failures in the sandbox; the same suite passed with local socket
+permission (662 app tests, plus the other workspace suites). A rebuilt native
+GUI was not visually inspected.
+
+## Native editor footer alignment and context menu (2026-10-14)
+
+The fixed command/search footer now paints at the left edge of its row. The
+source hit area fills blank editor space, and secondary click opens a native
+context menu with edit, find, save, path-copy, Open file, and supported LSP actions.
+Right-click preserves an existing text selection. Go to definition, references,
+and hover are shown as disabled for languages without a Terminator LSP server;
+the header References action uses the same gate. Only Rust and Python have
+native-editor LSP servers at this point. The context-menu action for references
+uses the existing async result window.
+
+Validation: a headless right-click check opened the menu from blank editor
+space. Formatting, strict workspace Clippy, and the full workspace test suite
+passed with local socket permission. The installed or running GUI was not
+replaced by these local changes.
+
+## IDE Phase 3 editor tabs and symbol rename (2026-10-14)
+
+Top-level tabs now persist a pinned flag and a bounded recent
+tab order. The strip has a recent-tab menu, and bulk close preserves pinned
+groups. The native editor retains its separate file bookmark list. Rust and
+Python LSP rename uses a review window and explicit Apply. It rejects dirty
+open buffers, changed document versions, unsupported resource operations,
+overlapping or invalid UTF-16 ranges, symlinks, paths outside the project,
+oversized edits, and files changed since preview. Replacements are staged
+beside their targets, with rollback copies for a later failure.
+
+Validation: `cargo fmt --all`, `cargo check --workspace --all-targets
+--all-features --locked`, strict workspace Clippy, and the full workspace
+test suite passed locally (669 app tests, 141 native-editor tests, plus other
+workspace suites). Focused tests covered layout persistence and pinned bulk
+close, LSP rename request/response dispatch, text-edit parsing, UTF-16
+multi-file application, stale file rejection, overlap/out-of-project
+rejection, and symlink rejection. The tests used isolated temporary files.
+The apply window makes affected native buffers read-only; a focused view test
+checks that typing cannot change such a buffer.
+The native `workspace-tabs` fixture passed after pinning its classic-mode
+preference. It exercised Pin and Unpin in the real tab context menu and saved
+the pinned flag. The new isolated `native-rename` fixture opened a Rust file
+in the native editor, reached a two-file rust-analyzer preview, confirmed that
+preview alone left both files unchanged, then applied the change through the
+editor context menu. Its captures were inspected: the pinned-tab marker and
+the two-file diff preview rendered in the quiet native GUI. Orca desktop
+inspection was unavailable because `orca open` timed out; the user's running
+or installed app was not replaced or checked. No deployment or release was
+performed.
+
+The preview-only fixture also restarted the GUI with its native editor tab
+restored, then used F2 to reopen Rename. That exposed and fixed stale terminal
+input ownership: clicking the source now selects the native editor as the
+input target. The final restart-and-apply fixture passed against two files.

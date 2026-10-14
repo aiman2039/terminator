@@ -216,6 +216,22 @@ Focus outlines briefly emphasize a newly selected terminal, then fade to a thin,
 
 Top-level tabs use a flat strip with a terminal icon, close button, and muted active underline. Renaming edits the label in place on the tab, pane caption, or sidebar row; valid edits also save when focus leaves the field.
 
+Top-level tabs, including native and Neovim editor tabs, can be pinned from
+their context menu. Bulk close actions leave pinned groups open; an explicit
+close still closes one.
+The History icon beside the tab-strip plus button lists recently selected tabs
+for that project. Pin state and recent order survive a layout reload. The
+native editor's separate Bookmark and Recent files controls keep file paths
+for quick reopening; they do not pin a workspace tab.
+
+The native editor offers Problems, Structure, hover, definition, references,
+and preview-first symbol rename for Rust and Python when their language
+servers are available. F2 or the editor context menu starts rename. The
+preview shows the proposed changes by file, then Apply checks that files and
+open buffers have not changed. Unsupported file operations and paths outside
+the project are rejected. JavaScript and TypeScript syntax highlighting does
+not require an LSP server; their native LSP actions remain disabled.
+
 
 Clean file-only tabs and editor panes close directly without a terminal-session
 confirmation. If any editor buffer has unsaved changes, a high-visibility bar

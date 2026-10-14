@@ -7,10 +7,17 @@ impl App {
         ui: &mut egui::Ui,
         spec: WorkspaceTabMenuSpec<'_>,
     ) -> WorkspaceTabMenu {
-        let WorkspaceTabMenuSpec { sid, index, count } = spec;
+        let WorkspaceTabMenuSpec {
+            sid,
+            index,
+            count,
+            pinned,
+        } = spec;
         if let Some(sid) = sid {
             self.rename_action(ui, sid, RenameSurface::Workspace);
         }
+        let toggle_pin =
+            click_menu_item(ui, if pinned { "Unpin tab" } else { "Pin tab" }, "FileCode");
         let close = click_menu_item(ui, "Close tab…", "X");
         ui.separator();
         let close_all = click_enabled_menu_item(ui, count > 1, "Close all tabs…", "X");
@@ -25,6 +32,7 @@ impl App {
         let add_left = click_menu_item(ui, "Add tab to the left", "Plus");
         let add_right = click_menu_item(ui, "Add tab to the right", "Plus");
         WorkspaceTabMenu {
+            toggle_pin,
             close,
             close_all,
             close_left,

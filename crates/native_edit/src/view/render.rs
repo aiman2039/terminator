@@ -29,6 +29,9 @@ pub struct SourceOptions {
     /// printable keys (and Enter/Backspace/…) always edit, and Ctrl-V/H
     /// always paste/prompt.
     pub vim: bool,
+    /// A filesystem operation owns this buffer; navigation and copying
+    /// stay available, while edits and saves wait for its result.
+    pub read_only: bool,
 }
 
 impl Default for SourceOptions {
@@ -39,6 +42,7 @@ impl Default for SourceOptions {
             show_status: true,
             autofocus: true,
             vim: true,
+            read_only: false,
             diagnostics: Vec::new(),
         }
     }
@@ -48,6 +52,14 @@ pub struct SourceOutcome {
     pub effects: Vec<Effect>,
     /// Painted file area, for fixture targeting and reveal requests.
     pub content_rect: egui::Rect,
+    /// A primary or secondary click made this source view the input target.
+    pub activated: bool,
+    /// True while the editor context menu is open.
+    pub context_menu_opened: bool,
+    /// Rename action geometry for an optional GUI fixture target.
+    pub rename_action_rect: Option<egui::Rect>,
+    /// Command/search row, fixed to the pane bottom when enabled.
+    pub footer_rect: Option<egui::Rect>,
 }
 
 /// Render an editable source view. Returns engine effects (`Save`/`Quit`/…)
@@ -93,23 +105,34 @@ pub fn show_source<B: Buffer>(
         highlight.ensure(language, dark, doc.revision(), &text);
     }
 
-    // Reserve the vim footer: an unconstrained scroll area fills the pane
-    // and pushes the status/command line out of sight.
-    let max_scroll = (ui.available_height() - row_height - 8.0).max(row_height * 3.0);
+    // Keep one footer row outside the source viewport. The viewport must
+    // fill its allotted height even when the file has only a few lines;
+    // otherwise the command/search prompt follows the end of the file.
+    let footer_height = if options.show_status { row_height } else { 0.0 };
+    let max_scroll =
+        (ui.available_height() - footer_height - ui.spacing().item_spacing.y).max(row_height);
     let mut content_rect = egui::Rect::NOTHING;
+    let mut context_menu_opened = false;
+    let mut rename_action_rect = None;
+    let mut activated = false;
     egui::ScrollArea::vertical()
         .id_salt(("native-source", id))
         .max_height(max_scroll)
+        .auto_shrink([true, false])
         .show(ui, |ui| {
             let width = ui.available_width().max(gutter + advance);
-            let (response, painter) =
-                ui.allocate_painter(Vec2::new(width, content_height), Sense::click());
+            let (response, painter) = ui.allocate_painter(
+                Vec2::new(width, content_height.max(max_scroll)),
+                Sense::click(),
+            );
             // I-beam over file text; the default Sense::click pointer reads
             // as "clickable chrome" instead of an editor.
             let response = response.on_hover_cursor(egui::CursorIcon::Text);
             content_rect = response.rect;
+            activated = response.clicked() || response.secondary_clicked();
             let focus_id = source_focus_id(id);
-            if response.clicked() {
+            if response.clicked() || (response.secondary_clicked() && engine.selection().is_none())
+            {
                 ui.memory_mut(|memory| memory.request_focus(focus_id));
                 if let Some(pos) = response.interact_pointer_pos() {
                     let click_origin = response.rect.min;
@@ -128,6 +151,122 @@ pub fn show_source<B: Buffer>(
                     effects.extend(engine.place_cursor(doc, line, col));
                 }
             }
+            response.context_menu(|ui| {
+                if ui.button("Copy").clicked() {
+                    let text = engine.copy_text(doc);
+                    if !text.is_empty() {
+                        ui.ctx().copy_text(text);
+                    }
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(
+                        !options.read_only && engine.selection().is_some(),
+                        egui::Button::new("Cut"),
+                    )
+                    .clicked()
+                {
+                    let text = engine.cut(doc);
+                    if !text.is_empty() {
+                        ui.ctx().copy_text(text);
+                    }
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(!options.read_only, egui::Button::new("Paste"))
+                    .clicked()
+                {
+                    ui.memory_mut(|memory| memory.request_focus(focus_id));
+                    ui.ctx()
+                        .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                    ui.close();
+                }
+                if ui.button("Select all").clicked() {
+                    engine.select_all(doc);
+                    ui.close();
+                }
+                ui.separator();
+                if ui
+                    .add_enabled(!options.read_only, egui::Button::new("Undo"))
+                    .clicked()
+                {
+                    engine.undo(doc);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(!options.read_only, egui::Button::new("Redo"))
+                    .clicked()
+                {
+                    engine.redo(doc);
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Find in file").clicked() {
+                    engine.begin_search();
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(!options.read_only, egui::Button::new("Replace in file"))
+                    .clicked()
+                {
+                    engine.begin_ex("%s/");
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(!options.read_only, egui::Button::new("Save"))
+                    .clicked()
+                {
+                    effects.push(Effect::Save);
+                    ui.close();
+                }
+                if ui.button("Copy file path").clicked() {
+                    ui.ctx().copy_text(id.to_owned());
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Open file…").clicked() {
+                    effects.push(Effect::OpenFilePicker);
+                    ui.close();
+                }
+                let lsp_supported = crate::lsp::language_id(language).is_some();
+                let lsp_note = "Language server actions are available for Rust and Python files";
+                if ui
+                    .add_enabled(lsp_supported, egui::Button::new("Go to definition"))
+                    .on_disabled_hover_text(lsp_note)
+                    .clicked()
+                {
+                    effects.push(Effect::GotoDefinition);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(lsp_supported, egui::Button::new("Find references"))
+                    .on_disabled_hover_text(lsp_note)
+                    .clicked()
+                {
+                    effects.push(Effect::FindReferences);
+                    ui.close();
+                }
+                let rename_button = ui
+                    .add_enabled(
+                        lsp_supported && !options.read_only,
+                        egui::Button::new("Rename symbol…"),
+                    )
+                    .on_disabled_hover_text(lsp_note);
+                rename_action_rect = Some(rename_button.rect);
+                if rename_button.clicked() {
+                    effects.push(Effect::RenameSymbol);
+                    ui.close();
+                }
+                if ui
+                    .add_enabled(lsp_supported, egui::Button::new("Show hover"))
+                    .on_disabled_hover_text(lsp_note)
+                    .clicked()
+                {
+                    effects.push(Effect::Hover);
+                    ui.close();
+                }
+            });
+            context_menu_opened = response.context_menu_opened();
             if options.autofocus && ui.memory(|memory| memory.focused().is_none()) {
                 ui.memory_mut(|memory| memory.request_focus(focus_id));
             }
@@ -249,7 +388,7 @@ pub fn show_source<B: Buffer>(
                 }
             }
 
-            if focused {
+            if focused && !options.read_only {
                 // IDE shortcuts first: copy/cut/paste/select/undo work in
                 // every mode (IntelliJ-style), then plain vim keys. Ctrl-V
                 // and Ctrl-H detour to vim where it owns them.
@@ -354,6 +493,14 @@ pub fn show_source<B: Buffer>(
                                 && !modifiers.alt
                             {
                                 effects.push(Effect::GotoDefinition);
+                                consumed.push(*key);
+                            } else if *key == egui::Key::F2
+                                && crate::lsp::language_id(language).is_some()
+                                && !modifiers.command
+                                && !modifiers.ctrl
+                                && !modifiers.alt
+                            {
+                                effects.push(Effect::RenameSymbol);
                                 consumed.push(*key);
                             } else if let Some(mapped) = egui_key(*key, *modifiers) {
                                 discrete.push((*key, mapped));
@@ -468,19 +615,33 @@ pub fn show_source<B: Buffer>(
             }
         });
 
-    // Command footer only: mode and cursor live in the pane header. The
-    // scroll reservation above keeps this visible while typing `:ex` or
-    // `/search`.
-    if options.show_status
-        && let Some(prompt) = command_prompt(engine)
-    {
-        ui.horizontal(|ui| {
-            ui.monospace(prompt);
-        });
-    }
+    // Reserve the footer on every frame so entering or leaving command
+    // mode does not move the source viewport.
+    let footer_rect = if options.show_status {
+        let (rect, _) = ui.allocate_exact_size(
+            Vec2::new(ui.available_width(), footer_height),
+            Sense::hover(),
+        );
+        if let Some(prompt) = command_prompt(engine) {
+            ui.painter().text(
+                Pos2::new(rect.left(), rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                prompt,
+                font,
+                ui.visuals().text_color(),
+            );
+        }
+        Some(rect)
+    } else {
+        None
+    };
     SourceOutcome {
         effects,
         content_rect,
+        activated,
+        context_menu_opened,
+        rename_action_rect,
+        footer_rect,
     }
 }
 

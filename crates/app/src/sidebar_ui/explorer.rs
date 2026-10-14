@@ -351,6 +351,8 @@ impl App {
             } else {
                 folder
             };
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), &format!("explorer-folder:{label}"), folder.rect);
             if folder.clicked() {
                 if expanded {
                     self.expanded_dirs.remove(&entry.path);
@@ -526,6 +528,14 @@ impl App {
                     ui.add_space(8.0);
                 }
             });
+            return;
+        }
+        if tool == SidebarTool::Problems {
+            self.problems_panel(ui);
+            return;
+        }
+        if tool == SidebarTool::Structure {
+            self.structure_panel(ui);
             return;
         }
         if tool == SidebarTool::Agents {

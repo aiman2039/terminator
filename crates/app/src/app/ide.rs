@@ -89,6 +89,16 @@ impl App {
                     (StripeTool::Tool(SidebarTool::Git), "GitBranch", "Git"),
                     (StripeTool::Tool(SidebarTool::History), "History", "History"),
                     (StripeTool::Tool(SidebarTool::Info), "Info", "Info"),
+                    (
+                        StripeTool::Tool(SidebarTool::Problems),
+                        "CircleAlert",
+                        "Problems",
+                    ),
+                    (
+                        StripeTool::Tool(SidebarTool::Structure),
+                        "ListTree",
+                        "Structure",
+                    ),
                 ] {
                     let selected = self.stripe_selected(right, tool);
                     let badge = if tool == StripeTool::Tool(SidebarTool::Agents) {

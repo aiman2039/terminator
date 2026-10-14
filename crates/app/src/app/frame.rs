@@ -436,6 +436,7 @@ impl eframe::App for App {
             window_resize_edges(ui);
         }
         self.modals(&ctx, frame);
+        self.show_native_rename_dialog(&ctx);
         self.apply_browser_submit();
         self.reconcile_gui_resources();
         self.sync_browsers(frame);
@@ -515,7 +516,7 @@ impl App {
             if errors == 0 && warnings == 0 {
                 parts.push(format!("{total} problems"));
             }
-            let _diag = ui
+            let diag = ui
                 .colored_label(
                     appearance::color(if errors > 0 {
                         &self.theme.status_failed
@@ -524,9 +525,14 @@ impl App {
                     }),
                     parts.join(" · "),
                 )
-                .on_hover_text("Diagnostics from language servers for open files");
+                .on_hover_text(
+                    "Diagnostics from language servers for open files — click to open Problems",
+                );
             #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "status-diagnostics", _diag.rect);
+            diagnostics::record(ui.ctx(), "status-diagnostics", diag.rect);
+            if diag.interact(egui::Sense::click()).clicked() {
+                self.open_problems();
+            }
         }
         if let Some(path) = editor_path
             && self.lsp.tracked(&path)
@@ -548,6 +554,18 @@ impl App {
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+    #[cfg(any(test, target_os = "macos"))]
+    /// Show the Problems tool in whichever sidebar the current mode
+    /// treats as primary (left in IDE mode, right otherwise).
+    pub(crate) fn open_problems(&mut self) {
+        if self.preferences.ide_mode {
+            self.preferences.left_tool = Some(SidebarTool::Problems);
+            self.preferences.left_visible = true;
+        } else {
+            self.preferences.tool = SidebarTool::Problems;
+            self.preferences.visible = true;
+        }
     }
     #[cfg(any(test, target_os = "macos"))]
     pub(crate) fn open_agents_inbox(&mut self) {

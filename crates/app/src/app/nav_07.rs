@@ -879,6 +879,7 @@ mod tests {
         workspace.tabs.push(crate::workspace::WorkspaceTab {
             id: "second".into(),
             name: None,
+            pinned: false,
             primary: Some(editor()),
             layout: DockState::new(vec![editor()]),
         });

@@ -7,6 +7,48 @@ use std::collections::HashSet;
 mod tests {
     use super::*;
     #[test]
+    fn pinned_tabs_survive_bulk_close_and_recent_order_round_trips() {
+        let editor = Tab::NativeEditor {
+            path: "/tmp/a.rs".into(),
+        };
+        let mut workspace = Workspace::from_layout(DockState::new(vec![editor]));
+        let pinned = workspace.active.clone();
+        workspace.tabs[0].pinned = true;
+        workspace.add("second".into(), Tab::Terminal("shell".into()));
+        workspace.active = pinned.clone();
+        workspace.record_active();
+        assert_eq!(
+            workspace.recent_tabs,
+            vec![pinned.clone(), "second".to_string()]
+        );
+        assert_eq!(
+            workspace.unpinned_ids(workspace.ids()),
+            vec!["second".to_string()]
+        );
+
+        let loaded = Workspace::load(serde_json::to_value(&workspace).unwrap()).unwrap();
+        assert!(loaded.tabs[0].pinned);
+        assert_eq!(loaded.recent_tabs, workspace.recent_tabs);
+        let mut legacy = serde_json::to_value(&workspace).unwrap();
+        legacy.as_object_mut().unwrap().remove("recent_tabs");
+        legacy["tabs"][0].as_object_mut().unwrap().remove("pinned");
+        let loaded = Workspace::load(legacy).unwrap();
+        assert!(!loaded.tabs[0].pinned);
+        assert_eq!(loaded.recent_tabs.first(), Some(&pinned));
+    }
+
+    #[test]
+    fn pin_stays_with_its_group_when_an_editor_moves_out() {
+        let editor = Tab::NativeEditor {
+            path: "/tmp/a.rs".into(),
+        };
+        let shell = Tab::Terminal("shell".into());
+        let mut workspace = Workspace::from_layout(DockState::new(vec![editor.clone(), shell]));
+        workspace.tabs[0].pinned = true;
+        workspace.move_pane_to_new_group_at(&editor, 1).unwrap();
+        assert!(workspace.tabs[0].pinned);
+    }
+    #[test]
     fn group_name_round_trips_and_legacy_layouts_default_to_tab_n() {
         let mut workspace =
             Workspace::from_layout(DockState::new(vec![Tab::Terminal("shell".into())]));

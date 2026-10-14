@@ -280,6 +280,8 @@ impl App {
             pending_native_close: Vec::new(),
             pending_native_splits: Vec::new(),
             pending_goto: Vec::new(),
+            native_references: None,
+            native_rename: None,
             file_index: terminator_native_edit::finder::FileIndex::empty(),
             file_index_rx: None,
             file_index_roots: Vec::new(),

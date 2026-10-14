@@ -117,8 +117,10 @@ const CAPTURES: &[&str] = &["comment", "string", "keyword", "function", "type", 
 fn scope_for_capture(capture: &str) -> Option<&'static str> {
     match capture {
         "comment" => Some("comment"),
-        "string" => Some("string"),
-        "keyword" => Some("keyword"),
+        // The bundled Nord/OneHalf themes style concrete TextMate scopes.
+        // Generic `string` and `keyword` resolve to their default foreground.
+        "string" => Some("string.quoted.double"),
+        "keyword" => Some("keyword.control"),
         "function" => Some("entity.name.function"),
         "type" => Some("entity.name.type"),
         "number" => Some("constant.numeric"),
