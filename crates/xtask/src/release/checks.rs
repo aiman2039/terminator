@@ -52,37 +52,49 @@ pub(super) fn run_with(
             "sh",
             &["scripts/check.sh", "windows-clippy"],
         ))?;
+        for check in ["async-boundary", "fmt", "audit", "deny"] {
+            run(&mut cmd(root, "sh", &["scripts/check.sh", check]))?;
+        }
     }
-    for check in [
-        "async-boundary",
-        "fmt",
-        "build",
-        "clippy",
-        "test",
-        "audit",
-        "deny",
-    ] {
-        // `clippy` type-checks everything `cargo check` does, so the release
-        // flow does not run the `lint` step twice over the same targets.
-        run(&mut cmd(root, "sh", &["scripts/check.sh", check]))?;
-    }
-    if matches!(platform, Platform::Windows) {
-        println!("Windows PTY and native GUI fixtures are not yet supported.");
-    } else {
+    // `clippy` type-checks everything `cargo check` does, and the test /
+    // test-support / package steps compile all test and binary targets, so the
+    // release flow does not run `lint` or `build` twice over the same targets.
+    run(&mut cmd(root, "sh", &["scripts/check.sh", "clippy"]))?;
+    if matches!(platform, Platform::Linux) {
+        // Run unit tests and coverage in one pass on Linux via cargo-llvm-cov + nextest.
         run(&mut cmd(
             root,
             "cargo",
             &[
-                "build",
+                "llvm-cov",
+                "nextest",
+                "--workspace",
+                "--exclude",
+                "xtask",
+                "--all-features",
                 "--locked",
-                "--bin",
-                "terminator-daemon",
-                "--bin",
-                "terminator-hook",
+                "--profile",
+                "ci",
+                "--summary-only",
+                "--fail-under-lines",
+                "50",
+                "--",
+                "--skip",
+                "signals::tests::hangup_ends_a_spawned_process_group",
+                "--skip",
+                "navigation_tests::reconnect_clears_transport_errors_but_preserves_failed_operations",
             ],
         ))?;
-        run(&mut cmd(root, "cargo", &["xtask", "integration"]))?;
-        run(&mut cmd(root, "cargo", &["xtask", "idle-close"]))?;
+    } else {
+        run(&mut cmd(root, "sh", &["scripts/check.sh", "test"]))?;
+    }
+    if matches!(platform, Platform::Windows) {
+        println!("Windows PTY and native GUI fixtures are not yet supported.");
+        run(
+            cmd(root, "cargo", &["xtask", "package", "--debug", "--output"])
+                .arg(output.join("package")),
+        )?;
+    } else {
         run(&mut cmd(
             root,
             "cargo",
@@ -96,6 +108,31 @@ pub(super) fn run_with(
                 "--locked",
             ],
         ))?;
+        std::thread::scope(|scope| -> Result<()> {
+            let integration = scope.spawn(|| {
+                run(&mut cmd(
+                    root,
+                    "sh",
+                    &["scripts/run-built-xtask.sh", "integration"],
+                ))
+            });
+            let idle_close = scope.spawn(|| {
+                run(&mut cmd(
+                    root,
+                    "sh",
+                    &["scripts/run-built-xtask.sh", "idle-close"],
+                ))
+            });
+            let integration_result = integration
+                .join()
+                .map_err(|_| anyhow::anyhow!("integration check panicked"))?;
+            let idle_close_result = idle_close
+                .join()
+                .map_err(|_| anyhow::anyhow!("idle-close check panicked"))?;
+            integration_result?;
+            idle_close_result?;
+            Ok(())
+        })?;
         let native = output.join("native");
         match platform {
             Platform::Linux => {
@@ -115,37 +152,32 @@ pub(super) fn run_with(
 openbox > "$RUNNER_TEMP/window-manager.log" 2>&1 &
 manager_pid=$!
 trap 'kill "$manager_pid" 2>/dev/null || true' EXIT
-cargo xtask gui all --output "$RUNNER_TEMP/native"
+sh scripts/run-built-xtask.sh gui all --output "$RUNNER_TEMP/native"
 "#,
                     ],
                 ))?;
             }
             Platform::Mac => {
-                run(cmd(root, "cargo", &["xtask", "gui", "all", "--output"]).arg(native))?;
+                run(cmd(
+                    root,
+                    "sh",
+                    &["scripts/run-built-xtask.sh", "gui", "all", "--output"],
+                )
+                .arg(native))?;
             }
             Platform::Windows => unreachable!(),
         }
-    }
-    run(cmd(root, "cargo", &["xtask", "package", "--output"]).arg(output.join("package")))?;
-    if matches!(platform, Platform::Linux) {
-        run(&mut cmd(
+        run(cmd(
             root,
-            "cargo",
+            "sh",
             &[
-                "llvm-cov",
-                "--workspace",
-                "--all-features",
-                "--locked",
-                "--summary-only",
-                "--fail-under-lines",
-                "50",
-                "--",
-                "--skip",
-                "signals::tests::hangup_ends_a_spawned_process_group",
-                "--skip",
-                "navigation_tests::reconnect_clears_transport_errors_but_preserves_failed_operations",
+                "scripts/run-built-xtask.sh",
+                "package",
+                "--debug",
+                "--output",
             ],
-        ))?;
+        )
+        .arg(output.join("package")))?;
     }
     ensure!(
         git(root, &["status", "--porcelain"])?.is_empty(),

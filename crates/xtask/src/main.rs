@@ -129,7 +129,7 @@ enum Task {
         #[arg(long, default_value = "5")]
         seconds: u64,
         /// Parallel quiet GUI workers; native-input cases always run alone.
-        #[arg(long, default_value = "5")]
+        #[arg(long, default_value = "8")]
         jobs: usize,
     },
     /// Bounded daemon transport/PTY load (does not measure GUI FPS).
@@ -269,12 +269,28 @@ fn main() -> Result<()> {
             build_number,
             destination: &output,
         }),
-        Task::Integration => {
-            integration::run()?;
-            integration::controls()?;
-            integration::hook_controls()?;
-            regressions::run()
-        }
+        Task::Integration => std::thread::scope(|scope| -> Result<()> {
+            let tasks = [
+                ("run", scope.spawn(integration::run)),
+                ("controls", scope.spawn(integration::controls)),
+                ("hook_controls", scope.spawn(integration::hook_controls)),
+                ("regressions", scope.spawn(regressions::run)),
+            ];
+            let mut failures = Vec::new();
+            for (name, task) in tasks {
+                match task.join() {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => failures.push(format!("{name}: {error:#}")),
+                    Err(_) => failures.push(format!("{name}: panicked")),
+                }
+            }
+            anyhow::ensure!(
+                failures.is_empty(),
+                "Integration failures:\n{}",
+                failures.join("\n")
+            );
+            Ok(())
+        }),
         Task::Gui {
             case,
             scale,

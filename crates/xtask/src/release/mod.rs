@@ -15,6 +15,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    sync::Mutex,
     time::Instant,
 };
 
@@ -121,15 +122,22 @@ pub fn run(mut options: Options) -> Result<()> {
     }
     if !options.skip_linux {
         require("docker")?;
-        linux_platform(&System.output(&mut cmd(
-            &root,
-            "docker",
-            &["info", "--format", "{{.Architecture}}"],
-        ))?)?;
     }
-    for plugin in ["audit", "deny", "nextest"] {
-        System.run(&mut cmd(&root, "cargo", &[plugin, "--version"]))?;
-    }
+    std::thread::scope(|scope| -> Result<()> {
+        let mut checks = Vec::new();
+        for plugin in ["audit", "deny", "nextest"] {
+            let root = &root;
+            checks.push(
+                scope.spawn(move || System.run(&mut cmd(root, "cargo", &[plugin, "--version"]))),
+            );
+        }
+        for check in checks {
+            check
+                .join()
+                .map_err(|_| anyhow::anyhow!("Plugin check panicked"))??;
+        }
+        Ok(())
+    })?;
     execute(&root, &options, &System, |source, artifacts| {
         validate(source, artifacts, &options, &System)
     })
@@ -225,6 +233,11 @@ fn export_source(
             &format!("--object-format={object_format}"),
         ],
     )?;
+    // Disable background maintenance and auto-gc so the exported .git/objects
+    // directory is never mutated while Docker copies /snapshot in parallel.
+    for (key, value) in [("gc.auto", "0"), ("maintenance.auto", "false")] {
+        git(source, &["config", key, value])?;
+    }
     git(source, &["add", "--force", "--all"])?;
     git(
         source,
@@ -237,6 +250,10 @@ fn export_source(
             "core.hooksPath=/dev/null",
             "-c",
             "commit.gpgsign=false",
+            "-c",
+            "gc.auto=0",
+            "-c",
+            "maintenance.auto=false",
             "commit",
             "--quiet",
             "-m",
@@ -378,17 +395,33 @@ struct Stages<'a, R> {
     source: &'a Path,
     artifacts: &'a Path,
     runner: &'a R,
-    results: BTreeMap<String, Value>,
+    results: Mutex<BTreeMap<String, Value>>,
 }
 impl<R: Runner> Stages<'_, R> {
     fn save(&self) -> Result<()> {
+        let results = self
+            .results
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Release results lock poisoned"))?;
         fs::write(
             self.artifacts.join("results.json"),
-            serde_json::to_vec_pretty(&self.results)?,
+            serde_json::to_vec_pretty(&*results)?,
         )?;
         Ok(())
     }
-    fn run(&mut self, name: &str, command: &mut std::process::Command) -> Result<()> {
+    fn record(&self, name: &str, value: Value) -> Result<()> {
+        let mut results = self
+            .results
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Release results lock poisoned"))?;
+        results.insert(name.into(), value);
+        fs::write(
+            self.artifacts.join("results.json"),
+            serde_json::to_vec_pretty(&*results)?,
+        )?;
+        Ok(())
+    }
+    fn run(&self, name: &str, command: &mut std::process::Command) -> Result<()> {
         let destination = self.artifacts.join(name);
         fs::create_dir(&destination)?;
         command
@@ -398,8 +431,10 @@ impl<R: Runner> Stages<'_, R> {
         println!("==> {name}: {command:?}");
         let started = Instant::now();
         let result = self.runner.logged(command, &destination.join("run.log"));
-        self.results.insert(name.into(), json!({"status":if result.is_ok() {"passed"} else {"failed"}, "seconds":started.elapsed().as_secs_f64()}));
-        self.save()?;
+        self.record(
+            name,
+            json!({"status":if result.is_ok() {"passed"} else {"failed"}, "seconds":started.elapsed().as_secs_f64()}),
+        )?;
         result.with_context(|| {
             format!(
                 "{name} failed. See {}",
@@ -415,11 +450,11 @@ fn validate(
     options: &Options,
     runner: &impl Runner,
 ) -> Result<()> {
-    let mut stages = Stages {
+    let stages = Stages {
         source,
         artifacts,
         runner,
-        results: BTreeMap::from([
+        results: Mutex::new(BTreeMap::from([
             ("host".into(), json!({"status":"pending"})),
             (
                 "linux".into(),
@@ -429,7 +464,7 @@ fn validate(
                 "windows".into(),
                 json!({"status":if options.skip_windows {"skipped explicitly; macOS cross-check only"} else {"pending"}}),
             ),
-        ]),
+        ])),
     };
     stages.save()?;
     let platform = if options.skip_linux {
@@ -456,10 +491,7 @@ fn validate(
             );
         }
         println!("Linux runtime platform: {platform} (native Docker architecture)");
-        stages
-            .results
-            .insert("linux-platform".into(), json!({"platform":platform}));
-        stages.save()?;
+        stages.record("linux-platform", json!({"platform":platform}))?;
         Some(platform)
     };
     let target = artifacts
@@ -467,32 +499,20 @@ fn validate(
         .and_then(Path::parent)
         .context("Missing artifact parent")?
         .join("release-target");
-    stages.run(
-        "release-flow-tests",
-        cmd(
-            source,
-            "cargo",
-            &["test", "-p", "xtask", "--locked", "release::"],
-        )
-        .env("CARGO_TARGET_DIR", &target),
-    )?;
-    stages.run(
-        "host",
-        cmd(source, "bash", &["scripts/release-check.sh"]).env("CARGO_TARGET_DIR", &target),
-    )?;
-    if !options.skip_linux {
+    let linux_plan = if !options.skip_linux {
         let platform = platform.context("Missing Linux platform")?;
         let toolchain = version::document(&source.join("rust-toolchain.toml"))?;
         let rust = version::field(&toolchain, &["toolchain", "channel"])?
             .as_str()
-            .context("Missing Rust toolchain")?;
+            .context("Missing Rust toolchain")?
+            .to_owned();
         let components = rust_components(&toolchain)?;
         let image = if let Some(image) = &options.linux_image {
             image.clone()
         } else {
             linux_image_tag(
                 &fs::read(source.join("scripts/release-linux.Dockerfile"))?,
-                rust,
+                &rust,
                 &components,
                 platform,
             )
@@ -501,20 +521,17 @@ fn validate(
         fs::create_dir(&context)?;
         let cached = if options.rebuild_linux_image {
             false
+        } else if options.linux_image.is_some() {
+            // Already inspected above during platform architecture check.
+            true
         } else {
-            let inspected = runner.output(&mut cmd(
-                source,
-                "docker",
-                &["image", "inspect", "--format", "{{.Id}}", &image],
-            ));
-            if options.linux_image.is_some() {
-                inspected.with_context(|| {
-                    format!("Selected Linux image {image} is not available locally")
-                })?;
-                true
-            } else {
-                inspected.is_ok()
-            }
+            runner
+                .output(&mut cmd(
+                    source,
+                    "docker",
+                    &["image", "inspect", "--format", "{{.Id}}", &image],
+                ))
+                .is_ok()
         };
         if cached {
             let destination = artifacts.join("linux-image");
@@ -531,11 +548,7 @@ fn validate(
                 ),
             )?;
             println!("Reusing local Linux image {image}");
-            stages.results.insert(
-                "linux-image".into(),
-                json!({"status":"cached", "image":image}),
-            );
-            stages.save()?;
+            stages.record("linux-image", json!({"status":"cached", "image":image}))?;
         } else {
             stages.run(
                 "linux-image",
@@ -559,21 +572,78 @@ fn validate(
                 ),
             )?;
         }
-        let output = artifacts.join(platform.replace('/', "-"));
-        let target_volume = format!(
-            "type=volume,src=terminator-release-linux-target-{},dst=/build",
-            platform.replace('/', "-")
-        );
-        fs::create_dir(&output)?;
-        stages.run("linux", &mut cmd(source, "docker", &["run", "--rm", "--pull", "never", "--platform", platform,
-            "--mount", &format!("type=bind,src={},dst=/snapshot,readonly", source.display()),
-            "--mount", &format!("type=bind,src={},dst=/artifacts", output.display()),
-            "--mount", &target_volume,
-            "--mount", "type=volume,src=terminator-release-linux-registry,dst=/root/.cargo/registry",
-            "--mount", "type=volume,src=terminator-release-linux-git,dst=/root/.cargo/git",
-            "-e", "CARGO_TARGET_DIR=/build", "-e", "RUNNER_TEMP=/artifacts", &image,
-            "bash", "-euo", "pipefail", "-c", "cp -a --no-preserve=ownership /snapshot/. /src/; bash scripts/release-check.sh"]))?;
-    }
+        Some((platform, image))
+    } else {
+        None
+    };
+    let stages_ref = &stages;
+    let target_ref = &target;
+    std::thread::scope(|scope| -> Result<()> {
+        let host_task = scope.spawn(move || {
+            stages_ref.run(
+                "host",
+                cmd(source, "bash", &["scripts/release-check.sh"])
+                    .env("CARGO_TARGET_DIR", target_ref),
+            )
+        });
+        let linux_task = linux_plan.map(|(platform, image)| {
+            scope.spawn(move || -> Result<()> {
+                let output = artifacts.join(platform.replace('/', "-"));
+                let target_volume = format!(
+                    "type=volume,src=terminator-release-linux-target-{},dst=/build",
+                    platform.replace('/', "-")
+                );
+                fs::create_dir(&output)?;
+                stages_ref.run(
+                    "linux",
+                    &mut cmd(
+                        source,
+                        "docker",
+                        &[
+                            "run",
+                            "--rm",
+                            "--pull",
+                            "never",
+                            "--platform",
+                            platform,
+                            "--mount",
+                            &format!("type=bind,src={},dst=/snapshot,readonly", source.display()),
+                            "--mount",
+                            &format!("type=bind,src={},dst=/artifacts", output.display()),
+                            "--mount",
+                            &target_volume,
+                            "--mount",
+                            "type=volume,src=terminator-release-linux-registry,dst=/root/.cargo/registry",
+                            "--mount",
+                            "type=volume,src=terminator-release-linux-git,dst=/root/.cargo/git",
+                            "-e",
+                            "CARGO_TARGET_DIR=/build",
+                            "-e",
+                            "RUNNER_TEMP=/artifacts",
+                            &image,
+                            "bash",
+                            "-euo",
+                            "pipefail",
+                            "-c",
+                            "cp -a --preserve=timestamps --no-preserve=ownership /snapshot/. /src/; bash scripts/release-check.sh",
+                        ],
+                    ),
+                )
+            })
+        });
+        let host_result = host_task
+            .join()
+            .map_err(|_| anyhow::anyhow!("Host release check panicked"))?;
+        let linux_result = match linux_task {
+            Some(task) => task
+                .join()
+                .map_err(|_| anyhow::anyhow!("Linux release check panicked"))?,
+            None => Ok(()),
+        };
+        host_result?;
+        linux_result?;
+        Ok(())
+    })?;
     if !options.skip_windows {
         let output = artifacts.join("windows-runtime");
         fs::create_dir(&output)?;

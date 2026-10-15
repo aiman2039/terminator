@@ -1,4 +1,5 @@
 nvim.log
+/log.log
 /target/
 /.runtime/
 /.artifacts/

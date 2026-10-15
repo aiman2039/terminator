@@ -26,7 +26,7 @@ impl Default for Options {
             output: artifacts().join("native"),
             sessions: 50,
             seconds: 5,
-            jobs: 5,
+            jobs: 8,
         }
     }
 }

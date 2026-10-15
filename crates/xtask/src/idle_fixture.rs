@@ -19,172 +19,193 @@ fn closed(value: &Value) -> bool {
     })
 }
 pub fn run() -> Result<()> {
-    for name in ["zsh", "bash", "fish", "sh"] {
-        let Some(shell) = terminator_core::find_executable(name) else {
-            println!("SKIP idle-close {name}: not installed");
-            continue;
-        };
-        let mut h = Harness::new()?;
-        let home = h.root.join("home");
-        fs::create_dir_all(&home)?;
-        if name == "fish" {
-            // A fresh fish profile otherwise starts a background Python job
-            // to generate completions. Test an initialized, idle profile.
-            fs::create_dir_all(h.root.join("data/fish/generated_completions"))?;
+    thread::scope(|scope| -> Result<()> {
+        let mut tasks = Vec::new();
+        for name in ["zsh", "bash", "fish", "sh"] {
+            tasks.push((name, scope.spawn(move || run_shell(name))));
         }
-        h.env
-            .insert("HOME".into(), home.to_string_lossy().into_owned());
-        h.env
-            .insert("ZDOTDIR".into(), home.to_string_lossy().into_owned());
-        h.restart()?;
-        let mut settings = h
-            .state()?
-            .get("settings")
-            .cloned()
-            .ok_or_else(|| anyhow!("missing settings"))?;
-        settings
-            .as_object_mut()
-            .ok_or_else(|| anyhow!("settings is not an object"))?
-            .insert("shell".into(), json!(shell));
-        h.rpc(json!({"Settings":settings}))?;
-        let project = h.project(&format!("idle-{name}"))?;
-        let generation = h
-            .state()?
-            .get("generation")
-            .ok_or_else(|| anyhow!("missing generation"))?
-            .as_str()
-            .unwrap()
-            .to_owned();
-        let initial = h.shell(&project)?;
-        thread::sleep(Duration::from_millis(700));
-        let outcome = close(&h, &[&initial], &generation)?;
-        if name == "sh" {
-            ensure!(
-                !closed(&outcome),
-                "Unsupported shell was closed without readiness"
-            );
-            h.assert_pids(std::slice::from_ref(&initial))?;
-            println!("PASS idle-close sh: unsupported shell retained");
-            continue;
+        tasks.push(("zsh-prompt-framework", scope.spawn(zsh_prompt_framework)));
+        let mut failures = Vec::new();
+        for (name, task) in tasks {
+            match task.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => failures.push(format!("{name}: {error:#}")),
+                Err(_) => failures.push(format!("{name}: panicked")),
+            }
         }
-        if !closed(&outcome) {
-            anyhow::bail!(
-                "Initial {name} shell did not close: {outcome}; {}",
-                h.history(id(&initial))?
-            );
-        }
-        let completed = h.shell(&project)?;
-        thread::sleep(Duration::from_millis(300));
-        let mut command = h.attach(&completed)?;
-        h.write(&mut command, "true\r")?;
-        thread::sleep(Duration::from_millis(400));
-        let outcome = close(&h, &[&completed], &generation)?;
         ensure!(
-            closed(&outcome),
-            "{name} shell after a completed builtin did not close: {outcome}"
+            failures.is_empty(),
+            "idle-close failures:\n{}",
+            failures.join("\n")
         );
-        let builtin = h.shell(&project)?;
-        thread::sleep(Duration::from_millis(400));
-        h.write(&mut h.attach(&builtin)?, "read value\r")?;
-        thread::sleep(Duration::from_millis(300));
-        ensure!(
-            closed(&close(&h, &[&builtin], &generation)?),
-            "Builtin without children required confirmation"
-        );
-        let busy = h.shell(&project)?;
-        let idle = h.shell(&project)?;
-        thread::sleep(Duration::from_millis(400));
-        h.write(&mut h.attach(&busy)?, "sleep 30\r")?;
-        thread::sleep(Duration::from_millis(300));
-        let outcome = close(&h, &[&idle, &busy], &generation)?;
+        Ok(())
+    })
+}
+
+fn run_shell(name: &str) -> Result<()> {
+    let Some(shell) = terminator_core::find_executable(name) else {
+        println!("SKIP idle-close {name}: not installed");
+        return Ok(());
+    };
+    let mut h = Harness::new()?;
+    let home = h.root.join("home");
+    fs::create_dir_all(&home)?;
+    if name == "fish" {
+        // A fresh fish profile otherwise starts a background Python job
+        // to generate completions. Test an initialized, idle profile.
+        fs::create_dir_all(h.root.join("data/fish/generated_completions"))?;
+    }
+    h.env
+        .insert("HOME".into(), home.to_string_lossy().into_owned());
+    h.env
+        .insert("ZDOTDIR".into(), home.to_string_lossy().into_owned());
+    h.restart()?;
+    let mut settings = h
+        .state()?
+        .get("settings")
+        .cloned()
+        .ok_or_else(|| anyhow!("missing settings"))?;
+    settings
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("settings is not an object"))?
+        .insert("shell".into(), json!(shell));
+    h.rpc(json!({"Settings":settings}))?;
+    let project = h.project(&format!("idle-{name}"))?;
+    let generation = h
+        .state()?
+        .get("generation")
+        .ok_or_else(|| anyhow!("missing generation"))?
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let initial = h.shell(&project)?;
+    thread::sleep(Duration::from_millis(700));
+    let outcome = close(&h, &[&initial], &generation)?;
+    if name == "sh" {
         ensure!(
             !closed(&outcome),
-            "Busy sibling did not block idle close: {outcome}"
+            "Unsupported shell was closed without readiness"
         );
-        h.assert_pids(&[idle.clone(), busy.clone()])?;
-        let stale = close(&h, &[&idle], "stale-generation")?;
-        ensure!(
-            stale
-                .get(0)
-                .and_then(|outcome| outcome.get("status"))
-                .is_some_and(|status| status == "stale_generation"),
-            "Stale generation was accepted"
-        );
-        h.assert_pids(std::slice::from_ref(&idle))?;
-        let background = h.shell(&project)?;
-        thread::sleep(Duration::from_millis(300));
-        let mut bg = h.attach(&background)?;
-        h.write(&mut bg, "sleep 30 &\r")?;
-        thread::sleep(Duration::from_millis(300));
-        let outcome = close(&h, &[&background], &generation)?;
-        ensure!(!closed(&outcome), "Background job mistaken for idle");
-        h.assert_pids(std::slice::from_ref(&background))?;
-        let last_pid = if name == "fish" { "$last_pid" } else { "$!" };
-        h.write(
-            &mut bg,
-            &format!("kill -STOP {last_pid} && printf '%s\\n' 'IDLE_STOPPED_''JOB'\r"),
-        )?;
-        h.wait(
-            |_| {
-                h.history(id(&background))
-                    .is_ok_and(|s| s.contains("IDLE_STOPPED_JOB"))
-            },
-            5,
-        )?;
-        ensure!(
-            !closed(&close(&h, &[&background], &generation)?),
-            "Stopped job mistaken for idle"
-        );
-        let foreground = h.shell(&project)?;
-        thread::sleep(Duration::from_millis(300));
-        h.write(&mut h.attach(&foreground)?, "sleep 30\r")?;
-        thread::sleep(Duration::from_millis(300));
-        ensure!(
-            !closed(&close(&h, &[&foreground], &generation)?),
-            "Foreground job mistaken for idle"
-        );
-        h.assert_pids(std::slice::from_ref(&foreground))?;
-        // Resize is processed on the same attachment after Input. Observing it
-        // acknowledges forwarding, without waiting for the command to settle.
-        let submitted = h.shell(&project)?;
-        thread::sleep(Duration::from_millis(300));
-        let mut input = h.attach(&submitted)?;
-        h.write(&mut input, "sleep 30\r")?;
-        terminator_core::write_frame(&mut input, &json!({"Resize":{"rows":31,"cols":91}}))?;
-        let deadline = std::time::Instant::now()
-            .checked_add(Duration::from_secs(3))
-            .ok_or_else(|| anyhow!("input deadline overflow"))?;
-        while session(&h.state()?, id(&submitted))["rows"] != 31 {
-            ensure!(
-                std::time::Instant::now() < deadline,
-                "Input forwarding was not acknowledged"
-            );
-            thread::yield_now();
-        }
-        ensure!(
-            !closed(&close(&h, &[&submitted], &generation)?),
-            "Just-submitted command was closed"
-        );
-        h.assert_pids(std::slice::from_ref(&submitted))?;
-        let partial = h.shell(&project)?;
-        thread::sleep(Duration::from_millis(300));
-        h.write(&mut h.attach(&partial)?, "echo")?;
-        thread::sleep(Duration::from_millis(100));
-        ensure!(
-            closed(&close(&h, &[&partial], &generation)?),
-            "Partial input without children required confirmation"
-        );
-        h.rpc(json!({"Hook":{"protocol_version":1,"event_id":"idle-fixture-agent","terminal_session_id":id(&idle),"agent_invocation_id":"idle-fixture-agent","agent_kind":"sample","state":"waiting_input","request_id":"question","sequence":1,"summary":"Fixture agent awaits input","details":"Isolated test","resume":null}}))?;
-        ensure!(
-            !closed(&close(&h, &[&idle], &generation)?),
-            "Active agent ignored"
-        );
-        h.assert_pids(std::slice::from_ref(&idle))?;
-        println!(
-            "PASS idle-close {name}: idle shells, builtin without children, tab preflight, foreground/background/stopped jobs, immediate close after input forwarding, partial input, agent, stale generation"
+        h.assert_pids(std::slice::from_ref(&initial))?;
+        println!("PASS idle-close sh: unsupported shell retained");
+        return Ok(());
+    }
+    if !closed(&outcome) {
+        anyhow::bail!(
+            "Initial {name} shell did not close: {outcome}; {}",
+            h.history(id(&initial))?
         );
     }
-    zsh_prompt_framework()?;
+    let completed = h.shell(&project)?;
+    thread::sleep(Duration::from_millis(300));
+    let mut command = h.attach(&completed)?;
+    h.write(&mut command, "true\r")?;
+    thread::sleep(Duration::from_millis(400));
+    let outcome = close(&h, &[&completed], &generation)?;
+    ensure!(
+        closed(&outcome),
+        "{name} shell after a completed builtin did not close: {outcome}"
+    );
+    let builtin = h.shell(&project)?;
+    thread::sleep(Duration::from_millis(400));
+    h.write(&mut h.attach(&builtin)?, "read value\r")?;
+    thread::sleep(Duration::from_millis(300));
+    ensure!(
+        closed(&close(&h, &[&builtin], &generation)?),
+        "Builtin without children required confirmation"
+    );
+    let busy = h.shell(&project)?;
+    let idle = h.shell(&project)?;
+    thread::sleep(Duration::from_millis(400));
+    h.write(&mut h.attach(&busy)?, "sleep 30\r")?;
+    thread::sleep(Duration::from_millis(300));
+    let outcome = close(&h, &[&idle, &busy], &generation)?;
+    ensure!(
+        !closed(&outcome),
+        "Busy sibling did not block idle close: {outcome}"
+    );
+    h.assert_pids(&[idle.clone(), busy.clone()])?;
+    let stale = close(&h, &[&idle], "stale-generation")?;
+    ensure!(
+        stale
+            .get(0)
+            .and_then(|outcome| outcome.get("status"))
+            .is_some_and(|status| status == "stale_generation"),
+        "Stale generation was accepted"
+    );
+    h.assert_pids(std::slice::from_ref(&idle))?;
+    let background = h.shell(&project)?;
+    thread::sleep(Duration::from_millis(300));
+    let mut bg = h.attach(&background)?;
+    h.write(&mut bg, "sleep 30 &\r")?;
+    thread::sleep(Duration::from_millis(300));
+    let outcome = close(&h, &[&background], &generation)?;
+    ensure!(!closed(&outcome), "Background job mistaken for idle");
+    h.assert_pids(std::slice::from_ref(&background))?;
+    let last_pid = if name == "fish" { "$last_pid" } else { "$!" };
+    h.write(
+        &mut bg,
+        &format!("kill -STOP {last_pid} && printf '%s\\n' 'IDLE_STOPPED_''JOB'\r"),
+    )?;
+    h.wait(
+        |_| {
+            h.history(id(&background))
+                .is_ok_and(|s| s.contains("IDLE_STOPPED_JOB"))
+        },
+        5,
+    )?;
+    ensure!(
+        !closed(&close(&h, &[&background], &generation)?),
+        "Stopped job mistaken for idle"
+    );
+    let foreground = h.shell(&project)?;
+    thread::sleep(Duration::from_millis(300));
+    h.write(&mut h.attach(&foreground)?, "sleep 30\r")?;
+    thread::sleep(Duration::from_millis(300));
+    ensure!(
+        !closed(&close(&h, &[&foreground], &generation)?),
+        "Foreground job mistaken for idle"
+    );
+    h.assert_pids(std::slice::from_ref(&foreground))?;
+    // Resize is processed on the same attachment after Input. Observing it
+    // acknowledges forwarding, without waiting for the command to settle.
+    let submitted = h.shell(&project)?;
+    thread::sleep(Duration::from_millis(300));
+    let mut input = h.attach(&submitted)?;
+    h.write(&mut input, "sleep 30\r")?;
+    terminator_core::write_frame(&mut input, &json!({"Resize":{"rows":31,"cols":91}}))?;
+    let deadline = std::time::Instant::now()
+        .checked_add(Duration::from_secs(3))
+        .ok_or_else(|| anyhow!("input deadline overflow"))?;
+    while session(&h.state()?, id(&submitted))["rows"] != 31 {
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Input forwarding was not acknowledged"
+        );
+        thread::yield_now();
+    }
+    ensure!(
+        !closed(&close(&h, &[&submitted], &generation)?),
+        "Just-submitted command was closed"
+    );
+    h.assert_pids(std::slice::from_ref(&submitted))?;
+    let partial = h.shell(&project)?;
+    thread::sleep(Duration::from_millis(300));
+    h.write(&mut h.attach(&partial)?, "echo")?;
+    thread::sleep(Duration::from_millis(100));
+    ensure!(
+        closed(&close(&h, &[&partial], &generation)?),
+        "Partial input without children required confirmation"
+    );
+    h.rpc(json!({"Hook":{"protocol_version":1,"event_id":"idle-fixture-agent","terminal_session_id":id(&idle),"agent_invocation_id":"idle-fixture-agent","agent_kind":"sample","state":"waiting_input","request_id":"question","sequence":1,"summary":"Fixture agent awaits input","details":"Isolated test","resume":null}}))?;
+    ensure!(
+        !closed(&close(&h, &[&idle], &generation)?),
+        "Active agent ignored"
+    );
+    h.assert_pids(std::slice::from_ref(&idle))?;
+    println!(
+        "PASS idle-close {name}: idle shells, builtin without children, tab preflight, foreground/background/stopped jobs, immediate close after input forwarding, partial input, agent, stale generation"
+    );
     Ok(())
 }
 

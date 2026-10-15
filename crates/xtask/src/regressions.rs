@@ -14,15 +14,32 @@ use std::{
 use terminator_core::{quote, read_frame};
 
 pub fn run() -> Result<()> {
-    clean_shutdown()?;
-    relaunch_shutdown()?;
-    idle_shutdown_race()?;
-    history_burst()?;
-    missing_helper_health()?;
-    large_snapshots()?;
-    stalled_attachment()?;
-    terminal_editors()?;
-    Ok(())
+    thread::scope(|scope| -> Result<()> {
+        let tasks = [
+            ("clean_shutdown", scope.spawn(clean_shutdown)),
+            ("relaunch_shutdown", scope.spawn(relaunch_shutdown)),
+            ("idle_shutdown_race", scope.spawn(idle_shutdown_race)),
+            ("history_burst", scope.spawn(history_burst)),
+            ("missing_helper_health", scope.spawn(missing_helper_health)),
+            ("large_snapshots", scope.spawn(large_snapshots)),
+            ("stalled_attachment", scope.spawn(stalled_attachment)),
+            ("terminal_editors", scope.spawn(terminal_editors)),
+        ];
+        let mut failures = Vec::new();
+        for (name, task) in tasks {
+            match task.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => failures.push(format!("{name}: {error:#}")),
+                Err(_) => failures.push(format!("{name}: panicked")),
+            }
+        }
+        ensure!(
+            failures.is_empty(),
+            "Regression failures:\n{}",
+            failures.join("\n")
+        );
+        Ok(())
+    })
 }
 
 fn clean_shutdown() -> Result<()> {

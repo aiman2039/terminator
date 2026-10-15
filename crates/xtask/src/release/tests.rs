@@ -1,6 +1,6 @@
 use super::*;
 use anyhow::bail;
-use std::{cell::RefCell, process::Command};
+use std::{process::Command, sync::Mutex};
 
 fn arguments(command: &Command) -> Vec<String> {
     std::iter::once(command.get_program())
@@ -11,13 +11,13 @@ fn arguments(command: &Command) -> Vec<String> {
 
 #[derive(Default)]
 struct GitRunner {
-    commands: RefCell<Vec<Vec<String>>>,
+    commands: Mutex<Vec<Vec<String>>>,
     fail_dispatch: bool,
 }
 impl Runner for GitRunner {
     fn run(&self, command: &mut Command) -> Result<()> {
         let args = arguments(command);
-        self.commands.borrow_mut().push(args.clone());
+        self.commands.lock().unwrap().push(args.clone());
         if args.first().is_some_and(|program| program == "gh") {
             ensure!(
                 !self.fail_dispatch || !args.iter().any(|arg| arg == "workflow"),
@@ -152,7 +152,7 @@ fn check_only_preserves_staged_unstaged_deleted_and_untracked_work() {
         })
         .unwrap();
     assert_eq!(fixture.state(), before);
-    assert!(fixture.runner.commands.borrow().is_empty());
+    assert!(fixture.runner.commands.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -233,7 +233,7 @@ fn a_retry_of_the_same_tree_reuses_the_exported_source() {
             .unwrap(),
         "the reuse must not rewrite the exported files"
     );
-    assert!(fixture.runner.commands.borrow().is_empty());
+    assert!(fixture.runner.commands.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -268,7 +268,7 @@ fn successful_release_pushes_tested_tree_and_dispatches_tag() {
         revision
     );
     assert_eq!(
-        fixture.runner.commands.borrow().last().unwrap(),
+        fixture.runner.commands.lock().unwrap().last().unwrap(),
         &["gh", "workflow", "run", "release.yaml", "--ref", "v0.2.0"]
     );
 }
@@ -330,7 +330,8 @@ fn rejected_atomic_push_changes_neither_remote_branch_nor_tag() {
         !fixture
             .runner
             .commands
-            .borrow()
+            .lock()
+            .unwrap()
             .iter()
             .any(|args| args.iter().any(|arg| arg == "workflow"))
     );
@@ -468,7 +469,7 @@ fn missing_lockfile_member_does_not_change_either_file() {
 
 #[derive(Default)]
 struct FakeRunner {
-    commands: RefCell<Vec<Vec<String>>>,
+    commands: Mutex<Vec<Vec<String>>>,
     fail: Option<&'static str>,
     architecture: Option<&'static str>,
     image_architecture: Option<&'static str>,
@@ -476,7 +477,7 @@ struct FakeRunner {
 impl Runner for FakeRunner {
     fn run(&self, command: &mut Command) -> Result<()> {
         let args = arguments(command);
-        self.commands.borrow_mut().push(args.clone());
+        self.commands.lock().unwrap().push(args.clone());
         ensure!(
             !self
                 .fail
@@ -487,7 +488,7 @@ impl Runner for FakeRunner {
     }
     fn output(&self, command: &mut Command) -> Result<String> {
         let args = arguments(command);
-        self.commands.borrow_mut().push(args.clone());
+        self.commands.lock().unwrap().push(args.clone());
         ensure!(
             !self
                 .fail
@@ -519,9 +520,18 @@ fn failed_host_retains_logs_and_does_not_start_other_platforms() {
         fail: Some("bash"),
         ..FakeRunner::default()
     };
-    let error = validate(&fixture.root, &artifacts, &Options::default(), &runner).unwrap_err();
+    let error = validate(
+        &fixture.root,
+        &artifacts,
+        &Options {
+            skip_linux: true,
+            ..Options::default()
+        },
+        &runner,
+    )
+    .unwrap_err();
     assert!(error.to_string().contains("host failed"));
-    assert_eq!(runner.commands.borrow().len(), 3);
+    assert_eq!(runner.commands.lock().unwrap().len(), 1);
     assert_eq!(
         fs::read_to_string(artifacts.join("host/run.log")).unwrap(),
         "fixture log\n"
@@ -529,6 +539,7 @@ fn failed_host_retains_logs_and_does_not_start_other_platforms() {
     let results: Value =
         serde_json::from_slice(&fs::read(artifacts.join("results.json")).unwrap()).unwrap();
     assert_eq!(results["host"]["status"], "failed");
+    assert_eq!(results["windows"]["status"], "pending");
 }
 
 #[test]
@@ -547,7 +558,7 @@ fn unit_failure_stops_before_runtime_and_packaging() {
         )
         .is_err()
     );
-    let commands = runner.commands.borrow();
+    let commands = runner.commands.lock().unwrap();
     assert_eq!(
         commands.last().unwrap(),
         &["sh", "scripts/check.sh", "test"]
@@ -570,7 +581,7 @@ fn mac_checks_include_cross_check_runtime_gui_and_package() {
         &runner,
     )
     .unwrap();
-    let commands = runner.commands.borrow();
+    let commands = runner.commands.lock().unwrap();
     for expected in [
         "windows-clippy",
         "test",
@@ -599,7 +610,7 @@ fn linux_checks_use_xvfb_and_the_ci_coverage_threshold() {
         &runner,
     )
     .unwrap();
-    let commands = runner.commands.borrow();
+    let commands = runner.commands.lock().unwrap();
     assert!(
         commands
             .iter()
@@ -622,7 +633,7 @@ fn windows_checks_do_not_claim_unix_runtime_coverage() {
         &runner,
     )
     .unwrap();
-    let commands = runner.commands.borrow();
+    let commands = runner.commands.lock().unwrap();
     assert!(
         commands
             .iter()
@@ -637,10 +648,10 @@ fn windows_checks_do_not_claim_unix_runtime_coverage() {
 
 #[test]
 fn windows_failure_still_collects_artifacts() {
-    struct WindowsRunner(RefCell<Vec<Vec<String>>>);
+    struct WindowsRunner(Mutex<Vec<Vec<String>>>);
     impl Runner for WindowsRunner {
         fn run(&self, command: &mut Command) -> Result<()> {
-            self.0.borrow_mut().push(arguments(command));
+            self.0.lock().unwrap().push(arguments(command));
             if command.get_program() == "ssh"
                 && windows::decoded_script(command).contains("scripts/release-check.sh")
             {
@@ -656,7 +667,7 @@ fn windows_failure_still_collects_artifacts() {
         }
     }
     let fixture = Fixture::new();
-    let runner = WindowsRunner(RefCell::default());
+    let runner = WindowsRunner(Mutex::default());
     let error = windows::run_with(
         &fixture.root,
         &fixture.root.join(".artifacts/windows"),
@@ -666,7 +677,7 @@ fn windows_failure_still_collects_artifacts() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("fixture Windows failure"));
-    let commands = runner.0.borrow();
+    let commands = runner.0.lock().unwrap();
     assert_eq!(commands.len(), 4);
     assert!(
         commands
@@ -829,7 +840,7 @@ fn docker_plan_keeps_source_read_only_and_records_windows_skip() {
         ..Options::default()
     };
     validate(&fixture.root, &artifacts, &options, &runner).unwrap();
-    let commands = runner.commands.borrow();
+    let commands = runner.commands.lock().unwrap();
     let build = commands
         .iter()
         .find(|args| args.starts_with(&["docker".into(), "build".into()]))
@@ -957,7 +968,7 @@ fn linux_reuses_matching_image_and_explicit_refresh_rebuilds_it() {
             ..Options::default()
         };
         validate(&fixture.root, &artifacts, &options, &runner).unwrap();
-        let commands = runner.commands.borrow();
+        let commands = runner.commands.lock().unwrap();
         assert_eq!(
             commands
                 .iter()
@@ -1017,7 +1028,8 @@ fn failed_linux_image_build_stops_before_linux_tests() {
     assert!(
         !runner
             .commands
-            .borrow()
+            .lock()
+            .unwrap()
             .iter()
             .any(|args| args.starts_with(&["docker".into(), "run".into()]))
     );
@@ -1048,7 +1060,7 @@ fn explicit_linux_image_uses_local_selection_and_missing_selection_stops() {
             ..Options::default()
         };
         let result = validate(&fixture.root, &artifacts, &options, &runner);
-        let commands = runner.commands.borrow();
+        let commands = runner.commands.lock().unwrap();
         assert!(
             !commands
                 .iter()
@@ -1125,7 +1137,7 @@ fn arm_docker_uses_native_runtime_and_separate_build_cache() {
         &runner,
     )
     .unwrap();
-    let commands = runner.commands.borrow();
+    let commands = runner.commands.lock().unwrap();
     for verb in ["build", "run"] {
         let args = commands
             .iter()
@@ -1172,11 +1184,12 @@ fn emulated_image_is_rejected_before_host_checks() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("requires native linux/arm64"));
-    assert_eq!(runner.commands.borrow().len(), 2);
+    assert_eq!(runner.commands.lock().unwrap().len(), 2);
     assert!(
         runner
             .commands
-            .borrow()
+            .lock()
+            .unwrap()
             .iter()
             .all(|args| args[0] == "docker")
     );

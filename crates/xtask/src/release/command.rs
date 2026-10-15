@@ -7,7 +7,7 @@ use std::{
     sync::Mutex,
 };
 
-pub(super) trait Runner {
+pub(super) trait Runner: Sync {
     fn run(&self, command: &mut Command) -> Result<()>;
     fn output(&self, command: &mut Command) -> Result<String>;
     fn logged(&self, command: &mut Command, path: &Path) -> Result<()>;
