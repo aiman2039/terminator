@@ -50,10 +50,11 @@ pub struct Diagnostic {
     pub message: String,
 }
 
-/// Flattened hover text (markdown or plaintext, markup stripped).
+/// Hover text with its presentation format preserved.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Hover {
     pub text: String,
+    pub markdown: bool,
 }
 
 /// One go-to-definition target: server URI plus range.
@@ -87,6 +88,16 @@ pub struct Symbol {
     pub kind: String,
     pub range: Range,
     pub depth: usize,
+}
+
+/// One workspace-wide symbol match from an LSP server.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct WorkspaceSymbolHit {
+    pub name: String,
+    pub kind: String,
+    pub container: Option<String>,
+    pub uri: String,
+    pub range: Range,
 }
 
 /// JSON-RPC request id: integer or string, echoed back by the server.
@@ -441,6 +452,16 @@ pub fn document_symbol(id: &RequestId, uri: &Url) -> Vec<u8> {
     )
 }
 
+/// `workspace/symbol` for project-wide symbol search.
+#[must_use]
+pub fn workspace_symbol(id: &RequestId, query: &str) -> Vec<u8> {
+    request(
+        id,
+        "workspace/symbol",
+        serde_json::json!({ "query": query }),
+    )
+}
+
 fn native_position(value: lsp_types::Position) -> Position {
     Position {
         line: value.line,
@@ -485,7 +506,7 @@ pub fn parse_diagnostics(params: &Value) -> Option<(String, Vec<Diagnostic>)> {
     Some((parsed.uri.as_str().to_owned(), items))
 }
 
-/// Parse a `textDocument/hover` result into flat text. `None` means null
+/// Parse a `textDocument/hover` result. `None` means null
 /// or an unrecognized shape (no hover available).
 #[must_use]
 pub fn parse_hover(result: &Value) -> Option<Hover> {
@@ -493,22 +514,30 @@ pub fn parse_hover(result: &Value) -> Option<Hover> {
         return None;
     }
     let parsed: lsp_types::Hover = serde_json::from_value(result.clone()).ok()?;
-    let text = match parsed.contents {
-        lsp_types::HoverContents::Scalar(marked) => marked_text(&marked),
-        lsp_types::HoverContents::Array(marked) => marked
-            .iter()
-            .map(marked_text)
-            .collect::<Vec<_>>()
-            .join("\n"),
-        lsp_types::HoverContents::Markup(content) => content.value,
+    let (text, markdown) = match parsed.contents {
+        lsp_types::HoverContents::Scalar(marked) => (marked_text(&marked), true),
+        lsp_types::HoverContents::Array(marked) => (
+            marked
+                .iter()
+                .map(marked_text)
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+            true,
+        ),
+        lsp_types::HoverContents::Markup(content) => (
+            content.value,
+            content.kind == lsp_types::MarkupKind::Markdown,
+        ),
     };
-    Some(Hover { text })
+    Some(Hover { text, markdown })
 }
 
 fn marked_text(value: &lsp_types::MarkedString) -> String {
     match value {
         lsp_types::MarkedString::String(text) => text.clone(),
-        lsp_types::MarkedString::LanguageString(content) => content.value.clone(),
+        lsp_types::MarkedString::LanguageString(content) => {
+            format!("```{}\n{}\n```", content.language, content.value)
+        }
     }
 }
 
@@ -656,6 +685,46 @@ pub fn parse_document_symbols(result: &Value) -> Vec<Symbol> {
         Err(_) => {}
     }
     out
+}
+
+/// Parse both LSP workspace-symbol response shapes. Unresolved locations
+/// have no range and cannot be opened without a follow-up capability, so
+/// they are skipped.
+#[must_use]
+pub fn parse_workspace_symbols(result: &Value) -> Vec<WorkspaceSymbolHit> {
+    if result.is_null() {
+        return Vec::new();
+    }
+    let parsed: Result<lsp_types::WorkspaceSymbolResponse, _> =
+        serde_json::from_value(result.clone());
+    match parsed {
+        Ok(lsp_types::WorkspaceSymbolResponse::Flat(items)) => items
+            .into_iter()
+            .map(|item| WorkspaceSymbolHit {
+                name: item.name,
+                kind: symbol_kind_label(item.kind),
+                container: item.container_name,
+                uri: item.location.uri.as_str().to_owned(),
+                range: native_range(&item.location.range),
+            })
+            .collect(),
+        Ok(lsp_types::WorkspaceSymbolResponse::Nested(items)) => items
+            .into_iter()
+            .filter_map(|item| {
+                let lsp_types::OneOf::Left(location) = item.location else {
+                    return None;
+                };
+                Some(WorkspaceSymbolHit {
+                    name: item.name,
+                    kind: symbol_kind_label(item.kind),
+                    container: item.container_name,
+                    uri: location.uri.as_str().to_owned(),
+                    range: native_range(&location.range),
+                })
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 fn symbol_kind_label(kind: lsp_types::SymbolKind) -> String {
@@ -1090,6 +1159,38 @@ mod tests {
     }
 
     #[test]
+    fn workspace_symbol_request_and_responses_keep_file_targets() {
+        let request = body_of(&workspace_symbol(&RequestId::Number(9), "helper"));
+        assert_eq!(text(&request, "method"), "workspace/symbol");
+        assert_eq!(text(field(&request, "params"), "query"), "helper");
+        let flat = serde_json::json!([{
+            "name": "helper",
+            "kind": 12,
+            "containerName": "module",
+            "location": {
+                "uri": "file:///repo/src/lib.rs",
+                "range": {
+                    "start": { "line": 3, "character": 4 },
+                    "end": { "line": 3, "character": 10 }
+                }
+            }
+        }]);
+        let hits = parse_workspace_symbols(&flat);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "helper");
+        assert_eq!(hits[0].container.as_deref(), Some("module"));
+        assert_eq!(hits[0].range.start.line, 3);
+        assert_eq!(hits[0].uri, "file:///repo/src/lib.rs");
+
+        let unresolved = serde_json::json!([{
+            "name": "unresolved",
+            "kind": 12,
+            "location": { "uri": "file:///repo/src/lib.rs" }
+        }]);
+        assert!(parse_workspace_symbols(&unresolved).is_empty());
+    }
+
+    #[test]
     fn publishes_diagnostics_with_severity() {
         let params = serde_json::json!({
             "uri": "file:///repo/main.rs",
@@ -1131,6 +1232,11 @@ mod tests {
             parse_hover(&markup).expect("markup").text,
             "# f\n```rust\nfn f()\n```"
         );
+        assert!(parse_hover(&markup).expect("markup").markdown);
+        let plaintext = serde_json::json!({
+            "contents": {"kind": "plaintext", "value": "# f"}
+        });
+        assert!(!parse_hover(&plaintext).expect("plaintext").markdown);
         let scalar = serde_json::json!({"contents": "plain hover"});
         assert_eq!(parse_hover(&scalar).expect("scalar").text, "plain hover");
         let array = serde_json::json!({
@@ -1141,7 +1247,7 @@ mod tests {
         });
         assert_eq!(
             parse_hover(&array).expect("array").text,
-            "fn f()\ndocs here"
+            "```rust\nfn f()\n```\n\ndocs here"
         );
     }
 

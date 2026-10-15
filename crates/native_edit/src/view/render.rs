@@ -58,6 +58,8 @@ pub struct SourceOutcome {
     pub context_menu_opened: bool,
     /// Rename action geometry for an optional GUI fixture target.
     pub rename_action_rect: Option<egui::Rect>,
+    /// Hover action geometry for an optional GUI fixture target.
+    pub hover_action_rect: Option<egui::Rect>,
     /// Command/search row, fixed to the pane bottom when enabled.
     pub footer_rect: Option<egui::Rect>,
 }
@@ -114,6 +116,7 @@ pub fn show_source<B: Buffer>(
     let mut content_rect = egui::Rect::NOTHING;
     let mut context_menu_opened = false;
     let mut rename_action_rect = None;
+    let mut hover_action_rect = None;
     let mut activated = false;
     egui::ScrollArea::vertical()
         .id_salt(("native-source", id))
@@ -257,11 +260,11 @@ pub fn show_source<B: Buffer>(
                     effects.push(Effect::RenameSymbol);
                     ui.close();
                 }
-                if ui
+                let hover_button = ui
                     .add_enabled(lsp_supported, egui::Button::new("Show hover"))
-                    .on_disabled_hover_text(lsp_note)
-                    .clicked()
-                {
+                    .on_disabled_hover_text(lsp_note);
+                hover_action_rect = Some(hover_button.rect);
+                if hover_button.clicked() {
                     effects.push(Effect::Hover);
                     ui.close();
                 }
@@ -641,6 +644,7 @@ pub fn show_source<B: Buffer>(
         activated,
         context_menu_opened,
         rename_action_rect,
+        hover_action_rect,
         footer_rect,
     }
 }

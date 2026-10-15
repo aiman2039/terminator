@@ -25,7 +25,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("move_to_main", "Move terminal to main pane"),
     ("move_to_strip", "Move terminal to lower pane"),
     ("open_settings", "Settings"),
-    ("open_palette", "Command palette"),
+    ("open_palette", "Search Everywhere"),
     ("next_attention", "Next agent needing attention"),
 ];
 

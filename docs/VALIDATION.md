@@ -4443,3 +4443,28 @@ the enabled Locate button after Apply and observed its active state; its
 capture showed the one-row toolbar and selected file row. Formatting, strict
 Clippy, and the full workspace suite passed locally. The installed or running
 app was not replaced.
+
+## IDE Phase 4 Search Everywhere (2026-10-14)
+
+The header search and `Command+P` open one fuzzy list for visible project
+files, open-editor and language-server symbols, projects, live sessions,
+waiting agents, actions, and Settings sections. File scanning stays in a
+background worker and gives each project a share of the file limit. Symbol
+queries use active Rust/Python language servers; stale replies are discarded.
+Results show their kind and location. File and symbol selection switches to
+the owning project before opening the file.
+
+Validation: focused tests cover file-index fairness and generated-directory
+filtering, workspace-symbol request and response handling, fuzzy settings and
+action search, waiting-agent results, and cross-project file and symbol
+routing. Formatting, strict Clippy, the full workspace suite, and the isolated
+`native-rename` GUI fixture passed locally. The fixture searched for a renamed
+Rust symbol and captured its Search Everywhere result. The running or
+installed app was not replaced.
+
+The native editor Hover window now renders Markdown answers through the
+existing CommonMark viewer. The parser keeps the server's Markdown/plain-text
+kind and wraps LSP language strings as code blocks. Plain-text answers stay
+plain text. The isolated `native-rename` fixture also captures the Hover
+window after the symbol rename. Its capture shows highlighted Rust code with
+no visible Markdown fence markers.

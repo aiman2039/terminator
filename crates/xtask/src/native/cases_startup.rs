@@ -336,6 +336,27 @@ pub(crate) fn native_rename(o: &Options) -> Result<()> {
         fs::read_to_string(&main)?.contains("helper::renamed()"),
         "Reference was not renamed"
     );
+    plain(
+        &h,
+        o,
+        "search-everywhere-symbol",
+        json!([
+            {"at_ms": 800, "target": "toolbar-search"},
+            {"at_ms": 1250, "target": "palette-search", "text": "renamed"},
+            {"at_ms": 4500, "target": "palette-item:Symbol  renamed", "hover": true}
+        ]),
+        7000,
+    )?;
+    plain(
+        &h,
+        o,
+        "native-hover-markdown",
+        json!([
+            {"at_ms": 3300, "target": "native-file", "hover_offset": [96.0, 10.0], "right_click": true},
+            {"at_ms": 3900, "target": "native-hover-action"}
+        ]),
+        6500,
+    )?;
     Ok(())
 }
 pub(crate) fn split_file_opening(o: &Options) -> Result<()> {

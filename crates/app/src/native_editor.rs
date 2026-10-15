@@ -972,6 +972,10 @@ impl App {
             if let Some(rect) = outcome.rename_action_rect {
                 crate::diagnostics::record(ui.ctx(), "native-rename-action", rect);
             }
+            #[cfg(feature = "test-support")]
+            if let Some(rect) = outcome.hover_action_rect {
+                crate::diagnostics::record(ui.ctx(), "native-hover-action", rect);
+            }
             activated_editor = outcome.activated;
             for effect in outcome.effects {
                 match effect {
@@ -1267,7 +1271,7 @@ impl App {
         let Some(cursor) = cursor else {
             return;
         };
-        let Some(text) = self.lsp.hover_popup(path, (cursor.line, cursor.col)) else {
+        let Some((text, markdown)) = self.lsp.hover_popup(path, (cursor.line, cursor.col)) else {
             return;
         };
         let mut open = true;
@@ -1276,7 +1280,18 @@ impl App {
             .open(&mut open)
             .collapsible(false)
             .show(ui.ctx(), |ui| {
-                ui.monospace(&text);
+                egui::ScrollArea::vertical()
+                    .max_height(500.0)
+                    .show(ui, |ui| {
+                        ui.set_max_width(700.0);
+                        if markdown {
+                            egui_commonmark::CommonMarkViewer::new()
+                                .explicit_image_uri_scheme(true)
+                                .show(ui, &mut self.native_hover_markdown_cache, &text);
+                        } else {
+                            ui.monospace(&text);
+                        }
+                    });
             });
         if !open {
             self.lsp.close_hover();

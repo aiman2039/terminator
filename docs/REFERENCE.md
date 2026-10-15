@@ -227,6 +227,8 @@ for quick reopening; they do not pin a workspace tab.
 The native editor offers Problems, Structure, hover, definition, references,
 and preview-first symbol rename for Rust and Python when their language
 servers are available. F2 or the editor context menu starts rename. The
+Hover window renders Markdown answers, including highlighted code blocks;
+plain-text answers stay plain text. The
 preview shows the proposed changes by file, then Apply checks that files and
 open buffers have not changed. Unsupported file operations and paths outside
 the project are rejected. JavaScript and TypeScript syntax highlighting does
@@ -310,6 +312,15 @@ not when the Player view hides.
 Git sidebar click on a modified, untracked, or deleted file opens the diff.
 Explorer, palette, and **Open file** still use the default viewer even when the
 file is git-dirty.
+
+**Search Everywhere** (`Command+P` or the header search button) uses one fuzzy
+list for files in visible projects, open-editor symbols, symbols from active
+Rust/Python language servers, projects, live sessions, waiting agents, actions,
+and Settings sections. Type a name or path, use the arrow keys, then press
+Enter. File and symbol results open in the owning project; symbol results open
+at their source line. The file index runs in the background and skips common
+generated directories. Language-server symbols appear when a supported server
+is ready.
 
 `terminator-hook ctl --help` exposes explicit controls. Examples:
 

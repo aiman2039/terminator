@@ -211,7 +211,7 @@ pub(super) fn header_action_view(action: HeaderAction) -> HeaderActionView {
             target: "settings",
         },
         HeaderAction::Palette => HeaderActionView {
-            label: "Command palette",
+            label: "Search Everywhere",
             icon: "Search",
             #[cfg(feature = "test-support")]
             target: "palette",

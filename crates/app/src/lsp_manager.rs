@@ -85,6 +85,9 @@ enum Pending {
         path: PathBuf,
         revision: u64,
     },
+    WorkspaceSymbols {
+        generation: u64,
+    },
 }
 
 struct Server {
@@ -108,6 +111,7 @@ pub struct HoverPopup {
     cursor_line: usize,
     cursor_col: usize,
     pub text: String,
+    pub markdown: bool,
     pub open: bool,
     /// A status note ("starting…", "not found"), not a server answer:
     /// a null hover clears these, never real answers.
@@ -148,6 +152,10 @@ pub struct LspManager {
     rename: Option<RenameResults>,
     symbols: std::collections::HashMap<PathBuf, Vec<L::Symbol>>,
     symbols_rev: std::collections::HashMap<PathBuf, u64>,
+    workspace_symbol_query: String,
+    workspace_symbol_generation: u64,
+    workspace_symbols: HashMap<ServerKey, Vec<L::WorkspaceSymbolHit>>,
+    search_revision: u64,
     unavailable: HashMap<&'static str, String>,
     /// Consecutive crashes per language (reset on a good handshake).
     failures: HashMap<&'static str, u32>,
@@ -174,6 +182,10 @@ impl LspManager {
             rename: None,
             symbols: std::collections::HashMap::new(),
             symbols_rev: std::collections::HashMap::new(),
+            workspace_symbol_query: String::new(),
+            workspace_symbol_generation: 0,
+            workspace_symbols: HashMap::new(),
+            search_revision: 0,
             unavailable: HashMap::new(),
             failures: HashMap::new(),
             cooled: HashMap::new(),
@@ -308,6 +320,7 @@ impl LspManager {
                 cursor_line: cursor.0,
                 cursor_col: cursor.1,
                 text: note,
+                markdown: false,
                 open: true,
                 status: true,
             });
@@ -327,6 +340,7 @@ impl LspManager {
                 cursor_line: cursor.0,
                 cursor_col: cursor.1,
                 text: "Language server is starting…".into(),
+                markdown: false,
                 open: true,
                 status: true,
             });
@@ -498,9 +512,92 @@ impl LspManager {
         self.symbols.get(path).cloned().unwrap_or_default()
     }
 
+    /// Request fresh document outlines for every open native editor. The
+    /// per-document cache and pending guard keep repeated calls cheap.
+    pub fn request_open_document_symbols(&mut self) {
+        let paths: Vec<PathBuf> = self.docs.keys().cloned().collect();
+        for path in paths {
+            self.request_symbols(&path);
+        }
+    }
+
+    /// Cached document symbols from all open native buffers.
+    pub fn all_document_symbols(&self) -> Vec<(PathBuf, L::Symbol)> {
+        self.symbols
+            .iter()
+            .flat_map(|(path, symbols)| {
+                symbols.iter().cloned().map(|symbol| (path.clone(), symbol))
+            })
+            .collect()
+    }
+
+    pub fn clear_workspace_symbols(&mut self) {
+        if self.workspace_symbol_query.is_empty() && self.workspace_symbols.is_empty() {
+            return;
+        }
+        self.workspace_symbol_query.clear();
+        self.workspace_symbol_generation = self.workspace_symbol_generation.wrapping_add(1);
+        self.workspace_symbols.clear();
+        self.search_revision = self.search_revision.wrapping_add(1);
+        for server in self.servers.values_mut() {
+            server
+                .pending
+                .retain(|_, pending| !matches!(pending, Pending::WorkspaceSymbols { .. }));
+        }
+    }
+
+    /// Ask each ready project server for matching symbols once per query.
+    /// A later query discards old pending replies by generation.
+    pub fn request_workspace_symbols(&mut self, query: &str) {
+        let query = query.trim();
+        if query.is_empty() {
+            self.clear_workspace_symbols();
+            return;
+        }
+        if self.workspace_symbol_query != query {
+            self.clear_workspace_symbols();
+            query.clone_into(&mut self.workspace_symbol_query);
+        }
+        let generation = self.workspace_symbol_generation;
+        for (key, server) in &mut self.servers {
+            if !server.ready || self.workspace_symbols.contains_key(key)
+                || server.pending.values().any(|pending| matches!(pending, Pending::WorkspaceSymbols { generation: pending_generation } if *pending_generation == generation))
+            {
+                continue;
+            }
+            let L::RequestId::Number(number) = server.ids.next_id() else {
+                continue;
+            };
+            if server
+                .inbox
+                .send(L::workspace_symbol(&L::RequestId::Number(number), query))
+                .is_ok()
+            {
+                server
+                    .pending
+                    .insert(number, Pending::WorkspaceSymbols { generation });
+            }
+        }
+    }
+
+    pub fn workspace_symbols(&self) -> Vec<L::WorkspaceSymbolHit> {
+        self.workspace_symbols
+            .values()
+            .flat_map(|hits| hits.iter().cloned())
+            .collect()
+    }
+
+    pub fn workspace_symbols_pending(&self) -> bool {
+        self.servers.values().any(|server| server.pending.values().any(|pending| matches!(pending, Pending::WorkspaceSymbols { generation } if *generation == self.workspace_symbol_generation)))
+    }
+
+    pub fn search_revision(&self) -> u64 {
+        self.search_revision
+    }
+
     /// Current hover popup for `path`, dismissed when the cursor moved
     /// on. Returns the text to show, if any.
-    pub fn hover_popup(&mut self, path: &Path, cursor: (usize, usize)) -> Option<String> {
+    pub fn hover_popup(&mut self, path: &Path, cursor: (usize, usize)) -> Option<(String, bool)> {
         let popup = self.hover.as_mut()?;
         if popup.path != path || (popup.cursor_line, popup.cursor_col) != cursor || !popup.open {
             if popup.path == path {
@@ -508,7 +605,7 @@ impl LspManager {
             }
             return None;
         }
-        Some(popup.text.clone())
+        Some((popup.text.clone(), popup.markdown))
     }
 
     pub fn close_hover(&mut self) {
@@ -632,8 +729,11 @@ impl LspManager {
             let _ = server.inbox.send(L::did_close(&doc.uri));
         }
         self.diagnostics.remove(path);
-        self.symbols.remove(path);
+        let had_symbols = self.symbols.remove(path).is_some();
         self.symbols_rev.remove(path);
+        if had_symbols {
+            self.search_revision = self.search_revision.wrapping_add(1);
+        }
         if self.hover.as_ref().is_some_and(|popup| popup.path == path) {
             self.hover = None;
         }
@@ -878,6 +978,7 @@ impl LspManager {
                         cursor_line: cursor.0,
                         cursor_col: cursor.1,
                         text: hover.text,
+                        markdown: hover.markdown,
                         open: true,
                         status: false,
                     });
@@ -897,6 +998,16 @@ impl LspManager {
                 self.symbols
                     .insert(path.clone(), L::parse_document_symbols(&result));
                 self.symbols_rev.insert(path, revision);
+                self.search_revision = self.search_revision.wrapping_add(1);
+            }
+            Some(Pending::WorkspaceSymbols { generation }) => {
+                if generation == self.workspace_symbol_generation {
+                    let hits =
+                        L::parse_workspace_symbols(&result.unwrap_or(serde_json::Value::Null));
+                    self.workspace_symbols
+                        .insert(key.clone(), hits.into_iter().take(200).collect());
+                    self.search_revision = self.search_revision.wrapping_add(1);
+                }
             }
             Some(Pending::Definition { path }) => {
                 let result = result.unwrap_or(serde_json::Value::Null);
@@ -947,6 +1058,8 @@ impl LspManager {
         if self.servers.remove(key).is_none() {
             return;
         }
+        self.workspace_symbols.remove(key);
+        self.search_revision = self.search_revision.wrapping_add(1);
         self.note_failure(key.language);
         // Docs re-open (and the server respawns, cooldown permitting)
         // on the next sync; pending answers are dead with their ids.
@@ -967,6 +1080,8 @@ impl LspManager {
                 cancel.cancel();
             }
         }
+        self.workspace_symbols.remove(key);
+        self.search_revision = self.search_revision.wrapping_add(1);
         for doc in self.docs.values_mut().filter(|doc| doc.server == *key) {
             doc.opened = false;
         }
@@ -1598,6 +1713,53 @@ mod tests {
     }
 
     #[test]
+    fn workspace_symbol_results_follow_the_latest_query() {
+        let mut manager = LspManager::new();
+        let path = crate::test_path("/tmp/symbols.rs");
+        tracked(&mut manager, &path);
+        let key = manager.docs.get(&path).unwrap().server.clone();
+        let (inbox, mut outbox) = tokio::sync::mpsc::unbounded_channel();
+        manager.servers.insert(
+            key.clone(),
+            Server {
+                inbox,
+                child: None,
+                cancel: None,
+                ids: L::IdGen::default(),
+                pending: HashMap::new(),
+                init_id: None,
+                ready: true,
+            },
+        );
+        manager.request_workspace_symbols("old");
+        assert!(manager.workspace_symbols_pending());
+        let mut decoder = L::FrameDecoder::default();
+        let request = decoder.feed(&outbox.try_recv().unwrap()).remove(0);
+        let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
+        assert_eq!(request["method"], "workspace/symbol");
+        manager.request_workspace_symbols("new");
+        let newer = decoder.feed(&outbox.try_recv().unwrap()).remove(0);
+        let newer: serde_json::Value = serde_json::from_slice(&newer).unwrap();
+        let location = serde_json::json!({
+            "uri": L::file_uri(&path).unwrap().as_str(),
+            "range": {"start": {"line": 2, "character": 0}, "end": {"line": 2, "character": 3}}
+        });
+        let old = serde_json::json!({
+            "jsonrpc": "2.0", "id": request["id"],
+            "result": [{"name": "old", "kind": 12, "location": location.clone()}]
+        });
+        manager.on_body(&key, old.to_string().as_bytes());
+        assert!(manager.workspace_symbols().is_empty());
+        let new = serde_json::json!({
+            "jsonrpc": "2.0", "id": newer["id"],
+            "result": [{"name": "new", "kind": 12, "location": location}]
+        });
+        manager.on_body(&key, new.to_string().as_bytes());
+        assert_eq!(manager.workspace_symbols()[0].name, "new");
+        assert!(!manager.workspace_symbols_pending());
+    }
+
+    #[test]
     fn diagnostics_route_to_tracked_docs_only() {
         let mut manager = LspManager::new();
         let path = crate::test_path("/tmp/routed.rs");
@@ -1737,7 +1899,7 @@ mod tests {
             }
         }
         assert!(
-            hover.as_ref().is_some_and(|text| text.contains("i32")),
+            hover.as_ref().is_some_and(|(text, _)| text.contains("i32")),
             "hover: {hover:?}"
         );
         manager.prune(&std::collections::HashSet::new());
