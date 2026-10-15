@@ -35,6 +35,9 @@ pub struct App {
     pub(crate) name_prompt: Option<workspace_ops::NamePrompt>,
     /// The name field takes keyboard focus on its next paint, then this clears.
     pub(crate) name_prompt_focus: bool,
+    /// Widget ID of the name-prompt field as last painted. The ID is scoped
+    /// to the hosting sidebar, so focus handling must use the painted one.
+    pub(crate) name_prompt_widget: Option<egui::Id>,
     pub(crate) pending_delete: Option<PathBuf>,
     pub(crate) services: gui_services::Services,
     pub(crate) service_owner: gui_services::Owner,
@@ -254,6 +257,8 @@ pub struct App {
     pub(crate) palette_open: bool,
     pub(crate) palette_query: String,
     pub(crate) palette_index: usize,
+    pub(crate) palette_cache: Option<palette::PaletteCache>,
+    pub(crate) palette_query_changed_at: Instant,
     pub(crate) worktree_draft: Option<worktree_ui::WorktreeDraft>,
     pub(crate) worktree_remove: Option<String>,
     pub(crate) theme: AppearanceConfig,
@@ -284,6 +289,11 @@ pub struct App {
     pub(crate) rename_missed: bool,
     /// Last painted rename field, so a hidden field can drop keyboard focus.
     pub(crate) rename_field_id: Option<egui::Id>,
+    /// Sidebar group rename in progress: (project, workspace tab id) plus
+    /// the draft text. GUI-local; the name lives on the workspace tab.
+    pub(crate) rename_group: Option<(String, String)>,
+    pub(crate) rename_group_text: String,
+    pub(crate) rename_group_focus: bool,
     pub(crate) editor_origins: HashMap<String, Vec<Tab>>,
     pub(crate) search: String,
     pub(crate) search_session: Option<String>,
@@ -292,6 +302,7 @@ pub struct App {
     pub(crate) terminal_find: HashMap<String, TerminalFind>,
     pub(crate) history_filter: HashMap<String, String>,
     pub(crate) native_docs: HashMap<PathBuf, native_editor::NativeDoc>,
+    pub(crate) native_hover_markdown_cache: egui_commonmark::CommonMarkCache,
     pub(crate) native_pending_line: HashMap<PathBuf, usize>,
     pub(crate) native_pending_col: HashMap<PathBuf, usize>,
     pub(crate) lsp: lsp_manager::LspManager,
@@ -316,6 +327,9 @@ pub struct App {
     /// checked out, so looking up the originating project there always
     /// misses and drops the jump.
     pub(crate) pending_goto: Vec<lsp_manager::GotoJump>,
+    /// Read-only reference list for the native editor.
+    pub(crate) native_references: Option<lsp_manager::ReferenceResults>,
+    pub(crate) native_rename: Option<native_editor::RenameDialog>,
     pub(crate) file_index: terminator_native_edit::finder::FileIndex,
     pub(crate) file_index_rx:
         Option<std::sync::mpsc::Receiver<terminator_native_edit::finder::FileIndex>>,
@@ -333,6 +347,8 @@ pub struct App {
     pub(crate) refresh_generation: u64,
     pub(crate) visible_dirs: Vec<PathBuf>,
     pub(crate) expanded_dirs: HashSet<PathBuf>,
+    /// One Explorer pane's request to open and scroll to its focused file.
+    pub(crate) explorer_reveal: Option<sidebar_ui::ExplorerReveal>,
     pub(crate) watch_fallback: bool,
     pub(crate) targets: HashMap<String, Option<services::Target>>,
     pub(crate) hover_popup: Option<HoverPopup>,

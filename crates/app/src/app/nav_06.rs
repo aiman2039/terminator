@@ -685,6 +685,47 @@ mod tests {
     }
 
     #[test]
+    fn idle_close_ignores_state_pruning_of_the_closing_shell() {
+        let (mut app, _, _dir) = fixture();
+        let (jobs, received) = mpsc::channel();
+        app.jobs = jobs.into();
+        app.state
+            .sessions
+            .push(session_fixture("shell", SessionKind::Shell));
+        app.state
+            .capabilities
+            .push(terminator_core::idle_close::CAPABILITY.into());
+        app.insert("a", Tab::Terminal("shell".into()), None);
+        let tab = app.layouts["a"].active.clone();
+        let target = editor_close::Target::Workspace("a".into(), tab.clone());
+        assert!(app.check_idle_close(target.clone(), vec!["shell".into()]));
+        assert!(matches!(received.try_recv().unwrap(), Job::CloseIdle(..)));
+        // The daemon's state broadcast prunes the dead shell's pane before
+        // the close completion arrives (the bulk-close race).
+        app.layouts.get_mut("a").unwrap().remove_session("shell");
+        app.idle_closed(
+            target,
+            vec!["shell".into()],
+            Ok(vec![terminator_core::idle_close::Outcome {
+                session: "shell".into(),
+                status: terminator_core::idle_close::Status::Closed,
+                reason: "Exited".into(),
+            }]),
+        );
+        assert!(app.error.is_none(), "no spurious changed-while-closing");
+        assert!(app.idle_close_fallback.is_none());
+        // The closed tab is gone; closing the last one leaves the usual
+        // fresh empty Workspace tab (rebuilt with the same id).
+        assert!(!app.layouts["a"].contains(&Tab::Terminal("shell".into())));
+        assert!(
+            app.layouts["a"]
+                .tabs
+                .iter()
+                .all(|t| t.layout.iter_all_tabs().next().is_none())
+        );
+    }
+
+    #[test]
     fn older_daemons_and_mixed_editor_tabs_keep_confirmation() {
         let (mut app, _, _dir) = fixture();
         let (jobs, received) = mpsc::channel();

@@ -1,5 +1,7 @@
 use super::rows::row;
-use super::theme::{ICON_COLOR, MENU_FILL, MENU_LINE, MENU_MUTED, MENU_TEXT};
+use super::theme::{
+    ICON_COLOR, MENU_FILL, MENU_LINE, MENU_MUTED, MENU_RADIUS, MENU_TEXT, WIDGET_RADIUS,
+};
 use eframe::egui::{self, Color32, FontId, TextStyle};
 
 /// Title-bar sidebar glyph. Resting state has no frame; hover fills only.
@@ -22,7 +24,7 @@ pub fn framed_icon_button(
     if response.hovered() || selected {
         ui.painter().rect_filled(
             response.rect,
-            7.0,
+            WIDGET_RADIUS,
             if selected {
                 ui.visuals().selection.bg_fill
             } else {
@@ -88,7 +90,7 @@ fn paint_action_icon(ui: &egui::Ui, response: &egui::Response, icon: &str) {
     let rect = response.rect;
     if response.hovered() || response.is_pointer_button_down_on() {
         ui.painter()
-            .rect_filled(rect, 4.0, ui.visuals().widgets.hovered.bg_fill);
+            .rect_filled(rect, WIDGET_RADIUS, ui.visuals().widgets.hovered.bg_fill);
     }
     paint_centered_icon(ui, rect, icon, TOOLBAR_ICON, ICON_COLOR);
 }
@@ -121,7 +123,7 @@ pub fn selectable_icon(ui: &mut egui::Ui, icon: &str, tip: &str, selected: bool)
     if response.hovered() || selected {
         ui.painter().rect_filled(
             response.rect,
-            4,
+            WIDGET_RADIUS,
             if selected {
                 ui.visuals().selection.bg_fill
             } else {
@@ -132,6 +134,63 @@ pub fn selectable_icon(ui: &mut egui::Ui, icon: &str, tip: &str, selected: bool)
     paint_centered_icon(ui, response.rect, icon, TOOLBAR_ICON, ICON_COLOR);
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, tip)
+    });
+    response
+}
+
+/// Tool-window stripe button: icon over a tiny label, pill when selected.
+/// `badge` paints a waiting dot in the top-right corner (agent attention).
+pub fn stripe_button(
+    ui: &mut egui::Ui,
+    icon: &str,
+    label: &str,
+    selected: bool,
+    badge: Option<Color32>,
+) -> egui::Response {
+    let response = ui
+        .allocate_response(egui::vec2(40.0, 46.0), egui::Sense::click())
+        .on_hover_text(label);
+    if response.hovered() || selected {
+        ui.painter().rect_filled(
+            response.rect,
+            WIDGET_RADIUS,
+            if selected {
+                ui.visuals().selection.bg_fill
+            } else {
+                ui.visuals().widgets.hovered.bg_fill
+            },
+        );
+    }
+    paint_centered_icon(
+        ui,
+        egui::Rect::from_min_size(
+            egui::pos2(response.rect.left(), response.rect.top() + 3.0),
+            egui::vec2(40.0, 20.0),
+        ),
+        icon,
+        16.0,
+        ICON_COLOR,
+    );
+    ui.painter().text(
+        egui::pos2(response.rect.center().x, response.rect.bottom() - 11.0),
+        egui::Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(9.0),
+        if selected {
+            ICON_COLOR
+        } else {
+            ui.visuals().weak_text_color()
+        },
+    );
+    if let Some(dot) = badge {
+        ui.painter().circle_filled(
+            egui::pos2(response.rect.right() - 7.0, response.rect.top() + 7.0),
+            3.5,
+            dot,
+        );
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)
     });
     response
 }
@@ -154,9 +213,16 @@ pub fn tool_button(
     let response = ui
         .add_sized([36.0, 32.0], egui::Button::new("").frame(false))
         .on_hover_text(label);
-    if response.hovered() {
-        ui.painter()
-            .rect_filled(response.rect, 2, ui.visuals().widgets.hovered.bg_fill);
+    if active || response.hovered() {
+        ui.painter().rect_filled(
+            response.rect,
+            WIDGET_RADIUS,
+            if active {
+                ui.visuals().selection.bg_fill
+            } else {
+                ui.visuals().widgets.hovered.bg_fill
+            },
+        );
     }
     let tint = ICON_COLOR;
     let icon = match tool {
@@ -165,6 +231,8 @@ pub fn tool_button(
         SidebarTool::Git => "GitBranch",
         SidebarTool::History => "History",
         SidebarTool::Info => "Info",
+        SidebarTool::Problems => "CircleAlert",
+        SidebarTool::Structure => "ListTree",
     };
     egui::Image::new(crate::icons::source(icon))
         .tint(tint)
@@ -172,21 +240,6 @@ pub fn tool_button(
             ui,
             egui::Rect::from_center_size(response.rect.center(), egui::vec2(16.0, 16.0)),
         );
-    if active {
-        ui.painter().line_segment(
-            [
-                egui::pos2(
-                    response.rect.left_bottom().x + 8.0,
-                    response.rect.left_bottom().y - 1.0,
-                ),
-                egui::pos2(
-                    response.rect.right_bottom().x - 8.0,
-                    response.rect.right_bottom().y - 1.0,
-                ),
-            ],
-            egui::Stroke::new(2.0, tint),
-        );
-    }
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, label)
     });
@@ -206,7 +259,7 @@ pub fn menu_style(style: &mut egui::Style) {
     style.visuals.override_text_color = Some(MENU_TEXT);
     style.visuals.weak_text_color = Some(MENU_MUTED);
     style.visuals.window_stroke = egui::Stroke::new(1.0, MENU_LINE);
-    style.visuals.menu_corner_radius = egui::CornerRadius::same(11);
+    style.visuals.menu_corner_radius = egui::CornerRadius::same(MENU_RADIUS);
     style.visuals.popup_shadow = egui::epaint::Shadow {
         offset: [0, 16],
         blur: 34,
@@ -292,7 +345,7 @@ pub fn compact_menu_button<R>(
     });
     if response.hovered() || response.is_pointer_button_down_on() {
         ui.painter()
-            .rect_filled(rect, 4.0, ui.visuals().widgets.hovered.bg_fill);
+            .rect_filled(rect, WIDGET_RADIUS, ui.visuals().widgets.hovered.bg_fill);
     }
     ui.painter().text(
         rect.center(),

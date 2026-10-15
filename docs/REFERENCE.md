@@ -216,6 +216,24 @@ Focus outlines briefly emphasize a newly selected terminal, then fade to a thin,
 
 Top-level tabs use a flat strip with a terminal icon, close button, and muted active underline. Renaming edits the label in place on the tab, pane caption, or sidebar row; valid edits also save when focus leaves the field.
 
+Top-level tabs, including native and Neovim editor tabs, can be pinned from
+their context menu. Bulk close actions leave pinned groups open; an explicit
+close still closes one.
+The History icon beside the tab-strip plus button lists recently selected tabs
+for that project. Pin state and recent order survive a layout reload. The
+native editor's separate Bookmark and Recent files controls keep file paths
+for quick reopening; they do not pin a workspace tab.
+
+The native editor offers Problems, Structure, hover, definition, references,
+and preview-first symbol rename for Rust and Python when their language
+servers are available. F2 or the editor context menu starts rename. The
+Hover window renders Markdown answers, including highlighted code blocks;
+plain-text answers stay plain text. The
+preview shows the proposed changes by file, then Apply checks that files and
+open buffers have not changed. Unsupported file operations and paths outside
+the project are rejected. JavaScript and TypeScript syntax highlighting does
+not require an LSP server; their native LSP actions remain disabled.
+
 
 Clean file-only tabs and editor panes close directly without a terminal-session
 confirmation. If any editor buffer has unsaved changes, a high-visibility bar
@@ -229,6 +247,14 @@ Explorer uses Git colors on filenames, icons, and badges: **U** for untracked,
 precedence, followed by working-tree status and then staged status. Folder
 badges aggregate descendants, prioritizing conflicts and deletions. Hover the
 Explorer icon for the effective directory and any last-known-directory qualifier.
+
+Explorer's Locate button reveals the focused local file: it clears Explorer
+search, selects Names, opens parent folders, and scrolls to the file. If the
+current shell directory does not contain that file, Explorer uses the selected
+project root for the reveal without changing the shell directory. Ignored
+parents and the target remain visible for that focused file. The button is
+disabled when no local file is focused or the file is outside the project and
+Explorer roots.
 
 ## Native previews and explicit controls
 
@@ -286,6 +312,15 @@ not when the Player view hides.
 Git sidebar click on a modified, untracked, or deleted file opens the diff.
 Explorer, palette, and **Open file** still use the default viewer even when the
 file is git-dirty.
+
+**Search Everywhere** (`Command+P` or the header search button) uses one fuzzy
+list for files in visible projects, open-editor symbols, symbols from active
+Rust/Python language servers, projects, live sessions, waiting agents, actions,
+and Settings sections. Type a name or path, use the arrow keys, then press
+Enter. File and symbol results open in the owning project; symbol results open
+at their source line. The file index runs in the background and skips common
+generated directories. Language-server symbols appear when a supported server
+is ready.
 
 `terminator-hook ctl --help` exposes explicit controls. Examples:
 

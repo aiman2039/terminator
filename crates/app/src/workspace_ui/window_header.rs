@@ -9,6 +9,7 @@ use super::header::{
 };
 impl App {
     pub(super) fn show_git_sidebar(&mut self) {
+        self.preferences.right_projects = false;
         self.preferences.visible = true;
         self.preferences.tool = SidebarTool::Git;
     }
@@ -213,7 +214,10 @@ impl App {
         );
         ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
             ui.set_clip_rect(tabs_rect);
-            header_drag_space(ui);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                self.toolbar_cluster(ui);
+                header_drag_space(ui);
+            });
         });
         ui.scope_builder(
             egui::UiBuilder::new()
@@ -244,6 +248,75 @@ impl App {
         // checkout, so floating close requests must still drain instead
         // of stalling with their windows open.
         self.drain_pending_native_close();
+    }
+
+    /// Main toolbar in the header's center: project switcher, branch
+    /// (opens the Git sidebar; switching stays a Git-panel action), and
+    /// Search Everywhere. Collapses away on narrow windows.
+    pub(super) fn toolbar_cluster(&mut self, ui: &mut egui::Ui) {
+        if ui.available_width() < 120.0 {
+            return;
+        }
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let name = self.project_header_name();
+        let chosen = appearance::text_menu_button(ui, &format!("{name} ▾"), |ui| {
+            let mut chosen = None;
+            for project in self.visible_projects() {
+                let mark = if Some(&project.id) == self.selected.as_ref() {
+                    "✓"
+                } else {
+                    ""
+                };
+                if appearance::menu_item(ui, &project.name, "Folder", mark).clicked() {
+                    chosen = Some(project.id.clone());
+                }
+            }
+            chosen
+        });
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "toolbar-project", chosen.response.rect);
+        if let Some(Some(project)) = chosen.inner {
+            self.select_project(project);
+        }
+        if ui.available_width() < 220.0 {
+            return;
+        }
+        if let Some(metadata) = self.metadata.clone()
+            && let Some(branch) = metadata.branch.clone()
+        {
+            let label = if metadata.worktree {
+                format!("Worktree · {branch}")
+            } else {
+                branch
+            };
+            let branch_button = ui.add(
+                egui::Button::image_and_text(
+                    egui::Image::new(crate::icons::source("GitBranch"))
+                        .tint(appearance::ICON_COLOR)
+                        .fit_to_exact_size(egui::vec2(13.0, 13.0)),
+                    label,
+                )
+                .frame(false),
+            );
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), "toolbar-branch", branch_button.rect);
+            if branch_button
+                .on_hover_text("Open the Git sidebar")
+                .clicked()
+            {
+                self.show_git_sidebar();
+            }
+        }
+        let search = appearance::framed_icon(
+            ui,
+            "Search",
+            &self.action_tip("Search everywhere", "open_palette"),
+        );
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "toolbar-search", search.rect);
+        if search.clicked() {
+            self.open_command_palette();
+        }
     }
 
     pub(super) fn header_tools(&mut self, ui: &mut egui::Ui) {
@@ -378,7 +451,10 @@ impl App {
 
     pub(super) fn run_header_action(&mut self, action: HeaderAction) {
         match action {
-            HeaderAction::Tool(tool) => self.preferences.toggle(tool),
+            HeaderAction::Tool(tool) => {
+                self.preferences.right_projects = false;
+                self.preferences.toggle(tool);
+            }
             HeaderAction::IdeMode => self.toggle_ide_mode(),
             HeaderAction::Settings => self.open_settings(),
             HeaderAction::Palette => self.open_command_palette(),

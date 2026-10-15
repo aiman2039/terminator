@@ -13,8 +13,11 @@ impl Workspace {
             version: 2,
             active: id.clone(),
             return_tabs: HashMap::default(),
+            recent_tabs: vec![id.clone()],
             tabs: vec![WorkspaceTab {
                 id,
+                name: None,
+                pinned: false,
                 primary,
                 layout,
             }],
@@ -81,6 +84,10 @@ impl Workspace {
             for tab in &workspace.tabs {
                 validate_layout(&tab.layout)?;
             }
+            workspace
+                .recent_tabs
+                .retain(|id| workspace.tabs.iter().any(|tab| &tab.id == id));
+            workspace.record_active();
             Ok(workspace)
         } else {
             let layout = serde_json::from_value(terminator_core::sanitize_layout(value))
@@ -97,6 +104,7 @@ impl Workspace {
             .find(|tab| tab.layout.find_tab(pane).is_some())
         {
             self.active = tab.id.clone();
+            self.record_active();
             true
         } else {
             false
@@ -149,11 +157,14 @@ impl Workspace {
             index,
             WorkspaceTab {
                 id: id.clone(),
+                name: None,
+                pinned: false,
                 primary: Some(pane.clone()),
                 layout: DockState::new(vec![pane]),
             },
         );
         self.active = id;
+        self.record_active();
         self.main_surface_mut()
             .set_focused_node(egui_dock::NodeIndex::root());
     }
@@ -161,7 +172,22 @@ impl Workspace {
     pub fn close(&mut self, id: &str) {
         let previous = self.active_index();
         self.tabs.retain(|tab| tab.id != id);
+        self.recent_tabs.retain(|recent| recent != id);
         self.normalize(previous);
+    }
+
+    /// Keep a bounded MRU list of top-level tabs. It is safe to call every
+    /// frame; an unchanged active tab does not alter persisted state.
+    pub fn record_active(&mut self) {
+        if !self.tabs.iter().any(|tab| tab.id == self.active) {
+            return;
+        }
+        if self.recent_tabs.first() == Some(&self.active) {
+            return;
+        }
+        self.recent_tabs.retain(|id| id != &self.active);
+        self.recent_tabs.insert(0, self.active.clone());
+        self.recent_tabs.truncate(30);
     }
 
     fn group_with_pane(&self, pane: &Tab) -> Option<usize> {
@@ -578,11 +604,14 @@ impl Workspace {
         let id = terminator_core::id();
         self.tabs.push(WorkspaceTab {
             id: id.clone(),
+            name: None,
+            pinned: false,
             primary: Some(primary),
             layout,
         });
         if activate {
             self.active = id;
+            self.record_active();
         }
         true
     }
@@ -670,5 +699,8 @@ impl Workspace {
         }
         self.return_tabs
             .retain(|id, _| self.tabs.iter().any(|tab| &tab.id == id));
+        self.recent_tabs
+            .retain(|id| self.tabs.iter().any(|tab| &tab.id == id));
+        self.record_active();
     }
 }

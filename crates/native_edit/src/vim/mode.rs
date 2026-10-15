@@ -60,12 +60,19 @@ pub enum Effect {
     Vsplit,
     /// Open a new workspace tab (`:tabnew`); the GUI owns layout.
     TabNew,
+    /// Open the existing application file picker.
+    OpenFilePicker,
     /// Show language-server hover for the cursor (`K` in Normal,
     /// Ctrl+K modeless); the GUI owns servers and popups.
     Hover,
     /// Jump to the definition under the cursor (`gd`, F12); the GUI
     /// owns servers and opening the target.
     GotoDefinition,
+    /// List references for the symbol under the cursor. The GUI owns
+    /// language servers and the results window.
+    FindReferences,
+    /// Preview and apply a language-server symbol rename after review.
+    RenameSymbol,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

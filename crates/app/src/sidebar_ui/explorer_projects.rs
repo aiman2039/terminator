@@ -12,6 +12,16 @@ use eframe::egui::{self};
 use std::sync::Arc;
 use terminator_core::{AgentState, Session, SessionKind};
 
+/// Outcome of painting one sidebar group header.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GroupRenameAction {
+    None,
+    Begin,
+    Commit,
+    Cancel,
+    Clear,
+}
+
 impl App {
     fn project_sort_menu(&mut self, ui: &mut egui::Ui) {
         let current = self.preferences.project_sort;
@@ -186,7 +196,7 @@ impl App {
                 let filter = ui.add_sized(
                     [ui.available_width(), appearance::TOOLBAR_BUTTON],
                     appearance::singleline(&mut self.preferences.project_filter)
-                        .id(egui::Id::new("project-filter"))
+                        .id(ui.id().with("project-filter"))
                         .hint_text("Filter projects"),
                 );
                 #[cfg(feature = "test-support")]
@@ -402,22 +412,37 @@ impl App {
             live.iter().map(|s| (s.id.as_str(), s)).collect();
         let workspace_active = self.layouts.get(project_id).map(|w| w.active.clone());
         for (tab_id, sids) in &groups {
-            let primary = self
+            // The group is abstract: its own name, or `Tab N` by position.
+            // It never borrows a member terminal's label.
+            let (group_index, group_name) = self
                 .layouts
                 .get(project_id)
-                .and_then(|workspace| workspace.tabs.iter().find(|group| &group.id == tab_id))
-                .and_then(|group| {
-                    group
-                        .primary
-                        .as_ref()
-                        .filter(|tab| group.layout.find_tab(tab).is_some())
-                        .or_else(|| group.layout.iter_all_tabs().next().map(|(_, tab)| tab))
-                });
-            let face = self.tab_face(primary);
+                .and_then(|workspace| {
+                    workspace
+                        .tabs
+                        .iter()
+                        .position(|group| &group.id == tab_id)
+                        .map(|index| {
+                            (
+                                index,
+                                workspace.tabs.get(index).and_then(|group| {
+                                    group.name.clone().filter(|name| !name.trim().is_empty())
+                                }),
+                            )
+                        })
+                })
+                .unwrap_or((0, None));
+            let group_label =
+                crate::workspace::group_display_name(group_name.as_deref(), group_index);
             let key = format!("workspace-tab:{project_id}:{tab_id}");
             let mut tab_expanded = *self.preferences.expanded.entry(key.clone()).or_insert(true);
             let active_tab = workspace_active.as_deref() == Some(tab_id.as_str());
             let selected = self.selected.as_deref() == Some(project_id) && active_tab;
+            let renaming_group = self
+                .rename_group
+                .as_ref()
+                .is_some_and(|(p, t)| p == project_id && t == tab_id);
+            let mut rename_action = GroupRenameAction::None;
             let tab_left = ui
                 .horizontal(|ui| {
                     if ui
@@ -441,28 +466,111 @@ impl App {
                         tab_expanded = !tab_expanded;
                         self.preferences.expanded.insert(key.clone(), tab_expanded);
                     }
-                    let response = appearance::project_row(
-                        ui,
-                        &face.label,
-                        face.icon,
-                        selected,
-                        self.theme.row_height(),
-                        &sids.len().to_string(),
-                        appearance::color(&self.theme.secondary),
-                    )
-                    .on_hover_text(format!("Top-level tab\n{}", face.label));
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(ui.ctx(), &format!("sidebar-tab:{tab_id}"), response.rect);
-                    if response.clicked() {
-                        self.select_project(project_id.to_string());
-                        if let Some(workspace) = self.layouts.get_mut(project_id) {
-                            workspace.active.clone_from(tab_id);
+                    if renaming_group {
+                        let field = ui.add_sized(
+                            [160.0, self.theme.row_height()],
+                            appearance::singleline(&mut self.rename_group_text)
+                                .id(ui.id().with(("rename-group", tab_id.as_str())))
+                                .hint_text(&group_label),
+                        );
+                        if self.rename_group_focus {
+                            field.request_focus();
+                            self.rename_group_focus = false;
                         }
-                        self.hide_center_overlay();
+                        #[cfg(feature = "test-support")]
+                        diagnostics::record(
+                            ui.ctx(),
+                            &format!("sidebar-tab-rename:{tab_id}"),
+                            field.rect,
+                        );
+                        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                            rename_action = GroupRenameAction::Cancel;
+                        } else if field.lost_focus()
+                            || (field.has_focus()
+                                && ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                        {
+                            rename_action = GroupRenameAction::Commit;
+                        }
+                        field.rect.left()
+                    } else {
+                        let response = appearance::project_row(
+                            ui,
+                            &group_label,
+                            "LayoutDashboard",
+                            selected,
+                            self.theme.row_height(),
+                            &sids.len().to_string(),
+                            appearance::color(&self.theme.secondary),
+                        )
+                        .on_hover_text(format!("Tab group\n{group_label}\nDouble-click to rename"));
+                        #[cfg(feature = "test-support")]
+                        diagnostics::record(
+                            ui.ctx(),
+                            &format!("sidebar-tab:{tab_id}"),
+                            response.rect,
+                        );
+                        appearance::context_menu(&response, |ui| {
+                            if appearance::menu_item(ui, "Rename tab…", "Pencil", "").clicked() {
+                                rename_action = GroupRenameAction::Begin;
+                                ui.close();
+                            }
+                            if group_name.is_some()
+                                && appearance::menu_item(ui, "Clear tab name", "X", "").clicked()
+                            {
+                                rename_action = GroupRenameAction::Clear;
+                                ui.close();
+                            }
+                        });
+                        if response.double_clicked() {
+                            rename_action = GroupRenameAction::Begin;
+                        } else if response.clicked() {
+                            self.select_project(project_id.to_string());
+                            if let Some(workspace) = self.layouts.get_mut(project_id) {
+                                workspace.active.clone_from(tab_id);
+                            }
+                            self.hide_center_overlay();
+                        }
+                        response.rect.left()
                     }
-                    response.rect.left()
                 })
                 .inner;
+            match rename_action {
+                GroupRenameAction::Begin => {
+                    self.rename_group = Some((project_id.to_string(), tab_id.clone()));
+                    self.rename_group_text = group_name.clone().unwrap_or_default();
+                    self.rename_group_focus = true;
+                }
+                GroupRenameAction::Commit => {
+                    let name = self.rename_group_text.trim().to_string();
+                    if let Some(group) = self
+                        .layouts
+                        .get_mut(project_id)
+                        .and_then(|w| w.tabs.iter_mut().find(|g| &g.id == tab_id))
+                    {
+                        group.name = if name.is_empty() {
+                            None
+                        } else {
+                            Some(name.chars().take(64).collect())
+                        };
+                    }
+                    self.rename_group = None;
+                    self.save_layouts();
+                }
+                GroupRenameAction::Cancel => {
+                    self.rename_group = None;
+                }
+                GroupRenameAction::Clear => {
+                    if let Some(group) = self
+                        .layouts
+                        .get_mut(project_id)
+                        .and_then(|w| w.tabs.iter_mut().find(|g| &g.id == tab_id))
+                    {
+                        group.name = None;
+                    }
+                    self.save_layouts();
+                }
+                GroupRenameAction::None => {}
+            }
             if tab_expanded {
                 ui.scope(|ui| {
                     ui.spacing_mut().indent += tab_left - ui.next_widget_position().x;

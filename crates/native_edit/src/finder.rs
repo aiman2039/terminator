@@ -53,8 +53,12 @@ impl FileIndex {
     #[must_use]
     pub fn scan(roots: &[PathBuf], max_files: usize) -> Self {
         let mut files = Vec::new();
+        // Give every project room in the bounded index. One large checkout
+        // must not consume the whole cap before later projects are scanned.
+        let per_root = max_files.div_ceil(roots.len().max(1));
         for root in roots {
             let anchor = root.clone();
+            let mut taken = 0usize;
             let mut walker = ignore::WalkBuilder::new(root);
             // Ignore files count even outside git checkouts: a file finder
             // must be predictable in plain directories too.
@@ -63,8 +67,26 @@ impl FileIndex {
                 .parents(true)
                 .git_global(true)
                 .require_git(false);
+            walker.filter_entry(|entry| {
+                if entry.depth() == 0 || !entry.file_type().is_some_and(|kind| kind.is_dir()) {
+                    return true;
+                }
+                !matches!(
+                    entry.file_name().to_str(),
+                    Some(
+                        "target"
+                            | "node_modules"
+                            | "dist"
+                            | "build"
+                            | ".next"
+                            | ".venv"
+                            | "venv"
+                            | "coverage"
+                    )
+                )
+            });
             for entry in walker.build().filter_map(Result::ok) {
-                if files.len() >= max_files {
+                if files.len() >= max_files || taken >= per_root {
                     break;
                 }
                 let path = entry.path().to_path_buf();
@@ -73,6 +95,7 @@ impl FileIndex {
                         display: display_for(&anchor, &path),
                         path,
                     });
+                    taken = taken.saturating_add(1);
                 }
             }
         }
@@ -85,12 +108,22 @@ impl FileIndex {
     /// entries). An empty pattern returns stable order.
     #[must_use]
     pub fn query(&self, pattern: &str, limit: usize) -> Vec<PathBuf> {
+        self.query_scored(pattern, limit)
+            .into_iter()
+            .map(|(_, file)| file.path)
+            .collect()
+    }
+
+    /// Ranked file matches with the same score used by other palette
+    /// categories. The caller can merge all kinds into one fuzzy list.
+    #[must_use]
+    pub fn query_scored(&self, pattern: &str, limit: usize) -> Vec<(u16, IndexedFile)> {
         if pattern.is_empty() {
             return self
                 .files
                 .iter()
                 .take(limit)
-                .map(|file| file.path.clone())
+                .map(|file| (0, file.clone()))
                 .collect();
         }
         let mut matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
@@ -108,7 +141,7 @@ impl FileIndex {
         scored
             .into_iter()
             .take(limit)
-            .map(|(_, file)| file.path.clone())
+            .map(|(score, file)| (score, file.clone()))
             .collect()
     }
 }
@@ -203,5 +236,41 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(10))
             .expect("index");
         assert!(!index.is_empty());
+    }
+
+    #[test]
+    fn large_first_project_does_not_hide_later_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        for index in 0..8 {
+            fs::write(first.join(format!("{index}.rs")), "").unwrap();
+        }
+        fs::write(second.join("answer.rs"), "").unwrap();
+        let index = FileIndex::scan(&[first, second.clone()], 4);
+        assert!(
+            index
+                .files()
+                .iter()
+                .any(|file| file.path == second.join("answer.rs"))
+        );
+        assert_eq!(index.query_scored("answer", 4).len(), 1);
+    }
+
+    #[test]
+    fn generated_build_trees_are_skipped_without_an_ignore_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("target/debug")).unwrap();
+        fs::create_dir_all(root.join("node_modules/dependency")).unwrap();
+        fs::write(root.join("src/main.rs"), "").unwrap();
+        fs::write(root.join("target/debug/dep-graph.bin"), "").unwrap();
+        fs::write(root.join("node_modules/dependency/index.js"), "").unwrap();
+        let index = FileIndex::scan(&[root], MAX_INDEX_FILES);
+        assert_eq!(index.files().len(), 1);
+        assert!(index.files()[0].path.ends_with("src/main.rs"));
     }
 }

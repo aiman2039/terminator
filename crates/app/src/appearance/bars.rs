@@ -249,7 +249,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
             });
             if response.hovered() {
                 ui.painter()
-                    .rect_filled(rect, 4.0, ui.visuals().widgets.hovered.bg_fill);
+                    .rect_filled(rect, 6.0, ui.visuals().widgets.hovered.bg_fill);
             }
             let tint = hover_tint
                 .filter(|_| response.hovered())

@@ -61,38 +61,48 @@ impl App {
                 |ui| {
                     let mut choice = if self.theme_draft.colors_match(&self.theme_committed) {
                         0
-                    } else if self.theme_draft.colors_match(&AppearanceConfig::default()) {
+                    } else if self
+                        .theme_draft
+                        .colors_match(&AppearanceConfig::intellij_dark())
+                    {
                         1
                     } else if self
                         .theme_draft
                         .colors_match(&AppearanceConfig::high_contrast())
                     {
                         2
-                    } else {
+                    } else if self
+                        .theme_draft
+                        .colors_match(&AppearanceConfig::terminator_dark())
+                    {
                         3
+                    } else {
+                        4
                     };
                     if settings_controls::segmented(
                         ui,
                         &mut choice,
                         &[
                             ("Current saved", 0),
-                            ("Terminator dark", 1),
+                            ("IntelliJ dark", 1),
                             ("High contrast", 2),
+                            ("Terminator dark", 3),
                         ],
                     ) {
                         let density = self.theme_draft.density;
                         let divider = self.theme_draft.pane_divider_width;
                         let border = self.theme_draft.border_width;
                         self.theme_draft = match choice {
-                            1 => AppearanceConfig::default(),
+                            1 => AppearanceConfig::intellij_dark(),
                             2 => AppearanceConfig::high_contrast(),
+                            3 => AppearanceConfig::terminator_dark(),
                             _ => self.theme_committed.clone(),
                         };
                         self.theme_draft.density = density;
                         self.theme_draft.pane_divider_width = divider;
                         self.theme_draft.border_width = border;
                     }
-                    if choice == 3 {
+                    if choice == 4 {
                         ui.weak("Custom colors");
                     }
                 },

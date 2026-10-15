@@ -180,6 +180,119 @@ mod tests {
     }
 
     #[test]
+    fn command_footer_stays_at_pane_bottom_for_short_and_long_files() {
+        use crate::doc::Doc;
+        fn footer_y(ctx: &egui::Context, text: &str) -> f32 {
+            let mut doc = Doc::new(text);
+            let mut engine = VimEngine::new();
+            engine.begin_search();
+            let mut highlight = HighlightCache::default();
+            let mut footer = 0.0;
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let result = show_source(
+                        ui,
+                        &mut doc,
+                        &mut engine,
+                        &SourceOptions::default(),
+                        &mut highlight,
+                        Language::Plain,
+                        "footer-test",
+                    );
+                    footer = result.footer_rect.expect("footer").top();
+                });
+            });
+            output.textures_delta.clear();
+            footer
+        }
+        let ctx = egui::Context::default();
+        let short = footer_y(&ctx, "one line");
+        let long = footer_y(&ctx, &"many lines\n".repeat(200));
+        assert!((short - long).abs() < 1.0, "short={short}, long={long}");
+    }
+
+    #[test]
+    fn right_click_in_blank_editor_space_opens_context_menu() {
+        use crate::doc::Doc;
+        let ctx = egui::Context::default();
+        let mut doc = Doc::new("short file");
+        let mut engine = VimEngine::new();
+        let mut highlight = HighlightCache::default();
+        let draw = |input: egui::RawInput,
+                    doc: &mut Doc,
+                    engine: &mut VimEngine,
+                    highlight: &mut HighlightCache| {
+            let mut outcome = None;
+            let mut output = ctx.run_ui(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    outcome = Some(show_source(
+                        ui,
+                        doc,
+                        engine,
+                        &SourceOptions::default(),
+                        highlight,
+                        Language::Plain,
+                        "context-menu-test",
+                    ));
+                });
+            });
+            output.textures_delta.clear();
+            outcome.expect("source outcome")
+        };
+        let first = draw(
+            egui::RawInput::default(),
+            &mut doc,
+            &mut engine,
+            &mut highlight,
+        );
+        let pos = first.content_rect.left_top() + egui::vec2(100.0, 100.0);
+        assert!(first.content_rect.contains(pos));
+        let mut press = egui::RawInput::default();
+        press.events.push(egui::Event::PointerMoved(pos));
+        press.events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Secondary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        draw(press, &mut doc, &mut engine, &mut highlight);
+        let mut release = egui::RawInput::default();
+        release.events.push(egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Secondary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let result = draw(release, &mut doc, &mut engine, &mut highlight);
+        assert!(result.context_menu_opened);
+    }
+
+    #[test]
+    fn read_only_rename_window_keeps_buffer_text() {
+        use crate::doc::Doc;
+        let ctx = egui::Context::default();
+        let mut doc = Doc::new("before");
+        let mut engine = VimEngine::new();
+        let options = SourceOptions {
+            read_only: true,
+            ..SourceOptions::default()
+        };
+        drive_mods(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &options,
+            Language::Plain,
+            &mut HighlightCache::default(),
+            &[
+                (egui::Key::I, egui::Modifiers::NONE),
+                (egui::Key::A, egui::Modifiers::NONE),
+            ],
+        );
+        assert_eq!(doc.text(), "before");
+    }
+
+    #[test]
     fn wide_chars_take_two_display_cells() {
         assert_eq!(char_display_width('a'), 1);
         assert_eq!(char_display_width('あ'), 2);

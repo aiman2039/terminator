@@ -50,15 +50,52 @@ pub struct Diagnostic {
     pub message: String,
 }
 
-/// Flattened hover text (markdown or plaintext, markup stripped).
+/// Hover text with its presentation format preserved.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Hover {
     pub text: String,
+    pub markdown: bool,
 }
 
 /// One go-to-definition target: server URI plus range.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct GotoTarget {
+    pub uri: String,
+    pub range: Range,
+}
+
+/// One replacement proposed by a language server during a symbol rename.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RenameTextEdit {
+    pub range: Range,
+    pub new_text: String,
+}
+
+/// All edits for one file. A server version, when present, must still
+/// match before the host applies the rename.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct RenameFileEdit {
+    pub uri: String,
+    pub version: Option<i32>,
+    pub edits: Vec<RenameTextEdit>,
+}
+
+/// One document symbol, flattened from the server's tree: `depth` is the
+/// nesting level (0 for top-level items) for outline indentation.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Symbol {
+    pub name: String,
+    pub kind: String,
+    pub range: Range,
+    pub depth: usize,
+}
+
+/// One workspace-wide symbol match from an LSP server.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct WorkspaceSymbolHit {
+    pub name: String,
+    pub kind: String,
+    pub container: Option<String>,
     pub uri: String,
     pub range: Range,
 }
@@ -280,10 +317,12 @@ pub fn initialize(id: &RequestId, process_id: u32, root: &Url) -> Vec<u8> {
             "rootUri": root.as_str(),
             "capabilities": {
                 "general": { "positionEncodings": ["utf-16"] },
+                "workspace": { "workspaceEdit": { "documentChanges": true } },
                 "textDocument": {
                     "synchronization": { "didSave": false },
                     "hover": { "contentFormat": ["markdown", "plaintext"] },
                     "definition": { "linkSupport": true },
+                    "rename": {},
                     "publishDiagnostics": { "relatedInformation": true },
                 },
             },
@@ -373,6 +412,56 @@ pub fn definition(id: &RequestId, uri: &Url, position: Position) -> Vec<u8> {
     )
 }
 
+/// `textDocument/references` at a UTF-16 position, including the declaration.
+#[must_use]
+pub fn references(id: &RequestId, uri: &Url, position: Position) -> Vec<u8> {
+    request(
+        id,
+        "textDocument/references",
+        serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "position": { "line": position.line, "character": position.character },
+            "context": { "includeDeclaration": true },
+        }),
+    )
+}
+
+/// `textDocument/rename` at a UTF-16 position.
+#[must_use]
+pub fn rename(id: &RequestId, uri: &Url, position: Position, new_name: &str) -> Vec<u8> {
+    request(
+        id,
+        "textDocument/rename",
+        serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "position": { "line": position.line, "character": position.character },
+            "newName": new_name,
+        }),
+    )
+}
+
+/// `textDocument/documentSymbol` for one document.
+#[must_use]
+pub fn document_symbol(id: &RequestId, uri: &Url) -> Vec<u8> {
+    request(
+        id,
+        "textDocument/documentSymbol",
+        serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+        }),
+    )
+}
+
+/// `workspace/symbol` for project-wide symbol search.
+#[must_use]
+pub fn workspace_symbol(id: &RequestId, query: &str) -> Vec<u8> {
+    request(
+        id,
+        "workspace/symbol",
+        serde_json::json!({ "query": query }),
+    )
+}
+
 fn native_position(value: lsp_types::Position) -> Position {
     Position {
         line: value.line,
@@ -417,7 +506,7 @@ pub fn parse_diagnostics(params: &Value) -> Option<(String, Vec<Diagnostic>)> {
     Some((parsed.uri.as_str().to_owned(), items))
 }
 
-/// Parse a `textDocument/hover` result into flat text. `None` means null
+/// Parse a `textDocument/hover` result. `None` means null
 /// or an unrecognized shape (no hover available).
 #[must_use]
 pub fn parse_hover(result: &Value) -> Option<Hover> {
@@ -425,22 +514,30 @@ pub fn parse_hover(result: &Value) -> Option<Hover> {
         return None;
     }
     let parsed: lsp_types::Hover = serde_json::from_value(result.clone()).ok()?;
-    let text = match parsed.contents {
-        lsp_types::HoverContents::Scalar(marked) => marked_text(&marked),
-        lsp_types::HoverContents::Array(marked) => marked
-            .iter()
-            .map(marked_text)
-            .collect::<Vec<_>>()
-            .join("\n"),
-        lsp_types::HoverContents::Markup(content) => content.value,
+    let (text, markdown) = match parsed.contents {
+        lsp_types::HoverContents::Scalar(marked) => (marked_text(&marked), true),
+        lsp_types::HoverContents::Array(marked) => (
+            marked
+                .iter()
+                .map(marked_text)
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+            true,
+        ),
+        lsp_types::HoverContents::Markup(content) => (
+            content.value,
+            content.kind == lsp_types::MarkupKind::Markdown,
+        ),
     };
-    Some(Hover { text })
+    Some(Hover { text, markdown })
 }
 
 fn marked_text(value: &lsp_types::MarkedString) -> String {
     match value {
         lsp_types::MarkedString::String(text) => text.clone(),
-        lsp_types::MarkedString::LanguageString(content) => content.value.clone(),
+        lsp_types::MarkedString::LanguageString(content) => {
+            format!("```{}\n{}\n```", content.language, content.value)
+        }
     }
 }
 
@@ -467,6 +564,201 @@ pub fn parse_definition(result: &Value) -> Vec<GotoTarget> {
             .collect(),
         Err(_) => Vec::new(),
     }
+}
+
+/// Parse a `textDocument/references` location list. Invalid entries are
+/// ignored; an unsupported or null result produces an empty list.
+#[must_use]
+pub fn parse_references(result: &Value) -> Vec<GotoTarget> {
+    let Ok(locations) = serde_json::from_value::<Vec<lsp_types::Location>>(result.clone()) else {
+        return Vec::new();
+    };
+    locations
+        .iter()
+        .map(|location| native_location(&location.uri, &location.range))
+        .collect()
+}
+
+/// Parse only text replacements. Resource operations and change annotations
+/// require a different preview/apply flow and are rejected as a whole.
+pub fn parse_rename(result: &Value) -> Result<Vec<RenameFileEdit>, String> {
+    let edit: lsp_types::WorkspaceEdit = serde_json::from_value(result.clone())
+        .map_err(|error| format!("Invalid rename response: {error}"))?;
+    if edit
+        .change_annotations
+        .as_ref()
+        .is_some_and(|items| !items.is_empty())
+    {
+        return Err("Rename response contains unsupported change annotations".into());
+    }
+    let mut files = Vec::new();
+    if let Some(changes) = edit.document_changes {
+        let documents = match changes {
+            lsp_types::DocumentChanges::Edits(documents) => documents,
+            lsp_types::DocumentChanges::Operations(operations) => operations
+                .into_iter()
+                .map(|operation| match operation {
+                    lsp_types::DocumentChangeOperation::Edit(document) => Ok(document),
+                    lsp_types::DocumentChangeOperation::Op(_) => {
+                        Err("Rename response contains a file create, move, or delete".to_string())
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        for document in documents {
+            let mut edits = Vec::new();
+            for edit in document.edits {
+                let edit = match edit {
+                    lsp_types::OneOf::Left(edit) => edit,
+                    lsp_types::OneOf::Right(_) => {
+                        return Err("Rename response contains an annotated edit".into());
+                    }
+                };
+                edits.push(RenameTextEdit {
+                    range: native_range(&edit.range),
+                    new_text: edit.new_text,
+                });
+            }
+            files.push(RenameFileEdit {
+                uri: document.text_document.uri.as_str().to_owned(),
+                version: document.text_document.version,
+                edits,
+            });
+        }
+    } else if let Some(changes) = edit.changes {
+        for (uri, edits) in changes {
+            files.push(RenameFileEdit {
+                uri: uri.as_str().to_owned(),
+                version: None,
+                edits: edits
+                    .into_iter()
+                    .map(|edit| RenameTextEdit {
+                        range: native_range(&edit.range),
+                        new_text: edit.new_text,
+                    })
+                    .collect(),
+            });
+        }
+    }
+    files.sort_by(|a, b| a.uri.cmp(&b.uri));
+    Ok(files)
+}
+
+/// Parse a `textDocument/documentSymbol` result (hierarchical
+/// `DocumentSymbol[]` or flat `SymbolInformation[]`) into a flat,
+/// depth-tagged outline. Null or unrecognized shapes yield no symbols.
+#[must_use]
+pub fn parse_document_symbols(result: &Value) -> Vec<Symbol> {
+    if result.is_null() {
+        return Vec::new();
+    }
+    let parsed: Result<lsp_types::DocumentSymbolResponse, _> =
+        serde_json::from_value(result.clone());
+    let mut out = Vec::new();
+    match parsed {
+        Ok(lsp_types::DocumentSymbolResponse::Nested(items)) => {
+            fn walk(items: &[lsp_types::DocumentSymbol], depth: usize, out: &mut Vec<Symbol>) {
+                for item in items {
+                    out.push(Symbol {
+                        name: item.name.clone(),
+                        kind: symbol_kind_label(item.kind),
+                        range: native_range(&item.range),
+                        depth,
+                    });
+                    if let Some(children) = &item.children {
+                        walk(children, depth.saturating_add(1), out);
+                    }
+                }
+            }
+            walk(&items, 0, &mut out);
+        }
+        Ok(lsp_types::DocumentSymbolResponse::Flat(items)) => {
+            for item in items {
+                out.push(Symbol {
+                    name: item.name.clone(),
+                    kind: symbol_kind_label(item.kind),
+                    range: native_range(&item.location.range),
+                    depth: 0,
+                });
+            }
+        }
+        Err(_) => {}
+    }
+    out
+}
+
+/// Parse both LSP workspace-symbol response shapes. Unresolved locations
+/// have no range and cannot be opened without a follow-up capability, so
+/// they are skipped.
+#[must_use]
+pub fn parse_workspace_symbols(result: &Value) -> Vec<WorkspaceSymbolHit> {
+    if result.is_null() {
+        return Vec::new();
+    }
+    let parsed: Result<lsp_types::WorkspaceSymbolResponse, _> =
+        serde_json::from_value(result.clone());
+    match parsed {
+        Ok(lsp_types::WorkspaceSymbolResponse::Flat(items)) => items
+            .into_iter()
+            .map(|item| WorkspaceSymbolHit {
+                name: item.name,
+                kind: symbol_kind_label(item.kind),
+                container: item.container_name,
+                uri: item.location.uri.as_str().to_owned(),
+                range: native_range(&item.location.range),
+            })
+            .collect(),
+        Ok(lsp_types::WorkspaceSymbolResponse::Nested(items)) => items
+            .into_iter()
+            .filter_map(|item| {
+                let lsp_types::OneOf::Left(location) = item.location else {
+                    return None;
+                };
+                Some(WorkspaceSymbolHit {
+                    name: item.name,
+                    kind: symbol_kind_label(item.kind),
+                    container: item.container_name,
+                    uri: location.uri.as_str().to_owned(),
+                    range: native_range(&location.range),
+                })
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+fn symbol_kind_label(kind: lsp_types::SymbolKind) -> String {
+    use lsp_types::SymbolKind as Kind;
+    match kind {
+        Kind::FILE => "File",
+        Kind::MODULE => "Module",
+        Kind::NAMESPACE => "Namespace",
+        Kind::PACKAGE => "Package",
+        Kind::CLASS => "Class",
+        Kind::METHOD => "Method",
+        Kind::PROPERTY => "Property",
+        Kind::FIELD => "Field",
+        Kind::CONSTRUCTOR => "Constructor",
+        Kind::ENUM => "Enum",
+        Kind::INTERFACE => "Interface",
+        Kind::FUNCTION => "Function",
+        Kind::VARIABLE => "Variable",
+        Kind::CONSTANT => "Constant",
+        Kind::STRING => "String",
+        Kind::NUMBER => "Number",
+        Kind::BOOLEAN => "Boolean",
+        Kind::ARRAY => "Array",
+        Kind::OBJECT => "Object",
+        Kind::KEY => "Key",
+        Kind::NULL => "Null",
+        Kind::ENUM_MEMBER => "Enum member",
+        Kind::STRUCT => "Struct",
+        Kind::EVENT => "Event",
+        Kind::OPERATOR => "Operator",
+        Kind::TYPE_PARAMETER => "Type parameter",
+        _ => "Symbol",
+    }
+    .to_string()
 }
 
 fn native_location(uri: &lsp_types::Uri, range: &lsp_types::Range) -> GotoTarget {
@@ -789,6 +1081,116 @@ mod tests {
     }
 
     #[test]
+    fn references_request_and_locations_keep_utf16_positions() {
+        let uri = Url::parse("file:///repo/main.rs").expect("uri");
+        let at = Position {
+            line: 4,
+            character: 9,
+        };
+        let request = body_of(&references(&RequestId::Number(7), &uri, at));
+        assert_eq!(text(&request, "method"), "textDocument/references");
+        let params = field(&request, "params");
+        assert_eq!(number(field(params, "position"), "character"), 9);
+        assert_eq!(
+            field(field(params, "context"), "includeDeclaration"),
+            &Value::Bool(true)
+        );
+
+        let locations = serde_json::json!([{
+            "uri": "file:///repo/lib.rs",
+            "range": {
+                "start": { "line": 2, "character": 4 },
+                "end": { "line": 2, "character": 8 }
+            }
+        }]);
+        let parsed = parse_references(&locations);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].uri, "file:///repo/lib.rs");
+        assert_eq!(
+            parsed[0].range.start,
+            Position {
+                line: 2,
+                character: 4
+            }
+        );
+        assert!(parse_references(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn rename_parses_multifile_text_edits_and_rejects_file_operations() {
+        let uri = Url::parse("file:///repo/main.rs").unwrap();
+        let request = body_of(&rename(
+            &RequestId::Number(4),
+            &uri,
+            Position {
+                line: 1,
+                character: 5,
+            },
+            "new_name",
+        ));
+        assert_eq!(text(&request, "method"), "textDocument/rename");
+        assert_eq!(text(field(&request, "params"), "newName"), "new_name");
+
+        let edit = serde_json::json!({
+            "documentChanges": [{
+                "textDocument": { "uri": "file:///repo/main.rs", "version": 3 },
+                "edits": [{
+                    "range": {
+                        "start": { "line": 1, "character": 5 },
+                        "end": { "line": 1, "character": 9 }
+                    },
+                    "newText": "new_name"
+                }]
+            }]
+        });
+        let files = parse_rename(&edit).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].version, Some(3));
+        assert_eq!(files[0].edits[0].new_text, "new_name");
+
+        let operation = serde_json::json!({
+            "documentChanges": [{
+                "kind": "rename",
+                "oldUri": "file:///repo/a.rs",
+                "newUri": "file:///repo/b.rs"
+            }]
+        });
+        assert!(parse_rename(&operation).is_err());
+    }
+
+    #[test]
+    fn workspace_symbol_request_and_responses_keep_file_targets() {
+        let request = body_of(&workspace_symbol(&RequestId::Number(9), "helper"));
+        assert_eq!(text(&request, "method"), "workspace/symbol");
+        assert_eq!(text(field(&request, "params"), "query"), "helper");
+        let flat = serde_json::json!([{
+            "name": "helper",
+            "kind": 12,
+            "containerName": "module",
+            "location": {
+                "uri": "file:///repo/src/lib.rs",
+                "range": {
+                    "start": { "line": 3, "character": 4 },
+                    "end": { "line": 3, "character": 10 }
+                }
+            }
+        }]);
+        let hits = parse_workspace_symbols(&flat);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "helper");
+        assert_eq!(hits[0].container.as_deref(), Some("module"));
+        assert_eq!(hits[0].range.start.line, 3);
+        assert_eq!(hits[0].uri, "file:///repo/src/lib.rs");
+
+        let unresolved = serde_json::json!([{
+            "name": "unresolved",
+            "kind": 12,
+            "location": { "uri": "file:///repo/src/lib.rs" }
+        }]);
+        assert!(parse_workspace_symbols(&unresolved).is_empty());
+    }
+
+    #[test]
     fn publishes_diagnostics_with_severity() {
         let params = serde_json::json!({
             "uri": "file:///repo/main.rs",
@@ -830,6 +1232,11 @@ mod tests {
             parse_hover(&markup).expect("markup").text,
             "# f\n```rust\nfn f()\n```"
         );
+        assert!(parse_hover(&markup).expect("markup").markdown);
+        let plaintext = serde_json::json!({
+            "contents": {"kind": "plaintext", "value": "# f"}
+        });
+        assert!(!parse_hover(&plaintext).expect("plaintext").markdown);
         let scalar = serde_json::json!({"contents": "plain hover"});
         assert_eq!(parse_hover(&scalar).expect("scalar").text, "plain hover");
         let array = serde_json::json!({
@@ -840,7 +1247,7 @@ mod tests {
         });
         assert_eq!(
             parse_hover(&array).expect("array").text,
-            "fn f()\ndocs here"
+            "```rust\nfn f()\n```\n\ndocs here"
         );
     }
 
@@ -871,6 +1278,48 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].uri, "file:///repo/b.rs");
         assert_eq!(targets[0].range.start.line, 9);
+    }
+
+    #[test]
+    fn document_symbols_flatten_nested_and_flat_shapes() {
+        assert!(parse_document_symbols(&Value::Null).is_empty());
+        let nested = serde_json::json!([{
+            "name": "main",
+            "kind": 12,
+            "range": {"start": {"line": 0, "character": 0},
+                      "end": {"line": 9, "character": 1}},
+            "selectionRange": {"start": {"line": 0, "character": 3},
+                               "end": {"line": 0, "character": 7}},
+            "children": [{
+                "name": "helper",
+                "kind": 12,
+                "range": {"start": {"line": 2, "character": 1},
+                          "end": {"line": 4, "character": 2}},
+                "selectionRange": {"start": {"line": 2, "character": 5},
+                                   "end": {"line": 2, "character": 11}},
+            }],
+        }]);
+        let symbols = parse_document_symbols(&nested);
+        assert_eq!(symbols.len(), 2);
+        assert_eq!(symbols[0].name, "main");
+        assert_eq!(symbols[0].depth, 0);
+        assert_eq!(symbols[1].name, "helper");
+        assert_eq!(symbols[1].depth, 1);
+        assert_eq!(symbols[1].range.start.line, 2);
+
+        let flat = serde_json::json!([{
+            "name": "Thing",
+            "kind": 5,
+            "location": {
+                "uri": "file:///repo/a.rs",
+                "range": {"start": {"line": 3, "character": 0},
+                          "end": {"line": 5, "character": 1}},
+            },
+        }]);
+        let symbols = parse_document_symbols(&flat);
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].kind, "Class");
+        assert_eq!(symbols[0].depth, 0);
     }
 
     #[test]

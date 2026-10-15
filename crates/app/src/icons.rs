@@ -373,6 +373,7 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         }
         "ShieldQuestion" => egui::include_image!("../assets/icons/shield-question.svg"),
         "History" => egui::include_image!("../assets/icons/history.svg"),
+        "LocateFixed" => egui::include_image!("../assets/icons/locate-fixed.svg"),
         "Folder" => egui::include_image!("../assets/icons/folder.svg"),
         "FileLock" => egui::include_image!("../assets/icons/file-lock.svg"),
         "FileAxis3D" => egui::include_image!("../assets/icons/file-axis-3d.svg"),

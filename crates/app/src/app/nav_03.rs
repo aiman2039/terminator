@@ -479,7 +479,7 @@ mod tests {
         paint_explorer(&mut app, &ctx, vec![]);
         assert_eq!(
             ctx.memory(eframe::egui::Memory::focused),
-            Some(App::explorer_name_prompt_id())
+            app.name_prompt_widget
         );
         paint_explorer(&mut app, &ctx, vec![egui::Event::Text("a.txt".into())]);
         assert_eq!(prompt_name(&app), Some("a.txt"));
@@ -491,7 +491,7 @@ mod tests {
         assert!(!app.name_prompt_focus);
         assert_ne!(
             ctx.memory(eframe::egui::Memory::focused),
-            Some(App::explorer_name_prompt_id())
+            app.name_prompt_widget
         );
         paint_explorer(&mut app, &ctx, vec![egui::Event::Text("more".into())]);
         assert_eq!(prompt_name(&app), Some("a.txt"));

@@ -44,6 +44,9 @@ sidebars run full height beside the terminal strip.
 `archive.svg` comes from Lucide 0.577.0 with the same license and white-stroke
 adaptation, for the removed-projects control.
 
+`locate-fixed.svg` comes from Lucide 0.577.0 with the same license and
+white-stroke adaptation, for Explorer's Reveal current file action.
+
 Agent identity icons are official vendor marks, used only to identify the
 agent running in a terminal (nominative use; all marks are trademarks of
 their owners: OpenAI, Anthropic, SST, xAI, Meta, Mario Zechner/pi.dev):

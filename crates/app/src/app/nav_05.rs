@@ -373,7 +373,42 @@ mod tests {
             output.textures_delta.clear();
         };
         paint(&mut app);
-        ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("project-filter")));
+        // The filter ID is scoped to its hosting sidebar, so focus it the
+        // way a user does: click the painted field.
+        let rect = ctx
+            .data(|data| {
+                data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", "project-filter")))
+            })
+            .expect("project filter geometry");
+        let pos = rect.center();
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::default(),
+            }],
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::default(),
+            }],
+        ] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(320.0, 400.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.projects(ui),
+            );
+            output.textures_delta.clear();
+        }
         paint(&mut app);
         assert!(app.text_input_focused(&ctx));
     }

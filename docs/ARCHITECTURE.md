@@ -94,6 +94,18 @@ embedded mode; ordinary embedded editors still load user configuration.
 
 Embedded mode starts a real Neovim process with a private RPC endpoint and the user's normal configuration. It is rendered as a native terminal surface, not a web editor. The application supplies save-all and read-only disk-comparison commands; Neovim owns buffers, plugins, language tooling, autoread, and conflict prompts. Unsaved buffers survive GUI closure while the editor process remains alive. Reboot recovery relies on editor-native recovery, not terminal scrollback.
 
+Native mode owns its buffers and LSP processes in the GUI. Rust and Python
+servers run through the GUI service supervisor, keyed by language and project
+root; they die with the GUI. Symbol rename is preview-first: the server only
+proposes text edits. A filesystem worker checks project containment, regular
+files, UTF-16 ranges, overlap, size, and disk snapshots before showing a diff.
+The user must choose Apply. The worker stages replacements and rollback copies
+beside each file, then rechecks content before replacing files. Affected native
+buffers are read-only while Apply runs. Open clean native buffers reload after
+success; dirty or version-changed buffers block the operation, and a buffer
+that somehow becomes dirty during Apply is kept for review. Neovim-owned
+buffers remain outside this flow.
+
 Markdown is a presentation mode of an existing editor session, not another dock
 tab identity or PTY. `markdown.rs` renders through `egui_commonmark`, and
 `ui-preferences.json` stores modes by session ID. A tracked async actor polls visible previews at 350 ms intervals, with bounded

@@ -4,7 +4,7 @@ use super::cases_agents::{
 };
 use super::cases_editor::{cleanup, editor_lifecycle, file_close, focus_close, inline_rename};
 use super::cases_gui::{browser, control, external, images, terminal_actions};
-use super::cases_startup::{smoke, split_file_opening, workspace_tabs};
+use super::cases_startup::{native_rename, smoke, split_file_opening, workspace_tabs};
 use anyhow::{Context, Result, anyhow, ensure};
 use rayon::prelude::*;
 use serde_json::{Value, json};
@@ -223,6 +223,7 @@ fn run_case(case: &str, mut opts: Options) -> Result<()> {
         "agent-wheel-live" => agent_wheel_live(&opts)?,
         "control" => control(&opts)?,
         "workspace-tabs" => workspace_tabs(&opts)?,
+        "native-rename" => native_rename(&opts)?,
         "split-file-opening" => split_file_opening(&opts)?,
         "float-window" => super::float::run(&opts)?,
         "markdown" => super::markdown::run(&opts)?,

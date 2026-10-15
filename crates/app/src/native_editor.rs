@@ -5,6 +5,8 @@
 //! the same 1 MiB bound as Markdown previews. Saves refuse to overwrite a
 //! file that changed on disk unless forced, Reload is disabled while dirty,
 //! and closing a dirty tab asks first — nothing is silently discarded.
+mod rename;
+pub(crate) use rename::RenameDialog;
 
 use super::workspace::WorkspaceTab;
 use super::*;
@@ -692,6 +694,11 @@ impl App {
             .map(|sid| Tab::Terminal(sid.clone()));
         let after = self.editor_target(project, origin.as_ref(), split);
         let path = std::path::absolute(&path).unwrap_or(path);
+        self.preferences
+            .recent_native_files
+            .retain(|item| item != &path);
+        self.preferences.recent_native_files.insert(0, path.clone());
+        self.preferences.recent_native_files.truncate(30);
         if let Some(line) = line.filter(|line| *line > 0) {
             self.native_pending_line.insert(
                 path.clone(),
@@ -759,11 +766,25 @@ impl App {
             }
         }
 
-        let filename = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
+        let project_root = self.selected_project().map(|project| project.path.clone());
+        let breadcrumb = self
+            .selected_project()
+            .and_then(|project| path.strip_prefix(&project.path).ok())
+            .unwrap_or(path)
+            .components()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join(" › ");
+        let pinned_files = self.preferences.pinned_native_files.clone();
+        let mut recent_files = self.preferences.recent_native_files.clone();
+        if let Some(root) = project_root.as_ref() {
+            recent_files.retain(|item| item.starts_with(root) && item != path);
+        } else {
+            recent_files.clear();
+        }
+        recent_files.sort_by_key(|item| !pinned_files.contains(item));
+        let pinned = pinned_files.contains(path);
+        let outline = self.lsp.symbols_for(path);
         // Deferred closes run after the borrow below ends.
         let mut defer_close_after_save = false;
         // The view issuing `:wq`: the save settles frames later, when a
@@ -777,7 +798,17 @@ impl App {
         let mut splits: Vec<NativeSplit> = Vec::new();
         let mut hover_at: Option<(native_lsp::Position, (usize, usize))> = None;
         let mut goto_at: Option<native_lsp::Position> = None;
+        let mut references_at: Option<native_lsp::Position> = None;
+        let mut rename_at: Option<native_lsp::Position> = None;
+        let mut open_file_picker = false;
+        let mut toggle_pin = false;
+        let mut recent_open: Option<PathBuf> = None;
+        let activated_editor;
         let language: Language = language_for_path(&path.to_string_lossy());
+        let rename_applying = self
+            .native_rename
+            .as_ref()
+            .is_some_and(|dialog| dialog.applying_to(path));
         // Diagnostics snapshots for this frame: the manager borrow ends
         // before the buffer borrow below begins.
         let marks: Vec<DiagnosticMark> = self.lsp.row_marks(path);
@@ -788,8 +819,22 @@ impl App {
             // Clicking a header button moves keyboard focus to it; hand focus
             // back to the file so arrows and typing keep editing text.
             let file_focus = source_focus_id(&path.to_string_lossy());
+            let current_symbol = doc.doc.as_ref().and_then(|_| {
+                let line = u32::try_from(doc.engine.cursor().line).ok()?;
+                outline
+                    .iter()
+                    .filter(|symbol| {
+                        symbol.range.start.line <= line && line <= symbol.range.end.line
+                    })
+                    .max_by_key(|symbol| (symbol.depth, symbol.range.start.line))
+                    .map(|symbol| symbol.name.as_str())
+            });
             ui.horizontal(|ui| {
-                ui.monospace(&filename);
+                ui.weak(&breadcrumb);
+                if let Some(symbol) = current_symbol {
+                    ui.weak("›");
+                    ui.monospace(symbol);
+                }
                 if doc.dirty() {
                     ui.monospace("●");
                 }
@@ -798,8 +843,14 @@ impl App {
                 if doc.saving {
                     ui.weak("Saving…");
                 }
+                if rename_applying {
+                    ui.weak("Renaming…");
+                }
                 if ui
-                    .add_enabled(doc.dirty() && !doc.saving, egui::Button::new("Save"))
+                    .add_enabled(
+                        doc.dirty() && !doc.saving && !rename_applying,
+                        egui::Button::new("Save"),
+                    )
                     .clicked()
                 {
                     doc.force_save = false;
@@ -808,7 +859,10 @@ impl App {
                 }
                 // Reload while dirty would silently discard edits: disabled.
                 let reload = ui
-                    .add_enabled(!doc.dirty() && !doc.loading, egui::Button::new("Reload"))
+                    .add_enabled(
+                        !doc.dirty() && !doc.loading && !rename_applying,
+                        egui::Button::new("Reload"),
+                    )
                     .on_disabled_hover_text("Unsaved changes are kept");
                 if reload.clicked() {
                     doc.load_error = None;
@@ -817,6 +871,57 @@ impl App {
                     doc.doc = None;
                     ui.memory_mut(|memory| memory.request_focus(file_focus));
                 }
+                if ui
+                    .add_enabled(
+                        native_lsp::language_id(language).is_some(),
+                        egui::Button::new("References"),
+                    )
+                    .on_hover_text("Find references to the symbol at the cursor")
+                    .on_disabled_hover_text(
+                        "Language server actions are available for Rust and Python files",
+                    )
+                    .clicked()
+                {
+                    let cursor = doc.engine.cursor();
+                    let row = doc
+                        .doc
+                        .as_ref()
+                        .map(|live| live.line_text(cursor.line))
+                        .unwrap_or_default();
+                    references_at = Some(native_lsp::Position {
+                        line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
+                        character: native_lsp::char_col_to_utf16(&row, cursor.col),
+                    });
+                    ui.memory_mut(|memory| memory.request_focus(file_focus));
+                }
+                if ui
+                    .small_button(if pinned { "Unbookmark" } else { "Bookmark" })
+                    .clicked()
+                {
+                    toggle_pin = true;
+                    ui.memory_mut(|memory| memory.request_focus(file_focus));
+                }
+                ui.menu_button("Recent files", |ui| {
+                    if recent_files.is_empty() {
+                        ui.weak("No other recent files in this project");
+                    }
+                    for item in &recent_files {
+                        let name = item.file_name().unwrap_or_default().to_string_lossy();
+                        let marker = if pinned_files.contains(item) {
+                            "◆ "
+                        } else {
+                            ""
+                        };
+                        if ui
+                            .button(format!("{marker}{name}"))
+                            .on_hover_text(item.display().to_string())
+                            .clicked()
+                        {
+                            recent_open = Some(item.clone());
+                            ui.close();
+                        }
+                    }
+                });
             });
             if let Some(error) = doc.save_error.clone() {
                 ui.horizontal(|ui| {
@@ -853,6 +958,7 @@ impl App {
                 &mut doc.engine,
                 &SourceOptions {
                     vim,
+                    read_only: rename_applying,
                     diagnostics: marks,
                     ..SourceOptions::default()
                 },
@@ -862,6 +968,15 @@ impl App {
             );
             #[cfg(feature = "test-support")]
             crate::diagnostics::record(ui.ctx(), "native-file", outcome.content_rect);
+            #[cfg(feature = "test-support")]
+            if let Some(rect) = outcome.rename_action_rect {
+                crate::diagnostics::record(ui.ctx(), "native-rename-action", rect);
+            }
+            #[cfg(feature = "test-support")]
+            if let Some(rect) = outcome.hover_action_rect {
+                crate::diagnostics::record(ui.ctx(), "native-hover-action", rect);
+            }
+            activated_editor = outcome.activated;
             for effect in outcome.effects {
                 match effect {
                     Effect::Save => {
@@ -904,6 +1019,9 @@ impl App {
                     Effect::TabNew => {
                         splits.push(NativeSplit::NewTab);
                     }
+                    Effect::OpenFilePicker => {
+                        open_file_picker = true;
+                    }
                     Effect::Hover => {
                         let cursor = doc.engine.cursor();
                         let row = doc
@@ -927,6 +1045,30 @@ impl App {
                             .map(|live| live.line_text(cursor.line))
                             .unwrap_or_default();
                         goto_at = Some(native_lsp::Position {
+                            line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
+                            character: native_lsp::char_col_to_utf16(&row, cursor.col),
+                        });
+                    }
+                    Effect::FindReferences => {
+                        let cursor = doc.engine.cursor();
+                        let row = doc
+                            .doc
+                            .as_ref()
+                            .map(|live| live.line_text(cursor.line))
+                            .unwrap_or_default();
+                        references_at = Some(native_lsp::Position {
+                            line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
+                            character: native_lsp::char_col_to_utf16(&row, cursor.col),
+                        });
+                    }
+                    Effect::RenameSymbol => {
+                        let cursor = doc.engine.cursor();
+                        let row = doc
+                            .doc
+                            .as_ref()
+                            .map(|live| live.line_text(cursor.line))
+                            .unwrap_or_default();
+                        rename_at = Some(native_lsp::Position {
                             line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
                             character: native_lsp::char_col_to_utf16(&row, cursor.col),
                         });
@@ -983,6 +1125,36 @@ impl App {
             ));
             return;
         }
+        if activated_editor {
+            self.follow_focus_tab(Some(Tab::NativeEditor {
+                path: path.to_owned(),
+            }));
+        }
+        if open_file_picker {
+            self.open_path = true;
+        }
+        if toggle_pin {
+            if pinned {
+                self.preferences.pinned_native_files.remove(path);
+            } else {
+                self.preferences.pinned_native_files.insert(path.to_owned());
+            }
+        }
+        if let Some(path_to_open) = recent_open
+            && let Some(uri) = native_lsp::file_uri(&path_to_open)
+        {
+            let at = native_lsp::Position {
+                line: 0,
+                character: 0,
+            };
+            self.pending_goto.push(lsp_manager::GotoJump {
+                from: path.to_owned(),
+                targets: vec![native_lsp::GotoTarget {
+                    uri: uri.to_string(),
+                    range: native_lsp::Range { start: at, end: at },
+                }],
+            });
+        }
         // Language-server sync for the visible buffer: clone the text
         // only when the manager actually wants it.
         if let Some(revision) = self
@@ -1005,6 +1177,16 @@ impl App {
         if let Some(position) = goto_at {
             self.lsp.request_definition(path, position);
         }
+        if let Some(position) = references_at {
+            self.native_references = None;
+            self.lsp.request_references(path, position);
+        }
+        if let Some(position) = rename_at {
+            self.begin_native_rename(path, project, position);
+        }
+        if let Some(results) = self.lsp.take_references() {
+            self.native_references = Some(results);
+        }
         // Finished jumps queue until the workspace is checked back in:
         // this view renders while it is checked out, so opening the
         // target now would miss its project and drop the jump.
@@ -1012,6 +1194,7 @@ impl App {
             self.pending_goto.push(jump);
         }
         self.show_hover_popup(ui, path);
+        self.show_references_popup(ui, path);
         if defer_close_after_save {
             self.native_close_after_save = Some(path.to_owned());
             self.native_close_after_save_issuer = wq_issuer.map(CloseIssuer::deferred);
@@ -1088,7 +1271,7 @@ impl App {
         let Some(cursor) = cursor else {
             return;
         };
-        let Some(text) = self.lsp.hover_popup(path, (cursor.line, cursor.col)) else {
+        let Some((text, markdown)) = self.lsp.hover_popup(path, (cursor.line, cursor.col)) else {
             return;
         };
         let mut open = true;
@@ -1097,10 +1280,74 @@ impl App {
             .open(&mut open)
             .collapsible(false)
             .show(ui.ctx(), |ui| {
-                ui.monospace(&text);
+                egui::ScrollArea::vertical()
+                    .max_height(500.0)
+                    .show(ui, |ui| {
+                        ui.set_max_width(700.0);
+                        if markdown {
+                            egui_commonmark::CommonMarkViewer::new()
+                                .explicit_image_uri_scheme(true)
+                                .show(ui, &mut self.native_hover_markdown_cache, &text);
+                        } else {
+                            ui.monospace(&text);
+                        }
+                    });
             });
         if !open {
             self.lsp.close_hover();
+        }
+    }
+
+    fn show_references_popup(&mut self, ui: &mut egui::Ui, path: &Path) {
+        let Some(results) = self
+            .native_references
+            .as_ref()
+            .filter(|results| results.from == path)
+        else {
+            return;
+        };
+        let mut open = true;
+        let mut selected = None;
+        self.popups
+            .window(ui.ctx(), "References")
+            .open(&mut open)
+            .collapsible(false)
+            .show(ui.ctx(), |ui| {
+                if results.targets.is_empty() {
+                    ui.weak("No references found.");
+                }
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        for target in &results.targets {
+                            let label = native_lsp::uri_to_path(&target.uri).map_or_else(
+                                || target.uri.clone(),
+                                |path| path.display().to_string(),
+                            );
+                            if ui
+                                .selectable_label(
+                                    false,
+                                    format!(
+                                        "{label}:{}",
+                                        target.range.start.line.saturating_add(1)
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                selected = Some(target.clone());
+                            }
+                        }
+                    });
+            });
+        if let Some(target) = selected {
+            self.pending_goto.push(lsp_manager::GotoJump {
+                from: path.to_owned(),
+                targets: vec![target],
+            });
+            open = false;
+        }
+        if !open {
+            self.native_references = None;
         }
     }
 

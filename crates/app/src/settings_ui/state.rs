@@ -60,7 +60,7 @@ impl SettingsSection {
         }
     }
 
-    pub(super) fn keywords(self) -> &'static str {
+    pub(crate) fn keywords(self) -> &'static str {
         match self {
             Self::Appearance => "theme accent density color hex font",
             Self::Terminal => {

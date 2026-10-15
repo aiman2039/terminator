@@ -239,6 +239,35 @@ mod tests {
     }
 
     #[test]
+    fn javascript_config_has_keyword_and_string_colors() {
+        let lines = highlight_text(
+            Language::JavaScript,
+            "import js from \"@eslint/js\";\nconst value = 42;",
+            true,
+        )
+        .expect("JavaScript highlights");
+        let mut colors: Vec<[u8; 3]> = lines
+            .iter()
+            .flat_map(|line| line.iter().map(|span| span.color))
+            .collect();
+        colors.sort_unstable();
+        colors.dedup();
+        assert!(
+            colors.len() > 1,
+            "JavaScript painted in one color: {lines:?}"
+        );
+        let color_at = |line: usize, column: usize| {
+            lines[line]
+                .iter()
+                .find(|span| span.start <= column && column < span.end)
+                .map(|span| span.color)
+                .expect("colored position")
+        };
+        assert_ne!(color_at(0, 0), color_at(0, 7), "import keyword is plain");
+        assert_ne!(color_at(0, 16), color_at(0, 7), "module string is plain");
+    }
+
+    #[test]
     fn spans_partition_the_whole_line() {
         let lines = highlight_text(Language::Rust, "let x = 1;", true).expect("rust highlights");
         let mut col = 0;

@@ -332,6 +332,14 @@ impl App {
         self.state = state;
         self.reconcile_presentations();
         self.migrate_attention();
+        if initial && self.preferences.ide_mode {
+            // First state load under IDE layout (the default for fresh
+            // preferences): main-dock shells belong in the terminal strip.
+            // Later loads must not re-move shells the user dragged out.
+            self.move_shells_to_strip();
+            self.note_focus_baselines();
+            self.save_layouts();
+        }
 
         if self.preferences_writable
             && !self.preferences.typography_migrated

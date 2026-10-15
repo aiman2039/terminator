@@ -24,6 +24,20 @@ pub fn color(value: &str) -> Color32 {
     let [r, g, b] = rgb(value).unwrap_or([209, 211, 217]);
     Color32::from_rgb(r, g, b)
 }
+
+/// `JetBrains` New UI geometry: inset rounded panels, softer widgets/menus.
+pub const PANEL_RADIUS: u8 = 10;
+pub const WIDGET_RADIUS: u8 = 6;
+pub const MENU_RADIUS: u8 = 10;
+
+/// Flush panel: surface fill and a hairline edge, no gap between sections.
+/// Rounding lives on widgets, menus, and popups, not on abutting panels.
+pub fn panel_frame(theme: &AppearanceConfig) -> egui::Frame {
+    egui::Frame::new()
+        .fill(color(&theme.surface))
+        .stroke(egui::Stroke::new(theme.border_width, color(&theme.border)))
+        .inner_margin(egui::Margin::same(8))
+}
 pub fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     for (name, bytes, family) in [
@@ -130,7 +144,7 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
     style.visuals.selection.bg_fill = color(&theme.selection);
     style.visuals.selection.stroke = egui::Stroke::new(1.0, color(&theme.accent));
     style.visuals.window_stroke = egui::Stroke::new(theme.border_width, color(&theme.border));
-    style.visuals.window_corner_radius = egui::CornerRadius::same(3);
+    style.visuals.window_corner_radius = egui::CornerRadius::same(PANEL_RADIUS);
     for widget in [
         &mut style.visuals.widgets.noninteractive,
         &mut style.visuals.widgets.inactive,
@@ -142,15 +156,20 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
         widget.weak_bg_fill = color(&theme.surface);
         widget.bg_stroke = egui::Stroke::new(theme.border_width, color(&theme.border));
         widget.fg_stroke = egui::Stroke::new(1.0, color(&theme.text));
-        widget.corner_radius = egui::CornerRadius::same(3);
+        widget.corner_radius = egui::CornerRadius::same(WIDGET_RADIUS);
     }
     style.visuals.widgets.hovered.bg_fill = color(&theme.hover);
     style.visuals.widgets.hovered.weak_bg_fill = color(&theme.hover);
     style.visuals.widgets.active.bg_stroke.color = color(&theme.accent);
-    style.visuals.window_shadow = egui::epaint::Shadow::NONE;
-    style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+    style.visuals.window_shadow = egui::epaint::Shadow {
+        offset: [0, 8],
+        blur: 24,
+        spread: 0,
+        color: Color32::from_black_alpha(80),
+    };
+    style.visuals.popup_shadow = style.visuals.window_shadow;
     style.visuals.indent_has_left_vline = false;
-    style.visuals.menu_corner_radius = egui::CornerRadius::same(4);
+    style.visuals.menu_corner_radius = egui::CornerRadius::same(MENU_RADIUS);
     // Shared by every app-owned ScrollArea: overlay handles stay hidden at rest.
     style.spacing.scroll = egui::style::ScrollStyle {
         floating: true,
