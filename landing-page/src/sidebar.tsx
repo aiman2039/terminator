@@ -3,11 +3,9 @@ import { useMemo, useState } from "react";
 import { Icon } from "./icons";
 import {
   agentCards,
-  fileTree,
   fileIcon,
   gitGroups,
   historyGroups,
-  sessions,
   systemInfo,
   type AgentCard,
   type FileNode,
@@ -18,12 +16,14 @@ import {
 /* ============================ Left projects tree ============================ */
 export function ProjectsTree({
   projects,
+  sessions,
   selected,
   onSelect,
   onOpenSession,
   onNewTerminal,
 }: {
   projects: Project[];
+  sessions: Session[];
   selected: string;
   onSelect: (id: string) => void;
   onOpenSession: (id: string) => void;
@@ -108,6 +108,9 @@ export function ProjectsTree({
           <Icon name="Plus" size={14} /> new terminal
         </button>
       </div>
+      <div className="side-foot">
+        {sessions.filter((s) => s.visible).length} live sessions
+      </div>
     </>
   );
 }
@@ -116,9 +119,11 @@ export function ProjectsTree({
 export function ExplorerPanel({
   onOpenFile,
   root,
+  tree,
 }: {
   onOpenFile: (f: FileNode) => void;
   root: string;
+  tree: FileNode[];
 }) {
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<"names" | "contents">("names");
@@ -169,7 +174,7 @@ export function ExplorerPanel({
       }
     }
   };
-  walk(fileTree, 0);
+  walk(tree, 0);
 
   return (
     <>
