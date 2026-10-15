@@ -901,12 +901,12 @@ mod tests {
             app.state.projects.push(Project {
                 id: id.into(),
                 name: id.into(),
-                path: PathBuf::from(format!("/{id}")),
+                path: dir.path().join(id),
                 layout: serde_json::Value::Null,
             });
         }
         app.selected = Some("a".into());
-        let file = PathBuf::from("/b/src/main.rs");
+        let file = dir.path().join("b/src/main.rs");
         app.run_palette(&ctx, PaletteItem::File(file.clone()));
         assert_eq!(app.selected.as_deref(), Some("b"));
         app.selected = Some("a".into());
