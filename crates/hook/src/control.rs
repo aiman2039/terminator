@@ -352,6 +352,18 @@ pub fn run(args: &[String]) -> Result<()> {
                 },
             )?;
             stream.flush()?;
+            // Read the frames the daemon streams back before closing. A close
+            // that leaves unread output in the socket resets the connection,
+            // and a reset discards the input frames the daemon has not read
+            // yet, so the text would silently never reach the terminal. Five
+            // 100 ms reads bound the wait to half a second.
+            stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+            for _ in 0..5 {
+                match read_frame::<Response>(&mut stream) {
+                    Ok(Response::End) | Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
             json!({"sent":true})
         }
         Control::Read { session, screen } => {

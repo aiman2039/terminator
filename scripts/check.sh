@@ -36,7 +36,9 @@ case "${1:-all}" in
     test)
         need_plugin nextest
         cargo nextest run --workspace --all-features --locked --profile ci
-        cargo test --workspace --all-features --locked --doc
+        # No `cargo test --doc`: the workspace has no doc examples, so the step
+        # only compiled rustdoc test harnesses for an empty run. `cargo test`
+        # (scripts/test.sh) and `cargo test --doc` still cover them on demand.
         ;;
     windows-check) windows_toolchain cargo check --workspace --target x86_64-pc-windows-msvc --locked ;;
     windows-clippy) windows_toolchain cargo clippy --workspace --all-targets --all-features --target x86_64-pc-windows-msvc --locked -- -D warnings ;;

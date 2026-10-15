@@ -366,8 +366,9 @@ pub(crate) fn control(o: &Options) -> Result<()> {
     image::RgbaImage::from_pixel(24, 12, image::Rgba([70, 140, 210, 255]))
         .save(root.join("ctl.png"))?;
     let actions = json!([]);
-    // The window must outlive the CLI round trips below: a control request
-    // accepted while the window closes never reaches the daemon.
+    // The window must outlive the GUI round trips: a control request accepted
+    // while the window closes never reaches the daemon. The delivery check at
+    // the end talks to the daemon only, so it may outlive the window.
     capture(&h, o, "control", actions, 12000, |_| {
         let paths = Paths::at(h.root.clone());
         h.wait(|_| ui_control::rpc(&paths, Request::Ping).is_ok(), 15)?;
@@ -397,22 +398,6 @@ pub(crate) fn control(o: &Options) -> Result<()> {
             sessions(&h.state()?).len() == 7,
             "CLI split created wrong number of sessions"
         );
-        let mut send = h.command("terminator-hook");
-        send.args([
-            "ctl",
-            "send",
-            id(&created),
-            "printf 'GUI_CONTROL_PROOF\\n'",
-            "--enter",
-        ]);
-        output(send)?;
-        h.wait(
-            |_| {
-                h.history(id(&created))
-                    .is_ok_and(|t| t.contains("GUI_CONTROL_PROOF"))
-            },
-            15,
-        )?;
         let mut open = h.command("terminator-hook");
         open.args(["ctl", "open-file", id(&p)])
             .arg(root.join("ctl.png"));
@@ -431,6 +416,50 @@ pub(crate) fn control(o: &Options) -> Result<()> {
         ensure!(
             sessions(&h.state()?).len() == 7,
             "CLI image preview created PTY"
+        );
+        // Delivery is a live stream write, so re-send while the proof is
+        // missing: a frame lost to a reset connection must not fail the gate.
+        // The panes are tiny, so both the echo and the output wrap; compare
+        // the history without whitespace. The send splits the marker across
+        // shell quotes, so the echoed command cannot contain it and only the
+        // command output proves delivery.
+        let mut delivered = false;
+        for _ in 0..3 {
+            let mut send = h.command("terminator-hook");
+            send.args([
+                "ctl",
+                "send",
+                id(&created),
+                "printf 'GUI_'CONTROL_''PROOF\\n'",
+                "--enter",
+            ]);
+            output(send)?;
+            if h.wait(
+                |_| {
+                    h.history(id(&created)).is_ok_and(|text| {
+                        text.split_whitespace()
+                            .collect::<String>()
+                            .contains("GUI_CONTROL_PROOF")
+                    })
+                },
+                5,
+            )
+            .is_ok()
+            {
+                delivered = true;
+                break;
+            }
+        }
+        ensure!(
+            delivered,
+            "CLI send never reached the session: record={:?} history={:?}",
+            h.state()?
+                .get("sessions")
+                .and_then(Value::as_array)
+                .and_then(|sessions| sessions
+                    .iter()
+                    .find(|session| session["id"] == id(&created))),
+            h.history(id(&created)).unwrap_or_default()
         );
         Ok(())
     })?;

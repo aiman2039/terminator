@@ -4495,7 +4495,7 @@ strict workspace Clippy for the host and for `x86_64-pc-windows-msvc`, and the
 xtask test suite passed locally. The running or installed app was not
 replaced.
 
-## Release flow rebuilds and fixture timing (2026-10-15)
+## Release flow rebuilds and controller delivery (2026-10-15)
 
 The host stage compiled the same crates five times per run: `lint` (check),
 `build`, `clippy`, the default-feature binaries, and the test-support binaries,
@@ -4520,16 +4520,32 @@ when nothing had changed.
   without a workspace root.
 - The fixture action runner waits for its pending actions before it takes the
   capture, so a late frame under parallel fixtures cannot drop a scripted
-  action and read as a missing step. `control` gives its window 12 s to outlive
-  its CLI round trips, because a control request accepted while the window
-  closes never reaches the daemon.
+  action and read as a missing step.
+- The `test` step no longer compiles rustdoc test harnesses. The workspace has
+  no doc examples, so `cargo test --workspace --all-features --locked --doc`
+  built seven harnesses and ran zero tests. `cargo test --doc` and
+  `scripts/test.sh` (plain `cargo test`) still cover doc examples on demand.
+- `control` no longer fails on a wrapped proof. The split it creates lands in a
+  tiny pane (16 columns), so both the echoed command and the printed marker
+  wrap mid-word, and the fixture searched the history for the literal marker
+  and timed out after 15 s even though the text arrived. The check now compares
+  the history without whitespace, and the send splits its marker across shell
+  quotes, so the echoed command cannot match and only the command output proves
+  delivery. The fixture also re-sends while its proof is missing. Its window
+  bounds the GUI round trips; the delivery check talks to the daemon only.
+- `ctl send` reads the frames the daemon streams back before it closes the
+  connection, so a close cannot reset the socket with the input frame still
+  unread. The daemon streams this session's output on that connection and never
+  acknowledges an input frame on its own.
 
 Validation: `cargo xtask release --check-only --skip-windows --skip-linux`
 compiled 51.0 s of work on the first run and 0.4 s of compiler checks on a retry
 of the same tree (no `Compiling` or `Checking` line). Unit tests
 `a_retry_of_the_same_tree_reuses_the_exported_source` and
-`a_changed_export_is_not_reused` cover the reuse and the fallback. `cargo xtask
-gui all` passed repeatedly against the release target directory. Formatting,
+`a_changed_export_is_not_reused` cover the reuse and the fallback. The Linux
+stage reproduced the controller failure before the fix and passed after it;
+`control` then passed 66 consecutive runs with six parallel fixtures, and
+`cargo xtask gui all` passed against the release target directory. Formatting,
 strict workspace Clippy, and the xtask suite passed locally. The Windows
 runner still extracts each run into a fresh remote directory, so its path
 dependencies rebuild every run.

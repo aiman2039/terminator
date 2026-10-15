@@ -191,7 +191,10 @@ another window on macOS. This is not a measurement of the installed application.
 ## Workspace tests
 
 `sh scripts/check.sh test` runs unit and integration test binaries through
-nextest, then runs doctests with Cargo. CI and Docker install prebuilt nextest
+nextest. The workspace has no doc examples, so the step no longer compiles and
+runs rustdoc test harnesses for an empty run; `cargo test --doc` covers doc
+examples on demand, and `sh scripts/test.sh` runs plain `cargo test`, which
+includes doctests. CI and Docker install prebuilt nextest
 0.9.140. Install the same version locally with
 `cargo install cargo-nextest --version 0.9.140 --locked`, or use the official
 prebuilt binaries. Nextest runs tests across crates in parallel; it does not
