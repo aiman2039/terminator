@@ -4549,3 +4549,23 @@ stage reproduced the controller failure before the fix and passed after it;
 strict workspace Clippy, and the xtask suite passed locally. The Windows
 runner still extracts each run into a fresh remote directory, so its path
 dependencies rebuild every run.
+
+## Release cache scope and parallel builds (2026-10-15)
+
+Release run `38716932282` started the package jobs only after Windows checks
+finished. The Windows checks and Linux/macOS package jobs each logged `No cache
+found`. The Linux x86-64 package job spent about 6 minutes 38 seconds in the
+release Cargo build. Cache inventory was 10.4 GB against a 10 GB repository
+limit, with older release caches under tag refs and current caches under
+`master`.
+
+The release helper now dispatches on `master` with the already pushed tag as an
+input; preparation rejects a tag that differs from the selected commit. Package
+jobs and checks start after preparation, while draft upload still requires
+checks, all native builds, and macOS assembly. Only the checks job saves the
+shared development cache; E2E and native GUI jobs restore it. Failed checks can
+save compiled dependencies, and Rust cache writes occur only on `master`.
+
+Local validation: 42 focused `xtask` release tests, `cargo fmt --all --check`,
+`git diff --check`, and YAML parsing plus release dependency graph assertions
+passed. No hosted run with these workflow changes has completed yet.

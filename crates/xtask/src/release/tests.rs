@@ -257,7 +257,7 @@ fn a_changed_export_is_not_reused() {
 }
 
 #[test]
-fn successful_release_pushes_tested_tree_and_dispatches_tag() {
+fn successful_release_pushes_tested_tree_and_dispatches_master() {
     let mut fixture = Fixture::new();
     fixture.options.check_only = false;
     fixture.execute(|_, _| Ok(())).unwrap();
@@ -269,7 +269,16 @@ fn successful_release_pushes_tested_tree_and_dispatches_tag() {
     );
     assert_eq!(
         fixture.runner.commands.lock().unwrap().last().unwrap(),
-        &["gh", "workflow", "run", "release.yaml", "--ref", "v0.2.0"]
+        &[
+            "gh",
+            "workflow",
+            "run",
+            "release.yaml",
+            "--ref",
+            "master",
+            "-f",
+            "tag=v0.2.0"
+        ]
     );
 }
 
@@ -306,7 +315,10 @@ fn dispatch_failure_reports_exact_retry_after_successful_push() {
     fixture.options.check_only = false;
     fixture.runner.fail_dispatch = true;
     let error = fixture.execute(|_, _| Ok(())).unwrap_err();
-    assert!(format!("{error:#}").contains("Retry only: gh workflow run release.yaml --ref v0.2.0"));
+    assert!(
+        format!("{error:#}")
+            .contains("Retry only: gh workflow run release.yaml --ref master -f tag=v0.2.0")
+    );
     assert_eq!(
         fixture.remote_head(),
         git(&fixture.remote, &["rev-parse", "refs/tags/v0.2.0"]).unwrap()

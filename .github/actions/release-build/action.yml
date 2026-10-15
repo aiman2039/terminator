@@ -48,6 +48,7 @@ runs:
         shared-key: release-${{ inputs.runner-label }}-${{ inputs.target }}
         cache-bin: false
         cache-on-failure: true
+        save-if: ${{ github.ref == 'refs/heads/master' }}
     - name: Remove legacy cached package output
       shell: bash
       run: |

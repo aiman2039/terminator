@@ -99,7 +99,8 @@ implementation, first confirm no release process is running, then remove
 that directory with `rmdir .artifacts/release.lock` once.
 A commit or push failure leaves local files, commits, and tags for inspection.
 If dispatch fails after a successful push, retry only the printed
-`gh workflow run release.yaml --ref vVERSION` command; do not bump again.
+`gh workflow run release.yaml --ref master -f tag=vVERSION` command; do not bump again.
+If master has moved, select `vVERSION` as the ref and leave the tag input empty.
 GitHub Actions retains its final checks and hosted security/signing steps.
 
 The release commands are implemented in `crates/xtask/src/release/`:
@@ -143,7 +144,8 @@ lockfile and do not rewrite files. Pre-commit uses the same `all` path; install
 Existing non-cargo-husky hooks are preserved. CI skips hook installation and runs
 all checks plus tests on native macOS, Linux, and Windows through the reusable
 CI workflow called by Release. Native `focus-editor-close` and `file-close`
-fixtures must pass on macOS and Linux before release builds. The CI wrapper
+fixtures must pass on macOS and Linux before release assets are uploaded.
+The CI wrapper
 (`bash scripts/native-gui-ci.sh CASE`) keeps logs and screenshots under
 `$RUNNER_TEMP/terminator-native-gui`; CI uploads them even on failure. Linux uses
 Xvfb and Openbox, and both runners explicitly select Glow. Local checks, CI, and releases use Rust 1.97.1, pinned locally by

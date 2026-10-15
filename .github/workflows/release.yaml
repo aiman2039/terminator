@@ -2,6 +2,11 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag at the selected master revision
+        required: false
+        type: string
 
 # Manual runs create v<workspace version> at the selected revision. The build
 # stays in this run because tags created with GITHUB_TOKEN do not trigger runs.
@@ -36,14 +41,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name || github.sha }}
+          ref: ${{ inputs.tag || github.event.release.tag_name || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Validate version and resolve immutable revision
         id: version
         env:
           EVENT_NAME: ${{ github.event_name }}
-          EVENT_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+          EVENT_TAG: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+          REQUESTED_TAG: ${{ inputs.tag }}
           REF_TYPE: ${{ github.ref_type }}
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -52,11 +58,15 @@ jobs:
           tag="v${version}"
           git check-ref-format "refs/tags/$tag"
           sha="$(git rev-parse HEAD)"
+          if [[ -n "$REQUESTED_TAG" && "$sha" != "$GITHUB_SHA" ]]; then
+            echo "::error::Requested tag must point to the selected workflow commit. Retry on the tag ref if master has moved."
+            exit 1
+          fi
           if [[ "$EVENT_NAME" == push && "$REF_TYPE" == branch ]]; then
             echo "sha=$sha" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [[ "$EVENT_NAME" != workflow_dispatch && "$EVENT_TAG" != "$tag" ]]; then
+          if [[ "$REF_TYPE" == tag || -n "$REQUESTED_TAG" || "$EVENT_NAME" != workflow_dispatch ]] && [[ "$EVENT_TAG" != "$tag" ]]; then
             echo "::error::Tag $EVENT_TAG must match workspace version $tag"
             exit 1
           fi
@@ -102,7 +112,7 @@ jobs:
       security-events: write
 
   build-macos:
-    needs: [prepare, checks]
+    needs: prepare
     name: Build aarch64-apple-darwin
     runs-on: macos-15
     timeout-minutes: 90
@@ -119,7 +129,7 @@ jobs:
           tag: ${{ needs.prepare.outputs.tag }}
 
   build-linux:
-    needs: [prepare, checks]
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -144,7 +154,7 @@ jobs:
           tag: ${{ needs.prepare.outputs.tag }}
 
   build-windows:
-    needs: [prepare, checks]
+    needs: prepare
     name: Build x86_64-pc-windows-msvc
     runs-on: windows-2025
     timeout-minutes: 90
@@ -366,7 +376,8 @@ jobs:
           retention-days: 7
 
   upload-draft:
-    needs: [prepare, build-linux, build-windows, assemble-macos]
+    # Build in parallel with validation, but never upload unvalidated assets.
+    needs: [prepare, checks, build-linux, build-windows, assemble-macos]
     if: needs.prepare.outputs.tag != ''
     runs-on: ubuntu-24.04
     concurrency:

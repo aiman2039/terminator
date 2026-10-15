@@ -69,10 +69,12 @@ jobs:
           tool: cargo-nextest@0.9.140
       - uses: Swatinem/rust-cache@v2
         with:
-          # Shared with the e2e and native-gui jobs: same OS, same dev
-          # profile, so dependency artifacts are reused across jobs.
+          # Only this job saves the shared dev cache. Faster fixture jobs
+          # restore it but must not save an incomplete cache first.
           shared-key: dev-${{ matrix.os }}
           cache-bin: false
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - name: Formatting
         run: sh scripts/check.sh fmt
       - name: Compiler checks
@@ -141,6 +143,7 @@ jobs:
           # Shared with the checks and native-gui jobs (same dev profile).
           shared-key: dev-${{ matrix.os }}
           cache-bin: false
+          save-if: false
       # cargo test does not refresh target/debug binaries. xtask launches those.
       - name: Build E2E binaries together
         run: cargo build --locked -p terminator-daemon -p terminator-hook -p xtask --bins
@@ -207,13 +210,14 @@ jobs:
           # Shared with the checks and e2e jobs (same dev profile).
           shared-key: dev-${{ matrix.os }}
           cache-bin: false
+          save-if: false
       - name: Build native fixture binaries
         id: native_build
         run: |
           mkdir -p "$RUNNER_TEMP/terminator-native-gui"
           cargo build --workspace --bins --examples --features terminator/test-support --locked \
             2>&1 | tee "$RUNNER_TEMP/terminator-native-gui/build.log"
-      # Release builds depend on this reusable workflow. Neither fixture may fail.
+      # Release asset upload depends on this reusable workflow. Neither fixture may fail.
       # Try both fixtures after a successful build, even if the first one fails.
       - name: Native focus and new-tab directory
         if: ${{ !cancelled() && steps.native_build.outcome == 'success' }}
@@ -269,6 +273,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: coverage
+          save-if: ${{ github.ref == 'refs/heads/master' }}
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov

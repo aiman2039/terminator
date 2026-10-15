@@ -382,8 +382,20 @@ fn execute(
             &format!("refs/tags/{tag}"),
         ],
     ))?;
-    runner.run(&mut cmd(root, "gh", &["workflow", "run", "release.yaml", "--ref", &tag]))
-        .with_context(|| format!("{tag} was pushed, but workflow dispatch failed. Retry only: gh workflow run release.yaml --ref {tag}"))?;
+    runner.run(&mut cmd(
+        root,
+        "gh",
+        &[
+            "workflow",
+            "run",
+            "release.yaml",
+            "--ref",
+            "master",
+            "-f",
+            &format!("tag={tag}"),
+        ],
+    ))
+    .with_context(|| format!("{tag} was pushed, but workflow dispatch failed. Retry only: gh workflow run release.yaml --ref master -f tag={tag} (if master has moved, use --ref {tag} without the tag input)"))?;
     println!(
         "Started Release for {tag} ({revision}). Logs: {}",
         artifacts.display()

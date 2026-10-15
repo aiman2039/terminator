@@ -22,8 +22,9 @@ Neovim is not bundled; install Neovim 0.10+ for CodeDiff reviews.
 ## Build dependencies and caches
 
 Separate macOS, Linux, and Windows jobs use `.github/actions/release-build` and run
-the four native builds concurrently. macOS assembly depends only on the Apple
-Silicon job; final draft upload still requires Linux and macOS to succeed. That
+the four native builds concurrently with CI checks after tag preparation. macOS
+assembly depends only on the Apple Silicon job; final draft upload requires all
+native builds and CI checks to succeed. That
 macOS job also uploads its development `xtask` binary in a tar archive to retain
 executable permissions. Assembly and DMG creation run that exact same-revision
 tool, with no additional Cargo/toolchain setup or assembly compiler cache.
@@ -31,7 +32,12 @@ tool, with no additional Cargo/toolchain setup or assembly compiler cache.
 The packager builds only `terminator`, `terminator-daemon`, and `terminator-hook`
 and their dependencies. It does not compile a second optimized `xtask` binary.
 Native builds retain their existing runner/architecture-specific Rust cache keys
-for registry and compiler reuse. The legacy `target/package` directory is removed
+for registry and compiler reuse. The release helper dispatches on `master` with
+the exact tag as an input so successive releases share the default-branch cache
+scope. The workflow rejects that input if the tag differs from the selected
+workflow commit. Only checks, coverage, and native package jobs save Rust caches on master;
+fixture jobs restore the checks cache without racing to save a smaller copy.
+The legacy `target/package` directory is removed
 after restore in the disposable runner checkout. All new package, inspection and
 slice outputs live under `RUNNER_TEMP`, outside the compiler cache. Existing
 assembly destinations remain protected against overwriting.
@@ -49,15 +55,17 @@ Commit the intended `[workspace.package].version` in `Cargo.toml` and update
 `Cargo.lock` as needed. Merge the workflow onto the default branch before using
 the Actions manual-run UI.
 
-- **Actions → Release → Run workflow:** select the intended branch or tag. The
-  workflow creates `v<workspace version>` at that revision if absent, and builds
-  it in the same run. An existing tag must point to that exact commit.
+- **Actions → Release → Run workflow:** select `master`. The workflow creates
+  `v<workspace version>` at that revision if absent, and builds it in the same
+  run. To rebuild an existing tag at the current master commit, enter the tag
+  input. An existing tag must point to that exact commit.
 
 The workflow runs only through this manual trigger. Branch pushes, tag pushes,
 and publishing a GitHub release do not start it.
 
 All builds use the resolved commit SHA. Version mismatches fail before building.
-To retry an older release manually, select its tag rather than the current branch.
+To retry an older release after master has moved, select its tag as the workflow
+ref and leave the tag input empty.
 The workflow never moves existing tags. Bump the version for a new revision.
 
 The upload job runs only after all packages and macOS assembly pass their checks.
