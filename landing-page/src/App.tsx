@@ -14,11 +14,13 @@ import {
   README_MD,
   REPO,
   firstLeaf,
+  initialGroups,
   leaf,
   nid,
   projects,
   removePane,
   sessions as seedSessions,
+  treesByProject,
   type FileNode,
   type Group,
   type Layout,
@@ -79,30 +81,33 @@ let termSeq = 10;
 export default function App() {
   const [sessions, setSessions] = useState<Session[]>(seedSessions);
   const [selectedProject, setSelectedProject] = useState("atlas-web");
-  const [groups, setGroups] = useState<Group[]>(() => [
-    {
-      id: "grp-tour",
-      layout: {
-        type: "split",
-        id: "split-tour",
-        dir: "row",
-        children: [leaf({ kind: "tour" }, "lf-tour"), leaf({ kind: "term", sid: "s-api" }, "lf-tour-term")],
-      },
-      activeLeaf: "lf-tour",
-    },
-    {
-      id: "grp-dev",
-      layout: {
-        type: "split",
-        id: "split-dev",
-        dir: "row",
-        children: [leaf({ kind: "term", sid: "s-dev" }, "lf-dev"), leaf({ kind: "term", sid: "s-tests" }, "lf-tests")],
-      },
-      activeLeaf: "lf-dev",
-    },
-    { id: "grp-readme", layout: leaf({ kind: "markdown", path: "README.md" }, "lf-readme"), activeLeaf: "lf-readme" },
-  ]);
-  const [activeGroup, setActiveGroup] = useState("grp-tour");
+  /* Each project owns its tabs and split layout, preserved across switches. */
+  const [workspaces, setWorkspaces] = useState<Record<string, { groups: Group[]; active: string }>>(() =>
+    Object.fromEntries(
+      projects.map((p) => {
+        const gs = initialGroups(p.id);
+        return [p.id, { groups: gs, active: gs[0]?.id ?? "" }];
+      }),
+    ),
+  );
+  const ws = workspaces[selectedProject] ?? { groups: initialGroups(selectedProject), active: "" };
+  const groups = ws.groups;
+  const activeGroup = ws.active;
+  const setActiveGroup = (id: string) =>
+    setWorkspaces((w) => ({ ...w, [selectedProject]: { ...w[selectedProject], active: id } }));
+  const setGroups = (u: Group[] | ((gs: Group[]) => Group[]), active?: string) =>
+    setWorkspaces((w) => {
+      const cur = w[selectedProject];
+      if (!cur) return w;
+      const next = typeof u === "function" ? (u as (gs: Group[]) => Group[])(cur.groups) : u;
+      return {
+        ...w,
+        [selectedProject]: {
+          groups: next,
+          active: active ?? (next.some((g) => g.id === cur.active) ? cur.active : (next[0]?.id ?? cur.active)),
+        },
+      };
+    });
   const [central, setCentral] = useState<Central>("dock");
   const [tool, setTool] = useState<ToolId>("explorer");
   const [leftVisible, setLeftVisible] = useState(true);
@@ -229,17 +234,28 @@ export default function App() {
 
   const goSession = (sid: string) => {
     const s = sessions.find((x) => x.id === sid);
-    if (s) setSelectedProject(s.projectId);
-    const owner = groups.find((g) =>
-      collectLeaves(g.layout).some((l) => l.content.kind === "term" && l.content.sid === sid),
-    );
-    if (owner) {
-      setActiveGroup(owner.id);
+    const pid = s?.projectId ?? selectedProject;
+    if (s) setSelectedProject(pid);
+    setWorkspaces((w) => {
+      const cur = w[pid];
+      if (!cur) return w;
+      const owner = cur.groups.find((g) =>
+        collectLeaves(g.layout).some((l) => l.content.kind === "term" && l.content.sid === sid),
+      );
+      if (!owner) {
+        const lf = leaf({ kind: "term", sid });
+        const id = nid("grp");
+        return { ...w, [pid]: { groups: [...cur.groups, { id, layout: lf, activeLeaf: lf.id }], active: id } };
+      }
       const l = collectLeaves(owner.layout).find((x) => x.content.kind === "term" && x.content.sid === sid);
-      if (l) setLayout(owner.id, owner.layout, l.id);
-    } else {
-      addGroup({ kind: "term", sid });
-    }
+      return {
+        ...w,
+        [pid]: {
+          groups: cur.groups.map((g) => (g.id === owner.id && l ? { ...g, activeLeaf: l.id } : g)),
+          active: owner.id,
+        },
+      };
+    });
     setCentral("dock");
   };
 
@@ -322,9 +338,17 @@ export default function App() {
     } else if (h === "palette") {
       setPaletteOpen(true);
     } else if (h === "readme") {
-      setActiveGroup("grp-readme");
+      setActiveGroup("grp-web-readme");
     } else if (h === "dev") {
-      setActiveGroup("grp-dev");
+      setActiveGroup("grp-web-dev");
+    } else if (h === "agents-demo") {
+      setSelectedProject("atlas-api");
+      setTool("agents");
+      setRightVisible(true);
+    } else if (h === "notes") {
+      setSelectedProject("field-notes");
+    } else if (h === "soundlab") {
+      setSelectedProject("soundlab");
     } else if (h === "diff") {
       setActiveGroup("grp-diff");
       setGroups((gs) =>
@@ -464,6 +488,60 @@ export default function App() {
     ]);
   };
 
+  /* --------------------------- guided tour --------------------------- */
+  const tourAction = (action: string) => {
+    switch (action) {
+      case "agents":
+        setSelectedProject("atlas-api");
+        setWorkspaces((w) => ({ ...w, "atlas-api": { ...w["atlas-api"], active: "grp-api-agents" } }));
+        setTool("agents");
+        setRightVisible(true);
+        setCentral("dock");
+        break;
+      case "git":
+        setTool("git");
+        setRightVisible(true);
+        setCentral("dock");
+        break;
+      case "diff":
+        openInNewTab({ kind: "diff", path: "src/app.ts", staged: true });
+        break;
+      case "split":
+        setCentral("dock");
+        splitFocused("row");
+        break;
+      case "palette":
+        setPaletteOpen(true);
+        break;
+      case "player":
+        setSelectedProject("soundlab");
+        setCentral("player");
+        break;
+      case "settings":
+        setCentral("settings");
+        break;
+      case "ide":
+        setIdeMode(true);
+        setCentral("dock");
+        break;
+      case "history":
+        setTool("history");
+        setRightVisible(true);
+        setCentral("dock");
+        break;
+      case "markdown":
+        setSelectedProject("field-notes");
+        setWorkspaces((w) => ({ ...w, "field-notes": { ...w["field-notes"], active: "grp-notes-md" } }));
+        setCentral("dock");
+        break;
+      case "projects":
+        setLeftVisible(true);
+        break;
+      default:
+        break;
+    }
+  };
+
   /* --------------------------- render --------------------------- */
   const renderLeaf = (l: Extract<Layout, { type: "leaf" }>, groupId: string) => {
     const c = l.content;
@@ -523,7 +601,7 @@ export default function App() {
 
     return (
       <section className={`pane${foc ? " foc" : ""}`} onClick={focus}>
-        {c.kind === "tour" && <TourView onClose={onClose} />}
+        {c.kind === "tour" && <TourView onClose={onClose} onAction={tourAction} />}
         {c.kind === "markdown" && <MarkdownView path={c.path} content={openFileContent(c.path)} onClose={onClose} />}
         {c.kind === "diff" && <DiffView path={c.path} staged={c.staged} onClose={onClose} />}
       </section>
@@ -634,6 +712,7 @@ export default function App() {
         <aside className={`sidebar left${leftVisible ? "" : " hidden"}`} style={{ width: LEFT_W }}>
           <ProjectsTree
             projects={projects}
+            sessions={sessions}
             selected={selectedProject}
             onSelect={(id) => { setSelectedProject(id); setCentral("dock"); }}
             onOpenSession={goSession}
@@ -701,7 +780,9 @@ export default function App() {
         </main>
 
         <aside className={`sidebar right${rightVisible ? "" : " hidden"}`} style={{ width: RIGHT_W }}>
-          {tool === "explorer" && <ExplorerPanel root={`~/code/${selectedProject}`} onOpenFile={openFile} />}
+          {tool === "explorer" && (
+            <ExplorerPanel root={`~/code/${selectedProject}`} tree={treesByProject[selectedProject] ?? []} onOpenFile={openFile} />
+          )}
           {tool === "agents" && <AgentsPanel />}
           {tool === "git" && <GitPanel onOpenDiff={(f, staged) => openInNewTab({ kind: "diff", path: f.path, staged })} />}
           {tool === "history" && <HistoryPanel />}

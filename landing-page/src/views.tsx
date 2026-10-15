@@ -3,8 +3,32 @@ import { useEffect, useMemo, useState } from "react";
 import { Icon } from "./icons";
 import { DOWNLOAD, REPO, diffFor } from "./data";
 
-/* ============================ Tour (marketing) ============================ */
-export function TourView({ onClose }: { onClose: () => void }) {
+/* ============================ Tour (guided showcase) ============================ */
+export type TourAction =
+  | "agents"
+  | "git"
+  | "diff"
+  | "split"
+  | "palette"
+  | "player"
+  | "settings"
+  | "ide"
+  | "history"
+  | "markdown"
+  | "projects";
+
+const DEMOS: { action: TourAction; title: string; body: string; cta: string }[] = [
+  { action: "projects", title: "Projects & sessions", body: "Each project in the left sidebar owns its tabs and splits. Switch projects — layouts are preserved.", cta: "Show projects" },
+  { action: "split", title: "Splits & persistent terminals", body: "Terminals live in the daemon. Split this pane, close tabs, come back — sessions keep running.", cta: "Split this pane" },
+  { action: "agents", title: "Agent inbox", body: "Claude Code, Codex, OpenCode, Muse, and Grok hooks report needs-input, permission, done, and failed.", cta: "Open the agent demo" },
+  { action: "diff", title: "Git reviews", body: "Native side-by-side diffs from read-only snapshots: HEAD → index, index → disk. The repo is never mutated.", cta: "Open a diff" },
+  { action: "markdown", title: "Markdown, images & files", body: "Files open in the right viewer: Markdown preview, image preview, browser tab, editor, or the player.", cta: "Open field-notes" },
+  { action: "player", title: "Player & radio", body: "Audio opens in the chrome player — named playlists, shuffle, repeat, equalizer, and internet radio.", cta: "Open the player" },
+  { action: "palette", title: "Command palette", body: "Jump across projects, sessions, files, and settings without touching the mouse.", cta: "Open palette (⌘K)" },
+  { action: "ide", title: "IDE mode", body: "Editor centered with a terminal strip docked below, toggled without losing any session.", cta: "Toggle IDE mode (⌘E)" },
+];
+
+export function TourView({ onClose, onAction }: { onClose: () => void; onAction: (a: TourAction) => void }) {
   return (
     <>
       <div className="md-toolbar">
@@ -34,64 +58,88 @@ export function TourView({ onClose }: { onClose: () => void }) {
             Star on GitHub
           </a>
         </div>
-        <p className="tag">// try it</p>
+        <p className="tag">// try it — every demo below runs in this window</p>
         <p>
-          Click around the chrome. The <strong>left sidebar</strong> lists projects and live sessions,
-          the <strong>right sidebar</strong> is the tool panel (Explorer, Agents, Git, History, Info),
-          and the <strong>terminal</strong> in the next pane is a working demo shell. Press{" "}
+          This page is the app: same chrome, same layout, same shortcuts. The{" "}
+          <strong>left sidebar</strong> lists projects and live sessions, the{" "}
+          <strong>right sidebar</strong> is the tool panel (Explorer, Agents, Git, History, Info), and
+          the <strong>terminal</strong> in the next pane is a working demo shell. Press{" "}
           <span className="kbd">⌘K</span> for the command palette, <span className="kbd">⌘E</span> for
-          IDE mode, <span className="kbd">⌘T</span> for a new terminal tab.
+          IDE mode, <span className="kbd">⌘T</span> for a new terminal tab — or start with a demo:
         </p>
-        <hr />
         <div className="cards">
-          {[
-            ["Persistent sessions", "Close the app; shells and editors keep running in the daemon."],
-            ["Agent inbox", "Needs input, needs permission, done, failed — from real hooks."],
-            ["Git reviews", "Native diffs, read-only snapshots. CodeDiff with Neovim if you want it."],
-            ["Command palette", "Jump across projects, sessions, files, and settings."],
-          ].map(([h, p]) => (
-            <div className="card" key={h}>
-              <h3>{h}</h3>
-              <p>{p}</p>
+          {DEMOS.map((d) => (
+            <div className="card" key={d.action}>
+              <h3>{d.title}</h3>
+              <p>{d.body}</p>
+              <button className="small-btn tour-cta" onClick={() => onAction(d.action)}>
+                {d.cta}
+              </button>
             </div>
           ))}
         </div>
         <h2 id="workspace">One workspace per project</h2>
         <p>
-          Each project owns its tabs and split layouts. Right-click a terminal to split in any
-          direction. Sessions live in a background daemon, so closing the app never kills them.
+          Each project owns its tabs and split layouts. Try it: switch to <strong>atlas-api</strong> or{" "}
+          <strong>field-notes</strong> in the left sidebar, then come back — this layout is exactly as
+          you left it. Right-click a terminal to split in any direction. Sessions live in a background
+          daemon, so closing the app never kills them.
         </p>
         <ul>
           <li>Reconnect to running sessions after restart</li>
           <li>Sort and filter projects</li>
           <li>Rename, reorder, and close tabs in bulk</li>
         </ul>
+        <div className="tour-actions">
+          <button className="small-btn" onClick={() => onAction("projects")}>Show projects</button>
+          <button className="small-btn" onClick={() => onAction("split")}>Split this pane</button>
+          <button className="small-btn" onClick={() => onAction("history")}>Search history</button>
+        </div>
         <h2 id="agents">Know the moment an agent needs you</h2>
         <p>
           Hooks for Claude Code, Codex, OpenCode, Muse, and Grok report real lifecycle events. One
-          card per agent run, with go, snooze, and dismiss. Switch the right sidebar to "Agents" to
-          see it.
+          card per agent run, with go, snooze, and dismiss. The <strong>atlas-api</strong> project is
+          staged with two live agents — one is waiting for permission right now.
         </p>
+        <div className="tour-actions">
+          <button className="small-btn" onClick={() => onAction("agents")}>Open the agent demo</button>
+        </div>
         <h2 id="editing">Files open the right way</h2>
         <p>
           Images preview, HTML opens in a browser tab, Markdown previews, audio plays, code opens in
-          your own Neovim. Open as text bypasses any viewer. Try the files in the Explorer.
+          your own Neovim. Open as text bypasses any viewer. The <strong>field-notes</strong> project
+          stages Markdown and image tabs; try the files in the Explorer.
         </p>
+        <div className="tour-actions">
+          <button className="small-btn" onClick={() => onAction("markdown")}>Open field-notes</button>
+        </div>
         <h2 id="git">Native diffs, never destructive</h2>
         <p>
           Side-by-side by default, CodeDiff in Neovim in Settings. Reviews are read-only snapshots:
           HEAD to index, index to disk. They never touch your repo.
         </p>
+        <div className="tour-actions">
+          <button className="small-btn" onClick={() => onAction("diff")}>Open a diff</button>
+          <button className="small-btn" onClick={() => onAction("git")}>Show Git panel</button>
+        </div>
         <h2 id="media">A built-in player. And internet radio.</h2>
         <p>
-          Open a track from the Explorer and the Chrome player appears. Named playlists, shuffle,
-          repeat, an equalizer, and a bundled Icecast/Shoutcast catalog.
+          Open a track from the Explorer and the chrome player appears. Named playlists, shuffle,
+          repeat, an equalizer, and a bundled Icecast/Shoutcast catalog. The{" "}
+          <strong>soundlab</strong> project is staged for it.
         </p>
+        <div className="tour-actions">
+          <button className="small-btn" onClick={() => onAction("player")}>Open the player</button>
+        </div>
         <h2 id="notify">Alerts everywhere</h2>
         <p>
           In app, on the desktop, on the macOS menu bar, or pushed to your phone through ntfy. Bursts
           are time-gated so your phone buzzes once. Prompt text is never uploaded.
         </p>
+        <div className="tour-actions">
+          <button className="small-btn" onClick={() => onAction("settings")}>Open Settings</button>
+          <button className="small-btn" onClick={() => onAction("palette")}>Open command palette (⌘K)</button>
+        </div>
         <div className="hero-btns">
           <a className="btn" href={DOWNLOAD}>
             <Icon name="ArrowDown" size={15} /> Download the latest release

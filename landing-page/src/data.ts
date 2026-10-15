@@ -104,9 +104,10 @@ export const updatePane = (l: Layout, id: string, content: PaneContent): Layout 
     : { ...l, children: l.children.map((c) => updatePane(c, id, content)) };
 
 export const projects: Project[] = [
-  { id: "atlas-api", name: "atlas-api", path: "~/code/atlas-api", branch: "main" },
   { id: "atlas-web", name: "atlas-web", path: "~/code/atlas-web", branch: "master" },
-  { id: "dotfiles", name: "dotfiles", path: "~/dotfiles", branch: "master" },
+  { id: "atlas-api", name: "atlas-api", path: "~/code/atlas-api", branch: "main" },
+  { id: "field-notes", name: "field-notes", path: "~/code/field-notes", branch: "main" },
+  { id: "soundlab", name: "soundlab", path: "~/code/soundlab", branch: "main" },
 ];
 
 export const sessions: Session[] = [
@@ -149,6 +150,60 @@ export const sessions: Session[] = [
     cpu: 0,
     mem: 2,
   },
+  {
+    id: "s-agent-claude",
+    label: "Claude — api review",
+    projectId: "atlas-api",
+    branch: "main",
+    cwd: "~/code/atlas-api",
+    kind: "shell",
+    status: "waiting",
+    agent: "AgentClaude",
+    visible: true,
+    started: "4m ago",
+    cpu: 1,
+    mem: 6,
+  },
+  {
+    id: "s-agent-codex",
+    label: "Codex — tests",
+    projectId: "atlas-api",
+    branch: "main",
+    cwd: "~/code/atlas-api",
+    kind: "shell",
+    status: "running",
+    agent: "AgentCodex",
+    visible: true,
+    started: "2m ago",
+    cpu: 3,
+    mem: 5,
+  },
+  {
+    id: "s-notes",
+    label: "Terminal 1",
+    projectId: "field-notes",
+    branch: "main",
+    cwd: "~/code/field-notes",
+    kind: "shell",
+    status: "running",
+    visible: true,
+    started: "9m ago",
+    cpu: 0,
+    mem: 2,
+  },
+  {
+    id: "s-sound",
+    label: "Terminal 1",
+    projectId: "soundlab",
+    branch: "main",
+    cwd: "~/code/soundlab",
+    kind: "shell",
+    status: "running",
+    visible: true,
+    started: "12m ago",
+    cpu: 0,
+    mem: 2,
+  },
 ];
 
 /* --------------------------- files --------------------------- */
@@ -179,6 +234,85 @@ export const fileTree: FileNode[] = [
   { name: "README.md", path: "README.md", status: "M", contents: README_MD },
   { name: "tone.wav", path: "tone.wav" },
 ];
+
+export const treesByProject: Record<string, FileNode[]> = {
+  "atlas-web": fileTree,
+  "atlas-api": [
+    {
+      name: "src",
+      path: "src",
+      dir: true,
+      status: "M",
+      children: [
+        { name: "app.ts", path: "src/app.ts", status: "M", contents: APP_TS },
+        { name: "billing.ts", path: "src/billing.ts", status: "U", contents: BILLING_TS },
+      ],
+    },
+    { name: "README.md", path: "README.md", status: "M", contents: README_MD },
+  ],
+  "field-notes": [
+    { name: "README.md", path: "README.md", status: "M", contents: README_MD },
+    { name: "docs.html", path: "docs.html" },
+    { name: "public", path: "public", dir: true, children: [{ name: "hero.png", path: "public/hero.png" }] },
+  ],
+  soundlab: [
+    { name: "tone.wav", path: "tone.wav" },
+    { name: "public", path: "public", dir: true, children: [{ name: "hero.png", path: "public/hero.png" }] },
+    { name: "README.md", path: "README.md", contents: README_MD },
+  ],
+};
+
+/** Each project owns its tabs and split layout, like the real app. */
+export function initialGroups(projectId: string): Group[] {
+  switch (projectId) {
+    case "atlas-api":
+      return [
+        {
+          id: "grp-api-agents",
+          layout: {
+            type: "split",
+            id: "split-api",
+            dir: "row",
+            children: [leaf({ kind: "term", sid: "s-agent-claude" }, "lf-api-claude"), leaf({ kind: "term", sid: "s-agent-codex" }, "lf-api-codex")],
+          },
+          activeLeaf: "lf-api-claude",
+        },
+        { id: "grp-api-editor", layout: leaf({ kind: "editor", path: "src/app.ts" }, "lf-api-editor"), activeLeaf: "lf-api-editor" },
+      ];
+    case "field-notes":
+      return [
+        { id: "grp-notes-md", layout: leaf({ kind: "markdown", path: "README.md" }, "lf-notes-md"), activeLeaf: "lf-notes-md" },
+        { id: "grp-notes-image", layout: leaf({ kind: "image", path: "public/hero.png" }, "lf-notes-image"), activeLeaf: "lf-notes-image" },
+        { id: "grp-notes-term", layout: leaf({ kind: "term", sid: "s-notes" }, "lf-notes-term"), activeLeaf: "lf-notes-term" },
+      ];
+    case "soundlab":
+      return [{ id: "grp-sound-term", layout: leaf({ kind: "term", sid: "s-sound" }, "lf-sound-term"), activeLeaf: "lf-sound-term" }];
+    default:
+      return [
+        {
+          id: "grp-web-tour",
+          layout: {
+            type: "split",
+            id: "split-web-tour",
+            dir: "row",
+            children: [leaf({ kind: "tour" }, "lf-web-tour"), leaf({ kind: "term", sid: "s-dev" }, "lf-web-dev")],
+          },
+          activeLeaf: "lf-web-tour",
+        },
+        {
+          id: "grp-web-dev",
+          layout: {
+            type: "split",
+            id: "split-web-dev",
+            dir: "row",
+            children: [leaf({ kind: "term", sid: "s-tests" }, "lf-web-tests"), leaf({ kind: "editor", path: "src/app.ts" }, "lf-web-editor")],
+          },
+          activeLeaf: "lf-web-tests",
+        },
+        { id: "grp-web-readme", layout: leaf({ kind: "markdown", path: "README.md" }, "lf-web-readme"), activeLeaf: "lf-web-readme" },
+      ];
+  }
+}
 
 export function flattenFiles(nodes: FileNode[], out: FileNode[] = []): FileNode[] {
   for (const n of nodes) {
@@ -283,7 +417,8 @@ export const historyGroups: { project: string; sessions: { id: string; label: st
     project: "atlas-api",
     sessions: [{ id: "h4", label: "cargo run", when: "yesterday" }],
   },
-  { project: "dotfiles", sessions: [{ id: "h5", label: "stow -R zsh", when: "3 days ago" }] },
+  { project: "field-notes", sessions: [{ id: "h5", label: "Terminal 1", when: "3 days ago" }] },
+  { project: "soundlab", sessions: [{ id: "h6", label: "Terminal 1", when: "3 days ago" }] },
 ];
 
 /* --------------------------- resources --------------------------- */

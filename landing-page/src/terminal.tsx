@@ -27,6 +27,21 @@ const starters: Record<string, Line[]> = {
     { t: "nothing to commit, working tree clean", cls: "ok" },
     { t: "" },
   ],
+  "s-agent-claude": [
+    { t: "claude", cls: "cmd" },
+    { t: "" },
+    { t: "  Claude Code — hooks report to Terminator", cls: "dim" },
+    { t: "  Wants to edit src/app.ts", cls: "warn" },
+    { t: "  ⏸ needs permission — see the Agents inbox (bell, top left)", cls: "warn" },
+  ],
+  "s-agent-codex": [
+    { t: "codex", cls: "cmd" },
+    { t: "" },
+    { t: "  Codex — running the review pass", cls: "dim" },
+    { t: "  test result: ok. 42 passed; 0 failed", cls: "ok" },
+  ],
+  "s-notes": [{ t: "ls", cls: "cmd" }, { t: "README.md   docs.html   public/" }],
+  "s-sound": [{ t: "ls", cls: "cmd" }, { t: "tone.wav   public/   README.md" }],
   "s-term": [
     { t: "claude", cls: "cmd" },
     { t: "" },

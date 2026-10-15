@@ -351,6 +351,13 @@ textarea {
   background: var(--hover);
   color: var(--text);
 }
+.side-foot {
+  flex: none;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--secondary);
+  font-size: 12px;
+}
 
 /* ---------------- center ---------------- */
 .center {
@@ -526,6 +533,9 @@ textarea {
 }
 .pane.foc {
   outline-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.pane.foc .pane-title {
+  color: var(--accent);
 }
 .pane-bar {
   height: 26px;
@@ -850,6 +860,15 @@ textarea {
   margin: 0;
   color: var(--secondary);
   font-size: 13px;
+}
+.tour-cta {
+  margin-top: 10px;
+}
+.tour-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 4px 0 6px;
 }
 
 /* native editor (nvim-like) */
