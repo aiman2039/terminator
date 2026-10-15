@@ -157,6 +157,102 @@ fn source_tree(root: &Path, temporary: &Path) -> Result<String> {
     System.output(cmd(root, "git", &["write-tree"]).env("GIT_INDEX_FILE", &index))
 }
 
+/// Exported source tree, kept between runs. Cargo reuses compiler artifacts
+/// only while the source path and the file times stay unchanged, so a retry
+/// of the same index tree reuses this export instead of copying the tree
+/// again: a fresh copy has new file times and rebuilds every workspace and
+/// vendored crate. The path stays outside the repository, because a nested
+/// copy of the workspace leaves its excluded vendored crates without a root,
+/// and it is derived from the repository path so two checkouts never share
+/// one export.
+fn export_paths(root: &Path) -> (PathBuf, PathBuf) {
+    let digest = format!("{:x}", Sha256::digest(root.as_os_str().as_encoded_bytes()));
+    let parent = std::env::temp_dir();
+    let export = parent.join(format!(
+        "terminator-release-source-{}",
+        digest.get(..16).unwrap_or(&digest)
+    ));
+    let marker = parent.join(format!(
+        "{}.json",
+        export.file_name().unwrap().to_string_lossy()
+    ));
+    (export, marker)
+}
+
+/// Marker of the last completed export: the index tree it came from, the
+/// tagged version it was bumped to, and its validated commit tree.
+fn reusable_export(source: &Path, marker: &Path, original: &str) -> Option<(String, String)> {
+    let marker: Value = serde_json::from_slice(&fs::read(marker).ok()?).ok()?;
+    if marker.get("original")?.as_str()? != original {
+        return None;
+    }
+    let validated = marker.get("validated")?.as_str()?.to_owned();
+    if !source.is_dir()
+        || marker.get("tag")?.as_str().is_none()
+        || git(source, &["rev-parse", "HEAD^{tree}"]).ok()? != validated
+        || !git(source, &["status", "--porcelain"]).ok()?.is_empty()
+    {
+        return None;
+    }
+    Some((marker.get("tag")?.as_str()?.to_owned(), validated))
+}
+
+/// Copy the current index tree into the export directory, bump its version,
+/// commit it as the validated tree, and record the marker a retry reads.
+fn export_source(
+    root: &Path,
+    temporary: &Path,
+    source: &Path,
+    marker: &Path,
+    original: &str,
+) -> Result<(String, String)> {
+    if source.exists() {
+        fs::remove_dir_all(source)?;
+    }
+    fs::create_dir_all(source)?;
+    let prefix = format!("--prefix={}/", source.display());
+    System.run(
+        cmd(root, "git", &["checkout-index", "--all", &prefix])
+            .env("GIT_INDEX_FILE", temporary.join("index")),
+    )?;
+    let tag = format!("v{}", version::bump(source)?);
+    let object_format = git(root, &["rev-parse", "--show-object-format"])?;
+    git(
+        source,
+        &[
+            "init",
+            "--quiet",
+            &format!("--object-format={object_format}"),
+        ],
+    )?;
+    git(source, &["add", "--force", "--all"])?;
+    git(
+        source,
+        &[
+            "-c",
+            "user.name=Release validation",
+            "-c",
+            "user.email=release@localhost",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "-m",
+            &format!("Validate {tag}"),
+        ],
+    )?;
+    let validated = git(source, &["rev-parse", "HEAD^{tree}"])?;
+    fs::write(
+        marker,
+        serde_json::to_vec_pretty(&json!({
+            "original": original, "validated": validated, "tag": tag,
+        }))?,
+    )?;
+    Ok((tag, validated))
+}
+
 fn execute(
     root: &Path,
     options: &Options,
@@ -194,14 +290,17 @@ fn execute(
         .prefix("terminator-release-")
         .tempdir()?;
     let original = source_tree(root, temporary.path())?;
-    let source = temporary.path().join("source");
-    fs::create_dir(&source)?;
-    let prefix = format!("--prefix={}/", source.display());
-    System.run(
-        cmd(root, "git", &["checkout-index", "--all", &prefix])
-            .env("GIT_INDEX_FILE", temporary.path().join("index")),
-    )?;
-    let tag = format!("v{}", version::bump(&source)?);
+    let (source, marker) = export_paths(root);
+    let (tag, validated) =
+        if let Some((tag, validated)) = reusable_export(&source, &marker, &original) {
+            println!(
+                "Reusing the validated source for {tag}: {}",
+                source.display()
+            );
+            (tag, validated)
+        } else {
+            export_source(root, temporary.path(), &source, &marker, &original)?
+        };
     if !options.check_only {
         ensure!(
             git(root, &["tag", "--list", &tag])?.is_empty()
@@ -213,34 +312,6 @@ fn execute(
             "Tag {tag} already exists. No files changed."
         );
     }
-    let object_format = git(root, &["rev-parse", "--show-object-format"])?;
-    git(
-        &source,
-        &[
-            "init",
-            "--quiet",
-            &format!("--object-format={object_format}"),
-        ],
-    )?;
-    git(&source, &["add", "--force", "--all"])?;
-    git(
-        &source,
-        &[
-            "-c",
-            "user.name=Release validation",
-            "-c",
-            "user.email=release@localhost",
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "--quiet",
-            "-m",
-            &format!("Validate {tag}"),
-        ],
-    )?;
-    let validated = git(&source, &["rev-parse", "HEAD^{tree}"])?;
     fs::write(
         artifacts.join("source.json"),
         serde_json::to_vec_pretty(&json!({

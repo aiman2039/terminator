@@ -51,9 +51,7 @@ mod preferences;
 #[cfg(any(windows, test))]
 mod windows_updates;
 mod workspace;
-#[cfg(any(test, target_os = "macos"))]
-use preferences::AgentsTab;
-use preferences::{SidebarTool, UiPreferences};
+use preferences::{AgentsTab, SidebarTool, UiPreferences};
 use terminator_core::appearance::{AppearanceConfig, AppearanceFile};
 use workspace::Workspace;
 pub mod app;

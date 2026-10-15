@@ -4468,3 +4468,68 @@ kind and wraps LSP language strings as code blocks. Plain-text answers stay
 plain text. The isolated `native-rename` fixture also captures the Hover
 window after the symbol rename. Its capture shows highlighted Rust code with
 no visible Markdown fence markers.
+
+## Native fixture baseline for the IDE-mode default (2026-10-15)
+
+The release gate failed twice. The `windows-clippy` step could not compile the
+app for `x86_64-pc-windows-msvc`: `AgentsTab` was imported only for macOS and
+tests, but the IDE stripe code that sets `preferences.agents_tab` is
+cross-platform, and `open_problems` inherited the menu-bar `cfg` written for
+`focus_window_from_menu` while the status bar calls it on every platform.
+
+With that fixed, `cargo xtask gui all` failed 12 of 21 cases: `smoke`,
+`scrolling-bounded`, `split-file-opening`, `markdown`, `project-sidebar`,
+`inline-rename`, `editor-lifecycle`, `file-close`, `focus-editor-close`,
+`ui-cleanup`, `control`, and `hover-menu`. Fresh preferences default to IDE
+mode, which moves shells into the bottom strip before a scripted target is
+painted, while the native fixtures assert classic top-level tabs. The harness
+`setup()` now pins `{"version": 2, "ide_mode": false}` before the first GUI
+capture, the same rule `workspace_tabs` applied by hand; a fixture that needs
+IDE mode can write its own preferences afterwards. The `smoke` fixture no
+longer compares `ide_strip_docks`: it hides a sidebar, so the IDE terminal
+strip's painted dock rects legitimately move, and dock geometry is not a user
+preference.
+
+Validation: `cargo xtask gui all` (21 cases), `cargo fmt --all --check`,
+strict workspace Clippy for the host and for `x86_64-pc-windows-msvc`, and the
+xtask test suite passed locally. The running or installed app was not
+replaced.
+
+## Release flow rebuilds and fixture timing (2026-10-15)
+
+The host stage compiled the same crates five times per run: `lint` (check),
+`build`, `clippy`, the default-feature binaries, and the test-support binaries,
+plus the release build inside `package` and a second target for
+`windows-clippy`. Every run paid for all of them again, because the validated
+source was exported into a new random temporary directory each time
+(`terminator-release-XXXX/source`) and cargo keys path-dependency fingerprints
+on the absolute path: each run rebuilt every workspace and vendored crate, even
+when nothing had changed.
+
+- The host check list drops `lint`. `clippy --workspace --all-targets
+  --all-features -- -D warnings` type-checks everything `cargo check` does.
+  Measured locally, `check` after `clippy` is a no-op (0.12 s) while `clippy`
+  after `check` recompiles the crate (1.25 s).
+- The export lives at a fixed path derived from the repository
+  (`<temp>/terminator-release-source-<hash>`), and a marker next to it records
+  the index tree, the tagged version, and the validated tree. A retry of the
+  same index tree reuses the export, so the source path and the file times stay
+  unchanged and cargo skips its work; a different tree, a missing export, or a
+  dirty export re-exports from scratch. The export stays outside the repository
+  because a nested copy of the workspace leaves its excluded vendored crates
+  without a workspace root.
+- The fixture action runner waits for its pending actions before it takes the
+  capture, so a late frame under parallel fixtures cannot drop a scripted
+  action and read as a missing step. `control` gives its window 12 s to outlive
+  its CLI round trips, because a control request accepted while the window
+  closes never reaches the daemon.
+
+Validation: `cargo xtask release --check-only --skip-windows --skip-linux`
+compiled 51.0 s of work on the first run and 0.4 s of compiler checks on a retry
+of the same tree (no `Compiling` or `Checking` line). Unit tests
+`a_retry_of_the_same_tree_reuses_the_exported_source` and
+`a_changed_export_is_not_reused` cover the reuse and the fallback. `cargo xtask
+gui all` passed repeatedly against the release target directory. Formatting,
+strict workspace Clippy, and the xtask suite passed locally. The Windows
+runner still extracts each run into a fresh remote directory, so its path
+dependencies rebuild every run.

@@ -555,7 +555,6 @@ impl App {
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
-    #[cfg(any(test, target_os = "macos"))]
     /// Show the Problems tool in whichever sidebar the current mode
     /// treats as primary (left in IDE mode, right otherwise).
     pub(crate) fn open_problems(&mut self) {

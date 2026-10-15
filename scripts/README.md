@@ -116,6 +116,12 @@ The matching shell scripts remain wrappers. Offline Rust regressions:
 `cargo test -p xtask --locked release::`. They use disposable Git repositories
 and local bare remotes; they do not publish releases.
 
+Validation exports the source into `<temp>/terminator-release-source-<hash>`
+and keeps a marker beside it. A retry of the same index tree and version reuses
+that export, so Cargo keeps its compiler artifacts and a retry does not rebuild
+every crate; a different tree, a missing export, or an edited export re-exports
+from scratch.
+
 ## Quality checks
 
 Run `sh scripts/check.sh` for the async-boundary check, formatting, build,

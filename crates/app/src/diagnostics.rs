@@ -390,7 +390,15 @@ impl Diagnostics {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3000),
         );
-        if !self.requested && self.started.elapsed() > after {
+        if !self.requested
+            && self.started.elapsed() > after
+            // A scripted action must never lose its target to the capture
+            // deadline: parallel fixtures on a loaded machine paint late, and
+            // a skipped action reads as a missing step. Wait for the pending
+            // actions; a target that never appears still fails, because the
+            // action is never logged and the driver kills the window.
+            && self.action_index >= self.actions.len()
+        {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
             self.requested = true;
             eprintln!("Native fixture requested capture");

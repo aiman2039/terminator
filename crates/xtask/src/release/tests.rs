@@ -42,6 +42,13 @@ struct Fixture {
     options: Options,
     runner: GitRunner,
 }
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let (export, marker) = export_paths(&self.root);
+        let _ = fs::remove_dir_all(export);
+        let _ = fs::remove_file(marker);
+    }
+}
 impl Fixture {
     fn new() -> Self {
         let temporary = tempfile::tempdir().unwrap();
@@ -189,6 +196,64 @@ fn changed_snapshot_stops_release() {
         .unwrap_err();
     assert!(error.to_string().contains("Checks changed source"));
     assert_eq!(fixture.state(), before);
+}
+
+#[test]
+fn a_retry_of_the_same_tree_reuses_the_exported_source() {
+    let fixture = Fixture::new();
+    let mut exported = None;
+    fixture
+        .execute(|source, _| {
+            assert!(fs::read_to_string(source.join("Cargo.toml"))?.contains("version = \"0.2.0\""));
+            exported = Some(source.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+    let source = exported.unwrap();
+    assert_eq!(source, export_paths(&fixture.root).0);
+    assert!(!source.starts_with(&fixture.root));
+    let before = fs::metadata(source.join("Cargo.toml"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    // The second run must reuse the export: a fresh export copies the tree
+    // again, moves every file time and rebuilds every crate, and a second
+    // version bump would publish 0.3.0.
+    fixture
+        .execute(|source, _| {
+            assert!(fs::read_to_string(source.join("Cargo.toml"))?.contains("0.2.0"));
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        before,
+        fs::metadata(source.join("Cargo.toml"))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        "the reuse must not rewrite the exported files"
+    );
+    assert!(fixture.runner.commands.borrow().is_empty());
+}
+
+#[test]
+fn a_changed_export_is_not_reused() {
+    let fixture = Fixture::new();
+    let mut exported = None;
+    fixture
+        .execute(|source, _| {
+            exported = Some(source.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+    let source = exported.unwrap();
+    fs::write(source.join("local-edit"), "dirty\n").unwrap();
+    fixture
+        .execute(|source, _| {
+            assert!(!source.join("local-edit").exists());
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]

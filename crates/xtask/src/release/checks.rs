@@ -56,13 +56,14 @@ pub(super) fn run_with(
     for check in [
         "async-boundary",
         "fmt",
-        "lint",
         "build",
         "clippy",
         "test",
         "audit",
         "deny",
     ] {
+        // `clippy` type-checks everything `cargo check` does, so the release
+        // flow does not run the `lint` step twice over the same targets.
         run(&mut cmd(root, "sh", &["scripts/check.sh", check]))?;
     }
     if matches!(platform, Platform::Windows) {

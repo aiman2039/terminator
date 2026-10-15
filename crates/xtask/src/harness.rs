@@ -357,7 +357,19 @@ impl Harness {
             .context("History text missing")?
             .into())
     }
+    /// Fixture baseline: a pin on classic top-level tabs plus `/bin/sh`.
+    /// Fresh preferences default to IDE mode, which moves shells into the
+    /// bottom strip before the scripted target is painted; fixtures assert
+    /// the classic strip. The pin lands before the first GUI capture and a
+    /// fixture that needs IDE mode writes its own preferences afterwards.
     pub fn setup(&self) -> Result<()> {
+        let preferences = self.root.join("ui-preferences.json");
+        if !preferences.exists() {
+            fs::write(
+                &preferences,
+                serde_json::to_vec(&json!({"version": 2, "ide_mode": false}))?,
+            )?;
+        }
         let mut settings = self
             .state()?
             .get("settings")

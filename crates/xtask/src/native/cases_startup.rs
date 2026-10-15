@@ -1,7 +1,7 @@
 use super::super::harness::{Harness, id, session, session_closed, session_ids, sessions};
 use super::dispatch::{Options, plain, prefs, save_prefs, setup};
 use anyhow::{Context, Result, anyhow, ensure};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{fs, path::PathBuf};
 pub(crate) fn smoke(opts: &Options) -> Result<()> {
     ensure!(
@@ -91,12 +91,22 @@ pub(crate) fn smoke(opts: &Options) -> Result<()> {
         json!([]),
         opts.seconds.saturating_mul(1000),
     )?;
+    // The fixture changes sidebar visibility, so the IDE terminal strip's
+    // painted dock rects legitimately move; they are geometry, not user
+    // preferences. Compare everything else.
+    fn without_ide_strip_docks(value: &Value) -> Value {
+        let mut value = value.clone();
+        if let Some(preferences) = value.as_object_mut() {
+            preferences.remove("ide_strip_docks");
+        }
+        value
+    }
     ensure!(
         h.state()?
             .get("settings")
             .and_then(|settings| settings.get("font_size"))
             .is_some_and(|size| size == &json!(18.0))
-            && prefs(&h)? == pref,
+            && without_ide_strip_docks(&prefs(&h)?) == without_ide_strip_docks(&pref),
         "User preferences changed on restart"
     );
     h.assert_pids(&originals)?;
@@ -121,13 +131,6 @@ pub(crate) fn smoke(opts: &Options) -> Result<()> {
 }
 pub(crate) fn workspace_tabs(o: &Options) -> Result<()> {
     let (h, _p, originals, root) = setup("workspace-tabs")?;
-    // This fixture asserts classic top-level shell tabs. Fresh user
-    // preferences default to IDE mode, which moves those shells to the
-    // bottom strip before the scripted target is painted.
-    fs::write(
-        h.root.join("ui-preferences.json"),
-        serde_json::to_vec(&json!({"version": 2, "ide_mode": false}))?,
-    )?;
     fs::write(root.join("source.rs"), "fn main() {}\n")?;
     plain(
         &h,

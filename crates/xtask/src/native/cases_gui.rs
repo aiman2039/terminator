@@ -366,9 +366,11 @@ pub(crate) fn control(o: &Options) -> Result<()> {
     image::RgbaImage::from_pixel(24, 12, image::Rgba([70, 140, 210, 255]))
         .save(root.join("ctl.png"))?;
     let actions = json!([]);
-    capture(&h, o, "control", actions, 5000, |_| {
+    // The window must outlive the CLI round trips below: a control request
+    // accepted while the window closes never reaches the daemon.
+    capture(&h, o, "control", actions, 12000, |_| {
         let paths = Paths::at(h.root.clone());
-        h.wait(|_| ui_control::rpc(&paths, Request::Ping).is_ok(), 5)?;
+        h.wait(|_| ui_control::rpc(&paths, Request::Ping).is_ok(), 15)?;
         let mut command = h.command("terminator-hook");
         command.args([
             "ctl",
@@ -409,7 +411,7 @@ pub(crate) fn control(o: &Options) -> Result<()> {
                 h.history(id(&created))
                     .is_ok_and(|t| t.contains("GUI_CONTROL_PROOF"))
             },
-            5,
+            15,
         )?;
         let mut open = h.command("terminator-hook");
         open.args(["ctl", "open-file", id(&p)])
@@ -424,7 +426,7 @@ pub(crate) fn control(o: &Options) -> Result<()> {
                         .is_some_and(|version| version.as_u64() == Some(3))
                 })
             },
-            5,
+            15,
         )?;
         ensure!(
             sessions(&h.state()?).len() == 7,
