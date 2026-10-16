@@ -546,6 +546,26 @@ impl App {
                         }
                     }
                 }
+                Update::DirectoryPreview(generation, cwd, path, entries) => {
+                    if generation == self.refresh_generation
+                        && self
+                            .refresh_request
+                            .as_ref()
+                            .is_some_and(|request| request.cwd == cwd)
+                        && !self.dirs.contains_key(&path)
+                    {
+                        self.sidebar_cache.get_mut().clear_files();
+                        match entries {
+                            Ok(entries) => {
+                                self.directory_errors.remove(&path);
+                                self.dirs.insert(path, entries);
+                            }
+                            Err(error) => {
+                                self.directory_errors.insert(path, error);
+                            }
+                        }
+                    }
+                }
                 Update::Refresh(generation, context, directories, fallback) => {
                     if generation == self.refresh_generation
                         && self

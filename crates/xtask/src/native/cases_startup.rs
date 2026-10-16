@@ -287,6 +287,10 @@ pub(crate) fn native_rename(o: &Options) -> Result<()> {
     let main = root.join("main.rs");
     fs::write(&helper, "pub fn helper() {}\n")?;
     fs::write(&main, "mod helper;\nfn main() { helper::helper(); }\n")?;
+    fs::write(
+        root.join("notes.md"),
+        "# Native Markdown\n\n## A readable section\n\n- **Long note:** The native source must wrap this sentence inside the split pane so every word stays visible while the preview keeps a comfortable reading width and clear heading sizes.\n",
+    )?;
     let mut settings = h.state()?.get("settings").cloned().context("settings")?;
     settings
         .as_object_mut()
@@ -353,12 +357,29 @@ pub(crate) fn native_rename(o: &Options) -> Result<()> {
     plain(
         &h,
         o,
+        "native-context-menu",
+        json!([{"at_ms": 1100, "target": "native-file", "hover_offset": [96.0, 10.0], "right_click": true}]),
+        2600,
+    )?;
+    plain(
+        &h,
+        o,
         "native-hover-markdown",
         json!([
             {"at_ms": 3300, "target": "native-file", "hover_offset": [96.0, 10.0], "right_click": true},
             {"at_ms": 3900, "target": "native-hover-action"}
         ]),
         6500,
+    )?;
+    plain(
+        &h,
+        o,
+        "native-markdown-split",
+        json!([
+            {"at_ms": 900, "target": "explorer-file:notes.md"},
+            {"at_ms": 1600, "target": "native-markdown-mode:Split"}
+        ]),
+        4500,
     )?;
     Ok(())
 }

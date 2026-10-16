@@ -14,6 +14,7 @@ use anyhow::Context as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
+use terminator_native_edit::blocks::{BlockKind, parse_blocks};
 use terminator_native_edit::doc::{Buffer, Doc};
 use terminator_native_edit::highlight::{HighlightCache, Language, language_for_path};
 use terminator_native_edit::lsp as native_lsp;
@@ -56,6 +57,7 @@ type SaveResult = anyhow::Result<Option<SystemTime>>;
 pub struct NativeDoc {
     pub path: PathBuf,
     doc: Option<Doc>,
+    markdown_mode: markdown::Mode,
     engine: VimEngine,
     highlight: HighlightCache,
     insert_first: bool,
@@ -75,6 +77,7 @@ impl NativeDoc {
         Self {
             path,
             doc: None,
+            markdown_mode: markdown::Mode::Preview,
             engine: VimEngine::new(),
             highlight: HighlightCache::default(),
             insert_first,
@@ -805,6 +808,22 @@ impl App {
         let mut recent_open: Option<PathBuf> = None;
         let activated_editor;
         let language: Language = language_for_path(&path.to_string_lossy());
+        let is_markdown = markdown::supported(path);
+        let preview_key = format!("native:{}", path.display());
+        let preview_hovered = self
+            .markdown
+            .entries
+            .get(&preview_key)
+            .is_some_and(|preview| preview.contains_pointer(ui));
+        let preview_scroll = if preview_hovered {
+            self.markdown
+                .entries
+                .get(&preview_key)
+                .map(|preview| preview.scroll_fraction)
+        } else {
+            None
+        };
+        let source_scroll;
         let rename_applying = self
             .native_rename
             .as_ref()
@@ -829,8 +848,15 @@ impl App {
                     .max_by_key(|symbol| (symbol.depth, symbol.range.start.line))
                     .map(|symbol| symbol.name.as_str())
             });
+            let mut heading_jump = None;
             ui.horizontal(|ui| {
-                ui.weak(&breadcrumb);
+                let title_width = (ui.available_width() - if is_markdown { 260.0 } else { 200.0 })
+                    .clamp(48.0, 260.0);
+                ui.add_sized(
+                    [title_width, appearance::TOOLBAR_BUTTON],
+                    egui::Label::new(egui::RichText::new(&breadcrumb).weak()).truncate(),
+                )
+                .on_hover_text(path.display().to_string());
                 if let Some(symbol) = current_symbol {
                     ui.weak("›");
                     ui.monospace(symbol);
@@ -838,8 +864,61 @@ impl App {
                 if doc.dirty() {
                     ui.monospace("●");
                 }
-                let mode = doc.engine.mode();
-                ui.colored_label(mode_color(mode), format!("-- {} --", mode_name(mode)));
+                if is_markdown {
+                    for (option, icon) in [
+                        (markdown::Mode::Edit, "Pencil"),
+                        (markdown::Mode::Preview, "Eye"),
+                        (markdown::Mode::Split, "Columns2"),
+                    ] {
+                        let response = appearance::selectable_icon(
+                            ui,
+                            icon,
+                            option.label(),
+                            doc.markdown_mode == option,
+                        );
+                        #[cfg(feature = "test-support")]
+                        crate::diagnostics::record(
+                            ui.ctx(),
+                            &format!("native-markdown-mode:{}", option.label()),
+                            response.rect,
+                        );
+                        if response.clicked() {
+                            doc.markdown_mode = option;
+                            if option == markdown::Mode::Edit {
+                                ui.memory_mut(|memory| memory.request_focus(file_focus));
+                            }
+                        }
+                    }
+                    appearance::icon_menu_button(ui, "ListTree", |ui| {
+                        let Some(buffer) = doc.doc.as_ref() else {
+                            return;
+                        };
+                        let mut found = false;
+                        for block in parse_blocks(buffer) {
+                            let BlockKind::Heading(level) = block.kind else {
+                                continue;
+                            };
+                            found = true;
+                            let title = buffer.line_text(block.start_line);
+                            let title = title.trim_start_matches('#').trim();
+                            if ui
+                                .button(format!("{} {title}", "·".repeat(level.into())))
+                                .clicked()
+                            {
+                                heading_jump = Some(block.start_line);
+                                ui.close();
+                            }
+                        }
+                        if !found {
+                            ui.weak("No headings");
+                        }
+                    })
+                    .response
+                    .on_hover_text("Go to heading");
+                } else {
+                    let mode = doc.engine.mode();
+                    ui.colored_label(mode_color(mode), format!("-- {} --", mode_name(mode)));
+                }
                 if doc.saving {
                     ui.weak("Saving…");
                 }
@@ -847,10 +926,10 @@ impl App {
                     ui.weak("Renaming…");
                 }
                 if ui
-                    .add_enabled(
-                        doc.dirty() && !doc.saving && !rename_applying,
-                        egui::Button::new("Save"),
-                    )
+                    .add_enabled_ui(doc.dirty() && !doc.saving && !rename_applying, |ui| {
+                        appearance::sidebar_action(ui, "Save", "Save file")
+                    })
+                    .inner
                     .clicked()
                 {
                     doc.force_save = false;
@@ -859,10 +938,10 @@ impl App {
                 }
                 // Reload while dirty would silently discard edits: disabled.
                 let reload = ui
-                    .add_enabled(
-                        !doc.dirty() && !doc.loading && !rename_applying,
-                        egui::Button::new("Reload"),
-                    )
+                    .add_enabled_ui(!doc.dirty() && !doc.loading && !rename_applying, |ui| {
+                        appearance::sidebar_action(ui, "RefreshCw", "Reload file")
+                    })
+                    .inner
                     .on_disabled_hover_text("Unsaved changes are kept");
                 if reload.clicked() {
                     doc.load_error = None;
@@ -871,16 +950,8 @@ impl App {
                     doc.doc = None;
                     ui.memory_mut(|memory| memory.request_focus(file_focus));
                 }
-                if ui
-                    .add_enabled(
-                        native_lsp::language_id(language).is_some(),
-                        egui::Button::new("References"),
-                    )
-                    .on_hover_text("Find references to the symbol at the cursor")
-                    .on_disabled_hover_text(
-                        "Language server actions are available for Rust and Python files",
-                    )
-                    .clicked()
+                if native_lsp::language_id(language).is_some()
+                    && appearance::sidebar_action(ui, "ListTree", "Find references").clicked()
                 {
                     let cursor = doc.engine.cursor();
                     let row = doc
@@ -894,14 +965,22 @@ impl App {
                     });
                     ui.memory_mut(|memory| memory.request_focus(file_focus));
                 }
-                if ui
-                    .small_button(if pinned { "Unbookmark" } else { "Bookmark" })
-                    .clicked()
+                if appearance::selectable_icon(
+                    ui,
+                    "FileText",
+                    if pinned {
+                        "Remove bookmark"
+                    } else {
+                        "Bookmark file"
+                    },
+                    pinned,
+                )
+                .clicked()
                 {
                     toggle_pin = true;
                     ui.memory_mut(|memory| memory.request_focus(file_focus));
                 }
-                ui.menu_button("Recent files", |ui| {
+                appearance::icon_menu_button(ui, "History", |ui| {
                     if recent_files.is_empty() {
                         ui.weak("No other recent files in this project");
                     }
@@ -921,8 +1000,17 @@ impl App {
                             ui.close();
                         }
                     }
-                });
+                })
+                .response
+                .on_hover_text("Recent files");
             });
+            if let Some(line) = heading_jump
+                && let Some(buffer) = doc.doc.as_mut()
+            {
+                doc.markdown_mode = markdown::Mode::Edit;
+                doc.engine.place_cursor(buffer, line, 0);
+                ui.memory_mut(|memory| memory.request_focus(file_focus));
+            }
             if let Some(error) = doc.save_error.clone() {
                 ui.horizontal(|ui| {
                     ui.colored_label(failed_color, format!("Save failed: {error}"));
@@ -952,128 +1040,164 @@ impl App {
                 ui.ctx().request_repaint();
                 return;
             };
-            let outcome = show_source(
-                ui,
-                buffer,
-                &mut doc.engine,
-                &SourceOptions {
-                    vim,
-                    read_only: rename_applying,
-                    diagnostics: marks,
-                    ..SourceOptions::default()
-                },
-                &mut doc.highlight,
-                language,
-                &path.to_string_lossy(),
-            );
-            #[cfg(feature = "test-support")]
-            crate::diagnostics::record(ui.ctx(), "native-file", outcome.content_rect);
-            #[cfg(feature = "test-support")]
-            if let Some(rect) = outcome.rename_action_rect {
-                crate::diagnostics::record(ui.ctx(), "native-rename-action", rect);
-            }
-            #[cfg(feature = "test-support")]
-            if let Some(rect) = outcome.hover_action_rect {
-                crate::diagnostics::record(ui.ctx(), "native-hover-action", rect);
-            }
-            activated_editor = outcome.activated;
-            for effect in outcome.effects {
-                match effect {
-                    Effect::Save => {
-                        doc.force_save = false;
-                        doc.start_save(&services);
-                    }
-                    Effect::SaveForce => {
-                        doc.force_save = true;
-                        doc.start_save(&services);
-                    }
-                    Effect::Quit => {
-                        if doc.dirty() {
-                            doc.save_error =
-                                Some("No write since last change (add ! to override)".into());
+            let mode = if is_markdown {
+                doc.markdown_mode
+            } else {
+                markdown::Mode::Edit
+            };
+            let source = |ui: &mut egui::Ui| {
+                show_source(
+                    ui,
+                    buffer,
+                    &mut doc.engine,
+                    &SourceOptions {
+                        vim,
+                        read_only: rename_applying,
+                        menu_style: Some(appearance::menu_style),
+                        menu_header: Some(appearance::target_header),
+                        menu_item: Some(appearance::menu_item),
+                        soft_wrap: is_markdown,
+                        font_size: if is_markdown { 14.0 } else { 13.0 },
+                        scroll_fraction: if mode == markdown::Mode::Split {
+                            preview_scroll
                         } else {
-                            post = PostEdit::Close { force: false };
+                            None
+                        },
+                        diagnostics: marks,
+                        ..SourceOptions::default()
+                    },
+                    &mut doc.highlight,
+                    language,
+                    &path.to_string_lossy(),
+                )
+            };
+            let outcome = match mode {
+                markdown::Mode::Preview => None,
+                markdown::Mode::Edit => Some(source(ui)),
+                markdown::Mode::Split => {
+                    let width = ui.available_width();
+                    Some(
+                        egui::Panel::left(egui::Id::new(("native-markdown-editor", path)))
+                            .resizable(true)
+                            .default_size(width * 0.5)
+                            .size_range(80.0..=(width - 80.0).max(80.0))
+                            .frame(egui::Frame::NONE)
+                            .show(ui, source)
+                            .inner,
+                    )
+                }
+            };
+            activated_editor = outcome.as_ref().is_some_and(|outcome| outcome.activated);
+            source_scroll = outcome.as_ref().map(|outcome| outcome.scroll_fraction);
+            if let Some(outcome) = outcome {
+                #[cfg(feature = "test-support")]
+                crate::diagnostics::record(ui.ctx(), "native-file", outcome.content_rect);
+                #[cfg(feature = "test-support")]
+                if let Some(rect) = outcome.rename_action_rect {
+                    crate::diagnostics::record(ui.ctx(), "native-rename-action", rect);
+                }
+                #[cfg(feature = "test-support")]
+                if let Some(rect) = outcome.hover_action_rect {
+                    crate::diagnostics::record(ui.ctx(), "native-hover-action", rect);
+                }
+                for effect in outcome.effects {
+                    match effect {
+                        Effect::Save => {
+                            doc.force_save = false;
+                            doc.start_save(&services);
                         }
-                    }
-                    Effect::QuitForce => {
-                        post = PostEdit::Close { force: true };
-                    }
-                    Effect::WriteQuit { force } => {
-                        // The write is async: closing here would always see
-                        // a dirty buffer and refuse, so defer to the
-                        // save-settled check instead.
-                        doc.force_save = force;
-                        doc.start_save(&services);
-                        defer_close_after_save = true;
-                        wq_issuer = Self::close_issuer(ui, project, tab, node);
-                    }
-                    Effect::QuitAll { force } => {
-                        quit_all = Some(force);
-                    }
-                    Effect::Split => {
-                        splits.push(NativeSplit::Below);
-                    }
-                    Effect::Vsplit => {
-                        splits.push(NativeSplit::Beside);
-                    }
-                    Effect::TabNew => {
-                        splits.push(NativeSplit::NewTab);
-                    }
-                    Effect::OpenFilePicker => {
-                        open_file_picker = true;
-                    }
-                    Effect::Hover => {
-                        let cursor = doc.engine.cursor();
-                        let row = doc
-                            .doc
-                            .as_ref()
-                            .map(|live| live.line_text(cursor.line))
-                            .unwrap_or_default();
-                        hover_at = Some((
-                            native_lsp::Position {
+                        Effect::SaveForce => {
+                            doc.force_save = true;
+                            doc.start_save(&services);
+                        }
+                        Effect::Quit => {
+                            if doc.dirty() {
+                                doc.save_error =
+                                    Some("No write since last change (add ! to override)".into());
+                            } else {
+                                post = PostEdit::Close { force: false };
+                            }
+                        }
+                        Effect::QuitForce => {
+                            post = PostEdit::Close { force: true };
+                        }
+                        Effect::WriteQuit { force } => {
+                            // The write is async: closing here would always see
+                            // a dirty buffer and refuse, so defer to the
+                            // save-settled check instead.
+                            doc.force_save = force;
+                            doc.start_save(&services);
+                            defer_close_after_save = true;
+                            wq_issuer = Self::close_issuer(ui, project, tab, node);
+                        }
+                        Effect::QuitAll { force } => {
+                            quit_all = Some(force);
+                        }
+                        Effect::Split => {
+                            splits.push(NativeSplit::Below);
+                        }
+                        Effect::Vsplit => {
+                            splits.push(NativeSplit::Beside);
+                        }
+                        Effect::TabNew => {
+                            splits.push(NativeSplit::NewTab);
+                        }
+                        Effect::OpenFilePicker => {
+                            open_file_picker = true;
+                        }
+                        Effect::Hover => {
+                            let cursor = doc.engine.cursor();
+                            let row = doc
+                                .doc
+                                .as_ref()
+                                .map(|live| live.line_text(cursor.line))
+                                .unwrap_or_default();
+                            hover_at = Some((
+                                native_lsp::Position {
+                                    line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
+                                    character: native_lsp::char_col_to_utf16(&row, cursor.col),
+                                },
+                                (cursor.line, cursor.col),
+                            ));
+                        }
+                        Effect::GotoDefinition => {
+                            let cursor = doc.engine.cursor();
+                            let row = doc
+                                .doc
+                                .as_ref()
+                                .map(|live| live.line_text(cursor.line))
+                                .unwrap_or_default();
+                            goto_at = Some(native_lsp::Position {
                                 line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
                                 character: native_lsp::char_col_to_utf16(&row, cursor.col),
-                            },
-                            (cursor.line, cursor.col),
-                        ));
+                            });
+                        }
+                        Effect::FindReferences => {
+                            let cursor = doc.engine.cursor();
+                            let row = doc
+                                .doc
+                                .as_ref()
+                                .map(|live| live.line_text(cursor.line))
+                                .unwrap_or_default();
+                            references_at = Some(native_lsp::Position {
+                                line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
+                                character: native_lsp::char_col_to_utf16(&row, cursor.col),
+                            });
+                        }
+                        Effect::RenameSymbol => {
+                            let cursor = doc.engine.cursor();
+                            let row = doc
+                                .doc
+                                .as_ref()
+                                .map(|live| live.line_text(cursor.line))
+                                .unwrap_or_default();
+                            rename_at = Some(native_lsp::Position {
+                                line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
+                                character: native_lsp::char_col_to_utf16(&row, cursor.col),
+                            });
+                        }
+                        Effect::Bell => {}
                     }
-                    Effect::GotoDefinition => {
-                        let cursor = doc.engine.cursor();
-                        let row = doc
-                            .doc
-                            .as_ref()
-                            .map(|live| live.line_text(cursor.line))
-                            .unwrap_or_default();
-                        goto_at = Some(native_lsp::Position {
-                            line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
-                            character: native_lsp::char_col_to_utf16(&row, cursor.col),
-                        });
-                    }
-                    Effect::FindReferences => {
-                        let cursor = doc.engine.cursor();
-                        let row = doc
-                            .doc
-                            .as_ref()
-                            .map(|live| live.line_text(cursor.line))
-                            .unwrap_or_default();
-                        references_at = Some(native_lsp::Position {
-                            line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
-                            character: native_lsp::char_col_to_utf16(&row, cursor.col),
-                        });
-                    }
-                    Effect::RenameSymbol => {
-                        let cursor = doc.engine.cursor();
-                        let row = doc
-                            .doc
-                            .as_ref()
-                            .map(|live| live.line_text(cursor.line))
-                            .unwrap_or_default();
-                        rename_at = Some(native_lsp::Position {
-                            line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
-                            character: native_lsp::char_col_to_utf16(&row, cursor.col),
-                        });
-                    }
-                    Effect::Bell => {}
                 }
             }
             // Problems panel: click targets under the header. Clicks
@@ -1117,6 +1241,61 @@ impl App {
             }
             post
         };
+        if is_markdown {
+            let mode = self.native_docs.get(path).map(|doc| doc.markdown_mode);
+            if mode != Some(markdown::Mode::Edit) {
+                let text = self
+                    .native_docs
+                    .get(path)
+                    .and_then(|doc| doc.doc.as_ref())
+                    .map(Doc::text);
+                if let Some(text) = text {
+                    let state = if self.native_dirty(path) {
+                        "Unsaved changes"
+                    } else {
+                        "Saved"
+                    };
+                    let cursor = self.native_docs.get(path).map(|doc| doc.engine.cursor());
+                    let status = cursor.map_or_else(
+                        || state.to_owned(),
+                        |cursor| {
+                            format!(
+                                "Ln {}, Col {}  ·  {state}",
+                                cursor.line.saturating_add(1),
+                                cursor.col.saturating_add(1)
+                            )
+                        },
+                    );
+                    let preview = self.markdown.snapshot(&preview_key, path, &text);
+                    let mut link = None;
+                    let mut show_preview = |ui: &mut egui::Ui| {
+                        let sync = if mode == Some(markdown::Mode::Split) && !preview_hovered {
+                            source_scroll
+                        } else {
+                            None
+                        };
+                        link = preview.show_synced(ui, &preview_key, Some(&status), sync);
+                    };
+                    if mode == Some(markdown::Mode::Split) {
+                        egui::CentralPanel::default()
+                            .frame(egui::Frame::NONE)
+                            .show(ui, &mut show_preview);
+                    } else {
+                        show_preview(ui);
+                    }
+                    if let Some(link) = link {
+                        match link {
+                            markdown::Link::File(target) => {
+                                self.open_file(target, None, None, false);
+                            }
+                            markdown::Link::Web(url) => {
+                                let _ = self.jobs.send(Job::Browser(url));
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if let PostEdit::Close { force } = post {
             self.pending_native_close.push((
                 path.to_owned(),

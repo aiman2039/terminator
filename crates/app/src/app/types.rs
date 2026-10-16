@@ -266,6 +266,12 @@ pub(crate) enum Update {
     Diff(String, Result<diff::DiffDocument, String>),
     Workspace(workspace_ops::Op, Result<workspace_ops::Report, String>),
     Search(u64, Result<Vec<search::Hit>, String>),
+    DirectoryPreview(
+        u64,
+        PathBuf,
+        PathBuf,
+        Result<Vec<terminator_git::Entry>, services::DirectoryError>,
+    ),
     Refresh(
         u64,
         services::ContextData,

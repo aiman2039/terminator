@@ -18,6 +18,37 @@ pub struct Request {
     pub cwd: PathBuf,
     pub generation: u64,
     pub directories: Vec<PathBuf>,
+    /// The Git view needs per-file untracked status, line counts, and a full watch.
+    pub include_stats: bool,
+}
+
+fn watch_targets(
+    request: &Request,
+    context: &services::ContextData,
+) -> Vec<(PathBuf, RecursiveMode)> {
+    let mut targets = std::collections::BTreeMap::new();
+    if request.include_stats {
+        targets.insert(
+            normalize(context.root.as_ref().unwrap_or(&request.cwd)),
+            RecursiveMode::Recursive,
+        );
+    } else {
+        for path in &request.directories {
+            targets.insert(normalize(path), RecursiveMode::NonRecursive);
+        }
+    }
+    for path in &context.git_dirs {
+        targets.insert(normalize(path), RecursiveMode::Recursive);
+    }
+    let all: Vec<_> = targets.into_iter().collect();
+    all.iter()
+        .filter(|(path, _)| {
+            !all.iter().any(|(parent, mode)| {
+                parent != path && *mode == RecursiveMode::Recursive && path.starts_with(parent)
+            })
+        })
+        .cloned()
+        .collect()
 }
 #[cfg(test)]
 pub fn spawn(tx: Sender<Update>, ctx: eframe::egui::Context) -> Sender<Option<Request>> {
@@ -51,7 +82,7 @@ fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Con
         notify::Config::default().with_poll_interval(Duration::from_millis(50)),
     )
     .ok();
-    let mut watched = Vec::<PathBuf>::new();
+    let mut watched = Vec::<(PathBuf, RecursiveMode)>::new();
     let mut active = None::<Request>;
     let mut pending = None::<Instant>;
     let mut last = Instant::now();
@@ -107,7 +138,7 @@ fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Con
         }
         let Some(request) = &active else {
             if let Some(watcher) = &mut watcher {
-                for path in watched.drain(..) {
+                for (path, _) in watched.drain(..) {
                     let _ = watcher.unwatch(&path);
                 }
             }
@@ -136,29 +167,16 @@ fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Con
             continue;
         }
         pending = None;
-        let context = services::context_cached(&request.cwd, &mut cache);
-        let mut targets = Vec::new();
-        targets.push(context.root.clone().unwrap_or(request.cwd.clone()));
-        targets.extend(context.git_dirs.iter().cloned());
-        // FSEvents delivers canonical paths. Register those same paths rather
-        // than aliases such as macOS /var or /tmp, including linked worktrees.
-        targets = targets.into_iter().map(|path| normalize(&path)).collect();
-        targets.sort();
-        targets.dedup();
-        let all_targets = targets.clone();
-        targets.retain(|path| {
-            !all_targets
-                .iter()
-                .any(|parent| parent != path && path.starts_with(parent))
-        });
+        let context = services::context_cached(&request.cwd, &mut cache, request.include_stats);
+        let targets = watch_targets(request, &context);
         if targets != watched || !watch_ok {
             watch_ok = watcher.is_some();
             if let Some(watcher) = &mut watcher {
-                for path in watched.drain(..) {
+                for (path, _) in watched.drain(..) {
                     let _ = watcher.unwatch(&path);
                 }
-                for path in &targets {
-                    if watcher.watch(path, RecursiveMode::Recursive).is_err() {
+                for (path, mode) in &targets {
+                    if watcher.watch(path, *mode).is_err() {
                         watch_ok = false;
                     }
                 }
@@ -262,7 +280,7 @@ pub fn spawn_async(
             }).ok())
         }).await?;
         let watcher = std::sync::Arc::new(std::sync::Mutex::new(watcher));
-        let mut watched = Vec::<PathBuf>::new();
+        let mut watched = Vec::<(PathBuf, RecursiveMode)>::new();
         let mut missing_path = crate::retry_budget::RetryBudget::default();
         loop {
             let request = requests.borrow_and_update().clone();
@@ -280,27 +298,40 @@ pub fn spawn_async(
             let operation = token.child_token();
             let _guard = operation.clone().drop_guard();
             let work = async {
-                let context = services::context_async(&service, request.cwd.clone(), &operation).await;
-                let mut targets = vec![context.root.clone().unwrap_or(request.cwd.clone())];
-                targets.extend(context.git_dirs.iter().cloned());
+                // Show the bounded directory entries before repository status,
+                // line counts, ignore checks, or watcher setup can delay them.
+                let mut raw_directories = Vec::new();
+                for path in &request.directories {
+                    let entries = services::directory_raw_async(&service, path.clone(), &operation).await;
+                    service.emit_read(Update::DirectoryPreview(
+                        request.generation,
+                        request.cwd.clone(),
+                        path.clone(),
+                        entries.clone(),
+                    )).await?;
+                    raw_directories.push((path.clone(), entries));
+                }
+                let context = services::context_async(
+                    &service, request.cwd.clone(), request.include_stats, &operation,
+                ).await;
+                let targets = watch_targets(&request, &context);
                 let old = watched.clone();
                 let cache = std::sync::Arc::clone(&watcher);
                 let (targets, fallback) = service.fs().run(&operation, move || {
-                    let mut targets: Vec<_> = targets.iter().map(|p| normalize(p)).collect();
-                    targets.sort(); targets.dedup();
-                    let all = targets.clone(); targets.retain(|p| !all.iter().any(|parent| parent != p && p.starts_with(parent)));
                     let mut watcher = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     let mut fallback = watcher.is_none();
                     if let Some(watcher) = watcher.as_mut() && old != targets {
-                        for path in old { let _ = watcher.unwatch(&path); }
-                        for path in &targets { if watcher.watch(path, RecursiveMode::Recursive).is_err() { fallback = true; } }
+                        for (path, _) in old { let _ = watcher.unwatch(&path); }
+                        for (path, mode) in &targets { if watcher.watch(path, *mode).is_err() { fallback = true; } }
                     }
                     Ok((targets, fallback))
                 }).await?;
                 let mut directories = Vec::new();
-                for path in &request.directories {
-                    let entries = services::directory_async(&service, path.clone(), context.root.clone(), &operation).await;
-                    directories.push((path.clone(), entries));
+                for (path, entries) in raw_directories {
+                    let entries = services::directory_with_ignored_async(
+                        &service, path.clone(), entries, context.root.is_some(),
+                    ).await;
+                    directories.push((path, entries));
                 }
                 service.emit_read(Update::Refresh(request.generation, context, directories, fallback)).await?;
                 Ok::<_, anyhow::Error>((targets, fallback))
@@ -343,6 +374,82 @@ pub fn spawn_async(
 mod tests {
     use super::*;
     #[test]
+    fn explorer_watches_only_visible_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let target = root.join("target");
+        let modules = root.join("node_modules");
+        let git_dir = root.join(".git");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::create_dir_all(&modules).unwrap();
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let context = services::ContextData {
+            cwd: root.clone(),
+            root: Some(root.clone()),
+            git_dirs: vec![git_dir.clone()],
+            branch: String::new(),
+            changes: Vec::new(),
+            decorations: HashMap::default(),
+            stats: HashMap::default(),
+            error: None,
+        };
+        let mut request = Request {
+            cwd: root.clone(),
+            generation: 1,
+            directories: vec![root.clone()],
+            include_stats: false,
+        };
+        assert_eq!(
+            watch_targets(&request, &context),
+            vec![
+                (root.clone(), RecursiveMode::NonRecursive),
+                (git_dir.clone(), RecursiveMode::Recursive),
+            ]
+        );
+        request.directories.push(target.clone());
+        assert!(watch_targets(&request, &context).contains(&(target, RecursiveMode::NonRecursive)));
+        assert!(
+            !watch_targets(&request, &context)
+                .iter()
+                .any(|(path, _)| path == &modules)
+        );
+        request.include_stats = true;
+        assert_eq!(
+            watch_targets(&request, &context),
+            vec![(root, RecursiveMode::Recursive)]
+        );
+    }
+
+    #[tokio::test]
+    async fn visible_directory_arrives_before_repository_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("ready.md"), "# Ready\n").unwrap();
+        let (legacy, _) = mpsc::channel();
+        let paths = terminator_core::Paths::at(dir.path().join("app-state"));
+        let (service, mut owner) =
+            crate::gui_services::Services::new(paths, eframe::egui::Context::default(), legacy)
+                .unwrap();
+        let refresh = spawn_async(service);
+        refresh
+            .send(Some(Request {
+                cwd: dir.path().to_owned(),
+                generation: 1,
+                directories: vec![dir.path().to_owned()],
+                include_stats: false,
+            }))
+            .unwrap();
+        let first = tokio::time::timeout(Duration::from_secs(5), owner.events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let Update::DirectoryPreview(1, _, path, Ok(entries)) = first else {
+            panic!("directory entries must arrive before Git status");
+        };
+        assert_eq!(path, dir.path());
+        assert!(entries.iter().any(|entry| entry.path.ends_with("ready.md")));
+    }
+
+    #[test]
     fn dirty_path_overflow_becomes_one_full_rescan() {
         let mut paths = vec![PathBuf::from("old"); MAX_DIRTY_PATHS];
         let mut full = false;
@@ -363,6 +470,7 @@ mod tests {
                 cwd: dir.path().into(),
                 generation: 1,
                 directories: vec![dir.path().into()],
+                include_stats: false,
             }))
             .unwrap();
         assert!(matches!(
@@ -397,6 +505,7 @@ mod tests {
                 cwd: dir.path().into(),
                 generation: 2,
                 directories: vec![dir.path().into()],
+                include_stats: false,
             }))
             .unwrap();
         let Update::Refresh(2, _, dirs, _) = rx.recv_timeout(Duration::from_secs(5)).unwrap()
@@ -421,6 +530,7 @@ mod tests {
                     cwd: dir.path().into(),
                     generation,
                     directories: vec![dir.path().into()],
+                    include_stats: false,
                 }))
                 .unwrap();
             let Update::Refresh(actual, _, dirs, _) =
@@ -444,6 +554,7 @@ mod tests {
                 cwd: cwd.clone(),
                 generation: 1,
                 directories: vec![cwd.clone()],
+                include_stats: false,
             }))
             .unwrap();
         let mut refreshes = 0;
@@ -470,6 +581,7 @@ mod tests {
                 cwd,
                 generation: 2,
                 directories: vec![dir.path().join("deleted-worktree")],
+                include_stats: false,
             }))
             .unwrap();
         assert!(matches!(

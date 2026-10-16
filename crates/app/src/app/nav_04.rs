@@ -716,6 +716,7 @@ mod tests {
             cwd: root.clone(),
             generation: 7,
             directories: vec![root.clone()],
+            include_stats: false,
         });
         app.update_tx
             .send(Update::Refresh(6, context.clone(), vec![], false))

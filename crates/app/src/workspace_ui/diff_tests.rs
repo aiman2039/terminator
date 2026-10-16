@@ -762,6 +762,7 @@ pub(crate) mod tests {
             split: vec![],
         };
         let ctx = egui::Context::default();
+        appearance::install(&ctx);
         let mut previews = markdown::Previews::new(&ctx);
         for (index, text) in [&doc.left_text, &doc.right_text].into_iter().enumerate() {
             previews.snapshot(

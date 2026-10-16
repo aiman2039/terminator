@@ -1,5 +1,63 @@
 # Validation evidence — 2026-09-08
 
+## Markdown reading view and lazy Explorer — 2026-10-15
+
+Native Markdown source now wraps within the split pane while keeping logical
+cursor columns. Markdown preview uses a local 16-point reading font, 28-point
+top heading, more spacing, and a 720-point reading column. Explorer enumerates
+only visible directories and watches them without recursion. Its refresh does
+not run Git status; the Git view keeps full status and recursive watching.
+`cargo build --workspace --bins --examples --features terminator/test-support
+--locked` passed. The isolated `cargo xtask gui markdown` fixture passed and
+captured a larger preview at `/private/tmp/terminator-markdown-visual-20261015`.
+The isolated `cargo xtask gui native-rename` fixture also passed and captured
+the native context menu and wrapped Markdown split view at
+`/private/tmp/terminator-native-markdown-menu-20261015/native-rename`.
+`cargo clippy -p terminator --lib --locked -- -D warnings`, all 146
+`terminator-native-edit` unit tests, six refresh tests, and 15 Markdown tests
+passed. The real native fixture confirms the menu actions and captures the
+wrapped source; it does not measure performance in the user's project.
+
+## Explorer first listing — 2026-10-15
+
+The production refresh now sends each bounded raw directory listing before
+ignore checks finish. Explorer does not request Git status or line counts.
+Git line counts use the filesystem worker, stop on cancellation,
+and read at most 2 MiB from each regular untracked file. In this checkout,
+`git status --porcelain=v1 -z --untracked-files=all` took about 0.01 seconds,
+so it does not reproduce the reported delay. `cargo check -p terminator
+--locked`, `cargo clippy -p terminator --lib --locked -- -D warnings`,
+`cargo test -p terminator --lib directory_ --locked` (11 tests),
+`cargo test -p terminator --lib merge_stats --locked` (1 test), and
+`cargo test -p terminator --lib refresh::tests:: --locked` (5 tests), and
+`git diff --check` passed. The new async test observes the directory update
+before repository refresh. A live GUI in the affected project was not timed.
+
+## Native Mermaid Markdown preview — 2026-10-15
+
+Merman 0.9 renders valid Mermaid code fences on the Markdown CPU worker. The
+preview uses the existing bounded SVG decoder and shows the source block when
+rendering fails. The same path serves native, Neovim, and diff snapshots.
+`cargo check -p terminator --locked`, `cargo clippy -p terminator --lib --locked
+-- -D warnings`, `cargo test -p terminator --lib markdown:: --locked` (15 tests),
+and `cargo deny check bans licenses sources` passed. The focused test confirms a rendered
+flowchart, preserved surrounding text and links, GUI texture upload, and
+source fallback. Native desktop appearance was not checked.
+
+## Native Markdown preview and toolbar — 2026-10-15
+
+The native editor now presents Markdown in Edit, Preview, or Split. The preview
+uses the unsaved GUI buffer, and its status shows word and heading counts.
+The native header uses frameless icon controls and a heading menu. The preview
+column is centered at a readable width. `cargo check -p terminator --locked`,
+`cargo clippy -p terminator --lib --locked -- -D warnings`, and
+`cargo test -p terminator --lib markdown:: --locked` passed (11 tests).
+`cargo test -p terminator-native-edit --lib --locked` passed (144 tests).
+Split scroll positions follow the pane under the pointer by document fraction.
+`cargo clippy -p terminator --all-targets --locked -- -D warnings` remains
+blocked by 12 pre-existing unused-import warnings in unrelated test modules.
+Native desktop appearance, input, and split scroll behavior were not tested.
+
 ## Windows release ZIP verification — 2026-10-11
 
 Release run `38110971207`, Windows job `114387440022`, built the package

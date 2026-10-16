@@ -19,8 +19,11 @@ pub(crate) struct Preview {
     pub(super) applied_generation: u64,
     pub(super) error: Option<String>,
     pub(super) cache: CommonMarkCache,
+    pub(super) mermaid_textures: Vec<egui::TextureHandle>,
     pub editor_focused: bool,
     pub(super) preview_rect: egui::Rect,
+    pub scroll_fraction: f32,
+    pub(super) cache_scroll_height: f32,
 }
 impl Default for Preview {
     fn default() -> Self {
@@ -31,8 +34,11 @@ impl Default for Preview {
             applied_generation: 0,
             error: None,
             cache: CommonMarkCache::default(),
+            mermaid_textures: Vec::new(),
             editor_focused: true,
             preview_rect: egui::Rect::NOTHING,
+            scroll_fraction: 0.0,
+            cache_scroll_height: 0.0,
         }
     }
 }
@@ -42,6 +48,7 @@ impl Preview {
             Ok(document) => {
                 self.cache.clear_scrollable();
                 self.cache.link_hooks_clear();
+                self.mermaid_textures.clear();
                 for link in document.links.keys() {
                     self.cache.add_link_hook(link);
                 }
@@ -61,7 +68,32 @@ impl Preview {
             self.editor_focused = false;
         }
     }
+    pub fn contains_pointer(&self, ui: &egui::Ui) -> bool {
+        ui.input(|input| {
+            input
+                .pointer
+                .hover_pos()
+                .is_some_and(|point| self.preview_rect.contains(point))
+        })
+    }
     pub fn show(&mut self, ui: &mut egui::Ui, sid: &str) -> Option<Link> {
+        self.show_with_status(ui, sid, None)
+    }
+    pub fn show_with_status(
+        &mut self,
+        ui: &mut egui::Ui,
+        sid: &str,
+        status_override: Option<&str>,
+    ) -> Option<Link> {
+        self.show_synced(ui, sid, status_override, None)
+    }
+    pub fn show_synced(
+        &mut self,
+        ui: &mut egui::Ui,
+        sid: &str,
+        status_override: Option<&str>,
+        scroll_fraction: Option<f32>,
+    ) -> Option<Link> {
         self.preview_rect = ui.max_rect();
         self.pointer_focus(ui);
         #[cfg(feature = "test-support")]
@@ -80,10 +112,47 @@ impl Preview {
         };
         let status = if self.error.is_some() {
             "Last available preview"
+        } else if self.snapshot_source.is_some()
+            && self.applied_generation != self.snapshot_generation
+        {
+            "Updating preview…"
         } else {
-            document.status
+            status_override.unwrap_or(document.status)
         };
-        ui.weak(status);
+        let words = document.words;
+        let headings = document.headings;
+        if self.mermaid_textures.len() != document.mermaid.len() {
+            self.mermaid_textures = document
+                .mermaid
+                .iter()
+                .enumerate()
+                .map(|(index, diagram)| {
+                    ui.ctx().load_texture(
+                        format!("markdown-mermaid:{sid}:{index}"),
+                        Arc::clone(&diagram.image),
+                        egui::TextureOptions::LINEAR,
+                    )
+                })
+                .collect();
+        }
+        egui::Panel::bottom(egui::Id::new(("markdown-status", sid)))
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 4)))
+            .show(ui, |ui| {
+                let label = if ui.available_width() < 360.0 {
+                    status.to_owned()
+                } else {
+                    format!("{words} words  ·  {headings} headings  ·  {status}")
+                };
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    egui::Frame::new()
+                        .fill(ui.visuals().panel_fill)
+                        .corner_radius(10)
+                        .inner_margin(egui::Margin::symmetric(8, 3))
+                        .show(ui, |ui| {
+                            ui.weak(label);
+                        });
+                });
+            });
         #[cfg(feature = "test-support")]
         {
             crate::diagnostics::record(
@@ -92,20 +161,81 @@ impl Preview {
                 self.preview_rect,
             );
         }
-        egui::ScrollArea::both()
+        let mut scroll = egui::ScrollArea::both()
             .id_salt(("markdown-scroll", sid))
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                egui::Frame::NONE.inner_margin(12).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 8.0;
-                    CommonMarkViewer::new()
-                        .explicit_image_uri_scheme(true)
-                        .max_image_width(Some(usize_from_f32(ui.available_width().max(1.0))))
-                        .enable_scroll_to_heading(true)
-                        .show(ui, &mut self.cache, &document.text);
+            .auto_shrink([false, false]);
+        if let Some(fraction) = scroll_fraction {
+            let content_height = self.cache_scroll_height;
+            let viewport_height = ui.available_height();
+            scroll = scroll.vertical_scroll_offset(
+                (content_height - viewport_height).max(0.0) * fraction.clamp(0.0, 1.0),
+            );
+        }
+        let output = scroll.show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            let width = ui.available_width().min(720.0);
+            let margin = ((ui.available_width() - width) * 0.5).max(0.0);
+            ui.horizontal(|ui| {
+                ui.add_space(margin);
+                ui.vertical(|ui| {
+                    ui.set_max_width(width);
+                    egui::Frame::NONE.inner_margin(18).show(ui, |ui| {
+                        ui.style_mut()
+                            .text_styles
+                            .insert(egui::TextStyle::Body, egui::FontId::proportional(16.0));
+                        ui.style_mut().text_styles.insert(
+                            egui::TextStyle::Heading,
+                            egui::FontId::new(28.0, egui::FontFamily::Name("Semibold".into())),
+                        );
+                        ui.style_mut()
+                            .text_styles
+                            .insert(egui::TextStyle::Monospace, egui::FontId::monospace(14.0));
+                        ui.spacing_mut().item_spacing.y = 10.0;
+                        let mut show_text = |ui: &mut egui::Ui, text: &str| {
+                            CommonMarkViewer::new()
+                                .explicit_image_uri_scheme(true)
+                                .max_image_width(Some(usize_from_f32(
+                                    ui.available_width().max(1.0),
+                                )))
+                                .enable_scroll_to_heading(true)
+                                .show(ui, &mut self.cache, text);
+                        };
+                        if document.mermaid.is_empty() {
+                            show_text(ui, &document.text);
+                        } else {
+                            let mut position = 0;
+                            for (diagram, texture) in
+                                document.mermaid.iter().zip(&self.mermaid_textures)
+                            {
+                                if let Some(before) =
+                                    document.text.get(position..diagram.range.start)
+                                    && !before.is_empty()
+                                {
+                                    show_text(ui, before);
+                                }
+                                ui.add(
+                                    egui::Image::from_texture(texture)
+                                        .max_size(egui::vec2(ui.available_width(), 1200.0)),
+                                );
+                                position = diagram.range.end;
+                            }
+                            if let Some(after) = document.text.get(position..)
+                                && !after.is_empty()
+                            {
+                                show_text(ui, after);
+                            }
+                        }
+                    });
                 });
             });
+        });
+        self.cache_scroll_height = output.content_size.y;
+        let scroll_range = (output.content_size.y - output.inner_rect.height()).max(0.0);
+        self.scroll_fraction = if scroll_range > 0.0 {
+            (output.state.offset.y / scroll_range).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         document.links.iter().find_map(|(url, target)| {
             (self.cache.get_link_hook(url) == Some(true))
                 .then(|| target.clone())

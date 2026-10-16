@@ -14,6 +14,8 @@ pub struct DiagnosticMark {
     pub severity: crate::lsp::Severity,
 }
 
+pub type MenuItemRenderer = fn(&mut egui::Ui, &str, &str, &str) -> egui::Response;
+
 pub struct SourceOptions {
     pub font_size: f32,
     pub show_line_numbers: bool,
@@ -32,6 +34,14 @@ pub struct SourceOptions {
     /// A filesystem operation owns this buffer; navigation and copying
     /// stay available, while edits and saves wait for its result.
     pub read_only: bool,
+    /// Host menu widgets keep the editor menu consistent with other panes.
+    pub menu_style: Option<fn(&mut egui::Style)>,
+    pub menu_header: Option<fn(&mut egui::Ui, &str, &str)>,
+    pub menu_item: Option<MenuItemRenderer>,
+    /// Wrap long source lines inside the pane while keeping logical cursor columns.
+    pub soft_wrap: bool,
+    /// Set the visible position as a fraction of the scrollable document.
+    pub scroll_fraction: Option<f32>,
 }
 
 impl Default for SourceOptions {
@@ -43,6 +53,11 @@ impl Default for SourceOptions {
             autofocus: true,
             vim: true,
             read_only: false,
+            menu_style: None,
+            menu_header: None,
+            menu_item: None,
+            soft_wrap: false,
+            scroll_fraction: None,
             diagnostics: Vec::new(),
         }
     }
@@ -62,6 +77,80 @@ pub struct SourceOutcome {
     pub hover_action_rect: Option<egui::Rect>,
     /// Command/search row, fixed to the pane bottom when enabled.
     pub footer_rect: Option<egui::Rect>,
+    /// Current vertical position in the scrollable document, from 0 to 1.
+    pub scroll_fraction: f32,
+    /// Number of painted rows after optional source wrapping.
+    pub visual_rows: usize,
+}
+
+struct VisualRow {
+    line: usize,
+    start: usize,
+    end: usize,
+    line_len: usize,
+    text: String,
+}
+
+impl VisualRow {
+    fn owns_cursor(&self, line: usize, col: usize) -> bool {
+        self.line == line
+            && col >= self.start
+            && (col < self.end || (col == self.end && self.end == self.line_len))
+    }
+}
+
+fn visual_rows<B: Buffer>(doc: &B, wrap_columns: Option<usize>) -> Vec<VisualRow> {
+    let mut rows = Vec::new();
+    for line in 0..doc.line_count() {
+        let text = doc.line_text(line);
+        let chars: Vec<char> = text.chars().collect();
+        let line_len = chars.len();
+        if line_len == 0 || wrap_columns.is_none() {
+            rows.push(VisualRow {
+                line,
+                start: 0,
+                end: line_len,
+                line_len,
+                text,
+            });
+            continue;
+        }
+        let limit = wrap_columns.unwrap_or(usize::MAX).max(1);
+        let mut start = 0;
+        while start < line_len {
+            let mut end = start;
+            let mut cells = 0usize;
+            let mut last_space = None;
+            while end < line_len {
+                let Some(ch) = chars.get(end).copied() else {
+                    break;
+                };
+                let width = char_display_width(ch);
+                if end > start && cells.saturating_add(width) > limit {
+                    break;
+                }
+                cells = cells.saturating_add(width);
+                end = end.saturating_add(1);
+                if ch.is_whitespace() {
+                    last_space = Some(end);
+                }
+            }
+            if end < line_len
+                && let Some(space) = last_space.filter(|space| *space > start)
+            {
+                end = space;
+            }
+            rows.push(VisualRow {
+                line,
+                start,
+                end,
+                line_len,
+                text: chars.get(start..end).unwrap_or(&[]).iter().collect(),
+            });
+            start = end;
+        }
+    }
+    rows
 }
 
 /// Render an editable source view. Returns engine effects (`Save`/`Quit`/…)
@@ -91,8 +180,16 @@ pub fn show_source<B: Buffer>(
     } else {
         0.0
     };
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    // Pane geometry becomes a bounded number of monospace cells.
+    let wrap_columns = options.soft_wrap.then(|| {
+        ((ui.available_width() - gutter - 16.0).max(advance) / advance)
+            .floor()
+            .max(1.0) as usize
+    });
+    let visual_rows = visual_rows(doc, wrap_columns);
     #[allow(clippy::cast_precision_loss)] // UI coordinate
-    let content_height = doc.line_count().max(1) as f32 * row_height;
+    let content_height = visual_rows.len().max(1) as f32 * row_height;
     let mut effects = Vec::new();
 
     // Highlight derive, once per buffer revision: unchanged frames repaint
@@ -118,505 +215,567 @@ pub fn show_source<B: Buffer>(
     let mut rename_action_rect = None;
     let mut hover_action_rect = None;
     let mut activated = false;
-    egui::ScrollArea::vertical()
+    let mut scroll = egui::ScrollArea::vertical()
         .id_salt(("native-source", id))
         .max_height(max_scroll)
-        .auto_shrink([true, false])
-        .show(ui, |ui| {
-            let width = ui.available_width().max(gutter + advance);
-            let (response, painter) = ui.allocate_painter(
-                Vec2::new(width, content_height.max(max_scroll)),
-                Sense::click(),
-            );
-            // I-beam over file text; the default Sense::click pointer reads
-            // as "clickable chrome" instead of an editor.
-            let response = response.on_hover_cursor(egui::CursorIcon::Text);
-            content_rect = response.rect;
-            activated = response.clicked() || response.secondary_clicked();
-            let focus_id = source_focus_id(id);
-            if response.clicked() || (response.secondary_clicked() && engine.selection().is_none())
-            {
-                ui.memory_mut(|memory| memory.request_focus(focus_id));
-                if let Some(pos) = response.interact_pointer_pos() {
-                    let click_origin = response.rect.min;
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    // UI coordinate
-                    let line = ((pos.y - click_origin.y) / row_height).floor().max(0.0) as usize;
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    // UI coordinate
-                    let cells = ((pos.x - click_origin.x - gutter) / advance)
-                        .round()
-                        .max(0.0) as usize;
-                    // Wide chars occupy two cells: resolve the display cell
-                    // back to a char column on the clicked row.
-                    let row = doc.line_text(line.min(doc.line_count().saturating_sub(1)));
-                    let col = col_at_display_x(&row, cells);
-                    effects.extend(engine.place_cursor(doc, line, col));
+        .auto_shrink([true, false]);
+    if let Some(fraction) = options.scroll_fraction {
+        scroll = scroll.vertical_scroll_offset(
+            (content_height - max_scroll).max(0.0) * fraction.clamp(0.0, 1.0),
+        );
+    }
+    let scroll_output = scroll.show(ui, |ui| {
+        let width = ui.available_width().max(gutter + advance);
+        let (response, painter) = ui.allocate_painter(
+            Vec2::new(width, content_height.max(max_scroll)),
+            Sense::click(),
+        );
+        // I-beam over file text; the default Sense::click pointer reads
+        // as "clickable chrome" instead of an editor.
+        let response = response.on_hover_cursor(egui::CursorIcon::Text);
+        content_rect = response.rect;
+        activated = response.clicked() || response.secondary_clicked();
+        let focus_id = source_focus_id(id);
+        if response.clicked() || (response.secondary_clicked() && engine.selection().is_none()) {
+            ui.memory_mut(|memory| memory.request_focus(focus_id));
+            if let Some(pos) = response.interact_pointer_pos() {
+                let click_origin = response.rect.min;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                // UI coordinate
+                let visual_line = ((pos.y - click_origin.y) / row_height).floor().max(0.0) as usize;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                // UI coordinate
+                let cells = ((pos.x - click_origin.x - gutter) / advance)
+                    .round()
+                    .max(0.0) as usize;
+                // Wide chars occupy two cells: resolve the display cell
+                // back to a char column on the clicked row.
+                if let Some(row) = visual_rows.get(visual_line).or_else(|| visual_rows.last()) {
+                    let col = row.start.saturating_add(col_at_display_x(&row.text, cells));
+                    effects.extend(engine.place_cursor(doc, row.line, col));
                 }
             }
-            response.context_menu(|ui| {
-                if ui.button("Copy").clicked() {
-                    let text = engine.copy_text(doc);
-                    if !text.is_empty() {
-                        ui.ctx().copy_text(text);
-                    }
-                    ui.close();
+        }
+        let mut popup = egui::Popup::context_menu(&response);
+        if let Some(style) = options.menu_style {
+            popup = popup.style(style);
+        }
+        popup.show(|ui| {
+            if let Some(header) = options.menu_header {
+                header(ui, id, id);
+            }
+            let item = |ui: &mut egui::Ui, label: &str, icon: &str, shortcut: &str| match options
+                .menu_item
+            {
+                Some(draw) => draw(ui, label, icon, shortcut),
+                None => ui.button(label),
+            };
+            let key = if cfg!(target_os = "macos") {
+                "⌘"
+            } else {
+                "Ctrl+"
+            };
+            let shift = if cfg!(target_os = "macos") {
+                "⇧⌘"
+            } else {
+                "Ctrl+Shift+"
+            };
+            if item(ui, "Copy", "Copy", &format!("{key}C")).clicked() {
+                let text = engine.copy_text(doc);
+                if !text.is_empty() {
+                    ui.ctx().copy_text(text);
                 }
-                if ui
-                    .add_enabled(
-                        !options.read_only && engine.selection().is_some(),
-                        egui::Button::new("Cut"),
-                    )
-                    .clicked()
-                {
-                    let text = engine.cut(doc);
-                    if !text.is_empty() {
-                        ui.ctx().copy_text(text);
-                    }
-                    ui.close();
+                ui.close();
+            }
+            if ui
+                .add_enabled_ui(!options.read_only && engine.selection().is_some(), |ui| {
+                    item(ui, "Cut", "Eraser", &format!("{key}X"))
+                })
+                .inner
+                .clicked()
+            {
+                let text = engine.cut(doc);
+                if !text.is_empty() {
+                    ui.ctx().copy_text(text);
                 }
-                if ui
-                    .add_enabled(!options.read_only, egui::Button::new("Paste"))
-                    .clicked()
-                {
-                    ui.memory_mut(|memory| memory.request_focus(focus_id));
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-                    ui.close();
-                }
-                if ui.button("Select all").clicked() {
-                    engine.select_all(doc);
-                    ui.close();
-                }
+                ui.close();
+            }
+            if ui
+                .add_enabled_ui(!options.read_only, |ui| {
+                    item(ui, "Paste", "ClipboardPaste", &format!("{key}V"))
+                })
+                .inner
+                .clicked()
+            {
+                ui.memory_mut(|memory| memory.request_focus(focus_id));
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                ui.close();
+            }
+            if item(ui, "Select all", "TextSelect", &format!("{key}A")).clicked() {
+                engine.select_all(doc);
+                ui.close();
+            }
+            ui.separator();
+            if ui
+                .add_enabled_ui(!options.read_only, |ui| {
+                    item(ui, "Undo", "History", &format!("{key}Z"))
+                })
+                .inner
+                .clicked()
+            {
+                engine.undo(doc);
+                ui.close();
+            }
+            if ui
+                .add_enabled_ui(!options.read_only, |ui| {
+                    item(ui, "Redo", "RefreshCw", &format!("{shift}Z"))
+                })
+                .inner
+                .clicked()
+            {
+                engine.redo(doc);
+                ui.close();
+            }
+            ui.separator();
+            if item(ui, "Find in file", "Search", &format!("{key}F")).clicked() {
+                engine.begin_search();
+                ui.close();
+            }
+            if ui
+                .add_enabled_ui(!options.read_only, |ui| {
+                    item(ui, "Replace in file", "Pencil", "")
+                })
+                .inner
+                .clicked()
+            {
+                engine.begin_ex("%s/");
+                ui.close();
+            }
+            if ui
+                .add_enabled_ui(!options.read_only, |ui| {
+                    item(ui, "Save", "Save", &format!("{key}S"))
+                })
+                .inner
+                .clicked()
+            {
+                effects.push(Effect::Save);
+                ui.close();
+            }
+            ui.separator();
+            if item(ui, "Copy file path", "Copy", "").clicked() {
+                ui.ctx().copy_text(id.to_owned());
+                ui.close();
+            }
+            if item(ui, "Open file…", "File", &format!("{key}O")).clicked() {
+                effects.push(Effect::OpenFilePicker);
+                ui.close();
+            }
+            let lsp_supported = crate::lsp::language_id(language).is_some();
+            if lsp_supported {
                 ui.separator();
-                if ui
-                    .add_enabled(!options.read_only, egui::Button::new("Undo"))
-                    .clicked()
-                {
-                    engine.undo(doc);
-                    ui.close();
-                }
-                if ui
-                    .add_enabled(!options.read_only, egui::Button::new("Redo"))
-                    .clicked()
-                {
-                    engine.redo(doc);
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button("Find in file").clicked() {
-                    engine.begin_search();
-                    ui.close();
-                }
-                if ui
-                    .add_enabled(!options.read_only, egui::Button::new("Replace in file"))
-                    .clicked()
-                {
-                    engine.begin_ex("%s/");
-                    ui.close();
-                }
-                if ui
-                    .add_enabled(!options.read_only, egui::Button::new("Save"))
-                    .clicked()
-                {
-                    effects.push(Effect::Save);
-                    ui.close();
-                }
-                if ui.button("Copy file path").clicked() {
-                    ui.ctx().copy_text(id.to_owned());
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button("Open file…").clicked() {
-                    effects.push(Effect::OpenFilePicker);
-                    ui.close();
-                }
-                let lsp_supported = crate::lsp::language_id(language).is_some();
-                let lsp_note = "Language server actions are available for Rust and Python files";
-                if ui
-                    .add_enabled(lsp_supported, egui::Button::new("Go to definition"))
-                    .on_disabled_hover_text(lsp_note)
-                    .clicked()
-                {
+                if item(ui, "Go to definition", "ExternalLink", "").clicked() {
                     effects.push(Effect::GotoDefinition);
                     ui.close();
                 }
-                if ui
-                    .add_enabled(lsp_supported, egui::Button::new("Find references"))
-                    .on_disabled_hover_text(lsp_note)
-                    .clicked()
-                {
+                if item(ui, "Find references", "ListTree", "").clicked() {
                     effects.push(Effect::FindReferences);
                     ui.close();
                 }
                 let rename_button = ui
-                    .add_enabled(
-                        lsp_supported && !options.read_only,
-                        egui::Button::new("Rename symbol…"),
-                    )
-                    .on_disabled_hover_text(lsp_note);
+                    .add_enabled_ui(!options.read_only, |ui| {
+                        item(ui, "Rename symbol…", "Pencil", "")
+                    })
+                    .inner;
                 rename_action_rect = Some(rename_button.rect);
                 if rename_button.clicked() {
                     effects.push(Effect::RenameSymbol);
                     ui.close();
                 }
-                let hover_button = ui
-                    .add_enabled(lsp_supported, egui::Button::new("Show hover"))
-                    .on_disabled_hover_text(lsp_note);
+                let hover_button = item(ui, "Show hover", "Info", "");
                 hover_action_rect = Some(hover_button.rect);
                 if hover_button.clicked() {
                     effects.push(Effect::Hover);
                     ui.close();
                 }
-            });
-            context_menu_opened = response.context_menu_opened();
-            if options.autofocus && ui.memory(|memory| memory.focused().is_none()) {
-                ui.memory_mut(|memory| memory.request_focus(focus_id));
             }
-            let focused = ui.memory(|memory| memory.has_focus(focus_id));
-            let origin = response.rect.min;
+        });
+        context_menu_opened = response.context_menu_opened();
+        if options.autofocus && ui.memory(|memory| memory.focused().is_none()) {
+            ui.memory_mut(|memory| memory.request_focus(focus_id));
+        }
+        let focused = ui.memory(|memory| memory.has_focus(focus_id));
+        let origin = response.rect.min;
 
-            // Selection in line/col space, ordered. A visual block
-            // paints its rectangle instead: (top, bottom, left, right+1).
-            let selection = engine.selection().map(|(a, b)| {
-                let (a_idx, b_idx) = (line_col_ord(a), line_col_ord(b));
-                if a_idx <= b_idx { (a, b) } else { (b, a) }
-            });
-            let block = engine.block_span();
+        // Selection in line/col space, ordered. A visual block
+        // paints its rectangle instead: (top, bottom, left, right+1).
+        let selection = engine.selection().map(|(a, b)| {
+            let (a_idx, b_idx) = (line_col_ord(a), line_col_ord(b));
+            if a_idx <= b_idx { (a, b) } else { (b, a) }
+        });
+        let block = engine.block_span();
 
-            let cursor = engine.cursor();
-            let cursor_visible = !matches!(engine.mode(), Mode::Command);
-            for line in 0..doc.line_count() {
-                #[allow(clippy::cast_precision_loss)] // UI coordinate
-                let y = origin.y + line as f32 * row_height;
-                if options.show_line_numbers {
-                    // A marked row tints its line number: errors shout,
-                    // warnings caution, lower severities stay quiet.
-                    let number_color = options
-                        .diagnostics
-                        .binary_search_by(|mark| mark.line.cmp(&line))
-                        .ok()
-                        .and_then(|at| options.diagnostics.get(at))
-                        .map_or_else(
-                            || ui.visuals().weak_text_color(),
-                            |mark| match mark.severity {
-                                crate::lsp::Severity::Error => ui.visuals().error_fg_color,
-                                crate::lsp::Severity::Warning => ui.visuals().warn_fg_color,
-                                _ => ui.visuals().weak_text_color(),
-                            },
-                        );
-                    painter.text(
-                        Pos2::new(origin.x + gutter - advance, y),
-                        egui::Align2::RIGHT_TOP,
-                        format!("{}", line.saturating_add(1)),
-                        font.clone(),
-                        number_color,
+        let cursor = engine.cursor();
+        let cursor_visible = !matches!(engine.mode(), Mode::Command);
+        for (visual_line, visual) in visual_rows.iter().enumerate() {
+            let line = visual.line;
+            #[allow(clippy::cast_precision_loss)] // UI coordinate
+            let y = origin.y + visual_line as f32 * row_height;
+            if y + row_height < painter.clip_rect().top() || y > painter.clip_rect().bottom() {
+                continue;
+            }
+            if options.show_line_numbers && visual.start == 0 {
+                // A marked row tints its line number: errors shout,
+                // warnings caution, lower severities stay quiet.
+                let number_color = options
+                    .diagnostics
+                    .binary_search_by(|mark| mark.line.cmp(&line))
+                    .ok()
+                    .and_then(|at| options.diagnostics.get(at))
+                    .map_or_else(
+                        || ui.visuals().weak_text_color(),
+                        |mark| match mark.severity {
+                            crate::lsp::Severity::Error => ui.visuals().error_fg_color,
+                            crate::lsp::Severity::Warning => ui.visuals().warn_fg_color,
+                            _ => ui.visuals().weak_text_color(),
+                        },
                     );
+                painter.text(
+                    Pos2::new(origin.x + gutter - advance, y),
+                    egui::Align2::RIGHT_TOP,
+                    format!("{}", line.saturating_add(1)),
+                    font.clone(),
+                    number_color,
+                );
+            }
+            let text = &visual.text;
+            // Selection background for this row.
+            let span = match block {
+                Some((top, bottom, left, right)) if line >= top && line <= bottom => {
+                    let len = visual.line_len;
+                    (left < right.min(len)).then(|| (left, right.min(len)))
                 }
-                let text = doc.line_text(line);
-                // Selection background for this row.
-                let span = match block {
-                    Some((top, bottom, left, right)) if line >= top && line <= bottom => {
-                        let len = text.chars().count();
-                        (left < right.min(len)).then(|| (left, right.min(len)))
-                    }
-                    _ => selection.and_then(|(a, b)| {
-                        selection_span_for_line(a, b, line, text.chars().count())
-                    }),
-                };
-                if let Some((start_col, end_col)) = span {
-                    // Char columns to display cells: wide chars shift every
-                    // cell after them.
-                    let start_cell = display_x(&text, start_col);
-                    let cells = display_x(&text, end_col).saturating_sub(start_cell);
-                    #[allow(clippy::cast_precision_loss)] // UI coordinate
-                    let start_x = origin.x + gutter + start_cell as f32 * advance;
-                    #[allow(clippy::cast_precision_loss)] // UI coordinate
-                    let span_w = cells as f32 * advance;
+                _ => selection
+                    .and_then(|(a, b)| selection_span_for_line(a, b, line, visual.line_len)),
+            };
+            if let Some((start_col, end_col)) = span
+                && let (start_col, end_col) = (start_col.max(visual.start), end_col.min(visual.end))
+                && start_col < end_col
+            {
+                // Char columns to display cells: wide chars shift every
+                // cell after them.
+                let start_cell = display_x(text, start_col.saturating_sub(visual.start));
+                let cells = display_x(text, end_col.saturating_sub(visual.start))
+                    .saturating_sub(start_cell);
+                #[allow(clippy::cast_precision_loss)] // UI coordinate
+                let start_x = origin.x + gutter + start_cell as f32 * advance;
+                #[allow(clippy::cast_precision_loss)] // UI coordinate
+                let span_w = cells as f32 * advance;
+                painter.rect_filled(
+                    Rect::from_min_size(Pos2::new(start_x, y), Vec2::new(span_w, row_height)),
+                    0.0,
+                    ui.visuals().selection.bg_fill,
+                );
+            }
+            let cursor_here = cursor_visible && visual.owns_cursor(cursor.line, cursor.col);
+            let local_col = cursor.col.saturating_sub(visual.start);
+            let cell = cursor_here.then(|| text.chars().nth(local_col)).flatten();
+            let cursor_cells = cursor_here.then(|| display_x(text, local_col));
+            let spans: Vec<Span> = highlight
+                .line(line)
+                .iter()
+                .filter_map(|span| {
+                    let start = span.start.max(visual.start);
+                    let end = span.end.min(visual.end);
+                    (start < end).then_some(Span {
+                        start: start.saturating_sub(visual.start),
+                        end: end.saturating_sub(visual.start),
+                        color: span.color,
+                    })
+                })
+                .collect();
+            RowPaint {
+                painter: &painter,
+                text,
+                spans: &spans,
+                x: origin.x + gutter,
+                y,
+                advance,
+                font: &font,
+                plain: ui.visuals().text_color(),
+            }
+            .paint();
+            if let Some(cells) = cursor_cells {
+                let cell_cells = cell.map_or(1, char_display_width);
+                #[allow(clippy::cast_precision_loss)] // UI coordinate
+                let x = origin.x + gutter + cells as f32 * advance;
+                if engine.mode() == Mode::Insert {
                     painter.rect_filled(
-                        Rect::from_min_size(Pos2::new(start_x, y), Vec2::new(span_w, row_height)),
+                        Rect::from_min_size(Pos2::new(x, y), Vec2::new(2.0, row_height)),
+                        0.0,
+                        ui.visuals().text_color(),
+                    );
+                } else {
+                    #[allow(clippy::cast_precision_loss)] // UI coordinate
+                    let cursor_w = cell_cells as f32 * advance;
+                    painter.rect_filled(
+                        Rect::from_min_size(
+                            Pos2::new(x, y),
+                            Vec2::new(cursor_w.max(2.0), row_height),
+                        ),
                         0.0,
                         ui.visuals().selection.bg_fill,
                     );
-                }
-                // Owned before `text` moves into the paint calls below.
-                let cell = (cursor_visible && cursor.line == line)
-                    .then(|| text.chars().nth(cursor.col))
-                    .flatten();
-                let cursor_cells =
-                    (cursor_visible && cursor.line == line).then(|| display_x(&text, cursor.col));
-                RowPaint {
-                    painter: &painter,
-                    text: &text,
-                    spans: highlight.line(line),
-                    x: origin.x + gutter,
-                    y,
-                    advance,
-                    font: &font,
-                    plain: ui.visuals().text_color(),
-                }
-                .paint();
-                if let Some(cells) = cursor_cells {
-                    let cell_cells = cell.map_or(1, char_display_width);
-                    #[allow(clippy::cast_precision_loss)] // UI coordinate
-                    let x = origin.x + gutter + cells as f32 * advance;
-                    if engine.mode() == Mode::Insert {
-                        painter.rect_filled(
-                            Rect::from_min_size(Pos2::new(x, y), Vec2::new(2.0, row_height)),
-                            0.0,
-                            ui.visuals().text_color(),
+                    // Keep the covered cell legible on the block cursor.
+                    if let Some(cell) = cell {
+                        painter.text(
+                            Pos2::new(x, y),
+                            egui::Align2::LEFT_TOP,
+                            cell.to_string(),
+                            font.clone(),
+                            ui.visuals().selection.stroke.color,
                         );
-                    } else {
-                        #[allow(clippy::cast_precision_loss)] // UI coordinate
-                        let cursor_w = cell_cells as f32 * advance;
-                        painter.rect_filled(
-                            Rect::from_min_size(
-                                Pos2::new(x, y),
-                                Vec2::new(cursor_w.max(2.0), row_height),
-                            ),
-                            0.0,
-                            ui.visuals().selection.bg_fill,
-                        );
-                        // Keep the covered cell legible on the block cursor.
-                        if let Some(cell) = cell {
-                            painter.text(
-                                Pos2::new(x, y),
-                                egui::Align2::LEFT_TOP,
-                                cell.to_string(),
-                                font.clone(),
-                                ui.visuals().selection.stroke.color,
-                            );
-                        }
                     }
                 }
             }
+        }
 
-            if focused && !options.read_only {
-                // IDE shortcuts first: copy/cut/paste/select/undo work in
-                // every mode (IntelliJ-style), then plain vim keys. Ctrl-V
-                // and Ctrl-H detour to vim where it owns them.
-                let mut actions: Vec<(egui::Key, egui::Modifiers, IdeAction)> = Vec::new();
-                let mut vim_ctrls: Vec<(egui::Key, egui::Modifiers, VKey)> = Vec::new();
-                let mut pastes: Vec<String> = Vec::new();
-                ui.input(|input| {
-                    for event in &input.events {
-                        match event {
-                            egui::Event::Key {
-                                key,
-                                pressed: true,
-                                modifiers,
-                                ..
-                            } => {
-                                if let Some(action) = ide_shortcut(*key, *modifiers) {
-                                    actions.push((*key, *modifiers, action));
-                                }
-                            }
-                            egui::Event::Paste(text) => pastes.push(text.clone()),
-                            _ => {}
-                        }
-                    }
-                });
-                // Vim-owned Ctrl chords become engine keys before IDE
-                // actions run, so the mode they observe is current.
-                actions.retain(|(key, modifiers, action)| {
-                    let mode = engine.mode();
-                    match action {
-                        IdeAction::PasteKey
-                            if *key == egui::Key::V && ctrl_v_is_block(options.vim, mode) =>
-                        {
-                            vim_ctrls.push((*key, *modifiers, VKey::CtrlV));
-                            false
-                        }
-                        IdeAction::Replace
-                            if *key == egui::Key::H && ctrl_h_is_motion(options.vim, mode) =>
-                        {
-                            vim_ctrls.push((*key, *modifiers, VKey::Backspace));
-                            false
-                        }
-                        _ => true,
-                    }
-                });
-                for (key, modifiers, action) in actions {
-                    match action {
-                        IdeAction::Copy => {
-                            let text = engine.copy_text(doc);
-                            if !text.is_empty() {
-                                ui.ctx().copy_text(text);
-                            }
-                        }
-                        IdeAction::Cut => {
-                            let text = engine.cut(doc);
-                            if !text.is_empty() {
-                                ui.ctx().copy_text(text);
-                            }
-                        }
-                        IdeAction::SelectAll => engine.select_all(doc),
-                        IdeAction::Undo => engine.undo(doc),
-                        IdeAction::Redo => engine.redo(doc),
-                        IdeAction::PasteKey => {}
-                        IdeAction::Save => effects.push(Effect::Save),
-                        IdeAction::Find => engine.begin_search(),
-                        IdeAction::Replace => engine.begin_ex("%s/"),
-                        IdeAction::Hover => effects.push(Effect::Hover),
-                    }
-                    ui.input_mut(|input| input.consume_key(modifiers, key));
-                }
-                for (key, modifiers, vkey) in vim_ctrls {
-                    effects.extend(engine.press_key(doc, vkey));
-                    ui.input_mut(|input| input.consume_key(modifiers, key));
-                }
-                for text in pastes {
-                    engine.paste_text(doc, &text);
-                }
-                // Paste is editor-scoped while focused; nothing downstream
-                // should see it a second time.
-                ui.input_mut(|input| {
-                    input
-                        .events
-                        .retain(|event| !matches!(event, egui::Event::Paste(_)));
-                });
-                // Discrete keys (edge-triggered pressed events).
-                let mut discrete: Vec<(egui::Key, VKey)> = Vec::new();
-                let mut consumed: Vec<egui::Key> = Vec::new();
-                ui.input(|input| {
-                    for event in &input.events {
-                        if let egui::Event::Key {
+        if focused && !options.read_only {
+            // IDE shortcuts first: copy/cut/paste/select/undo work in
+            // every mode (IntelliJ-style), then plain vim keys. Ctrl-V
+            // and Ctrl-H detour to vim where it owns them.
+            let mut actions: Vec<(egui::Key, egui::Modifiers, IdeAction)> = Vec::new();
+            let mut vim_ctrls: Vec<(egui::Key, egui::Modifiers, VKey)> = Vec::new();
+            let mut pastes: Vec<String> = Vec::new();
+            ui.input(|input| {
+                for event in &input.events {
+                    match event {
+                        egui::Event::Key {
                             key,
                             pressed: true,
                             modifiers,
                             ..
-                        } = event
+                        } => {
+                            if let Some(action) = ide_shortcut(*key, *modifiers) {
+                                actions.push((*key, *modifiers, action));
+                            }
+                        }
+                        egui::Event::Paste(text) => pastes.push(text.clone()),
+                        _ => {}
+                    }
+                }
+            });
+            // Vim-owned Ctrl chords become engine keys before IDE
+            // actions run, so the mode they observe is current.
+            actions.retain(|(key, modifiers, action)| {
+                let mode = engine.mode();
+                match action {
+                    IdeAction::PasteKey
+                        if *key == egui::Key::V && ctrl_v_is_block(options.vim, mode) =>
+                    {
+                        vim_ctrls.push((*key, *modifiers, VKey::CtrlV));
+                        false
+                    }
+                    IdeAction::Replace
+                        if *key == egui::Key::H && ctrl_h_is_motion(options.vim, mode) =>
+                    {
+                        vim_ctrls.push((*key, *modifiers, VKey::Backspace));
+                        false
+                    }
+                    _ => true,
+                }
+            });
+            for (key, modifiers, action) in actions {
+                match action {
+                    IdeAction::Copy => {
+                        let text = engine.copy_text(doc);
+                        if !text.is_empty() {
+                            ui.ctx().copy_text(text);
+                        }
+                    }
+                    IdeAction::Cut => {
+                        let text = engine.cut(doc);
+                        if !text.is_empty() {
+                            ui.ctx().copy_text(text);
+                        }
+                    }
+                    IdeAction::SelectAll => engine.select_all(doc),
+                    IdeAction::Undo => engine.undo(doc),
+                    IdeAction::Redo => engine.redo(doc),
+                    IdeAction::PasteKey => {}
+                    IdeAction::Save => effects.push(Effect::Save),
+                    IdeAction::Find => engine.begin_search(),
+                    IdeAction::Replace => engine.begin_ex("%s/"),
+                    IdeAction::Hover => effects.push(Effect::Hover),
+                }
+                ui.input_mut(|input| input.consume_key(modifiers, key));
+            }
+            for (key, modifiers, vkey) in vim_ctrls {
+                effects.extend(engine.press_key(doc, vkey));
+                ui.input_mut(|input| input.consume_key(modifiers, key));
+            }
+            for text in pastes {
+                engine.paste_text(doc, &text);
+            }
+            // Paste is editor-scoped while focused; nothing downstream
+            // should see it a second time.
+            ui.input_mut(|input| {
+                input
+                    .events
+                    .retain(|event| !matches!(event, egui::Event::Paste(_)));
+            });
+            // Discrete keys (edge-triggered pressed events).
+            let mut discrete: Vec<(egui::Key, VKey)> = Vec::new();
+            let mut consumed: Vec<egui::Key> = Vec::new();
+            ui.input(|input| {
+                for event in &input.events {
+                    if let egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } = event
+                    {
+                        // F12 jumps to the definition under the cursor in
+                        // every mode (VS convention; F-keys are never
+                        // vim input and `egui_key` leaves them unmapped).
+                        if *key == egui::Key::F12
+                            && !modifiers.command
+                            && !modifiers.ctrl
+                            && !modifiers.alt
                         {
-                            // F12 jumps to the definition under the cursor in
-                            // every mode (VS convention; F-keys are never
-                            // vim input and `egui_key` leaves them unmapped).
-                            if *key == egui::Key::F12
-                                && !modifiers.command
-                                && !modifiers.ctrl
-                                && !modifiers.alt
-                            {
-                                effects.push(Effect::GotoDefinition);
-                                consumed.push(*key);
-                            } else if *key == egui::Key::F2
-                                && crate::lsp::language_id(language).is_some()
-                                && !modifiers.command
-                                && !modifiers.ctrl
-                                && !modifiers.alt
-                            {
-                                effects.push(Effect::RenameSymbol);
-                                consumed.push(*key);
-                            } else if let Some(mapped) = egui_key(*key, *modifiers) {
-                                discrete.push((*key, mapped));
-                            }
+                            effects.push(Effect::GotoDefinition);
+                            consumed.push(*key);
+                        } else if *key == egui::Key::F2
+                            && crate::lsp::language_id(language).is_some()
+                            && !modifiers.command
+                            && !modifiers.ctrl
+                            && !modifiers.alt
+                        {
+                            effects.push(Effect::RenameSymbol);
+                            consumed.push(*key);
+                        } else if let Some(mapped) = egui_key(*key, *modifiers) {
+                            discrete.push((*key, mapped));
                         }
                     }
-                });
-                // Printable chars handled below as discrete vim keys; their
-                // Text echo must not type a second time (the `i` in `i`).
-                let mut handled_chars: Vec<char> = Vec::new();
-                for (key, vkey) in discrete {
-                    // Single printable chars in Insert mode arrive as Text
-                    // events below; the key event only carries control keys.
-                    if engine.mode() == Mode::Insert && matches!(vkey, VKey::Char(_)) {
-                        continue;
-                    }
-                    if let VKey::Char(c) = vkey {
-                        handled_chars.push(c);
-                    }
-                    // Modeless: with vim off, Normal mode never holds keys
-                    // for commands. Printable keys open an insert session
-                    // and type; editing keys (Enter/Backspace/…) open one
-                    // and apply there; typing over a selection replaces it.
-                    if !options.vim {
-                        let mode = engine.mode();
-                        if mode == Mode::Normal || mode.is_visual() {
-                            match vkey {
-                                VKey::Char(c) if c == ' ' || c.is_ascii_graphic() => {
-                                    if mode.is_visual() {
-                                        let _ = engine.cut(doc);
-                                    }
-                                    effects.extend(engine.press_key(doc, VKey::Char('i')));
-                                    effects.extend(engine.type_text(doc, &c.to_string()));
-                                    consumed.push(key);
-                                    continue;
-                                }
-                                VKey::Enter
-                                | VKey::Backspace
-                                | VKey::Delete
-                                | VKey::Tab
-                                | VKey::Home
-                                | VKey::End => {
-                                    effects.extend(engine.press_key(doc, VKey::Char('i')));
-                                    effects.extend(engine.press_key(doc, vkey));
-                                    consumed.push(key);
-                                    continue;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    effects.extend(engine.press_key(doc, vkey));
-                    consumed.push(key);
                 }
-                // Handled keys must not leak to egui focus/menu handling:
-                // arrows stay in the file, Escape keeps editor focus.
+            });
+            // Printable chars handled below as discrete vim keys; their
+            // Text echo must not type a second time (the `i` in `i`).
+            let mut handled_chars: Vec<char> = Vec::new();
+            for (key, vkey) in discrete {
+                // Single printable chars in Insert mode arrive as Text
+                // events below; the key event only carries control keys.
+                if engine.mode() == Mode::Insert && matches!(vkey, VKey::Char(_)) {
+                    continue;
+                }
+                if let VKey::Char(c) = vkey {
+                    handled_chars.push(c);
+                }
+                // Modeless: with vim off, Normal mode never holds keys
+                // for commands. Printable keys open an insert session
+                // and type; editing keys (Enter/Backspace/…) open one
+                // and apply there; typing over a selection replaces it.
+                if !options.vim {
+                    let mode = engine.mode();
+                    if mode == Mode::Normal || mode.is_visual() {
+                        match vkey {
+                            VKey::Char(c) if c == ' ' || c.is_ascii_graphic() => {
+                                if mode.is_visual() {
+                                    let _ = engine.cut(doc);
+                                }
+                                effects.extend(engine.press_key(doc, VKey::Char('i')));
+                                effects.extend(engine.type_text(doc, &c.to_string()));
+                                consumed.push(key);
+                                continue;
+                            }
+                            VKey::Enter
+                            | VKey::Backspace
+                            | VKey::Delete
+                            | VKey::Tab
+                            | VKey::Home
+                            | VKey::End => {
+                                effects.extend(engine.press_key(doc, VKey::Char('i')));
+                                effects.extend(engine.press_key(doc, vkey));
+                                consumed.push(key);
+                                continue;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                effects.extend(engine.press_key(doc, vkey));
+                consumed.push(key);
+            }
+            // Handled keys must not leak to egui focus/menu handling:
+            // arrows stay in the file, Escape keeps editor focus.
+            ui.input_mut(|input| {
+                for key in consumed {
+                    input.consume_key(egui::Modifiers::NONE, key);
+                }
+            });
+            if engine.mode() == Mode::Insert {
+                let mut typed = String::new();
                 ui.input_mut(|input| {
-                    for key in consumed {
-                        input.consume_key(egui::Modifiers::NONE, key);
-                    }
-                });
-                if engine.mode() == Mode::Insert {
-                    let mut typed = String::new();
-                    ui.input_mut(|input| {
-                        input.events.retain(|event| {
-                            if let egui::Event::Text(text) = event {
-                                if !echo_of_handled_key(text, &mut handled_chars) {
-                                    typed.push_str(text);
-                                }
-                                false
-                            } else {
-                                true
+                    input.events.retain(|event| {
+                        if let egui::Event::Text(text) = event {
+                            if !echo_of_handled_key(text, &mut handled_chars) {
+                                typed.push_str(text);
                             }
-                        });
+                            false
+                        } else {
+                            true
+                        }
                     });
-                    if !typed.is_empty() {
-                        effects.extend(engine.type_text(doc, &typed));
-                    }
-                } else {
-                    // Discard text echoes outside Insert mode so stale input
-                    // (the `:` and `q` of `:q`) can never leak into a later
-                    // Insert session.
-                    ui.input_mut(|input| {
-                        input
-                            .events
-                            .retain(|event| !matches!(event, egui::Event::Text(_)));
-                    });
+                });
+                if !typed.is_empty() {
+                    effects.extend(engine.type_text(doc, &typed));
                 }
-                // Keep repainting while focused so the cursor stays live.
-                ui.ctx().request_repaint();
+            } else {
+                // Discard text echoes outside Insert mode so stale input
+                // (the `:` and `q` of `:q`) can never leak into a later
+                // Insert session.
+                ui.input_mut(|input| {
+                    input
+                        .events
+                        .retain(|event| !matches!(event, egui::Event::Text(_)));
+                });
             }
+            // Keep repainting while focused so the cursor stays live.
+            ui.ctx().request_repaint();
+        }
 
-            // Yank sync (`clipboard=unnamed`): every unnamed-register write
-            // lands on the system clipboard; terminal contexts can wrap it
-            // in `clipboard::copy_sequence` instead.
-            if let Some(text) = engine.take_clipboard()
-                && !text.is_empty()
-            {
-                ui.ctx().copy_text(text);
-            }
+        // Yank sync (`clipboard=unnamed`): every unnamed-register write
+        // lands on the system clipboard; terminal contexts can wrap it
+        // in `clipboard::copy_sequence` instead.
+        if let Some(text) = engine.take_clipboard()
+            && !text.is_empty()
+        {
+            ui.ctx().copy_text(text);
+        }
 
-            // Search and long jumps ask for the cursor row to be revealed;
-            // user scrolling never triggers this, so it cannot fight input.
-            let landed = engine.cursor();
-            if engine.take_scroll_request() {
-                #[allow(clippy::cast_precision_loss)] // UI coordinate
-                let row_y = origin.y + landed.line as f32 * row_height;
-                ui.scroll_to_rect(
-                    Rect::from_min_size(Pos2::new(origin.x, row_y), Vec2::new(width, row_height)),
-                    Some(egui::Align::Center),
-                );
-            }
-        });
+        // Search and long jumps ask for the cursor row to be revealed;
+        // user scrolling never triggers this, so it cannot fight input.
+        let landed = engine.cursor();
+        if engine.take_scroll_request() {
+            let visual_line = visual_rows
+                .iter()
+                .position(|row| row.owns_cursor(landed.line, landed.col))
+                .unwrap_or(landed.line);
+            #[allow(clippy::cast_precision_loss)] // UI coordinate
+            let row_y = origin.y + visual_line as f32 * row_height;
+            ui.scroll_to_rect(
+                Rect::from_min_size(Pos2::new(origin.x, row_y), Vec2::new(width, row_height)),
+                Some(egui::Align::Center),
+            );
+        }
+    });
+    let scroll_range = (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
+    let scroll_fraction = if scroll_range > 0.0 {
+        (scroll_output.state.offset.y / scroll_range).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
 
     // Reserve the footer on every frame so entering or leaving command
     // mode does not move the source viewport.
@@ -646,6 +805,8 @@ pub fn show_source<B: Buffer>(
         rename_action_rect,
         hover_action_rect,
         footer_rect,
+        scroll_fraction,
+        visual_rows: visual_rows.len(),
     }
 }
 
@@ -799,4 +960,74 @@ pub fn status_line(engine: &impl ModalEngine) -> String {
         cursor.line.saturating_add(1),
         cursor.col.saturating_add(1)
     )
+}
+
+#[cfg(test)]
+mod wrap_tests {
+    use super::{SourceOptions, display_x, show_source, visual_rows};
+    use crate::doc::{Buffer, Doc};
+    use crate::highlight::{HighlightCache, Language};
+    use crate::vim::VimEngine;
+
+    #[test]
+    fn wrapped_rows_preserve_source_and_cursor_columns() {
+        let doc = Doc::new("# Heading\n- Long words remain in one logical line\n");
+        let rows = visual_rows(&doc, Some(10));
+        for line in 0..doc.line_count() {
+            let joined: String = rows
+                .iter()
+                .filter(|row| row.line == line)
+                .map(|row| row.text.as_str())
+                .collect();
+            assert_eq!(joined, doc.line_text(line));
+        }
+        assert!(rows.iter().filter(|row| row.line == 1).count() > 1);
+        for col in 0..=doc.line_text(1).chars().count() {
+            assert_eq!(
+                rows.iter().filter(|row| row.owns_cursor(1, col)).count(),
+                1,
+                "cursor column {col} must have one visual row"
+            );
+        }
+        assert!(
+            rows.iter()
+                .all(|row| display_x(&row.text, row.text.chars().count()) <= 10)
+        );
+    }
+
+    #[test]
+    fn markdown_source_uses_wrapped_viewport_height() {
+        let ctx = egui::Context::default();
+        let mut doc = Doc::new(format!("{}\n", "long source words ".repeat(25)));
+        let mut engine = VimEngine::new();
+        let mut highlight = HighlightCache::default();
+        let mut visual_count = 0;
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(200.0, 220.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                ui.set_width(200.0);
+                let outcome = show_source(
+                    ui,
+                    &mut doc,
+                    &mut engine,
+                    &SourceOptions {
+                        soft_wrap: true,
+                        ..Default::default()
+                    },
+                    &mut highlight,
+                    Language::Markdown,
+                    "wrapped.md",
+                );
+                visual_count = outcome.visual_rows;
+            },
+        );
+        output.textures_delta.clear();
+        assert!(visual_count > doc.line_count());
+    }
 }

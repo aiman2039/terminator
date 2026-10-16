@@ -24,6 +24,9 @@ fn resolve_link(path: &Path, target: &str) -> Option<Link> {
 }
 pub(super) struct Document {
     pub(super) text: String,
+    pub(super) mermaid: Vec<super::mermaid::Diagram>,
+    pub(super) words: usize,
+    pub(super) headings: usize,
     pub(super) status: &'static str,
     pub(super) links: HashMap<String, Option<Link>>,
     pub(super) images: HashSet<String>,
@@ -320,8 +323,20 @@ pub(super) fn prepare(snapshot: Snapshot) -> Document {
     for (range, replacement) in replacements.into_iter().rev() {
         text.replace_range(range, &replacement);
     }
+    let words = text.split_whitespace().count();
+    let headings = text
+        .lines()
+        .filter(|line| {
+            let hashes = line.bytes().take_while(|byte| *byte == b'#').count();
+            (1..=6).contains(&hashes) && line.as_bytes().get(hashes) == Some(&b' ')
+        })
+        .count();
+    let mermaid = super::mermaid::render_fences(&text);
     Document {
         text,
+        mermaid,
+        words,
+        headings,
         status: match snapshot.revision {
             Some(revision) if snapshot.paused && revision.modified => {
                 "Unsaved preview · live updates paused"

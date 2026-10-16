@@ -116,6 +116,17 @@ is needed, so older running daemons remain compatible. The expression resolves t
 tab's file among loaded buffers and returns text only when its buffer number,
 changed tick or modified state changes. Polling neither changes the active buffer
 nor writes it. Terminal editors without a socket use a labeled saved-file view.
+Native Markdown tabs use the same preview renderer from their GUI-owned text
+buffer. They offer Edit, Preview, and Split views without a socket or PTY.
+In Split, the pane under the pointer leads proportional scroll position and
+the other pane follows. The heading menu opens a chosen heading in Edit.
+Native Markdown source wraps inside its pane. The preview uses larger local
+reading fonts without changing toolbar and sidebar text sizes.
+The native source context menu uses the shared appearance menu style, icon
+rows, and path header; editor actions remain owned by the native edit engine.
+Mermaid fences render through Merman on the Markdown CPU worker, with bounded
+SVG rasterization through the existing image decoder. Invalid diagrams remain
+source code. No browser or remote resource is loaded for a diagram.
 Blocking prompts or a 400 ms RPC deadline pause live updates while preserving
 the last live snapshot; without one, the saved file is displayed. Refresh retains
 cached unsaved text during a prompt, and normal polling resumes after the user
@@ -185,6 +196,13 @@ session PID/start time. sysinfo identifies descendants; lsof reports their TCP
 listeners. Optional gh lookups are read-only and cached. Terminal OSC messages are
 bounded records separate from agent notifications; history replay has no callback
 side effects and cannot manufacture agent lifecycle transitions.
+
+Explorer sends a bounded raw listing for each visible directory before Git
+ignore checks finish. Explorer watches only visible directories without
+recursion and does not run repository status. The later refresh adds ignore
+flags for listed entries. The Git view keeps full repository status and a
+recursive watch; it computes line counts on the filesystem worker with bounded,
+cancellable untracked-file reads.
 
 All project-owned test/package automation is Rust in `crates/xtask`. The native
 fixtures use isolated data/config directories and a test-support input/capture

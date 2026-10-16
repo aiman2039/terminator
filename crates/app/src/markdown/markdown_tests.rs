@@ -62,6 +62,33 @@ mod tests {
     }
 
     #[test]
+    fn mermaid_preview_uploads_diagram_and_keeps_links() {
+        let doc = prepare(snapshot(
+            "# Flow\n\n```mermaid\nflowchart LR\n  A --> B\n```\n\n[Next](next.md)\n",
+        ));
+        assert_eq!(doc.mermaid.len(), 1);
+        let mut preview = Preview::default();
+        preview.apply(Ok(doc));
+        let ctx = egui::Context::default();
+        crate::appearance::install(&ctx);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 700.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                preview.show(ui, "mermaid-preview");
+            },
+        );
+        assert_eq!(preview.mermaid_textures.len(), 1);
+        assert_eq!(preview.cache.get_link_hook("next.md"), Some(false));
+        output.textures_delta.clear();
+    }
+
+    #[test]
     fn diff_snapshots_resolve_links_refresh_and_release_resources() {
         let ctx = egui::Context::default();
         let mut previews = Previews::new(&ctx);

@@ -1,6 +1,7 @@
 use anyhow::{Result, ensure};
 use std::{
     fs,
+    io::Read as _,
     path::{Path, PathBuf},
 };
 use terminator_core::CommandOptions;
@@ -32,11 +33,22 @@ pub struct ContextData {
 /// Merge `--numstat` output for the index and worktree, then add line counts
 /// for untracked files. Paths match the porcelain records so the Git rows can
 /// look stats up directly.
+#[cfg(test)]
 pub fn merge_stats(
     root: &Path,
     working: &[u8],
     staged: &[u8],
     changes: &[Change],
+) -> std::collections::HashMap<PathBuf, (u32, u32)> {
+    merge_stats_cancel(root, working, staged, changes, None)
+}
+
+fn merge_stats_cancel(
+    root: &Path,
+    working: &[u8],
+    staged: &[u8],
+    changes: &[Change],
+    cancel: Option<&terminator_core::async_service::CancellationToken>,
 ) -> std::collections::HashMap<PathBuf, (u32, u32)> {
     let mut stats = terminator_git::parse_numstat(root, staged);
     for (path, (added, deleted)) in terminator_git::parse_numstat(root, working) {
@@ -45,10 +57,27 @@ pub fn merge_stats(
         entry.1 = entry.1.saturating_add(deleted);
     }
     for change in changes.iter().filter(|change| change.status == "??") {
-        let Ok(bytes) = fs::read(&change.path) else {
+        if cancel.is_some_and(terminator_core::async_service::CancellationToken::is_cancelled) {
+            break;
+        }
+        let Ok(metadata) = fs::symlink_metadata(&change.path) else {
             continue;
         };
-        if bytes.len() > 2 * 1024 * 1024 || bytes.contains(&0) {
+        const MAX_UNTRACKED_BYTES: u64 = 2 * 1024 * 1024;
+        if !metadata.file_type().is_file() || metadata.len() > MAX_UNTRACKED_BYTES {
+            continue;
+        }
+        let Ok(file) = fs::File::open(&change.path) else {
+            continue;
+        };
+        let mut bytes = Vec::new();
+        if file
+            .take(MAX_UNTRACKED_BYTES.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .is_err()
+            || bytes.len() as u64 > MAX_UNTRACKED_BYTES
+            || bytes.contains(&0)
+        {
             continue;
         }
         let mut lines =
@@ -128,6 +157,7 @@ pub fn entries_raw(
 pub fn context_cached(
     cwd: &Path,
     cache: &mut std::collections::HashMap<PathBuf, (PathBuf, Vec<PathBuf>)>,
+    include_git_status: bool,
 ) -> ContextData {
     let mut result = ContextData {
         cwd: cwd.into(),
@@ -168,6 +198,9 @@ pub fn context_cached(
     };
     result.git_dirs = metadata;
     result.root = Some(root.clone());
+    if !include_git_status {
+        return result;
+    }
     result.branch = git(&root, &["branch", "--show-current"])
         .map(|b| String::from_utf8_lossy(&b).trim().to_owned())
         .unwrap_or_default();
@@ -310,6 +343,7 @@ pub fn existing_directory(mut path: PathBuf) -> PathBuf {
 pub async fn context_async(
     service: &crate::gui_services::Services,
     cwd: PathBuf,
+    include_stats: bool,
     cancel: &terminator_core::async_service::CancellationToken,
 ) -> ContextData {
     let mut result = ContextData {
@@ -354,6 +388,9 @@ pub async fn context_async(
         }
     }
     result.root = Some(root.clone());
+    if !include_stats {
+        return result;
+    }
     result.branch = git(root.clone(), vec!["branch".into(), "--show-current".into()])
         .await
         .map(|b| String::from_utf8_lossy(&b).trim().to_owned())
@@ -378,7 +415,7 @@ pub async fn context_async(
         Err(error) => result.error = Some(error.to_string()),
     }
     result.decorations = terminator_git::decorations(&root, &result.changes);
-    if !result.changes.is_empty() {
+    if include_stats && !result.changes.is_empty() {
         let working = git(
             root.clone(),
             vec!["diff".into(), "--numstat".into(), "-z".into()],
@@ -396,25 +433,54 @@ pub async fn context_async(
         )
         .await
         .unwrap_or_default();
-        result.stats = merge_stats(&root, &working, &staged, &result.changes);
+        let changes = result.changes.clone();
+        let operation = cancel.clone();
+        result.stats = service
+            .fs()
+            .run(cancel, move || {
+                Ok(merge_stats_cancel(
+                    &root,
+                    &working,
+                    &staged,
+                    &changes,
+                    Some(&operation),
+                ))
+            })
+            .await
+            .unwrap_or_default();
     }
     result
 }
 
-pub async fn directory_async(
+pub async fn directory_raw_async(
     service: &crate::gui_services::Services,
     path: PathBuf,
-    root: Option<PathBuf>,
     cancel: &terminator_core::async_service::CancellationToken,
 ) -> std::result::Result<Vec<Entry>, DirectoryError> {
+    let folder = path.clone();
+    let operation = cancel.clone();
+    service
+        .fs()
+        .run(cancel, move || entries_raw(&folder, &operation))
+        .await
+        .map_err(|error| DirectoryError {
+            path,
+            kind: error
+                .downcast_ref::<std::io::Error>()
+                .map_or(std::io::ErrorKind::Other, std::io::Error::kind),
+            message: error.to_string(),
+        })
+}
+
+pub async fn directory_with_ignored_async(
+    service: &crate::gui_services::Services,
+    path: PathBuf,
+    entries: std::result::Result<Vec<Entry>, DirectoryError>,
+    in_git: bool,
+) -> std::result::Result<Vec<Entry>, DirectoryError> {
+    let mut entries = entries?;
     let result = async {
-        let folder = path.clone();
-        let operation = cancel.clone();
-        let mut entries = service
-            .fs()
-            .run(cancel, move || entries_raw(&folder, &operation))
-            .await?;
-        if root.is_some() {
+        if in_git {
             let output = terminator_git::run(
                 service.processes(),
                 service.fs(),
@@ -512,7 +578,7 @@ mod tests {
         .unwrap();
         fs::create_dir_all(root.join("new/nested")).unwrap();
         fs::write(root.join("new/nested/space file.rs"), "").unwrap();
-        let context = context_cached(&root, &mut std::collections::HashMap::default());
+        let context = context_cached(&root, &mut std::collections::HashMap::default(), true);
         assert_eq!(context.changes.len(), 1);
         for relative in ["new", "new/nested", "new/nested/space file.rs"] {
             assert_eq!(context.decorations[&root.join(relative)], 'U');

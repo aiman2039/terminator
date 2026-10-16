@@ -399,11 +399,20 @@ impl eframe::App for App {
         self.sync_resource_sample();
         self.visible_dirs.sort();
         self.visible_dirs.dedup();
-        let wants_files = self.preferences.visible
+        let right_files = self.preferences.visible
             && matches!(
                 self.preferences.tool,
                 SidebarTool::Explorer | SidebarTool::Git
             );
+        let left_files = self.preferences.left_visible
+            && matches!(
+                self.preferences.left_tool,
+                Some(SidebarTool::Explorer | SidebarTool::Git)
+            );
+        let wants_files = right_files || left_files;
+        let include_stats = (self.preferences.visible && self.preferences.tool == SidebarTool::Git)
+            || (self.preferences.left_visible
+                && self.preferences.left_tool == Some(SidebarTool::Git));
         let next = self
             .cwd()
             .filter(|_| wants_files)
@@ -411,6 +420,7 @@ impl eframe::App for App {
                 cwd,
                 generation: self.refresh_generation,
                 directories: self.visible_dirs.clone(),
+                include_stats,
             });
         if next != self.refresh_request {
             self.refresh_generation = self.refresh_generation.saturating_add(1);

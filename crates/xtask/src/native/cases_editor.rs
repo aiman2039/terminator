@@ -86,12 +86,12 @@ pub(crate) fn file_close(o: &Options) -> Result<()> {
     // A native runner cannot guarantee the time between rendered clicks.
     // Rapid-repeat suppression has a separate unit regression; this fixture
     // checks that closing one clean editor preserves the shell layout.
-    let close_log = capture(
+    capture(
         &h,
         o,
-        "clean-file-close",
-        json!([{"at_ms":1100,"target":"explorer-file:source.rs"},{"at_ms":2700,"target":"workspace-close:source.rs"}]),
-        4000,
+        "clean-file-open",
+        json!([{"at_ms":1100,"target":"explorer-file:source.rs"}]),
+        6000,
         |_| {
             let state = h.wait(
                 |state| {
@@ -102,7 +102,7 @@ pub(crate) fn file_close(o: &Options) -> Result<()> {
                                 .is_some_and(|lifecycle| lifecycle == "running")
                     })
                 },
-                3,
+                6,
             )?;
             ensure!(
                 sessions(&state)
@@ -114,6 +114,14 @@ pub(crate) fn file_close(o: &Options) -> Result<()> {
             );
             Ok(())
         },
+    )?;
+    let close_log = capture(
+        &h,
+        o,
+        "clean-file-close",
+        json!([{"at_ms":1100,"target":"workspace-close:source.rs"}]),
+        2600,
+        |_| Ok(()),
     )?;
     let state = h.state()?;
     let editors = sessions(&state)

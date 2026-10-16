@@ -1495,6 +1495,7 @@ mod tests {
             cwd: path.clone(),
             generation: 7,
             directories: vec![path.clone()],
+            include_stats: false,
         });
         let context = services::ContextData {
             cwd: path.clone(),
@@ -1538,6 +1539,56 @@ mod tests {
     }
 
     #[test]
+    fn early_directory_preview_shows_entries_and_preserves_cached_ignores() {
+        let (mut app, ctx, _dir) = fixture();
+        let path = PathBuf::from("/a");
+        app.refresh_generation = 7;
+        app.refresh_request = Some(refresh::Request {
+            cwd: path.clone(),
+            generation: 7,
+            directories: vec![path.clone()],
+            include_stats: false,
+        });
+        let entry = terminator_git::Entry {
+            path: path.join("ready.md"),
+            directory: false,
+            ignored: false,
+        };
+        app.update_tx
+            .send(Update::DirectoryPreview(
+                7,
+                path.clone(),
+                path.clone(),
+                Ok(vec![entry.clone()]),
+            ))
+            .unwrap();
+        drain_updates(&mut app, &ctx);
+        assert_eq!(app.dirs[&path][0].path, entry.path);
+        assert!(app.context.is_none());
+
+        app.dirs.get_mut(&path).unwrap()[0].ignored = true;
+        app.update_tx
+            .send(Update::DirectoryPreview(
+                7,
+                path.clone(),
+                path.clone(),
+                Ok(vec![entry]),
+            ))
+            .unwrap();
+        app.update_tx
+            .send(Update::DirectoryPreview(
+                6,
+                path.clone(),
+                path.join("stale"),
+                Ok(vec![]),
+            ))
+            .unwrap();
+        drain_updates(&mut app, &ctx);
+        assert!(app.dirs[&path][0].ignored);
+        assert!(!app.dirs.contains_key(&path.join("stale")));
+    }
+
+    #[test]
     fn stale_refresh_is_ignored_even_for_same_directory() {
         let (mut app, ctx, _dir) = fixture();
         app.refresh_generation = 3;
@@ -1545,6 +1596,7 @@ mod tests {
             cwd: "/a".into(),
             generation: 3,
             directories: vec![],
+            include_stats: false,
         });
         app.update_tx
             .send(Update::Refresh(
