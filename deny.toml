@@ -19,6 +19,9 @@ ignore = [
     { id = "RUSTSEC-2024-0320", reason = "yaml-rust via syntect; published 5.3.0 not on yaml-rust2 yet" },
     { id = "RUSTSEC-2024-0429", reason = "glib 0.18 via wry/gtk3; unsound, no CVE; 0.20 blocked on wry" },
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error via gtk3-macros; unmaintained, no CVE" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant via Linux zbus 5/atspi; merged into zbus 6, transitive migration pending" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names via Linux zbus 5/atspi; merged into zbus 6, transitive migration pending" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive via Linux zbus 5/atspi; merged into zbus 6, transitive migration pending" },
 ]
 
 [bans]
