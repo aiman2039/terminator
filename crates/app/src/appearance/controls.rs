@@ -304,7 +304,7 @@ pub fn menu_button<R>(
             .ui(ui, add_contents)
     };
     #[cfg(feature = "test-support")]
-    crate::diagnostics::record(ui.ctx(), title, response.rect);
+    crate::diagnostics::record_ui(ui, title, response.rect);
     egui::InnerResponse::new(inner.map(|shown| shown.inner), response)
 }
 
@@ -380,6 +380,6 @@ pub fn menu_item(ui: &mut egui::Ui, label: &str, icon: &str, shortcut: &str) -> 
     let response = row(ui, label, icon, false, 26.0, shortcut, tint);
     ui.visuals_mut().override_text_color = previous;
     #[cfg(feature = "test-support")]
-    crate::diagnostics::record(ui.ctx(), label, response.rect);
+    crate::diagnostics::record_ui(ui, label, response.rect);
     response
 }

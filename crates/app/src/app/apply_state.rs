@@ -320,6 +320,7 @@ impl App {
                 });
         }
         shortcuts::fill_defaults(&mut state.settings.keybindings);
+        self.lsp.set_server_overrides(&state.settings.lsp_servers);
         self.preferences.markdown_modes.retain(|sid, _| {
             state
                 .sessions

@@ -3,10 +3,29 @@
 //! through the ordinary file-open path, so focus, splits, and the
 //! pending-line handoff behave exactly like an Explorer open.
 
+#[cfg(feature = "test-support")]
+use crate::diagnostics;
 use crate::{App, Tab, appearance};
 use eframe::egui::{self, RichText};
 use std::path::PathBuf;
 use terminator_native_edit::lsp::Severity;
+
+/// Panel title with the manual re-index action on the right. Returns
+/// true when the button was clicked.
+fn lsp_panel_header(ui: &mut egui::Ui, title: &str, tip: &str) -> bool {
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        ui.strong(title);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let button = appearance::sidebar_action(ui, "RefreshCw", tip);
+            #[cfg(feature = "test-support")]
+            diagnostics::record(ui.ctx(), &format!("lsp-restart:{title}"), button.rect);
+            clicked = button.clicked();
+        });
+    });
+    ui.separator();
+    clicked
+}
 
 impl App {
     /// Path of the native editor in the selected project's active pane.
@@ -23,6 +42,13 @@ impl App {
     }
 
     pub(crate) fn problems_panel(&mut self, ui: &mut egui::Ui) {
+        if lsp_panel_header(
+            ui,
+            "Problems",
+            "Restart language servers and re-index (also retries a missing server)",
+        ) {
+            self.lsp.restart_all();
+        }
         let files = self.lsp.all_problems();
         let total: usize = files.iter().map(|(_, items)| items.len()).sum();
         if files.is_empty() {
@@ -85,10 +111,22 @@ impl App {
 
     #[allow(clippy::cast_precision_loss)] // outline depth is small
     pub(crate) fn structure_panel(&mut self, ui: &mut egui::Ui) {
+        let restart = lsp_panel_header(
+            ui,
+            "Structure",
+            "Restart the language server and re-request symbols",
+        );
         let Some(path) = self.active_editor_path() else {
             ui.weak("Open a file in the native editor to see its outline.");
             return;
         };
+        if restart {
+            if self.lsp.tracked(&path) {
+                self.lsp.restart(&path);
+            } else {
+                self.lsp.restart_all();
+            }
+        }
         if !self.lsp.tracked(&path) {
             ui.weak("No language server tracks this file.");
             return;
@@ -96,7 +134,9 @@ impl App {
         self.lsp.request_symbols(&path);
         let symbols = self.lsp.symbols_for(&path);
         if symbols.is_empty() {
-            ui.weak("No symbols yet — the server may still be indexing.");
+            ui.weak(
+                "No symbols yet — the server may still be indexing (it retries every few seconds).",
+            );
             return;
         }
         let mut jump: Option<u32> = None;

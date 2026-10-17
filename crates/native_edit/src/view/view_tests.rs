@@ -421,6 +421,72 @@ mod tests {
     }
 
     #[test]
+    fn colon_split_and_tabnew_reach_the_host_through_view() {
+        use crate::doc::Doc;
+        let ctx = egui::Context::default();
+        let mut doc = Doc::new("hi");
+        let mut engine = VimEngine::new();
+        let effects = drive_keys(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &[
+                egui::Key::Colon,
+                egui::Key::S,
+                egui::Key::P,
+                egui::Key::L,
+                egui::Key::I,
+                egui::Key::T,
+                egui::Key::Enter,
+            ],
+        );
+        assert_eq!(effects, vec![Effect::Split]);
+        let effects = drive_keys(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &[
+                egui::Key::Colon,
+                egui::Key::T,
+                egui::Key::A,
+                egui::Key::B,
+                egui::Key::N,
+                egui::Key::E,
+                egui::Key::W,
+                egui::Key::Enter,
+            ],
+        );
+        assert_eq!(effects, vec![Effect::TabNew]);
+    }
+
+    #[test]
+    fn colon_set_wrap_reaches_the_view_option_through_view() {
+        use crate::doc::Doc;
+        let ctx = egui::Context::default();
+        let mut doc = Doc::new("hi");
+        let mut engine = VimEngine::new();
+        assert_eq!(engine.wrap(), None);
+        drive_keys(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &[
+                egui::Key::Colon,
+                egui::Key::S,
+                egui::Key::E,
+                egui::Key::T,
+                egui::Key::Space,
+                egui::Key::W,
+                egui::Key::R,
+                egui::Key::A,
+                egui::Key::P,
+                egui::Key::Enter,
+            ],
+        );
+        assert_eq!(engine.wrap(), Some(true));
+    }
+
+    #[test]
     fn insert_opener_echo_does_not_type_through_view() {
         use crate::doc::Doc;
         let ctx = egui::Context::default();

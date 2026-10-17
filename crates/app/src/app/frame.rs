@@ -551,13 +551,21 @@ impl App {
             && self.lsp.tracked(&path)
         {
             ui.separator();
-            let _lsp = if let Some(note) = self.lsp.server_note(&path) {
-                ui.weak("LSP unavailable").on_hover_text(note)
+            if let Some(note) = self.lsp.server_note(&path) {
+                let retry = ui
+                    .weak("LSP unavailable")
+                    .on_hover_text(format!("{note}\nClick to retry"))
+                    .interact(egui::Sense::click());
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "status-lsp", retry.rect);
+                if retry.clicked() {
+                    self.lsp.restart(&path);
+                }
             } else {
-                ui.weak("LSP ready")
-            };
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "status-lsp", _lsp.rect);
+                let _lsp = ui.weak("LSP ready");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "status-lsp", _lsp.rect);
+            }
         }
     }
 

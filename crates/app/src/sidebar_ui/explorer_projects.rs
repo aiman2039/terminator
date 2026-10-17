@@ -358,9 +358,11 @@ impl App {
 
     /// Live terminal sessions under one project, grouped as a tree per
     /// top-level workspace tab in layout order. Single-tab projects keep the
-    /// historic flat list; multi-tab projects render one expandable tab node
+    /// historic flat list. Multi-tab projects render one expandable tab node
     /// per tab that owns live sessions, then any background sessions that are
-    /// in no tab.
+    /// in no tab. A tab that holds exactly one live terminal and has no custom
+    /// name draws that terminal in the tab's place, because the node would
+    /// only repeat it.
     pub(super) fn project_sessions_tree(&mut self, ui: &mut egui::Ui, project_id: &str) {
         let index = self.sidebar_index();
         let live: Vec<Arc<Session>> = index
@@ -436,16 +438,29 @@ impl App {
                         })
                 })
                 .unwrap_or((0, None));
+            let renaming_group = self
+                .rename_group
+                .as_ref()
+                .is_some_and(|(p, t)| p == project_id && t == tab_id);
+            // One live terminal and no custom name: the node would only repeat
+            // the terminal it holds, so the terminal itself takes its place.
+            // A tab that is being named keeps its node to host the field.
+            if sids.len() == 1 && group_name.is_none() && !renaming_group {
+                if let Some(session) = sids
+                    .first()
+                    .and_then(|sid| by_id.get(sid.as_str()))
+                    .map(|session| session.as_ref())
+                {
+                    self.session_row_in_tab(ui, session, project_id, tab_id);
+                }
+                continue;
+            }
             let group_label =
                 crate::workspace::group_display_name(group_name.as_deref(), group_index);
             let key = format!("workspace-tab:{project_id}:{tab_id}");
             let mut tab_expanded = *self.preferences.expanded.entry(key.clone()).or_insert(true);
             let active_tab = workspace_active.as_deref() == Some(tab_id.as_str());
             let selected = self.selected.as_deref() == Some(project_id) && active_tab;
-            let renaming_group = self
-                .rename_group
-                .as_ref()
-                .is_some_and(|(p, t)| p == project_id && t == tab_id);
             let mut rename_action = GroupRenameAction::None;
             let tab_left = ui
                 .horizontal(|ui| {

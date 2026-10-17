@@ -1,10 +1,22 @@
 use eframe::egui;
+
+mod langs;
+
+/// Colored, per-language glyph for files with a known type. These keep their
+/// own colors; the renderer skips theme tinting for them.
+pub fn is_language(icon: &str) -> bool {
+    icon.starts_with("lang:")
+}
+
 pub fn file_icon(path: &std::path::Path) -> &'static str {
     let name = path
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_lowercase();
+    if let Some(icon) = langs::by_name(&name) {
+        return icon;
+    }
     match name.as_str() {
         ".babelrc" => return "FileSliders",
         ".dockerignore" => return "FileSliders",
@@ -102,6 +114,9 @@ pub fn file_icon(path: &std::path::Path) -> &'static str {
                 .map(|(_, ext)| ext)
                 .unwrap_or("")
         });
+    if let Some(icon) = langs::by_extension(ext) {
+        return icon;
+    }
     match ext {
         "7z" => "FileArchive",
         "aac" => "FileMusic",
@@ -280,6 +295,9 @@ pub fn file_icon(path: &std::path::Path) -> &'static str {
     }
 }
 pub fn source(name: &str) -> egui::ImageSource<'static> {
+    if let Some(language) = name.strip_prefix("lang:") {
+        return langs::source(language);
+    }
     match name {
         "RefreshCw" => egui::include_image!("../assets/icons/refresh-cw.svg"),
         "PanelLeft" => egui::include_image!("../assets/icons/panel-left.svg"),

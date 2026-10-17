@@ -69,7 +69,8 @@ mod search;
 mod services;
 pub use app::app_state::App;
 pub(crate) use app::app_state::{
-    inventory_is_stale, is_missing_path_error, observation_is_stale, service_failure_update,
+    inventory_is_stale, is_missing_path_error, is_session_auth_error, observation_is_stale,
+    service_failure_update,
 };
 pub(crate) use app::frame::RepaintProbe;
 pub(crate) use app::types::{

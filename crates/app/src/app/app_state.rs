@@ -236,6 +236,8 @@ pub struct App {
     pub(crate) error: Option<String>,
     /// Same status text the user dismissed. Identical reports stay hidden.
     pub(crate) dismissed_error: Option<String>,
+    /// Authentication errors belong to a service, not the selected directory.
+    pub(crate) dismissed_auth_errors: HashSet<String>,
     /// Working directory the dismiss latch and missing-path budget belong to.
     pub(crate) error_cwd: Option<PathBuf>,
     pub(crate) missing_path_reports: u8,
@@ -377,6 +379,10 @@ pub(crate) fn is_missing_path_error(error: &str) -> bool {
     error
         .lines()
         .any(|line| line.trim() == "No such file or directory (os error 2)")
+}
+
+pub(crate) fn is_session_auth_error(error: &str) -> bool {
+    error.starts_with("Cannot read session service authentication file ")
 }
 
 pub(crate) fn observation_is_stale(current: &State, incoming: &State) -> bool {

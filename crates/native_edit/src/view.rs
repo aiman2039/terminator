@@ -11,3 +11,8 @@ pub use render::{
     DiagnosticMark, SourceOptions, SourceOutcome, char_display_width, col_at_display_x, display_x,
     show_source, status_line,
 };
+
+/// Font family the host registers for italic theme spans.
+pub const ITALIC_FAMILY: &str = "Terminal Italic";
+/// Font family the host registers for bold theme spans.
+pub const BOLD_FAMILY: &str = "Terminal Bold";

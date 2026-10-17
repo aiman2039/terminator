@@ -1,5 +1,7 @@
 Lucide 0.468.0 SVGs (ISC/Feather MIT), tinted at render time. See LICENSE.
 SVG currentColor is replaced with white for egui multiplicative tinting.
+Colored per-language file glyphs live in `../langs/` (Material Icon Theme,
+MIT) and are painted untinted.
 The flat UI also bundles Lucide 0.468.0 action/navigation icons for copy, paste,
 selection, splits, close, search, external opening, settings and sidebar tools.
 

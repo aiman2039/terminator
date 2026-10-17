@@ -1,6 +1,7 @@
 use super::super::doc::Buffer;
 use super::helpers::range_text;
 use super::mode::{Bit, Cursor, Effect, Key, ModalEngine, Mode, Repeat};
+use super::operators::find_matches;
 use super::state::VimEngine;
 use super::words::line_len;
 impl VimEngine {
@@ -329,6 +330,29 @@ impl VimEngine {
                     self.enter_normal(doc);
                     return outcome;
                 }
+                // `:set` switches the view (wrap) and search (ignorecase);
+                // unknown names bell instead of silently succeeding.
+                let set_args = ["set", "setlocal"].iter().find_map(|name| {
+                    if self.command == *name {
+                        Some(String::new())
+                    } else {
+                        self.command
+                            .strip_prefix(&format!("{name} "))
+                            .map(str::to_owned)
+                    }
+                });
+                if let Some(args) = set_args {
+                    // Bare `:set` lists options in vim; here it is a no-op
+                    // rather than an error.
+                    let known = args.trim().is_empty() || self.apply_set_args(&args);
+                    self.command.clear();
+                    self.enter_normal(doc);
+                    return if known {
+                        Vec::new()
+                    } else {
+                        vec![Effect::Bell]
+                    };
+                }
                 let effects = match self.command.as_str() {
                     "w" => vec![Effect::Save],
                     "w!" => vec![Effect::SaveForce],
@@ -448,13 +472,19 @@ impl VimEngine {
             text: String,
         }
         let mut edits: Vec<Edit> = Vec::new();
+        let ignorecase = self.ignorecase();
         for line in lines {
             let text = doc.line_text(line);
-            let matches: Vec<(usize, usize)> = text
-                .match_indices(&pattern)
-                .map(|(byte, m)| {
+            let matches: Vec<(usize, usize, String)> = find_matches(&text, &pattern, ignorecase)
+                .into_iter()
+                .map(|(byte, len)| {
                     let col = text.get(..byte).map_or(0, |p| p.chars().count());
-                    (col, col.saturating_add(m.chars().count()))
+                    let matched = text.get(byte..byte.saturating_add(len)).unwrap_or("");
+                    (
+                        col,
+                        col.saturating_add(matched.chars().count()),
+                        matched.to_owned(),
+                    )
                 })
                 .collect();
             if matches.is_empty() {
@@ -465,13 +495,13 @@ impl VimEngine {
             let Some(replacement) = parts.get(1) else {
                 return vec![Effect::Bell];
             };
-            for (col, end) in matches.into_iter().take(take) {
+            for (col, end, matched) in matches.into_iter().take(take) {
                 let mut rep = String::new();
                 for c in replacement.chars() {
                     // The splitter already resolved escapes, so a bare `&`
                     // always means the whole match.
                     if c == '&' {
-                        rep.push_str(&pattern);
+                        rep.push_str(&matched);
                     } else {
                         rep.push(c);
                     }

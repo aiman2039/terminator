@@ -338,6 +338,11 @@ impl App {
                                 self.settings_draft.external_editor = text;
                                 self.editor_preset = external_editor::CUSTOM;
                             }
+                            BrowseTarget::Lsp(language) => {
+                                self.settings_draft
+                                    .lsp_servers
+                                    .insert(language.to_owned(), text);
+                            }
                             BrowseTarget::WorktreeDest => {
                                 if let Some(draft) = &mut self.worktree_draft {
                                     let leaf = draft

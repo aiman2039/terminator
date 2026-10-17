@@ -473,6 +473,17 @@ pub fn record(ctx: &egui::Context, name: &str, rect: egui::Rect) {
     });
 }
 
+/// Popups place their contents on an invisible, non-interactable sizing pass
+/// the first time they open. A scripted click on a rect from that pass lands
+/// where nothing can receive it, so popup rows use this variant and stay
+/// unavailable until the first real layout pass.
+pub fn record_ui(ui: &egui::Ui, name: &str, rect: egui::Rect) {
+    if ui.is_sizing_pass() {
+        return;
+    }
+    record(ui.ctx(), name, rect);
+}
+
 pub fn current_rect(ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
     let current = ctx.cumulative_frame_nr();
     ctx.data(|data| {
@@ -567,6 +578,28 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, egui::Event::PointerButton { pressed: true, .. }))
         );
+    }
+
+    #[test]
+    fn sizing_pass_rows_wait_for_the_real_popup_layout() {
+        let ctx = egui::Context::default();
+        let mut diagnostics = click_save();
+        // The first popup pass is invisible and non-interactable; a click on
+        // its provisional rect could never reach the row.
+        render(&ctx, |ui| {
+            let mut sizing = ui.new_child(egui::UiBuilder::new().sizing_pass());
+            let response = sizing.button("Save and close");
+            record_ui(&sizing, "Save and close", response.rect);
+        });
+        assert!(current_rect(&ctx, "Save and close").is_none());
+        diagnostics.input(&ctx, &mut egui::RawInput::default());
+        assert_eq!(diagnostics.actions_completed(), 0);
+        render(&ctx, |ui| {
+            let response = ui.button("Save and close");
+            record_ui(ui, "Save and close", response.rect);
+        });
+        diagnostics.input(&ctx, &mut egui::RawInput::default());
+        assert_eq!(diagnostics.actions_completed(), 1);
     }
 
     #[test]

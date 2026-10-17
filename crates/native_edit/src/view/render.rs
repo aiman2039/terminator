@@ -1,10 +1,11 @@
 use super::super::doc::Buffer;
-use super::super::highlight::{HighlightCache, Language, Span};
+use super::super::highlight::{HighlightCache, Language, Span, SpanStyle};
 use super::super::vim::{Cursor, Effect, Key as VKey, ModalEngine, Mode, VimEngine};
 use super::keys::{
     IdeAction, command_prompt, ctrl_h_is_motion, ctrl_v_is_block, echo_of_handled_key, egui_key,
     ide_shortcut, mode_name, source_focus_id,
 };
+use super::{BOLD_FAMILY, ITALIC_FAMILY};
 use egui;
 use egui::{Color32, FontId, Pos2, Rect, Sense, Vec2};
 /// Worst severity on one buffer row, for the diagnostics gutter.
@@ -167,6 +168,14 @@ pub fn show_source<B: Buffer>(
     id: &str,
 ) -> SourceOutcome {
     let font = FontId::monospace(options.font_size);
+    let italic_font = FontId::new(
+        options.font_size,
+        egui::FontFamily::Name(ITALIC_FAMILY.into()),
+    );
+    let bold_font = FontId::new(
+        options.font_size,
+        egui::FontFamily::Name(BOLD_FAMILY.into()),
+    );
     let (advance, row_height) = ui.fonts_mut(|fonts| {
         (
             fonts.glyph_width(&font, 'm').max(1.0),
@@ -371,7 +380,7 @@ pub fn show_source<B: Buffer>(
                 effects.push(Effect::OpenFilePicker);
                 ui.close();
             }
-            let lsp_supported = crate::lsp::language_id(language).is_some();
+            let lsp_supported = crate::lsp::server_language(language).is_some();
             if lsp_supported {
                 ui.separator();
                 if item(ui, "Go to definition", "ExternalLink", "").clicked() {
@@ -491,6 +500,7 @@ pub fn show_source<B: Buffer>(
                         start: start.saturating_sub(visual.start),
                         end: end.saturating_sub(visual.start),
                         color: span.color,
+                        style: span.style,
                     })
                 })
                 .collect();
@@ -502,6 +512,8 @@ pub fn show_source<B: Buffer>(
                 y,
                 advance,
                 font: &font,
+                italic_font: &italic_font,
+                bold_font: &bold_font,
                 plain: ui.visuals().text_color(),
             }
             .paint();
@@ -518,13 +530,16 @@ pub fn show_source<B: Buffer>(
                 } else {
                     #[allow(clippy::cast_precision_loss)] // UI coordinate
                     let cursor_w = cell_cells as f32 * advance;
+                    // Opaque caret in the text color (IntelliJ's block
+                    // caret), not the muted selection blue: a #214283
+                    // block on the #1E1F22 surface is nearly invisible.
                     painter.rect_filled(
                         Rect::from_min_size(
                             Pos2::new(x, y),
                             Vec2::new(cursor_w.max(2.0), row_height),
                         ),
                         0.0,
-                        ui.visuals().selection.bg_fill,
+                        ui.visuals().text_color(),
                     );
                     // Keep the covered cell legible on the block cursor.
                     if let Some(cell) = cell {
@@ -533,7 +548,7 @@ pub fn show_source<B: Buffer>(
                             egui::Align2::LEFT_TOP,
                             cell.to_string(),
                             font.clone(),
-                            ui.visuals().selection.stroke.color,
+                            ui.visuals().window_fill,
                         );
                     }
                 }
@@ -647,7 +662,7 @@ pub fn show_source<B: Buffer>(
                             effects.push(Effect::GotoDefinition);
                             consumed.push(*key);
                         } else if *key == egui::Key::F2
-                            && crate::lsp::language_id(language).is_some()
+                            && crate::lsp::server_language(language).is_some()
                             && !modifiers.command
                             && !modifiers.ctrl
                             && !modifiers.alt
@@ -825,10 +840,23 @@ struct RowPaint<'a> {
     y: f32,
     advance: f32,
     font: &'a FontId,
+    italic_font: &'a FontId,
+    bold_font: &'a FontId,
     plain: Color32,
 }
 
 impl RowPaint<'_> {
+    /// Font for one span: theme emphasis picks the italic/bold family.
+    fn font_for(&self, style: SpanStyle) -> FontId {
+        if style.italic {
+            self.italic_font.clone()
+        } else if style.bold {
+            self.bold_font.clone()
+        } else {
+            self.font.clone()
+        }
+    }
+
     fn paint(&self) {
         if self.spans.is_empty() {
             self.painter.text(
@@ -870,7 +898,7 @@ impl RowPaint<'_> {
                     Pos2::new(piece_x, self.y),
                     egui::Align2::LEFT_TOP,
                     piece,
-                    self.font.clone(),
+                    self.font_for(span.style),
                     Color32::from_rgb(red, green, blue),
                 );
             }

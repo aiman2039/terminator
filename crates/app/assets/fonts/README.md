@@ -2,7 +2,7 @@
 
 Unmodified TTFs and licenses extracted from official releases:
 - Inter 4.1: https://github.com/rsms/inter/releases/tag/v4.1 (`extras/ttf`).
-- JetBrains Mono 2.304: https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304 (`fonts/ttf`).
+- JetBrains Mono 2.304: https://github.com/JetBrains/JetBrainsMono/releases/tag/v2.304 (`fonts/ttf`). Regular, Bold and Italic. Italic backs theme-emphasis spans (types, enum variants, comments) in the native editor under the `Terminal Italic` family; license `JetBrainsMono-OFL.txt`. Italic SHA-256 `9d0a1f7a708e6af183f1193b7e81d40da294f5c67682c085d8401c60aac8ded4`.
 - Noto Sans Symbols 2 (braille subset U+2800–U+28FF): https://github.com/notofonts/notofonts.github.io (`fonts/NotoSansSymbols2/hinted/ttf`). Appended as a monospace fallback so TUIs that draw logos in Braille Patterns render instead of tofu.
 - Noto Sans Hebrew Regular: https://github.com/notofonts/notofonts.github.io/blob/main/fonts/NotoSansHebrew/hinted/ttf/NotoSansHebrew-Regular.ttf. Unmodified static font, appended to normal/bold terminal and UI families for Hebrew glyph coverage. License: https://github.com/notofonts/hebrew/blob/main/OFL.txt (bundled as `NotoSansHebrew-OFL.txt`). Downloaded 2026-09-14; SHA-256 `cdefaf8efd47045f6820928eba84db5bed7557539328952b5f828315485e02ee`. This supplies glyphs, not terminal bidirectional reordering.
 

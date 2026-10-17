@@ -13,7 +13,7 @@ use syntect::highlighting::Theme;
 use syntect::parsing::{MatchPower, Scope, ScopeStack};
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
-use crate::highlight::{Language, MAX_HIGHLIGHT_BYTES, Span};
+use crate::highlight::{Language, MAX_HIGHLIGHT_BYTES, Span, SpanStyle};
 
 const RUST_QUERY: &str = r"
 (line_comment) @comment
@@ -27,9 +27,16 @@ const RUST_QUERY: &str = r"
 (function_item name: (identifier) @function)
 (call_expression function: (identifier) @function)
 (call_expression function: (field_expression field: (field_identifier) @function))
-(primitive_type) @type
+(macro_invocation macro: (identifier) @function)
+(primitive_type) @builtin_type
 (type_identifier) @type
 (mutable_specifier) @keyword
+(enum_variant name: (identifier) @enum_variant)
+(const_item name: (identifier) @constant)
+(static_item name: (identifier) @constant)
+(attribute_item (attribute (identifier) @attribute))
+(inner_attribute_item (attribute (identifier) @attribute))
+(field_expression field: (field_identifier) @property)
 ";
 
 /// Anonymous keyword tokens per language. Grammars rename tokens across
@@ -111,26 +118,44 @@ const JAVASCRIPT_KEYWORDS: &[&str] = &[
 ];
 
 /// Capture names this backend styles; order is the query `configure` list.
-const CAPTURES: &[&str] = &["comment", "string", "keyword", "function", "type", "number"];
+const CAPTURES: &[&str] = &[
+    "comment",
+    "string",
+    "keyword",
+    "function",
+    "type",
+    "number",
+    "constant",
+    "attribute",
+    "property",
+    "builtin_type",
+    "enum_variant",
+];
 
 /// Capture name to syntect scope, for theme-consistent colors.
 fn scope_for_capture(capture: &str) -> Option<&'static str> {
     match capture {
         "comment" => Some("comment"),
-        // The bundled Nord/OneHalf themes style concrete TextMate scopes.
-        // Generic `string` and `keyword` resolve to their default foreground.
+        // The bundled Darcula/OneHalf themes style concrete TextMate
+        // scopes. Generic `string` and `keyword` resolve to their default
+        // foreground.
         "string" => Some("string.quoted.double"),
         "keyword" => Some("keyword.control"),
         "function" => Some("entity.name.function"),
-        "type" => Some("entity.name.type"),
+        "type" => Some("support.class"),
+        "builtin_type" => Some("support.type.primitive"),
         "number" => Some("constant.numeric"),
+        "constant" => Some("constant.other"),
+        "enum_variant" => Some("variable.other.enummember"),
+        "attribute" => Some("entity.name.annotation"),
+        "property" => Some("variable.other.member"),
         _ => None,
     }
 }
 
-/// Theme foreground for a syntect scope: strongest matching rule wins,
-/// falling back to the theme default.
-fn color_for_scope(theme: &Theme, scope: &str) -> [u8; 3] {
+/// Theme foreground and emphasis for a syntect scope: strongest matching
+/// rule wins, falling back to the theme default.
+fn resolve_scope(theme: &Theme, scope: &str) -> ([u8; 3], SpanStyle) {
     let default = theme
         .settings
         .foreground
@@ -140,23 +165,33 @@ fn color_for_scope(theme: &Theme, scope: &str) -> [u8; 3] {
             b: 0,
             a: 255,
         });
+    let plain = [default.r, default.g, default.b];
     let Ok(wanted) = Scope::new(scope) else {
-        return [default.r, default.g, default.b];
+        return (plain, SpanStyle::default());
     };
     let mut stack = ScopeStack::new();
     stack.push(wanted);
-    let mut best: Option<(MatchPower, [u8; 3])> = None;
+    let mut best: Option<(MatchPower, [u8; 3], SpanStyle)> = None;
     for item in &theme.scopes {
-        if let Some(power) = item.scope.does_match(stack.as_slice())
-            && let Some(foreground) = item.style.foreground
-        {
-            let color = [foreground.r, foreground.g, foreground.b];
-            if best.is_none_or(|(best_power, _)| power > best_power) {
-                best = Some((power, color));
+        if let Some(power) = item.scope.does_match(stack.as_slice()) {
+            let color = item.style.foreground.map_or(plain, |foreground| {
+                [foreground.r, foreground.g, foreground.b]
+            });
+            if best.is_none_or(|(best_power, _, _)| power > best_power) {
+                best = Some((
+                    power,
+                    color,
+                    item.style
+                        .font_style
+                        .map(crate::highlight::span_style)
+                        .unwrap_or_default(),
+                ));
             }
         }
     }
-    best.map_or([default.r, default.g, default.b], |(_, color)| color)
+    best.map_or((plain, SpanStyle::default()), |(_, color, style)| {
+        (color, style)
+    })
 }
 
 fn grammar(
@@ -234,11 +269,14 @@ pub fn highlight_text(language: Language, text: &str, theme: &Theme) -> Option<V
             b: 0,
             a: 255,
         });
-    let plain = [foreground.r, foreground.g, foreground.b];
-    let colors: Vec<[u8; 3]> = CAPTURES
+    let plain = (
+        [foreground.r, foreground.g, foreground.b],
+        SpanStyle::default(),
+    );
+    let colors: Vec<([u8; 3], SpanStyle)> = CAPTURES
         .iter()
         .map(|capture| {
-            scope_for_capture(capture).map_or(plain, |scope| color_for_scope(theme, scope))
+            scope_for_capture(capture).map_or(plain, |scope| resolve_scope(theme, scope))
         })
         .collect();
 
@@ -284,10 +322,12 @@ pub fn highlight_text(language: Language, text: &str, theme: &Theme) -> Option<V
                 for part in split_rows(piece) {
                     if !part.text.is_empty() {
                         let end = col.saturating_add(part.text.chars().count());
+                        let (color, style) = color.unwrap_or(plain);
                         row.push(Span {
                             start: col,
                             end,
-                            color: color.unwrap_or(plain),
+                            color,
+                            style,
                         });
                         col = end;
                         row_touched = true;
@@ -372,6 +412,51 @@ mod tests {
         let lines = highlight_text(Language::Python, "def f():\n    pass", &theme).expect("spans");
         assert!(!lines[0].is_empty());
         assert!(!lines[1].is_empty());
+    }
+
+    #[test]
+    fn rust_query_captures_constants_attributes_and_fields() {
+        let theme = crate::highlight::theme(true).expect("darcula");
+        let text = "#[derive(Debug)]\npub const SCALE: u64 = 1_000_000;\nstruct S { a: u64 }\nfn f(s: &S) -> u64 { s.a }\npub enum E {\n    Variant,\n}\n";
+        let lines = highlight_text(Language::Rust, text, theme).expect("spans");
+        let plain = theme.settings.foreground.expect("foreground");
+        let plain = [plain.r, plain.g, plain.b];
+
+        let span_at = |row: usize, col: usize| {
+            lines[row]
+                .iter()
+                .find(|span| span.start <= col && col < span.end)
+        };
+        // `derive` attribute, and `SCALE` constant name.
+        assert!(
+            span_at(0, 2).is_some_and(|span| span.color != plain),
+            "attribute"
+        );
+        assert!(
+            span_at(1, 10).is_some_and(|span| span.color != plain),
+            "const"
+        );
+        // User-defined type tints and italicizes; primitives stay upright.
+        let user_type = span_at(2, 7).expect("type span");
+        assert!(user_type.style.italic, "type italic");
+        assert_ne!(user_type.color, plain, "type tint");
+        let primitive = span_at(2, 14).expect("primitive span");
+        assert_ne!(primitive.color, plain, "primitive tint");
+        assert_ne!(primitive.color, user_type.color, "type vs primitive");
+        assert!(!primitive.style.italic, "primitives are upright");
+        // Enum variants are italic, like `IntelliJ`.
+        let variant = span_at(5, 4).expect("variant span");
+        assert!(variant.style.italic, "enum variant italic");
+        assert_ne!(variant.color, plain, "enum variant tint");
+        // Field access `s.a`, not the struct declaration.
+        let field_line = "fn f(s: &S) -> u64 { s.a }";
+        assert_eq!(text.split('\n').nth(3), Some(field_line));
+        let field_col = field_line.find('a').expect("field char");
+        assert!(
+            span_at(3, field_col).is_some_and(|span| span.color != plain),
+            "field access"
+        );
+        assert_eq!(lines.len(), text.split('\n').count());
     }
 
     #[test]

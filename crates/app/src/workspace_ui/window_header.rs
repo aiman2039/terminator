@@ -415,7 +415,7 @@ impl App {
         let mark = self.header_menu_mark(action);
         let response = appearance::menu_item(ui, view.label, view.icon, &mark);
         #[cfg(feature = "test-support")]
-        diagnostics::record(ui.ctx(), view.target, response.rect);
+        diagnostics::record_ui(ui, view.target, response.rect);
         if response.clicked() {
             self.run_header_action(action);
             true

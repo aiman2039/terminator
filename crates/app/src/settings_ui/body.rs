@@ -359,6 +359,54 @@ impl App {
                 },
             );
         }
+        for (language, label) in [
+            ("rust", "Rust language server"),
+            ("python", "Python language server"),
+            ("typescript", "TypeScript language server"),
+        ] {
+            if !self.field_visible(label, "lsp language server rust python typescript") {
+                continue;
+            }
+            settings_controls::settings_row(
+                ui,
+                label,
+                "Empty finds it on PATH. Saving restarts that server; the app keeps running.",
+                |ui| {
+                    let mut value = self
+                        .settings_draft
+                        .lsp_servers
+                        .get(language)
+                        .cloned()
+                        .unwrap_or_default();
+                    let mut pick = false;
+                    let _ = settings_controls::path_field(
+                        ui,
+                        &mut value,
+                        &format!("lsp-{language}"),
+                        &mut pick,
+                    );
+                    if pick {
+                        browse = Some(BrowseTarget::Lsp(language));
+                    }
+                    if value.is_empty() {
+                        self.settings_draft.lsp_servers.remove(language);
+                    } else {
+                        self.settings_draft
+                            .lsp_servers
+                            .insert(language.to_owned(), value.clone());
+                    }
+                    if !value.trim().is_empty() {
+                        match terminator_core::find_executable(value.trim()) {
+                            Some(path) => ui.weak(path.display().to_string()),
+                            None => ui.colored_label(
+                                appearance::color(&self.theme.status_failed),
+                                "Language server not found",
+                            ),
+                        };
+                    }
+                },
+            );
+        }
         if self.field_visible("Diff viewer", "native neovim review") {
             settings_controls::settings_row(
                 ui,

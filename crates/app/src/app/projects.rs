@@ -259,6 +259,9 @@ impl App {
         }
     }
     pub(crate) fn report_status_error(&mut self, error: String) {
+        if is_session_auth_error(&error) && self.dismissed_auth_errors.contains(&error) {
+            return;
+        }
         let cwd = self.cwd();
         if self.error_cwd.as_deref() != cwd.as_deref() {
             self.error_cwd = cwd;
@@ -283,6 +286,11 @@ impl App {
     }
     pub(crate) fn dismiss_status_error(&mut self) {
         self.dismissed_error = self.error.take();
+        if let Some(error) = &self.dismissed_error
+            && is_session_auth_error(error)
+        {
+            self.dismissed_auth_errors.insert(error.clone());
+        }
     }
     pub(crate) fn dialog_directory(&self) -> PathBuf {
         self.cwd()

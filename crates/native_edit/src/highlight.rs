@@ -35,8 +35,8 @@ pub fn language_for_path(path: &str) -> Language {
     match ext.as_str() {
         "rs" => Language::Rust,
         "py" => Language::Python,
-        "js" | "jsx" | "mjs" => Language::JavaScript,
-        "ts" | "tsx" => Language::TypeScript,
+        "js" | "jsx" | "mjs" | "cjs" => Language::JavaScript,
+        "ts" | "tsx" | "mts" | "cts" => Language::TypeScript,
         "go" => Language::Go,
         "c" | "h" => Language::C,
         "cc" | "cpp" | "cxx" | "hh" | "hpp" => Language::Cpp,
@@ -77,6 +77,24 @@ pub struct Span {
     pub start: usize,
     pub end: usize,
     pub color: [u8; 3],
+    pub style: SpanStyle,
+}
+
+/// Font emphasis for a span. Themes carry it per scope; the view picks an
+/// italic/bold font family for spans that ask for one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct SpanStyle {
+    pub italic: bool,
+    pub bold: bool,
+}
+
+/// Convert a syntect [`FontStyle`](syntect::highlighting::FontStyle) bit set.
+pub(crate) fn span_style(font_style: syntect::highlighting::FontStyle) -> SpanStyle {
+    use syntect::highlighting::FontStyle;
+    SpanStyle {
+        italic: font_style.contains(FontStyle::ITALIC),
+        bold: font_style.contains(FontStyle::BOLD),
+    }
 }
 
 /// Buffers over this size paint plain instead of highlighted.
@@ -94,18 +112,29 @@ pub(crate) fn assets() -> &'static (SyntaxSet, ThemeSet) {
     })
 }
 
-fn theme_name(dark: bool) -> &'static str {
-    if dark { "Nord" } else { "OneHalfLight" }
+/// `IntelliJ` Darcula's syntax palette, bundled so code colors match the
+/// IDE chrome instead of a third-party scheme.
+fn darcula() -> Option<&'static syntect::highlighting::Theme> {
+    static DARCULA: OnceLock<Option<syntect::highlighting::Theme>> = OnceLock::new();
+    DARCULA
+        .get_or_init(|| {
+            let mut reader = std::io::Cursor::new(include_bytes!("../assets/Darcula.tmTheme"));
+            ThemeSet::load_from_reader(&mut reader).ok()
+        })
+        .as_ref()
 }
 
 /// Active syntect theme, so sibling backends (tree-sitter) resolve the
 /// same colors the regex backend paints. `None` when the bundle holds
 /// no themes at all (then the caller falls back to syntect-or-plain).
 pub(crate) fn theme(dark: bool) -> Option<&'static syntect::highlighting::Theme> {
+    if dark {
+        return darcula();
+    }
     let (_, themes) = assets();
     themes
         .themes
-        .get(theme_name(dark))
+        .get("OneHalfLight")
         .or_else(|| themes.themes.values().next())
 }
 
@@ -125,12 +154,9 @@ pub fn highlight_text(language: Language, text: &str, dark: bool) -> Option<Vec<
         return Some(spans);
     }
     let ext = language.extension()?;
-    let (syntaxes, themes) = assets();
+    let (syntaxes, _) = assets();
     let syntax = syntaxes.find_syntax_by_extension(ext)?;
-    let theme = themes
-        .themes
-        .get(theme_name(dark))
-        .or_else(|| themes.themes.values().next())?;
+    let theme = theme(dark)?;
     let highlighter = Highlighter::new(theme);
     let mut highlight_state = HighlightState::new(&highlighter, ScopeStack::new());
     let mut parser = ParseState::new(syntax);
@@ -151,6 +177,7 @@ pub fn highlight_text(language: Language, text: &str, dark: bool) -> Option<Vec<
                     start: col,
                     end,
                     color: [foreground.r, foreground.g, foreground.b],
+                    style: span_style(style.font_style),
                 });
             }
             col = end;
@@ -236,6 +263,31 @@ mod tests {
         colors.sort_unstable();
         colors.dedup();
         assert!(colors.len() > 1, "spans: {:?}", lines[0]);
+    }
+
+    #[test]
+    fn dark_theme_uses_darcula_colors() {
+        let lines = highlight_text(
+            Language::Rust,
+            "fn main() {\n    // note\n    let x = 1;\n}",
+            true,
+        )
+        .expect("rust highlights");
+        let has = |line: usize, color: [u8; 3]| lines[line].iter().any(|span| span.color == color);
+        assert!(has(0, [0xCC, 0x78, 0x32]), "keyword orange: {:?}", lines[0]);
+        assert!(
+            has(0, [0xFF, 0xC6, 0x6D]),
+            "function yellow: {:?}",
+            lines[0]
+        );
+        assert!(has(1, [0x80, 0x80, 0x80]), "comment gray: {:?}", lines[1]);
+        assert!(has(2, [0x68, 0x97, 0xBB]), "number blue: {:?}", lines[2]);
+        assert!(!has(3, [0x80, 0x80, 0x80]));
+        assert!(
+            lines[2].iter().any(|span| span.color == [0xA9, 0xB7, 0xC6]),
+            "plain text stays Darcula foreground: {:?}",
+            lines[2]
+        );
     }
 
     #[test]

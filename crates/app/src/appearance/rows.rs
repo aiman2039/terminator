@@ -257,7 +257,11 @@ pub fn paint_status_icon(ui: &egui::Ui, rect: egui::Rect, icon: &str, tint: Colo
     if spin && !ui.is_rect_visible(rect) {
         return;
     }
-    let mut image = egui::Image::new(crate::icons::source(icon)).tint(tint);
+    let mut image = egui::Image::new(crate::icons::source(icon));
+    // Language icons carry their own palette; tinting them would flatten it.
+    if !crate::icons::is_language(icon) {
+        image = image.tint(tint);
+    }
     if spin {
         let (angle, animate) = ui.input(|input| {
             let viewport = input.viewport();

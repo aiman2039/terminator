@@ -1,6 +1,62 @@
 # Validation evidence — 2026-09-08
 
+## Host bounded-scrolling fixture race — 2026-10-17
+
+Release attempt `run-iW5U2c` failed the host GUI stage. Ten cases failed once
+while the Linux Docker stage ran concurrently; a clean eight-worker run passed
+all of them except `scrolling-bounded`. That case sent its first wheel one
+second after launch, and the wheel can be dropped before the first terminal
+paint settles, so the recorded offsets were `[0, 8, 0]` instead of the required
+`8, 0, 8` window. The check now anchors on the tab-return action and requires a
+positive retained-history offset after the restore plus a final return to
+recent output.
+
+Eight focused reruns passed, and one full 21-case, eight-worker native suite
+passed. `cargo fmt --all --check`, strict xtask Clippy, and `git diff --check`
+passed. The release stage was not rerun; the working tree had unrelated
+in-progress edits.
+
+## Idle-close input-forwarding race — 2026-10-17
+
+Release attempt `run-xGCV4s` failed `idle-close` for fish with
+`Just-submitted command was closed`. The fixture closed a shell immediately
+after the attachment acknowledged PTY input forwarding. Fish can still hold
+that forwarded input before its foreground job exists, and the daemon cannot
+see shell-buffered input. The case now starts a foreground `sh` job and waits
+for the job's own output before requesting close. The marker is assembled from
+`printf` arguments so the echoed command line cannot satisfy the wait.
+
+Linux ARM64 release image: six sequential `idle-close` runs passed, including
+fish. The artificial six-way parallel stress loop still shows unrelated
+`failed to fill whole buffer` transport errors that also occur without this
+change. macOS host `idle-close` passed zsh, bash, `sh` refusal, and the zsh
+prompt framework (fish is not installed). `cargo fmt --all --check` and strict
+workspace Clippy passed.
+
+## Scripted clicks on first-frame popups — 2026-10-17
+
+Linux release runs failed `workspace-tabs`, `ui-cleanup`, and
+`terminal-actions` because a scripted click on a menu row could land on the
+popup's invisible, non-interactable sizing pass, which is placed away from the
+final menu position. Popup rows now record their fixture rect only outside a
+sizing pass, so the click waits for the first real layout pass. The focused
+`diagnostics::tests::sizing_pass_rows_wait_for_the_real_popup_layout` test
+passed, and `cargo check -p terminator --features test-support --locked`
+passed. Three full Linux `gui all` loops (21 cases, 8 workers, Xvfb + Glow)
+passed with no failures, and the host `workspace-tabs`, `terminal-actions`,
+and `ui-cleanup` cases passed. This changes fixture diagnostics only; user
+input and popup rendering are unchanged.
+
 ## Unavailable session owner after update — 2026-10-17
+
+The authentication-file status error now stays dismissed across project and
+session changes, and after unrelated status errors. A different service path
+still reports its own error. The focused
+`dismissed_auth_error_stays_hidden_across_session_navigation` test passed.
+All 33 `app::nav_04::tests::` tests, strict app-library Clippy, formatting,
+and `git diff --check` passed.
+This changes the GUI message only; it does not recreate an authentication file
+or alter a live service.
 
 Saved sessions from an unavailable owner no longer appear as running in the
 project sidebar or status count. Closing such a pane removes its view without
@@ -4638,3 +4694,30 @@ save compiled dependencies, and Rust cache writes occur only on `master`.
 Local validation: 42 focused `xtask` release tests, `cargo fmt --all --check`,
 `git diff --check`, and YAML parsing plus release dependency graph assertions
 passed. No hosted run with these workflow changes has completed yet.
+
+## Native editor: wrap, vimrc, caret, and Darcula (2026-10-17)
+
+`~/.vimrc` is read once per process and only `set`/`setlocal` names the
+engine implements are applied (`wrap`/`nowrap`, `ic`/`noic`); mappings,
+plugins, and unknown options are ignored. `:set` now accepts the same names
+at runtime, and `ignorecase` reaches `/`, `n`, `N`, and `:s`, with `&` in a
+substitute splicing the text as written in the buffer. Source wrapping stays
+the per-type default (Markdown wraps, code does not) unless the vimrc or
+`:set` overrides it.
+
+The block caret now paints in the text color with the covered glyph in the
+window fill instead of the muted selection blue (`#214283`).
+`crates/native_edit/assets/Darcula.tmTheme` replaces the Nord theme for dark
+mode, so syntax colors match the IntelliJ chrome: keyword `#CC7832`,
+function `#FFC66D`, string `#6A8759`, number `#6897BB`, comment `#808080`,
+plain text `#A9B7C6`.
+
+`:split`/`:vsplit`/`:tabnew` now split at the focused leaf when the issuing
+copy is missing instead of dropping the request, and each split pane gets
+its own widget/focus id (`path#surface.node`) so a second view does not
+inherit the first pane's scroll offset or keyboard focus. Unit tests cover
+vimrc parsing, `:set` state, ignorecase search/substitute, the
+render-to-effect path for `:split`, `:tabnew`, and `:set wrap`, plus
+main-dock splits and `:tabnew` placement. `cargo test -p
+terminator-native-edit` (153 tests), `cargo test -p terminator --lib` (620
+tests), and strict Clippy for both crates passed.

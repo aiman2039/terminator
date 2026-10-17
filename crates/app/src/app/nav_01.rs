@@ -192,18 +192,24 @@ mod tests {
         app.state.sessions = vec![
             session_fixture("s1", SessionKind::Shell),
             session_fixture("s2", SessionKind::Shell),
+            session_fixture("s3", SessionKind::Shell),
         ];
-        let tab = |id: &str, sid: &str| crate::workspace::WorkspaceTab {
+        let tab = |id: &str, sids: &[&str]| crate::workspace::WorkspaceTab {
             id: id.into(),
             name: None,
             pinned: false,
-            primary: Some(Tab::Terminal(sid.into())),
-            layout: egui_dock::DockState::new(vec![Tab::Terminal(sid.into())]),
+            primary: Some(Tab::Terminal(sids[0].into())),
+            layout: egui_dock::DockState::new(
+                sids.iter()
+                    .map(|sid| Tab::Terminal((*sid).to_string()))
+                    .collect(),
+            ),
         };
         let mut workspace =
             Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal("s1".into())]));
-        workspace.tabs[0] = tab("g1", "s1");
-        workspace.tabs.push(tab("g2", "s2"));
+        // Two terminals so the tab keeps a node to rename.
+        workspace.tabs[0] = tab("g1", &["s1", "s3"]);
+        workspace.tabs.push(tab("g2", &["s2"]));
         workspace.active = "g1".into();
         app.layouts.insert("a".into(), workspace);
         app.selected = Some("a".into());
@@ -262,6 +268,61 @@ mod tests {
         paint(&mut app, &[key_press(egui::Key::Escape)], &mut time);
         assert_eq!(app.rename_group, None);
         assert_eq!(app.layouts["a"].tabs[0].name.as_deref(), Some("Agents"));
+    }
+
+    #[test]
+    #[cfg(feature = "test-support")]
+    fn single_terminal_tab_paints_the_terminal_without_a_node() {
+        let (mut app, ctx, _dir) = fixture();
+        app.state.sessions = vec![
+            session_fixture("s1", SessionKind::Shell),
+            session_fixture("s2", SessionKind::Shell),
+        ];
+        let tab = |id: &str, sid: &str| crate::workspace::WorkspaceTab {
+            id: id.into(),
+            name: None,
+            pinned: false,
+            primary: Some(Tab::Terminal(sid.into())),
+            layout: egui_dock::DockState::new(vec![Tab::Terminal(sid.into())]),
+        };
+        let mut workspace =
+            Workspace::from_layout(egui_dock::DockState::new(vec![Tab::Terminal("s1".into())]));
+        workspace.tabs[0] = tab("g1", "s1");
+        workspace.tabs.push(tab("g2", "s2"));
+        workspace.active = "g1".into();
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+
+        let mut time = 0.0_f64;
+        let mut paint = |app: &mut App| {
+            time += 0.05;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(360.0, 600.0),
+                    )),
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ui| app.projects(ui),
+            );
+            output.textures_delta.clear();
+        };
+        paint(&mut app);
+        paint(&mut app);
+        // Both terminals are painted at the tab level; no tab nodes.
+        assert!(header_target(&ctx)("session-row:s1").is_some());
+        assert!(header_target(&ctx)("session-row:s2").is_some());
+        assert!(header_target(&ctx)("sidebar-tab:g1").is_none());
+        assert!(header_target(&ctx)("sidebar-tab:g2").is_none());
+
+        // A custom name restores the node, so the name stays visible.
+        app.layouts.get_mut("a").unwrap().tabs[0].name = Some("Agents".into());
+        paint(&mut app);
+        paint(&mut app);
+        assert!(header_target(&ctx)("sidebar-tab:g1").is_some());
+        assert!(header_target(&ctx)("session-row:s1").is_some());
     }
 
     #[test]

@@ -90,6 +90,39 @@ mod tests {
     }
 
     #[test]
+    fn dismissed_auth_error_stays_hidden_across_session_navigation() {
+        let (mut app, ctx, _dir) = fixture();
+        let message = "Cannot read session service authentication file /tmp/old/auth: No such file or directory (os error 2)";
+        app.update_tx.send(Update::Error(message.into())).unwrap();
+        drain_updates(&mut app, &ctx);
+        assert_eq!(app.error.as_deref(), Some(message));
+        app.dismiss_status_error();
+
+        let mut session = session_fixture("shell", SessionKind::Shell);
+        session.cwd = "/other".into();
+        app.state.sessions.push(session);
+        app.selected = Some("a".into());
+        app.active_session = Some("shell".into());
+        app.update_tx.send(Update::Error(message.into())).unwrap();
+        drain_updates(&mut app, &ctx);
+        assert!(app.error.is_none());
+
+        app.update_tx
+            .send(Update::Error("Settings rejected".into()))
+            .unwrap();
+        drain_updates(&mut app, &ctx);
+        app.dismiss_status_error();
+        app.update_tx.send(Update::Error(message.into())).unwrap();
+        drain_updates(&mut app, &ctx);
+        assert!(app.error.is_none());
+
+        let new_owner = "Cannot read session service authentication file /tmp/new/auth: No such file or directory (os error 2)";
+        app.update_tx.send(Update::Error(new_owner.into())).unwrap();
+        drain_updates(&mut app, &ctx);
+        assert_eq!(app.error.as_deref(), Some(new_owner));
+    }
+
+    #[test]
     fn missing_directory_error_stops_after_three_reports() {
         let (mut app, ctx, _dir) = fixture();
         let message = "No such file or directory (os error 2)";

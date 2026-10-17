@@ -206,6 +206,9 @@ pub struct Settings {
     pub editor_program: String,
     pub external_editor: String,
     pub external_args: Vec<String>,
+    /// Language-server executables keyed by protocol language id
+    /// (`rust`, `python`). Empty or missing means automatic lookup.
+    pub lsp_servers: std::collections::BTreeMap<String, String>,
     pub shell: String,
     pub history_days: u64,
     pub session_mib: u64,
@@ -253,6 +256,7 @@ impl Default for Settings {
             }
             .into(),
             external_args: vec![],
+            lsp_servers: std::collections::BTreeMap::new(),
             shell: String::new(),
             history_days: 30,
             session_mib: 50,

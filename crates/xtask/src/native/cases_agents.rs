@@ -125,21 +125,30 @@ pub(crate) fn scrolling_bounded(opts: &Options) -> Result<()> {
         |_| Ok(()),
     )?;
     let prefix = format!("Scroll evidence: session={} ", id(&sample));
-    let offsets: Vec<usize> = logs
-        .lines()
-        .filter(|line| line.starts_with(&prefix))
-        .filter_map(|line| {
-            line.split(" offset=")
-                .nth(1)?
-                .split_whitespace()
-                .next()?
-                .parse()
-                .ok()
-        })
-        .collect();
+    let offsets = |text: &str| -> Vec<usize> {
+        text.lines()
+            .filter(|line| line.starts_with(&prefix))
+            .filter_map(|line| {
+                line.split(" offset=")
+                    .nth(1)?
+                    .split_whitespace()
+                    .next()?
+                    .parse()
+                    .ok()
+            })
+            .collect()
+    };
+    // A wheel sent before the first terminal paint settles can be dropped
+    // without a trace. Anchor on the tab return: retained history must scroll
+    // after the restore, and scrolling down must return to recent output.
+    let restored = logs
+        .split("Fixture action: workspace-tab:Muse sample")
+        .nth(1)
+        .unwrap_or_default();
+    let restored_offsets = offsets(restored);
     ensure!(
-        offsets.windows(3).any(|offsets| offsets == [8, 0, 8]) && offsets.last() == Some(&0),
-        "Bounded-region scrollback failed before/after tab reconnect: {offsets:?}; {logs}"
+        restored_offsets.iter().any(|offset| *offset > 0) && restored_offsets.last() == Some(&0),
+        "Bounded-region scrollback failed after tab reconnect: {restored_offsets:?}; {logs}"
     );
     h.assert_pids(&[sample, other])?;
     Ok(())

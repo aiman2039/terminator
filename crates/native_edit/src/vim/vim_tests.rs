@@ -582,6 +582,56 @@ mod tests {
     }
 
     #[test]
+    fn vimrc_set_wrap_is_parsed_and_unknown_options_are_ignored() {
+        assert_eq!(parse_vimrc("set wrap\n").wrap, Some(true));
+        assert_eq!(parse_vimrc("set nowrap\n").wrap, Some(false));
+        assert_eq!(
+            parse_vimrc("set number relativenumber wrap\n").wrap,
+            Some(true)
+        );
+        assert_eq!(parse_vimrc("set number\n").wrap, None);
+        assert_eq!(parse_vimrc("").wrap, None);
+    }
+
+    #[test]
+    fn ex_set_wrap_switches_the_view_option_and_bare_set_is_quiet() {
+        fn ex(eng: &mut VimEngine, doc: &mut Doc, command: &str) -> Vec<Effect> {
+            keys(eng, doc, command);
+            eng.press_key(doc, Key::Enter)
+        }
+        let (mut eng, mut doc) = engine("x");
+        assert_eq!(eng.wrap(), None);
+        assert_eq!(ex(&mut eng, &mut doc, ":set wrap"), Vec::new());
+        assert_eq!(eng.wrap(), Some(true));
+        assert_eq!(ex(&mut eng, &mut doc, ":set nowrap"), Vec::new());
+        assert_eq!(eng.wrap(), Some(false));
+        assert_eq!(ex(&mut eng, &mut doc, ":set wrap!"), Vec::new());
+        assert_eq!(eng.wrap(), Some(true));
+        assert_eq!(ex(&mut eng, &mut doc, ":setlocal nowrap"), Vec::new());
+        assert_eq!(eng.wrap(), Some(false));
+        // Bare `:set` lists options in vim; the editor treats it as a
+        // quiet no-op, and unknown names still bell.
+        assert_eq!(ex(&mut eng, &mut doc, ":set"), Vec::new());
+        assert_eq!(ex(&mut eng, &mut doc, ":set spell"), vec![Effect::Bell]);
+        assert_eq!(eng.wrap(), Some(false));
+    }
+
+    #[test]
+    fn ignorecase_from_set_applies_to_search_and_substitute() {
+        let (mut eng, mut doc) = engine("Foo\nbar\n");
+        keys(&mut eng, &mut doc, ":set ic");
+        eng.press_key(&mut doc, Key::Enter);
+        keys(&mut eng, &mut doc, "j");
+        keys(&mut eng, &mut doc, "/foo");
+        eng.press_key(&mut doc, Key::Enter);
+        assert_eq!((eng.cursor().line, eng.cursor().col), (0, 0));
+        // `&` splices the text as written in the buffer, not the pattern.
+        keys(&mut eng, &mut doc, ":%s/foo/[&]/");
+        eng.press_key(&mut doc, Key::Enter);
+        assert_eq!(doc.text().as_str(), "[Foo]\nbar\n");
+    }
+
+    #[test]
     fn backspace_after_a_multiline_paste_deletes_across_the_newlines() {
         let (mut eng, mut doc) = engine("");
         eng.press_key(&mut doc, Key::Char('i'));

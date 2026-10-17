@@ -209,6 +209,61 @@ mod tests {
     }
 
     #[test]
+    fn main_dock_native_split_fans_out_from_the_issuing_view() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/main-split.rs");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        app.layouts
+            .get_mut("a")
+            .unwrap()
+            .add("native".into(), Tab::NativeEditor { path: path.clone() });
+        app.selected = Some("a".into());
+        let views = |app: &App| {
+            app.layouts["a"]
+                .tabs
+                .iter()
+                .flat_map(|tab| tab.layout.iter_all_tabs())
+                .filter(|(_, tab)| matches!(tab, Tab::NativeEditor { .. }))
+                .count()
+        };
+        for _ in 0..2 {
+            app.pending_native_splits.push((
+                egui::ViewportId::ROOT,
+                path.clone(),
+                crate::native_editor::NativeSplit::Beside,
+            ));
+            app.drain_pending_native_close();
+        }
+        assert_eq!(views(&app), 3, "each :vsplit adds one view of the file");
+    }
+
+    #[test]
+    fn main_dock_native_tabnew_adds_a_top_level_tab() {
+        let (mut app, _, _dir) = fixture();
+        let path = PathBuf::from("/a/main-tabnew.rs");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+        );
+        app.layouts
+            .get_mut("a")
+            .unwrap()
+            .add("native".into(), Tab::NativeEditor { path: path.clone() });
+        app.selected = Some("a".into());
+        let tabs = app.layouts["a"].tabs.len();
+        app.pending_native_splits.push((
+            egui::ViewportId::ROOT,
+            path.clone(),
+            crate::native_editor::NativeSplit::NewTab,
+        ));
+        app.drain_pending_native_close();
+        assert_eq!(app.layouts["a"].tabs.len(), tabs + 1);
+    }
+
+    #[test]
     fn float_native_split_stays_in_window() {
         let (mut app, _, _dir) = fixture();
         let path = PathBuf::from("/a/float-split.md");

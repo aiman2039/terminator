@@ -148,6 +148,27 @@ impl App {
     }
 
     pub(super) fn session_row(&mut self, ui: &mut egui::Ui, session: &Session) {
+        self.session_row_for_tab(ui, session, None);
+    }
+
+    /// One session row that stands in for a single-terminal tab. It offers to
+    /// name that tab, since the tab node is not painted.
+    pub(super) fn session_row_in_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        session: &Session,
+        project_id: &str,
+        tab_id: &str,
+    ) {
+        self.session_row_for_tab(ui, session, Some((project_id, tab_id)));
+    }
+
+    fn session_row_for_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        session: &Session,
+        rename_tab: Option<(&str, &str)>,
+    ) {
         let presented = self.present_session(&session.id);
         let editing = self.renaming(&session.id, RenameSurface::Sidebar);
         let height = if !editing && presented.notice_preview.is_some() {
@@ -246,6 +267,14 @@ impl App {
             ui.separator();
             if appearance::menu_item(ui, "Open session", "Terminal", "").clicked() {
                 self.go_session(&session.id);
+                ui.close();
+            }
+            if let Some((project_id, tab_id)) = rename_tab
+                && appearance::menu_item(ui, "Name tab…", "Pencil", "").clicked()
+            {
+                self.rename_group = Some((project_id.to_string(), tab_id.to_string()));
+                self.rename_group_text.clear();
+                self.rename_group_focus = true;
                 ui.close();
             }
             ui.separator();

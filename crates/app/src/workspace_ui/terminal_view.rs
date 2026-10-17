@@ -446,7 +446,7 @@ impl Viewer<'_> {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let close = appearance::sidebar_action(ui, "X", "Dismiss file menu");
                             #[cfg(feature = "test-support")]
-                            diagnostics::record(ui.ctx(), "terminal-file-menu-close", close.rect);
+                            diagnostics::record_ui(ui, "terminal-file-menu-close", close.rect);
                             if close.clicked() {
                                 ui.close();
                             }

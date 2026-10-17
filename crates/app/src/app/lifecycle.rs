@@ -217,6 +217,7 @@ impl App {
             context_path: None,
             error: preference_error.or(upgrade_error),
             dismissed_error: None,
+            dismissed_auth_errors: HashSet::new(),
             error_cwd: None,
             missing_path_reports: 0,
             info: None,

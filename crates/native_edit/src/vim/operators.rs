@@ -3,6 +3,24 @@ use super::helpers::{doc_is_empty, range_text};
 use super::mode::{Bit, BlockPending, Cursor, Effect, ModalEngine, Mode, PendingOp, Place, Repeat};
 use super::state::VimEngine;
 use super::words::line_len;
+
+/// Byte offsets and lengths of every `pattern` match in `text`. ASCII
+/// case folding keeps the offsets valid for the original string, which
+/// is all `.vimrc` `ignorecase` needs to promise.
+pub(super) fn find_matches(text: &str, pattern: &str, ignorecase: bool) -> Vec<(usize, usize)> {
+    if ignorecase {
+        let folded = text.to_ascii_lowercase();
+        folded
+            .match_indices(&pattern.to_ascii_lowercase())
+            .map(|(byte, matched)| (byte, matched.len()))
+            .collect()
+    } else {
+        text.match_indices(pattern)
+            .map(|(byte, matched)| (byte, matched.len()))
+            .collect()
+    }
+}
+
 impl VimEngine {
     pub(super) fn delete_range<B: Buffer>(
         &mut self,
@@ -150,16 +168,21 @@ impl VimEngine {
     }
 
     /// All match starts (char indices) of a literal pattern, in buffer
-    /// order. Literal and case-sensitive (no vim regex); single-line
-    /// patterns only, so a pattern containing `\n` never matches.
-    pub(super) fn search_matches<B: Buffer>(doc: &B, pattern: &str) -> Vec<usize> {
+    /// order. Literal (no vim regex) and case-sensitive unless
+    /// `ignorecase` is set; single-line patterns only, so a pattern
+    /// containing `\n` never matches.
+    pub(super) fn search_matches<B: Buffer>(
+        doc: &B,
+        pattern: &str,
+        ignorecase: bool,
+    ) -> Vec<usize> {
         if pattern.is_empty() || pattern.contains('\n') {
             return Vec::new();
         }
         let mut out = Vec::new();
         for line in 0..doc.line_count() {
             let text = doc.line_text(line);
-            for (byte, _) in text.match_indices(pattern) {
+            for (byte, _) in find_matches(&text, pattern, ignorecase) {
                 let col = text.get(..byte).map_or(0, |prefix| prefix.chars().count());
                 out.push(doc.char_at_line_col(line, col));
             }
@@ -178,7 +201,7 @@ impl VimEngine {
         from: usize,
         forward: bool,
     ) -> bool {
-        let matches = Self::search_matches(doc, pattern);
+        let matches = Self::search_matches(doc, pattern, self.ignorecase());
         if matches.is_empty() {
             return false;
         }

@@ -768,14 +768,49 @@ fn native_location(uri: &lsp_types::Uri, range: &lsp_types::Range) -> GotoTarget
     }
 }
 
-/// Protocol language id for `didOpen`, if the language has a server.
+/// Server family id for a language, if it has a server. TypeScript and
+/// JavaScript share one family, because one `typescript-language-server`
+/// serves both; the per-file `didOpen` id comes from
+/// [`language_id_for_path`].
 #[must_use]
-pub fn language_id(language: Language) -> Option<&'static str> {
+pub fn server_language(language: Language) -> Option<&'static str> {
     match language {
         Language::Rust => Some("rust"),
         Language::Python => Some("python"),
+        Language::TypeScript | Language::JavaScript => Some("typescript"),
         _ => None,
     }
+}
+
+/// Protocol `languageId` for `didOpen`: TypeScript and JavaScript have
+/// several (`.tsx` is `typescriptreact`, `.jsx` is `javascriptreact`).
+#[must_use]
+pub fn language_id_for_path(path: &Path, language: Language) -> Option<&'static str> {
+    match language {
+        Language::Rust => Some("rust"),
+        Language::Python => Some("python"),
+        Language::TypeScript => Some(if extension(path) == "tsx" {
+            "typescriptreact"
+        } else {
+            "typescript"
+        }),
+        Language::JavaScript => Some(javascript_id(path)),
+        _ => None,
+    }
+}
+
+fn javascript_id(path: &Path) -> &'static str {
+    if extension(path) == "jsx" {
+        "javascriptreact"
+    } else {
+        "javascript"
+    }
+}
+
+fn extension(path: &Path) -> String {
+    path.extension()
+        .map(|value| value.to_string_lossy().to_lowercase())
+        .unwrap_or_default()
 }
 
 /// Server binary candidates for a language, in preference order. Only
@@ -785,6 +820,17 @@ pub fn server_candidates(language: Language) -> &'static [&'static str] {
     match language {
         Language::Rust => &["rust-analyzer"],
         Language::Python => &["pylsp"],
+        Language::TypeScript | Language::JavaScript => &["typescript-language-server"],
+        _ => &[],
+    }
+}
+
+/// Extra command-line arguments the server needs. TypeScript's server
+/// speaks LSP only on stdio, which it selects with `--stdio`.
+#[must_use]
+pub fn server_args(language: Language) -> &'static [&'static str] {
+    match language {
+        Language::TypeScript | Language::JavaScript => &["--stdio"],
         _ => &[],
     }
 }
@@ -1323,12 +1369,44 @@ mod tests {
     }
 
     #[test]
-    fn server_table_lists_rust_and_python_only() {
+    fn server_table_covers_rust_python_and_typescript() {
         assert_eq!(server_candidates(Language::Rust), &["rust-analyzer"]);
         assert_eq!(server_candidates(Language::Python), &["pylsp"]);
-        assert!(server_candidates(Language::TypeScript).is_empty());
-        assert_eq!(language_id(Language::Rust), Some("rust"));
-        assert_eq!(language_id(Language::Markdown), None);
+        assert_eq!(
+            server_candidates(Language::TypeScript),
+            &["typescript-language-server"]
+        );
+        assert_eq!(
+            server_candidates(Language::JavaScript),
+            &["typescript-language-server"]
+        );
+        assert!(server_candidates(Language::Go).is_empty());
+        assert_eq!(server_language(Language::Rust), Some("rust"));
+        assert_eq!(server_language(Language::TypeScript), Some("typescript"));
+        assert_eq!(server_language(Language::JavaScript), Some("typescript"));
+        assert_eq!(server_language(Language::Markdown), None);
+        assert_eq!(server_args(Language::TypeScript), &["--stdio"]);
+        assert!(server_args(Language::Rust).is_empty());
+    }
+
+    #[test]
+    fn typescript_file_ids_follow_the_extension() {
+        let id = |name: &str| language_id_for_path(Path::new(name), Language::TypeScript);
+        assert_eq!(id("app.ts"), Some("typescript"));
+        assert_eq!(id("view.tsx"), Some("typescriptreact"));
+        assert_eq!(id("config.mts"), Some("typescript"));
+        assert_eq!(
+            language_id_for_path(Path::new("main.js"), Language::JavaScript),
+            Some("javascript")
+        );
+        assert_eq!(
+            language_id_for_path(Path::new("view.jsx"), Language::JavaScript),
+            Some("javascriptreact")
+        );
+        assert_eq!(
+            language_id_for_path(Path::new("notes.md"), Language::Markdown),
+            None
+        );
     }
 
     #[test]

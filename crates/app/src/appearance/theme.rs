@@ -1,5 +1,6 @@
 use eframe::egui::{self, Color32, FontFamily, FontId, TextStyle};
 use terminator_core::appearance::{AppearanceConfig, rgb};
+use terminator_native_edit::view::{BOLD_FAMILY, ITALIC_FAMILY};
 
 /// Keep small navigation/action glyphs legible independently of secondary text.
 pub const ICON_COLOR: Color32 = Color32::from_rgb(242, 244, 248);
@@ -57,9 +58,14 @@ pub fn install(ctx: &egui::Context) {
             FontFamily::Monospace,
         ),
         (
+            "JetBrains Mono Italic",
+            include_bytes!("../../assets/fonts/JetBrainsMono-Italic.ttf").as_slice(),
+            FontFamily::Name(ITALIC_FAMILY.into()),
+        ),
+        (
             "JetBrains Mono Bold",
             include_bytes!("../../assets/fonts/JetBrainsMono-Bold.ttf").as_slice(),
-            FontFamily::Name("Terminal Bold".into()),
+            FontFamily::Name(BOLD_FAMILY.into()),
         ),
     ] {
         fonts
@@ -80,7 +86,8 @@ pub fn install(ctx: &egui::Context) {
     );
     for family in [
         FontFamily::Monospace,
-        FontFamily::Name("Terminal Bold".into()),
+        FontFamily::Name(BOLD_FAMILY.into()),
+        FontFamily::Name(ITALIC_FAMILY.into()),
     ] {
         fonts
             .families
@@ -97,7 +104,8 @@ pub fn install(ctx: &egui::Context) {
     );
     for family in [
         FontFamily::Monospace,
-        FontFamily::Name("Terminal Bold".into()),
+        FontFamily::Name(BOLD_FAMILY.into()),
+        FontFamily::Name(ITALIC_FAMILY.into()),
         FontFamily::Proportional,
         FontFamily::Name("Semibold".into()),
     ] {

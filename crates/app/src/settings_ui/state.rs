@@ -81,6 +81,7 @@ pub(crate) enum BrowseTarget {
     Editor,
     External,
     WorktreeDest,
+    Lsp(&'static str),
 }
 
 impl App {

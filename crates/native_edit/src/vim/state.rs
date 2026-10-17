@@ -36,6 +36,9 @@ pub struct VimEngine {
     /// indices captured when the session opens.
     pub(crate) typed_start: usize,
     pub(crate) typed_end: usize,
+    /// Options from `~/.vimrc` and later `:set` commands. View-only
+    /// switches (`wrap`) stay here so every pane of one buffer agrees.
+    pub(crate) options: VimrcOptions,
 }
 
 impl Default for VimEngine {
@@ -61,6 +64,7 @@ impl Default for VimEngine {
             typed_exact: true,
             typed_start: 0,
             typed_end: 0,
+            options: VimrcOptions::default(),
         }
     }
 }
@@ -69,6 +73,9 @@ impl Default for VimEngine {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct VimrcOptions {
     pub ignorecase: bool,
+    /// `set wrap` / `set nowrap`; `None` keeps the host default (source
+    /// wraps only for Markdown).
+    pub wrap: Option<bool>,
 }
 
 pub(crate) fn apply_set_str(opts: &mut VimrcOptions, option: &str) -> bool {
@@ -76,6 +83,9 @@ pub(crate) fn apply_set_str(opts: &mut VimrcOptions, option: &str) -> bool {
         "ic" | "ignorecase" => opts.ignorecase = true,
         "noic" | "noignorecase" => opts.ignorecase = false,
         "ic!" | "ignorecase!" => opts.ignorecase = !opts.ignorecase,
+        "wrap" => opts.wrap = Some(true),
+        "nowrap" => opts.wrap = Some(false),
+        "wrap!" => opts.wrap = Some(!opts.wrap.unwrap_or(false)),
         _ => return false,
     }
     true
@@ -115,6 +125,34 @@ impl VimEngine {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Adopt `~/.vimrc` options when the buffer's engine is created.
+    /// Later `:set` commands change the same fields.
+    pub fn apply_vimrc(&mut self, options: VimrcOptions) {
+        self.options = options;
+    }
+
+    /// `Some(true)` wraps every source line, `Some(false)` never wraps,
+    /// `None` leaves the host default (Markdown wraps, code does not).
+    #[must_use]
+    pub fn wrap(&self) -> Option<bool> {
+        self.options.wrap
+    }
+
+    #[must_use]
+    pub fn ignorecase(&self) -> bool {
+        self.options.ignorecase
+    }
+
+    /// Apply `:set` / `:setlocal` arguments. True when at least one name
+    /// was recognised; unknown names bell, like the rest of ex.
+    pub(super) fn apply_set_args(&mut self, args: &str) -> bool {
+        let mut known = false;
+        for arg in args.split_whitespace() {
+            known |= apply_set_str(&mut self.options, arg);
+        }
+        known
     }
 
     pub(super) fn take_count(&mut self) -> usize {

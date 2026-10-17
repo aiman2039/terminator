@@ -67,12 +67,21 @@ pub fn id() -> String {
 }
 /// Find an executable without invoking a shell. Include standard GUI-launch paths.
 pub fn find_executable(program: &str) -> Option<PathBuf> {
+    // Settings fields are typed by hand, so accept a leading `~/`.
+    if let Some(rest) = program.strip_prefix("~/") {
+        let base = directories::BaseDirs::new()?;
+        let path = base.home_dir().join(rest);
+        return is_executable_file(&path).then_some(path);
+    }
     let mut paths = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
         .unwrap_or_default();
     paths.extend(["/opt/homebrew/bin", "/usr/local/bin", "/bin", "/usr/bin"].map(PathBuf::from));
     if let Some(base) = directories::BaseDirs::new() {
-        paths.extend([".local/bin", ".opencode/bin", ".grok/bin"].map(|p| base.home_dir().join(p)));
+        paths.extend(
+            [".local/bin", ".cargo/bin", ".opencode/bin", ".grok/bin"]
+                .map(|p| base.home_dir().join(p)),
+        );
     }
     find_executable_in(program, &paths)
 }
@@ -130,21 +139,23 @@ fn find_executable_in(program: &str, paths: &[PathBuf]) -> Option<PathBuf> {
     } else {
         paths.iter().map(|p| p.join(program)).collect()
     };
-    candidates.into_iter().find(|p| {
-        p.metadata().is_ok_and(|m| {
-            if !m.is_file() {
-                return false;
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                m.permissions().mode() & 0o111 != 0
-            }
-            #[cfg(not(unix))]
-            {
-                true
-            }
-        })
+    candidates.into_iter().find(|p| is_executable_file(p))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    path.metadata().is_ok_and(|m| {
+        if !m.is_file() {
+            return false;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            m.permissions().mode() & 0o111 != 0
+        }
+        #[cfg(not(unix))]
+        {
+            true
+        }
     })
 }
 /// Sibling executable file name for this platform (`.exe` on Windows).

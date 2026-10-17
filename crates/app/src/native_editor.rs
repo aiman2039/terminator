@@ -21,7 +21,9 @@ use terminator_native_edit::lsp as native_lsp;
 use terminator_native_edit::view::{
     DiagnosticMark, SourceOptions, mode_color, mode_name, show_source, source_focus_id,
 };
-use terminator_native_edit::vim::{Effect, Key as VimKey, ModalEngine, VimEngine};
+use terminator_native_edit::vim::{
+    Effect, Key as VimKey, ModalEngine, VimEngine, VimrcOptions, parse_vimrc,
+};
 
 const MAX_NATIVE_BYTES: u64 = 1024 * 1024;
 
@@ -51,6 +53,23 @@ fn disk_mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
 }
 
+/// Options from `~/.vimrc`, read once per process. Only `set`/`setlocal`
+/// names the native engine implements are applied (wrap, ignorecase);
+/// mappings, plugins, and unknown options are ignored, so a large vimrc
+/// can never break the editor.
+fn vimrc_options() -> VimrcOptions {
+    static OPTIONS: std::sync::OnceLock<VimrcOptions> = std::sync::OnceLock::new();
+    *OPTIONS.get_or_init(|| {
+        let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+        else {
+            return VimrcOptions::default();
+        };
+        std::fs::read_to_string(Path::new(&home).join(".vimrc"))
+            .map(|text| parse_vimrc(&text))
+            .unwrap_or_default()
+    })
+}
+
 type LoadResult = anyhow::Result<LoadedFile>;
 type SaveResult = anyhow::Result<Option<SystemTime>>;
 
@@ -74,11 +93,13 @@ pub struct NativeDoc {
 
 impl NativeDoc {
     pub(crate) fn new(path: PathBuf, insert_first: bool) -> Self {
+        let mut engine = VimEngine::new();
+        engine.apply_vimrc(vimrc_options());
         Self {
             path,
             doc: None,
             markdown_mode: markdown::Mode::Preview,
-            engine: VimEngine::new(),
+            engine,
             highlight: HighlightCache::default(),
             insert_first,
             saved_text: String::new(),
@@ -824,6 +845,18 @@ impl App {
             None
         };
         let source_scroll;
+        // Split views share one buffer. Their widget and focus ids must
+        // still differ per pane, or the second split inherits the first
+        // pane's scroll offset and keyboard focus.
+        let source_id = match node {
+            Some(node) => format!(
+                "{}#{}.{}",
+                path.to_string_lossy(),
+                node.surface.0,
+                node.node.0
+            ),
+            None => path.to_string_lossy().into_owned(),
+        };
         let rename_applying = self
             .native_rename
             .as_ref()
@@ -837,7 +870,7 @@ impl App {
             let mut post = PostEdit::Keep;
             // Clicking a header button moves keyboard focus to it; hand focus
             // back to the file so arrows and typing keep editing text.
-            let file_focus = source_focus_id(&path.to_string_lossy());
+            let file_focus = source_focus_id(&source_id);
             let current_symbol = doc.doc.as_ref().and_then(|_| {
                 let line = u32::try_from(doc.engine.cursor().line).ok()?;
                 outline
@@ -950,7 +983,7 @@ impl App {
                     doc.doc = None;
                     ui.memory_mut(|memory| memory.request_focus(file_focus));
                 }
-                if native_lsp::language_id(language).is_some()
+                if native_lsp::server_language(language).is_some()
                     && appearance::sidebar_action(ui, "ListTree", "Find references").clicked()
                 {
                     let cursor = doc.engine.cursor();
@@ -1045,6 +1078,9 @@ impl App {
             } else {
                 markdown::Mode::Edit
             };
+            // `:set wrap` / `:set nowrap` (also from `~/.vimrc`) override
+            // the per-type default: Markdown wraps, code does not.
+            let soft_wrap = doc.engine.wrap().unwrap_or(is_markdown);
             let source = |ui: &mut egui::Ui| {
                 show_source(
                     ui,
@@ -1056,7 +1092,7 @@ impl App {
                         menu_style: Some(appearance::menu_style),
                         menu_header: Some(appearance::target_header),
                         menu_item: Some(appearance::menu_item),
-                        soft_wrap: is_markdown,
+                        soft_wrap,
                         font_size: if is_markdown { 14.0 } else { 13.0 },
                         scroll_fraction: if mode == markdown::Mode::Split {
                             preview_scroll
@@ -1068,7 +1104,7 @@ impl App {
                     },
                     &mut doc.highlight,
                     language,
-                    &path.to_string_lossy(),
+                    &source_id,
                 )
             };
             let outcome = match mode {
@@ -1636,19 +1672,7 @@ impl App {
                 .find(|window| window.viewport == viewport)
             && let Some(dock) = window.dock.as_mut()
         {
-            // Focus the issuing view first so the split lands next to it.
-            if let Some(found) = dock.find_tab(&tab) {
-                dock.set_focused_node_and_surface(found.node_path());
-                let tree = dock.main_surface_mut();
-                if !tree.is_empty() {
-                    let node = tree.focused_leaf().unwrap_or(NodeIndex::root());
-                    let placed = match split {
-                        NativeSplit::Below => tree.split_below(node, 0.5, vec![tab]),
-                        _ => tree.split_right(node, 0.5, vec![tab]),
-                    };
-                    tree.set_focused_node(placed[1]);
-                }
-            }
+            Self::split_dock(dock, tab, split);
             return;
         }
         let Some(project) = self.project_with_native_tab(path) else {
@@ -1657,19 +1681,29 @@ impl App {
         let Some(dock) = self.layouts.get_mut(&project) else {
             return;
         };
-        // Focus the issuing view first so the split lands next to it.
+        Self::split_dock(dock, tab, split);
+    }
+
+    /// Add one more view of `tab` beside or below the focused leaf. The
+    /// issuing copy is focused first when present, so repeated splits fan
+    /// out from the pane the user is typing in; a dock that no longer
+    /// holds it (closed or reloaded between frames) still splits at its
+    /// focused leaf instead of silently dropping the request.
+    fn split_dock(dock: &mut egui_dock::DockState<Tab>, tab: Tab, split: NativeSplit) {
         if let Some(found) = dock.find_tab(&tab) {
             dock.set_focused_node_and_surface(found.node_path());
-            let tree = dock.main_surface_mut();
-            if !tree.is_empty() {
-                let node = tree.focused_leaf().unwrap_or(NodeIndex::root());
-                let placed = match split {
-                    NativeSplit::Below => tree.split_below(node, 0.5, vec![tab]),
-                    _ => tree.split_right(node, 0.5, vec![tab]),
-                };
-                tree.set_focused_node(placed[1]);
-            }
         }
+        let tree = dock.main_surface_mut();
+        if tree.is_empty() {
+            tree.push_to_focused_leaf(tab);
+            return;
+        }
+        let node = tree.focused_leaf().unwrap_or(NodeIndex::root());
+        let placed = match split {
+            NativeSplit::Below => tree.split_below(node, 0.5, vec![tab]),
+            _ => tree.split_right(node, 0.5, vec![tab]),
+        };
+        tree.set_focused_node(placed[1]);
     }
 
     /// Apply a dirty-editor dialog choice for one path. Discard closes the

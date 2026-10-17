@@ -157,7 +157,7 @@ impl TabViewer for Viewer<'_> {
                     &self.app.shortcut_label(split_action(direction)),
                 );
                 #[cfg(feature = "test-support")]
-                diagnostics::record(ui.ctx(), label, response.rect);
+                diagnostics::record_ui(ui, label, response.rect);
                 if response.clicked() {
                     self.queue_add_tab(path, direction.map(str::to_owned));
                     ui.close();

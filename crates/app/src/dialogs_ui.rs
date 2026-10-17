@@ -405,6 +405,7 @@ impl App {
                             BrowseTarget::Editor => "Choose editor",
                             BrowseTarget::External => "Choose external editor",
                             BrowseTarget::WorktreeDest => "Choose parent folder",
+                            BrowseTarget::Lsp(_) => "Choose language server",
                         });
                 let cwd = self.dialog_directory();
                 let service = self.services.clone();

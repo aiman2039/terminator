@@ -30,6 +30,10 @@ const SYNC_DEBOUNCE: Duration = Duration::from_secs(1);
 const SPAWN_COOLDOWN: Duration = Duration::from_secs(10);
 /// Consecutive crashes before a server counts as unavailable.
 const MAX_CRASHES: u32 = 3;
+/// Delay before re-asking for an empty outline: an indexing server
+/// answers `documentSymbol` with nothing, and caching that would hide
+/// symbols until the next edit.
+const SYMBOLS_RETRY: Duration = Duration::from_secs(2);
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 struct ServerKey {
@@ -48,6 +52,8 @@ struct OpenDoc {
     uri: url::Url,
     version: i32,
     server: ServerKey,
+    /// Protocol `languageId` for `didOpen` (`.tsx` differs from `.ts`).
+    language_id: &'static str,
     /// Buffer revision of the last submitted text.
     submitted: u64,
     /// Buffer revision last seen by [`LspManager::sync_doc`]. The debounce
@@ -152,6 +158,8 @@ pub struct LspManager {
     rename: Option<RenameResults>,
     symbols: std::collections::HashMap<PathBuf, Vec<L::Symbol>>,
     symbols_rev: std::collections::HashMap<PathBuf, u64>,
+    /// Last empty outline answer per path (indexing retry gate).
+    symbols_retry: HashMap<PathBuf, Instant>,
     workspace_symbol_query: String,
     workspace_symbol_generation: u64,
     workspace_symbols: HashMap<ServerKey, Vec<L::WorkspaceSymbolHit>>,
@@ -167,6 +175,9 @@ pub struct LspManager {
     /// its actors, never on the calling thread. `None` keeps the direct
     /// spawn path for tests that own their Tokio runtime.
     services: Option<Services>,
+    /// Settings → Terminal & Editor server executables by language id.
+    /// Empty values fall back to the default candidates on `PATH`.
+    overrides: std::collections::BTreeMap<String, String>,
 }
 
 impl LspManager {
@@ -182,6 +193,7 @@ impl LspManager {
             rename: None,
             symbols: std::collections::HashMap::new(),
             symbols_rev: std::collections::HashMap::new(),
+            symbols_retry: HashMap::new(),
             workspace_symbol_query: String::new(),
             workspace_symbol_generation: 0,
             workspace_symbols: HashMap::new(),
@@ -192,6 +204,50 @@ impl LspManager {
             pump_tx,
             pump_rx,
             services: None,
+            overrides: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// Apply Settings → Terminal & Editor server paths. Saving restarts
+    /// only the servers whose path changed, so the new binary is used
+    /// without restarting the app. Unchanged settings do nothing.
+    pub fn set_server_overrides(&mut self, overrides: &std::collections::BTreeMap<String, String>) {
+        let normalized: std::collections::BTreeMap<String, String> = overrides
+            .iter()
+            .map(|(language, value)| (language.clone(), value.trim().to_owned()))
+            .filter(|(_, value)| !value.is_empty())
+            .collect();
+        if normalized == self.overrides {
+            return;
+        }
+        let mut changed: Vec<&'static str> = Vec::new();
+        for language in ["rust", "python", "typescript"] {
+            let before = self.overrides.get(language);
+            let after = normalized.get(language);
+            if before != after {
+                changed.push(language);
+            }
+        }
+        self.overrides = normalized;
+        for &language in &changed {
+            self.unavailable.remove(language);
+            self.failures.remove(language);
+            self.cooled.remove(language);
+            let keys: Vec<ServerKey> = self
+                .servers
+                .keys()
+                .filter(|key| key.language == language)
+                .cloned()
+                .collect();
+            for key in keys {
+                self.shutdown_server(&key);
+            }
+        }
+        if !changed.is_empty() {
+            self.symbols.clear();
+            self.symbols_rev.clear();
+            self.symbols_retry.clear();
+            self.search_revision = self.search_revision.wrapping_add(1);
         }
     }
 
@@ -220,7 +276,7 @@ impl LspManager {
     /// server, and edits older than the debounce. Unsupported languages
     /// untrack (and close) silently.
     pub fn sync_doc(&mut self, path: &Path, language: Language, revision: u64) -> bool {
-        if L::language_id(language).is_none() {
+        if L::server_language(language).is_none() {
             self.close_path(path);
             return false;
         }
@@ -247,7 +303,10 @@ impl LspManager {
     /// handshake completes, so a slow start neither blocks typing nor
     /// drops the open.
     pub fn submit_text(&mut self, path: &Path, language: Language, revision: u64, text: &str) {
-        let Some(language_id) = L::language_id(language) else {
+        let Some(language_id) = L::server_language(language) else {
+            return;
+        };
+        let Some(protocol_id) = L::language_id_for_path(path, language) else {
             return;
         };
         let root = project_root(path, language);
@@ -263,6 +322,7 @@ impl LspManager {
             uri,
             version: 0,
             server: key.clone(),
+            language_id: protocol_id,
             submitted: revision,
             observed: revision,
             last_change: now,
@@ -273,6 +333,7 @@ impl LspManager {
             doc.server = key.clone();
             doc.opened = false;
         }
+        doc.language_id = protocol_id;
         let was_submitted = doc.submitted;
         doc.submitted = revision;
         doc.observed = revision;
@@ -300,7 +361,7 @@ impl LspManager {
         doc.pending_text = None;
         if !doc.opened {
             doc.version = doc.version.saturating_add(1);
-            let bytes = L::did_open(&doc.uri, language_id, doc.version, text);
+            let bytes = L::did_open(&doc.uri, doc.language_id, doc.version, text);
             let _ = inbox.send(bytes);
             doc.opened = true;
         } else if was_submitted != revision {
@@ -478,7 +539,18 @@ impl LspManager {
         };
         let (key, uri, revision) = (doc.server.clone(), doc.uri.clone(), doc.submitted);
         if self.symbols_rev.get(path) == Some(&revision) {
-            return;
+            // An empty outline usually means the server is still indexing.
+            // Keep asking on a slow cadence until symbols arrive instead
+            // of caching the empty answer until the next edit.
+            let empty = self.symbols.get(path).is_none_or(Vec::is_empty);
+            if !empty
+                || self
+                    .symbols_retry
+                    .get(path)
+                    .is_some_and(|at| at.elapsed() < SYMBOLS_RETRY)
+            {
+                return;
+            }
         }
         let Some(server) = self.servers.get_mut(&key) else {
             return;
@@ -519,6 +591,48 @@ impl LspManager {
         for path in paths {
             self.request_symbols(&path);
         }
+    }
+
+    /// Manual recovery for one buffer: forget crash backoff and cached
+    /// answers, then stop every server for its language. The next frame
+    /// re-submits the open text, which respawns the server and makes it
+    /// index again. A binary installed after startup is found this time.
+    pub fn restart(&mut self, path: &Path) {
+        let Some(language) = self.docs.get(path).map(|doc| doc.server.language) else {
+            return;
+        };
+        self.restart_servers(Some(language));
+    }
+
+    /// [`restart`](Self::restart) for every language, used by the
+    /// Problems panel where no single editor is implied.
+    pub fn restart_all(&mut self) {
+        self.restart_servers(None);
+    }
+
+    fn restart_servers(&mut self, language: Option<&'static str>) {
+        if let Some(language) = language {
+            self.unavailable.remove(language);
+            self.failures.remove(language);
+            self.cooled.remove(language);
+        } else {
+            self.unavailable.clear();
+            self.failures.clear();
+            self.cooled.clear();
+        }
+        let keys: Vec<ServerKey> = self
+            .servers
+            .keys()
+            .filter(|key| language.is_none_or(|wanted| key.language == wanted))
+            .cloned()
+            .collect();
+        for key in keys {
+            self.shutdown_server(&key);
+        }
+        self.symbols.clear();
+        self.symbols_rev.clear();
+        self.symbols_retry.clear();
+        self.search_revision = self.search_revision.wrapping_add(1);
     }
 
     /// Cached document symbols from all open native buffers.
@@ -731,6 +845,7 @@ impl LspManager {
         self.diagnostics.remove(path);
         let had_symbols = self.symbols.remove(path).is_some();
         self.symbols_rev.remove(path);
+        self.symbols_retry.remove(path);
         if had_symbols {
             self.search_revision = self.search_revision.wrapping_add(1);
         }
@@ -778,18 +893,9 @@ impl LspManager {
         {
             return None;
         }
-        let candidates = terminator_native_edit::lsp::server_candidates(language_of(key.language));
-        let path_env = std::env::var_os("PATH")
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let Some(path) = L::find_server(candidates, &path_env) else {
-            self.unavailable.insert(
-                key.language,
-                format!(
-                    "No language server on PATH ({}); install it to enable hover, goto, and diagnostics",
-                    candidates.join(", ")
-                ),
-            );
+        let Some(path) = self.resolve_server(key.language) else {
+            self.unavailable
+                .insert(key.language, self.missing_server_note(key.language));
             return None;
         };
         if self.services.is_some() {
@@ -806,6 +912,42 @@ impl LspManager {
                 None
             }
         }
+    }
+
+    /// Server executable for one language: the Settings override when
+    /// set (absolute path or bare name), else the default candidates,
+    /// including the usual GUI-launch directories and `~/.cargo/bin`.
+    fn resolve_server(&self, language: &'static str) -> Option<PathBuf> {
+        if let Some(custom) = self
+            .overrides
+            .get(language)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            return terminator_core::find_executable(custom);
+        }
+        terminator_native_edit::lsp::server_candidates(language_of(language))
+            .iter()
+            .find_map(|candidate| terminator_core::find_executable(candidate))
+    }
+
+    /// Why no executable was found, naming the Settings row that fixes it.
+    fn missing_server_note(&self, language: &'static str) -> String {
+        if let Some(custom) = self
+            .overrides
+            .get(language)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            return format!(
+                "Language server not found: {custom}. Fix the path in Settings → Terminal & Editor."
+            );
+        }
+        let candidates = terminator_native_edit::lsp::server_candidates(language_of(language));
+        format!(
+            "No language server on PATH ({}); install it or set a path in Settings → Terminal & Editor.",
+            candidates.join(", ")
+        )
     }
 
     /// Insert an optimistic entry for `key` and start its process plus
@@ -942,21 +1084,36 @@ impl LspManager {
             return;
         };
         // Init handshake first: only the starting server owns init ids.
-        if let Some(server) = self.servers.get_mut(key)
-            && server.init_id == Some(number)
+        if self
+            .servers
+            .get(key)
+            .is_some_and(|server| server.init_id == Some(number))
         {
+            // A failed `initialize` (for example TypeScript's server with
+            // no usable `typescript` package) must not count as ready.
+            if let Some(error) = error {
+                self.shutdown_server(key);
+                self.note_failure(key.language);
+                self.unavailable.insert(
+                    key.language,
+                    format!("Language server failed to start: {}", error.message),
+                );
+                return;
+            }
+            let Some(server) = self.servers.get_mut(key) else {
+                return;
+            };
             server.init_id = None;
             server.ready = true;
             let _ = server.inbox.send(L::initialized());
             let inbox = server.inbox.clone();
-            let language = key.language;
             // Buffers submitted while starting open now, in order behind
             // `initialized`: a single pre-ready submit is enough, and no
             // further frame is needed to get its `didOpen` out.
             for doc in self.docs.values_mut().filter(|doc| doc.server == *key) {
                 if let Some(text) = doc.pending_text.take() {
                     doc.version = doc.version.saturating_add(1);
-                    let _ = inbox.send(L::did_open(&doc.uri, language, doc.version, &text));
+                    let _ = inbox.send(L::did_open(&doc.uri, doc.language_id, doc.version, &text));
                     doc.opened = true;
                 } else {
                     doc.opened = false;
@@ -995,8 +1152,13 @@ impl LspManager {
             }
             Some(Pending::Symbols { path, revision }) => {
                 let result = result.unwrap_or(serde_json::Value::Null);
-                self.symbols
-                    .insert(path.clone(), L::parse_document_symbols(&result));
+                let parsed = L::parse_document_symbols(&result);
+                if parsed.is_empty() {
+                    self.symbols_retry.insert(path.clone(), Instant::now());
+                } else {
+                    self.symbols_retry.remove(&path);
+                }
+                self.symbols.insert(path.clone(), parsed);
                 self.symbols_rev.insert(path, revision);
                 self.search_revision = self.search_revision.wrapping_add(1);
             }
@@ -1113,11 +1275,12 @@ impl LspManager {
     }
 }
 
-/// Inverse of [`L::language_id`], for the server table.
+/// Inverse of [`L::server_language`], for the server table.
 fn language_of(id: &str) -> Language {
     match id {
         "rust" => Language::Rust,
         "python" => Language::Python,
+        "typescript" => Language::TypeScript,
         _ => Language::Plain,
     }
 }
@@ -1131,6 +1294,9 @@ fn project_root(path: &Path, language: Language) -> PathBuf {
     let markers: &[&str] = match language {
         Language::Rust => &["Cargo.toml"],
         Language::Python => &["pyproject.toml", "setup.py", "setup.cfg"],
+        Language::TypeScript | Language::JavaScript => {
+            &["tsconfig.json", "jsconfig.json", "package.json"]
+        }
         _ => &[],
     };
     let mut fallback: Option<PathBuf> = None;
@@ -1166,6 +1332,7 @@ async fn run_server_actor(
     cancel: CancellationToken,
 ) -> anyhow::Result<()> {
     let mut child = match tokio::process::Command::new(&binary)
+        .args(L::server_args(language_of(key.language)))
         .current_dir(&root)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -1259,6 +1426,7 @@ fn spawn_server_direct(
     pump: tokio::sync::mpsc::UnboundedSender<PumpEvent>,
 ) -> Result<Server, String> {
     let mut child = tokio::process::Command::new(binary)
+        .args(L::server_args(language_of(key.language)))
         .current_dir(&key.root)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -1647,6 +1815,7 @@ mod tests {
                     language: "rust",
                     root,
                 },
+                language_id: "rust",
                 submitted: 1,
                 observed: 1,
                 last_change: Instant::now(),
@@ -1827,6 +1996,74 @@ mod tests {
         assert!(manager.row_marks(&path).is_empty());
     }
 
+    /// Full round trip against the real TypeScript server when
+    /// installed; self-skips otherwise.
+    #[tokio::test]
+    async fn live_typescript_server_diagnostics_and_symbols() {
+        if terminator_core::find_executable("typescript-language-server").is_none() {
+            eprintln!("SKIP: typescript-language-server not installed");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("proj");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        std::fs::write(
+            root.join("package.json"),
+            "{\"name\":\"proj\",\"version\":\"0.0.0\"}",
+        )
+        .expect("package");
+        std::fs::write(
+            root.join("tsconfig.json"),
+            "{\"compilerOptions\":{\"strict\":true}}",
+        )
+        .expect("tsconfig");
+        let source = "export const bad: number = \"oops\";\nexport function ok() { return 1; }\n";
+        let file = root.join("index.ts");
+        std::fs::write(&file, source).expect("source");
+
+        let mut manager = LspManager::new();
+        assert!(manager.sync_doc(&file, Language::TypeScript, 1));
+        manager.submit_text(&file, Language::TypeScript, 1, source);
+        let start = Instant::now();
+        while manager.problems_for(&file).is_empty() {
+            if let Some(note) = manager.server_note(&file)
+                && note.starts_with("Language server failed to start")
+            {
+                eprintln!("SKIP: {note}");
+                return;
+            }
+            assert!(
+                start.elapsed() < Duration::from_mins(1),
+                "no diagnostics; note={:?}",
+                manager.server_note(&file)
+            );
+            manager.poll();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let problems = manager.problems_for(&file);
+        assert!(
+            problems
+                .iter()
+                .any(|item| item.severity == Some(L::Severity::Error)),
+            "type error reported: {problems:?}"
+        );
+
+        let start = Instant::now();
+        while manager.symbols_for(&file).is_empty() {
+            assert!(start.elapsed() < Duration::from_secs(30), "no symbols");
+            manager.request_symbols(&file);
+            manager.poll();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let names: Vec<String> = manager
+            .symbols_for(&file)
+            .into_iter()
+            .map(|symbol| symbol.name)
+            .collect();
+        assert!(names.iter().any(|name| name == "ok"), "{names:?}");
+        manager.prune(&std::collections::HashSet::new());
+    }
+
     /// Full round trip against the real rust-analyzer when installed;
     /// self-skips otherwise (live-provider verification, not CI-gated).
     #[tokio::test]
@@ -1903,5 +2140,131 @@ mod tests {
             "hover: {hover:?}"
         );
         manager.prune(&std::collections::HashSet::new());
+    }
+
+    /// Fake ready server so symbol requests have an inbox to land in.
+    fn ready_server(
+        manager: &mut LspManager,
+        path: &Path,
+    ) -> (ServerKey, tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>) {
+        let key = manager.docs.get(path).expect("doc").server.clone();
+        let (inbox, outbox) = tokio::sync::mpsc::unbounded_channel();
+        manager.servers.insert(
+            key.clone(),
+            Server {
+                inbox,
+                child: None,
+                cancel: None,
+                ids: L::IdGen::default(),
+                pending: HashMap::new(),
+                init_id: None,
+                ready: true,
+            },
+        );
+        (key, outbox)
+    }
+
+    #[test]
+    fn empty_outline_retries_on_a_delay_instead_of_caching_forever() {
+        let mut manager = LspManager::new();
+        let path = crate::test_path("/tmp/outline.rs");
+        tracked(&mut manager, &path);
+        let (key, mut sent) = ready_server(&mut manager, &path);
+
+        manager.request_symbols(&path);
+        assert!(sent.try_recv().is_ok(), "first request goes out");
+        let id = manager
+            .servers
+            .get(&key)
+            .expect("server")
+            .pending
+            .keys()
+            .copied()
+            .next()
+            .expect("pending symbols");
+        manager.on_response(
+            &key,
+            L::RequestId::Number(id),
+            Some(serde_json::json!([])),
+            None,
+        );
+        assert!(manager.symbols_for(&path).is_empty());
+
+        // Immediately after an empty answer the gate holds...
+        manager.request_symbols(&path);
+        assert!(sent.try_recv().is_err(), "no per-frame spam while indexing");
+        // ...and releases once the delay passed.
+        manager.symbols_retry.insert(
+            path.clone(),
+            Instant::now().checked_sub(SYMBOLS_RETRY).expect("backdate"),
+        );
+        manager.request_symbols(&path);
+        assert!(sent.try_recv().is_ok(), "indexing retry asks again");
+    }
+
+    #[test]
+    fn restart_clears_unavailable_and_reopens_documents() {
+        let mut manager = LspManager::new();
+        let path = crate::test_path("/tmp/retry.rs");
+        tracked(&mut manager, &path);
+        let _ = ready_server(&mut manager, &path);
+        manager
+            .unavailable
+            .insert("rust", "No language server".into());
+        manager.failures.insert("rust", MAX_CRASHES);
+
+        manager.restart(&path);
+
+        assert!(manager.unavailable.is_empty());
+        assert!(manager.failures.is_empty());
+        assert!(!manager.docs.get(&path).expect("doc").opened);
+    }
+
+    #[test]
+    fn failed_initialize_reports_the_server_message() {
+        let mut manager = LspManager::new();
+        let path = crate::test_path("/tmp/app.ts");
+        tracked(&mut manager, &path);
+        let (key, _sent) = ready_server(&mut manager, &path);
+        manager.servers.get_mut(&key).expect("server").init_id = Some(7);
+
+        manager.on_response(
+            &key,
+            L::RequestId::Number(7),
+            None,
+            Some(L::ResponseError {
+                code: -32603,
+                message: "Could not find a valid TypeScript installation.".into(),
+            }),
+        );
+
+        let note = manager.server_note(&path).expect("note");
+        assert!(note.contains("Could not find a valid TypeScript"), "{note}");
+        assert!(!manager.servers.contains_key(&key));
+    }
+
+    #[test]
+    fn saved_server_path_restarts_only_that_language() {
+        let mut manager = LspManager::new();
+        let path = crate::test_path("/tmp/live.rs");
+        tracked(&mut manager, &path);
+        let (key, _sent) = ready_server(&mut manager, &path);
+        let mut overrides = std::collections::BTreeMap::new();
+        overrides.insert("rust".to_owned(), " /opt/rust-analyzer ".to_owned());
+
+        manager.set_server_overrides(&overrides);
+
+        assert!(!manager.servers.contains_key(&key), "rust server restarts");
+        assert!(!manager.docs.get(&path).expect("doc").opened);
+        assert_eq!(
+            manager.overrides.get("rust").map(String::as_str),
+            Some("/opt/rust-analyzer"),
+            "path is trimmed"
+        );
+
+        // Unrelated settings saves leave the live server alone.
+        let (key, _sent) = ready_server(&mut manager, &path);
+        manager.set_server_overrides(&overrides);
+        assert!(manager.servers.contains_key(&key));
     }
 }

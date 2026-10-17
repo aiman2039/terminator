@@ -167,12 +167,19 @@ fn run_shell(name: &str) -> Result<()> {
         "Foreground job mistaken for idle"
     );
     h.assert_pids(std::slice::from_ref(&foreground))?;
-    // Resize is processed on the same attachment after Input. Observing it
-    // acknowledges forwarding, without waiting for the command to settle.
+    // A forwarded command is only observable once its job owns the terminal.
+    // Shells can buffer forwarded input briefly (fish reads it on a worker
+    // thread), and the daemon cannot see buffered input. Wait for the
+    // foreground job's output instead of closing inside that window; the
+    // echoed command line would repeat a literal marker, so the marker is
+    // assembled from arguments to prove it came from the job itself.
     let submitted = h.shell(&project)?;
     thread::sleep(Duration::from_millis(300));
     let mut input = h.attach(&submitted)?;
-    h.write(&mut input, "sleep 30\r")?;
+    h.write(
+        &mut input,
+        "sh -c 'printf \"IDLE_%s\\n\" FOREGROUND_JOB; sleep 30'\r",
+    )?;
     terminator_core::write_frame(&mut input, &json!({"Resize":{"rows":31,"cols":91}}))?;
     let deadline = std::time::Instant::now()
         .checked_add(Duration::from_secs(3))
@@ -184,9 +191,16 @@ fn run_shell(name: &str) -> Result<()> {
         );
         thread::yield_now();
     }
+    h.wait(
+        |_| {
+            h.history(id(&submitted))
+                .is_ok_and(|s| s.contains("IDLE_FOREGROUND_JOB"))
+        },
+        5,
+    )?;
     ensure!(
         !closed(&close(&h, &[&submitted], &generation)?),
-        "Just-submitted command was closed"
+        "Submitted foreground job was closed"
     );
     h.assert_pids(std::slice::from_ref(&submitted))?;
     let partial = h.shell(&project)?;
@@ -204,7 +218,7 @@ fn run_shell(name: &str) -> Result<()> {
     );
     h.assert_pids(std::slice::from_ref(&idle))?;
     println!(
-        "PASS idle-close {name}: idle shells, builtin without children, tab preflight, foreground/background/stopped jobs, immediate close after input forwarding, partial input, agent, stale generation"
+        "PASS idle-close {name}: idle shells, builtin without children, tab preflight, foreground/background/stopped jobs, submitted foreground job, partial input, agent, stale generation"
     );
     Ok(())
 }
