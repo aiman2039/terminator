@@ -25,6 +25,16 @@ pub fn active_service_available(state: &State) -> bool {
         })
 }
 
+/// Saved records from an unavailable generation are not reachable sessions.
+pub fn session_owner_available(state: &State, session: &Session) -> bool {
+    state.generations.is_empty()
+        || state.generations.iter().any(|health| {
+            health.owner.id == session.generation
+                && health.error.is_none()
+                && health.owner.status != generations::Status::Retired
+        })
+}
+
 /// Recover only owners whose recorded process is proved absent. A timeout,
 /// missing token, held lock, or reused PID alone never permits recovery.
 pub fn recover_unavailable(paths: &Paths, state: &State, executable: &Path) -> Result<bool> {

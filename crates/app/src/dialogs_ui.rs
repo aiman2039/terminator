@@ -125,6 +125,13 @@ impl App {
             {
                 self.remove_tab(&sid);
                 self.close_session = None;
+            } else if session.as_ref().is_some_and(|session| {
+                !daemon_connection::session_owner_available(&self.state, session)
+            }) {
+                self.remove_tab(&sid);
+                self.close_session = None;
+                self.info =
+                    Some("Closed the view. The unavailable session owner was not stopped.".into());
             } else if self.editors_only(std::slice::from_ref(&sid)) {
                 self.close_session = None;
                 if !self.skip_editor_close_request(std::slice::from_ref(&sid)) {
@@ -479,10 +486,11 @@ impl App {
         sessions
             .into_iter()
             .filter(|id| {
-                self.state
-                    .sessions
-                    .iter()
-                    .any(|session| &session.id == id && session.lifecycle.live())
+                self.state.sessions.iter().any(|session| {
+                    &session.id == id
+                        && session.lifecycle.live()
+                        && daemon_connection::session_owner_available(&self.state, session)
+                })
             })
             .collect()
     }

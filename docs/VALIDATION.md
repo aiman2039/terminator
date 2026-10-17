@@ -1,5 +1,16 @@
 # Validation evidence — 2026-09-08
 
+## Unavailable session owner after update — 2026-10-17
+
+Saved sessions from an unavailable owner no longer appear as running in the
+project sidebar or status count. Closing such a pane removes its view without
+attempting to stop the unreachable owner. Its saved record remains available
+for guarded recovery; a reachable owner makes the session visible again.
+The focused regression passed with `cargo test -p terminator --lib
+unavailable_owner_stays_saved_but_disappears_from_running_sidebar --locked
+--offline`. Formatting and `git diff --check` passed. The installed GUI and
+the affected live service were not changed or tested.
+
 ## Markdown reading view and lazy Explorer — 2026-10-15
 
 Native Markdown source now wraps within the split pane while keeping logical

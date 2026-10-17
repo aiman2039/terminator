@@ -1,7 +1,7 @@
 //! GUI-only prepared sidebar data. Snapshot/presentation changes invalidate the
 //! indexes; scrolling, selection and expansion reuse the same immutable data.
 use crate::{
-    App,
+    App, daemon_connection,
     preferences::{self, HistoryGroup, HistoryInput, HistorySort, ProjectSort, VisibleProjects},
     sidebar_ui::{NoticeGroup, group_notices, notice_rank},
 };
@@ -143,6 +143,9 @@ impl App {
                 if resumable.contains(session.id.as_str()) {
                     index.resumable.push(session.as_ref().clone());
                 }
+                continue;
+            }
+            if !daemon_connection::session_owner_available(&self.state, &session) {
                 continue;
             }
             let presented = self.present_session(&session.id);

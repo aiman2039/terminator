@@ -325,6 +325,42 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_owner_stays_saved_but_disappears_from_running_sidebar() {
+        let (mut app, _, directory) = fixture();
+        let mut reachable = session_fixture("reachable", SessionKind::Shell);
+        reachable.generation = "active".into();
+        let mut stranded = session_fixture("stranded", SessionKind::Shell);
+        stranded.generation = "old".into();
+        app.state.generation = "active".into();
+        app.state.sessions = vec![reachable, stranded];
+        let active = generation_health("active", directory.path(), 1, generations::Status::Active);
+        let mut old = generation_health("old", directory.path(), 1, generations::Status::Draining);
+        old.error = Some("Cannot read authentication file".into());
+        app.state.generations = vec![active, old];
+        app.insert("a", Tab::Terminal("stranded".into()), None);
+
+        let sidebar = app.sidebar_index();
+        assert_eq!(sidebar.live_counts.get("a"), Some(&1));
+        assert!(sidebar.sessions.contains_key("stranded"));
+        app.remove_tab("stranded");
+        assert!(!app.layouts["a"].contains(&Tab::Terminal("stranded".into())));
+        assert!(
+            app.state
+                .sessions
+                .iter()
+                .any(|session| session.id == "stranded")
+        );
+        assert_eq!(app.sidebar_index().live_counts.get("a"), Some(&1));
+
+        let mut restored = app.state.clone();
+        restored.generations[1].error = None;
+        restored.generations[1].revision = 2;
+        restored.client_observation = 2;
+        app.apply_state(restored);
+        assert_eq!(app.sidebar_index().live_counts.get("a"), Some(&2));
+    }
+
+    #[test]
     fn unavailable_pane_close_waits_until_the_workspace_is_checked_in() {
         let (mut app, _, _dir) = fixture();
         app.connected = true;

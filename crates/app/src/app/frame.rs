@@ -285,7 +285,10 @@ impl eframe::App for App {
                             self.state
                                 .sessions
                                 .iter()
-                                .filter(|s| s.lifecycle.live())
+                                .filter(|s| {
+                                    s.lifecycle.live()
+                                        && daemon_connection::session_owner_available(&self.state, s)
+                                })
                                 .count()
                         ));
                     });

@@ -37,6 +37,17 @@ impl App {
                     .map(|s| s.generation.clone())
             })
             .collect();
+        if sessions.iter().any(|id| {
+            self.state
+                .sessions
+                .iter()
+                .find(|session| &session.id == id)
+                .is_some_and(|session| {
+                    !daemon_connection::session_owner_available(&self.state, session)
+                })
+        }) {
+            return false;
+        }
         if !self.state.generations.is_empty()
             && (owners.len() != 1
                 || !self.state.generations.iter().any(|g| {

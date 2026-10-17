@@ -369,7 +369,11 @@ impl App {
             .map(|sessions| {
                 sessions
                     .iter()
-                    .filter(|s| s.lifecycle.live() && s.kind != SessionKind::Editor)
+                    .filter(|s| {
+                        s.lifecycle.live()
+                            && s.kind != SessionKind::Editor
+                            && crate::daemon_connection::session_owner_available(&self.state, s)
+                    })
                     .map(Arc::clone)
                     .collect()
             })
