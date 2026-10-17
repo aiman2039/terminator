@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 egui = { version = "0.36", default-features = false }
 ignore = "0.4"
 lsp-types = "0.97"
