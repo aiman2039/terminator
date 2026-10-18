@@ -403,6 +403,7 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         "AgentOpencode" => egui::include_image!("../assets/icons/agent-opencode.svg"),
         "AgentGrok" => egui::include_image!("../assets/icons/agent-grok.png"),
         "AgentMuse" => egui::include_image!("../assets/icons/agent-muse.svg"),
+        "AgentCursor" => egui::include_image!("../assets/icons/agent-cursor.svg"),
         "AgentGeneric" => egui::include_image!("../assets/icons/agent-generic.svg"),
         "AgentMultiple" => egui::include_image!("../assets/icons/agent-multiple.svg"),
         _ => egui::include_image!("../assets/icons/file.svg"),

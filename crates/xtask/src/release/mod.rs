@@ -173,8 +173,25 @@ fn source_tree(root: &Path, temporary: &Path) -> Result<String> {
 /// copy of the workspace leaves its excluded vendored crates without a root,
 /// and it is derived from the repository path so two checkouts never share
 /// one export.
+fn hex_bytes(bytes: impl AsRef<[u8]>) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let bytes = bytes.as_ref();
+    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
+    for &byte in bytes {
+        let high = usize::from(byte >> 4);
+        let low = usize::from(byte & 0x0f);
+        if let Some(&digit) = HEX.get(high) {
+            out.push(char::from(digit));
+        }
+        if let Some(&digit) = HEX.get(low) {
+            out.push(char::from(digit));
+        }
+    }
+    out
+}
+
 fn export_paths(root: &Path) -> (PathBuf, PathBuf) {
-    let digest = format!("{:x}", Sha256::digest(root.as_os_str().as_encoded_bytes()));
+    let digest = hex_bytes(Sha256::digest(root.as_os_str().as_encoded_bytes()));
     let parent = std::env::temp_dir();
     let export = parent.join(format!(
         "terminator-release-source-{}",
@@ -703,7 +720,10 @@ fn linux_image_tag(dockerfile: &[u8], rust: &str, components: &str, platform: &s
         hash.update((part.len() as u64).to_le_bytes());
         hash.update(part);
     }
-    format!("terminator-release-check:config-{:x}", hash.finalize())
+    format!(
+        "terminator-release-check:config-{}",
+        hex_bytes(hash.finalize())
+    )
 }
 
 fn rust_components(toolchain: &toml_edit::DocumentMut) -> Result<String> {

@@ -51,7 +51,7 @@ white-stroke adaptation, for Explorer's Reveal current file action.
 
 Agent identity icons are official vendor marks, used only to identify the
 agent running in a terminal (nominative use; all marks are trademarks of
-their owners: OpenAI, Anthropic, SST, xAI, Meta, Mario Zechner/pi.dev):
+their owners: OpenAI, Anthropic, SST, xAI, Meta, Anysphere, Mario Zechner/pi.dev):
 
 - `agent-codex.svg`: `OpenAI-white-monoblossom.svg` verbatim from the
   official bundle at <https://cdn.openai.com/brand/OpenAI-Logos-2025.zip>
@@ -67,6 +67,8 @@ their owners: OpenAI, Anthropic, SST, xAI, Meta, Mario Zechner/pi.dev):
   transparency (luminance alpha); mark pixels otherwise unchanged.
 - `agent-muse.svg`: Meta loop mark (Muse Code has no separate public
   vector mark) via <https://cdn.simpleicons.org/meta> (CC0 reproduction).
+- `agent-cursor.svg`: Cursor cube from <https://cdn.simpleicons.org/cursor>
+  (CC0 reproduction). Fill changed from black to white for the tint pipeline.
 - `agent-generic.svg` (`bot`) and `agent-multiple.svg` (`copy`) come from
   Lucide 0.577.0 with the same license and white-stroke adaptation, for
   custom hook agents and multi-agent terminals.

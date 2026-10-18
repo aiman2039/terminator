@@ -9,7 +9,7 @@ use std::{
 use terminator_core::{
     AgentState, HookEvent, PROTOCOL_VERSION, Paths, Resume, atomic_write, id, now, quote,
 };
-pub const AGENTS: [&str; 5] = ["claude", "codex", "opencode", "muse", "grok"];
+pub const AGENTS: [&str; 6] = ["claude", "codex", "opencode", "muse", "grok", "cursor"];
 const MARKER: &str = "terminator-managed:v1";
 pub fn config_path(home: &Path, kind: &str) -> Result<PathBuf> {
     Ok(home.join(match kind {
@@ -18,6 +18,7 @@ pub fn config_path(home: &Path, kind: &str) -> Result<PathBuf> {
         "opencode" => ".config/opencode/plugins/terminator.js",
         "muse" => ".muse/hooks.json",
         "grok" => ".grok/hooks/terminator.json",
+        "cursor" => ".cursor/hooks.json",
         _ => bail!("Unknown built-in integration"),
     }))
 }
@@ -47,6 +48,21 @@ pub fn settings_path(home: &Path, kind: &str) -> PathBuf {
 
 fn muse_settings_path(home: &Path) -> PathBuf {
     home.join(".config/muse/settings.json")
+}
+
+/// Cursor lifecycle hooks. Permission hooks (`preToolUse`, `beforeShellExecution`,
+/// `beforeMCPExecution`, `beforeReadFile`, `subagentStart`) are omitted: exit 0
+/// with a body that fails their schema blocks the action.
+fn cursor_hook_events() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("sessionStart", "{}"),
+        ("beforeSubmitPrompt", "{\"continue\":true}"),
+        ("postToolUse", "{}"),
+        ("postToolUseFailure", "{}"),
+        ("afterAgentResponse", "{}"),
+        ("stop", "{}"),
+        ("sessionEnd", "{}"),
+    ]
 }
 
 fn muse_hook_events() -> &'static [&'static str] {
@@ -84,13 +100,14 @@ pub fn install_at(
         !path.is_symlink(),
         "Refusing to rewrite a symlinked agent configuration"
     );
-    let command = format!(
-        "{} event {} --data-dir {} --runtime-dir {} # {MARKER}",
+    let invocation = format!(
+        "{} event {} --data-dir {} --runtime-dir {}",
         quote(&helper.to_string_lossy()),
         kind,
         quote(&paths.data.to_string_lossy()),
         quote(&paths.runtime.to_string_lossy())
     );
+    let command = format!("{invocation} # {MARKER}");
     let after = if kind == "opencode" {
         ensure!(
             before.is_empty() || before.contains(MARKER),
@@ -103,6 +120,12 @@ pub fn install_at(
         }
     } else if kind == "codex" {
         codex_config(&before, &command, remove)?
+    } else if kind == "cursor" {
+        if remove && before.trim().is_empty() {
+            String::new()
+        } else {
+            cursor_config(&before, &invocation, remove)?
+        }
     } else {
         let mut doc: Value = if before.trim().is_empty() {
             json!({})
@@ -160,7 +183,7 @@ pub fn install_at(
         if path.exists() {
             fs::remove_file(&path)?;
         }
-    } else {
+    } else if !(after.is_empty() && !path.exists()) {
         atomic_write(&path, after.as_bytes())?;
     }
     if kind == "muse" {
@@ -254,6 +277,63 @@ fn clean_json_groups(groups: &mut Value) -> Result<()> {
     });
     Ok(())
 }
+fn cursor_config(before: &str, invocation: &str, remove: bool) -> Result<String> {
+    let mut doc: Value = if before.trim().is_empty() {
+        json!({"version": 1})
+    } else {
+        serde_json::from_str(before).context("Cursor hooks.json is invalid JSON; left untouched")?
+    };
+    ensure!(doc.is_object(), "Cursor hooks.json must be an object");
+    match doc.get("version") {
+        None => {
+            doc.as_object_mut()
+                .context("Cursor hooks.json must be an object")?
+                .insert("version".to_owned(), json!(1));
+        }
+        Some(version) if version.as_u64() == Some(1) => {}
+        Some(_) => bail!("Cursor hooks.json version is not 1; left untouched"),
+    }
+    if doc.get("hooks").is_none() {
+        doc.as_object_mut()
+            .context("Cursor hooks.json must be an object")?
+            .insert("hooks".to_owned(), json!({}));
+    }
+    let hooks = doc
+        .get_mut("hooks")
+        .and_then(Value::as_object_mut)
+        .context("Cursor hooks must be an object")?;
+    for &(event, response) in cursor_hook_events() {
+        let list = hooks
+            .entry(event)
+            .or_insert(json!([]))
+            .as_array_mut()
+            .with_context(|| format!("Cursor {event} hooks must be an array"))?;
+        if list.iter().any(|entry| {
+            entry.as_object().is_some_and(|object| {
+                object.contains_key("hooks") && !object.contains_key("command")
+            })
+        }) {
+            bail!("Unsupported Cursor hook format for {event}; left untouched");
+        }
+        list.retain(|entry| {
+            !entry
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|command| command.contains(MARKER))
+        });
+        if !remove {
+            list.push(json!({
+                "command": format!("{invocation} ; printf '%s\\n' '{response}' # {MARKER}"),
+                "timeout": 2
+            }));
+        }
+    }
+    if remove {
+        hooks.retain(|_, value| value.as_array().is_none_or(|list| !list.is_empty()));
+    }
+    Ok(serde_json::to_string_pretty(&doc)? + "\n")
+}
+
 fn codex_config(before: &str, command: &str, remove: bool) -> Result<String> {
     use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value as T};
     let mut doc = before
@@ -426,11 +506,23 @@ fn session_status_state(payload: &Value) -> Option<AgentState> {
     }
 }
 
+fn cursor_stop_state(payload: &Value) -> AgentState {
+    match first_str(payload, &["status"]) {
+        Some("error") => AgentState::Failed,
+        Some("aborted") => AgentState::Unknown,
+        _ => AgentState::Completed,
+    }
+}
+
 fn hook_state(name: &str, payload: &Value, tool: &str) -> Option<AgentState> {
     match name {
-        "SessionStart" | "session.created" => Some(AgentState::Unknown),
+        "SessionStart" | "session.created" | "sessionStart" => Some(AgentState::Unknown),
         "UserPromptSubmit"
         | "PostToolUse"
+        | "beforeSubmitPrompt"
+        | "postToolUse"
+        | "postToolUseFailure"
+        | "afterAgentResponse"
         | "permission.replied"
         | "permission.v2.replied"
         | "question.replied"
@@ -445,9 +537,10 @@ fn hook_state(name: &str, payload: &Value, tool: &str) -> Option<AgentState> {
         "Stop" | "session.idle" | "agent-turn-complete" | "SubagentStop" => {
             Some(AgentState::Completed)
         }
+        "stop" => Some(cursor_stop_state(payload)),
         "SubagentStart" => Some(AgentState::Running),
         "StopFailure" | "session.error" => Some(AgentState::Failed),
-        "SessionEnd" | "session.deleted" => Some(AgentState::Stopped),
+        "SessionEnd" | "session.deleted" | "sessionEnd" => Some(AgentState::Stopped),
         "Interrupt" => Some(AgentState::Unknown),
         "Notification" | "notification" => notification_state(payload),
         "session.status" => session_status_state(payload),
@@ -462,6 +555,7 @@ fn resume_for(kind: &str, provider: &str) -> Option<Resume> {
         "opencode" => ("opencode", "--session"),
         "muse" => ("muse", "resume"),
         "grok" => ("grok", "--resume"),
+        "cursor" => ("cursor-agent", "--resume"),
         _ => return None,
     };
     Some(Resume {
@@ -481,6 +575,8 @@ pub fn normalize(
         &[
             "session_id",
             "sessionId",
+            "conversation_id",
+            "conversationId",
             "thread-id",
             "sessionID",
             "/properties/sessionID",
@@ -780,6 +876,164 @@ mod tests {
                 "s",
                 "p",
                 &json!({"type":"file.edited","properties":{"sessionID":"x"}})
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+    #[test]
+    fn cursor_hooks_keep_user_commands_and_skip_permission_events() {
+        let home = tempfile::tempdir().unwrap();
+        let path = config_path(home.path(), "cursor").unwrap();
+        atomic_write(
+            &path,
+            br#"{"version":1,"extra":true,"hooks":{"stop":[{"command":"echo mine"}],"beforeShellExecution":[{"command":"echo gate"}]}}"#,
+        )
+        .unwrap();
+        let helper = Path::new("/tmp/space dir/hook");
+        install(home.path(), "cursor", helper, false).unwrap();
+        let once = fs::read_to_string(&path).unwrap();
+        install(home.path(), "cursor", helper, false).unwrap();
+        assert_eq!(once, fs::read_to_string(&path).unwrap());
+        let doc: Value = serde_json::from_str(&once).unwrap();
+        assert_eq!(doc["version"].as_u64(), Some(1));
+        assert_eq!(doc["extra"].as_bool(), Some(true));
+        let hooks = doc["hooks"].as_object().unwrap();
+        for event in [
+            "sessionStart",
+            "beforeSubmitPrompt",
+            "postToolUse",
+            "postToolUseFailure",
+            "afterAgentResponse",
+            "stop",
+            "sessionEnd",
+        ] {
+            assert!(
+                hooks[event]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry["command"].as_str().unwrap_or("").contains(MARKER)),
+                "{event}"
+            );
+        }
+        assert!(
+            hooks["stop"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["command"] == "echo mine")
+        );
+        assert_eq!(hooks["beforeShellExecution"][0]["command"], "echo gate");
+        assert!(!hooks.contains_key("preToolUse"));
+        assert!(!hooks.contains_key("beforeReadFile"));
+        assert!(!hooks.contains_key("subagentStart"));
+        let prompt = hooks["beforeSubmitPrompt"][0]["command"].as_str().unwrap();
+        assert!(prompt.contains("{\"continue\":true}"));
+        assert!(prompt.contains("/tmp/space dir/hook"));
+        assert_eq!(hooks["sessionStart"][0]["timeout"].as_u64(), Some(2));
+        let observe = hooks["stop"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["command"].as_str().unwrap_or("").contains(MARKER))
+            .unwrap()["command"]
+            .as_str()
+            .unwrap();
+        assert!(observe.contains("printf '%s\\n' '{}'"));
+        install(home.path(), "cursor", helper, true).unwrap();
+        let after = fs::read_to_string(&path).unwrap();
+        assert!(after.contains("echo mine"));
+        assert!(after.contains("echo gate"));
+        assert!(after.contains("\"extra\": true"));
+        assert!(!after.contains(MARKER));
+        assert!(!installed(home.path(), "cursor"));
+    }
+    #[test]
+    fn cursor_rejects_unknown_schema_and_nested_groups() {
+        let home = tempfile::tempdir().unwrap();
+        let path = config_path(home.path(), "cursor").unwrap();
+        let versioned = "{\"version\":2,\"hooks\":{}}\n";
+        atomic_write(&path, versioned.as_bytes()).unwrap();
+        let helper = Path::new("/tmp/hook");
+        assert!(install(home.path(), "cursor", helper, false).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), versioned);
+        atomic_write(
+            &path,
+            br#"{"version":1,"hooks":{"stop":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}"#,
+        )
+        .unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+        assert!(install(home.path(), "cursor", helper, false).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+    }
+    #[test]
+    fn cursor_events_map_conversation_without_prompt_text() {
+        let completed = normalize(
+            "cursor",
+            "s",
+            "p",
+            &json!({
+                "hook_event_name": "stop",
+                "conversation_id": "chat-1",
+                "status": "completed"
+            }),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(completed.state, AgentState::Completed);
+        assert_eq!(completed.provider_session_id.as_deref(), Some("chat-1"));
+        let resume = completed.resume.unwrap();
+        assert_eq!(resume.program, "cursor-agent");
+        assert_eq!(resume.args, vec!["--resume", "chat-1"]);
+        let failed = normalize(
+            "cursor",
+            "s",
+            "p",
+            &json!({"hook_event_name":"stop","conversation_id":"chat-1","status":"error"}),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(failed.state, AgentState::Failed);
+        let aborted = normalize(
+            "cursor",
+            "s",
+            "p",
+            &json!({"hook_event_name":"stop","conversation_id":"chat-1","status":"aborted"}),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(aborted.state, AgentState::Unknown);
+        let prompt = normalize(
+            "cursor",
+            "s",
+            "p",
+            &json!({
+                "hook_event_name": "beforeSubmitPrompt",
+                "conversation_id": "chat-1",
+                "prompt": "secret token"
+            }),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(prompt.state, AgentState::Running);
+        assert_eq!(prompt.summary, "Working");
+        assert!(!prompt.details.contains("secret"));
+        let ended = normalize(
+            "cursor",
+            "s",
+            "p",
+            &json!({"hook_event_name":"sessionEnd","session_id":"chat-1","reason":"user_close"}),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(ended.state, AgentState::Stopped);
+        assert!(
+            normalize(
+                "cursor",
+                "s",
+                "p",
+                &json!({"hook_event_name":"workspaceOpen","cursor_version":"1.0"})
             )
             .unwrap()
             .is_none()

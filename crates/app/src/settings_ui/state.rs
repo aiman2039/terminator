@@ -69,7 +69,7 @@ impl SettingsSection {
             Self::Notifications => "alert os desktop dismiss sound ntfy channel machine test",
             Self::History => "days mib scrollback disk",
             Self::Shortcuts => "keymap command shortcut chord palette",
-            Self::AgentHooks => "claude codex opencode muse grok install hook test hello",
+            Self::AgentHooks => "claude codex opencode muse grok cursor install hook test hello",
             Self::Updates => "sparkle install repair session service",
         }
     }

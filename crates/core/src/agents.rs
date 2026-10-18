@@ -1,7 +1,7 @@
 //! Shared agent catalog and live-presence observation types.
 //!
-//! Detection coverage (Codex, Claude Code, Pi, `OpenCode`, Grok, Muse) is
-//! separate from the five hook installers in `terminator-integrations`: Pi has
+//! Detection coverage (Codex, Claude Code, Pi, `OpenCode`, Grok, Muse, Cursor) is
+//! separate from the six hook installers in `terminator-integrations`: Pi has
 //! identity detection but no installer, and lifecycle reporting still requires
 //! hooks for every agent. Process observations never create lifecycle events,
 //! notifications, or resume commands.
@@ -179,6 +179,14 @@ pub const CATALOG: &[AgentInfo] = &[
         entrypoints: &[
             "muse.js", "muse.mjs", "muse.cjs", "muse.ts", "muse.mts", "muse.cts",
         ],
+    },
+    AgentInfo {
+        kind: "cursor",
+        name: "Cursor",
+        icon: "AgentCursor",
+        // `cursor-agent` only. The `agent` symlink is also Grok's shim.
+        exes: &["cursor-agent"],
+        entrypoints: &[],
     },
 ];
 
@@ -551,7 +559,7 @@ mod tests {
     }
 
     #[test]
-    fn six_catalog_matchers_cover_exact_executables() {
+    fn catalog_matchers_cover_exact_executables() {
         for (kind, exe) in [
             ("codex", "codex"),
             ("claude", "claude"),
@@ -559,6 +567,7 @@ mod tests {
             ("opencode", "opencode"),
             ("grok", "grok"),
             ("muse", "muse"),
+            ("cursor", "cursor-agent"),
         ] {
             assert_eq!(match_agent(exe, &[exe]), Some(kind), "{exe}");
             assert_eq!(
@@ -567,7 +576,20 @@ mod tests {
                 "path {exe}"
             );
         }
-        assert_eq!(CATALOG.len(), 6);
+        assert_eq!(CATALOG.len(), 7);
+        // Bare `agent` is also Grok's PATH shim. Identity stays on `cursor-agent`.
+        assert_eq!(match_agent("agent", &["agent"]), None);
+        assert_eq!(
+            match_agent(
+                "cursor-agent-2026.02.27-e7d2ef6",
+                &["/Users/test/.local/bin/agent"]
+            ),
+            Some("cursor")
+        );
+        assert_eq!(
+            match_agent("bash", &["bash", "/Users/test/.local/bin/cursor-agent"]),
+            Some("cursor")
+        );
     }
 
     #[test]

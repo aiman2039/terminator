@@ -54,7 +54,7 @@ Debian/Ubuntu desktop runtime libraries include `libxkbcommon-x11-0`, `libxkbcom
 
 ## Agent setup
 
-Settings → Agent hooks installs, repairs, and removes managed hooks for Claude Code, Codex, OpenCode, Muse, and Grok. Installation preserves unrelated hooks and writes a backup before changing an existing configuration. It never installs agent binaries or configures accounts.
+Settings → Agent hooks installs, repairs, and removes managed hooks for Claude Code, Codex, OpenCode, Muse, Grok, and Cursor. Installation preserves unrelated hooks and writes a backup before changing an existing configuration. It never installs agent binaries or configures accounts.
 
 Read [the integration contract and capability notes](INTEGRATIONS.md) before connecting a custom agent. Installed hooks are inert outside terminals owned by this application. Notification defaults cover input, permission, completion, and failure events where the agent exposes them; opening the relevant terminal dismisses the notification without changing agent state. Settings → Notifications can play a system sound with desktop banners (default on). The in-app Agents inbox stays silent. The control requires a daemon that advertises `notification-sound-v1`.
 

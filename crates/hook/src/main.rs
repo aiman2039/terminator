@@ -238,9 +238,9 @@ fn agent_parent() -> (
             && !["sh", "bash", "zsh", "fish", "env", "terminator-hook"]
                 .contains(&executable.as_ref())
         {
-            let kind = terminator_integrations::AGENTS
-                .iter()
-                .find(|kind| executable == **kind || executable.starts_with(&format!("{kind}-bin")))
+            let executable_name = executable.as_ref();
+            let kind = agents::match_agent(executable_name, &[executable_name])
+                .filter(|kind| terminator_integrations::AGENTS.contains(kind))
                 .map(std::string::ToString::to_string);
             selected = Some((pid.as_u32(), process.start_time(), kind));
         }

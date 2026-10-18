@@ -37,7 +37,7 @@
 3. Open a terminal tab. Right-click a terminal to split your workspace.
 4. Click a file to open it, or launch your usual tools in the terminal.
 
-For AI agent alerts, open **Settings → Agent hooks**, enable your agent, then start a fresh agent session inside Terminator. Integrations include Claude Code, Codex, OpenCode, Muse, and Grok; available alerts vary by agent.
+For AI agent alerts, open **Settings → Agent hooks**, enable your agent, then start a fresh agent session inside Terminator. Integrations include Claude Code, Codex, OpenCode, Muse, Grok, and Cursor; available alerts vary by agent.
 
 Install Neovim for editing inside the app; Git comparisons need Neovim 0.10 or newer. You can also choose an external editor in Settings.
 

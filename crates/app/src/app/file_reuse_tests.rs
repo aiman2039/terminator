@@ -16,7 +16,7 @@ fn panes(app: &App, project: &str) -> usize {
 fn repeated_native_opens_reveal_the_existing_split_and_preserve_the_buffer() {
     let (mut app, ctx, _dir) = fixture();
     app.state.settings.editor_mode = EditorMode::Native;
-    let path = PathBuf::from("/a/file.rs");
+    let path = crate::test_path("/a/file.rs");
     app.native_docs.insert(
         path.clone(),
         native_editor::NativeDoc::dirty_for_test(path.clone()),
@@ -139,16 +139,15 @@ fn repeated_diff_opens_focus_the_existing_leaf_and_keep_staged_views_distinct() 
 fn opening_a_floated_file_reveals_its_window_without_a_docked_copy() {
     let (mut app, ctx, _dir) = fixture();
     let viewport = egui::ViewportId::from_hash_of("file-window");
-    let tab = Tab::NativeEditor {
-        path: "/a/file.rs".into(),
-    };
+    let path = crate::test_path("/a/file.rs");
+    let tab = Tab::NativeEditor { path: path.clone() };
     app.state.settings.editor_mode = EditorMode::Native;
     app.floating.push(FloatingWindow {
         viewport,
         home: ("a".into(), "home".into()),
         dock: Some(egui_dock::DockState::new(vec![tab.clone()])),
     });
-    app.open_file("/a/file.rs".into(), None, None, false);
+    app.open_file(path, None, None, false);
     drain_updates(&mut app, &ctx);
     assert_eq!(panes(&app, "a"), 0);
     assert_eq!(app.floating.len(), 1);

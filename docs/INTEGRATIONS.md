@@ -9,6 +9,7 @@
 | OpenCode | `~/.config/opencode/plugins/terminator.js` | Session status/idle/error/end; permission and question (v1 and v2), matching Claude/Codex/Grok notification coverage | CLI 1.18.31 identified; dual-entry plugin (`server()` for 1.18.29+, `setup()` subscribe for V2). Generated sequence and invocation IDs avoid conflating repeated deliveries. Live provider combinations were not exercised. Existing installs need Settings → Agent hooks → Repair. |
 | Muse Code | `~/.config/muse/settings.json` (user hooks). Install also writes `~/.muse/hooks.json` for older CLIs and trusted project hooks. | Start, prompt/tool progress, permission, subagent start/stop, completion/end | CLI 1.4 reads user hooks from `settings.json`. Tool and subagent events use a different session id than Stop; the sidebar follows the conversation id so a later tool event does not stay Working. CLI 1.0.3-R2198.1 was tested with the offline echo provider. Its cleared hook environment is handled by ancestor correlation. |
 | Grok Build | `~/.grok/hooks/terminator.json` | Start, prompt/tool progress, input/permission notification, completion/failure/end | CLI 1.0.13 identified; official Grok hook format. Imported Claude hook commands are ignored when the actual agent is Grok, avoiding duplicate agent attribution. |
+| Cursor | `~/.cursor/hooks.json` | Session start, prompt submit, tool progress, assistant response, stop (completed / error / aborted), session end | User hooks, schema version 1. The command prints `{}` (or `{"continue":true}` for `beforeSubmitPrompt`) so Cursor does not treat an empty body as a block. Permission hooks are not installed: `preToolUse`, `beforeShellExecution`, `beforeMCPExecution`, `beforeReadFile`, and `subagentStart` block the action when the body does not match their schema. Cursor has no observer for a native approval or question dialog, so those states are not reported. Presence matches the `cursor-agent` executable, not the `agent` name, because Grok uses that name too. The resolved `cursor-agent` binary still matches when the user starts `agent`. |
 
 These are capability targets, not an assertion that all providers report identical lifecycle events. A missing callback cannot reliably be replaced with “the terminal was silent.” In particular, failures and clarification prompts are only reported when the integration receives an appropriate event. CLI upgrades may change their configuration or payloads.
 
@@ -46,7 +47,7 @@ The helper exits successfully without emitting a permission decision even if del
 
 If an agent executes hooks in a shared process that has neither the terminal environment nor a matching ancestor shell, use that agent's supported mechanism to propagate the session capability explicitly. The application must not guess the association.
 
-The app displays provider resume commands for manual copying; it never executes them. Built-in templates are `claude --resume ID`, `codex resume ID`, `opencode --session ID`, `muse resume ID`, and `grok --resume ID`. A custom event can omit resume information. Do not put credentials in summaries, details, or resume arguments.
+The app displays provider resume commands for manual copying; it never executes them. Built-in templates are `claude --resume ID`, `codex resume ID`, `opencode --session ID`, `muse resume ID`, `grok --resume ID`, and `cursor-agent --resume ID`. A custom event can omit resume information. Do not put credentials in summaries, details, or resume arguments.
 
 ## References
 
@@ -55,6 +56,7 @@ The app displays provider resume commands for manual copying; it never executes 
 - [OpenCode plugins](https://opencode.ai/docs/plugins/) and [V2 plugin migration](https://opencode.ai/v2/docs/build/plugins/migrate-v1)
 - [Muse Code SDK](https://github.com/meta-models/muse-code-sdk); installed CLI echo-provider testing verifies the project hook path and payloads.
 - [Grok hook guide](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/10-hooks.md)
+- [Cursor hooks](https://cursor.com/docs/agent/hooks)
 
 ## Idle-shell close (2026-09-15)
 

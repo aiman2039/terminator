@@ -187,7 +187,14 @@ async fn discard_and_undo_preserve_other_hunks_and_refuse_newer_edits() {
 
 #[tokio::test]
 async fn untracked_file_can_be_staged_discarded_and_restored_with_quoted_paths() {
-    let fixture = Fixture::new("odd \"ü\"\t.txt", None);
+    // Quotes and tabs are legal on Unix and need C-style quoting.
+    // Windows rejects both names. `ü` is legal on both and still forces octal escapes.
+    let name = if cfg!(windows) {
+        "odd ü.txt"
+    } else {
+        "odd \"ü\"\t.txt"
+    };
+    let fixture = Fixture::new(name, None);
     std::fs::write(fixture.absolute(), "new file without newline").unwrap();
     let doc = fixture.doc(false).await;
     let outcome = fixture.change(doc, 0, Kind::Stage).await.unwrap();
