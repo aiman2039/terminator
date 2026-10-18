@@ -131,6 +131,242 @@ mod tests {
         catalog.register(&g).unwrap();
         g
     }
+
+    struct HeartbeatServer {
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+        requests: std::sync::mpsc::Receiver<Request>,
+    }
+
+    impl HeartbeatServer {
+        fn new(owner: &Generation, auth: bool) -> Self {
+            if auth {
+                atomic_write(&owner.paths().auth(), b"fixture").unwrap();
+            }
+            let listener = crate::transport::Listener::bind_ipc(&owner.paths().socket()).unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let running = std::sync::Arc::clone(&stop);
+            let (send, requests) = std::sync::mpsc::channel();
+            let generation = owner.id.clone();
+            let thread = std::thread::spawn(move || {
+                while !running.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Ok((mut stream, _)) = listener.accept() {
+                        if stream
+                            .set_nonblocking(false)
+                            .and_then(|()| {
+                                stream.set_timeouts(
+                                    Duration::from_millis(200),
+                                    Duration::from_millis(200),
+                                )
+                            })
+                            .is_err()
+                        {
+                            continue;
+                        }
+                        // A missing-token sync client connects then closes
+                        // before sending an envelope.
+                        if let Ok(envelope) = read_frame::<Envelope>(&mut stream) {
+                            assert_eq!(envelope.auth, "fixture");
+                            let response = if matches!(envelope.request, Request::Snapshot) {
+                                Response::State(Box::new(State {
+                                    generation: generation.clone(),
+                                    revision: 7,
+                                    ..State::default()
+                                }))
+                            } else {
+                                Response::Ok
+                            };
+                            send.send(envelope.request).unwrap();
+                            write_frame(&mut stream, &response).unwrap();
+                        }
+                    } else {
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                }
+            });
+            Self {
+                stop,
+                thread: Some(thread),
+                requests,
+            }
+        }
+    }
+
+    impl Drop for HeartbeatServer {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.thread.take().unwrap().join().unwrap();
+        }
+    }
+
+    fn broadcast(paths: &Paths, request: Request, asynchronous: bool) -> anyhow::Result<Response> {
+        if asynchronous {
+            #[cfg(feature = "async-client")]
+            {
+                let runtime = tokio::runtime::Runtime::new().unwrap();
+                let client = crate::async_client::Client::new(
+                    paths.clone(),
+                    crate::async_service::NativePool::new("heartbeat-catalog", 1).unwrap(),
+                    crate::async_service::NativePool::new("heartbeat-cpu", 1).unwrap(),
+                );
+                return runtime.block_on(client.rpc(request));
+            }
+            #[cfg(not(feature = "async-client"))]
+            panic!("async-client feature is required");
+        }
+        rpc(paths, request)
+    }
+
+    fn broadcast_modes() -> &'static [bool] {
+        if cfg!(feature = "async-client") {
+            &[false, true]
+        } else {
+            &[false]
+        }
+    }
+
+    #[test]
+    fn heartbeat_reaches_healthy_owners_when_an_old_auth_file_is_missing() {
+        for &asynchronous in broadcast_modes() {
+            let (_dir, paths, mut catalog) = fixture();
+            let unavailable = owner(&paths, &catalog);
+            let healthy = owner(&paths, &catalog);
+            let active = owner(&paths, &catalog);
+            catalog.activate(&unavailable.id).unwrap();
+            catalog.activate(&healthy.id).unwrap();
+            catalog.activate(&active.id).unwrap();
+            let _unavailable = HeartbeatServer::new(&unavailable, false);
+            let healthy_server = HeartbeatServer::new(&healthy, true);
+            let active_server = HeartbeatServer::new(&active, true);
+            assert!(matches!(
+                broadcast(&paths, Request::Heartbeat { focused: true }, asynchronous).unwrap(),
+                Response::Ok
+            ));
+            for server in [&healthy_server, &active_server] {
+                assert!(matches!(
+                    server
+                        .requests
+                        .recv_timeout(Duration::from_secs(1))
+                        .unwrap(),
+                    Request::Heartbeat { focused: true }
+                ));
+            }
+            assert!(!unavailable.paths().auth().exists());
+            assert_eq!(
+                catalog.active().unwrap().as_deref(),
+                Some(active.id.as_str())
+            );
+            assert_eq!(
+                catalog
+                    .generations()
+                    .unwrap()
+                    .iter()
+                    .find(|owner| owner.id == unavailable.id)
+                    .unwrap()
+                    .status,
+                Status::Draining
+            );
+        }
+    }
+
+    #[test]
+    fn heartbeat_still_reports_a_missing_active_auth_file() {
+        for &asynchronous in broadcast_modes() {
+            let (_dir, paths, mut catalog) = fixture();
+            let active = owner(&paths, &catalog);
+            catalog.activate(&active.id).unwrap();
+            let _server = HeartbeatServer::new(&active, false);
+            let error =
+                broadcast(&paths, Request::Heartbeat { focused: false }, asynchronous).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&active.paths().auth().display().to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn clear_history_still_reports_an_unavailable_old_owner() {
+        for &asynchronous in broadcast_modes() {
+            let (_dir, paths, mut catalog) = fixture();
+            let unavailable = owner(&paths, &catalog);
+            let active = owner(&paths, &catalog);
+            catalog.activate(&unavailable.id).unwrap();
+            catalog.activate(&active.id).unwrap();
+            let _unavailable = HeartbeatServer::new(&unavailable, false);
+            let _active = HeartbeatServer::new(&active, true);
+            let error = broadcast(
+                &paths,
+                Request::ClearHistory { session: None },
+                asynchronous,
+            )
+            .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&unavailable.paths().auth().display().to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_keeps_the_active_owner_when_an_old_token_and_store_are_missing() {
+        for &asynchronous in broadcast_modes() {
+            let (_dir, paths, mut catalog) = fixture();
+            let unavailable = owner(&paths, &catalog);
+            let active = owner(&paths, &catalog);
+            catalog.activate(&unavailable.id).unwrap();
+            catalog.activate(&active.id).unwrap();
+            let _unavailable = HeartbeatServer::new(&unavailable, false);
+            let _active = HeartbeatServer::new(&active, true);
+            fs::remove_file(unavailable.data.join("state.sqlite3")).unwrap();
+            let Response::State(state) =
+                broadcast(&paths, Request::Snapshot, asynchronous).unwrap()
+            else {
+                panic!("expected aggregate state");
+            };
+            assert_eq!(state.generation, active.id);
+            assert_eq!(state.revision, 7);
+            let health = state
+                .generations
+                .iter()
+                .find(|health| health.owner.id == unavailable.id)
+                .unwrap();
+            assert_eq!(health.owner.status, Status::Draining);
+            assert!(
+                health
+                    .error
+                    .as_ref()
+                    .unwrap()
+                    .contains("saved state unavailable")
+            );
+            assert!(
+                state
+                    .generations
+                    .iter()
+                    .find(|health| health.owner.id == active.id)
+                    .unwrap()
+                    .error
+                    .is_none()
+            );
+            assert!(!unavailable.paths().auth().exists());
+            assert!(!unavailable.data.join("state.sqlite3").exists());
+        }
+    }
+
+    #[test]
+    fn snapshot_still_fails_when_the_active_token_and_store_are_missing() {
+        for &asynchronous in broadcast_modes() {
+            let (_dir, paths, mut catalog) = fixture();
+            let active = owner(&paths, &catalog);
+            catalog.activate(&active.id).unwrap();
+            let _active = HeartbeatServer::new(&active, false);
+            fs::remove_file(active.data.join("state.sqlite3")).unwrap();
+            assert!(broadcast(&paths, Request::Snapshot, asynchronous).is_err());
+        }
+    }
     fn session(generation: &str, lifecycle: Lifecycle) -> Session {
         Session {
             id: id(),

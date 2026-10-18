@@ -111,10 +111,13 @@ impl Client {
                                         generation: owner.id,
                                         request: Box::new(original.clone()),
                                     },
+                                    true,
                                 ));
                             }
                         } else {
-                            targets.push((owner.paths(), original.clone()));
+                            let required = !matches!(original, Request::Heartbeat { .. })
+                                || active.as_deref() == Some(owner.id.as_str());
+                            targets.push((owner.paths(), original.clone(), required));
                         }
                     }
                     Ok(targets)
@@ -122,16 +125,26 @@ impl Client {
                 .await?;
             let retired = targets
                 .iter()
-                .filter_map(|(_, request)| archived_mutation(request))
+                .filter_map(|(_, request, _)| archived_mutation(request))
                 .map(str::to_string)
                 .collect::<Vec<_>>();
-            let mut responses =
-                stream::iter(targets.into_iter().map(|(paths, request)| async move {
-                    self.direct(paths, request, None).await?.checked()
-                }))
-                .buffer_unordered(4);
-            while let Some(result) = responses.next().await {
-                result?;
+            let mut responses = stream::iter(targets.into_iter().map(
+                |(paths, request, required)| async move {
+                    let result = match self.direct(paths, request, None).await {
+                        Ok(response) => response.checked(),
+                        Err(error) => Err(error),
+                    };
+                    (required, result)
+                },
+            ))
+            .buffer_unordered(4);
+            while let Some((required, result)) = responses.next().await {
+                // Snapshot retains unavailable-owner diagnostics. Heartbeats
+                // tolerate only failures of non-active owners; real mutations
+                // and active-owner failures must remain visible to callers.
+                if required {
+                    result?;
+                }
             }
             for generation in retired {
                 self.evict_historical(&generation);
@@ -273,19 +286,24 @@ impl Client {
         }
         let mut responses = stream::iter(live.into_iter().map(|owner| {
             let client = self.clone();
+            let active = active.clone();
             async move {
                 let response = client.direct(owner.paths(), Request::Snapshot, None).await;
                 let (state, error) = match response {
                     Ok(Response::State(state)) => (Arc::new(*state), None),
                     result => {
-                        let paths = owner.paths();
-                        let saved = client
+                        let unavailable = owner.clone();
+                        let (saved, error) = client
                             .catalog
                             .run(&CancellationToken::new(), move || {
-                                generations::saved(&paths).map(Arc::new)
+                                generations::unavailable_snapshot(
+                                    &unavailable,
+                                    &active,
+                                    format!("Owner unavailable: {result:?}"),
+                                )
                             })
                             .await?;
-                        (saved, Some(format!("Owner unavailable: {result:?}")))
+                        (Arc::new(saved), error)
                     }
                 };
                 Ok::<_, anyhow::Error>((owner, state, error))

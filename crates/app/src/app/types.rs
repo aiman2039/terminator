@@ -181,6 +181,9 @@ pub(crate) enum Job {
     PasteClipboard(String),
 
     Diff(Tab),
+    DiffContext(Tab, usize),
+    DiffExpand(Tab, std::sync::Arc<diff::DiffDocument>, usize),
+    DiffAction(Tab, Box<diff::actions::Request>),
     Install(String, bool),
     TestNtfy {
         channel: String,
@@ -235,6 +238,8 @@ pub(crate) enum Update {
     OpenImage(String, PathBuf, After),
     OpenNativeEditor(String, PathBuf, After),
     OpenBrowser(String, BrowserTarget, After),
+    FocusViewport(egui::ViewportId),
+    RevealFileSession(String, String),
     Image(PathBuf, u64, Result<egui::ColorImage, String>),
     TestPickerClosed,
     PickedProject(Option<PathBuf>, u64),
@@ -264,6 +269,8 @@ pub(crate) enum Update {
     FloatCreated(Session, egui::ViewportId, Option<String>, Vec<Tab>),
     Text(String, String),
     Diff(String, Result<diff::DiffDocument, String>),
+    DiffAction(Tab, bool, Result<diff::actions::Outcome, String>),
+    DiffActionFailed(String, String),
     Workspace(workspace_ops::Op, Result<workspace_ops::Report, String>),
     Search(u64, Result<Vec<search::Hit>, String>),
     DirectoryPreview(

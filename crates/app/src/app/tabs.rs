@@ -108,6 +108,8 @@ impl App {
                 .map(|(_, tab)| tab.key()),
         );
         self.diff_split_scroll.retain(|key, _| live.contains(key));
+        self.diff_reviews
+            .retain(|key, review| live.contains(key) || review.busy);
     }
     pub(crate) fn advance_workspace_close(&mut self, project: &str) {
         let existing: HashSet<String> = self

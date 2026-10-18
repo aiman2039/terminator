@@ -74,6 +74,7 @@ pub(crate) mod tests {
             right_text: String::new(),
             unified: vec![sample_line()],
             split: vec![],
+            ..Default::default()
         }
     }
 
@@ -239,6 +240,7 @@ pub(crate) mod tests {
                     ),
                 ],
                 split: vec![],
+                ..Default::default()
             },
             false,
         );
@@ -267,6 +269,7 @@ pub(crate) mod tests {
                     "removed-line",
                 )],
                 split: vec![],
+                ..Default::default()
             },
             false,
         );
@@ -297,6 +300,7 @@ pub(crate) mod tests {
                 right_text: String::new(),
                 unified: vec![line(diff::LineKind::Insert, None, Some(102), "added-line")],
                 split: vec![],
+                ..Default::default()
             },
             false,
         );
@@ -323,6 +327,7 @@ pub(crate) mod tests {
                     left: Some(line(diff::LineKind::Delete, Some(5), None, "left-only")),
                     right: Some(line(diff::LineKind::Insert, None, Some(6), "right-only")),
                 }],
+                ..Default::default()
             },
             true,
         );
@@ -363,6 +368,7 @@ pub(crate) mod tests {
                     line(diff::LineKind::Equal, Some(2), Some(2), "row-b"),
                 ],
                 split: vec![],
+                ..Default::default()
             },
             false,
         );
@@ -385,6 +391,7 @@ pub(crate) mod tests {
                 right_text: String::new(),
                 unified: vec![line(diff::LineKind::Equal, Some(97), Some(97), "unchanged")],
                 split: vec![],
+                ..Default::default()
             },
             false,
         );
@@ -413,6 +420,7 @@ pub(crate) mod tests {
                 right_text: String::new(),
                 unified: vec![line(diff::LineKind::Hunk, None, None, "@@ -3,2 +3,2 @@")],
                 split: vec![],
+                ..Default::default()
             },
             false,
         );
@@ -437,6 +445,7 @@ pub(crate) mod tests {
                 right_text: String::new(),
                 unified: vec![line(diff::LineKind::Insert, None, Some(10000), "wide-line")],
                 split: vec![],
+                ..Default::default()
             },
             false,
         );
@@ -500,6 +509,7 @@ pub(crate) mod tests {
                         right: None,
                     },
                 ],
+                ..Default::default()
             },
             true,
         );
@@ -582,6 +592,7 @@ pub(crate) mod tests {
             right_text: String::new(),
             unified,
             split,
+            ..Default::default()
         }
     }
 
@@ -760,6 +771,7 @@ pub(crate) mod tests {
             right_text: "# Hello\n\nThis is the *updated* markdown.".into(),
             unified: vec![],
             split: vec![],
+            ..Default::default()
         };
         let ctx = egui::Context::default();
         appearance::install(&ctx);

@@ -180,6 +180,28 @@ pub fn run(o: &Options) -> Result<()> {
         .rev()
         .find(|s| s["review"] == true && s["lifecycle"] == "running")
         .context("Native review not created")?;
+    let review_id = id(review).to_string();
+    let session_count = sessions(&state).len();
+    plain(
+        &h,
+        o,
+        "review-reopen",
+        json!([
+            {"at_ms":1200,"target":"git-file-review.rs","right_click":true},
+            {"at_ms":1600,"target":"Open changes"}
+        ]),
+        3200,
+    )?;
+    ensure!(
+        sessions(&h.state()?).len() == session_count,
+        "Reopening the same Neovim review created another session"
+    );
+    ensure!(
+        sessions(&h.state()?)
+            .iter()
+            .any(|session| id(session) == review_id && session["lifecycle"] == "running"),
+        "Reopening a review replaced its existing session"
+    );
     verify(
         &h,
         review,
@@ -242,6 +264,202 @@ pub fn run(o: &Options) -> Result<()> {
     ensure!(
         sessions(&h.state()?).len() == before_native,
         "Native diff allocated a PTY"
+    );
+    h.assert_pids(&[shell])
+}
+
+/// Real-window regression for explicit native hunk mutations and navigation.
+pub fn hunks(o: &Options) -> Result<()> {
+    use std::fmt::Write;
+    let h = Harness::new()?;
+    h.setup()?;
+    let p = h.project("diff-hunks")?;
+    let root = PathBuf::from(
+        p.get("path")
+            .and_then(Value::as_str)
+            .context("Missing project path")?,
+    );
+    git(&root, &["init", "-q"])?;
+    git(&root, &["config", "user.name", "Fixture"])?;
+    git(&root, &["config", "user.email", "fixture@example.invalid"])?;
+    git(&root, &["config", "commit.gpgsign", "false"])?;
+    git(&root, &["config", "core.hooksPath", ".no-fixture-hooks"])?;
+    let mut original = String::new();
+    for line in 0..45 {
+        writeln!(original, "line {line}")?;
+    }
+    let changed = original
+        .replace(
+            "line 2\n",
+            "first change\nextra inserted line\nanother inserted line\n",
+        )
+        .replace("line 20\n", "middle change\n")
+        .replace("line 38\n", "");
+    let middle = original.replace("line 20\n", "middle change\n");
+    let discarded = changed.replace(
+        "first change\nextra inserted line\nanother inserted line\n",
+        "line 2\n",
+    );
+    let source = root.join("hunks.txt");
+    fs::write(&source, &original)?;
+    git(&root, &["add", "hunks.txt"])?;
+    git(&root, &["commit", "-qm", "fixture"])?;
+    fs::write(&source, &changed)?;
+    let shell = h.shell(&p)?;
+    h.layout(&p, std::slice::from_ref(&shell))?;
+    save_prefs(
+        &h,
+        &json!({"version":1,"tool":"Git","visible":true,"typography_migrated":true}),
+    )?;
+    let before = sessions(&h.state()?).len();
+    super::capture(
+        &h,
+        o,
+        "diff-hunks",
+        json!([
+            {"at_ms":1200,"target":"git-file-hunks.txt","right_click":true},
+            {"at_ms":1600,"target":"Open changes"},
+            {"at_ms":2200,"target":"diff-next"},
+            {"at_ms":2600,"target":"diff-hunk-action-1"},
+            {"at_ms":3700,"target":"diff-previous"},
+            {"at_ms":4100,"target":"diff-hunk-discard-0"},
+            {"at_ms":4500,"target":"diff-confirm-discard"},
+            {"at_ms":5900,"target":"diff-undo"},
+            {"at_ms":6500,"target":"diff-side-by-side"},
+            {"at_ms":7100,"target":"diff-marker-1"},
+                {"at_ms":7500,"target":"diff-gap-0"},
+                {"at_ms":8200,"target":"diff-marker-0"},
+                {"at_ms":8600,"target":"diff-menu"},
+                {"at_ms":9000,"target":"Collapse unchanged lines"}
+        ]),
+        9800,
+        |_| {
+            h.wait(
+                |_| {
+                    git(&root, &["show", ":hunks.txt"])
+                        .is_ok_and(|bytes| bytes == middle.as_bytes())
+                },
+                8,
+            )?;
+            h.wait(
+                |_| fs::read_to_string(&source).is_ok_and(|text| text == discarded),
+                5,
+            )?;
+            h.wait(
+                |_| fs::read_to_string(&source).is_ok_and(|text| text == changed),
+                5,
+            )?;
+            Ok(())
+        },
+    )?;
+    ensure!(
+        git(&root, &["show", ":hunks.txt"])? == middle.as_bytes(),
+        "Hunk stage changed the wrong lines"
+    );
+    ensure!(
+        fs::read_to_string(&source)? == changed,
+        "Discard undo did not restore the working file"
+    );
+    ensure!(
+        sessions(&h.state()?).len() == before,
+        "Native diff allocated a PTY"
+    );
+    h.assert_pids(&[shell])
+}
+
+pub fn file_reuse(o: &Options) -> Result<()> {
+    let h = Harness::new()?;
+    h.setup()?;
+    let p = h.project("file-reuse")?;
+    let root = PathBuf::from(
+        p.get("path")
+            .and_then(Value::as_str)
+            .context("Missing project path")?,
+    );
+    git(&root, &["init", "-q"])?;
+    git(&root, &["config", "user.name", "Fixture"])?;
+    git(&root, &["config", "user.email", "fixture@example.invalid"])?;
+    git(&root, &["config", "commit.gpgsign", "false"])?;
+    git(&root, &["config", "core.hooksPath", ".no-fixture-hooks"])?;
+    fs::write(root.join("file.txt"), "original\n")?;
+    git(&root, &["add", "file.txt"])?;
+    git(&root, &["commit", "-qm", "fixture"])?;
+    fs::write(root.join("file.txt"), "changed\n")?;
+    let mut settings = h
+        .state()?
+        .get("settings")
+        .cloned()
+        .context("Missing settings")?;
+    let settings_object = settings
+        .as_object_mut()
+        .context("Settings are not an object")?;
+    settings_object.insert("editor_mode".into(), json!("Native"));
+    settings_object.insert("review_mode".into(), json!("native"));
+    h.rpc(json!({"Settings":settings}))?;
+    let shell = h.shell(&p)?;
+    h.layout(&p, std::slice::from_ref(&shell))?;
+    save_prefs(
+        &h,
+        &json!({"version":1,"tool":"Explorer","visible":true,"typography_migrated":true}),
+    )?;
+    plain(
+        &h,
+        o,
+        "file-reuse",
+        json!([
+            {"at_ms":1000,"target":"explorer-file:file.txt"},
+            {"at_ms":1800,"target":"explorer-file:file.txt"},
+            {"at_ms":2600,"target":"explorer-file:file.txt"},
+            {"at_ms":3300,"target":"tool-Git"},
+            {"at_ms":4000,"target":"git-file-file.txt"},
+            {"at_ms":4600,"target":"git-file-file.txt"},
+            {"at_ms":5200,"target":"git-file-file.txt"},
+            {"at_ms":5800,"target":"tool-Explorer"},
+            {"at_ms":6400,"target":"explorer-file:file.txt"}
+        ]),
+        7400,
+    )?;
+    let state = h.state()?;
+    let layout = state
+        .get("projects")
+        .and_then(Value::as_array)
+        .and_then(|projects| {
+            projects
+                .iter()
+                .find(|project| project.get("id").and_then(Value::as_str) == Some(id(&p)))
+        })
+        .and_then(|project| project.get("layout"))
+        .context("Missing saved layout")?;
+    let groups = layout
+        .get("tabs")
+        .and_then(Value::as_array)
+        .context("Missing top-level tabs")?;
+    fn count(value: &Value, kind: &str) -> usize {
+        match value {
+            Value::Object(values) if values.contains_key(kind) => 1,
+            Value::Object(values) => values.values().map(|value| count(value, kind)).sum(),
+            Value::Array(values) => values.iter().map(|value| count(value, kind)).sum(),
+            _ => 0,
+        }
+    }
+    for kind in ["NativeEditor", "Diff"] {
+        ensure!(
+            groups
+                .iter()
+                .filter_map(|group| group.get("layout"))
+                .map(|layout| count(layout, kind))
+                .sum::<usize>()
+                == 1,
+            "Repeated file opens duplicated {kind}: {layout}"
+        );
+    }
+    ensure!(
+        groups.len() == 3,
+        "Repeated opens created extra top-level tabs"
+    );
+    ensure!(
+        sessions(&state).len() == 1,
+        "Repeated opens created extra sessions"
     );
     h.assert_pids(&[shell])
 }

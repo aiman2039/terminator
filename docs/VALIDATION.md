@@ -4721,3 +4721,119 @@ render-to-effect path for `:split`, `:tabnew`, and `:set wrap`, plus
 main-dock splits and `:tabnew` placement. `cargo test -p
 terminator-native-edit` (153 tests), `cargo test -p terminator --lib` (620
 tests), and strict Clippy for both crates passed.
+
+## 2026-10-18: Native Git hunk controls
+
+Added Previous/Next (F7/Shift+F7), a selected-change counter and outline,
+clickable change markers, per-hunk Stage/Unstage, confirmed Discard, Undo,
+context expansion/collapse, and Open at line (F4 or double-click).
+The approved AGENTS.md exception applies to explicit native controls only.
+Neovim review snapshots remain read-only.
+
+Validation on macOS:
+
+- `cargo test -p terminator --lib --all-features --locked --quiet`:
+  702 passed, 4 ignored. Regressions cover independent hunks, stale file/index
+  snapshots, Undo after newer edits, added/deleted files, quoted Unicode paths,
+  CRLF/missing final newline, context ranges, and long-file jumps in both views.
+- `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`:
+  passed.
+- `cargo build --workspace --bins --examples --features terminator/test-support --locked`:
+  passed. The debug linker reported a large unwind-table warning.
+- `cargo xtask gui diff-hunks`: passed with the native Glow renderer at 1x.
+  The isolated fixture verifies the exact index after staging the middle hunk,
+  disk content after discarding another hunk, and restoration with Undo. It
+  exercises split view, markers, and context expansion/collapse, and verifies
+  that no extra PTY was created. Capture and action log:
+  `target/validation/native/diff-hunks/diff-hunks.{png,log}`.
+
+Undo keeps at most sixteen actions per open diff tab and is not saved across
+GUI restarts. Linux rendering and installed-app replacement were not performed.
+
+## 2026-10-18: Missing old-owner files and relevant Installation entries
+
+The debug catalog still registered a running 0.116.0 owner whose runtime auth
+file and saved database path were missing. Its heartbeat error propagated to
+the GUI, and the missing saved store also blocked aggregate snapshots.
+Both clients now tolerate unavailable non-active owners while retaining their
+health diagnostics. Active-owner failures and explicit history-clear failures
+remain errors. The Installation list hides empty retired/prepared/draining
+entries, keeps live/current/error entries, and labels an unreadable count as
+unavailable.
+
+Validation:
+
+- Core tests: 136 passed, including both synchronous and async heartbeat
+  delivery, active-owner failure, explicit history-clear failure, missing old
+  store fallback, and active-store failure.
+- The full workspace test suite passed with all features. The app suite then
+  passed with 703 tests and 4 ignored after adding the Installation rendering
+  regression; the final unavailable-count label passed that focused regression.
+- Workspace Clippy with all targets/features and `-D warnings` passed.
+- The rebuilt `terminator-hook ctl list` successfully read the same
+  `/tmp/terminator-ux` catalog that had failed before the fix. It returned the
+  active owner, three projects, and one live session record.
+- No running GUI or daemon was restarted, and no missing authentication or
+  database files were recreated. The installed app still needs the new GUI
+  build to display these changes.
+
+## 2026-10-18: Reuse existing file and Git views
+
+Repeated file opens now focus the existing top-level tab and split leaf, or
+reveal its floating window. GUI open completions reuse native editor buffers,
+image previews, and browser identities. Ordinary daemon editors reuse their
+live session. Native Git views keep staged and working comparisons separate;
+Neovim review requests serialize matching opens and use private comparison
+metadata to reuse the correct live review session. Explicit native splits and
+`:tabnew` still create additional views.
+
+Validation:
+
+- App tests with all features: 709 passed, 4 ignored. Six file-reuse regressions
+  cover focused split leaves, queued opens, dirty-buffer retention, image/HTML
+  identities, staged/working separation, floating windows, explicit splits,
+  and ordinary daemon editors. All six passed again after the final deferred
+  focus routing change.
+- Workspace Clippy with all targets/features and `-D warnings` passed.
+- Workspace binaries/examples built with `terminator/test-support`.
+- `sh scripts/run-built-xtask.sh gui file-reuse`: passed. Native Explorer/Git
+  clicks produced one native editor and one diff view, retained three total
+  top-level tabs including the original shell, and created no extra sessions.
+- `sh scripts/run-built-xtask.sh gui reviews`: passed, including reopening a
+  Neovim review without creating or replacing its live session. Captures are
+  under `target/validation/native/file-reuse/` and
+  `target/validation/native/reviews/`.
+
+The IntelliJ-style connected change bands, revised comparison headers and
+toolbar grouping were researched as a follow-up plan, not implemented here.
+The installed GUI was not replaced.
+
+## 2026-10-18: Connected diff layout and syntax coverage
+
+Implemented connected from/to change bands, blue replacement highlights,
+green additions, red deletions, separate version/path headers, one compact
+toolbar, contextual gutter actions, and individually expandable unchanged
+gaps. The exact snapshot text and mutation hunk ranges remain unchanged by
+context expansion.
+
+The editor and native diff now share the existing 220-grammar two-face bundle.
+JSONC comments/strings were verified, as were common HTML, CSS/SCSS, SQL,
+Dockerfile, Makefile, GraphQL, Lua, Ruby, PHP, Swift, Kotlin, C#, Terraform,
+XML, dotenv and Vue mappings. Svelte, Zig and Solidity resolve to bundled
+grammars; Astro, MDX and JSON5 still resolve to plain text. Native highlighting
+still falls back to plain text above its existing 256 KiB limit.
+
+Structure remains server-backed for the main native editor's Rust, Python,
+JavaScript and TypeScript files. It now identifies the file, unsupported file
+types, missing/starting servers, and symbol count instead of presenting all
+empty cases as indexing. No fallback outline parser was added.
+
+Validation: 711 app tests passed (4 ignored), 156 native-editor tests passed,
+and workspace Clippy passed with all targets/features and warnings denied.
+The native `diff-hunks` check passed with a one-to-three-line replacement and
+a deletion, exercising stage, discard/undo, view selection and gap expansion.
+The native `file-reuse` check also passed. Capture:
+`target/validation/native/diff-hunks/diff-hunks.png`.
+The final local workspace build passed after a header-spacing/path-label
+correction; that small correction was not recaptured. The installed app was
+not replaced.

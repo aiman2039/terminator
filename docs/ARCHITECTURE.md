@@ -87,6 +87,48 @@ opening resolves saved path aliases on its worker to avoid duplicate identities.
 
 ## Editing
 
+Native Git comparisons use a shared two-face/syntect grammar set and the
+native editor's syntax palette. Replacements use blue bands, additions green,
+and deletions red. Split panes connect the actual old/new line spans through
+the center gutter; hunk actions live in that gutter. Separate headers identify
+the compared versions and repository-relative path. Hidden unchanged ranges
+are clickable gaps; expanding one range runs on the CPU worker and preserves
+the exact snapshot and hunk ranges used for mutations.
+
+The native editor detects the bundled grammars by extension or common filename,
+with dedicated JSONC/JSON Lines aliases. This is syntax highlighting, not
+language-server support. Structure remains a document-symbol list for Rust,
+Python, JavaScript and TypeScript in the main native editor, provided the
+matching language server is available. It has no general local config or
+Markdown outline; its empty states identify unsupported files and server issues.
+
+Ordinary file opens reveal an existing view in the originating project before
+creating another one. GUI open completions search all top-level groups and
+split leaves, retain browser identity and dirty native buffers, and focus the
+owning floating window when needed. Explicit native split and `:tabnew`
+commands can still create additional views. Native Git comparisons include the
+repository and staged/working side in their identity. Neovim review opens are
+serialized per comparison and use the private review metadata to find an
+existing matching session. They never infer the comparison side from an
+editable tab title. Deferred focus retains the originating project so a later
+completion does not switch back from a project the user selected meanwhile.
+
+Native Git diffs retain exact snapshot text and explicit changed-line ranges.
+The native viewer provides per-hunk Stage/Unstage, confirmed Discard, and a
+bounded in-memory Undo history. Neovim CodeDiff snapshots remain read-only.
+Mutations are ordered background jobs, serialized across diff tabs. Before
+applying a patch, the job rechecks the displayed file, HEAD and index, checks
+the patch with Git, then rechecks the complete target. Undo requires the exact
+result of the previous action; it refuses intervening edits. Index actions use
+`git apply --cached`; disk actions use `git apply`. Neither creates a commit.
+Both diff sides and sidebar status refresh after an action. Undo history is
+limited to sixteen actions per open diff tab and is not persisted.
+
+Previous/Next and F7/Shift+F7 select changes in split or unified mode. Change
+markers jump to the corresponding row. Context can expand in twenty-line steps
+or show the complete file, and can collapse again. F4, a hunk's Open control, or
+a double-click on a current-version line opens the text editor at that line.
+
 Terminal-editor mode passes only the absolute file operand to custom programs.
 Known Vim, vi, Nano/Pico, and Emacs launchers receive their supported position
 arguments. Neovim RPC, startup commands and autoread configuration belong to
@@ -510,3 +552,16 @@ clear all inherited `TERMINATOR_*` routing before applying isolated overrides.
 Client observation ordering is an in-memory-only field excluded from serde;
 it does not change the daemon protocol or stored state. Unavailable owners retain
 last-observed records while their health error is updated.
+
+Focus heartbeats tolerate failures of non-active owners so an older missing
+runtime token cannot block healthy owners. Active-owner heartbeat failures and
+explicit history mutations still report errors. If an older owner has neither
+working IPC nor a readable saved store, snapshots retain its registration and
+health error with an unavailable inventory. The active owner's unreadable store
+still fails the snapshot. These fallback reads do not create tokens, replace
+databases, retire owners, or stop sessions.
+
+The Installation list shows the active owner, owners with live sessions, and
+draining owners with a current error. Empty historical entries are hidden.
+An unavailable owner with no readable session count shows “session status
+unavailable” instead of claiming it has no live sessions.

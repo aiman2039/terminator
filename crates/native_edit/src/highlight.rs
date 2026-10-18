@@ -24,6 +24,8 @@ pub enum Language {
     Toml,
     Yaml,
     Markdown,
+    /// Any other grammar bundled by two-face (its name has process lifetime).
+    Syntax(&'static str),
     Plain,
 }
 
@@ -42,11 +44,18 @@ pub fn language_for_path(path: &str) -> Language {
         "cc" | "cpp" | "cxx" | "hh" | "hpp" => Language::Cpp,
         "java" => Language::Java,
         "sh" | "bash" | "zsh" => Language::Shell,
-        "json" => Language::Json,
+        "json" | "jsonc" | "jsonl" | "ndjson" => Language::Json,
         "toml" => Language::Toml,
         "yaml" | "yml" => Language::Yaml,
         "md" | "markdown" => Language::Markdown,
-        _ => Language::Plain,
+        _ => {
+            let syntax = syntax_for_path(path);
+            if syntax.name == "Plain Text" {
+                Language::Plain
+            } else {
+                Language::Syntax(syntax.name.as_str())
+            }
+        }
     }
 }
 
@@ -66,7 +75,7 @@ impl Language {
             Language::Toml => Some("toml"),
             Language::Yaml => Some("yaml"),
             Language::Markdown => Some("md"),
-            Language::Plain => None,
+            Language::Plain | Language::Syntax(_) => None,
         }
     }
 }
@@ -112,6 +121,50 @@ pub(crate) fn assets() -> &'static (SyntaxSet, ThemeSet) {
     })
 }
 
+/// Shared bundled grammars for the native editor and Git snapshots.
+#[must_use]
+pub fn syntax_set() -> &'static SyntaxSet {
+    &assets().0
+}
+
+/// Detect extensions and common extensionless configuration filenames.
+#[must_use]
+pub fn syntax_for_path(path: &str) -> &'static syntect::parsing::SyntaxReference {
+    let set = syntax_set();
+    let path = std::path::Path::new(path);
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let lower = name.to_ascii_lowercase();
+    let named =
+        if lower == "dockerfile" || lower.starts_with("dockerfile.") || lower == "containerfile" {
+            Some("Dockerfile")
+        } else if matches!(lower.as_str(), "makefile" | "gnumakefile") {
+            Some("Makefile")
+        } else if lower == ".env" || lower.starts_with(".env.") {
+            Some("DotENV")
+        } else {
+            None
+        };
+    let ext = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    named
+        .and_then(|name| set.find_syntax_by_name(name))
+        .or_else(|| set.find_syntax_by_extension(&ext))
+        .or_else(|| {
+            matches!(ext.as_str(), "jsonc" | "jsonl" | "ndjson")
+                .then(|| set.find_syntax_by_extension("json"))
+                .flatten()
+        })
+        .or_else(|| set.find_syntax_by_extension(name))
+        .or_else(|| set.find_syntax_by_extension(name.trim_start_matches('.')))
+        .unwrap_or_else(|| set.find_syntax_plain_text())
+}
+
 /// `IntelliJ` Darcula's syntax palette, bundled so code colors match the
 /// IDE chrome instead of a third-party scheme.
 fn darcula() -> Option<&'static syntect::highlighting::Theme> {
@@ -127,7 +180,7 @@ fn darcula() -> Option<&'static syntect::highlighting::Theme> {
 /// Active syntect theme, so sibling backends (tree-sitter) resolve the
 /// same colors the regex backend paints. `None` when the bundle holds
 /// no themes at all (then the caller falls back to syntect-or-plain).
-pub(crate) fn theme(dark: bool) -> Option<&'static syntect::highlighting::Theme> {
+pub fn theme(dark: bool) -> Option<&'static syntect::highlighting::Theme> {
     if dark {
         return darcula();
     }
@@ -153,9 +206,11 @@ pub fn highlight_text(language: Language, text: &str, dark: bool) -> Option<Vec<
     {
         return Some(spans);
     }
-    let ext = language.extension()?;
     let (syntaxes, _) = assets();
-    let syntax = syntaxes.find_syntax_by_extension(ext)?;
+    let syntax = match language {
+        Language::Syntax(name) => syntaxes.find_syntax_by_name(name)?,
+        _ => syntaxes.find_syntax_by_extension(language.extension()?)?,
+    };
     let theme = theme(dark)?;
     let highlighter = Highlighter::new(theme);
     let mut highlight_state = HighlightState::new(&highlighter, ScopeStack::new());
@@ -249,7 +304,7 @@ mod tests {
         assert_eq!(language_for_path("data.yaml"), Language::Yaml);
         assert_eq!(language_for_path("notes.md"), Language::Markdown);
         assert_eq!(language_for_path("nope.zq"), Language::Plain);
-        assert_eq!(language_for_path("Makefile"), Language::Plain);
+        assert_ne!(language_for_path("Makefile"), Language::Plain);
     }
 
     #[test]
@@ -339,6 +394,59 @@ mod tests {
     #[test]
     fn plain_language_paints_plain() {
         assert!(highlight_text(Language::Plain, "fn main() {}", true).is_none());
+    }
+
+    #[test]
+    fn jsonc_highlights_comments_and_keeps_urls_as_strings() {
+        assert_eq!(language_for_path("wrangler.jsonc"), Language::Json);
+        let text = "{\n  // Comment\n  \"url\": \"https://example.test\",\n  /* Block */ \"enabled\": true,\n}\n";
+        let lines = highlight_text(language_for_path("wrangler.jsonc"), text, true)
+            .expect("JSONC highlight");
+        assert!(lines[1].iter().any(|span| span.color == [0x80, 0x80, 0x80]));
+        assert!(lines[3].iter().any(|span| span.color == [0x80, 0x80, 0x80]));
+        assert!(lines[2].iter().any(|span| span.color == [0x6A, 0x87, 0x59]));
+    }
+
+    #[test]
+    fn common_format_inventory_uses_the_bundled_grammars() {
+        for path in [
+            "index.html",
+            "style.css",
+            "style.scss",
+            "query.sql",
+            "Dockerfile",
+            "Makefile",
+            "query.graphql",
+            "main.lua",
+            "main.rb",
+            "main.php",
+            "main.swift",
+            "main.kt",
+            "main.cs",
+            "main.tf",
+            ".env",
+            "config.xml",
+            "app.vue",
+        ] {
+            let language = language_for_path(path);
+            assert_ne!(language, Language::Plain, "missing grammar: {path}");
+            assert!(
+                highlight_text(language, "value = 1", true).is_some(),
+                "missing highlight: {path}"
+            );
+        }
+        for path in [
+            "wrangler.jsonc",
+            "view.astro",
+            "view.svelte",
+            "notes.mdx",
+            "data.json5",
+            "build.zig",
+            "main.sol",
+        ] {
+            println!("FORMAT {path}: {:?}", language_for_path(path));
+        }
+        println!("BUNDLED GRAMMARS: {}", syntax_set().syntaxes().len());
     }
 
     #[test]

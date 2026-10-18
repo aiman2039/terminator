@@ -55,6 +55,10 @@ impl DiffMetrics {
     }
 }
 
+pub(super) fn diff_row_height(ui: &egui::Ui) -> f32 {
+    DiffMetrics::measure(ui, 4).row_h
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct GutterCols {
     old_right: Option<f32>,
@@ -204,7 +208,7 @@ pub(super) fn paint_diff_document(
                                     width,
                                     line,
                                     gutter: DiffGutter::Unified,
-                                    colors,
+                                    colors: row_colors(doc, index, false, colors),
                                     metrics: &metrics,
                                 },
                             );
@@ -216,7 +220,7 @@ pub(super) fn paint_diff_document(
     }
 }
 
-pub(super) const DIFF_SPLIT_GAP: f32 = 6.0;
+pub(super) const DIFF_SPLIT_GAP: f32 = 72.0;
 pub(super) const DIFF_SPLIT_MIN_PANE: f32 = 40.0;
 
 #[derive(Clone, Copy)]
@@ -298,8 +302,10 @@ pub(super) fn paint_diff_split(
         }
     };
     ui.allocate_rect(full, egui::Sense::hover());
+    let handle =
+        egui::Rect::from_center_size(gap_rect.center(), egui::vec2(6.0, gap_rect.height()));
     let response = ui.interact(
-        gap_rect,
+        handle,
         ui.id().with(("diff-split-drag", scroll_key)),
         egui::Sense::drag(),
     );
@@ -319,7 +325,7 @@ pub(super) fn paint_diff_split(
     ui.painter()
         .vline(gap_rect.center().x, full.y_range(), stroke);
     #[cfg(feature = "test-support")]
-    diagnostics::record(ui.ctx(), "diff-split-handle", gap_rect);
+    diagnostics::record(ui.ctx(), "diff-split-handle", handle);
     vec![left, right]
 }
 
@@ -353,7 +359,7 @@ pub(super) fn paint_diff_pane(
                         paint_diff_side(
                             ui,
                             DiffSidePaint {
-                                size: egui::vec2(content, metrics.row_h),
+                                size: egui::vec2(content.max(rect.width()), metrics.row_h),
                                 line: doc.split.get(index).and_then(|row| match pane {
                                     SplitPane::Left => row.left.as_ref(),
                                     SplitPane::Right => row.right.as_ref(),
@@ -362,7 +368,7 @@ pub(super) fn paint_diff_pane(
                                     SplitPane::Left => DiffGutter::Old,
                                     SplitPane::Right => DiffGutter::New,
                                 },
-                                colors,
+                                colors: row_colors(doc, index, true, colors),
                                 metrics,
                             },
                         );
@@ -496,9 +502,87 @@ pub(super) fn diff_row_style(kind: diff::LineKind, colors: DiffColors) -> (Color
     match kind {
         diff::LineKind::Insert => (tint(colors.added, 40), "+"),
         diff::LineKind::Delete => (tint(colors.deleted, 40), "-"),
-        diff::LineKind::Hunk => (tint(colors.accent, 24), " "),
+        diff::LineKind::Hunk => (Color32::TRANSPARENT, " "),
         diff::LineKind::Equal => (Color32::TRANSPARENT, " "),
     }
+}
+
+pub(super) fn row_colors(
+    doc: &diff::DiffDocument,
+    row: usize,
+    split: bool,
+    colors: DiffColors,
+) -> DiffColors {
+    if doc
+        .change_at(row, split)
+        .is_some_and(diff::review::Hunk::replacement)
+    {
+        DiffColors {
+            added: colors.accent,
+            deleted: colors.accent,
+            ..colors
+        }
+    } else {
+        colors
+    }
+}
+
+pub(super) fn comparison_headers(
+    ui: &mut egui::Ui,
+    doc: &diff::DiffDocument,
+    split: bool,
+    ratio: f32,
+    path: &std::path::Path,
+) {
+    let full = ui.available_rect_before_wrap();
+    let header =
+        egui::Rect::from_min_size(full.min, egui::vec2((full.width() - 10.0).max(1.0), 54.0));
+    let usable = (header.width() - DIFF_SPLIT_GAP).max(1.0);
+    let min = DIFF_SPLIT_MIN_PANE.min(usable / 2.0);
+    let left_width = (ratio * usable).clamp(min, usable - min);
+    let labels = if split {
+        vec![
+            (
+                egui::Rect::from_min_size(header.min, egui::vec2(left_width, header.height())),
+                doc.left_label.clone(),
+            ),
+            (
+                egui::Rect::from_min_max(
+                    egui::pos2(header.left() + left_width + DIFF_SPLIT_GAP, header.top()),
+                    header.max,
+                ),
+                doc.right_label.clone(),
+            ),
+        ]
+    } else {
+        vec![(header, format!("{} → {}", doc.left_label, doc.right_label))]
+    };
+    for (rect, label) in labels {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+            ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+            ui.horizontal(|ui| {
+                ui.strong(label);
+                ui.weak("Read-only");
+            });
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(doc.source.as_ref().map_or_else(
+                        || crate::services::compact_path(path),
+                        |source| source.path.display().to_string(),
+                    ))
+                    .weak(),
+                )
+                .truncate(),
+            )
+            .on_hover_text(path.display().to_string());
+        });
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom() - 1.0,
+            ui.visuals().widgets.noninteractive.bg_stroke,
+        );
+    }
+    ui.allocate_rect(header, egui::Sense::hover());
 }
 
 pub(super) fn diff_code_job(
@@ -523,7 +607,7 @@ pub(super) fn diff_code_job(
             egui::TextFormat {
                 font_id: font.clone(),
                 color: if line.kind == diff::LineKind::Hunk {
-                    colors.accent
+                    colors.text.gamma_multiply(0.55)
                 } else {
                     Color32::from_rgb(span.rgb[0], span.rgb[1], span.rgb[2])
                 },

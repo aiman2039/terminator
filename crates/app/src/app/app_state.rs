@@ -218,7 +218,7 @@ pub struct App {
     pub(crate) diff_split_ratio: f32,
     pub(crate) diff_split_scroll: HashMap<String, f32>,
     pub(crate) diff_preview: HashSet<String>,
-    pub(crate) diff_ignore_ws: HashSet<String>,
+    pub(crate) diff_reviews: HashMap<String, diff::review::State>,
     pub(crate) loading: HashSet<String>,
     pub(crate) git_logs: HashMap<String, git_log::CommitLog>,
     pub(crate) selected_commit: Option<String>,
@@ -402,6 +402,10 @@ pub(crate) fn service_failure_update(
     error: &async_service::Failure,
 ) -> Option<Update> {
     match context.subsystem {
+        "diff-action" => Some(Update::DiffActionFailed(
+            context.resource.clone(),
+            error.to_string(),
+        )),
         "diff" => Some(Update::Diff(
             context.resource.clone(),
             Err(error.to_string()),

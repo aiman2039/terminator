@@ -7,11 +7,14 @@ use std::{
 };
 use syntect::{
     easy::HighlightLines,
-    highlighting::{Theme, ThemeSet},
+    highlighting::Theme,
     parsing::{SyntaxReference, SyntaxSet},
     util::LinesWithEndings,
 };
 use terminator_core::CommandOptions;
+
+pub(crate) mod actions;
+pub(crate) mod review;
 
 const CONTEXT: usize = 3;
 
@@ -57,7 +60,7 @@ pub struct SplitRow {
     pub right: Option<DiffLine>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct DiffDocument {
     pub left_label: String,
     pub right_label: String,
@@ -65,6 +68,42 @@ pub struct DiffDocument {
     pub right_text: String,
     pub unified: Vec<DiffLine>,
     pub split: Vec<SplitRow>,
+    pub(crate) hunks: Vec<review::Hunk>,
+    pub(crate) gaps: Vec<review::Gap>,
+    pub(crate) revealed: Vec<std::ops::Range<usize>>,
+    pub(crate) context: usize,
+    pub(crate) source: Option<actions::Source>,
+}
+
+impl DiffDocument {
+    pub(crate) fn change_at(&self, row: usize, split: bool) -> Option<&review::Hunk> {
+        let index = self
+            .hunks
+            .partition_point(|hunk| hunk.row(split) <= row)
+            .checked_sub(1)?;
+        self.hunks
+            .get(index)
+            .filter(|hunk| hunk.rows(split).contains(&row))
+    }
+
+    pub(crate) fn expand_gap(&self, path: &Path, gap: usize, staged: bool) -> Result<Self> {
+        let gap = self
+            .gaps
+            .get(gap)
+            .context("The hidden lines changed; refresh the diff")?;
+        let mut revealed = self.revealed.clone();
+        revealed.push(gap.old.clone());
+        let mut doc = build_with_revealed(
+            path,
+            &self.left_text,
+            &self.right_text,
+            staged,
+            self.context,
+            revealed,
+        );
+        doc.source.clone_from(&self.source);
+        Ok(doc)
+    }
 }
 
 #[cfg(test)]
@@ -106,17 +145,12 @@ fn decode_side(bytes: &[u8]) -> Result<String> {
 }
 
 fn syntaxes() -> &'static SyntaxSet {
-    static SET: OnceLock<SyntaxSet> = OnceLock::new();
-    SET.get_or_init(SyntaxSet::load_defaults_newlines)
+    terminator_native_edit::highlight::syntax_set()
 }
 
 fn theme() -> &'static Theme {
-    static SET: OnceLock<ThemeSet> = OnceLock::new();
     static FALLBACK: OnceLock<Theme> = OnceLock::new();
-    let themes = SET.get_or_init(ThemeSet::load_defaults);
-    themes
-        .themes
-        .get("base16-ocean.dark")
+    terminator_native_edit::highlight::theme(true)
         .unwrap_or_else(|| FALLBACK.get_or_init(Theme::default))
 }
 
@@ -157,16 +191,8 @@ fn highlight_file(path: &Path, text: &str) -> Vec<Vec<DiffSpan>> {
     lines
 }
 
-fn syntax_for<'a>(path: &Path, set: &'a SyntaxSet) -> &'a SyntaxReference {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .and_then(|ext| set.find_syntax_by_extension(ext))
-        .or_else(|| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .and_then(|name| set.find_syntax_by_extension(name))
-        })
-        .unwrap_or_else(|| set.find_syntax_plain_text())
+fn syntax_for<'a>(path: &Path, _set: &'a SyntaxSet) -> &'a SyntaxReference {
+    terminator_native_edit::highlight::syntax_for_path(&path.to_string_lossy())
 }
 
 fn fallback_rgb() -> [u8; 3] {
@@ -225,56 +251,133 @@ fn overlay(spans: Vec<DiffSpan>, fragments: &[(bool, String)]) -> Vec<DiffSpan> 
     if out.is_empty() { spans } else { out }
 }
 
-fn hunk_line(old_start: usize, old_len: usize, new_start: usize, new_len: usize) -> DiffLine {
-    DiffLine {
-        kind: LineKind::Hunk,
-        old_no: None,
-        new_no: None,
-        spans: vec![DiffSpan {
-            text: format!(
-                "@@ -{},{} +{},{} @@",
-                old_start.saturating_add(1),
-                old_len,
-                new_start.saturating_add(1),
-                new_len
-            ),
-            rgb: fallback_rgb(),
-            intra: Intra::None,
-        }],
-    }
+#[cfg(test)]
+fn build(path: &Path, left: &str, right: &str, staged: bool) -> DiffDocument {
+    build_with_context(path, left, right, staged, CONTEXT)
 }
 
-fn build(path: &Path, left: &str, right: &str, staged: bool) -> DiffDocument {
+pub(crate) fn build_with_context(
+    path: &Path,
+    left: &str,
+    right: &str,
+    staged: bool,
+    context: usize,
+) -> DiffDocument {
+    build_with_revealed(path, left, right, staged, context, Vec::new())
+}
+
+fn build_with_revealed(
+    path: &Path,
+    left: &str,
+    right: &str,
+    staged: bool,
+    context: usize,
+    revealed: Vec<std::ops::Range<usize>>,
+) -> DiffDocument {
     let old_hl = highlight_file(path, left);
     let new_hl = highlight_file(path, right);
     let diff = TextDiff::from_lines(left, right);
-    let mut unified = Vec::new();
-    let mut split = Vec::new();
-    for group in diff.grouped_ops(CONTEXT) {
-        if let (Some(first), Some(last)) = (group.first(), group.last()) {
-            unified.push(hunk_line(
-                first.old_range().start,
-                last.old_range().end.saturating_sub(first.old_range().start),
-                first.new_range().start,
-                last.new_range().end.saturating_sub(first.new_range().start),
-            ));
-            split.push(SplitRow {
-                left: unified.last().cloned(),
-                right: None,
-            });
-        }
-        for op in &group {
-            emit_op(&diff, op, &old_hl, &new_hl, &mut unified, &mut split);
-        }
-    }
-    DiffDocument {
+    let mut doc = DiffDocument {
         left_label: if staged { "HEAD" } else { "Index" }.into(),
         right_label: if staged { "Index" } else { "Working tree" }.into(),
         left_text: left.into(),
         right_text: right.into(),
-        unified,
-        split,
+        context,
+        revealed,
+        ..Default::default()
+    };
+    let mut old_end = 0;
+    let mut new_end = 0;
+    for group in diff.grouped_ops(context) {
+        if let Some(first) = group.first() {
+            emit_gap(
+                &mut doc,
+                &diff,
+                old_end..first.old_range().start,
+                new_end..first.new_range().start,
+                &old_hl,
+                &new_hl,
+            );
+        }
+        for op in &group {
+            if op.tag() != DiffTag::Equal {
+                doc.hunks.push(review::Hunk {
+                    old: op.old_range(),
+                    new: op.new_range(),
+                    unified_row: doc.unified.len(),
+                    split_row: doc.split.len(),
+                });
+            }
+            emit_op(
+                &diff,
+                op,
+                &old_hl,
+                &new_hl,
+                &mut doc.unified,
+                &mut doc.split,
+            );
+            old_end = op.old_range().end;
+            new_end = op.new_range().end;
+        }
     }
+    if !doc.hunks.is_empty() {
+        emit_gap(
+            &mut doc,
+            &diff,
+            old_end..left.split_inclusive('\n').count(),
+            new_end..right.split_inclusive('\n').count(),
+            &old_hl,
+            &new_hl,
+        );
+    }
+    doc
+}
+
+fn emit_gap(
+    doc: &mut DiffDocument,
+    diff: &TextDiff<'_, '_, str>,
+    old: std::ops::Range<usize>,
+    new: std::ops::Range<usize>,
+    old_hl: &[Vec<DiffSpan>],
+    new_hl: &[Vec<DiffSpan>],
+) {
+    if old.is_empty() {
+        return;
+    }
+    if doc
+        .revealed
+        .iter()
+        .any(|range| range.start <= old.start && range.end >= old.end)
+    {
+        let op = similar::DiffOp::Equal {
+            old_index: old.start,
+            new_index: new.start,
+            len: old.len(),
+        };
+        emit_op(diff, &op, old_hl, new_hl, &mut doc.unified, &mut doc.split);
+        return;
+    }
+    let line = DiffLine {
+        kind: LineKind::Hunk,
+        old_no: None,
+        new_no: None,
+        spans: vec![DiffSpan {
+            text: format!("⋯ {} unchanged lines ⋯", old.len()),
+            rgb: fallback_rgb(),
+            intra: Intra::None,
+        }],
+    };
+    doc.gaps.push(review::Gap {
+        old,
+        new,
+        unified_row: doc.unified.len(),
+        split_row: doc.split.len(),
+    });
+    doc.unified.push(line.clone());
+    doc.split.push(SplitRow {
+        left: Some(line.clone()),
+        right: Some(line),
+    });
 }
 
 fn emit_op(
@@ -397,6 +500,17 @@ pub async fn document_async(
     staged: bool,
     cancel: &terminator_core::async_service::CancellationToken,
 ) -> Result<DiffDocument> {
+    document_with_context(service, cwd, path, staged, CONTEXT, cancel).await
+}
+
+pub(crate) async fn document_with_context(
+    service: &crate::gui_services::Services,
+    cwd: PathBuf,
+    path: PathBuf,
+    staged: bool,
+    context: usize,
+    cancel: &terminator_core::async_service::CancellationToken,
+) -> Result<DiffDocument> {
     let options = || CommandOptions {
         stdout_limit: 4 * 1024 * 1024,
         ..Default::default()
@@ -463,46 +577,61 @@ pub async fn document_async(
         };
         (left, right)
     } else {
-        ensure!(
-            !staged,
-            "This file has no staged changes; refresh Git status"
-        );
         let tracked = terminator_git::run(
             service.processes(),
             service.fs(),
             &root,
             vec![
                 "ls-files".into(),
+                "--stage".into(),
                 "-z".into(),
                 "--".into(),
-                relative.as_os_str().to_owned(),
+                actions::literal(&relative),
             ],
             options(),
         )
         .await?;
-        ensure!(
-            tracked.is_empty(),
-            "This file has no working-tree changes; refresh Git status"
-        );
-        let path = root.join(&relative);
-        let right = service
-            .fs()
-            .run(cancel, move || {
-                ensure!(path.exists(), "File no longer exists; refresh Git status");
-                terminator_git::worktree_file(&path)
-            })
-            .await?;
-        (Vec::new(), right)
+        let oid = tracked
+            .split(|byte| *byte == b' ')
+            .nth(1)
+            .map(std::str::from_utf8)
+            .transpose()?;
+        let left = if let Some(oid) = oid {
+            terminator_git::snapshot::blob_async(
+                service.processes(),
+                service.fs(),
+                &root,
+                oid,
+                options(),
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
+        let right = if staged {
+            left.clone()
+        } else {
+            let path = root.join(&relative);
+            service
+                .fs()
+                .run(cancel, move || terminator_git::worktree_file(&path))
+                .await?
+        };
+        (left, right)
     };
+    let source = actions::Source::capture(service, &root, &relative, cancel).await?;
     service
         .cpu()
         .run(cancel, move || {
-            Ok(build(
+            let mut doc = build_with_context(
                 &relative,
                 &decode_side(&left)?,
                 &decode_side(&right)?,
                 staged,
-            ))
+                context,
+            );
+            doc.source = Some(source);
+            Ok(doc)
         })
         .await
 }

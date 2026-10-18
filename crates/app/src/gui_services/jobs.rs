@@ -9,6 +9,12 @@ pub(super) fn editor_ids(job: &Job) -> Vec<String> {
     let mut ids = match job {
         Job::CloseEditors(_, ids, _, _) => ids.clone(),
         Job::Control(request, _) => match request.as_ref() {
+            Request::CreateReview {
+                project,
+                cwd,
+                path,
+                staged,
+            } => vec![format!("review:{project}:{cwd:?}:{path:?}:{staged}")],
             Request::EditorSave { session }
             | Request::EditorStatus { session }
             | Request::EditorCompare { session }
@@ -41,7 +47,10 @@ pub(super) fn rejection(job: &Job) -> Vec<Update> {
         Job::RepairInstallation(..) => vec![Update::InstallationRepaired(Err(busy()))],
         Job::RestartSessionService(_) => vec![Update::RestartFinished(busy())],
         Job::StartSessionService => vec![Update::ServiceStarted(Err(busy()))],
-        Job::Diff(tab) => vec![Update::Diff(tab.key(), Err(busy()))],
+        Job::Diff(tab) | Job::DiffContext(tab, _) | Job::DiffExpand(tab, ..) => {
+            vec![Update::Diff(tab.key(), Err(busy()))]
+        }
+        Job::DiffAction(tab, _) => vec![Update::DiffActionFailed(tab.key(), busy())],
         Job::ResolveTarget(key, _, _) => vec![Update::ResolvedTarget(key.clone(), None)],
         Job::ExitSave(id, _) => vec![Update::ExitSaved(*id, Err(busy()))],
         _ => Vec::new(),
@@ -81,7 +90,10 @@ pub(super) fn context(job: &Job) -> OperationContext {
             format!("editor:{}", ids.join(",")),
             Policy::OrderedMutation,
         ),
-        Job::Diff(tab) => ("diff", tab.key(), Policy::ReplaceableRead),
+        Job::Diff(tab) | Job::DiffContext(tab, _) | Job::DiffExpand(tab, ..) => {
+            ("diff", tab.key(), Policy::ReplaceableRead)
+        }
+        Job::DiffAction(tab, _) => ("diff-action", tab.key(), Policy::OrderedMutation),
         Job::ResolveTarget(key, _, _) => ("files", key.clone(), Policy::ReplaceableRead),
         Job::HookStatus => ("catalog", "hooks".into(), Policy::ReplaceableRead),
         Job::TestNtfy { .. } => ("platform", "ntfy-test".into(), Policy::ReplaceableRead),

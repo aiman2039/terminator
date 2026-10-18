@@ -249,6 +249,8 @@ Project-owned Python automation has moved to `crates/xtask`. Run commands from
 | `ui_cleanup_smoke.py` | `cargo xtask gui ui-cleanup` |
 | `external_editor_smoke.py` | `cargo xtask gui external-editor` |
 | `review_smoke.py --gui` | `cargo xtask gui reviews` |
+| Native hunk navigation, stage, discard and undo | `cargo xtask gui diff-hunks` |
+| Reopen Explorer/Git files without duplicate views | `cargo xtask gui file-reuse` |
 | `legacy_diff_smoke.py` | `cargo xtask gui legacy-diff` |
 | `ui_flat_smoke.py`, `ui_plan3_smoke.py` | `cargo xtask gui terminal-actions` and `cargo xtask gui ui-cleanup` |
 | `integration.py --load-seconds N` | `cargo xtask load --seconds N --output report.json` |

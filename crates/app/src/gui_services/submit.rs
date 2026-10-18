@@ -480,6 +480,70 @@ impl Services {
         }
         let client = self.client();
         let mut updates = Vec::new();
+        if let Job::Control(request, _) = &job
+            && let Request::CreateReview {
+                project,
+                path,
+                staged,
+                ..
+            } = request.as_ref()
+        {
+            let Response::State(state) = client.snapshot(None).await? else {
+                anyhow::bail!("Expected review session inventory");
+            };
+            let candidates: Vec<_> = state
+                .sessions
+                .iter()
+                .filter(|session| {
+                    session.project_id == *project
+                        && session.review
+                        && session.lifecycle.live()
+                        && session.file.as_ref() == Some(path)
+                        && daemon_connection::session_owner_available(&state, session)
+                })
+                .map(|session| session.id.clone())
+                .collect();
+            let paths = client.paths.clone();
+            let staged = *staged;
+            let existing = client
+                .catalog
+                .run(&cancel, move || {
+                    for session in candidates {
+                        let owner = terminator_core::generations::owner_for(
+                            &paths,
+                            &Request::EditorStatus {
+                                session: session.clone(),
+                            },
+                        )?;
+                        let config = owner.runtime.join(format!("review-{session}/config.json"));
+                        if !fs::metadata(&config).is_ok_and(|metadata| metadata.len() <= 65536) {
+                            continue;
+                        }
+                        let Ok(bytes) = fs::read(config) else {
+                            continue;
+                        };
+                        let Ok(config) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+                            continue;
+                        };
+                        if config.get("left_label").and_then(serde_json::Value::as_str)
+                            == Some(if staged { "HEAD" } else { "Index" })
+                            && config
+                                .get("right_label")
+                                .and_then(serde_json::Value::as_str)
+                                == Some(if staged { "Index" } else { "Working tree" })
+                        {
+                            return Ok(Some(session));
+                        }
+                    }
+                    Ok(None)
+                })
+                .await?;
+            if let Some(session) = existing {
+                updates.push(Update::State(state));
+                updates.push(Update::RevealFileSession(session, project.clone()));
+                return Ok(updates);
+            }
+        }
         match job {
             Job::PrepareLayouts(generation, layouts) => {
                 let layouts = self
@@ -686,6 +750,41 @@ impl Services {
                 });
                 if let Response::State(state) = client.rpc(Request::Snapshot).await? {
                     updates.push(Update::State(state));
+                }
+            }
+            Job::DiffAction(tab, request) => {
+                let undo = matches!(request.as_ref(), diff::actions::Request::Undo(_));
+                let staged = matches!(&tab, Tab::Diff { staged: true, .. });
+                let result = diff::actions::execute(self, *request, staged, &cancel)
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                updates.push(Update::DiffAction(tab, undo, result));
+            }
+            Job::DiffContext(tab, context) => {
+                if let Tab::Diff { cwd, path, staged } = &tab {
+                    let result = diff::document_with_context(
+                        self,
+                        cwd.clone(),
+                        path.clone(),
+                        *staged,
+                        context,
+                        &cancel,
+                    )
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                    updates.push(Update::Diff(tab.key(), result));
+                }
+            }
+            Job::DiffExpand(tab, doc, gap) => {
+                if let Tab::Diff { path, staged, .. } = &tab {
+                    let path = path.clone();
+                    let staged = *staged;
+                    let result = self
+                        .cpu()
+                        .run(&cancel, move || doc.expand_gap(&path, gap, staged))
+                        .await
+                        .map_err(|error| format!("{error:#}"));
+                    updates.push(Update::Diff(tab.key(), result));
                 }
             }
             Job::Diff(tab) => {

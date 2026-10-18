@@ -359,7 +359,16 @@ fn fanout_owners(paths: &Paths, request: &Request) -> Result<()> {
                 )?;
             }
         } else {
-            rpc(&owner.paths(), request.clone())?;
+            let result = rpc(&owner.paths(), request.clone());
+            // Old owners may outlive their temporary runtime files. Their
+            // health is reported by Snapshot; a best-effort focus heartbeat
+            // must still reach the active owner and other healthy owners.
+            // Explicit history mutations continue to report every failure.
+            if !matches!(request, Request::Heartbeat { .. })
+                || active.as_deref() == Some(owner.id.as_str())
+            {
+                result?;
+            }
         }
     }
     Ok(())

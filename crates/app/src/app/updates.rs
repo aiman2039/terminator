@@ -203,7 +203,27 @@ impl App {
                 }
                 Update::Resources(sample) => self.resources = Some(sample),
                 Update::OpenImage(project, path, after) => {
-                    self.place_gui_tab(project, Tab::Image { path }, after);
+                    self.open_gui_tab(project, Tab::Image { path }, after);
+                }
+                Update::FocusViewport(viewport) => {
+                    ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
+                }
+                Update::RevealFileSession(session, project) => {
+                    if self.selected.as_deref() != Some(project.as_str()) {
+                        continue;
+                    }
+                    self.go_session(&session);
+                    if let Some(viewport) = self.floating.iter().find_map(|window| {
+                        window
+                            .dock
+                            .as_ref()
+                            .filter(|dock| dock.find_tab(&Tab::Terminal(session.clone())).is_some())
+                            .map(|_| window.viewport)
+                    }) {
+                        ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Minimized(false));
+                        ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Focus);
+                    }
                 }
                 Update::OpenNativeEditor(project, path, after) => {
                     let existing = self.layouts.get(&project).and_then(|workspace| {
@@ -215,7 +235,7 @@ impl App {
                             .find(|tab| matches!(tab, Tab::NativeEditor { path: current } if *current == path))
                             .cloned()
                     });
-                    self.place_gui_tab(
+                    self.open_gui_tab(
                         project,
                         existing.unwrap_or(Tab::NativeEditor { path }),
                         after,
@@ -228,7 +248,7 @@ impl App {
                             .find(|tab| matches!(tab, Tab::Browser { target: current, .. } if *current == target))
                             .cloned()
                     });
-                    self.place_gui_tab(
+                    self.open_gui_tab(
                         project,
                         existing.unwrap_or_else(|| Tab::Browser { id: id(), target }),
                         after,
@@ -386,6 +406,9 @@ impl App {
                         {
                             self.open_native(project, path, None, None);
                         } else if let Some(project) = project {
+                            if self.reuse_file_session(&project, &path) {
+                                continue;
+                            }
                             self.hide_center_overlay();
                             let after = self.editor_target(&project, None, None);
                             let _ = self.jobs.send(Job::rpc(
@@ -539,6 +562,14 @@ impl App {
                     self.loading.remove(&key);
                     match result {
                         Ok(document) => {
+                            let review = self.diff_reviews.entry(key.clone()).or_default();
+                            review.context = document.context;
+                            review.confirm_discard = None;
+                            review.selected = document
+                                .hunks
+                                .len()
+                                .checked_sub(1)
+                                .map(|last| review.selected.unwrap_or(0).min(last));
                             self.diffs.insert(key, Ok(std::sync::Arc::new(document)));
                         }
                         Err(error) if self.diffs.get(&key).is_some_and(Result::is_ok) => {
@@ -549,6 +580,52 @@ impl App {
                         Err(error) => {
                             self.diffs.insert(key, Err(error));
                         }
+                    }
+                }
+                Update::DiffActionFailed(key, error) => {
+                    let review = self.diff_reviews.entry(key).or_default();
+                    review.busy = false;
+                    review.message = Some(error);
+                }
+                Update::DiffAction(tab, undoing, result) => {
+                    let key = tab.key();
+                    let review = self.diff_reviews.entry(key.clone()).or_default();
+                    review.busy = false;
+                    review.confirm_discard = None;
+                    match result {
+                        Ok(outcome) => {
+                            if undoing {
+                                review.undo.pop();
+                            }
+                            if let Some(undo) = outcome.undo {
+                                // Bound retained snapshots to sixteen explicit actions per tab.
+                                if review.undo.len() == 16 {
+                                    review.undo.remove(0);
+                                }
+                                review.undo.push(undo);
+                            }
+                            review.message = Some(outcome.message);
+                        }
+                        Err(error) => review.message = Some(error),
+                    }
+                    if let Tab::Diff { cwd, path, .. } = tab {
+                        for staged in [false, true] {
+                            let tab = Tab::Diff {
+                                cwd: cwd.clone(),
+                                path: path.clone(),
+                                staged,
+                            };
+                            let key = tab.key();
+                            if self.diffs.contains_key(&key) {
+                                self.loading.insert(key.clone());
+                                let context = self
+                                    .diff_reviews
+                                    .get(&key)
+                                    .map_or(3, |review| review.context.max(3));
+                                let _ = self.jobs.send(Job::DiffContext(tab, context));
+                            }
+                        }
+                        self.refresh_request = None;
                     }
                 }
                 Update::DirectoryPreview(generation, cwd, path, entries) => {

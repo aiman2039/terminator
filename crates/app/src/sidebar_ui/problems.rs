@@ -120,6 +120,20 @@ impl App {
             ui.weak("Open a file in the native editor to see its outline.");
             return;
         };
+        ui.add(
+            egui::Label::new(
+                RichText::new(path.file_name().unwrap_or_default().to_string_lossy()).strong(),
+            )
+            .truncate(),
+        )
+        .on_hover_text(path.display().to_string());
+        let language =
+            terminator_native_edit::highlight::language_for_path(&path.to_string_lossy());
+        if terminator_native_edit::lsp::server_language(language).is_none() {
+            ui.weak("No document outline for this file type.");
+            ui.weak("Structure supports Rust, Python, JavaScript and TypeScript through a language server.");
+            return;
+        }
         if restart {
             if self.lsp.tracked(&path) {
                 self.lsp.restart(&path);
@@ -128,7 +142,11 @@ impl App {
             }
         }
         if !self.lsp.tracked(&path) {
-            ui.weak("No language server tracks this file.");
+            ui.weak("Waiting for the native editor to load this file.");
+            return;
+        }
+        if let Some(note) = self.lsp.server_note(&path) {
+            ui.weak(note);
             return;
         }
         self.lsp.request_symbols(&path);
@@ -140,6 +158,7 @@ impl App {
             return;
         }
         let mut jump: Option<u32> = None;
+        ui.weak(format!("{} symbols", symbols.len()));
         appearance::sidebar_scroll("structure")
             .max_height(ui.available_height())
             .show(ui, |ui| {

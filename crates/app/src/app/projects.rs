@@ -84,7 +84,9 @@ impl App {
             .entry(project.into())
             .or_insert_with(Workspace::empty);
         dock.version = dock.version.max(tab.layout_version());
-        if let Some(path) = dock.find_tab(&tab) {
+        if !(split.is_some() && matches!(tab, Tab::NativeEditor { .. }))
+            && let Some(path) = dock.find_tab(&tab)
+        {
             let _ = dock.set_active_tab(path);
             dock.set_focused_node_and_surface(path.node_path());
             return;

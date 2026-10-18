@@ -167,6 +167,8 @@ pub fn run(case: &str, opts: Options) -> Result<()> {
             "terminal-actions",
             "hover-menu",
             "reviews",
+            "diff-hunks",
+            "file-reuse",
             "legacy-diff",
         ]
     } else {
@@ -296,6 +298,8 @@ fn run_case(case: &str, mut opts: Options) -> Result<()> {
         "browser" => browser(&opts)?,
         "terminal-actions" | "ui-flat" | "ui-plan3" => terminal_actions(&opts)?,
         "reviews" => super::reviews::run(&opts)?,
+        "diff-hunks" => super::reviews::hunks(&opts)?,
+        "file-reuse" => super::reviews::file_reuse(&opts)?,
         "legacy-diff" => super::reviews::legacy(&opts)?,
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         "window-controls" => super::windows::run(&opts)?,

@@ -18,4 +18,4 @@ pub(crate) use explorer::ExplorerReveal;
 pub(crate) use explorer_rows::explorer_query_keeps_file;
 #[cfg(test)]
 pub(crate) use git_panel::{GitPanelInput, git_click_action, git_panel};
-pub(crate) use git_panel::{GitPanelOutcome, PreparedGit, git_color};
+pub(crate) use git_panel::{GitPanelOutcome, PreparedGit};

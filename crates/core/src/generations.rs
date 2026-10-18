@@ -12,6 +12,8 @@ pub use catalog::{
 };
 pub use migration::{migrate_after_legacy_exit, migrate_idle};
 pub use ownership::{owner_for, validate_endpoint};
+#[cfg(feature = "async-client")]
+pub(crate) use recovery::unavailable_snapshot;
 pub use recovery::{
     RETIRED_RETENTION, clear_owned, historical, mergeable_presence, prune_retired, recover_exited,
     saved, snapshot,

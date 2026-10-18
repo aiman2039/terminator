@@ -29,6 +29,27 @@ pub fn saved(paths: &Paths) -> Result<State> {
     Ok(state)
 }
 
+/// A missing old store must not block unrelated owners. Preserve the owner
+/// registration and report the incomplete inventory in its health entry.
+/// Failure to load the active owner's state remains an error.
+pub(crate) fn unavailable_snapshot(
+    owner: &Generation,
+    active: &str,
+    error: String,
+) -> Result<(State, Option<String>)> {
+    match saved(&owner.paths()) {
+        Ok(state) => Ok((state, Some(error))),
+        Err(saved_error) if owner.id != active => Ok((
+            State {
+                generation: owner.id.clone(),
+                ..State::default()
+            },
+            Some(format!("{error}; saved state unavailable: {saved_error:#}")),
+        )),
+        Err(error) => Err(error),
+    }
+}
+
 /// Lock release plus an absent recorded process proves death. PID reuse is
 /// conservatively treated as unavailable rather than declaring ownership lost.
 #[must_use]
@@ -159,14 +180,18 @@ pub fn snapshot(paths: &Paths) -> Result<State> {
             continue;
         }
         let (state, error) = if historical(&owner, Some(active.as_str())) {
-            (saved(&owner.paths())?, None)
+            // Match the async client when a retired generation is pruned
+            // between reading the catalog and reading its store.
+            let Ok(state) = saved(&owner.paths()) else {
+                continue;
+            };
+            (state, None)
         } else {
             match crate::rpc(&owner.paths(), Request::Snapshot) {
                 Ok(Response::State(s)) => (*s, None),
-                result => (
-                    saved(&owner.paths())?,
-                    Some(format!("Owner unavailable: {result:?}")),
-                ),
+                result => {
+                    unavailable_snapshot(&owner, &active, format!("Owner unavailable: {result:?}"))?
+                }
             }
         };
         if owner.id == active {

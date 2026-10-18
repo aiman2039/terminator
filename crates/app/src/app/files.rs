@@ -3,7 +3,132 @@ use std::{collections::HashSet, path::PathBuf};
 use terminator_core::*;
 
 use super::super::*;
+
+fn same_file_view(left: &Tab, right: &Tab) -> bool {
+    match (left, right) {
+        (Tab::Image { path: left }, Tab::Image { path: right })
+        | (Tab::NativeEditor { path: left }, Tab::NativeEditor { path: right }) => {
+            left.components().eq(right.components())
+        }
+        (Tab::Browser { target: left, .. }, Tab::Browser { target: right, .. }) => left == right,
+        (
+            Tab::Diff {
+                cwd: left_root,
+                path: left,
+                staged: left_staged,
+            },
+            Tab::Diff {
+                cwd: right_root,
+                path: right,
+                staged: right_staged,
+            },
+        ) => {
+            let left = if left.is_absolute() {
+                left.clone()
+            } else {
+                left_root.join(left)
+            };
+            let right = if right.is_absolute() {
+                right.clone()
+            } else {
+                right_root.join(right)
+            };
+            left_staged == right_staged
+                && left_root.components().eq(right_root.components())
+                && left.components().eq(right.components())
+        }
+        _ => left == right,
+    }
+}
+
 impl App {
+    /// Select the existing pane and its owning window without moving it or
+    /// creating a second top-level tab. Explicit split requests bypass this.
+    pub(crate) fn focus_file_view(&mut self, project: &str, requested: &Tab) -> bool {
+        let docked = self.layouts.get(project).and_then(|workspace| {
+            workspace
+                .iter_all_tabs()
+                .map(|(_, tab)| tab)
+                .chain(
+                    workspace
+                        .tabs
+                        .iter()
+                        .flat_map(|group| group.layout.iter_all_tabs())
+                        .map(|(_, tab)| tab),
+                )
+                .find(|tab| same_file_view(tab, requested))
+                .cloned()
+        });
+        if let Some(tab) = docked {
+            if let Some(workspace) = self.layouts.get_mut(project) {
+                if workspace.find_tab(&tab).is_none() {
+                    workspace.activate_containing(&tab);
+                }
+                if let Some(path) = workspace.find_tab(&tab) {
+                    let _ = workspace.set_active_tab(path);
+                    workspace.set_focused_node_and_surface(path.node_path());
+                }
+            }
+            if self.selected.as_deref() == Some(project) {
+                self.hide_center_overlay();
+                self.active_session = None;
+                self.non_terminal_selected = true;
+                self.focus_tab = Some(tab);
+            }
+            return true;
+        }
+        let floated = self
+            .floating
+            .iter()
+            .filter(|window| window.home.0 == project)
+            .find_map(|window| {
+                let dock = window.dock.as_ref()?;
+                dock.iter_all_tabs()
+                    .map(|(_, tab)| tab)
+                    .find(|tab| same_file_view(tab, requested))
+                    .map(|tab| (window.viewport, tab.clone()))
+            });
+        if let Some((viewport, tab)) = floated {
+            if self.selected.as_deref() == Some(project) {
+                self.hide_center_overlay();
+                self.active_session = None;
+                self.non_terminal_selected = true;
+                self.focus_float_tab = Some((viewport, tab));
+                let _ = self.update_tx.send(Update::FocusViewport(viewport));
+            }
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn reuse_file_session(&mut self, project: &str, path: &std::path::Path) -> bool {
+        let existing = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| {
+                session.project_id == project
+                    && session.kind == SessionKind::Editor
+                    && !session.review
+                    && session.lifecycle.live()
+                    && daemon_connection::session_owner_available(&self.state, session)
+                    && session
+                        .file
+                        .as_ref()
+                        .is_some_and(|file| file.components().eq(path.components()))
+            })
+            .map(|session| session.id.clone());
+        if let Some(session) = existing {
+            // Defer until all rendering docks are checked back in.
+            self.hide_center_overlay();
+            let _ = self
+                .update_tx
+                .send(Update::RevealFileSession(session, project.into()));
+            true
+        } else {
+            false
+        }
+    }
     pub(crate) fn open_file(
         &mut self,
         path: PathBuf,
@@ -47,6 +172,12 @@ impl App {
             && let Some(project) = self.selected.clone()
         {
             self.open_native(&project, path, line, split);
+            return;
+        }
+        if split.is_none()
+            && let Some(project) = self.selected.clone()
+            && self.reuse_file_session(&project, &path)
+        {
             return;
         }
         self.hide_center_overlay();
@@ -153,6 +284,13 @@ impl App {
             .map_err(|_| anyhow::anyhow!("Browser open queue closed"))?;
         Ok(())
     }
+    pub(crate) fn open_gui_tab(&mut self, project: String, tab: Tab, after: After) {
+        if matches!(after, After::Workspace(..)) && self.focus_file_view(&project, &tab) {
+            return;
+        }
+        self.place_gui_tab(project, tab, after);
+    }
+
     pub(crate) fn place_gui_tab(&mut self, project: String, tab: Tab, after: After) {
         if let After::CreateAt(anchors, direction) = after {
             let previous = self.layouts.get(&project).map(|d| d.active.clone());

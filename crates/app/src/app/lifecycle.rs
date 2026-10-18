@@ -200,7 +200,7 @@ impl App {
             diff_split_ratio: 0.5,
             diff_split_scroll: HashMap::new(),
             diff_preview: HashSet::new(),
-            diff_ignore_ws: HashSet::new(),
+            diff_reviews: HashMap::new(),
             loading: HashSet::new(),
             git_logs: HashMap::new(),
             selected_commit: None,

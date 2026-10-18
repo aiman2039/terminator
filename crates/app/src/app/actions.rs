@@ -85,6 +85,11 @@ impl App {
                         Self::split_for(action),
                     );
                 } else {
+                    if Self::split_for(action).is_none()
+                        && self.reuse_file_session(&session.project_id, path)
+                    {
+                        return;
+                    }
                     let origin = Tab::Terminal(session.id.clone());
                     let after = self.editor_target(
                         &session.project_id,
@@ -324,10 +329,7 @@ impl App {
         };
         if native {
             let tab = Tab::Diff { cwd, path, staged };
-            if let Some(workspace) = self.layouts.get_mut(&project)
-                && workspace.activate_containing(&tab)
-            {
-                self.active_session = None;
+            if self.focus_file_view(&project, &tab) {
                 return;
             }
             self.layouts

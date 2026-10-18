@@ -1,7 +1,9 @@
 //! Workspace and terminal rendering.
+mod diff_controls;
 mod diff_paint;
 #[cfg(test)]
 mod diff_tests;
+mod diff_view;
 mod drag;
 mod header;
 mod hover;
