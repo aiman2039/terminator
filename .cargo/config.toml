@@ -1,10 +1,6 @@
 [alias]
 xtask = "run --locked --package xtask --"
 
-# Apple ld warns when __eh_frame exceeds 16MB and it cannot build a compact
-# unwind table. Skip that table. Panic unwinding still uses DWARF.
-[target.aarch64-apple-darwin]
-rustflags = ["-C", "link-arg=-Wl,-no_compact_unwind"]
-
-[target.x86_64-apple-darwin]
-rustflags = ["-C", "link-arg=-Wl,-no_compact_unwind"]
+# Do not pass -Wl,-no_compact_unwind on Apple targets.
+# macOS libunwind needs the compact unwind table. Without it, catch_unwind
+# aborts with "failed to initiate panic, error 5".
