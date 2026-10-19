@@ -1,0 +1,29 @@
+# Upstream
+
+Source: https://github.com/lampsitter/egui_commonmark
+
+Version: crates.io `egui_commonmark` 0.25.0. Retains the MIT and Apache-2.0
+license files. The backend remains the upstream registry dependency.
+
+Local change: table header and body cells use `horizontal_wrapped` instead
+of `horizontal`, so explicit text newlines advance to the next line.
+Each cell can use the viewer width so the grid's initial narrow cell width
+does not split words or formatting spans.
+The app converts HTML `br` tags to newline entities before rendering;
+these keep the Markdown table row intact during parsing.
+
+Coverage: `markdown::markdown_tests` checks rendered line positions and
+preserves table cell counts and code literals.
+
+List item content sets its first row to the body text height. The default
+interaction height in `horizontal_wrapped` otherwise moves the text baseline
+below the number. Number painting and the existing gutter remain unchanged.
+
+The internal scrollable renderer uses the same `pulldown_cmark` feature gate
+as its public entry point. Scroll-only types use qualified `egui::Id` and
+`egui::Pos2` paths so builds without that feature have no unused imports or
+dead method warning.
+
+Both render paths retain extra source blank lines between parsed blocks as
+additional hard-break events. The Markdown block tree and source offsets
+remain unchanged, including code blocks and list nesting.

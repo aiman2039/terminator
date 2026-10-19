@@ -1622,8 +1622,6 @@ dependencies = [
 [[package]]
 name = "egui_commonmark"
 version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19e757b2a0639f5f75793e6936ad4c86e8b58ee379d23578ad6924ba9f75ec38"
 dependencies = [
  "egui",
  "egui_commonmark_backend",
@@ -6735,7 +6733,7 @@ dependencies = [
 
 [[package]]
 name = "terminator"
-version = "0.127.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -6797,7 +6795,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-core"
-version = "0.127.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -6822,7 +6820,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-daemon"
-version = "0.127.0"
+version = "0.128.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -6848,7 +6846,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-git"
-version = "0.127.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "tempfile",
@@ -6857,7 +6855,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-hook"
-version = "0.127.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -6878,7 +6876,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-integrations"
-version = "0.127.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -6889,7 +6887,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-native-edit"
-version = "0.127.0"
+version = "0.128.0"
 dependencies = [
  "base64 0.23.1",
  "egui",
@@ -6913,7 +6911,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-sys"
-version = "0.127.0"
+version = "0.128.0"
 dependencies = [
  "core-foundation 0.10.1",
  "core-graphics",
@@ -6923,7 +6921,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-updater"
-version = "0.127.0"
+version = "0.128.0"
 dependencies = [
  "dispatch2",
  "eframe",
@@ -8843,7 +8841,7 @@ checksum = "32ac00cd3f8ec9c1d33fb3e7958a82df6989c42d747bd326c822b1d625283547"
 
 [[package]]
 name = "xtask"
-version = "0.127.0"
+version = "0.128.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",

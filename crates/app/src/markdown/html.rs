@@ -69,7 +69,9 @@ fn html_to_markdown(chunk: &str) -> String {
             .unwrap_or("")
             .to_ascii_lowercase();
         match name.as_str() {
-            "br" => out.push('\n'),
+            // Keep the break inside the Markdown line so table cells stay intact.
+            // The Markdown parser decodes this entity to a literal text newline.
+            "br" => out.push_str("&NewLine;"),
             "img" if !closing => {
                 let alt = html_attr(tag, "alt").unwrap_or_default();
                 if alt.is_empty() {
@@ -322,6 +324,15 @@ pub(super) fn prepare(snapshot: Snapshot) -> Document {
     let mut text = snapshot.text;
     for (range, replacement) in replacements.into_iter().rev() {
         text.replace_range(range, &replacement);
+    }
+    // Preserve source line breaks, including those in converted HTML blocks.
+    // Parser offsets keep code, list/quote prefixes and existing hard breaks intact.
+    let breaks: Vec<_> = Parser::new_ext(&text, Options::all())
+        .into_offset_iter()
+        .filter_map(|(event, range)| matches!(event, Event::SoftBreak).then_some(range))
+        .collect();
+    for range in breaks.into_iter().rev() {
+        text.replace_range(range, "  \n");
     }
     let words = text.split_whitespace().count();
     let headings = text

@@ -4837,3 +4837,68 @@ The native `file-reuse` check also passed. Capture:
 The final local workspace build passed after a header-spacing/path-label
 correction; that small correction was not recaptured. The installed app was
 not replaced.
+
+
+## 2026-10-19: Markdown line breaks
+
+The preview now preserves source newlines and HTML `br` tags. The HTML
+conversion previously emitted soft breaks, which the viewer displayed as
+spaces. Break tags now produce text newline entities so Markdown table
+rows remain intact. A local patch to egui_commonmark 0.25.0 allows table
+header and body cells to wrap explicit newlines without splitting words.
+See `vendor/egui_commonmark/UPSTREAM.md`.
+
+Validation: `cargo test -p terminator --lib markdown::markdown_tests --locked`
+passed all 14 tests. The rendering regression checks egui text row positions
+for LF/CRLF, HTML break variants, repeated breaks, HTML paragraphs, table
+headers and body cells, lists, quotes, and existing Markdown hard breaks.
+A separate check preserves inline/fenced/indented code and table cell counts.
+The table rendering check failed against the upstream cell layout and passed
+with the local patch. Formatting and diff whitespace checks passed. Compiler
+warnings remain in unrelated app code and upstream optional-feature code.
+These are local parser and headless rendering checks. The installed GUI was
+not rebuilt or tested on the desktop.
+
+
+## 2026-10-19: Ordered list number alignment
+
+Confirmed a first-line baseline mismatch: with a 32-point control height,
+`1. Alpha` placed the number baseline at 33.1875 and the text at 40 points.
+The item content inherited interaction height from `horizontal_wrapped`.
+Setting its row height to the body text height aligns it with the marker.
+The number gutter and painting remain unchanged.
+
+The new baseline regression failed with the original layout and passed with
+the fix. It checks plain, bold, inline-code, wrapped, explicit line-break,
+loose, nested, and two-digit list items over three frames. All 15 Markdown
+tests passed with temporary socket access outside the sandbox. Formatting
+and diff whitespace checks passed. The installed GUI was not rebuilt or
+checked on the desktop.
+
+## 2026-10-19: Vendored Markdown feature warnings
+
+The internal scrollable renderer now shares its public entry point's
+`pulldown_cmark` feature gate. Scroll-only types use qualified paths.
+`cargo check -p egui_commonmark --locked` and
+`cargo check -p terminator --features egui_commonmark/pulldown_cmark --locked`
+both passed without warnings. Rust formatting and diff whitespace checks
+passed. No running GUI or daemon was changed.
+
+
+## 2026-10-19: Preserve extra empty lines in Markdown previews
+
+The earlier line-break checks did not verify spacing from repeated empty
+lines. A rendering probe confirmed that two, three, and four source newlines
+between paragraphs all produced the same vertical gap. The new spacing
+regression reproduced that failure with gaps of 38 points in all three cases.
+
+The vendored renderer now adds hard-break events for extra empty source lines
+between parsed blocks, preserving source offsets and the parsed block tree.
+The regression checks increasing visible gaps for LF/CRLF paragraphs,
+headings, list items, quotes, code-block boundaries, and repeated HTML breaks.
+It fails with the previous parser stream and passes with the new stream.
+All 16 Markdown tests passed with temporary socket access outside the sandbox.
+Formatting and diff whitespace checks passed. These are headless rendering
+checks; the user's desktop example has not been reproduced directly.
+`cargo build -p terminator --bin terminator --locked` passed and refreshed
+the local development GUI binary. No running GUI or daemon was restarted.

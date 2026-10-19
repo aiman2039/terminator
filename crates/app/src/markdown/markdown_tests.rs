@@ -27,6 +27,265 @@ mod tests {
     }
 
     #[test]
+    fn preview_places_source_newlines_and_html_breaks_on_separate_rows() {
+        fn rows(shape: &egui::Shape, out: &mut Vec<(f32, String)>) {
+            match shape {
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        rows(shape, out);
+                    }
+                }
+                egui::Shape::Text(text) => {
+                    for row in &text.galley.rows {
+                        out.push((
+                            text.pos.y + row.pos.y,
+                            row.glyphs.iter().map(|glyph| glyph.chr).collect(),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for (source, separate_lines) in [
+            "Alpha\nBeta\nGamma",
+            "Alpha\r\nBeta\r\nGamma",
+            "Alpha<br>Beta<BR />Gamma",
+            "Alpha<br><br>Beta<br>Gamma",
+            "<p>Alpha<br/>Beta<br>Gamma</p>",
+            "| Header |\n| --- |\n| Alpha<br>Beta<br/>Gamma |",
+            "| Alpha<br>Beta<br>Gamma | Other |\n| --- | --- |\n| Body | Cell |",
+            "| Header | Other |\n| --- | --- |\n| Alpha<br>Beta<br>Gamma | Cell |",
+            "> Alpha\n> Beta\n> Gamma",
+            "- Alpha\n  Beta\n  Gamma",
+            "Alpha  \nBeta\\\nGamma",
+        ]
+        .into_iter()
+        .map(|source| (source, true))
+        .chain([(
+            "| Header | Other |\n| --- | --- |\n| Alpha **Beta** Gamma | Cell |",
+            false,
+        )]) {
+            let mut preview = Preview::default();
+            preview.apply(Ok(prepare(snapshot(source))));
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 700.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    preview.show(ui, "line-breaks");
+                },
+            );
+            output.textures_delta.clear();
+            let mut painted = Vec::new();
+            for clipped in &output.shapes {
+                rows(&clipped.shape, &mut painted);
+            }
+            let positions: Vec<_> = ["Alpha", "Beta", "Gamma"]
+                .iter()
+                .map(|word| {
+                    painted
+                        .iter()
+                        .find(|(_, text)| text.contains(word))
+                        .unwrap_or_else(|| panic!("Missing {word}: {source:?}: {painted:?}"))
+                        .0
+                })
+                .collect();
+            assert!(
+                positions.windows(2).all(|pair| if separate_lines {
+                    pair[0] < pair[1]
+                } else {
+                    pair[0] == pair[1]
+                }),
+                "Line breaks lost: {source:?}: {painted:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_list_numbers_align_with_the_first_text_line() {
+        fn text_rows(shape: &egui::Shape, out: &mut Vec<(f32, String)>) {
+            match shape {
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        text_rows(shape, out);
+                    }
+                }
+                egui::Shape::Text(text) => {
+                    for row in &text.galley.rows {
+                        out.push((
+                            text.pos.y
+                                + row.pos.y
+                                + row.glyphs.first().map_or(0.0, |glyph| glyph.pos.y),
+                            row.glyphs.iter().map(|glyph| glyph.chr).collect(),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for source in [
+            "1. Alpha\n2. Beta",
+            "1. **Alpha**\n2. Beta",
+            "1. `Alpha`\n2. `Beta`",
+            "1. Alpha<br>continuation\n2. Beta",
+            "1. Alpha\n   continuation\n2. Beta",
+            "1. Alpha with enough words to wrap onto several lines in a narrow preview\n2. Beta",
+            "1. Alpha\n\n2. Beta",
+            "9. Alpha\n10. Beta",
+            "1. Parent\n   1. Alpha\n   2. Beta",
+        ] {
+            let ctx = egui::Context::default();
+            crate::appearance::install(&ctx);
+            let mut preview = Preview::default();
+            preview.apply(Ok(prepare(snapshot(source))));
+            for _ in 0..3 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(340.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        // A large control height must not change the text baseline.
+                        ui.spacing_mut().interact_size.y = 32.0;
+                        preview.show(ui, "ordered-list-alignment");
+                    },
+                );
+                output.textures_delta.clear();
+                let mut painted = Vec::new();
+                for clipped in &output.shapes {
+                    text_rows(&clipped.shape, &mut painted);
+                }
+                let numbered_rows: Vec<_> = painted
+                    .iter()
+                    .filter(|(_, text)| {
+                        text.strip_suffix('.')
+                            .is_some_and(|number| number.parse::<u64>().is_ok())
+                    })
+                    .collect();
+                for word in ["Alpha", "Beta"] {
+                    let (text_y, _) = painted
+                        .iter()
+                        .find(|(_, text)| text.contains(word))
+                        .unwrap_or_else(|| panic!("Missing {word}: {source:?}: {painted:?}"));
+                    assert!(
+                        numbered_rows
+                            .iter()
+                            .any(|(number_y, _)| (text_y - number_y).abs() <= 1.0),
+                        "Number and text do not align: {source:?}: {painted:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn extra_empty_lines_add_visible_space_between_blocks() {
+        fn positions(shape: &egui::Shape, out: &mut Vec<(f32, String)>) {
+            match shape {
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        positions(shape, out);
+                    }
+                }
+                egui::Shape::Text(text) => {
+                    for row in &text.galley.rows {
+                        out.push((
+                            text.pos.y + row.pos.y,
+                            row.glyphs.iter().map(|glyph| glyph.chr).collect(),
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for (before, after, separator) in [
+            ("Alpha", "Beta", "\n"),
+            ("Alpha", "Beta", "\r\n"),
+            ("# Alpha", "Beta", "\n"),
+            ("- Alpha", "- Beta", "\n"),
+            ("> Alpha", " Beta", "\n>"),
+            ("Alpha", "Beta", "<br>"),
+            ("```text\nAlpha\n```", "Beta", "\n"),
+        ] {
+            let mut gaps = Vec::new();
+            for newlines in 2..=4 {
+                let source = format!("{before}{}{after}", separator.repeat(newlines));
+                let ctx = egui::Context::default();
+                crate::appearance::install(&ctx);
+                let mut preview = Preview::default();
+                preview.apply(Ok(prepare(snapshot(&source))));
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        preview.show(ui, "blank-line-spacing");
+                    },
+                );
+                output.textures_delta.clear();
+                let mut painted = Vec::new();
+                for clipped in &output.shapes {
+                    positions(&clipped.shape, &mut painted);
+                }
+                let y = |word: &str| {
+                    painted
+                        .iter()
+                        .find(|(_, text)| text.contains(word))
+                        .unwrap_or_else(|| panic!("Missing {word}: {source:?}: {painted:?}"))
+                        .0
+                };
+                gaps.push(y("Beta") - y("Alpha"));
+            }
+            assert!(
+                gaps.windows(2).all(|pair| pair[1] - pair[0] >= 16.0),
+                "Extra empty lines collapsed: {before:?}, {after:?}, {separator:?}: {gaps:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn line_break_conversion_preserves_code_and_table_structure() {
+        let code =
+            "`Alpha<br>Beta`\n\n```text\nAlpha\n<br>\nBeta\n```\n\n    Alpha\n    <br>\n    Beta\n";
+        assert_eq!(prepare(snapshot(code)).text, code);
+
+        let doc = prepare(snapshot(
+            "| A | B |\n| --- | --- |\n| One<br><br>Two | Three |",
+        ));
+        let events: Vec<_> = Parser::new_ext(&doc.text, pulldown_cmark::Options::all()).collect();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, Event::Start(Tag::TableCell)))
+                .count(),
+            4
+        );
+        let text: String = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Text(text) => Some(text.as_ref()),
+                _ => None,
+            })
+            .collect();
+        assert!(text.contains("One\n\nTwo"), "{text:?}");
+    }
+
+    #[test]
     fn readme_style_html_renders_as_text_not_literal_tags() {
         let doc = prepare(snapshot(
             "<p align=\"center\">\n  <img src=\"logo.png\" alt=\"Terminator app icon\" width=\"128\" height=\"128\">\n</p>\n\n<h1 align=\"center\">Terminator</h1>\n\n<p align=\"center\">Your terminals.<br>For macOS and Linux.</p>\n\n<a href=\"https://example.com/ci\"><img src=\"https://example.com/badge.svg\" alt=\"CI\"></a>",
