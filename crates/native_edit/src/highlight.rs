@@ -43,7 +43,7 @@ pub fn language_for_path(path: &str) -> Language {
         "c" | "h" => Language::C,
         "cc" | "cpp" | "cxx" | "hh" | "hpp" => Language::Cpp,
         "java" => Language::Java,
-        "sh" | "bash" | "zsh" => Language::Shell,
+        "sh" | "bash" | "zsh" | "ksh" => Language::Shell,
         "json" | "jsonc" | "jsonl" | "ndjson" => Language::Json,
         "toml" => Language::Toml,
         "yaml" | "yml" => Language::Yaml,
@@ -154,6 +154,11 @@ pub fn syntax_for_path(path: &str) -> &'static syntect::parsing::SyntaxReference
         .to_ascii_lowercase();
     named
         .and_then(|name| set.find_syntax_by_name(name))
+        .or_else(|| {
+            (ext == "ksh")
+                .then(|| set.find_syntax_by_extension("sh"))
+                .flatten()
+        })
         .or_else(|| set.find_syntax_by_extension(&ext))
         .or_else(|| {
             matches!(ext.as_str(), "jsonc" | "jsonl" | "ndjson")
@@ -216,16 +221,17 @@ pub fn highlight_text(language: Language, text: &str, dark: bool) -> Option<Vec<
     let mut highlight_state = HighlightState::new(&highlighter, ScopeStack::new());
     let mut parser = ParseState::new(syntax);
     let mut out = Vec::new();
-    // syntect lines exclude the terminator; parser state carries across
-    // lines, so multi-line strings and comments still highlight.
-    for line in text.split('\n') {
+    // These grammars require line endings to close line comments and other
+    // line-scoped contexts. Keep them for parsing, but omit LF from view spans.
+    for line in syntect::util::LinesWithEndings::from(text) {
+        let visible_chars = line.strip_suffix('\n').unwrap_or(line).chars().count();
         let ops = parser.parse_line(line, syntaxes).unwrap_or_default();
         let iter = HighlightIterator::new(&mut highlight_state, &ops, line, &highlighter);
         let mut spans = Vec::new();
         let mut col = 0usize;
         for (style, piece) in iter {
             let len = piece.chars().count();
-            let end = col.saturating_add(len);
+            let end = col.saturating_add(len).min(visible_chars);
             if end > col {
                 let foreground = style.foreground;
                 spans.push(Span {
@@ -238,6 +244,9 @@ pub fn highlight_text(language: Language, text: &str, dark: bool) -> Option<Vec<
             col = end;
         }
         out.push(spans);
+    }
+    if text.is_empty() || text.ends_with('\n') {
+        out.push(Vec::new());
     }
     Some(out)
 }
@@ -372,6 +381,86 @@ mod tests {
         };
         assert_ne!(color_at(0, 0), color_at(0, 7), "import keyword is plain");
         assert_ne!(color_at(0, 16), color_at(0, 7), "module string is plain");
+    }
+
+    #[test]
+    fn shell_shebang_and_comments_do_not_leak_into_later_lines() {
+        for path in [
+            "script.sh",
+            "script.bash",
+            "script.zsh",
+            "script.ksh",
+            ".bashrc",
+            ".zshrc",
+        ] {
+            assert_ne!(language_for_path(path), Language::Plain, "{path}");
+            assert_ne!(syntax_for_path(path).name, "Plain Text", "{path}");
+            for ending in ["\n", "\r\n"] {
+                let text = [
+                    "#!/bin/sh",
+                    "# comment",
+                    "if [ -n \"$HOME\" ]; then",
+                    "  echo \"héllo $HOME\"",
+                    "fi",
+                    "",
+                ]
+                .join(ending);
+                for dark in [true, false] {
+                    let lines = highlight_text(language_for_path(path), &text, dark)
+                        .expect("shell highlights");
+                    let comment = lines[1][0].color;
+                    assert_ne!(
+                        lines[2][0].color, comment,
+                        "comment leaked: {path}: {lines:?}"
+                    );
+                    let colors: std::collections::HashSet<_> =
+                        lines[3].iter().map(|span| span.color).collect();
+                    assert!(
+                        colors.len() > 1,
+                        "shell command has no syntax colors: {path}: {lines:?}"
+                    );
+                    for (source, spans) in text.split('\n').zip(&lines) {
+                        let mut column = 0;
+                        for span in spans {
+                            assert_eq!(span.start, column);
+                            column = span.end;
+                        }
+                        assert_eq!(column, source.chars().count(), "{path}: {source:?}");
+                    }
+                    assert_eq!(lines.len(), text.split('\n').count());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shell_heredoc_ends_before_the_next_command() {
+        let text = "#!/bin/sh\ncat <<'EOF'\nhello\nEOF\necho \"done\"";
+        let lines = highlight_text(Language::Shell, text, true).expect("shell highlights");
+        assert_eq!(lines.len(), 5);
+        let heredoc_color = lines[2][0].color;
+        assert_ne!(
+            lines[4][0].color, heredoc_color,
+            "heredoc leaked: {lines:?}"
+        );
+        assert_eq!(
+            lines[4].last().expect("last span").end,
+            "echo \"done\"".len()
+        );
+    }
+
+    #[test]
+    fn syntect_preserves_empty_and_unterminated_last_rows() {
+        for text in ["", "echo hi", "echo hi\n", "# comment\necho hi"] {
+            let lines = highlight_text(Language::Shell, text, true).expect("shell highlights");
+            assert_eq!(lines.len(), text.split('\n').count());
+            for (source, spans) in text.split('\n').zip(lines) {
+                assert_eq!(
+                    spans.last().map_or(0, |span| span.end),
+                    source.chars().count()
+                );
+            }
+        }
     }
 
     #[test]

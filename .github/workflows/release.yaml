@@ -300,10 +300,10 @@ jobs:
           sign(app)
           SIGN
           codesign --verify --deep --strict --verbose=2 "$app"
-          staple_with_retry() {
-            local target="$1" attempt status
+          stapler_with_retry() {
+            local action="$1" target="$2" attempt status
             for attempt in 1 2 3 4 5; do
-              if xcrun stapler staple "$target"; then
+              if xcrun stapler "$action" "$target"; then
                 return 0
               else
                 status=$?
@@ -312,7 +312,7 @@ jobs:
               if [[ "$status" -ne 68 || "$attempt" -eq 5 ]]; then
                 return "$status"
               fi
-              echo "::warning::Stapler ticket lookup failed (68); retry $attempt/4 in $((attempt * 15)) seconds"
+              echo "::warning::Stapler $action ticket lookup failed (68); retry $attempt/4 in $((attempt * 15)) seconds"
               sleep "$((attempt * 15))"
             done
           }
@@ -323,8 +323,8 @@ jobs:
             --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" --wait --timeout 20m --output-format json > "$result"
           python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print("Notarization:", r.get("id"), r.get("status")); sys.exit(0 if r.get("status") == "Accepted" else 1)' "$result"
-          staple_with_retry "$app"
-          xcrun stapler validate "$app"
+          stapler_with_retry staple "$app"
+          stapler_with_retry validate "$app"
           spctl --assess --type execute --verbose=2 "$app"
           mkdir -p dist
           dmg="dist/terminator-${TAG}-macos.dmg"
@@ -335,8 +335,8 @@ jobs:
             --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" --wait --timeout 20m --output-format json > "$result"
           python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print("DMG notarization:", r.get("id"), r.get("status")); sys.exit(0 if r.get("status") == "Accepted" else 1)' "$result"
-          staple_with_retry "$dmg"
-          xcrun stapler validate "$dmg"
+          stapler_with_retry staple "$dmg"
+          stapler_with_retry validate "$dmg"
       - name: Remove temporary macOS signing credentials
         if: always()
         run: |

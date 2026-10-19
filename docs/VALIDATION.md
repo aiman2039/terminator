@@ -4902,3 +4902,51 @@ Formatting and diff whitespace checks passed. These are headless rendering
 checks; the user's desktop example has not been reproduced directly.
 `cargo build -p terminator --bin terminator --locked` passed and refreshed
 the local development GUI binary. No running GUI or daemon was restarted.
+
+
+## 2026-10-19: Shell syntax highlighting
+
+The native editor already selected the bundled Bash grammar for `.sh`, but
+passed lines without their terminators to the newline-aware syntax set.
+A direct probe showed that a shell shebang caused the entire following script
+to retain comment color. Parsing now keeps line endings and clips LF from
+view spans. Empty and trailing rows retain their existing indexing.
+`.ksh` now resolves to the existing shell grammar in both the editor and Git
+diff detection. No syntax package or grammar was added.
+
+All 159 native-editor unit tests passed, including LF/CRLF shell comments,
+shebangs, heredoc termination, Unicode span bounds, both themes, and files
+without a final newline. Focused Clippy passed for all native-editor targets
+with warnings denied; formatting and diff whitespace checks passed.
+
+A current syntax inventory confirmed 220 bundled grammars. JSON5, Astro, MDX,
+and Justfile still resolve to plain text. Fish, PowerShell, Nix, Terraform,
+CSV/TSV, Git ignore/config, and EditorConfig already resolve to grammars.
+These are syntax selection and span checks; desktop rendering remains
+unverified for this change.
+The local GUI build (`cargo build -p terminator --bin terminator --locked`)
+passed. No running GUI or daemon was restarted.
+
+
+## 2026-10-19: Retry CloudKit ticket validation in macOS release assembly
+
+Release run `39275449254`, job `118141972065` (`assemble-macos`), failed at
+commit `2ca50018173d3bfe5c5526cd5c23d3eab02560ae`. Apple accepted both the app
+and DMG notarization submissions. Stapling succeeded, but the final DMG
+`xcrun stapler validate` lost its connection to Apple CloudKit and exited 68.
+The workflow already retried error 68 during stapling, but validation ran once.
+
+The shared helper now accepts `staple` or `validate`. Both operations use the
+existing five-attempt limit and 15/30/45/60-second delays for error 68 on both
+artifacts. Other errors and retry exhaustion still fail the signing step.
+All notarization, signature, Gatekeeper, and validation checks remain required.
+
+Validation: the complete signing step passed `bash -n` and ShellCheck.
+Ruby YAML parsing and `git diff --check` passed. Twenty isolated Bash fixture
+cases covered both operations and artifact paths with spaces: immediate
+success, transient recovery, five failed attempts, permanent failure, and
+transient then permanent failure. Mocked sleeps verified the existing delays;
+no Apple service or signing credential was used. All four workflow calls use
+the helper. The hosted release was not rerun or published. A failed-job rerun
+would still use the original workflow revision; this source change needs a
+new run after it is committed and pushed.
