@@ -398,3 +398,18 @@ playlist. Closing the owner's Player stops playback; closing another project's
 Player does not. Only one audio source plays at a time. Radio uses connection and
 per-read timeouts without a total stream deadline; initial output honors saved
 volume, including mute.
+
+### Native editor block selection
+
+With Vim keys enabled, press Ctrl+V in Normal mode to start block selection.
+Ctrl+Q also starts block selection when the platform reserves Ctrl+V for paste.
+Use arrow keys or `h`, `j`, `k`, `l` to select the rectangle.
+Press `d`, `x`, or Delete to delete it. Press `I` to insert before the block,
+`A` to insert after it, or `c` to replace it. Type the text, then press Escape
+to apply it to the other selected lines. Press `u` to undo the whole action.
+Command+V on macOS remains paste.
+
+In a native editor selection (including Markdown), Tab indents all selected
+lines by four spaces. Shift+Tab removes up to four leading spaces or one
+leading tab. The selection stays active. Vim Visual mode also accepts `>`
+and `<` for these actions. Each action is one undo step.

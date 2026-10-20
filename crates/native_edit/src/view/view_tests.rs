@@ -508,6 +508,75 @@ mod tests {
     }
 
     #[test]
+    fn markdown_selection_tab_indents_and_shift_tab_restores_lines() {
+        for vim in [true, false] {
+            for selection in [VKey::Char('v'), VKey::Char('V'), VKey::CtrlV] {
+                let ctx = egui::Context::default();
+                let mut doc = crate::doc::Doc::new("- one\n- two\nlast\n");
+                let mut engine = VimEngine::new();
+                engine.press_key(&mut doc, VKey::Down);
+                engine.press_key(&mut doc, selection);
+                engine.press_key(&mut doc, VKey::Up);
+                let mode = engine.mode();
+                let ends = engine.selection();
+                let options = SourceOptions {
+                    vim,
+                    soft_wrap: true,
+                    ..SourceOptions::default()
+                };
+                let mut highlight = HighlightCache::default();
+                // Establish focus before Tab, as a user click does.
+                drive_mods(
+                    &ctx,
+                    &mut doc,
+                    &mut engine,
+                    &options,
+                    Language::Markdown,
+                    &mut highlight,
+                    &[
+                        (egui::Key::F5, egui::Modifiers::NONE),
+                        (egui::Key::F5, egui::Modifiers::NONE),
+                    ],
+                );
+                for (modifiers, expected) in [
+                    (egui::Modifiers::NONE, "    - one\n    - two\nlast\n"),
+                    (egui::Modifiers::SHIFT, "- one\n- two\nlast\n"),
+                ] {
+                    drive_mods(
+                        &ctx,
+                        &mut doc,
+                        &mut engine,
+                        &options,
+                        Language::Markdown,
+                        &mut highlight,
+                        &[(egui::Key::Tab, modifiers)],
+                    );
+                    assert_eq!(doc.text(), expected);
+                    assert_eq!(engine.mode(), mode);
+                    assert!(ctx.memory(|memory| memory.has_focus(source_focus_id("headless"))));
+                }
+                assert_eq!(engine.selection(), ends);
+                engine.undo(&mut doc);
+                assert_eq!(doc.text(), "    - one\n    - two\nlast\n");
+                engine.undo(&mut doc);
+                assert_eq!(doc.text(), "- one\n- two\nlast\n");
+                engine.redo(&mut doc);
+                assert_eq!(doc.text(), "    - one\n    - two\nlast\n");
+            }
+        }
+    }
+
+    #[test]
+    fn insert_mode_tab_still_inserts_a_tab() {
+        let ctx = egui::Context::default();
+        let mut doc = crate::doc::Doc::new("text");
+        let mut engine = VimEngine::new();
+        drive_keys(&ctx, &mut doc, &mut engine, &[egui::Key::I, egui::Key::Tab]);
+        assert_eq!(doc.text(), "\ttext");
+        assert_eq!(engine.mode(), Mode::Insert);
+    }
+
+    #[test]
     fn ctrl_chords_route_by_vim_and_mode() {
         // Vim owns Ctrl-V/H in its modes; the IDE owns them elsewhere.
         assert!(ctrl_v_is_block(true, Mode::Normal));
@@ -535,9 +604,115 @@ mod tests {
             &super::SourceOptions::default(),
             super::Language::Plain,
             &mut super::HighlightCache::default(),
-            &[(egui::Key::V, egui::Modifiers::COMMAND)],
+            &[(egui::Key::V, egui::Modifiers::CTRL)],
         );
         assert_eq!(engine.mode(), Mode::VisualBlock);
+    }
+
+    #[test]
+    fn block_selection_edits_through_control_keys() {
+        for control in [
+            egui::Modifiers::CTRL,
+            egui::Modifiers {
+                ctrl: true,
+                command: true,
+                ..egui::Modifiers::NONE
+            },
+        ] {
+            for toggle in [egui::Key::V, egui::Key::Q] {
+                for (action, expected) in [
+                    (egui::Key::I, "Xabcd\nXefgh\n"),
+                    (egui::Key::A, "abXcd\nefXgh\n"),
+                    (egui::Key::C, "Xcd\nXgh\n"),
+                    (egui::Key::Delete, "cd\ngh\n"),
+                ] {
+                    let ctx = egui::Context::default();
+                    let mut doc = crate::doc::Doc::new("abcd\nefgh\n");
+                    let mut engine = VimEngine::new();
+                    let mut keys = vec![
+                        (toggle, control),
+                        (egui::Key::ArrowRight, egui::Modifiers::NONE),
+                        (egui::Key::ArrowDown, egui::Modifiers::NONE),
+                        (
+                            action,
+                            if matches!(action, egui::Key::I | egui::Key::A) {
+                                egui::Modifiers::SHIFT
+                            } else {
+                                egui::Modifiers::NONE
+                            },
+                        ),
+                    ];
+                    if action != egui::Key::Delete {
+                        keys.push((egui::Key::X, egui::Modifiers::SHIFT));
+                        keys.push((egui::Key::Escape, egui::Modifiers::NONE));
+                    }
+                    drive_mods(
+                        &ctx,
+                        &mut doc,
+                        &mut engine,
+                        &SourceOptions::default(),
+                        Language::Plain,
+                        &mut HighlightCache::default(),
+                        &keys,
+                    );
+                    assert_eq!(doc.text(), expected, "{control:?} {toggle:?} {action:?}");
+                    assert_eq!(engine.mode(), Mode::Normal);
+                    drive_keys(&ctx, &mut doc, &mut engine, &[egui::Key::U]);
+                    assert_eq!(doc.text(), "abcd\nefgh\n");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn command_v_pastes_and_control_v_ignores_clipboard_echo() {
+        for (modifiers, expected, mode) in [
+            (
+                egui::Modifiers {
+                    mac_cmd: true,
+                    command: true,
+                    ..egui::Modifiers::NONE
+                },
+                "Xab\ncd\n",
+                Mode::Normal,
+            ),
+            (egui::Modifiers::CTRL, "ab\ncd\n", Mode::VisualBlock),
+        ] {
+            let ctx = egui::Context::default();
+            let mut doc = crate::doc::Doc::new("ab\ncd\n");
+            let mut engine = VimEngine::new();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events: vec![
+                        egui::Event::Key {
+                            key: egui::Key::V,
+                            physical_key: None,
+                            pressed: true,
+                            repeat: false,
+                            modifiers,
+                        },
+                        egui::Event::Paste("X".into()),
+                    ],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        show_source(
+                            ui,
+                            &mut doc,
+                            &mut engine,
+                            &SourceOptions::default(),
+                            &mut HighlightCache::default(),
+                            Language::Plain,
+                            "headless",
+                        );
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            assert_eq!(doc.text(), expected);
+            assert_eq!(engine.mode(), mode);
+        }
     }
 
     #[test]

@@ -4950,3 +4950,62 @@ no Apple service or signing credential was used. All four workflow calls use
 the helper. The hosted release was not rerun or published. A failed-job rerun
 would still use the original workflow revision; this source change needs a
 new run after it is committed and pushed.
+
+## 2026-10-20: Native editor visual block input
+
+Control-V now reaches visual block mode on macOS, where Control and Command
+are separate modifiers. Command-V remains paste. Control-Q also selects a
+block when the platform reserves Control-V for paste. A clipboard event sent
+with a block-selection key does not insert text. Delete removes the selected
+rectangle, as do the existing `d` and `x` actions.
+
+Validation: all 161 native-editor tests passed. Headless egui input checks
+covered Control-V and Control-Q with macOS and Linux modifier forms, rectangle
+selection, `I`, `A`, `c`, Delete, and one-step undo. A separate check covered
+Command-V paste and suppression of a clipboard echo during block selection.
+Focused Clippy with warnings denied, workspace formatting, and diff whitespace
+checks passed. Desktop input and rendering were not tested. No running GUI or
+daemon was restarted.
+
+## 2026-10-20: Native editor selection indentation
+
+Tab now indents selected lines by four spaces in Visual, Visual Line, and
+Visual Block modes. Shift-Tab removes up to four leading spaces or one leading
+tab. Selection indentation also works with Vim disabled; `>` and `<` provide
+Vim Visual aliases. Selection stays active and each shift is one undo step.
+The stable source focus ID is registered as a widget each frame, with Tab,
+arrows, and Escape reserved for editor input. Insert-mode Tab still inserts
+a literal tab. Indentation does not support dot repeat.
+
+Validation: all 164 native-editor tests passed. Headless egui checks covered
+wrapped Markdown with Vim enabled and disabled, all three selection modes,
+reverse selections, Tab/Shift-Tab, focus retention, undo/redo, and Insert Tab.
+An engine check covered tabs, partial space indents, blank lines, and Unicode.
+Focused Clippy with warnings denied, workspace formatting, and diff whitespace
+checks passed. Desktop behavior remains unverified; the GUI was not rebuilt
+or restarted.
+
+## 2026-10-20: Linux release idle-close connection failure
+
+The local release log `.artifacts/releases/run-YCsAtA/linux/run.log` reports
+`failed to fill whole buffer` for Bash and Fish in `xtask idle-close`. Build,
+Clippy, and coverage tests completed before that failure. The original log
+has no request context, so the exact failing RPC cannot be established from
+that log alone. Five isolated retries passed before the production change.
+
+Source inspection found a shutdown reply race: the request handler sets the
+shutdown flag and wakes the main loop before writing its response. The main
+thread could complete cleanup and exit before that write. It now waits for
+accepted connection handlers to finish, with a three-second bound for stalled
+clients. Fixture restart and attach errors now include operation context.
+The integration suite checks 32 consecutive acknowledged daemon restarts.
+
+Validation used the cached release image on native Linux ARM64, with temporary
+fixture state. The current daemon, hook, and xtask were built from this working
+tree. `xtask integration` and `xtask idle-close` passed concurrently, matching
+the release scheduling; all Bash, Fish, zsh, sh, and prompt-framework cases
+passed. The 32 restart checks and the existing eight concurrent creation/idle
+shutdown cases passed. Linux daemon and xtask unit tests passed (53 and 68).
+Focused Clippy with warnings denied passed on Linux and macOS. Workspace
+formatting and diff whitespace checks passed. The full release, GUI fixtures,
+packaging, and publishing were not rerun. Existing user sessions were untouched.

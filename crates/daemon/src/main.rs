@@ -479,6 +479,16 @@ fn main() -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+    // Shutdown is set by a connection handler before it writes the reply.
+    // Keep the process alive until accepted requests finish, or a fast main
+    // loop can exit while the shutdown client is still reading its frame.
+    // Bound draining: a stalled client must not prevent daemon exit.
+    let drain_deadline = Instant::now()
+        .checked_add(Duration::from_secs(3))
+        .unwrap_or_else(Instant::now);
+    while active.load(Ordering::Acquire) != 0 && Instant::now() < drain_deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
     shared.persist()?;
     transport::cleanup_ipc(&shared.paths.socket());
     shared.helper.cleanup()?;

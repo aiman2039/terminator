@@ -341,7 +341,8 @@ impl Harness {
             None,
             None,
         )?;
-        let _: Value = read_frame(&mut stream)?;
+        let _: Value = read_frame(&mut stream)
+            .with_context(|| format!("Fixture Attach failed for session {}", id(session)))?;
         Ok(stream)
     }
     pub fn write(&self, stream: &mut transport::Stream, text: &str) -> Result<()> {
@@ -411,7 +412,8 @@ impl Harness {
         Ok(layout)
     }
     pub fn restart(&mut self) -> Result<()> {
-        self.rpc(json!("Shutdown"))?;
+        self.rpc(json!("Shutdown"))
+            .context("Fixture daemon shutdown before restart failed")?;
         wait_child(&mut self.daemon.as_mut().unwrap().0, Duration::from_secs(5))?;
         self.daemon.take();
         self.start()

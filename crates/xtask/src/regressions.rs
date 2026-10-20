@@ -19,6 +19,7 @@ pub fn run() -> Result<()> {
             ("clean_shutdown", scope.spawn(clean_shutdown)),
             ("relaunch_shutdown", scope.spawn(relaunch_shutdown)),
             ("idle_shutdown_race", scope.spawn(idle_shutdown_race)),
+            ("shutdown_reply", scope.spawn(shutdown_reply)),
             ("history_burst", scope.spawn(history_burst)),
             ("missing_helper_health", scope.spawn(missing_helper_health)),
             ("large_snapshots", scope.spawn(large_snapshots)),
@@ -40,6 +41,16 @@ pub fn run() -> Result<()> {
         );
         Ok(())
     })
+}
+
+fn shutdown_reply() -> Result<()> {
+    let mut h = Harness::new()?;
+    for round in 0..32 {
+        h.restart()
+            .map_err(|error| anyhow!("Shutdown reply round {round}: {error:#}"))?;
+    }
+    println!("Shutdown acknowledged before daemon exit (32 restarts)");
+    Ok(())
 }
 
 fn clean_shutdown() -> Result<()> {

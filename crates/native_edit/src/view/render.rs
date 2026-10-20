@@ -245,6 +245,9 @@ pub fn show_source<B: Buffer>(
         content_rect = response.rect;
         activated = response.clicked() || response.secondary_clicked();
         let focus_id = source_focus_id(id);
+        // Register the stable keyboard target each frame. Otherwise egui
+        // drops it as a disappeared widget after the focus request.
+        ui.interact(response.rect, focus_id, Sense::focusable_noninteractive());
         if response.clicked() || (response.secondary_clicked() && engine.selection().is_none()) {
             ui.memory_mut(|memory| memory.request_focus(focus_id));
             if let Some(pos) = response.interact_pointer_pos() {
@@ -414,6 +417,19 @@ pub fn show_source<B: Buffer>(
             ui.memory_mut(|memory| memory.request_focus(focus_id));
         }
         let focused = ui.memory(|memory| memory.has_focus(focus_id));
+        if focused {
+            ui.memory_mut(|memory| {
+                memory.set_focus_lock_filter(
+                    focus_id,
+                    egui::EventFilter {
+                        tab: true,
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        escape: true,
+                    },
+                );
+            });
+        }
         let origin = response.rect.min;
 
         // Selection in line/col space, ordered. A visual block
@@ -571,7 +587,18 @@ pub fn show_source<B: Buffer>(
                             modifiers,
                             ..
                         } => {
-                            if let Some(action) = ide_shortcut(*key, *modifiers) {
+                            // Control is independent of Command on macOS.
+                            // Ctrl-Q is Vim's block-selection alias for backends
+                            // that reserve Ctrl-V for clipboard paste.
+                            if matches!(key, egui::Key::V | egui::Key::Q)
+                                && modifiers.ctrl
+                                && !modifiers.mac_cmd
+                                && !modifiers.alt
+                                && !modifiers.shift
+                                && ctrl_v_is_block(options.vim, engine.mode())
+                            {
+                                vim_ctrls.push((*key, *modifiers, VKey::CtrlV));
+                            } else if let Some(action) = ide_shortcut(*key, *modifiers) {
                                 actions.push((*key, *modifiers, action));
                             }
                         }
@@ -585,12 +612,6 @@ pub fn show_source<B: Buffer>(
             actions.retain(|(key, modifiers, action)| {
                 let mode = engine.mode();
                 match action {
-                    IdeAction::PasteKey
-                        if *key == egui::Key::V && ctrl_v_is_block(options.vim, mode) =>
-                    {
-                        vim_ctrls.push((*key, *modifiers, VKey::CtrlV));
-                        false
-                    }
                     IdeAction::Replace
                         if *key == egui::Key::H && ctrl_h_is_motion(options.vim, mode) =>
                     {
@@ -625,12 +646,17 @@ pub fn show_source<B: Buffer>(
                 }
                 ui.input_mut(|input| input.consume_key(modifiers, key));
             }
+            // Some backends send both the key and a clipboard event.
+            // A block-selection chord must not also insert clipboard text.
+            let selecting_block = vim_ctrls.iter().any(|(_, _, key)| *key == VKey::CtrlV);
             for (key, modifiers, vkey) in vim_ctrls {
                 effects.extend(engine.press_key(doc, vkey));
                 ui.input_mut(|input| input.consume_key(modifiers, key));
             }
-            for text in pastes {
-                engine.paste_text(doc, &text);
+            if !selecting_block {
+                for text in pastes {
+                    engine.paste_text(doc, &text);
+                }
             }
             // Paste is editor-scoped while focused; nothing downstream
             // should see it a second time.
@@ -686,6 +712,13 @@ pub fn show_source<B: Buffer>(
                 }
                 if let VKey::Char(c) = vkey {
                     handled_chars.push(c);
+                }
+                // Selection indentation also applies with Vim disabled;
+                // keep the selected lines instead of opening Insert mode.
+                if engine.mode().is_visual() && matches!(vkey, VKey::Tab | VKey::BackTab) {
+                    effects.extend(engine.press_key(doc, vkey));
+                    consumed.push(key);
+                    continue;
                 }
                 // Modeless: with vim off, Normal mode never holds keys
                 // for commands. Printable keys open an insert session

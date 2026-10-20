@@ -33,6 +33,7 @@ pub enum Key {
     Delete,
     Escape,
     Tab,
+    BackTab,
     /// Visual-block toggle. The view routes Ctrl-V here in vim
     /// Normal/Visual modes (where vim owns it, IdeaVim-style) and keeps
     /// it as paste everywhere else, so modeless editing never loses paste.

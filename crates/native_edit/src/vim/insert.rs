@@ -84,7 +84,7 @@ impl VimEngine {
             }
             // Unreachable through the view (Ctrl-V pastes outside vim
             // Normal/Visual); bell rather than guess.
-            Key::CtrlV => return vec![Effect::Bell],
+            Key::CtrlV | Key::BackTab => return vec![Effect::Bell],
             Key::Char(_) => return vec![Effect::Bell],
         }
         Vec::new()
@@ -112,6 +112,8 @@ impl VimEngine {
                 self.enter_normal(doc);
                 self.rec_discard();
             }
+            Key::Tab | Key::Char('>') => self.indent_selection(doc, false),
+            Key::BackTab | Key::Char('<') => self.indent_selection(doc, true),
             // Mode switches keep the anchor: `v`/`V`/Ctrl-V reshape the
             // same selection instead of restarting it.
             Key::Char('v') => {
@@ -179,7 +181,7 @@ impl VimEngine {
                 self.rec_discard();
             }
             // Vim parity: Backspace deletes the selection like `x`.
-            Key::Char('d' | 'x') | Key::Backspace => {
+            Key::Char('d' | 'x') | Key::Backspace | Key::Delete => {
                 if blockwise {
                     // Capture the rectangle before deleting: a blockwise
                     // delete replays from dims, not from motion bits.
@@ -244,6 +246,46 @@ impl VimEngine {
             }
         }
         Vec::new()
+    }
+
+    /// Shift whole selected lines by one Markdown-compatible indent level.
+    /// Keep the selection active so repeated Tab/Shift-Tab can adjust it.
+    fn indent_selection<B: Buffer>(&mut self, doc: &mut B, remove: bool) {
+        let top = self.anchor.line.min(self.cursor.line);
+        let bottom = self.anchor.line.max(self.cursor.line);
+        doc.begin_undo_group();
+        for line in (top..=bottom).rev() {
+            let at = doc.char_at_line_col(line, 0);
+            let amount = if remove {
+                let text = doc.line_text(line);
+                let amount = if text.starts_with('\t') {
+                    1
+                } else {
+                    text.chars().take(4).take_while(|c| *c == ' ').count()
+                };
+                doc.delete(at..at.saturating_add(amount));
+                amount
+            } else {
+                doc.insert(at, "    ");
+                4
+            };
+            for end in [&mut self.anchor, &mut self.cursor] {
+                if end.line == line {
+                    end.col = if remove {
+                        end.col.saturating_sub(amount)
+                    } else {
+                        end.col.saturating_add(amount)
+                    };
+                }
+            }
+        }
+        doc.end_undo_group();
+        self.preferred_col = self.cursor.col;
+        self.clear_pending();
+        self.rec_discard();
+        // Indentation is not yet represented by the dot-repeat engine.
+        self.last_change = None;
+        self.clamp(doc);
     }
 
     pub(super) fn selection_range<B: Buffer>(&self, doc: &B, linewise: bool) -> (usize, usize) {

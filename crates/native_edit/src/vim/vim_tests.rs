@@ -20,6 +20,17 @@ mod tests {
     }
 
     #[test]
+    fn visual_outdent_handles_tabs_short_indents_and_blank_lines() {
+        let (mut eng, mut doc) = engine("\tα\n  β\n\nplain\n");
+        keys(&mut eng, &mut doc, "V3j<");
+        assert_eq!(doc.text(), "α\nβ\n\nplain\n");
+        assert_eq!(eng.mode(), Mode::VisualLine);
+        eng.press_key(&mut doc, Key::Escape);
+        keys(&mut eng, &mut doc, "u");
+        assert_eq!(doc.text(), "\tα\n  β\n\nplain\n");
+    }
+
+    #[test]
     fn hjkl_moves_with_counts_and_clamps() {
         // "ab\ncdef\n" is two vim lines; the trailing empty row is the file's
         // final newline, not an addressable line.

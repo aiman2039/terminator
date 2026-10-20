@@ -16,6 +16,7 @@ pub fn egui_key(key: egui::Key, modifiers: egui::Modifiers) -> Option<VKey> {
         egui::Key::Backspace => VKey::Backspace,
         egui::Key::Delete => VKey::Delete,
         egui::Key::Escape => VKey::Escape,
+        egui::Key::Tab if modifiers.shift => VKey::BackTab,
         egui::Key::Tab => VKey::Tab,
         // Punctuation arrives as dedicated physical keys; pass the character
         // through so current and future engine commands stay reachable.
