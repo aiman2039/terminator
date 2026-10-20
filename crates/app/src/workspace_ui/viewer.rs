@@ -273,6 +273,9 @@ impl TabViewer for Viewer<'_> {
         [false, false]
     }
     fn on_close(&mut self, tab: &mut Tab, pane: egui_dock::NodePath) -> OnCloseResponse {
+        if matches!(tab, Tab::Diff { .. }) && self.app.block_unsaved_diff(Some(&tab.key())) {
+            return OnCloseResponse::Ignore;
+        }
         if let Tab::Terminal(sid) = tab {
             if self
                 .app

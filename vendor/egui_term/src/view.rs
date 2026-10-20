@@ -578,6 +578,10 @@ fn flush_text_run(painter: &Painter, shapes: &mut Vec<Shape>, run: &mut TextRun)
 }
 
 fn focus_terminal(layout: &Response) {
+    // A keyboard target also needs a node in the accessibility tree.
+    layout.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Other, layout.enabled(), "Terminal")
+    });
     // A terminal that is the active session stays "focused" for as long as the
     // app says so, but it must not yank keyboard focus back from another widget
     // every frame. Otherwise a sidebar search field can never keep focus: the
@@ -609,6 +613,21 @@ fn focus_terminal(layout: &Response) {
 #[cfg(test)]
 mod focus_tests {
     use super::*;
+
+    #[test]
+    fn terminal_keyboard_focus_has_an_accessibility_node() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let terminal = ui.allocate_response(Vec2::splat(100.0), egui::Sense::click());
+            focus_terminal(&terminal);
+            assert!(terminal.has_focus());
+        });
+        output.textures_delta.clear();
+        let update = output.platform_output.accesskit_update.unwrap();
+        assert_ne!(update.focus, update.tree.as_ref().unwrap().root);
+        assert!(update.nodes.iter().any(|(id, _)| *id == update.focus));
+    }
 
     #[test]
     fn terminal_navigation_keys_do_not_focus_the_separator() {

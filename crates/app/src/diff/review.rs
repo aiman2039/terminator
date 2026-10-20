@@ -53,6 +53,8 @@ impl Gap {
 
 #[derive(Default)]
 pub(crate) struct State {
+    pub editor: Option<Edit>,
+    pub saving_edits: bool,
     pub selected: Option<usize>,
     pub jump: bool,
     pub confirm_discard: Option<usize>,
@@ -60,6 +62,19 @@ pub(crate) struct State {
     pub undo: Vec<super::actions::Undo>,
     pub context: usize,
     pub message: Option<String>,
+}
+
+pub(crate) struct Edit {
+    pub document: std::sync::Arc<super::DiffDocument>,
+    pub text: String,
+}
+
+impl State {
+    pub fn unsaved_edits(&self) -> bool {
+        self.editor
+            .as_ref()
+            .is_some_and(|edit| edit.text != edit.document.right_text)
+    }
 }
 
 impl State {

@@ -11,6 +11,33 @@ use egui;
 mod tests {
     use super::*;
 
+    #[test]
+    fn source_keyboard_focus_has_an_accessibility_node() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut doc = crate::doc::Doc::new("private file contents");
+        let mut engine = VimEngine::new();
+        let mut highlight = HighlightCache::default();
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                show_source(
+                    ui,
+                    &mut doc,
+                    &mut engine,
+                    &SourceOptions::default(),
+                    &mut highlight,
+                    Language::Plain,
+                    "accessibility-editor",
+                );
+            });
+            output.textures_delta.clear();
+            let update = output.platform_output.accesskit_update.unwrap();
+            assert_ne!(update.focus, update.tree.as_ref().unwrap().root);
+            assert!(update.nodes.iter().any(|(id, _)| *id == update.focus));
+            assert!(!format!("{:?}", update.nodes).contains("private file contents"));
+        }
+    }
+
     fn plain(key: egui::Key) -> Option<VKey> {
         egui_key(key, egui::Modifiers::NONE)
     }

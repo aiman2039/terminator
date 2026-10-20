@@ -1197,9 +1197,10 @@ impl State {
 
         #[cfg(feature = "accesskit")]
         if let Some(accesskit) = self.accesskit.as_mut()
-            && let Some(update) = accesskit_update
+            && let Some(mut update) = accesskit_update
         {
             profiling::scope!("accesskit");
+            repair_accesskit_focus(&mut update);
             accesskit.update_if_active(|| update);
         }
 
@@ -1294,6 +1295,65 @@ impl State {
         } else {
             window.set_cursor_visible(false);
         }
+    }
+}
+
+/// egui emits the complete accessibility tree on each pass. A focus request
+/// can outlive its widget (or arrive before the widget is drawn). AccessKit
+/// panics on an absent focus target, including on later native focus events.
+/// Fall back before handing that tree to the platform adapter. Do not rewrite
+/// incremental updates, whose focus node may be in a previous update.
+#[cfg(feature = "accesskit")]
+fn repair_accesskit_focus(update: &mut accesskit::TreeUpdate) {
+    let Some(tree) = &update.tree else {
+        return;
+    };
+    if !update.nodes.iter().any(|(id, _)| *id == update.focus)
+        && update.nodes.iter().any(|(id, _)| *id == tree.root)
+    {
+        log::warn!("Accessibility focus target is absent; using the window root");
+        update.focus = tree.root;
+    }
+}
+
+#[cfg(all(test, feature = "accesskit"))]
+mod accessibility_tests {
+    use super::*;
+
+    #[test]
+    fn absent_focus_falls_back_before_reaching_the_platform_adapter() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.label("Visible control");
+            ui.memory_mut(|memory| memory.request_focus(egui::Id::new("missing-widget")));
+        });
+        output.textures_delta.clear();
+        let mut update = output.platform_output.accesskit_update.unwrap();
+        assert!(!update.nodes.iter().any(|(id, _)| *id == update.focus));
+        repair_accesskit_focus(&mut update);
+        assert_eq!(update.focus, update.tree.as_ref().unwrap().root);
+        assert!(update.nodes.iter().any(|(id, _)| *id == update.focus));
+    }
+
+    #[test]
+    fn existing_focus_and_incremental_updates_are_preserved() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut text = String::new();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.text_edit_singleline(&mut text).request_focus();
+        });
+        output.textures_delta.clear();
+        let mut update = output.platform_output.accesskit_update.unwrap();
+        let focus = update.focus;
+        assert_ne!(focus, update.tree.as_ref().unwrap().root);
+        repair_accesskit_focus(&mut update);
+        assert_eq!(update.focus, focus);
+        update.tree = None;
+        update.nodes.clear();
+        repair_accesskit_focus(&mut update);
+        assert_eq!(update.focus, focus);
     }
 }
 

@@ -126,8 +126,14 @@ limited to sixteen actions per open diff tab and is not persisted.
 
 Previous/Next and F7/Shift+F7 select changes in split or unified mode. Change
 markers jump to the corresponding row. Context can expand in twenty-line steps
-or show the complete file, and can collapse again. F4, a hunk's Open control, or
-a double-click on a current-version line opens the text editor at that line.
+or show the complete file, and can collapse again. F4 or the Open control opens
+the text editor at the selected change. Text supports drag selection and copy;
+double-click selects a word. The Pencil control shows the complete snapshots
+with independent text selections. Only the working-tree side can be edited.
+Save uses the ordered diff mutation worker, checks the displayed snapshot
+against disk, HEAD and index, and supports Undo. Failed saves retain the draft.
+Closing a diff, its workspace tab, or the app requires saving or discarding
+unsaved diff edits first. Staged snapshots remain read-only on both sides.
 
 Terminal-editor mode passes only the absolute file operand to custom programs.
 Known Vim, vi, Nano/Pico, and Emacs launchers receive their supported position

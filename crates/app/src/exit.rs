@@ -113,6 +113,11 @@ impl Checkpoint {
 }
 impl App {
     pub(super) fn begin_exit(&mut self) {
+        if self.block_unsaved_diff(None) {
+            self.pending_app_quit = false;
+            crate::updater::cancel_termination();
+            return;
+        }
         if !self.exit.active() {
             self.player.stop();
             self.services.pause_reads(true);

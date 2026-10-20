@@ -271,7 +271,9 @@ pub fn run(o: &Options) -> Result<()> {
 /// Real-window regression for explicit native hunk mutations and navigation.
 pub fn hunks(o: &Options) -> Result<()> {
     use std::fmt::Write;
-    let h = Harness::new()?;
+    let mut h = Harness::new()?;
+    h.env
+        .insert("TERMINATOR_TEST_CAPTURE_COPY".into(), "1".into());
     h.setup()?;
     let p = h.project("diff-hunks")?;
     let root = PathBuf::from(
@@ -300,6 +302,7 @@ pub fn hunks(o: &Options) -> Result<()> {
         "first change\nextra inserted line\nanother inserted line\n",
         "line 2\n",
     );
+    let edited = "edited in the diff viewer\n";
     let source = root.join("hunks.txt");
     fs::write(&source, &original)?;
     git(&root, &["add", "hunks.txt"])?;
@@ -312,7 +315,7 @@ pub fn hunks(o: &Options) -> Result<()> {
         &json!({"version":1,"tool":"Git","visible":true,"typography_migrated":true}),
     )?;
     let before = sessions(&h.state()?).len();
-    super::capture(
+    let log = super::capture(
         &h,
         o,
         "diff-hunks",
@@ -330,9 +333,19 @@ pub fn hunks(o: &Options) -> Result<()> {
                 {"at_ms":7500,"target":"diff-gap-0"},
                 {"at_ms":8200,"target":"diff-marker-0"},
                 {"at_ms":8600,"target":"diff-menu"},
-                {"at_ms":9000,"target":"Collapse unchanged lines"}
+                {"at_ms":9000,"target":"Collapse unchanged lines"},
+                {"at_ms":9700,"target":"diff-edit"},
+                {"at_ms":10100,"target":"diff-edit-old"},
+                {"at_ms":10400,"target":"diff-edit-old","key":"A","command":true},
+                {"at_ms":10700,"target":"diff-edit-old","copy":true},
+                {"at_ms":11000,"target":"diff-edit-local"},
+                {"at_ms":11300,"target":"diff-edit-local","text":edited},
+                {"at_ms":11600,"target":"diff-edit-local","key":"A","command":true},
+                {"at_ms":11900,"target":"diff-edit-local","copy":true,"capture":true},
+                {"at_ms":12300,"target":"diff-edit-save"},
+                {"at_ms":13300,"target":"diff-undo"}
         ]),
-        9800,
+        14100,
         |_| {
             h.wait(
                 |_| {
@@ -349,9 +362,25 @@ pub fn hunks(o: &Options) -> Result<()> {
                 |_| fs::read_to_string(&source).is_ok_and(|text| text == changed),
                 5,
             )?;
+            h.wait(
+                |_| fs::read_to_string(&source).is_ok_and(|text| text == edited),
+                8,
+            )?;
+            h.wait(
+                |_| fs::read_to_string(&source).is_ok_and(|text| text == changed),
+                5,
+            )?;
             Ok(())
         },
     )?;
+    ensure!(
+        log.contains(&format!("Fixture copied text: {middle:?}")),
+        "Old-side selection did not copy the index snapshot"
+    );
+    ensure!(
+        log.contains(&format!("Fixture copied text: {edited:?}")),
+        "Local-side selection did not copy the draft"
+    );
     ensure!(
         git(&root, &["show", ":hunks.txt"])? == middle.as_bytes(),
         "Hunk stage changed the wrong lines"

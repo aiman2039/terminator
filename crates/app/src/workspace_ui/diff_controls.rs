@@ -111,25 +111,6 @@ pub(super) fn paint(
     let row_h = diff_row_height(ui);
     let count = diff_row_count(doc, split).max(1);
     let pointer = ui.ctx().input(|input| input.pointer.hover_pos());
-    let body = ui.interact(
-        last.inner_rect,
-        ui.id().with("diff-open-line"),
-        egui::Sense::click(),
-    );
-    if body.double_clicked()
-        && let Some(pos) = body.interact_pointer_pos()
-    {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let row = ((pos.y - last.inner_rect.top() + last.state.offset.y) / row_h).max(0.0) as usize;
-        result.open_line = if split {
-            doc.split
-                .get(row)
-                .and_then(|row| row.right.as_ref())
-                .and_then(|line| line.new_no)
-        } else {
-            doc.unified.get(row).and_then(|line| line.new_no)
-        };
-    }
     for (index, gap) in doc.gaps.iter().enumerate() {
         for (side, output) in scroll.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
@@ -241,30 +222,12 @@ pub(super) fn paint(
                     egui::StrokeKind::Inside,
                 );
             }
-            let response = ui.interact(
-                visible,
-                ui.id().with(("diff-hunk", index, side)),
-                egui::Sense::click(),
-            );
-            if response.clicked() {
+            // Observe clicks without covering the text's selection widget.
+            if pointer.is_some_and(|pos| visible.contains(pos))
+                && ui.input(|input| input.pointer.primary_clicked())
+            {
                 review.selected = Some(index);
                 review.confirm_discard = None;
-            }
-            if response.double_clicked()
-                && (split && side == 1 || !split)
-                && let Some(pos) = response.interact_pointer_pos()
-            {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let row = ((pos.y - output.inner_rect.top() + output.state.offset.y) / row_h)
-                    .max(0.0) as usize;
-                result.open_line = if split {
-                    doc.split
-                        .get(row)
-                        .and_then(|row| row.right.as_ref())
-                        .and_then(|line| line.new_no)
-                } else {
-                    doc.unified.get(row).and_then(|line| line.new_no)
-                };
             }
         }
         let band = left.union(right);

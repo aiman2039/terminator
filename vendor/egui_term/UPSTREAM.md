@@ -2,6 +2,13 @@ Vendored from https://github.com/kemokempo/egui_term at 31bbc7ab8503c9518fcee571
 
 Local integration changes: expose a path token lookup for the context menu; allow keyboard input to the focused terminal when the pointer is elsewhere while preserving pointer hit testing.
 
+## Accessibility focus node (2026-10-20)
+
+Register the terminal keyboard target with WidgetInfo before requesting focus.
+An egui interaction alone does not add an accessibility node. Without this
+node, AccessKit can panic when processing terminal or window focus changes.
+The node contains only the label Terminal, not terminal contents.
+
 The daemon answers terminal queries, so the widget does not send duplicate replies. Event subscription exits cleanly when its receiver is gone.
 
 ## Islands typography (2026-09-08)

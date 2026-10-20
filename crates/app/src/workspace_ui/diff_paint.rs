@@ -741,10 +741,20 @@ pub(super) fn paint_diff_line(ui: &mut egui::Ui, paint: DiffPaint<'_>) {
             metrics,
         },
     );
-    ui.painter().galley(
-        egui::pos2(rect.left() + cols.code, rect.top()).round(),
+    let pos = egui::pos2(rect.left() + cols.code, rect.top()).round();
+    let response = ui.interact(
+        egui::Rect::from_min_size(pos, code.size()),
+        ui.auto_id_with("diff-code-selection"),
+        egui::Sense::click_and_drag(),
+    );
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, code.text()));
+    egui::text_selection::LabelSelectionState::label_text_selection(
+        ui,
+        &response,
+        pos,
         code,
         colors.text,
+        egui::Stroke::NONE,
     );
 }
 

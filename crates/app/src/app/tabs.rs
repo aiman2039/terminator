@@ -73,6 +73,21 @@ impl App {
         self.close_workspace_queue.clear();
     }
     pub(crate) fn close_workspace_tab_now(&mut self, project: &str, tab_id: &str) {
+        let keys: Vec<_> = self
+            .layouts
+            .get(project)
+            .and_then(|workspace| workspace.tabs.iter().find(|tab| tab.id == tab_id))
+            .map(|tab| {
+                tab.layout
+                    .iter_all_tabs()
+                    .map(|(_, tab)| tab.key())
+                    .collect()
+            })
+            .unwrap_or_default();
+        if keys.iter().any(|key| self.block_unsaved_diff(Some(key))) {
+            self.abort_workspace_close();
+            return;
+        }
         if let Some(workspace) = self.layouts.get_mut(project) {
             let previous = workspace.active.clone();
             workspace.close(tab_id);
@@ -109,7 +124,7 @@ impl App {
         );
         self.diff_split_scroll.retain(|key, _| live.contains(key));
         self.diff_reviews
-            .retain(|key, review| live.contains(key) || review.busy);
+            .retain(|key, review| live.contains(key) || review.busy || review.unsaved_edits());
     }
     pub(crate) fn advance_workspace_close(&mut self, project: &str) {
         let existing: HashSet<String> = self

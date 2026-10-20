@@ -18,13 +18,15 @@ impl App {
             .and_then(|doc| doc.as_ref().ok())
             .map(std::sync::Arc::clone);
         let enabled = !review.busy
+            && review.editor.is_none()
             && !self.loading.contains(&key)
             && !self.diff_reviews.values().any(|state| state.busy)
             && doc.as_ref().is_some_and(|doc| doc.source.is_some());
         let count = doc.as_ref().map_or(0, |doc| doc.hunks.len());
         let split = self.diff_split.contains(&key);
-        let focus_id = ui.id().with("diff-review-focus");
-        let focused = ui.memory(|memory| memory.has_focus(focus_id)) || ui.ui_contains_pointer();
+        // Focus must belong to a real widget. A synthetic focus ID has no
+        // AccessKit node and crashes its macOS consumer when window focus changes.
+        let focused = ui.ui_contains_pointer();
         if focused && !ui.ctx().egui_wants_keyboard_input() {
             if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F7)) {
                 review.advance(true, count);
@@ -38,10 +40,60 @@ impl App {
         let mut open_line = None;
         let mut context = None;
         let mut refresh = false;
+        let mut save_edits = false;
         let is_md = crate::markdown::supported(path);
         let mut gap = None;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
+            if review.editor.is_none() {
+                let edit = ui
+                    .add_enabled_ui(enabled, |ui| {
+                        appearance::sidebar_action(
+                            ui,
+                            "Pencil",
+                            "Select full text / edit working tree",
+                        )
+                    })
+                    .inner;
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "diff-edit", edit.rect);
+                if edit.clicked()
+                    && let Some(document) = &doc
+                {
+                    review.confirm_discard = None;
+                    review.editor = Some(diff::review::Edit {
+                        document: std::sync::Arc::clone(document),
+                        text: document.right_text.clone(),
+                    });
+                }
+            } else {
+                let save = ui
+                    .add_enabled_ui(!review.busy && !*staged && review.unsaved_edits(), |ui| {
+                        appearance::sidebar_action(ui, "Save", "Save local edits")
+                    })
+                    .inner;
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "diff-edit-save", save.rect);
+                save_edits = save.clicked();
+                let cancel = ui
+                    .add_enabled_ui(!review.busy, |ui| {
+                        appearance::sidebar_action(
+                            ui,
+                            "X",
+                            if review.unsaved_edits() {
+                                "Discard edits"
+                            } else {
+                                "Back to diff"
+                            },
+                        )
+                    })
+                    .inner;
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "diff-edit-cancel", cancel.rect);
+                if cancel.clicked() {
+                    review.editor = None;
+                }
+            }
             let previous = ui
                 .add_enabled_ui(count > 0 && review.selected != Some(0), |ui| {
                     appearance::sidebar_action(ui, "ArrowUp", "Previous change (Shift+F7)")
@@ -73,7 +125,12 @@ impl App {
                     .and_then(|hunk| u32::try_from(hunk.new.start.saturating_add(1)).ok())
                     .or(Some(1));
             }
-            refresh = appearance::sidebar_action(ui, "RefreshCw", "Refresh diff").clicked();
+            refresh = ui
+                .add_enabled_ui(review.editor.is_none(), |ui| {
+                    appearance::sidebar_action(ui, "RefreshCw", "Refresh diff")
+                })
+                .inner
+                .clicked();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let menu = appearance::icon_menu_button(ui, "Settings2", |ui| {
                     if appearance::menu_item(ui, "Show more unchanged lines", "Plus", "").clicked()
@@ -184,7 +241,9 @@ impl App {
         if !self.diffs.contains_key(&key) && self.loading.insert(key.clone()) {
             let _ = self.jobs.send(Job::Diff(tab.clone()));
         }
-        if let Some(doc) = &doc {
+        if let Some(edit) = &mut review.editor {
+            super::diff_edit::show(ui, edit, *staged || review.busy, &key);
+        } else if let Some(doc) = &doc {
             let split = self.diff_split.contains(&key);
             super::diff_paint::comparison_headers(
                 ui,
@@ -262,9 +321,6 @@ impl App {
                 });
                 ui.allocate_rect(full, egui::Sense::hover());
                 self.diff_split_scroll.insert(key.clone(), sync);
-                if ui.rect_contains_pointer(full) && ui.input(|input| input.pointer.any_click()) {
-                    ui.memory_mut(|memory| memory.request_focus(focus_id));
-                }
             }
         } else if let Some(Err(error)) = self.diffs.get(&key) {
             ui.colored_label(ui.visuals().error_fg_color, error);
@@ -272,7 +328,12 @@ impl App {
             ui.spinner();
         }
 
-        let request = if let Some(index) = confirmed {
+        let request = if save_edits {
+            review.editor.as_ref().map(|edit| Request::Save {
+                document: std::sync::Arc::clone(&edit.document),
+                text: edit.text.clone(),
+            })
+        } else if let Some(index) = confirmed {
             doc.as_ref().map(|document| Request::Hunk {
                 document: std::sync::Arc::clone(document),
                 hunk: index,
@@ -295,7 +356,10 @@ impl App {
         } else {
             None
         };
-        if enabled && let Some(request) = request {
+        if (enabled || save_edits)
+            && let Some(request) = request
+        {
+            review.saving_edits = save_edits;
             review.busy = true;
             review.confirm_discard = None;
             review.message = None;

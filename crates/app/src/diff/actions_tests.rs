@@ -111,6 +111,69 @@ fn changed() -> String {
 }
 
 #[tokio::test]
+async fn saving_diff_edits_preserves_index_and_supports_undo() {
+    let fixture = Fixture::new("file.txt", Some("base\n"));
+    std::fs::write(fixture.absolute(), "local\n").unwrap();
+    let outcome = execute(
+        &fixture.service,
+        Request::Save {
+            document: fixture.doc(false).await,
+            text: "edited λ\nlast line".into(),
+        },
+        false,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fixture.absolute()).unwrap(),
+        "edited λ\nlast line"
+    );
+    assert_eq!(fixture.index(), "base\n");
+    fixture.undo(outcome.undo.unwrap()).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fixture.absolute()).unwrap(),
+        "local\n"
+    );
+}
+
+#[tokio::test]
+async fn saving_diff_edits_refuses_stale_disk_and_staged_snapshots() {
+    let fixture = Fixture::new("file.txt", Some("base\n"));
+    let document = fixture.doc(false).await;
+    std::fs::write(fixture.absolute(), "external edit\n").unwrap();
+    let error = execute(
+        &fixture.service,
+        Request::Save {
+            document,
+            text: "draft\n".into(),
+        },
+        false,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("changed"));
+    let error = execute(
+        &fixture.service,
+        Request::Save {
+            document: fixture.doc(true).await,
+            text: "draft\n".into(),
+        },
+        true,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("working tree"));
+    assert_eq!(fixture.index(), "base\n");
+    assert_eq!(
+        std::fs::read_to_string(fixture.absolute()).unwrap(),
+        "external edit\n"
+    );
+}
+
+#[tokio::test]
 async fn staging_and_unstaging_one_hunk_preserve_other_changes_and_support_undo() {
     let fixture = Fixture::new("file.txt", Some(&original()));
     std::fs::write(fixture.absolute(), changed()).unwrap();

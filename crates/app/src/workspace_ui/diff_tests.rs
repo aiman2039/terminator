@@ -78,6 +78,80 @@ pub(crate) mod tests {
         }
     }
 
+    #[test]
+    fn clicking_diff_text_keeps_accessibility_focus_on_an_existing_node() {
+        for split in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let ctx = egui::Context::default();
+            ctx.enable_accesskit();
+            let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+            let tab = Tab::Diff {
+                cwd: dir.path().into(),
+                path: dir.path().join("file.txt"),
+                staged: false,
+            };
+            let doc = diff::build_with_context(
+                std::path::Path::new("file.txt"),
+                "old text\n",
+                "new text\n",
+                false,
+                3,
+            );
+            app.diffs.insert(tab.key(), Ok(doc.into()));
+            if split {
+                app.diff_split.insert(tab.key());
+            }
+            let painted = paint_diff_view(&mut app, &ctx, &tab);
+            let pos = require_text(&painted, "new text").0 + egui::vec2(12.0, 5.0);
+            let mut nodes = std::collections::HashSet::new();
+            for frame in 0..4 {
+                let mut events = vec![egui::Event::PointerMoved(pos)];
+                if frame == 1 || frame == 2 {
+                    events.push(egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: frame == 1,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                }
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 500.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| app.diff_view(ui, &tab),
+                );
+                output.textures_delta.clear();
+                let update = output.platform_output.accesskit_update.unwrap();
+                nodes.extend(update.nodes.iter().map(|(id, _)| *id));
+                assert!(
+                    nodes.contains(&update.focus),
+                    "focused accessibility node is absent; split={split}, frame={frame}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unsaved_diff_edits_block_closing_and_quit() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        app.diff_reviews.entry("diff".into()).or_default().editor = Some(diff::review::Edit {
+            document: std::sync::Arc::new(sample_doc()),
+            text: "unsaved".into(),
+        });
+        assert!(app.block_unsaved_diff(Some("diff")));
+        app.begin_exit();
+        assert!(!app.exit.active());
+        app.diff_reviews.clear();
+        assert!(!app.block_unsaved_diff(None));
+    }
+
     fn paint_diff_view(app: &mut App, ctx: &egui::Context, tab: &Tab) -> Vec<(egui::Pos2, String)> {
         let mut painted = Vec::new();
         for _ in 0..2 {

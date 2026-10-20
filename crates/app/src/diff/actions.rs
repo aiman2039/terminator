@@ -159,6 +159,10 @@ impl Kind {
 }
 
 pub(crate) enum Request {
+    Save {
+        document: Arc<DiffDocument>,
+        text: String,
+    },
     Hunk {
         document: Arc<DiffDocument>,
         hunk: usize,
@@ -412,6 +416,48 @@ pub(crate) async fn execute(
         .lock()
         .await;
     match request {
+        Request::Save { document, text } => {
+            ensure!(!staged, "Only the working tree can be edited");
+            let source = document
+                .source
+                .as_ref()
+                .context("Refresh the diff before editing")?;
+            let fresh = super::document_async(
+                service,
+                source.root.clone(),
+                source.root.join(&source.path),
+                false,
+                cancel,
+            )
+            .await?;
+            ensure!(
+                fresh.source == document.source
+                    && fresh.left_text == document.left_text
+                    && fresh.right_text == document.right_text,
+                "The file, HEAD, or index changed; your edits were kept. Reopen the file to resolve the changes"
+            );
+            let before = Version {
+                text: document.right_text.clone(),
+                exists: source.exists,
+                mode: source.mode,
+            };
+            let change = Undo {
+                root: source.root.clone(),
+                path: source.path.clone(),
+                index: false,
+                after: Version {
+                    text,
+                    exists: true,
+                    mode: before.mode,
+                },
+                before,
+            };
+            apply(service, &change, cancel).await?;
+            Ok(Outcome {
+                undo: Some(change),
+                message: "File saved".into(),
+            })
+        }
         Request::Hunk {
             document,
             hunk,

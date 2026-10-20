@@ -1,5 +1,6 @@
 //! Workspace and terminal rendering.
 mod diff_controls;
+mod diff_edit;
 mod diff_paint;
 #[cfg(test)]
 mod diff_tests;

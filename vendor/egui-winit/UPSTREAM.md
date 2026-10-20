@@ -2,6 +2,14 @@ Vendored egui-winit 0.36.1 from https://github.com/emilk/egui at
 4c1f2fae95475a40e524884ebb298bcb1714b08e (crates/egui-winit).
 MIT and Apache-2.0 licenses retained. Cargo.toml is the published crate manifest.
 
+## Missing accessibility focus target (2026-10-20)
+
+Check egui's complete accessibility update before passing it to AccessKit.
+If the focused node is absent, use the window root and log a warning. This
+prevents a malformed focus request from causing an AccessKit panic during
+the update or a later macOS window focus event. Incremental updates are
+unchanged. This does not catch panics or resume an invalid consumer tree.
+
 ## Quiet fixture activation (2026-10-10)
 
 With `test-support`, capture fixtures marked `TERMINATOR_TEST_BACKGROUND`

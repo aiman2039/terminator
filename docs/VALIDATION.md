@@ -5009,3 +5009,57 @@ shutdown cases passed. Linux daemon and xtask unit tests passed (53 and 68).
 Focused Clippy with warnings denied passed on Linux and macOS. Workspace
 formatting and diff whitespace checks passed. The full release, GUI fixtures,
 packaging, and publishing were not rerun. Existing user sessions were untouched.
+
+
+## 2026-10-20: Native diff click crash and local editing
+
+The saved GUI crash report `terminator-1791927437.log` reports an AccessKit
+panic: the focused ID is absent from the node list. The diff body requested
+focus on a synthetic ID without a widget or accessibility node. That request
+is removed. An egui regression clicks text in both layouts and checks that
+accessibility focus names an existing node.
+
+Diff text now supports selection and copy. Double-click selects a word;
+F4 and Open still open the source editor. Pencil opens complete snapshots
+with separate text selections. Only the working-tree side accepts edits.
+Save checks disk, HEAD and index through the existing ordered mutation worker;
+Undo restores the prior working file. Failed saves keep the draft, and closing
+a pane, workspace tab or app cannot discard unsaved diff edits.
+
+Validation: 50 focused diff tests passed with test-support enabled. Workspace
+binaries built with test-support. App and xtask Clippy passed for all targets
+with warnings denied. The isolated native `xtask gui diff-hunks` fixture passed:
+copying the complete index snapshot and edited local text, saving, Undo, hunk
+staging/discard/navigation, unchanged session count, and surviving shell PID.
+The fixture captures copy commands without changing the system clipboard.
+Its screenshot and log are under `target/validation/native/diff-hunks/`.
+The screenshot was inspected. The installed GUI was not replaced or restarted;
+existing user sessions were untouched.
+
+
+## 2026-10-20: Accessibility focus audit and recovery
+
+The focus audit found two more missing accessibility nodes: the native source
+editor's stable keyboard target and the terminal widget. Both registered egui
+interactions but did not supply WidgetInfo. They now register labeled nodes
+before requesting focus. The nodes do not contain source or terminal text.
+Other app focus requests target standard text fields or the source editor;
+loading, Markdown preview, or a view change can still leave a deferred target
+absent during a frame.
+
+The vendored egui-winit adapter now checks the focus target in egui's complete
+accessibility update. If that node is absent and the root exists, it logs a
+warning and uses the root before handing the update to AccessKit. Updates
+without tree metadata remain unchanged. This prevents this specific malformed
+focus state from reaching the consumer. It does not catch arbitrary panics or
+resume a partially changed accessibility tree. Fatal main-thread panic policy
+remains unchanged.
+
+Five focused accessibility checks passed: native source, terminal, diff,
+missing-target fallback, and valid/incremental target preservation. App,
+native editor, egui-winit and egui_term Clippy passed with warnings denied.
+The rebuilt test GUI passed the isolated native `file-reuse` fixture for
+source, diff and terminal views. Formatting and diff whitespace checks passed.
+The installed GUI was not replaced or restarted. No live user sessions were
+stopped. Screen-reader interaction and deliberate native window-focus changes
+were not tested.

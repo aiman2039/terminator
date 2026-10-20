@@ -247,7 +247,10 @@ pub fn show_source<B: Buffer>(
         let focus_id = source_focus_id(id);
         // Register the stable keyboard target each frame. Otherwise egui
         // drops it as a disappeared widget after the focus request.
-        ui.interact(response.rect, focus_id, Sense::focusable_noninteractive());
+        let focus = ui.interact(response.rect, focus_id, Sense::focusable_noninteractive());
+        focus.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, ui.is_enabled(), "Source editor")
+        });
         if response.clicked() || (response.secondary_clicked() && engine.selection().is_none()) {
             ui.memory_mut(|memory| memory.request_focus(focus_id));
             if let Some(pos) = response.interact_pointer_pos() {

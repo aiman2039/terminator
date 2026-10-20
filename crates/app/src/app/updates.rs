@@ -585,6 +585,7 @@ impl App {
                 Update::DiffActionFailed(key, error) => {
                     let review = self.diff_reviews.entry(key).or_default();
                     review.busy = false;
+                    review.saving_edits = false;
                     review.message = Some(error);
                 }
                 Update::DiffAction(tab, undoing, result) => {
@@ -594,6 +595,9 @@ impl App {
                     review.confirm_discard = None;
                     match result {
                         Ok(outcome) => {
+                            if review.saving_edits {
+                                review.editor = None;
+                            }
                             if undoing {
                                 review.undo.pop();
                             }
@@ -608,6 +612,7 @@ impl App {
                         }
                         Err(error) => review.message = Some(error),
                     }
+                    review.saving_edits = false;
                     if let Tab::Diff { cwd, path, .. } = tab {
                         for staged in [false, true] {
                             let tab = Tab::Diff {
