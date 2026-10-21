@@ -14,6 +14,52 @@ use super::nav_common::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn single_native_editor_panes_have_working_dock_drag_handles() {
+        let (mut app, ctx, dir) = fixture();
+        let left = dir.path().join("left.rs");
+        let right = dir.path().join("right.rs");
+        for path in [&left, &right] {
+            std::fs::write(path, "source").unwrap();
+            app.native_docs.insert(
+                path.clone(),
+                crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
+            );
+        }
+        let from = Tab::NativeEditor { path: left };
+        let to = Tab::NativeEditor { path: right };
+        let mut workspace = Workspace::from_layout(DockState::new(vec![from.clone()]));
+        workspace.main_surface_mut().split_right(
+            egui_dock::NodeIndex::root(),
+            0.5,
+            vec![to.clone()],
+        );
+        app.layouts.insert("a".into(), workspace);
+        app.selected = Some("a".into());
+        combined_frame(&mut app, &ctx, vec![]);
+        combined_frame(&mut app, &ctx, vec![]);
+        let start = frame_center(&app, &ctx, &format!("leaf-tab:{}", from.key()));
+        let target = app.layouts["a"].find_tab(&to).unwrap().node_path();
+        let end = app.layouts["a"].leaf(target).unwrap().rect.center();
+        combined_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(start)]);
+        combined_frame(&mut app, &ctx, vec![frame_press(start, true)]);
+        frame_glide(&mut app, &ctx, start, end, 8);
+        combined_frame(&mut app, &ctx, vec![frame_press(end, false)]);
+        combined_frame(&mut app, &ctx, vec![]);
+        let dock = &app.layouts["a"];
+        assert_eq!(
+            dock.find_tab(&from).unwrap().node_path(),
+            dock.find_tab(&to).unwrap().node_path()
+        );
+        assert_eq!(dock.iter_all_tabs().count(), 2);
+        assert!(app.native_dirty(match &from {
+            Tab::NativeEditor { path } => path,
+            _ => unreachable!(),
+        }));
+    }
+
     #[test]
     fn workspace_created_inserts_at_requested_index() {
         let (mut app, ctx, _dir) = fixture();
@@ -403,6 +449,7 @@ mod tests {
             tab: Some("tab".into()),
             window: None,
             render_path: None,
+            render_tab: None,
         };
         let mut tab = Tab::NativeEditor { path: path.clone() };
         assert_eq!(
@@ -423,6 +470,7 @@ mod tests {
             tab: None,
             window: Some(viewport),
             render_path: None,
+            render_tab: None,
         };
         let mut tab = Tab::NativeEditor { path: path.clone() };
         assert_eq!(
@@ -545,6 +593,7 @@ mod tests {
                 tab: None,
                 window: Some(viewport),
                 render_path: None,
+                render_tab: None,
             };
             viewer.terminal_input_for("float-gated")
         };
@@ -556,6 +605,7 @@ mod tests {
                 tab: Some("tab".into()),
                 window: None,
                 render_path: None,
+                render_tab: None,
             };
             viewer.terminal_input_for("float-gated")
         };
@@ -1105,6 +1155,7 @@ mod tests {
             tab: Some(tab),
             window: None,
             render_path: None,
+            render_tab: None,
         };
         let mut output = ctx.run_ui(
             egui::RawInput {

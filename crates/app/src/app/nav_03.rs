@@ -263,8 +263,21 @@ mod tests {
             path.clone(),
             crate::native_editor::NativeDoc::new(path.clone(), false),
         );
-        let id = terminator_native_edit::view::source_focus_id(&path.to_string_lossy());
-        ctx.memory_mut(|memory| memory.request_focus(id));
+        let mut doc = terminator_native_edit::doc::Doc::new("source");
+        let mut engine = terminator_native_edit::vim::VimEngine::new();
+        let mut highlight = terminator_native_edit::highlight::HighlightCache::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            terminator_native_edit::view::show_source(
+                ui,
+                &mut doc,
+                &mut engine,
+                &terminator_native_edit::view::SourceOptions::default(),
+                &mut highlight,
+                terminator_native_edit::highlight::Language::Rust,
+                "file.rs#split-pane",
+            );
+        });
+        output.textures_delta.clear();
         assert!(app.text_input_focused(&ctx));
     }
 

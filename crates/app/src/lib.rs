@@ -74,7 +74,8 @@ pub(crate) use app::app_state::{
 };
 pub(crate) use app::frame::RepaintProbe;
 pub(crate) use app::types::{
-    After, FileActivation, HoverPopup, Job, PaneDropZone, RenameSurface, SpawnDiff, Tab, Update,
+    After, FileActivation, HoverPopup, Job, PaneDropZone, PaneSource, RenameSurface, SpawnDiff,
+    Tab, Update,
 };
 pub(crate) use app::window::{
     FloatingWindow, PaneIndex, TerminalFind, begin_native_window_gesture, header_drag_space,

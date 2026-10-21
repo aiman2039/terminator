@@ -142,6 +142,14 @@ embedded mode; ordinary embedded editors still load user configuration.
 
 Embedded mode starts a real Neovim process with a private RPC endpoint and the user's normal configuration. It is rendered as a native terminal surface, not a web editor. The application supplies save-all and read-only disk-comparison commands; Neovim owns buffers, plugins, language tooling, autoread, and conflict prompts. Unsaved buffers survive GUI closure while the editor process remains alive. Reboot recovery relies on editor-native recovery, not terminal scrollback.
 
+Native editor buffers are shared by path, while view actions carry the source
+project, workspace group, leaf and tab index. Dragging a native editor transfers
+the gesture to the workspace drop handler, including cross-tab and new-tab
+drops. The dock releases its drag state at that handoff. Same-file view maps
+are built from leaves, and each floating view has its own viewport identity.
+Closing one view leaves its buffer and undo history available to the others.
+These addresses are runtime state; the saved layout format is unchanged.
+
 Native mode owns its buffers and LSP processes in the GUI. Rust and Python
 servers run through the GUI service supervisor, keyed by language and project
 root; they die with the GUI. Symbol rename is preview-first: the server only

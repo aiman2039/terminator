@@ -223,7 +223,9 @@ fn agent_parent() -> (
         system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[pid]),
             true,
-            ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
+            ProcessRefreshKind::nothing()
+                .with_exe(UpdateKind::Always)
+                .with_cmd(UpdateKind::Always),
         );
         let Some(process) = system.process(pid) else {
             break;
@@ -235,11 +237,28 @@ fn agent_parent() -> (
             .unwrap_or(process.name())
             .to_string_lossy();
         if selected.is_none()
-            && !["sh", "bash", "zsh", "fish", "env", "terminator-hook"]
-                .contains(&executable.as_ref())
+            && ![
+                "sh",
+                "bash",
+                "zsh",
+                "dash",
+                "fish",
+                "env",
+                "terminator-hook",
+            ]
+            .contains(&executable.as_ref())
         {
             let executable_name = executable.as_ref();
-            let kind = agents::match_agent(executable_name, &[executable_name])
+            let command = process
+                .cmd()
+                .iter()
+                .map(|arg| arg.to_string_lossy())
+                .collect::<Vec<_>>();
+            let argv = command
+                .iter()
+                .map(std::convert::AsRef::as_ref)
+                .collect::<Vec<_>>();
+            let kind = agents::match_agent(executable_name, &argv)
                 .filter(|kind| terminator_integrations::AGENTS.contains(kind))
                 .map(std::string::ToString::to_string);
             selected = Some((pid.as_u32(), process.start_time(), kind));

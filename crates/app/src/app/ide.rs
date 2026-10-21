@@ -612,6 +612,7 @@ impl App {
                         tab: None,
                         window: None,
                         render_path: None,
+                        render_tab: None,
                     },
                 );
             self.apply_add_strip_tab(&project, &mut strip);

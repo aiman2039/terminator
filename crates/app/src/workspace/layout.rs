@@ -485,7 +485,7 @@ impl Workspace {
     }
 
     pub(crate) fn dock_back(&mut self, pane: Tab, home: &str) {
-        if self.contains(&pane) {
+        if !matches!(pane, Tab::NativeEditor { .. }) && self.contains(&pane) {
             self.activate_containing(&pane);
             return;
         }

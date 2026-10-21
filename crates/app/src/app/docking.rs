@@ -8,23 +8,33 @@ use terminator_core::*;
 
 use super::super::*;
 impl App {
+    pub(crate) fn focus_moved_view(&mut self, pane: &Tab, project: &str, dock: &Workspace) {
+        self.follow_focus_tab(Some(pane.clone()));
+        if matches!(pane, Tab::NativeEditor { .. })
+            && let Some(node) = dock.main_surface().focused_leaf()
+        {
+            let path = egui_dock::NodePath {
+                surface: egui_dock::SurfaceIndex::main(),
+                node,
+            };
+            if let Ok(leaf) = dock.leaf(path) {
+                self.native_focus_pending = Some(PaneSource {
+                    project: project.to_owned(),
+                    group: dock.active.clone(),
+                    path: (path, leaf.active).into(),
+                });
+            }
+        }
+    }
     /// Strip-dock pane lookup, rebuilt every strip render (small dock; no cache).
     pub(crate) fn refresh_strip_pane_maps(&mut self, dock: &egui_dock::DockState<Tab>) {
         self.strip_pane_by_tab = dock
             .iter_all_tabs()
             .map(|(path, tab)| (tab.key(), path.node_path()))
             .collect();
-        self.strip_pane_tabs = self
-            .strip_pane_by_tab
-            .values()
-            .map(|path| {
-                (
-                    *path,
-                    dock.leaf(*path)
-                        .map(|leaf| leaf.tabs.clone())
-                        .unwrap_or_default(),
-                )
-            })
+        self.strip_pane_tabs = dock
+            .iter_leaves()
+            .map(|(path, leaf)| (path, leaf.tabs.clone()))
             .collect();
     }
 
@@ -82,6 +92,7 @@ impl App {
     /// Clear a finished or cancelled pane drag, including its ghost snapshot.
     pub(crate) fn end_pane_drag(&mut self) {
         self.pane_drag = None;
+        self.pane_drag_source = None;
         self.pane_drag_from_strip = false;
         self.pane_drag_snapshot.clear();
         self.strip_tab_hover = false;
@@ -128,6 +139,8 @@ impl App {
         let dragging = ui.input(|i| i.pointer.any_down());
         let released = ui.input(|i| i.pointer.any_released());
         if !dragging && !released {
+            self.revert_drop_preview(dock);
+            self.end_pane_drag();
             return;
         }
         let pos = ui.input(|i| i.pointer.interact_pos());
@@ -142,7 +155,25 @@ impl App {
             .iter_leaves()
             .find(|(_, leaf)| leaf.rect.contains(pos))
             .map(|(path, leaf)| (path, leaf.rect));
-        let zone = target.map(|(_, rect)| Self::pane_drop_zone(rect, pos));
+        let tab_insert = self.pane_drag_source.as_ref().and_then(|_| {
+            self.pane_drop_tabs
+                .iter()
+                .find(|(_, rect)| rect.contains(pos))
+                .map(|(path, rect)| {
+                    egui_dock::TabIndex(
+                        path.tab
+                            .0
+                            .saturating_add(usize::from(pos.x >= rect.center().x)),
+                    )
+                })
+        });
+        let zone = target.map(|(_, rect)| {
+            if tab_insert.is_some() {
+                PaneDropZone::Center
+            } else {
+                Self::pane_drop_zone(rect, pos)
+            }
+        });
         if dragging && !released {
             self.paint_landing_preview(ui, dock, &pane, target.map(|(path, _)| path), zone);
             // Hovering a strip tab interior previews the move-into outcome
@@ -182,7 +213,23 @@ impl App {
             if let Some((path, _)) = target {
                 let group = dock.active.clone();
                 let from_strip = self.pane_drag_from_strip;
-                let moved = if from_strip {
+                let moved = if let Some(source) = self.pane_drag_source.clone() {
+                    self.selected.as_ref() == Some(&source.project)
+                        && dock.move_view_to_leaf(
+                            &source,
+                            &pane,
+                            &group,
+                            path,
+                            tab_insert
+                                .map(egui_dock::TabInsert::Insert)
+                                .unwrap_or_else(|| {
+                                    zone.and_then(PaneDropZone::split).map_or(
+                                        egui_dock::TabInsert::Append,
+                                        egui_dock::TabInsert::Split,
+                                    )
+                                }),
+                        )
+                } else if from_strip {
                     match &pane {
                         Tab::Terminal(sid) => self.land_strip_shell_on_leaf(
                             dock,
@@ -214,6 +261,12 @@ impl App {
                     }
                 };
                 if moved {
+                    if self.pane_drag_source.is_some() {
+                        if let Some(project) = self.selected.clone() {
+                            self.focus_moved_view(&pane, &project, dock);
+                        }
+                        self.pending_layout_save = true;
+                    }
                     if let Tab::Terminal(sid) = &pane {
                         self.active_session = Some(sid.clone());
                         self.focus_tab = Some(pane.clone());
@@ -462,10 +515,19 @@ impl App {
         let Some(pane) = self.detach_pane.take() else {
             return;
         };
-        if dock
-            .move_pane_to_new_group_at(&pane, dock.tabs.len())
-            .is_some()
-        {
+        let moved = if let Some(source) = self.pane_action_source.take() {
+            self.selected.as_ref() == Some(&source.project)
+                && dock
+                    .move_view_to_new_group(&source, &pane, dock.tabs.len())
+                    .is_some()
+        } else {
+            dock.move_pane_to_new_group_at(&pane, dock.tabs.len())
+                .is_some()
+        };
+        if moved {
+            if let Some(project) = self.selected.clone() {
+                self.focus_moved_view(&pane, &project, dock);
+            }
             if let Tab::Terminal(sid) = &pane {
                 self.active_session = Some(sid.clone());
                 self.focus_tab = Some(pane);
@@ -492,10 +554,17 @@ impl App {
         if !Self::floatable(&pane) {
             return;
         }
-        let Some(home) = dock.take_pane(&pane) else {
+        let home = if let Some(source) = self.pane_action_source.take() {
+            (source.project == project)
+                .then(|| dock.take_view(&source, &pane))
+                .flatten()
+        } else {
+            dock.take_pane(&pane)
+        };
+        let Some(home) = home else {
             return;
         };
-        let viewport = egui::ViewportId::from_hash_of(format!("floating:{}", pane.key()));
+        let viewport = egui::ViewportId::from_hash_of(terminator_core::id());
         self.floating.push(FloatingWindow {
             viewport,
             dock: Some(egui_dock::DockState::new(vec![pane])),
@@ -699,7 +768,16 @@ impl App {
         let Some((pane, dest)) = self.dock_back_pane.take() else {
             return;
         };
-        if dock.move_pane_to_group(&pane, &dest) {
+        let moved = if let Some(source) = self.pane_action_source.take() {
+            self.selected.as_ref() == Some(&source.project)
+                && dock.move_view_to_group(&source, &pane, &dest)
+        } else {
+            dock.move_pane_to_group(&pane, &dest)
+        };
+        if moved {
+            if let Some(project) = self.selected.clone() {
+                self.focus_moved_view(&pane, &project, dock);
+            }
             if let Tab::Terminal(sid) = &pane {
                 self.active_session = Some(sid.clone());
                 self.focus_tab = Some(pane);

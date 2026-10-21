@@ -75,7 +75,16 @@ pub fn take_image_paste(
 fn copy_key(event: &eframe::egui::Event) -> bool {
     use eframe::egui::{Event, Key};
     matches!(event, Event::Key { key: Key::C, modifiers, .. }
-        if !modifiers.alt && (modifiers.ctrl || modifiers.command || modifiers.mac_cmd))
+        if copy_modifiers(*modifiers))
+}
+
+fn copy_modifiers(modifiers: eframe::egui::Modifiers) -> bool {
+    !modifiers.alt
+        && if cfg!(target_os = "macos") {
+            modifiers.mac_cmd
+        } else {
+            modifiers.ctrl && modifiers.shift
+        }
 }
 
 pub fn terminal_copy_requested(
@@ -84,14 +93,13 @@ pub fn terminal_copy_requested(
 ) -> bool {
     use eframe::egui::Event;
     events.iter().any(|event| {
-        matches!(event, Event::Copy)
+        matches!(event, Event::Copy if !modifiers.ctrl || copy_modifiers(modifiers))
             || matches!(event, Event::Key { pressed: true, .. } if copy_key(event))
-            || matches!(event, Event::Text(text) if text == "\u{3}" && !modifiers.alt)
     })
 }
 
 /// Consume every representation of a copy chord only when text is available.
-/// In particular, Ctrl+C must not also deliver ETX to the shell.
+/// Plain Ctrl+C remains an interrupt, including with selected text or a hovered path.
 pub fn take_terminal_copy(
     events: &mut Vec<eframe::egui::Event>,
     modifiers: eframe::egui::Modifiers,
@@ -131,13 +139,11 @@ mod tests {
     }
 
     #[test]
-    fn selected_terminal_path_copies_with_control_command_or_native_copy() {
+    fn selected_terminal_path_copies_with_platform_copy_or_native_copy() {
         let path = "src/a folder/日本.rs:17";
         for (mut events, modifiers) in [
-            (vec![key_c(Modifiers::CTRL, true)], Modifiers::CTRL),
-            (vec![key_c(Modifiers::MAC_CMD, true)], Modifiers::MAC_CMD),
+            (vec![key_c(copy_chord(), true)], copy_chord()),
             (vec![Event::Copy], Modifiers::NONE),
-            (vec![Event::Text("\u{3}".into())], Modifiers::NONE),
         ] {
             assert_eq!(
                 take_terminal_copy(&mut events, modifiers, path).as_deref(),
@@ -147,25 +153,47 @@ mod tests {
         }
     }
 
+    fn copy_chord() -> Modifiers {
+        if cfg!(target_os = "macos") {
+            Modifiers::MAC_CMD
+        } else {
+            Modifiers::CTRL | Modifiers::SHIFT
+        }
+    }
+
     #[test]
-    fn copying_a_selection_consumes_duplicate_control_text_without_interrupting() {
+    fn copying_a_selection_consumes_the_copy_chord_once() {
         let paste = Event::Paste("other".into());
-        let mut events = vec![
-            key_c(Modifiers::CTRL, true),
-            Event::Text("\u{3}".into()),
-            Event::Text("c".into()),
-            Event::Copy,
-            paste.clone(),
-        ];
+        let mut events = vec![key_c(copy_chord(), true), Event::Copy, paste.clone()];
         assert_eq!(
-            take_terminal_copy(&mut events, Modifiers::CTRL, "path"),
+            take_terminal_copy(&mut events, copy_chord(), "path"),
             Some("path".into())
         );
         assert_eq!(events, [paste]);
-        assert_eq!(
-            take_terminal_copy(&mut events, Modifiers::CTRL, "path"),
-            None
-        );
+        assert_eq!(take_terminal_copy(&mut events, copy_chord(), "path"), None);
+    }
+
+    #[test]
+    fn selected_text_or_a_hovered_path_never_consumes_plain_control_c() {
+        for selection in ["selected text", "src/hovered.rs"] {
+            for original in [
+                vec![key_c(Modifiers::CTRL, true)],
+                vec![Event::Text("\u{3}".into())],
+                vec![Event::Copy],
+                vec![
+                    key_c(Modifiers::CTRL, true),
+                    Event::Copy,
+                    Event::Text("\u{3}".into()),
+                ],
+            ] {
+                let mut events = original.clone();
+                assert_eq!(
+                    take_terminal_copy(&mut events, Modifiers::CTRL, selection),
+                    None
+                );
+                assert_eq!(events, original);
+            }
+        }
     }
 
     #[test]

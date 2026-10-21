@@ -31,6 +31,7 @@ mod tests {
                     tab: None,
                     window: None,
                     render_path: None,
+                    render_tab: None,
                 }
                 .terminal_view(ui, session);
             },

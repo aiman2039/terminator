@@ -245,6 +245,9 @@ pub fn show_source<B: Buffer>(
         content_rect = response.rect;
         activated = response.clicked() || response.secondary_clicked();
         let focus_id = source_focus_id(id);
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(focus_id.with("native-source"), true);
+        });
         // Register the stable keyboard target each frame. Otherwise egui
         // drops it as a disappeared widget after the focus request.
         let focus = ui.interact(response.rect, focus_id, Sense::focusable_noninteractive());
@@ -419,7 +422,8 @@ pub fn show_source<B: Buffer>(
         if options.autofocus && ui.memory(|memory| memory.focused().is_none()) {
             ui.memory_mut(|memory| memory.request_focus(focus_id));
         }
-        let focused = ui.memory(|memory| memory.has_focus(focus_id));
+        let focused = ui.memory(|memory| memory.has_focus(focus_id))
+            && !ui.input(|input| input.pointer.any_pressed() && !response.contains_pointer());
         if focused {
             ui.memory_mut(|memory| {
                 memory.set_focus_lock_filter(

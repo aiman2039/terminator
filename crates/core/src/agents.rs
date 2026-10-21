@@ -184,7 +184,8 @@ pub const CATALOG: &[AgentInfo] = &[
         kind: "cursor",
         name: "Cursor",
         icon: "AgentCursor",
-        // `cursor-agent` only. The `agent` symlink is also Grok's shim.
+        // Bare `agent` is also Grok's shim. The Node launcher is matched by
+        // its namespaced installation path below.
         exes: &["cursor-agent"],
         entrypoints: &[],
     },
@@ -205,6 +206,25 @@ const SHELL_LAUNCHERS: &[&str] = &["sh", "bash", "zsh", "dash", "fish"];
 #[must_use]
 pub fn catalog(kind: &str) -> Option<&'static AgentInfo> {
     CATALOG.iter().find(|info| info.kind == kind)
+}
+
+/// Shared CLI lookup for the Settings status and hook installation gate.
+#[must_use]
+pub fn find_installed(kind: &str) -> Option<std::path::PathBuf> {
+    let info = catalog(kind)?;
+    info.exes
+        .iter()
+        .find_map(|name| crate::find_executable(name))
+        .or_else(|| {
+            (kind == "cursor")
+                .then(|| crate::find_executable("agent"))
+                .flatten()
+                .filter(|path| {
+                    path.canonicalize().is_ok_and(|resolved| {
+                        match_agent(&resolved.to_string_lossy(), &[]) == Some("cursor")
+                    })
+                })
+        })
 }
 
 #[must_use]
@@ -272,15 +292,38 @@ pub fn match_agent(exe_file_name: &str, argv: &[&str]) -> Option<&'static str> {
     if !SCRIPT_RUNTIMES.contains(&exe) {
         return None;
     }
-    let entry = argv
-        .iter()
-        .skip(1)
-        .find(|arg| !arg.starts_with('-'))
-        .map(|arg| arg.rsplit('/').next().unwrap_or(arg))?;
+    let script = argv.iter().skip(1).find(|arg| !arg.starts_with('-'))?;
+    if cursor_entrypoint(script) {
+        return Some("cursor");
+    }
+    let entry = script.rsplit('/').next().unwrap_or(script);
     CATALOG
         .iter()
         .find(|info| info.entrypoints.contains(&entry))
         .map(|info| info.kind)
+}
+
+/// Cursor's `agent` launcher execs Node with a generic `index.js`. Only the
+/// versioned Cursor installation layout identifies that entrypoint.
+fn cursor_entrypoint(script: &str) -> bool {
+    let path = std::path::Path::new(script);
+    let Some(version) = path.parent() else {
+        return false;
+    };
+    path.is_absolute()
+        && path.file_name().is_some_and(|name| name == "index.js")
+        && version.file_name().is_some_and(|name| {
+            name.to_str()
+                .and_then(|name| name.as_bytes().first())
+                .is_some_and(u8::is_ascii_digit)
+        })
+        && version.parent().is_some_and(|versions| {
+            versions.file_name().is_some_and(|name| name == "versions")
+                && versions
+                    .parent()
+                    .and_then(std::path::Path::file_name)
+                    .is_some_and(|name| name == "cursor-agent")
+        })
 }
 
 /// First script path after a shell launcher. Flags and nested interpreters
@@ -556,6 +599,32 @@ mod tests {
             argv: vec![format!("/usr/local/bin/{exe}")],
             live: true,
         }
+    }
+
+    #[test]
+    fn cursor_node_launcher_matches_agent_alias_without_matching_generic_scripts() {
+        let entry = std::env::temp_dir().join("cursor-agent/versions/2026.10.19-6bbf2c4/index.js");
+        let entry = entry.to_string_lossy();
+        for invoked in ["node", "agent", "/Users/test/.local/bin/agent"] {
+            assert_eq!(
+                match_agent("node", &[invoked, "--use-system-ca", &entry]),
+                Some("cursor")
+            );
+        }
+        for script in [
+            "/tmp/index.js",
+            "/tmp/not-cursor-agent/versions/2026.10.19/index.js",
+            "/tmp/cursor-agent/versions/not-a-version/index.js",
+            "cursor-agent/versions/2026.10.19/index.js",
+        ] {
+            assert_eq!(match_agent("node", &["agent", script]), None);
+        }
+        assert_eq!(
+            match_agent("node", &["node", "/tmp/index.js", &entry]),
+            None
+        );
+        assert_eq!(match_agent("agent", &["agent"]), None);
+        assert_eq!(match_agent("python", &["python", &entry]), None);
     }
 
     #[test]

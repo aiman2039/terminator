@@ -149,7 +149,7 @@ impl<'a> TerminalView<'a> {
     }
 
     fn focus(self, layout: &Response) -> Self {
-        if self.has_focus {
+        if self.has_focus || terminal_pointer_pressed(layout) {
             focus_terminal(layout);
         } else {
             layout.surrender_focus();
@@ -591,6 +591,7 @@ fn focus_terminal(layout: &Response) {
         .ctx
         .memory(|memory| memory.focused())
         .is_some_and(|id| id != layout.id)
+        && !terminal_pointer_pressed(layout)
     {
         return;
     }
@@ -610,9 +611,60 @@ fn focus_terminal(layout: &Response) {
     });
 }
 
+fn terminal_pointer_pressed(layout: &Response) -> bool {
+    layout.enabled()
+        && layout.contains_pointer()
+        && layout.ctx.input(|input| input.pointer.any_pressed())
+}
+
 #[cfg(test)]
 mod focus_tests {
     use super::*;
+
+    #[test]
+    fn pressing_terminal_takes_focus_from_an_editor_before_key_release() {
+        let ctx = egui::Context::default();
+        let editor_id = Id::new("split-source-editor");
+        let mut center = Pos2::ZERO;
+        for frame in 0..3 {
+            let events = if frame == 2 {
+                vec![
+                    egui::Event::PointerMoved(center),
+                    egui::Event::PointerButton {
+                        pos: center,
+                        button: PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Modifiers::NONE,
+                    },
+                ]
+            } else {
+                vec![]
+            };
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let editor = ui.interact(
+                        Rect::from_min_size(Pos2::ZERO, Vec2::splat(50.0)),
+                        editor_id,
+                        egui::Sense::focusable_noninteractive(),
+                    );
+                    if frame < 2 {
+                        editor.request_focus();
+                    }
+                    let terminal = ui
+                        .allocate_response(Vec2::new(100.0, 100.0), egui::Sense::click_and_drag());
+                    center = terminal.rect.center();
+                    focus_terminal(&terminal);
+                    assert_eq!(terminal.has_focus(), frame == 2);
+                    assert_eq!(editor.has_focus(), frame != 2);
+                },
+            );
+            output.textures_delta.clear();
+        }
+    }
 
     #[test]
     fn terminal_keyboard_focus_has_an_accessibility_node() {
@@ -1141,7 +1193,9 @@ fn input_event_applies(
 }
 
 fn copy_input_action(content: String, modifiers: Modifiers) -> InputAction {
-    if content.is_empty() {
+    if modifiers.ctrl && !modifiers.shift && !modifiers.alt && !modifiers.mac_cmd {
+        InputAction::BackendCall(BackendCommand::Write(vec![0x03]))
+    } else if content.is_empty() {
         interrupt_if_unshifted_copy(modifiers)
     } else {
         InputAction::WriteToClipboard(content)
@@ -1706,6 +1760,14 @@ mod pointer_tests {
     fn nonempty_copy_writes_clipboard() {
         let action = copy_input_action("hello".into(), Modifiers::NONE);
         assert!(matches!(action, InputAction::WriteToClipboard(text) if text == "hello"));
+    }
+
+    #[test]
+    fn control_c_interrupts_with_a_selection() {
+        let action = copy_input_action("selected".into(), Modifiers::CTRL);
+        assert!(
+            matches!(action, InputAction::BackendCall(BackendCommand::Write(bytes)) if bytes == [0x03])
+        );
     }
 
     #[test]

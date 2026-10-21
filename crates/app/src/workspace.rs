@@ -3,6 +3,7 @@ mod layout;
 mod layout_tests;
 mod model;
 mod query;
+mod views;
 
 pub(crate) use model::Workspace;
 pub(crate) use model::WorkspaceTab;

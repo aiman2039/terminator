@@ -6,6 +6,8 @@ mod client;
 mod commands;
 mod docking;
 #[cfg(test)]
+mod editor_drag_tests;
+#[cfg(test)]
 mod file_reuse_tests;
 mod files;
 pub(crate) mod frame;

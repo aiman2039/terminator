@@ -200,19 +200,7 @@ pub fn combo_or_custom(
     changed
 }
 
-pub fn agent_binary(kind: &str) -> Option<PathBuf> {
-    let names = match kind {
-        "claude" => &["claude"][..],
-        "codex" => &["codex"],
-        "opencode" => &["opencode"],
-        "muse" => &["muse"],
-        "grok" => &["grok"],
-        // Not `agent`: that name is also Grok's PATH shim.
-        "cursor" => &["cursor-agent"],
-        _ => &[],
-    };
-    names.iter().find_map(|name| find_executable(name))
-}
+pub use terminator_core::agents::find_installed as agent_binary;
 
 #[cfg(test)]
 mod tests {

@@ -19,7 +19,7 @@ use std::{
 #[cfg(feature = "test-support")]
 use terminator_core::CommandOptions;
 use terminator_core::appearance::{AppearanceFile, config_path};
-use terminator_core::{Paths, Request, Response, State, find_executable, sanitize_layout};
+use terminator_core::{Paths, Request, Response, State, sanitize_layout};
 use terminator_core::{
     async_client::Client,
     async_process::Processes,
@@ -868,7 +868,7 @@ impl Services {
                     .catalog
                     .run(&cancel, move || {
                         anyhow::ensure!(
-                            remove || find_executable(&kind).is_some(),
+                            remove || terminator_core::agents::find_installed(&kind).is_some(),
                             "Install the {kind} CLI before configuring its hooks"
                         );
                         let home = std::env::var_os("HOME").context("No home directory")?;

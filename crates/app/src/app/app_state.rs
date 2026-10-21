@@ -185,6 +185,10 @@ pub struct App {
     /// pointer leaves the IDE strip, by a strip tab. Dropped onto another
     /// split leaf, a workspace tab, or the opposite dock.
     pub(crate) pane_drag: Option<Tab>,
+    pub(crate) pane_drag_source: Option<PaneSource>,
+    pub(crate) pane_action_source: Option<PaneSource>,
+    pub(crate) pane_drop_tabs: Vec<(egui_dock::TabPath, egui::Rect)>,
+    pub(crate) native_focus_pending: Option<PaneSource>,
     /// The dragged pane started in the IDE strip. A drop on the main pane
     /// moves it there; a drop back on the strip cancels that move.
     pub(crate) pane_drag_from_strip: bool,

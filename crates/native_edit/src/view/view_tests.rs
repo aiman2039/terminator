@@ -12,6 +12,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn split_source_focus_is_registered_and_outside_pointer_press_does_not_edit() {
+        let ctx = egui::Context::default();
+        let mut doc = crate::doc::Doc::new("source");
+        let mut engine = VimEngine::new();
+        let mut highlight = HighlightCache::default();
+        for frame in 0..2 {
+            let events = if frame == 1 {
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(700.0, 150.0)),
+                    egui::Event::PointerButton {
+                        pos: egui::pos2(700.0, 150.0),
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    egui::Event::Text("outside input".into()),
+                ]
+            } else {
+                vec![]
+            };
+            let mut output = ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 400.0))),
+                events, ..Default::default()
+            }, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0))), |ui| {
+                    show_source(ui, &mut doc, &mut engine, &SourceOptions { vim: false, ..Default::default() }, &mut highlight, Language::Rust, "file.rs#project.tab.split");
+                });
+                assert!(crate::view::source_has_focus(ui.ctx()));
+                if frame == 1 {
+                    assert!(ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Text(text) if text == "outside input"))));
+                }
+            });
+            output.textures_delta.clear();
+        }
+        assert_eq!(doc.text(), "source");
+    }
+
+    #[test]
     fn source_keyboard_focus_has_an_accessibility_node() {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();

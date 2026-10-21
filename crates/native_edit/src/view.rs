@@ -16,3 +16,11 @@ pub use render::{
 pub const ITALIC_FAMILY: &str = "Terminal Italic";
 /// Font family the host registers for bold theme spans.
 pub const BOLD_FAMILY: &str = "Terminal Bold";
+
+/// Whether the keyboard target belongs to a registered source view, including splits.
+#[must_use]
+pub fn source_has_focus(ctx: &egui::Context) -> bool {
+    ctx.memory(|memory| memory.focused()).is_some_and(|id| {
+        ctx.data(|data| data.get_temp::<bool>(id.with("native-source")) == Some(true))
+    })
+}

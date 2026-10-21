@@ -514,7 +514,18 @@ fn cursor_stop_state(payload: &Value) -> AgentState {
     }
 }
 
-fn hook_state(name: &str, payload: &Value, tool: &str) -> Option<AgentState> {
+fn cursor_session_end_state(payload: &Value) -> AgentState {
+    // Cursor CLI can report only sessionStart/sessionEnd, with no stop event.
+    // The reason describes the outcome; closing a window is not completion.
+    match first_str(payload, &["reason"]) {
+        Some("completed") => AgentState::Completed,
+        Some("error") => AgentState::Failed,
+        Some("aborted") => AgentState::Unknown,
+        _ => AgentState::Stopped,
+    }
+}
+
+fn hook_state(kind: &str, name: &str, payload: &Value, tool: &str) -> Option<AgentState> {
     match name {
         "SessionStart" | "session.created" | "sessionStart" => Some(AgentState::Unknown),
         "UserPromptSubmit"
@@ -540,6 +551,7 @@ fn hook_state(name: &str, payload: &Value, tool: &str) -> Option<AgentState> {
         "stop" => Some(cursor_stop_state(payload)),
         "SubagentStart" => Some(AgentState::Running),
         "StopFailure" | "session.error" => Some(AgentState::Failed),
+        "sessionEnd" if kind == "cursor" => Some(cursor_session_end_state(payload)),
         "SessionEnd" | "session.deleted" | "sessionEnd" => Some(AgentState::Stopped),
         "Interrupt" => Some(AgentState::Unknown),
         "Notification" | "notification" => notification_state(payload),
@@ -589,7 +601,7 @@ pub fn normalize(
     let tool = first_str(payload, &["tool_name", "toolName"])
         .unwrap_or("")
         .to_lowercase();
-    let Some(state) = hook_state(name, payload, &tool) else {
+    let Some(state) = hook_state(kind, name, payload, &tool) else {
         return Ok(None);
     };
     let Some(provider) = provider else {
@@ -967,6 +979,44 @@ mod tests {
         assert!(install(home.path(), "cursor", helper, false).is_err());
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
     }
+    #[test]
+    fn cursor_cli_session_end_reports_the_real_outcome_without_a_stop_hook() {
+        // Sanitized payload from the real Cursor CLI Reply OK check.
+        let payload: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/cursor-session-end-completed.json"
+        ))
+        .unwrap();
+        let completed = normalize("cursor", "s", "p", &payload).unwrap().unwrap();
+        assert_eq!(completed.state, AgentState::Completed);
+        assert_eq!(completed.summary, "Completed");
+        assert!(completed.state.actionable());
+        for (reason, expected) in [
+            ("error", AgentState::Failed),
+            ("aborted", AgentState::Unknown),
+            ("window_close", AgentState::Stopped),
+            ("user_close", AgentState::Stopped),
+            ("unrecognized", AgentState::Stopped),
+        ] {
+            let mut ended = payload.clone();
+            ended["reason"] = json!(reason);
+            // A stale final_status must not turn a user-close into completion.
+            assert_eq!(
+                normalize("cursor", "s", "p", &ended)
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                expected
+            );
+        }
+        assert_eq!(
+            normalize("claude", "s", "p", &payload)
+                .unwrap()
+                .unwrap()
+                .state,
+            AgentState::Stopped
+        );
+    }
+
     #[test]
     fn cursor_events_map_conversation_without_prompt_text() {
         let completed = normalize(

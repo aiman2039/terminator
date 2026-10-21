@@ -1,5 +1,179 @@
 # Validation evidence — 2026-09-08
 
+## Release run-2nhmMy audit and Linux hook repair — 2026-10-22
+
+The archived host log stopped at cargo audit: RUSTSEC-2026-0382 affected
+rustls-webpki 0.103.15, and RUSTSEC-2026-0383 affected webpki-root-certs 1.0.9.
+The lockfile now selects the patched versions 0.103.16 and 1.0.10 with their
+registry checksums. Dependency changes are limited to those two packages.
+The audit gate passed against the refreshed 1,348-advisory database.
+
+The same run's Linux log also failed Cursor sessionEnd duplicate suppression:
+four notifications were recorded where three were expected. On that image,
+/bin/sh resolves to dash. Hook ancestry did not skip dash, so temporary command
+shells supplied different invocation identities. The helper now skips dash as
+it already skips sh/bash/zsh/fish, preserving the agent's identity and duplicate
+suppression.
+
+Validation: host and Windows strict workspace Clippy passed. The cached Linux
+ARM64 release image built the hook, daemon and xtask from an isolated snapshot
+of the current working source; hook Clippy and the complete real-PTY integration
+suite passed, including Cursor completion/error delivery and duplicate
+suppression. Formatting and whitespace checks passed. Logs are
+`/tmp/terminator-release-tls-audit.log`,
+`/tmp/terminator-release-repair-host-clippy.log`,
+`/tmp/terminator-release-repair-windows-clippy.log`, and
+`/tmp/terminator-release-tls-linux.log`.
+
+The archived release source/logs were not edited. These are focused validation
+results; the complete release pipeline, packaging and publishing were not rerun.
+
+
+## Real Cursor completion callback repair — 2026-10-22
+
+After the user renewed Cursor login, CLI 2026.10.19-6bbf2c4 returned OK from the
+approved isolated ask/print prompt (exit 0). It emitted sessionStart and
+sessionEnd, but no stop hook. The actual sessionEnd had reason completed and
+final_status completed. The old adapter mapped it to Stopped, so the original
+live test produced no completion notification.
+
+The Cursor adapter now uses the sessionEnd reason: completed produces Completed,
+error produces Failed, aborted remains Unknown, and user/window close remains
+Stopped. Other providers retain their existing session-end behavior. The
+sanitized real payload is checked in as
+`crates/integrations/tests/fixtures/cursor-session-end-completed.json`.
+
+Validation: all 15 integration-library tests passed; real-PTY integration passed
+with sessionEnd-only completion/error checks and duplicate suppression; strict
+Clippy passed for integrations, hook and xtask. Replaying the captured real
+callback through a Node fixture and the fixed helper created exactly one
+Completed inbox notice linked to the process. Repeating it did not add another
+notice. No additional provider prompt was sent after this repair. Notification
+Center delivery/removal is separate evidence from the earlier direct module
+check; notification clicks remain untested. The original live-test report is
+`/private/tmp/term-cursor-live-ij_d1b84/report.json`; its missing-notification
+result records the defect before the repair, not a passing post-fix run.
+
+Cursor's user hooks were repaired to use a hash-verified copy of the fixed
+helper under the application's `integration-helpers/<sha256>/` directory. The
+installer preserved a backup of the prior hooks file and unrelated entries.
+The exact configured helper passed another captured-callback replay with one
+Completed notice and no duplicate. The installed GUI bundle and live terminal
+sessions were not replaced or restarted.
+
+
+## Cursor live verification and current Ctrl+C check — 2026-10-22
+
+The current test-support GUI passed the real-PTY Ctrl+C fixture again: terminal
+input followed an editor-to-terminal click, two interrupts reached the shell
+(one with selected text), editor-only text saved to the file, and terminal text
+did not enter the editor. Capture:
+`/private/tmp/term-input-native-k5fqc831/native-input.png`.
+The fixture used a copied set of binaries under
+`/tmp/terminator-cursor-verified-bin`: the shared `target/debug/terminator` had
+been replaced by a normal build without test-support, which caused the earlier
+capture runs to wait without processing fixture input.
+
+With explicit user approval, one real Cursor "Reply exactly OK" prompt was
+attempted in a temporary daemon-owned shell. Cursor detected its stored tokens
+but rejected the login before any lifecycle hook or provider result ran:
+"Your stored authentication is invalid. Please log in again."
+The normal-config model-list command also required authentication. No credentials
+were copied, printed or changed. The live callback check is blocked on user login
+renewal; this is not a passing real-provider test. The local generated-hook and
+Node-identity checks remain separate evidence.
+
+A probe compiled the repository's exact `crates/daemon/src/notifications.rs`
+module and observed its own test notification through macOS Notification Center.
+Delivery and removal after the wait both passed. A separate-process observer
+could not see the daemon's notification; its missing result did not establish a
+delivery failure. This verifies the desktop delivery module independently of
+Cursor's live callback. Notification clicks were not exercised.
+The installed app's saved OS event selections already include completion.
+The installed GUI and live daemon generations were not replaced or stopped.
+
+
+## Native editor view moves — 2026-10-21
+
+Editor drags now transfer from egui_dock to the workspace move path. A move
+retains its source project, workspace group, leaf and tab index, so same-file
+copies remain distinct. Drops support another workspace tab, the strip gap or
+plus button, a split edge, and a position in a stacked tab bar. Escape cancels
+a drag and restores the source workspace. Successful moves focus the moved
+editor and save the resulting layout. Invalid source addresses leave the
+layout unchanged.
+
+Pane-header maps now enumerate leaves directly, so all same-file split views
+keep drag handles. Menu detach/move/float actions retain the exact issuing tab.
+Floating windows receive distinct viewport IDs; returning two windows of the
+same file preserves both views. Closing a clean copy retains the shared buffer
+and undo history until the last view closes. No persisted layout version or
+daemon request changed.
+
+Validation on macOS:
+
+- App unit suite: 727 passed, four existing opt-in tests ignored. Six new
+  checks cover same-file cross-workspace movement, plus/gap drops, Escape,
+  stale sources and stack order, exact detach/float with unique windows, and
+  undo history after closing a clean copy.
+- A rebuilt native Glow GUI moved an editor onto another workspace tab and
+  onto the plus button. The daemon snapshots after GUI exit confirmed the
+  new saved group membership and view counts. Captures are
+  `/private/tmp/term-input-native-c_aeny79/existing-tab.png` and `new-tab.png`.
+- Workspace bins/examples built with all features. Strict workspace Clippy,
+  formatting and whitespace checks passed. The development linker retained
+  its large unwind-section warning.
+
+All runtime checks used isolated temporary data and sessions. The installed
+GUI and live daemon generations were not replaced. Dragging across native
+windows remains unsupported for all pane types; the Float window and window
+close/dock-back actions retain their existing role.
+
+
+## Terminal input, native editor splits, and Cursor hooks — 2026-10-21
+
+Plain Ctrl+C remains an interrupt with selected terminal text or a hovered path.
+Copy uses Command+C on macOS and Ctrl+Shift+C on Linux. A terminal pointer press
+transfers keyboard focus before reading keys. Native editor focus is registered
+per view, including project/tab/leaf identity, and single editor leaves expose
+the existing dock drag tab. The dock reports the leaf before assigning a body ID
+so same-file editor copies do not share toolbar or source widget IDs.
+
+Settings detection and hook installation now share the agent CLI lookup. Cursor
+uses `cursor-agent`; a bare `agent` alias is accepted only when its resolved target
+matches Cursor. Running Node launchers match the versioned Cursor entrypoint,
+not arbitrary `index.js` files. Hook ancestry uses the same command-line matcher.
+
+Validation on macOS:
+
+- App/core/native-editor/integration unit suites: 1,038 passed, four existing
+  opt-in tests ignored. Vendored terminal suite: 92 passed.
+- Real-PTY integration passed, including execution of generated Cursor hook
+  commands from an isolated shell: valid prompt response, completion/error
+  inbox entries, and no extra notices for abort/end.
+- An offline Node fixture at the Cursor versioned entrypoint was detected and
+  its generated hook linked to the same live process before creating a
+  completion notification. No provider or model call was made.
+- A rebuilt native Glow window switched input from editor to shell and back,
+  saved only editor input, delivered two Ctrl+C interrupts (including with text
+  selected), and persisted an editor drag into the shell's dock leaf. Capture:
+  `/private/tmp/term-input-native-jm77is8b/native-input.png`.
+- The native hover-menu suite passed with the platform copy shortcuts,
+  including selected text, hovered paths, field copy ownership, and a plain
+  Ctrl+C delivered to the focused shell.
+- Workspace bins/examples built with all features. Strict workspace Clippy,
+  formatting, and whitespace checks passed. The linker reported its existing
+  large unwind-section warning for the development GUI.
+
+The supported Cursor user hooks were configured with the installed helper;
+inspection returned configured. Cursor permission/question dialogs still have
+no observational callback. Desktop completion banners depend on the user's
+Completed selection under OS notifications. Live provider callbacks, visible
+Notification Center alerts, and alert clicks were not verified. The installed
+GUI and live daemon generations were not replaced or stopped; code changes
+require an updated application. All runtime checks used temporary state.
+
+
 ## Host bounded-scrolling fixture race — 2026-10-17
 
 Release attempt `run-iW5U2c` failed the host GUI stage. Ten cases failed once

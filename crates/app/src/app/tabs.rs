@@ -158,17 +158,9 @@ impl App {
                 .iter_all_tabs()
                 .map(|(path, tab)| (tab.key(), path.node_path()))
                 .collect();
-            self.pane_tabs = self
-                .pane_by_tab
-                .values()
-                .map(|path| {
-                    (
-                        *path,
-                        dock.leaf(*path)
-                            .map(|leaf| leaf.tabs.clone())
-                            .unwrap_or_default(),
-                    )
-                })
+            self.pane_tabs = dock
+                .iter_leaves()
+                .map(|(path, leaf)| (path, leaf.tabs.clone()))
                 .collect();
         }
     }

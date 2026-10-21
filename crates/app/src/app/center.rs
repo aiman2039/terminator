@@ -375,17 +375,9 @@ impl App {
             .iter_all_tabs()
             .map(|(path, tab)| (tab.key(), path.node_path()))
             .collect();
-        self.float_pane_tabs = self
-            .float_pane_by_tab
-            .values()
-            .map(|path| {
-                (
-                    *path,
-                    dock.leaf(*path)
-                        .map(|leaf| leaf.tabs.clone())
-                        .unwrap_or_default(),
-                )
-            })
+        self.float_pane_tabs = dock
+            .iter_leaves()
+            .map(|(path, leaf)| (path, leaf.tabs.clone()))
             .collect();
     }
 
@@ -403,6 +395,7 @@ impl App {
         let style = self.dock_style(ui);
         self.refresh_float_pane_maps(dock);
         DockArea::new(dock)
+            .id(egui::Id::new(("float-dock", viewport)))
             .style(style)
             .show_add_buttons(true)
             .show_leaf_close_all_buttons(false)
@@ -416,6 +409,7 @@ impl App {
                     tab: None,
                     window: Some(viewport),
                     render_path: None,
+                    render_tab: None,
                 },
             );
         self.apply_add_float_tab(viewport, project, dock);
@@ -423,6 +417,7 @@ impl App {
     }
 
     pub(crate) fn paint_dock(&mut self, ui: &mut egui::Ui, project: &str, dock: &mut Workspace) {
+        self.pane_drop_tabs.clear();
         let style = self.dock_style(ui);
         self.refresh_pane_maps(project, dock);
         // Issuing tab for close requests: the rendered tab (mirroring
@@ -435,6 +430,7 @@ impl App {
             .or(dock.tabs.first())
             .map(|tab| tab.id.clone());
         DockArea::new(dock)
+            .id(egui::Id::new(("main-dock", project, &tab)))
             .style(style)
             .show_add_buttons(true)
             .show_leaf_close_all_buttons(false)
@@ -448,6 +444,7 @@ impl App {
                     tab,
                     window: None,
                     render_path: None,
+                    render_tab: None,
                 },
             );
         self.finish_pane_drop(ui, dock);

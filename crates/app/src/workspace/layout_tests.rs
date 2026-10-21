@@ -878,10 +878,10 @@ mod tests {
         workspace.dock_back(editor.clone(), "missing");
         assert_eq!(workspace.tabs.len(), 1);
         assert!(workspace.tabs[0].layout.find_tab(&editor).is_some());
-        // Already docked: focuses instead of duplicating.
+        // A returned same-file window remains a separate view.
         let before = workspace.tabs[0].layout.iter_all_tabs().count();
         workspace.dock_back(editor.clone(), "missing");
-        assert_eq!(workspace.tabs[0].layout.iter_all_tabs().count(), before);
+        assert_eq!(workspace.tabs[0].layout.iter_all_tabs().count(), before + 1);
     }
 
     #[test]

@@ -142,6 +142,11 @@ impl App {
         project: &str,
         workspace: &mut Workspace,
     ) {
+        if self.pane_drag.is_some() && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.revert_drop_preview(workspace);
+            self.end_pane_drag();
+            ui.ctx().stop_dragging();
+        }
         let mut switch = None;
         let mut close = None;
         let mut close_all = false;
@@ -242,13 +247,18 @@ impl App {
             // Strip tabs are drop targets while a terminal pane is dragged,
             // and drag handles for reordering the tabs themselves. Only
             // match drags from this project.
-            let drag_same_project = self.pane_drag.as_ref().is_some_and(|pane| match pane {
-                Tab::Terminal(sid) => self
-                    .state
-                    .sessions
-                    .iter()
-                    .any(|s| &s.id == sid && s.project_id == project),
-                _ => false,
+            let drag_same_project = self.pane_drag.as_ref().is_some_and(|pane| {
+                if let Some(source) = &self.pane_drag_source {
+                    return source.project == project && workspace.view_exists(source, pane);
+                }
+                match pane {
+                    Tab::Terminal(sid) => self
+                        .state
+                        .sessions
+                        .iter()
+                        .any(|s| &s.id == sid && s.project_id == project),
+                    _ => false,
+                }
             });
             let mut scroll = egui::ScrollArea::horizontal()
                 .id_salt(("workspace-tabs", project))
@@ -680,7 +690,14 @@ impl App {
                     {
                         self.pull_strip_shell_into(workspace, sid);
                     }
-                    if workspace.move_pane_to_group(&pane, &group_id) {
+                    let moved = if let Some(source) = &self.pane_drag_source {
+                        workspace.move_view_to_group(source, &pane, &group_id)
+                    } else {
+                        workspace.move_pane_to_group(&pane, &group_id)
+                    };
+                    if moved {
+                        self.focus_moved_view(&pane, project, workspace);
+                        self.pending_layout_save = true;
                         if let Tab::Terminal(sid) = &pane {
                             self.active_session = Some(sid.clone());
                             self.focus_tab = Some(pane.clone());
@@ -702,7 +719,16 @@ impl App {
                         {
                             self.pull_strip_shell_into(workspace, sid);
                         }
-                        if workspace.move_pane_to_new_group_at(&pane, index).is_some() {
+                        let moved = if let Some(source) = &self.pane_drag_source {
+                            workspace
+                                .move_view_to_new_group(source, &pane, index)
+                                .is_some()
+                        } else {
+                            workspace.move_pane_to_new_group_at(&pane, index).is_some()
+                        };
+                        if moved {
+                            self.focus_moved_view(&pane, project, workspace);
+                            self.pending_layout_save = true;
                             if let Tab::Terminal(sid) = &pane {
                                 self.active_session = Some(sid.clone());
                                 self.focus_tab = Some(pane.clone());

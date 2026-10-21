@@ -90,6 +90,14 @@ pub(crate) enum Tab {
         path: PathBuf,
     },
 }
+
+/// Exact source of a view action. File paths identify buffers, not editor views.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PaneSource {
+    pub project: String,
+    pub group: String,
+    pub path: egui_dock::TabPath,
+}
 impl Tab {
     pub(crate) fn key(&self) -> String {
         if let Self::Browser { id, .. } = self

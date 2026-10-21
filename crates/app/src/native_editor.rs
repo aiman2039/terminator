@@ -848,15 +848,22 @@ impl App {
         // Split views share one buffer. Their widget and focus ids must
         // still differ per pane, or the second split inherits the first
         // pane's scroll offset and keyboard focus.
-        let source_id = match node {
-            Some(node) => format!(
-                "{}#{}.{}",
-                path.to_string_lossy(),
-                node.surface.0,
-                node.node.0
-            ),
-            None => path.to_string_lossy().into_owned(),
-        };
+        let source_id = format!(
+            "{:?}",
+            ui.make_persistent_id((path, project, tab, node, ui.ctx().viewport_id()))
+        );
+        if self.native_focus_pending.as_ref().is_some_and(|target| {
+            project == Some(target.project.as_str())
+                && tab == Some(target.group.as_str())
+                && node == Some(target.path.node_path())
+        }) && self
+            .native_docs
+            .get(path)
+            .is_some_and(|doc| doc.doc.is_some())
+        {
+            self.native_focus_pending = None;
+            ui.memory_mut(|memory| memory.request_focus(source_focus_id(&source_id)));
+        }
         let rename_applying = self
             .native_rename
             .as_ref()
@@ -1794,5 +1801,56 @@ impl NativeDoc {
         let mut doc = Self::new(path, true);
         doc.doc = Some(Doc::new("unsaved"));
         doc
+    }
+}
+
+#[cfg(test)]
+mod view_buffer_tests {
+    use super::*;
+
+    #[test]
+    fn closing_a_clean_editor_copy_keeps_the_other_views_undo_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        let path = dir.path().join("shared.txt");
+        let pane = Tab::NativeEditor { path: path.clone() };
+        let mut native = NativeDoc::new(path.clone(), true);
+        let mut buffer = Doc::new("original");
+        native.engine.press_key(&mut buffer, VimKey::Char('i'));
+        native.engine.type_text(&mut buffer, "saved ");
+        native.engine.press_key(&mut buffer, VimKey::Escape);
+        native.saved_text = buffer.text();
+        native.doc = Some(buffer);
+        app.native_docs.insert(path.clone(), native);
+        app.layouts.insert(
+            "a".into(),
+            Workspace::from_layout(egui_dock::DockState::new(vec![pane.clone(), pane.clone()])),
+        );
+        let at = app.layouts["a"].find_tab(&pane).unwrap();
+        {
+            let mut viewer = Viewer {
+                app: &mut app,
+                strip: false,
+                project: Some("a".into()),
+                tab: None,
+                window: None,
+                render_path: None,
+                render_tab: None,
+            };
+            assert_eq!(
+                viewer.on_close(&mut pane.clone(), at.node_path()),
+                OnCloseResponse::Close
+            );
+        }
+        app.layouts.get_mut("a").unwrap().remove_tab(at);
+        app.prune_native_docs();
+        let native = app
+            .native_docs
+            .get_mut(&path)
+            .expect("shared buffer remains");
+        let buffer = native.doc.as_mut().unwrap();
+        native.engine.undo(buffer);
+        assert_eq!(buffer.text(), "original");
     }
 }

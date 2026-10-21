@@ -110,9 +110,97 @@ pub fn hook_controls() -> Result<()> {
         .is_err(),
         "ctl send accepted input above the 1 MiB limit"
     );
+    cursor_hooks(&h, &sid)?;
     println!(
         "{}",
         json!({"cli_list":true,"cli_add_project":true,"cli_background_create":true,"cli_stdin_send_and_read":true,"cli_worktree_list":true,"cli_refusals":true})
+    );
+    Ok(())
+}
+
+/// Execute the installed Cursor commands inside a real daemon-owned shell.
+/// This uses fixture payloads and never starts a provider or changes user hooks.
+fn cursor_hooks(h: &Harness, sid: &str) -> Result<()> {
+    let home = h.root.join("cursor-home");
+    let mut install = h.command("terminator-hook");
+    install
+        .env("TERMINATOR_CONFIG_HOME", &home)
+        .args(["install", "cursor"]);
+    output(install)?;
+    let config: Value = serde_json::from_slice(&fs::read(home.join(".cursor/hooks.json"))?)?;
+    let hooks = config.get("hooks").context("Cursor hooks")?;
+    for (index, (event, status, expected, notices, response)) in [
+        (
+            "beforeSubmitPrompt",
+            None,
+            "running",
+            0,
+            "{\"continue\":true}",
+        ),
+        ("stop", Some("completed"), "completed", 1, "{}"),
+        ("stop", Some("error"), "failed", 2, "{}"),
+        ("stop", Some("aborted"), "unknown", 2, "{}"),
+        ("sessionEnd", None, "stopped", 2, "{}"),
+        // Cursor CLI ask mode emitted sessionEnd without a stop callback.
+        ("sessionEnd", Some("completed"), "completed", 3, "{}"),
+        ("sessionEnd", Some("completed"), "completed", 3, "{}"),
+        ("sessionEnd", Some("error"), "failed", 4, "{}"),
+        ("sessionEnd", Some("aborted"), "unknown", 4, "{}"),
+        ("sessionEnd", Some("user_close"), "stopped", 4, "{}"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let conversation = if event == "sessionEnd" && status.is_some() {
+            "cursor-session-end-only"
+        } else {
+            "cursor-fixture"
+        };
+        let payload = json!({"hook_event_name":event,"conversation_id":conversation,"status":status,"reason":if event == "sessionEnd" { status } else { None }});
+        let command = hooks
+            .get(event)
+            .and_then(Value::as_array)
+            .and_then(|hooks| hooks.first())
+            .and_then(|hook| hook.get("command"))
+            .and_then(Value::as_str)
+            .context("Cursor command")?;
+        let reply = h.root.join(format!("cursor-{index}.reply"));
+        let command = format!(
+            "printf %s {} | sh -c {} > {}",
+            terminator_core::quote(&payload.to_string()),
+            terminator_core::quote(command),
+            terminator_core::quote(&reply.to_string_lossy())
+        );
+        let mut send = h.command("terminator-hook");
+        send.args(["ctl", "send", sid, &command, "--enter"]);
+        output(send)?;
+        h.wait(
+            |state| {
+                state["agents"].as_array().is_some_and(|agents| {
+                    agents.iter().any(|agent| {
+                        agent["session_id"] == sid
+                            && agent["kind"] == "cursor"
+                            && agent["state"] == expected
+                    })
+                }) && fs::read_to_string(&reply).is_ok_and(|text| text.trim() == response)
+            },
+            5,
+        )?;
+        let state = h.state()?;
+        let count = state
+            .get("notifications")
+            .and_then(Value::as_array)
+            .context("notifications")?
+            .iter()
+            .filter(|notice| notice["session_id"] == sid)
+            .count();
+        ensure!(
+            count == notices,
+            "Cursor {event}/{status:?} produced {count} notifications, expected {notices}"
+        );
+    }
+    println!(
+        "Cursor hooks passed: shell delivery, prompt response, stop/sessionEnd completion/error notices, duplicate suppression, abort/close"
     );
     Ok(())
 }

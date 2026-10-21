@@ -5751,9 +5751,9 @@ checksum = "f87165f0995f63a9fbeea62b64d10b4d9d8e78ec6d7d51fb2125fda7bb36788f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -6733,7 +6733,7 @@ dependencies = [
 
 [[package]]
 name = "terminator"
-version = "0.131.0"
+version = "0.132.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -6795,7 +6795,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-core"
-version = "0.131.0"
+version = "0.132.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -6820,7 +6820,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-daemon"
-version = "0.131.0"
+version = "0.132.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -6846,7 +6846,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-git"
-version = "0.131.0"
+version = "0.132.0"
 dependencies = [
  "anyhow",
  "tempfile",
@@ -6855,7 +6855,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-hook"
-version = "0.131.0"
+version = "0.132.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -6876,7 +6876,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-integrations"
-version = "0.131.0"
+version = "0.132.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -6887,7 +6887,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-native-edit"
-version = "0.131.0"
+version = "0.132.0"
 dependencies = [
  "base64 0.23.1",
  "egui",
@@ -6911,7 +6911,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-sys"
-version = "0.131.0"
+version = "0.132.0"
 dependencies = [
  "core-foundation 0.10.1",
  "core-graphics",
@@ -6921,7 +6921,7 @@ dependencies = [
 
 [[package]]
 name = "terminator-updater"
-version = "0.131.0"
+version = "0.132.0"
 dependencies = [
  "dispatch2",
  "eframe",
@@ -7946,9 +7946,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -8841,7 +8841,7 @@ checksum = "32ac00cd3f8ec9c1d33fb3e7958a82df6989c42d747bd326c822b1d625283547"
 
 [[package]]
 name = "xtask"
-version = "0.131.0"
+version = "0.132.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",

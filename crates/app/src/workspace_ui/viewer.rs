@@ -8,7 +8,8 @@ pub(crate) struct Viewer<'a> {
     /// Creation queues, pane maps, and focus targets switch docks; the
     /// strip always shows native tab bars, while the main dock shows
     /// them only on stacked leaves (nested tabs) and otherwise titles
-    /// single panes with captions under the workspace strip.
+    /// single terminals with captions under the workspace strip. Native
+    /// editors keep their dock tab so each split has a drag handle.
     pub(crate) strip: bool,
     /// Docked project under render, if any: native close requests
     /// remember their issuing view. Floating windows pass none (the
@@ -24,6 +25,7 @@ pub(crate) struct Viewer<'a> {
     /// body: native close requests remember their issuing pane. Starts
     /// empty for direct (non-dock) renders such as floating panes.
     pub(crate) render_path: Option<egui_dock::NodePath>,
+    pub(crate) render_tab: Option<egui_dock::TabPath>,
 }
 impl Viewer<'_> {
     /// Queue tab creation in the dock under render: strip, floating
@@ -83,6 +85,10 @@ impl TabViewer for Viewer<'_> {
     fn set_render_path(&mut self, path: egui_dock::NodePath) {
         self.render_path = Some(path);
     }
+    fn set_render_tab(&mut self, path: egui_dock::TabPath) {
+        self.render_tab = Some(path);
+        self.set_render_path(path.node_path());
+    }
     fn on_add(&mut self, path: egui_dock::NodePath) {
         if self.strip {
             self.app.add_strip_tab = Some((path, None));
@@ -107,7 +113,12 @@ impl TabViewer for Viewer<'_> {
         } else {
             &self.app.pane_tabs
         };
-        tabs.get(&path).is_some_and(|tabs| tabs.len() > 1)
+        tabs.get(&path).is_some_and(|tabs| {
+            tabs.len() > 1
+                || tabs
+                    .iter()
+                    .any(|tab| matches!(tab, Tab::NativeEditor { .. }))
+        })
     }
     fn trailing_controls_width(&self) -> f32 {
         let actions = if self.strip {
@@ -171,7 +182,11 @@ impl TabViewer for Viewer<'_> {
         let _ = response;
     }
     fn id(&mut self, tab: &mut Tab) -> egui::Id {
-        egui::Id::new(tab.key())
+        if matches!(tab, Tab::NativeEditor { .. }) {
+            egui::Id::new((tab.key(), &self.project, &self.tab, self.render_tab))
+        } else {
+            egui::Id::new(tab.key())
+        }
     }
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
         match tab {
@@ -289,32 +304,33 @@ impl TabViewer for Viewer<'_> {
             }
             self.app.backends.remove(sid);
         }
-        if let Tab::NativeEditor { path } = tab {
-            if self.app.native_dirty(path) {
-                // The dock passes the closing tab's owning leaf: the
-                // dialog and save completion close exactly the clicked
-                // copy instead of a focus sample or every twin.
-                let issuer = match (self.window, self.project.as_deref(), self.tab.as_deref()) {
-                    (Some(viewport), _, _) => Some(crate::native_editor::CloseIssuer::Floating {
-                        viewport,
+        if let Tab::NativeEditor { path } = tab
+            && self.app.native_dirty(path)
+        {
+            // The dock passes the closing tab's owning leaf: the
+            // dialog and save completion close exactly the clicked
+            // copy instead of a focus sample or every twin.
+            let issuer = match (self.window, self.project.as_deref(), self.tab.as_deref()) {
+                (Some(viewport), _, _) => Some(crate::native_editor::CloseIssuer::Floating {
+                    viewport,
+                    node: Some(pane),
+                    delayed: false,
+                }),
+                (None, Some(project), Some(tab)) => {
+                    Some(crate::native_editor::CloseIssuer::Docked {
+                        project: project.to_owned(),
+                        tab: tab.to_owned(),
                         node: Some(pane),
                         delayed: false,
-                    }),
-                    (None, Some(project), Some(tab)) => {
-                        Some(crate::native_editor::CloseIssuer::Docked {
-                            project: project.to_owned(),
-                            tab: tab.to_owned(),
-                            node: Some(pane),
-                            delayed: false,
-                        })
-                    }
-                    _ => None,
-                };
-                self.app.native_close_prompt = Some((path.clone(), issuer));
-                return OnCloseResponse::Ignore;
-            }
-            self.app.native_docs.remove(path);
+                    })
+                }
+                _ => None,
+            };
+            self.app.native_close_prompt = Some((path.clone(), issuer));
+            return OnCloseResponse::Ignore;
         }
+        // Buffer pruning runs after the dock is checked back in and keeps
+        // the buffer (including undo history) while another view exists.
         OnCloseResponse::Close
     }
     fn on_tab_button(&mut self, tab: &mut Tab, response: &egui::Response) {
@@ -375,6 +391,64 @@ impl TabViewer for Viewer<'_> {
                 &format!("leaf-tab:{}", tab.key()),
                 response.rect,
             );
+        }
+    }
+    fn on_tab_button_at(
+        &mut self,
+        tab: &mut Tab,
+        path: egui_dock::TabPath,
+        response: &egui::Response,
+    ) -> bool {
+        self.on_tab_button(tab, response);
+        if !self.strip && self.window.is_none() {
+            self.app.pane_drop_tabs.push((path, response.rect));
+        }
+        #[cfg(feature = "test-support")]
+        diagnostics::record(
+            &response.ctx,
+            &format!(
+                "leaf-tab-at:{}:{}:{}",
+                path.surface.0, path.node.0, path.tab.0
+            ),
+            response.rect,
+        );
+        let dragging = response.drag_started()
+            || response.dragged()
+            || response
+                .ctx
+                .dragged_id()
+                .is_some_and(|id| response.id == id.with("dragged"));
+        if !self.strip
+            && self.window.is_none()
+            && matches!(tab, Tab::NativeEditor { .. })
+            && self.app.pane_drag.is_none()
+            && dragging
+            && let (Some(project), Some(group)) = (&self.project, &self.tab)
+        {
+            self.app.pane_drag = Some(tab.clone());
+            self.app.pane_drag_source = Some(PaneSource {
+                project: project.clone(),
+                group: group.clone(),
+                path,
+            });
+            self.app.pane_drag_snapshot.clear();
+            return true;
+        }
+        false
+    }
+    fn context_menu_at(&mut self, ui: &mut egui::Ui, tab: &mut Tab, path: egui_dock::TabPath) {
+        self.context_menu(ui, tab, path.node_path());
+        if matches!(tab, Tab::NativeEditor { .. })
+            && (self.app.detach_pane.is_some()
+                || self.app.float_pane.is_some()
+                || self.app.dock_back_pane.is_some())
+            && let (Some(project), Some(group)) = (&self.project, &self.tab)
+        {
+            self.app.pane_action_source = Some(PaneSource {
+                project: project.clone(),
+                group: group.clone(),
+                path,
+            });
         }
     }
     fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Tab, pane: egui_dock::NodePath) {

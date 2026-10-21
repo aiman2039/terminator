@@ -272,3 +272,10 @@ Tests: `trackpad_start_does_not_drop_a_partial_line`,
 `a_missed_mouse_up_does_not_keep_the_wheel`,
 `alternate_screen_wheel_reaches_the_app_without_mode_1007`,
 `revealing_a_scrolled_view_returns_to_the_live_screen`.
+
+## Terminal focus and interrupt input (2026-10-21)
+
+An explicit pointer press takes terminal keyboard focus before input is read,
+including when another editor currently holds it. Passive painting still leaves
+other widgets focused. A native Copy event with plain Control held writes ETX
+even when terminal text is selected. Command+C and Ctrl+Shift+C keep copying.

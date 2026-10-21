@@ -39,6 +39,11 @@ pub trait TabViewer {
     /// own identity. The default ignores it.
     fn set_render_path(&mut self, _path: NodePath) {}
 
+    /// Exact address of the tab body about to render, including stacked copies.
+    fn set_render_tab(&mut self, path: crate::TabPath) {
+        self.set_render_path(path.node_path());
+    }
+
     /// Content inside the context menu shown when the tab is right-clicked.
     ///
     /// `_path` specifies which [`Surface`](crate::Surface) and [`Node`](crate::Node)
@@ -47,6 +52,17 @@ pub trait TabViewer {
 
     /// Called after each tab button is shown, so you can add a tooltip, check for clicks, etc.
     fn on_tab_button(&mut self, _tab: &mut Self::Tab, _response: &egui::Response) {}
+
+    /// Returns true when the host takes ownership of this drag gesture.
+    fn on_tab_button_at(&mut self, tab: &mut Self::Tab, _path: crate::TabPath, response: &egui::Response) -> bool {
+        self.on_tab_button(tab, response);
+        false
+    }
+
+    /// Exact tab address for menus acting on multiple views of one document.
+    fn context_menu_at(&mut self, ui: &mut Ui, tab: &mut Self::Tab, path: crate::TabPath) {
+        self.context_menu(ui, tab, path.node_path());
+    }
 
     /// This is called when the `_tab` gets closed by the user.
     ///

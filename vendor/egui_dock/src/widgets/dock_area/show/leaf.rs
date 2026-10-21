@@ -533,7 +533,7 @@ impl<Tab> DockArea<'_, Tab> {
                             .expect("This node must be a leaf");
                         let tab = &mut leaf.tabs[tab_index.0];
 
-                        tab_viewer.context_menu(ui, tab, path);
+                        tab_viewer.context_menu_at(ui, tab, (path, tab_index).into());
                         if (path.surface.is_main() || !is_lonely_tab)
                             && tab_viewer.allowed_in_windows(tab)
                             && ui.add(eject_button).clicked()
@@ -608,7 +608,14 @@ impl<Tab> DockArea<'_, Tab> {
                 self.new_focused = Some(path);
             }
 
-            tab_viewer.on_tab_button(tab, &response);
+            if tab_viewer.on_tab_button_at(tab, (path, tab_index).into(), &response) {
+                state.reset_drag();
+                tabs_ui.ctx().stop_dragging();
+                tabs_ui.memory_mut(|memory| {
+                    memory.data.remove_temp::<Option<DragData>>(self.id.with("drag_data"));
+                    memory.data.remove_temp::<Option<HoverData>>(self.id.with("hover_data"));
+                });
+            }
 
             if self.show_close_buttons && tab_viewer.is_closeable(tab) && response.middle_clicked()
             {
@@ -1396,6 +1403,7 @@ impl<Tab> DockArea<'_, Tab> {
             // We are forced to use `Ui::new` because other methods (eg: push_id) always mix
             // the provided id with their own which would cause tabs to change id when moved
             // from node to node.
+            tab_viewer.set_render_tab((path, *active).into());
             let id = tab_body_id(self.id, path, tab_viewer.id(tab));
             ui.ctx().check_for_id_clash(id, body_rect, "a tab with id");
             let ui = &mut Ui::new(
@@ -1432,7 +1440,6 @@ impl<Tab> DockArea<'_, Tab> {
                         }
                         let available_rect = ui.available_rect_before_wrap();
                         ui.expand_to_include_rect(available_rect);
-                        tab_viewer.set_render_path(path);
                         tab_viewer.ui(ui, tab);
                     });
             });

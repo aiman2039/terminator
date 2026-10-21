@@ -280,14 +280,7 @@ impl App {
         if ctx.text_edit_focused() {
             return true;
         }
-        ctx.memory(|memory| {
-            memory.focused().is_some_and(|focused| {
-                self.native_docs.keys().any(|path| {
-                    terminator_native_edit::view::source_focus_id(&path.to_string_lossy())
-                        == focused
-                })
-            })
-        })
+        terminator_native_edit::view::source_has_focus(ctx)
     }
 
     pub(crate) fn open_scrollback_search(&mut self, ctx: &egui::Context, sid: &str) {

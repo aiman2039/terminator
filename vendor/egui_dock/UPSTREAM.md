@@ -32,3 +32,16 @@ shifts the title right, and returns the icon rect; the leaf paints it through
 the viewer after each tab button (including the drag ghost). Terminator paints
 the agent brand plus hook lifecycle status there so native strip tabs match
 the workspace strip and split-pane captions.
+
+## Editor split identity (2026-10-21)
+
+Report `set_render_path` before asking for a tab body ID. The host can then
+scope same-file editor copies to their owning leaf before creating their UI.
+This keeps editor controls and keyboard focus separate across split panes.
+
+## Host-owned editor drags and exact tab addresses (2026-10-21)
+
+Add defaulted `on_tab_button_at`, `context_menu_at`, and `set_render_tab` callbacks.
+They retain the node and tab index for same-file views. A host can take a drag
+from the dock; the dock then clears its own pending drag/drop data and releases
+the egui drag ID. This prevents two drag systems from moving the same view.

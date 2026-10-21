@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "sessionEnd",
+  "conversation_id": "cursor-fixture-conversation",
+  "session_id": "cursor-fixture-conversation",
+  "generation_id": "cursor-fixture-generation",
+  "reason": "completed",
+  "final_status": "completed",
+  "is_background_agent": false,
+  "cursor_version": "2026.10.19-6bbf2c4"
+}
