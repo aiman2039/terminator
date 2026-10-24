@@ -6,6 +6,7 @@ use super::keys::{
     ide_shortcut, mode_name, source_focus_id,
 };
 use super::{BOLD_FAMILY, ITALIC_FAMILY};
+use crate::rows::{char_display_width, col_at_display_x, display_x};
 use egui;
 use egui::{Color32, FontId, Pos2, Rect, Sense, Vec2};
 /// Worst severity on one buffer row, for the diagnostics gutter.
@@ -84,76 +85,6 @@ pub struct SourceOutcome {
     pub visual_rows: usize,
 }
 
-struct VisualRow {
-    line: usize,
-    start: usize,
-    end: usize,
-    line_len: usize,
-    text: String,
-}
-
-impl VisualRow {
-    fn owns_cursor(&self, line: usize, col: usize) -> bool {
-        self.line == line
-            && col >= self.start
-            && (col < self.end || (col == self.end && self.end == self.line_len))
-    }
-}
-
-fn visual_rows<B: Buffer>(doc: &B, wrap_columns: Option<usize>) -> Vec<VisualRow> {
-    let mut rows = Vec::new();
-    for line in 0..doc.line_count() {
-        let text = doc.line_text(line);
-        let chars: Vec<char> = text.chars().collect();
-        let line_len = chars.len();
-        if line_len == 0 || wrap_columns.is_none() {
-            rows.push(VisualRow {
-                line,
-                start: 0,
-                end: line_len,
-                line_len,
-                text,
-            });
-            continue;
-        }
-        let limit = wrap_columns.unwrap_or(usize::MAX).max(1);
-        let mut start = 0;
-        while start < line_len {
-            let mut end = start;
-            let mut cells = 0usize;
-            let mut last_space = None;
-            while end < line_len {
-                let Some(ch) = chars.get(end).copied() else {
-                    break;
-                };
-                let width = char_display_width(ch);
-                if end > start && cells.saturating_add(width) > limit {
-                    break;
-                }
-                cells = cells.saturating_add(width);
-                end = end.saturating_add(1);
-                if ch.is_whitespace() {
-                    last_space = Some(end);
-                }
-            }
-            if end < line_len
-                && let Some(space) = last_space.filter(|space| *space > start)
-            {
-                end = space;
-            }
-            rows.push(VisualRow {
-                line,
-                start,
-                end,
-                line_len,
-                text: chars.get(start..end).unwrap_or(&[]).iter().collect(),
-            });
-            start = end;
-        }
-    }
-    rows
-}
-
 /// Render an editable source view. Returns engine effects (`Save`/`Quit`/…)
 /// for the session layer to act on. Highlighting derives from the buffer
 /// revision into the caller's [`HighlightCache`]: frames without edits
@@ -196,13 +127,11 @@ pub fn show_source<B: Buffer>(
             .floor()
             .max(1.0) as usize
     });
-    let visual_rows = visual_rows(doc, wrap_columns);
-    #[allow(clippy::cast_precision_loss)] // UI coordinate
-    let content_height = visual_rows.len().max(1) as f32 * row_height;
     let mut effects = Vec::new();
 
     // Highlight derive, once per buffer revision: unchanged frames repaint
-    // straight from the cache without rebuilding the text.
+    // straight from the cache without rebuilding the text. The row layout
+    // is cached on the same key, so an idle frame does no per-line work.
     let dark = ui.visuals().dark_mode;
     if !highlight.is_current(language, dark, doc.revision()) {
         let mut text = String::new();
@@ -212,6 +141,10 @@ pub fn show_source<B: Buffer>(
         }
         highlight.ensure(language, dark, doc.revision(), &text);
     }
+    highlight.ensure_rows(doc, wrap_columns);
+    let visual_rows = highlight.rows();
+    #[allow(clippy::cast_precision_loss)] // UI coordinate
+    let content_height = visual_rows.len().max(1) as f32 * row_height;
 
     // Keep one footer row outside the source viewport. The viewport must
     // fill its allotted height even when the file has only a few lines;
@@ -219,32 +152,50 @@ pub fn show_source<B: Buffer>(
     let footer_height = if options.show_status { row_height } else { 0.0 };
     let max_scroll =
         (ui.available_height() - footer_height - ui.spacing().item_spacing.y).max(row_height);
+    // Long lines pan instead of clipping: without soft wrap the content
+    // keeps its full width and the scroll area owns both axes.
+    let h_scroll = !options.soft_wrap;
+    #[allow(clippy::cast_precision_loss)] // UI coordinate
+    let content_width =
+        (gutter + highlight.max_cells() as f32 * advance + advance).max(ui.available_width());
     let mut content_rect = egui::Rect::NOTHING;
     let mut context_menu_opened = false;
     let mut rename_action_rect = None;
     let mut hover_action_rect = None;
     let mut activated = false;
-    let mut scroll = egui::ScrollArea::vertical()
+    let focus_id = source_focus_id(id);
+    // Set while a drag selection owns the pointer: the next plain click
+    // collapses it instead of extending it like a `v` selection would.
+    let mouse_drag_key = focus_id.with("native-source-drag");
+    let mut scroll = if h_scroll {
+        egui::ScrollArea::both()
+    } else {
+        egui::ScrollArea::vertical()
+    };
+    scroll = scroll
         .id_salt(("native-source", id))
         .max_height(max_scroll)
-        .auto_shrink([true, false]);
+        .auto_shrink([!h_scroll, false]);
     if let Some(fraction) = options.scroll_fraction {
         scroll = scroll.vertical_scroll_offset(
             (content_height - max_scroll).max(0.0) * fraction.clamp(0.0, 1.0),
         );
     }
     let scroll_output = scroll.show(ui, |ui| {
-        let width = ui.available_width().max(gutter + advance);
+        let width = if h_scroll {
+            content_width
+        } else {
+            ui.available_width().max(gutter + advance)
+        };
         let (response, painter) = ui.allocate_painter(
             Vec2::new(width, content_height.max(max_scroll)),
-            Sense::click(),
+            Sense::click_and_drag(),
         );
         // I-beam over file text; the default Sense::click pointer reads
         // as "clickable chrome" instead of an editor.
         let response = response.on_hover_cursor(egui::CursorIcon::Text);
         content_rect = response.rect;
         activated = response.clicked() || response.secondary_clicked();
-        let focus_id = source_focus_id(id);
         ui.ctx().data_mut(|data| {
             data.insert_temp(focus_id.with("native-source"), true);
         });
@@ -254,25 +205,63 @@ pub fn show_source<B: Buffer>(
         focus.widget_info(|| {
             egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), "Source editor")
         });
+        // Pointer mapping: painted row and display cell back to a buffer
+        // position. A pointer below the last row clamps to it, so a drag
+        // that leaves the pane keeps selecting.
+        let cursor_at = |pos: egui::Pos2| -> Option<(usize, usize)> {
+            let origin = response.rect.min;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            // UI coordinate
+            let row_index = ((pos.y - origin.y) / row_height).floor().max(0.0) as usize;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            // UI coordinate
+            let cells = ((pos.x - origin.x - gutter) / advance).round().max(0.0) as usize;
+            // Wide chars occupy two cells: resolve the display cell back to
+            // a char column on the hit row.
+            let row = visual_rows.get(row_index).or_else(|| visual_rows.last())?;
+            Some((
+                row.line,
+                row.start.saturating_add(col_at_display_x(&row.text, cells)),
+            ))
+        };
         if response.clicked() || (response.secondary_clicked() && engine.selection().is_none()) {
             ui.memory_mut(|memory| memory.request_focus(focus_id));
-            if let Some(pos) = response.interact_pointer_pos() {
-                let click_origin = response.rect.min;
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                // UI coordinate
-                let visual_line = ((pos.y - click_origin.y) / row_height).floor().max(0.0) as usize;
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                // UI coordinate
-                let cells = ((pos.x - click_origin.x - gutter) / advance)
-                    .round()
-                    .max(0.0) as usize;
-                // Wide chars occupy two cells: resolve the display cell
-                // back to a char column on the clicked row.
-                if let Some(row) = visual_rows.get(visual_line).or_else(|| visual_rows.last()) {
-                    let col = row.start.saturating_add(col_at_display_x(&row.text, cells));
-                    effects.extend(engine.place_cursor(doc, row.line, col));
-                }
+            // A plain click after a drag collapses that selection instead of
+            // extending it the way a `v` selection does.
+            let dragged = ui
+                .ctx()
+                .data_mut(|data| data.remove_temp::<bool>(mouse_drag_key).unwrap_or(false));
+            if dragged {
+                engine.clear_mouse_selection(doc);
             }
+            if let Some(pos) = response.interact_pointer_pos()
+                && let Some((line, col)) = cursor_at(pos)
+            {
+                effects.extend(engine.place_cursor(doc, line, col));
+            }
+        }
+        if response.double_clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+            && let Some((line, col)) = cursor_at(pos)
+        {
+            engine.select_word_at(doc, line, col);
+            ui.memory_mut(|memory| memory.request_focus(focus_id));
+        }
+        if response.drag_started() {
+            // The press point, not the position where egui decided this was
+            // a drag: the anchor must be where the button went down.
+            let anchor = ui.input(|input| input.pointer.press_origin());
+            if let Some((line, col)) = anchor.and_then(&cursor_at) {
+                engine.begin_mouse_selection(doc, line, col);
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(mouse_drag_key, true));
+                ui.memory_mut(|memory| memory.request_focus(focus_id));
+            }
+        } else if response.dragged()
+            && let Some(pos) = ui.input(|input| input.pointer.interact_pos())
+            && let Some((line, col)) = cursor_at(pos)
+        {
+            engine.extend_mouse_selection(doc, line, col);
         }
         let mut popup = egui::Popup::context_menu(&response);
         if let Some(style) = options.menu_style {
@@ -456,15 +445,31 @@ pub fn show_source<B: Buffer>(
             if y + row_height < painter.clip_rect().top() || y > painter.clip_rect().bottom() {
                 continue;
             }
-            if options.show_line_numbers && visual.start == 0 {
-                // A marked row tints its line number: errors shout,
-                // warnings caution, lower severities stay quiet.
-                let number_color = options
+            if visual.start == 0 {
+                // Worst severity on the row, for both the line-number tint
+                // and the gutter strip: errors shout, warnings caution,
+                // lower severities stay quiet.
+                let mark = options
                     .diagnostics
                     .binary_search_by(|mark| mark.line.cmp(&line))
                     .ok()
-                    .and_then(|at| options.diagnostics.get(at))
-                    .map_or_else(
+                    .and_then(|at| options.diagnostics.get(at));
+                if let Some(mark) = mark {
+                    let color = match mark.severity {
+                        crate::lsp::Severity::Error => ui.visuals().error_fg_color,
+                        crate::lsp::Severity::Warning => ui.visuals().warn_fg_color,
+                        _ => ui.visuals().weak_text_color(),
+                    };
+                    // A 2px strip at the pane edge survives a scan of the
+                    // line numbers, where a color alone does not.
+                    painter.rect_filled(
+                        Rect::from_min_size(Pos2::new(origin.x, y), Vec2::new(2.0, row_height)),
+                        0.0,
+                        color,
+                    );
+                }
+                if options.show_line_numbers {
+                    let number_color = mark.map_or_else(
                         || ui.visuals().weak_text_color(),
                         |mark| match mark.severity {
                             crate::lsp::Severity::Error => ui.visuals().error_fg_color,
@@ -472,13 +477,14 @@ pub fn show_source<B: Buffer>(
                             _ => ui.visuals().weak_text_color(),
                         },
                     );
-                painter.text(
-                    Pos2::new(origin.x + gutter - advance, y),
-                    egui::Align2::RIGHT_TOP,
-                    format!("{}", line.saturating_add(1)),
-                    font.clone(),
-                    number_color,
-                );
+                    painter.text(
+                        Pos2::new(origin.x + gutter - advance, y),
+                        egui::Align2::RIGHT_TOP,
+                        format!("{}", line.saturating_add(1)),
+                        font.clone(),
+                        number_color,
+                    );
+                }
             }
             let text = &visual.text;
             // Selection background for this row.
@@ -796,8 +802,11 @@ pub fn show_source<B: Buffer>(
                         .retain(|event| !matches!(event, egui::Event::Text(_)));
                 });
             }
-            // Keep repainting while focused so the cursor stays live.
-            ui.ctx().request_repaint();
+            // Keep repainting while focused so the caret stays live. The
+            // caret does not blink, so a slow tick is enough: a per-frame
+            // repaint keeps the whole GUI awake for nothing.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(500));
         }
 
         // Yank sync (`clipboard=unnamed`): every unnamed-register write
@@ -833,7 +842,9 @@ pub fn show_source<B: Buffer>(
     };
 
     // Reserve the footer on every frame so entering or leaving command
-    // mode does not move the source viewport.
+    // mode does not move the source viewport. The command prompt owns the
+    // left half; the cursor position always sits at the right edge, so
+    // code editing gets the same Ln/Col readout as the Markdown preview.
     let footer_rect = if options.show_status {
         let (rect, _) = ui.allocate_exact_size(
             Vec2::new(ui.available_width(), footer_height),
@@ -844,8 +855,21 @@ pub fn show_source<B: Buffer>(
                 Pos2::new(rect.left(), rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 prompt,
-                font,
+                font.clone(),
                 ui.visuals().text_color(),
+            );
+        } else {
+            let cursor = engine.cursor();
+            ui.painter().text(
+                Pos2::new(rect.right(), rect.center().y),
+                egui::Align2::RIGHT_CENTER,
+                format!(
+                    "Ln {}, Col {}",
+                    cursor.line.saturating_add(1),
+                    cursor.col.saturating_add(1)
+                ),
+                font.clone(),
+                ui.visuals().weak_text_color(),
             );
         }
         Some(rect)
@@ -983,42 +1007,6 @@ fn selection_span_for_line(
     Some((start, end))
 }
 
-/// Display cells of one char: East Asian wide chars take two columns,
-/// everything else (including tabs, kept single-cell like the engine)
-/// takes one. Control chars fall back to one cell.
-#[must_use]
-pub fn char_display_width(c: char) -> usize {
-    unicode_width::UnicodeWidthChar::width(c)
-        .unwrap_or(1)
-        .max(1)
-}
-
-/// Display-column x (in cells) of char column `col`.
-#[must_use]
-pub fn display_x(text: &str, col: usize) -> usize {
-    text.chars()
-        .take(col)
-        .map(char_display_width)
-        .fold(0usize, |acc, w| acc.saturating_add(w))
-}
-
-/// Char column at display cell `x` (floor: a click on the second cell of
-/// a wide char lands on that char).
-#[must_use]
-pub fn col_at_display_x(text: &str, x: usize) -> usize {
-    let mut acc = 0usize;
-    let mut col = 0usize;
-    for c in text.chars() {
-        let next = acc.saturating_add(char_display_width(c));
-        if next > x {
-            break;
-        }
-        acc = next;
-        col = col.saturating_add(1);
-    }
-    col
-}
-
 /// `-- NORMAL --` style status plus 1-based cursor position.
 pub fn status_line(engine: &impl ModalEngine) -> String {
     let cursor = engine.cursor();
@@ -1032,36 +1020,10 @@ pub fn status_line(engine: &impl ModalEngine) -> String {
 
 #[cfg(test)]
 mod wrap_tests {
-    use super::{SourceOptions, display_x, show_source, visual_rows};
+    use super::{SourceOptions, show_source};
     use crate::doc::{Buffer, Doc};
     use crate::highlight::{HighlightCache, Language};
     use crate::vim::VimEngine;
-
-    #[test]
-    fn wrapped_rows_preserve_source_and_cursor_columns() {
-        let doc = Doc::new("# Heading\n- Long words remain in one logical line\n");
-        let rows = visual_rows(&doc, Some(10));
-        for line in 0..doc.line_count() {
-            let joined: String = rows
-                .iter()
-                .filter(|row| row.line == line)
-                .map(|row| row.text.as_str())
-                .collect();
-            assert_eq!(joined, doc.line_text(line));
-        }
-        assert!(rows.iter().filter(|row| row.line == 1).count() > 1);
-        for col in 0..=doc.line_text(1).chars().count() {
-            assert_eq!(
-                rows.iter().filter(|row| row.owns_cursor(1, col)).count(),
-                1,
-                "cursor column {col} must have one visual row"
-            );
-        }
-        assert!(
-            rows.iter()
-                .all(|row| display_x(&row.text, row.text.chars().count()) <= 10)
-        );
-    }
 
     #[test]
     fn markdown_source_uses_wrapped_viewport_height() {

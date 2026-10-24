@@ -11,6 +11,7 @@ pub mod doc;
 pub mod finder;
 pub mod highlight;
 pub mod lsp;
+mod rows;
 pub mod treesitter;
 pub mod view;
 pub mod vim;

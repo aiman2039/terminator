@@ -1011,11 +1011,16 @@ impl Services {
                 };
                 updates.push(Update::VncTabConnected(tab_id, result));
             }
-            Job::VncFrame { session, since } => {
+            Job::VncFrame {
+                session,
+                since,
+                regions,
+            } => {
                 let result = match client
                     .rpc(Request::VncFrame {
                         session: session.clone(),
                         since,
+                        regions,
                     })
                     .await
                 {

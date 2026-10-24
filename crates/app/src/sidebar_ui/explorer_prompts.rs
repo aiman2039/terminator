@@ -157,14 +157,21 @@ impl App {
                     .tint(appearance::color(&self.theme.secondary)),
             );
             let toggles = if contents { 78.0 } else { 0.0 };
-            let find = ui.add_sized(
-                [ui.available_width() - toggles, appearance::TOOLBAR_BUTTON],
-                appearance::singleline(&mut self.explorer_query).hint_text(if contents {
-                    "Search"
-                } else {
-                    "Find in folder"
-                }),
-            );
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let pad = ui.spacing().button_padding.x.round() as i8;
+            let find = ui
+                .scope(|ui| {
+                    // egui 0.37 floors a text edit at `interact_size.y`; keep
+                    // the toolbar row at the shared button height.
+                    ui.spacing_mut().interact_size.y = appearance::TOOLBAR_BUTTON;
+                    ui.add_sized(
+                        [ui.available_width() - toggles, appearance::TOOLBAR_BUTTON],
+                        appearance::singleline(&mut self.explorer_query)
+                            .hint_text(if contents { "Search" } else { "Find in folder" })
+                            .margin(egui::Margin::symmetric(pad, 2)),
+                    )
+                })
+                .inner;
             if focus_find {
                 find.request_focus();
             }

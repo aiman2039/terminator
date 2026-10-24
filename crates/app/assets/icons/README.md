@@ -32,6 +32,11 @@ and `circle-question-mark` (unknown).
 Lucide 0.577.0 with the same license and white-stroke adaptation, for the chrome
 player.
 
+`keyboard.svg` comes from Lucide 0.577.0 with the same license and white-stroke
+adaptation, for the VNC viewer's send-Ctrl+Alt+Del action. `circle.svg` is a
+local filled dot in the same folder style, tinted to show VNC tab connection
+state in the tab bar.
+
 `menu.svg` comes from Lucide 0.577.0 with the same license and white-stroke
 adaptation, for the header overflow menu.
 

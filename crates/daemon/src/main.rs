@@ -143,6 +143,7 @@ fn main() -> Result<()> {
         METADATA_SETTINGS_CAPABILITY.into(),
         AGENT_PRESENCE_CAPABILITY.into(),
         VNC_CAPABILITY.into(),
+        VNC_REGIONS_CAPABILITY.into(),
     ];
     if catalog_paths.is_some() {
         state.daemon_build = Some(generations::build_identity(

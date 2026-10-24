@@ -5,11 +5,11 @@ use std::{
     io::Write,
     sync::{Arc, Mutex},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use terminator_core::{
     id, now,
-    vnc::{VncFrame, VncInputEvent, VncSession, VncSessionStatus},
+    vnc::{VncFrame, VncInputEvent, VncRegion, VncSession, VncSessionStatus},
 };
 use tokio::sync::mpsc;
 use vnc::{
@@ -20,6 +20,10 @@ use vnc::{
 use crate::server::{Shared, relock};
 
 const MAX_DIMENSION: u16 = 8192;
+/// A viewer that has not asked for a frame within this window has stopped
+/// looking (its window is hidden or closed): the server refresh stops too,
+/// so an unwatched session costs no traffic.
+const CLIENT_ACTIVE: Duration = Duration::from_secs(2);
 
 pub(crate) struct VncRuntime {
     pub(crate) width: u16,
@@ -30,11 +34,18 @@ pub(crate) struct VncRuntime {
     pub(crate) error: Option<String>,
     pub(crate) clipboard: Option<String>,
     pub(crate) view_only: bool,
-    pub(crate) input_tx: Option<mpsc::Sender<VncInputEvent>>,
+    pub(crate) input_tx: Option<mpsc::UnboundedSender<VncInputEvent>>,
+    /// Union of framebuffer rectangles changed since the last encode; see
+    /// [`VncRuntime::encode_frame`]. `None` means the whole frame is stale.
+    dirty: Option<VncRegion>,
+    /// Revision the last encoded frame was cut from: a client that reports
+    /// this revision can take an incremental rectangle.
+    encoded_revision: u64,
+    last_poll: Option<Instant>,
 }
 
 impl VncRuntime {
-    fn new(view_only: bool, input_tx: mpsc::Sender<VncInputEvent>) -> Self {
+    fn new(view_only: bool, input_tx: mpsc::UnboundedSender<VncInputEvent>) -> Self {
         Self {
             width: 0,
             height: 0,
@@ -45,6 +56,9 @@ impl VncRuntime {
             clipboard: None,
             view_only,
             input_tx: Some(input_tx),
+            dirty: None,
+            encoded_revision: 0,
+            last_poll: None,
         }
     }
 
@@ -66,7 +80,19 @@ impl VncRuntime {
                 *alpha = 255;
             }
         }
+        // Every pixel changed: only a full frame can describe this now.
+        self.dirty = None;
         self.revision = self.revision.saturating_add(1);
+    }
+
+    fn mark_dirty(&mut self, region: VncRegion) {
+        if region.is_empty() {
+            return;
+        }
+        self.dirty = Some(match self.dirty {
+            Some(previous) => previous.union(region),
+            None => region,
+        });
     }
 
     fn blit_rgba(&mut self, rect: Rect, src: &[u8]) {
@@ -107,6 +133,12 @@ impl VncRuntime {
                 }
             }
         }
+        self.mark_dirty(VncRegion {
+            x: rect.x,
+            y: rect.y,
+            width: u16::try_from(copy_w).unwrap_or(0),
+            height: u16::try_from(copy_h).unwrap_or(0),
+        });
         self.revision = self.revision.saturating_add(1);
     }
 
@@ -152,25 +184,92 @@ impl VncRuntime {
         self.blit_rgba(clipped, &temp);
     }
 
-    pub(crate) fn encode_frame(&self, session: &str) -> Result<VncFrame> {
-        let zlib_rgba = if self.width > 0 && self.height > 0 && !self.rgba.is_empty() {
-            let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
-            encoder.write_all(&self.rgba)?;
-            B64.encode(encoder.finish()?)
+    /// Encode the current frame for `session`. With `regions` and a client
+    /// that is exactly at the last encoded revision, only the rectangle
+    /// changed since that encode is compressed; otherwise the whole
+    /// framebuffer. Either way the dirty union is consumed and the encoded
+    /// revision becomes current, so the next request can diff against it.
+    pub(crate) fn encode_frame(
+        &mut self,
+        session: &str,
+        since: u64,
+        regions: bool,
+    ) -> Result<VncFrame> {
+        let region = if regions && since > 0 && since == self.encoded_revision {
+            self.dirty.filter(|region| !region.is_empty())
         } else {
-            String::new()
+            None
         };
-        Ok(VncFrame {
+        let mut frame = VncFrame {
             session: session.to_owned(),
             width: self.width,
             height: self.height,
             revision: self.revision,
             status: self.status,
             error: self.error.clone(),
-            zlib_rgba,
+            zlib_rgba: String::new(),
+            region: None,
             clipboard: self.clipboard.clone(),
-        })
+        };
+        if let Some((region, pixels)) = region.and_then(|region| self.region_pixels(region)) {
+            frame.zlib_rgba = encode_pixels(&pixels)?;
+            frame.region = Some(region);
+        } else if self.width > 0 && self.height > 0 && !self.rgba.is_empty() {
+            frame.zlib_rgba = encode_pixels(&self.rgba)?;
+        }
+        self.dirty = None;
+        self.encoded_revision = self.revision;
+        Ok(frame)
     }
+
+    /// Copy one rectangle out of the framebuffer, clipped to its bounds.
+    /// `None` when the rectangle is outside or the framebuffer is empty.
+    fn region_pixels(&self, region: VncRegion) -> Option<(VncRegion, Vec<u8>)> {
+        if self.width == 0 || self.height == 0 || region.is_empty() {
+            return None;
+        }
+        let fb_w = usize::from(self.width);
+        let fb_h = usize::from(self.height);
+        let x = usize::from(region.x).min(fb_w);
+        let y = usize::from(region.y).min(fb_h);
+        let width = usize::from(region.width).min(fb_w.saturating_sub(x));
+        let height = usize::from(region.height).min(fb_h.saturating_sub(y));
+        if width == 0 || height == 0 {
+            return None;
+        }
+        let row_bytes = width.saturating_mul(4);
+        let mut pixels = Vec::with_capacity(height.saturating_mul(row_bytes));
+        for row in 0..height {
+            let start = y
+                .saturating_add(row)
+                .saturating_mul(fb_w)
+                .saturating_add(x)
+                .saturating_mul(4);
+            let end = start.saturating_add(row_bytes);
+            pixels.extend_from_slice(self.rgba.get(start..end)?);
+        }
+        Some((
+            VncRegion {
+                x: u16::try_from(x).unwrap_or(0),
+                y: u16::try_from(y).unwrap_or(0),
+                width: u16::try_from(width).unwrap_or(0),
+                height: u16::try_from(height).unwrap_or(0),
+            },
+            pixels,
+        ))
+    }
+
+    /// True while a viewer has asked for a frame within [`CLIENT_ACTIVE`].
+    fn polled_recently(&self) -> bool {
+        self.last_poll
+            .is_some_and(|polled| polled.elapsed() < CLIENT_ACTIVE)
+    }
+}
+
+fn encode_pixels(pixels: &[u8]) -> Result<String> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(pixels)?;
+    Ok(B64.encode(encoder.finish()?))
 }
 
 pub(crate) struct VncConnectSpec {
@@ -203,6 +302,10 @@ impl Shared {
         ensure!(port > 0, "Invalid VNC port");
         let sid = id();
         let now_ts = now();
+        // A reconnect to the same endpoint leaves the previous dead record
+        // behind forever; drop it (and its runtime) so the sidebar and the
+        // session list do not fill with duplicates.
+        let mut stale: Vec<String> = Vec::new();
         let record = {
             let mut state = relock(&self.state);
             if !project.is_empty() {
@@ -211,6 +314,16 @@ impl Shared {
                     "Unknown project"
                 );
             }
+            state.vnc_sessions.retain(|session| {
+                let duplicate = session.project_id == project
+                    && session.host == host
+                    && session.port == port
+                    && !session.status.live();
+                if duplicate {
+                    stale.push(session.id.clone());
+                }
+                !duplicate
+            });
             if let Some(pid) = &profile_id
                 && let Some(profile) = state.vnc_profiles.iter_mut().find(|p| &p.id == pid)
             {
@@ -253,31 +366,47 @@ impl Shared {
         }
         let _ = self.persist();
 
-        let (input_tx, input_rx) = mpsc::channel::<VncInputEvent>(256);
+        for id in &stale {
+            if let Some(runtime) = relock(&self.vnc_sessions).remove(id) {
+                let mut rt = relock(&runtime);
+                rt.input_tx = None;
+                rt.status = VncSessionStatus::Disconnected;
+                rt.revision = rt.revision.saturating_add(1);
+            }
+        }
+
+        // Unbounded: input must never be dropped or block the RPC thread,
+        // and an unbounded send from an async context is immediate.
+        let (input_tx, input_rx) = mpsc::unbounded_channel::<VncInputEvent>();
         let runtime = Arc::new(Mutex::new(VncRuntime::new(view_only, input_tx)));
         relock(&self.vnc_sessions).insert(sid.clone(), Arc::clone(&runtime));
 
         let shared_ref = Arc::clone(self);
         let session_id = sid;
         thread::spawn(move || {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let Ok(rt) = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                else {
-                    mark_failed(
-                        &shared_ref,
-                        &runtime,
-                        &session_id,
-                        "Could not initialize async runtime".into(),
-                    );
-                    return;
-                };
-                rt.block_on(run_vnc_session(
-                    shared_ref, runtime, session_id, host, port, password, shared, view_only,
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_vnc_thread(
+                    &shared_ref,
+                    &runtime,
+                    &session_id,
+                    host,
+                    port,
+                    password,
+                    shared,
+                    view_only,
                     input_rx,
-                ));
+                );
             }));
+            if outcome.is_err() {
+                // The session thread is gone: the GUI must not keep showing
+                // a live connection that will never produce another frame.
+                mark_failed(
+                    &shared_ref,
+                    &runtime,
+                    &session_id,
+                    "VNC session stopped after an internal error".into(),
+                );
+            }
         });
 
         Ok(record)
@@ -312,22 +441,70 @@ impl Shared {
             rt.input_tx.clone().context("VNC session is closed")?
         };
         for event in events {
-            let _ = tx.try_send(event);
+            let _ = tx.send(event);
         }
         Ok(())
     }
 
-    pub(crate) fn vnc_frame(&self, session: &str, since: u64) -> Result<Option<VncFrame>> {
+    pub(crate) fn vnc_frame(
+        &self,
+        session: &str,
+        since: u64,
+        regions: bool,
+    ) -> Result<Option<VncFrame>> {
         let runtime = relock(&self.vnc_sessions)
             .get(session)
             .cloned()
             .context("VNC session is not live")?;
-        let rt = relock(&runtime);
+        let mut rt = relock(&runtime);
+        // Any request counts as the viewer still watching: hidden or closed
+        // views stop asking, and the refresh below stops with them.
+        rt.last_poll = Some(Instant::now());
         if rt.revision <= since {
             return Ok(None);
         }
-        rt.encode_frame(session).map(Some)
+        rt.encode_frame(session, since, regions).map(Some)
     }
+}
+
+/// Build the per-session runtime and drive it to completion. Split out so
+/// the spawning thread can catch a panic from anywhere inside, including
+/// the runtime build.
+#[allow(clippy::too_many_arguments)]
+fn run_vnc_thread(
+    shared: &Arc<Shared>,
+    runtime: &Arc<Mutex<VncRuntime>>,
+    session_id: &str,
+    host: String,
+    port: u16,
+    password: String,
+    allow_shared: bool,
+    view_only: bool,
+    input_rx: mpsc::UnboundedReceiver<VncInputEvent>,
+) {
+    let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    else {
+        mark_failed(
+            shared,
+            runtime,
+            session_id,
+            "Could not initialize async runtime".into(),
+        );
+        return;
+    };
+    rt.block_on(run_vnc_session(
+        Arc::clone(shared),
+        Arc::clone(runtime),
+        session_id.to_owned(),
+        host,
+        port,
+        password,
+        allow_shared,
+        view_only,
+        input_rx,
+    ));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -340,7 +517,7 @@ async fn run_vnc_session(
     password: String,
     allow_shared: bool,
     view_only: bool,
-    mut input_rx: mpsc::Receiver<VncInputEvent>,
+    mut input_rx: mpsc::UnboundedReceiver<VncInputEvent>,
 ) {
     let endpoint = if host.contains(':') && !host.starts_with('[') {
         format!("[{host}]:{port}")
@@ -469,7 +646,10 @@ async fn run_vnc_session(
                 }
             }
             _ = refresh_tick.tick() => {
-                if client.input(X11Event::Refresh).await.is_err() {
+                // An unwatched session stops asking the server for damage:
+                // no viewer is polling, so the bandwidth would be wasted.
+                let watched = relock(&runtime).polled_recently();
+                if watched && client.input(X11Event::Refresh).await.is_err() {
                     mark_disconnected(&shared, &runtime, &session_id, None);
                     break;
                 }
@@ -625,5 +805,136 @@ fn mark_disconnected(
         rec.status = VncSessionStatus::Disconnected;
         rec.error = reason;
         state.revision = state.revision.saturating_add(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::read::ZlibDecoder;
+    use std::io::Read;
+
+    fn runtime() -> VncRuntime {
+        let (input_tx, _input_rx) = mpsc::unbounded_channel();
+        VncRuntime::new(false, input_tx)
+    }
+
+    fn pixels(encoded: &str) -> Vec<u8> {
+        let compressed = B64.decode(encoded).expect("base64 payload");
+        let mut out = Vec::new();
+        ZlibDecoder::new(compressed.as_slice())
+            .read_to_end(&mut out)
+            .expect("zlib payload");
+        out
+    }
+
+    fn one_pixel(runtime: &mut VncRuntime, x: u16, y: u16, rgba: [u8; 4]) {
+        runtime.blit_rgba(
+            Rect {
+                x,
+                y,
+                width: 1,
+                height: 1,
+            },
+            &rgba,
+        );
+    }
+
+    #[test]
+    fn a_client_at_the_encoded_revision_takes_the_changed_region_only() {
+        let mut rt = runtime();
+        rt.resize(4, 4);
+        let full = rt.encode_frame("s", 0, true).expect("full frame");
+        assert_eq!(full.region, None, "nothing encoded yet: the whole frame");
+        assert_eq!(pixels(&full.zlib_rgba).len(), 4 * 4 * 4);
+        assert_eq!((full.width, full.height), (4, 4));
+
+        one_pixel(&mut rt, 1, 2, [9, 8, 7, 255]);
+        let partial = rt
+            .encode_frame("s", full.revision, true)
+            .expect("partial frame");
+        assert_eq!(
+            partial.region,
+            Some(VncRegion {
+                x: 1,
+                y: 2,
+                width: 1,
+                height: 1
+            })
+        );
+        assert_eq!(pixels(&partial.zlib_rgba), vec![9, 8, 7, 255]);
+        assert_eq!(
+            (partial.width, partial.height),
+            (4, 4),
+            "the record keeps describing the whole remote screen"
+        );
+
+        // The region was consumed: a poll with no new damage answers with
+        // the full frame rather than repeating the one rectangle.
+        let next = rt
+            .encode_frame("s", partial.revision, true)
+            .expect("next frame");
+        assert_eq!(next.region, None);
+    }
+
+    #[test]
+    fn a_client_behind_the_encoded_revision_gets_the_whole_frame() {
+        let mut rt = runtime();
+        rt.resize(2, 2);
+        let full = rt.encode_frame("s", 0, true).expect("full frame");
+        one_pixel(&mut rt, 0, 0, [1, 2, 3, 255]);
+        // The client never took the last full frame, so a rectangle cut
+        // from it would land on the wrong texture.
+        let stale = rt
+            .encode_frame("s", full.revision.saturating_sub(1), true)
+            .expect("stale frame");
+        assert_eq!(stale.region, None);
+        assert_eq!(pixels(&stale.zlib_rgba).len(), 2 * 2 * 4);
+    }
+
+    #[test]
+    fn a_client_that_never_asked_for_regions_gets_the_whole_frame() {
+        let mut rt = runtime();
+        rt.resize(2, 2);
+        let full = rt.encode_frame("s", 0, false).expect("full frame");
+        one_pixel(&mut rt, 1, 1, [4, 5, 6, 255]);
+        let frame = rt
+            .encode_frame("s", full.revision, false)
+            .expect("legacy frame");
+        assert_eq!(frame.region, None);
+        assert_eq!(pixels(&frame.zlib_rgba).len(), 2 * 2 * 4);
+    }
+
+    #[test]
+    fn a_resize_invalidates_incremental_updates() {
+        let mut rt = runtime();
+        rt.resize(2, 2);
+        let full = rt.encode_frame("s", 0, true).expect("full frame");
+        rt.resize(3, 3);
+        let frame = rt
+            .encode_frame("s", full.revision, true)
+            .expect("resized frame");
+        assert_eq!(frame.region, None, "every pixel changed");
+        assert_eq!(pixels(&frame.zlib_rgba).len(), 3 * 3 * 4);
+    }
+
+    #[test]
+    fn the_server_refresh_follows_the_last_client_poll() {
+        let mut rt = runtime();
+        assert!(!rt.polled_recently(), "no viewer has asked yet");
+        rt.last_poll = Some(Instant::now());
+        assert!(
+            rt.polled_recently(),
+            "a viewer that just polled keeps the refresh running"
+        );
+        rt.last_poll = Some(
+            Instant::now()
+                .checked_sub(CLIENT_ACTIVE + Duration::from_secs(1))
+                .expect("instant inside the clock range"),
+        );
+        assert!(
+            !rt.polled_recently(),
+            "a viewer that stopped asking costs no traffic"
+        );
     }
 }

@@ -4,6 +4,8 @@
 //! work is a full parse cached by [`HighlightCache`] on the buffer
 //! revision, so frames after an edit cost nothing. Buffers over
 //! [`MAX_HIGHLIGHT_BYTES`] paint plain (large-file degradation).
+use crate::doc::Buffer;
+use crate::rows::{RowCache, VisualRow};
 use std::sync::OnceLock;
 use syntect::highlighting::{HighlightIterator, HighlightState, Highlighter, ThemeSet};
 use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
@@ -252,7 +254,9 @@ pub fn highlight_text(language: Language, text: &str, dark: bool) -> Option<Vec<
 }
 
 /// Revision-keyed highlight cache: one per open buffer, owned by the app
-/// next to the buffer it derives from.
+/// next to the buffer it derives from. The row layout lives here too: the
+/// app owns exactly one cache per buffer, and both derivations share the
+/// same revision key.
 #[derive(Default)]
 pub struct HighlightCache {
     language: Option<Language>,
@@ -260,6 +264,7 @@ pub struct HighlightCache {
     revision: u64,
     ready: bool,
     lines: Vec<Vec<Span>>,
+    rows: RowCache,
 }
 
 impl HighlightCache {
@@ -293,6 +298,24 @@ impl HighlightCache {
             Some(spans) => spans,
             None => &[],
         }
+    }
+
+    /// Lay out the painted rows for this revision and wrap width, reusing
+    /// the previous frame's rows until either changes.
+    pub fn ensure_rows<B: Buffer>(&mut self, doc: &B, wrap_columns: Option<usize>) {
+        self.rows.ensure(doc, wrap_columns);
+    }
+
+    /// Rows laid out by the last [`HighlightCache::ensure_rows`].
+    #[must_use]
+    pub fn rows(&self) -> &[VisualRow] {
+        self.rows.rows()
+    }
+
+    /// Widest laid-out row in display cells, for the horizontal extent.
+    #[must_use]
+    pub fn max_cells(&self) -> usize {
+        self.rows.max_cells()
     }
 }
 

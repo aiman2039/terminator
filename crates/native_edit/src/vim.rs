@@ -5,6 +5,7 @@ mod insert;
 mod modal;
 mod mode;
 mod motions;
+mod mouse;
 mod normal;
 mod operators;
 mod record;

@@ -5,7 +5,8 @@ use super::keys::{
     IdeAction, command_prompt, ctrl_h_is_motion, ctrl_v_is_block, echo_of_handled_key, egui_key,
     ide_shortcut, mode_name, source_focus_id,
 };
-use super::render::{SourceOptions, char_display_width, col_at_display_x, display_x, show_source};
+use super::render::{SourceOptions, show_source};
+use super::{char_display_width, col_at_display_x, display_x};
 use egui;
 #[cfg(test)]
 mod tests {

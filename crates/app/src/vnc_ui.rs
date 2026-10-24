@@ -10,7 +10,7 @@ use flate2::read::ZlibDecoder;
 use terminator_core::{
     Request, VNC_CAPABILITY, id,
     vnc::{
-        DEFAULT_PORT, VncFrame, VncInputEvent, VncProfile, VncSession, VncSessionStatus,
+        DEFAULT_PORT, VncFrame, VncInputEvent, VncProfile, VncRegion, VncSession, VncSessionStatus,
         parse_host_port,
     },
 };
@@ -25,14 +25,22 @@ pub(crate) struct VncDecodedFrame {
     pub(crate) status: VncSessionStatus,
     pub(crate) error: Option<String>,
     pub(crate) image: Option<ColorImage>,
+    /// Set when `image` covers only this rectangle of the frame.
+    pub(crate) region: Option<VncRegion>,
     pub(crate) clipboard: Option<String>,
 }
 
 pub(crate) fn decode_frame(frame: VncFrame) -> Result<VncDecodedFrame> {
-    let image = if frame.width > 0 && frame.height > 0 && !frame.zlib_rgba.is_empty() {
+    // A partial frame carries the changed rectangle only; the record's
+    // width/height still describe the whole remote screen.
+    let (pixels_w, pixels_h) = match frame.region {
+        Some(region) => (region.width, region.height),
+        None => (frame.width, frame.height),
+    };
+    let image = if pixels_w > 0 && pixels_h > 0 && !frame.zlib_rgba.is_empty() {
         let compressed = B64.decode(&frame.zlib_rgba)?;
-        let expected = usize::from(frame.width)
-            .saturating_mul(usize::from(frame.height))
+        let expected = usize::from(pixels_w)
+            .saturating_mul(usize::from(pixels_h))
             .saturating_mul(4);
         ensure!(
             expected <= 128 * 1024 * 1024,
@@ -44,7 +52,7 @@ pub(crate) fn decode_frame(frame: VncFrame) -> Result<VncDecodedFrame> {
             .read_to_end(&mut rgba)?;
         if rgba.len() == expected {
             Some(ColorImage::from_rgba_unmultiplied(
-                [usize::from(frame.width), usize::from(frame.height)],
+                [usize::from(pixels_w), usize::from(pixels_h)],
                 &rgba,
             ))
         } else {
@@ -61,6 +69,7 @@ pub(crate) fn decode_frame(frame: VncFrame) -> Result<VncDecodedFrame> {
         status: frame.status,
         error: frame.error,
         image,
+        region: frame.region,
         clipboard: frame.clipboard,
     })
 }
@@ -76,6 +85,20 @@ pub(crate) struct VncViewState {
     pub(crate) last_poll: Option<Instant>,
     pub(crate) fit: bool,
     pub(crate) last_pointer: Option<(u16, u16, u8)>,
+    /// Ask the next frame request for the whole screen: set when the
+    /// texture cannot take an incremental update (missing, wrong size, or
+    /// a decode that produced nothing).
+    pub(crate) force_full: bool,
+    /// Keyboard focus on the remote screen last frame: a fall from true to
+    /// false releases every held key and modifier.
+    pub(crate) focused: bool,
+    /// Vergen modifier state (shift/ctrl/alt/meta) held for the remote:
+    /// the viewer presses and releases the remote modifier keys itself so
+    /// Shift+click and Ctrl+C land as the remote expects.
+    pub(crate) modifier_bits: u8,
+    /// Keysyms currently held down for the remote, released when this
+    /// view loses focus so nothing sticks.
+    pub(crate) held_keys: Vec<u32>,
     pub(crate) draft_name: String,
     pub(crate) draft_host: String,
     pub(crate) draft_port: String,
@@ -99,6 +122,10 @@ impl Default for VncViewState {
             last_poll: None,
             fit: true,
             last_pointer: None,
+            force_full: false,
+            focused: false,
+            modifier_bits: 0,
+            held_keys: Vec::new(),
             draft_name: String::new(),
             draft_host: "127.0.0.1".into(),
             draft_port: DEFAULT_PORT.to_string(),
@@ -111,7 +138,6 @@ impl Default for VncViewState {
     }
 }
 
-#[derive(Default)]
 pub(crate) struct VncSidebarState {
     pub(crate) filter: String,
     pub(crate) editing_id: Option<String>,
@@ -122,8 +148,30 @@ pub(crate) struct VncSidebarState {
     pub(crate) username: String,
     pub(crate) password: String,
     pub(crate) show_password: bool,
+    pub(crate) save_password: bool,
     pub(crate) shared: bool,
     pub(crate) view_only: bool,
+}
+
+impl Default for VncSidebarState {
+    fn default() -> Self {
+        // The same starting point as [`Self::begin_new`]: a form that opens
+        // without an explicit reset still shows a usable host and port.
+        Self {
+            filter: String::new(),
+            editing_id: None,
+            form_open: false,
+            name: String::new(),
+            host: "127.0.0.1".into(),
+            port: DEFAULT_PORT.to_string(),
+            username: String::new(),
+            password: String::new(),
+            show_password: false,
+            save_password: true,
+            shared: true,
+            view_only: false,
+        }
+    }
 }
 
 impl VncSidebarState {
@@ -136,6 +184,7 @@ impl VncSidebarState {
         self.username.clear();
         self.password.clear();
         self.show_password = false;
+        self.save_password = true;
         self.shared = true;
         self.view_only = false;
     }
@@ -149,6 +198,7 @@ impl VncSidebarState {
         self.username.clone_from(&profile.username);
         self.password.clone_from(&profile.password);
         self.show_password = false;
+        self.save_password = true;
         self.shared = profile.shared;
         self.view_only = profile.view_only;
     }
@@ -238,12 +288,39 @@ impl App {
         entry.revision = decoded.revision;
         entry.status = decoded.status;
         entry.error = decoded.error;
+        let frame_size = [usize::from(decoded.width), usize::from(decoded.height)];
+        let mut applied = false;
         if let Some(image) = decoded.image {
-            entry.texture = Some(ctx.load_texture(
-                format!("vnc:{}", decoded.session),
-                image,
-                egui::TextureOptions::LINEAR,
-            ));
+            // A partial frame is valid only on top of the texture the daemon
+            // cut it from. Anything else (no texture yet, a resize, a
+            // dropped frame) falls through to a full request.
+            if let Some(region) = decoded.region {
+                let in_bounds = usize::from(region.x).saturating_add(usize::from(region.width))
+                    <= frame_size[0]
+                    && usize::from(region.y).saturating_add(usize::from(region.height))
+                        <= frame_size[1];
+                if in_bounds
+                    && let Some(texture) = entry.texture.as_mut()
+                    && texture.size() == frame_size
+                {
+                    texture.set_partial(
+                        [usize::from(region.x), usize::from(region.y)],
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    applied = true;
+                }
+            } else {
+                entry.texture = Some(ctx.load_texture(
+                    format!("vnc:{}", decoded.session),
+                    image,
+                    egui::TextureOptions::LINEAR,
+                ));
+                applied = true;
+            }
+        }
+        if !applied {
+            entry.force_full = true;
         }
         if let Some(clipboard) = decoded.clipboard
             && !clipboard.is_empty()
@@ -451,6 +528,11 @@ impl App {
                 ui.checkbox(&mut self.vnc_sidebar.shared, "Shared session");
                 ui.checkbox(&mut self.vnc_sidebar.view_only, "View only");
             });
+            ui.checkbox(
+                &mut self.vnc_sidebar.save_password,
+                "Save password with this host",
+            )
+            .on_hover_text("Off: the password is only used for this session");
             ui.horizontal(|ui| {
                 let save = ui.button("Save").clicked();
                 let save_connect = ui.button("Save & Connect").clicked();
@@ -473,7 +555,11 @@ impl App {
                             host,
                             port: parsed_port,
                             username: self.vnc_sidebar.username.trim().to_owned(),
-                            password: self.vnc_sidebar.password.clone(),
+                            password: if self.vnc_sidebar.save_password {
+                                self.vnc_sidebar.password.clone()
+                            } else {
+                                String::new()
+                            },
                             shared: self.vnc_sidebar.shared,
                             view_only: self.vnc_sidebar.view_only,
                             last_connected: 0,
@@ -489,6 +575,75 @@ impl App {
                 }
             });
         });
+    }
+
+    /// Drop view state for sessions and drafts that no open tab uses. Runs
+    /// after the frame is laid out, so a tab that closed this frame loses
+    /// its texture instead of keeping it alive forever.
+    pub(super) fn prune_vnc_views(&mut self) {
+        let mut live: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut collect = |tab: &Tab| {
+            if let Tab::Vnc { id, session, .. } = tab {
+                if session.is_empty() {
+                    live.insert(format!("draft:{id}"));
+                } else {
+                    live.insert(session.clone());
+                }
+            }
+        };
+        for workspace in self.layouts.values() {
+            for tab in &workspace.tabs {
+                for (_, tab) in tab.layout.iter_all_tabs() {
+                    collect(tab);
+                }
+            }
+        }
+        for window in &self.floating {
+            let Some(dock) = window.dock.as_ref() else {
+                continue;
+            };
+            for (_, tab) in dock.iter_all_tabs() {
+                collect(tab);
+            }
+        }
+        // Views painted this frame are kept even if their tab is mid-move:
+        // a transient dock check-out must not drop a live texture.
+        live.extend(self.visible_vnc.iter().cloned());
+        self.vnc_views.retain(|key, _| live.contains(key));
+    }
+
+    /// True when any open tab (docked or floating) still shows `session`.
+    pub(super) fn vnc_session_has_tab(&self, session: &str) -> bool {
+        let docked = self.layouts.values().any(|workspace| {
+            workspace.tabs.iter().any(|tab| {
+                tab.layout
+                    .iter_all_tabs()
+                    .any(|(_, tab)| matches!(tab, Tab::Vnc { session: sid, .. } if sid == session))
+            })
+        });
+        if docked {
+            return true;
+        }
+        self.floating.iter().any(|window| {
+            window.dock.as_ref().is_some_and(|dock| {
+                dock.iter_all_tabs()
+                    .any(|(_, tab)| matches!(tab, Tab::Vnc { session: sid, .. } if sid == session))
+            })
+        })
+    }
+
+    /// Send the deferred disconnect for a closed VNC tab, unless another
+    /// tab still shows the session. Called after the dock is checked back
+    /// in: counting tabs while the workspace is checked out missed the
+    /// remaining copies and dropped a session still on screen.
+    pub(super) fn drain_pending_vnc_disconnect(&mut self) {
+        let Some(session) = self.pending_vnc_disconnect.take() else {
+            return;
+        };
+        if session.is_empty() || self.vnc_session_has_tab(&session) {
+            return;
+        }
+        self.send(Request::VncDisconnect { session });
     }
 
     pub(crate) fn focus_or_open_vnc_session(&mut self, session: &VncSession) {
@@ -542,7 +697,6 @@ impl App {
         port: &mut u16,
         label: &mut String,
     ) {
-        self.visible_vnc.insert(session_id.clone());
         let daemon_session = self
             .state
             .vnc_sessions
@@ -550,11 +704,15 @@ impl App {
             .find(|s| s.id == *session_id)
             .cloned();
 
+        // View state is keyed by session, or by the tab while it is still a
+        // draft: the key doubles as the "seen this frame" marker that keeps
+        // the pruner from dropping live view state.
         let state_key = if session_id.is_empty() {
             format!("draft:{tab_id}")
         } else {
             session_id.clone()
         };
+        self.visible_vnc.insert(state_key.clone());
         let mut connect_request: Option<PendingVncConnect> = None;
         let mut disconnect_clicked = false;
         let mut refresh_clicked = false;
@@ -609,6 +767,50 @@ impl App {
                 if view.width > 0 && view.height > 0 {
                     ui.weak(format!("{} × {}", view.width, view.height));
                 }
+                // Actions stay one row of same-size icon buttons; the two
+                // view-mode toggles trail them so the icon row does not mix
+                // in differently sized widgets.
+                if daemon_session
+                    .as_ref()
+                    .is_some_and(|s| s.status == VncSessionStatus::Connected)
+                {
+                    refresh_clicked =
+                        appearance::sidebar_action(ui, "RefreshCw", "Refresh remote screen")
+                            .clicked();
+                    cad_clicked = appearance::sidebar_action(
+                        ui,
+                        "Keyboard",
+                        "Send Ctrl+Alt+Del to remote host",
+                    )
+                    .clicked();
+                    disconnect_clicked =
+                        appearance::sidebar_action(ui, "CircleStop", "Disconnect").clicked();
+                } else if !host.is_empty()
+                    && appearance::sidebar_action(ui, "Play", "Reconnect").clicked()
+                {
+                    connect_request = Some(PendingVncConnect {
+                        profile_id: profile_id.clone(),
+                        host: host.clone(),
+                        port: *port,
+                        username: view.draft_username.clone(),
+                        password: view.draft_password.clone(),
+                        shared: view.draft_shared,
+                        view_only: view.draft_view_only,
+                        label: Some(label.clone()),
+                        save_profile: false,
+                    });
+                }
+                if !host.is_empty()
+                    && profile_id.is_none()
+                    && appearance::sidebar_action(ui, "Save", "Save host to the VNC sidebar")
+                        .clicked()
+                {
+                    save_to_sidebar = true;
+                }
+                if appearance::sidebar_action(ui, "PanelRight", "Open the VNC sidebar").clicked() {
+                    open_sidebar = true;
+                }
+                ui.separator();
                 if ui
                     .selectable_label(view.fit, "Fit")
                     .on_hover_text("Scale remote screen to pane")
@@ -622,35 +824,6 @@ impl App {
                     .clicked()
                 {
                     view.fit = false;
-                }
-                if daemon_session
-                    .as_ref()
-                    .is_some_and(|s| s.status == VncSessionStatus::Connected)
-                {
-                    refresh_clicked = ui.button("Refresh").clicked();
-                    cad_clicked = ui
-                        .button("Ctrl+Alt+Del")
-                        .on_hover_text("Send Ctrl+Alt+Del to remote host")
-                        .clicked();
-                    disconnect_clicked = ui.button("Disconnect").clicked();
-                } else if !host.is_empty() && ui.button("Reconnect").clicked() {
-                    connect_request = Some(PendingVncConnect {
-                        profile_id: profile_id.clone(),
-                        host: host.clone(),
-                        port: *port,
-                        username: view.draft_username.clone(),
-                        password: view.draft_password.clone(),
-                        shared: view.draft_shared,
-                        view_only: view.draft_view_only,
-                        label: Some(label.clone()),
-                        save_profile: false,
-                    });
-                }
-                if !host.is_empty() && profile_id.is_none() && ui.button("Save host").clicked() {
-                    save_to_sidebar = true;
-                }
-                if ui.button("VNC Sidebar").clicked() {
-                    open_sidebar = true;
                 }
             });
         }
@@ -723,47 +896,23 @@ impl App {
 
         let is_live = daemon_session.as_ref().is_some_and(|s| s.status.live());
         if !is_live {
-            let profiles = self.state.vnc_profiles.clone();
             let view = self.vnc_views.entry(state_key.clone()).or_default();
             if let Some(error) = &view.error {
                 ui.colored_label(appearance::color(&self.theme.status_failed), error);
                 ui.add_space(4.0);
             }
+            // The saved hosts live in the VNC sidebar; repeating them here
+            // duplicated every row and its two controls, so this pane only
+            // carries the direct connection form.
             ui.vertical(|ui| {
-                if !profiles.is_empty() {
-                    ui.strong("Saved Connections (One-Click Connect)");
-                    ui.horizontal_wrapped(|ui| {
-                        for prof in &profiles {
-                            if ui
-                                .button(format!("▶ {} ({})", prof.display_name(), prof.endpoint()))
-                                .clicked()
-                            {
-                                connect_request = Some(PendingVncConnect {
-                                    profile_id: Some(prof.id.clone()),
-                                    host: prof.host.clone(),
-                                    port: prof.port,
-                                    username: prof.username.clone(),
-                                    password: prof.password.clone(),
-                                    shared: prof.shared,
-                                    view_only: prof.view_only,
-                                    label: Some(prof.display_name()),
-                                    save_profile: false,
-                                });
-                            }
-                        }
-                    });
-                    ui.add_space(8.0);
-                    ui.separator();
-                }
-
                 ui.strong("Connect to VNC Server");
                 ui.add_space(4.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Host:");
                     let host_resp = ui.add(
                         appearance::singleline(&mut view.draft_host)
                             .hint_text("127.0.0.1 or host:5900")
-                            .desired_width(220.0),
+                            .desired_width(200.0),
                     );
                     ui.label("Port:");
                     let port_resp = ui.add(
@@ -771,12 +920,18 @@ impl App {
                             .hint_text("5900")
                             .desired_width(70.0),
                     );
+                    ui.label("Username:");
+                    ui.add(
+                        appearance::singleline(&mut view.draft_username)
+                            .hint_text("Optional")
+                            .desired_width(130.0),
+                    );
                     ui.label("Password:");
                     let pass_resp = ui.add(
                         appearance::singleline(&mut view.draft_password)
                             .password(true)
                             .hint_text("VNC password")
-                            .desired_width(160.0),
+                            .desired_width(150.0),
                     );
                     let enter = (host_resp.lost_focus()
                         || port_resp.lost_focus()
@@ -810,7 +965,7 @@ impl App {
                         }
                     }
                 });
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Label:");
                     ui.add(
                         appearance::singleline(&mut view.draft_name)
@@ -892,143 +1047,344 @@ impl App {
                     .is_none_or(|t| t.elapsed() >= Duration::from_millis(33))
         };
         if should_poll {
-            let since = self.vnc_views.get(&sid).map_or(0, |v| v.revision);
+            // A view whose texture cannot take the incremental update (no
+            // texture yet, wrong size, dropped decode) asks for the whole
+            // screen once; the daemon answers anything else with the
+            // changed rectangle only.
+            let (since, regions) = self
+                .vnc_views
+                .get(&sid)
+                .map_or((0, false), |view| (view.revision, !view.force_full));
             if let Some(view) = self.vnc_views.get_mut(&sid) {
                 view.fetching = true;
                 view.last_poll = Some(Instant::now());
+                view.force_full = false;
             }
             let _ = self.jobs.send(Job::VncFrame {
                 session: sid.clone(),
                 since,
+                regions,
             });
         }
         ui.ctx().request_repaint_after(Duration::from_millis(33));
 
-        let mut outgoing = Vec::new();
-        {
+        let texture = {
             let view = self.vnc_views.entry(sid.clone()).or_default();
-            let Some(texture) = view.texture.as_ref() else {
+            let Some(texture) = view.texture.clone() else {
                 ui.centered_and_justified(|ui| {
                     ui.label("Connecting to VNC framebuffer…");
                 });
                 return;
             };
-            let tex_size = texture.size_vec2();
-            let available = ui.available_size();
-            let display_size = if view.fit && tex_size.x > 0.0 && tex_size.y > 0.0 {
-                let scale = (available.x / tex_size.x)
-                    .min(available.y / tex_size.y)
-                    .max(0.05);
-                egui::vec2(tex_size.x * scale, tex_size.y * scale)
-            } else {
-                tex_size
-            };
-
-            let (rect, response) = ui.allocate_exact_size(
-                available.max(egui::Vec2::ZERO),
-                egui::Sense::click_and_drag(),
-            );
-            ui.painter()
-                .rect_filled(rect, 0.0, Color32::from_rgb(16, 16, 20));
-            let image_rect = egui::Rect::from_center_size(rect.center(), display_size);
-            egui::Image::new(texture).paint_at(ui, image_rect);
-
-            if response.clicked() || response.drag_started() {
-                response.request_focus();
-                self.active_session = None;
-                self.non_terminal_selected = true;
-            }
-
-            let view_only = daemon_session.as_ref().is_some_and(|s| s.view_only);
-            if !view_only && image_rect.width() > 1.0 && image_rect.height() > 1.0 {
-                if let Some(pos) = response.hover_pos().or_else(|| {
-                    response
-                        .dragged()
-                        .then(|| ui.input(|i| i.pointer.interact_pos()))
-                        .flatten()
-                }) && image_rect.contains(pos)
-                {
-                    let rel_x = ((pos.x - image_rect.left()) / image_rect.width()).clamp(0.0, 1.0);
-                    let rel_y = ((pos.y - image_rect.top()) / image_rect.height()).clamp(0.0, 1.0);
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let x = (rel_x * f32::from(view.width.saturating_sub(1))) as u16;
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let y = (rel_y * f32::from(view.height.saturating_sub(1))) as u16;
-                    let buttons = ui.input(|i| {
-                        let mut mask = 0u8;
-                        if i.pointer.primary_down() {
-                            mask |= 1;
-                        }
-                        if i.pointer.middle_down() {
-                            mask |= 2;
-                        }
-                        if i.pointer.secondary_down() {
-                            mask |= 4;
-                        }
-                        mask
-                    });
-                    let next_ptr = (x, y, buttons);
-                    if view.last_pointer != Some(next_ptr) {
-                        view.last_pointer = Some(next_ptr);
-                        outgoing.push(VncInputEvent::Pointer { x, y, buttons });
-                    }
-                    let scroll = ui.input(|i| i.smooth_scroll_delta);
-                    if scroll.y.abs() > 1.0 {
-                        let wheel_bit = if scroll.y > 0.0 { 8u8 } else { 16u8 };
-                        outgoing.push(VncInputEvent::Pointer {
-                            x,
-                            y,
-                            buttons: buttons | wheel_bit,
-                        });
-                        outgoing.push(VncInputEvent::Pointer { x, y, buttons });
-                    }
-                }
-
-                if response.has_focus() {
-                    ui.input(|input| {
-                        for event in &input.events {
-                            match event {
-                                egui::Event::Key { key, pressed, .. } => {
-                                    if let Some(keysym) = egui_key_to_x11(*key) {
-                                        outgoing.push(VncInputEvent::Key {
-                                            keycode: keysym,
-                                            down: *pressed,
-                                        });
-                                    }
-                                }
-                                egui::Event::Text(text) => {
-                                    for ch in text.chars() {
-                                        let code = u32::from(ch);
-                                        if (0x20..=0x7E).contains(&code) {
-                                            outgoing.push(VncInputEvent::Key {
-                                                keycode: code,
-                                                down: true,
-                                            });
-                                            outgoing.push(VncInputEvent::Key {
-                                                keycode: code,
-                                                down: false,
-                                            });
-                                        }
-                                    }
-                                }
-                                egui::Event::Paste(text) => {
-                                    outgoing.push(VncInputEvent::CopyText(text.clone()));
-                                }
-                                _ => {}
-                            }
-                        }
-                    });
-                }
-            }
+            texture
+        };
+        let view_only = daemon_session.as_ref().is_some_and(|s| s.view_only);
+        let outcome = {
+            let view = self.vnc_views.entry(sid.clone()).or_default();
+            vnc_screen(ui, view, &texture, view_only)
+        };
+        if outcome.activated {
+            self.active_session = None;
+            self.non_terminal_selected = true;
         }
-
-        if !outgoing.is_empty() {
+        if !outcome.events.is_empty() {
             self.send(Request::VncInput {
                 session: sid,
-                events: outgoing,
+                events: outcome.events,
             });
         }
     }
+}
+
+#[derive(Default)]
+struct VncScreenOutcome {
+    events: Vec<VncInputEvent>,
+    activated: bool,
+}
+
+/// Remote modifier keysyms: one X11 keysym per bit of
+/// [`VncViewState::modifier_bits`].
+const MODIFIER_KEYSYMS: [(u8, u32); 4] = [
+    (1, 0xFFE1), // Shift_L
+    (2, 0xFFE3), // Control_L
+    (4, 0xFFE9), // Alt_L
+    (8, 0xFFEB), // Meta_L (Command on macOS)
+];
+
+/// Local modifier state reduced to the remote's four keys.
+fn modifier_bits(modifiers: egui::Modifiers) -> u8 {
+    let mut bits = 0u8;
+    if modifiers.shift {
+        bits |= 1;
+    }
+    if modifiers.ctrl {
+        bits |= 2;
+    }
+    if modifiers.alt {
+        bits |= 4;
+    }
+    // `command` mirrors Ctrl away from macOS; on macOS it is Command.
+    if modifiers.command && !modifiers.ctrl {
+        bits |= 8;
+    }
+    bits
+}
+
+/// Remote key transitions between two modifier snapshots: the remote sees
+/// exactly the modifiers that changed, never a stale held key.
+fn modifier_transitions(before: u8, after: u8) -> Vec<(u32, bool)> {
+    let mut transitions = Vec::new();
+    for (bit, keysym) in MODIFIER_KEYSYMS {
+        let was_down = before & bit != 0;
+        let is_down = after & bit != 0;
+        if was_down != is_down {
+            transitions.push((keysym, is_down));
+        }
+    }
+    transitions
+}
+
+/// Letter and digit keysyms for accelerator chords: egui suppresses the
+/// text event while Ctrl/Command is held, so the letter has to travel as a
+/// key event or the remote shortcut never fires.
+fn accelerator_keysym(key: egui::Key) -> Option<u32> {
+    use egui::Key;
+    let letter = match key {
+        Key::A => 'a',
+        Key::B => 'b',
+        Key::C => 'c',
+        Key::D => 'd',
+        Key::E => 'e',
+        Key::F => 'f',
+        Key::G => 'g',
+        Key::H => 'h',
+        Key::I => 'i',
+        Key::J => 'j',
+        Key::K => 'k',
+        Key::L => 'l',
+        Key::M => 'm',
+        Key::N => 'n',
+        Key::O => 'o',
+        Key::P => 'p',
+        Key::Q => 'q',
+        Key::R => 'r',
+        Key::S => 's',
+        Key::T => 't',
+        Key::U => 'u',
+        Key::V => 'v',
+        Key::W => 'w',
+        Key::X => 'x',
+        Key::Y => 'y',
+        Key::Z => 'z',
+        _ => return None,
+    };
+    Some(u32::from(letter))
+}
+
+/// One remote screen inside its pane: painting, pointer mapping, wheel,
+/// keyboard events, and the pointer/key release bookkeeping that stops a
+/// key or button from sticking when focus moves away mid-gesture.
+fn vnc_screen(
+    ui: &mut egui::Ui,
+    view: &mut VncViewState,
+    texture: &TextureHandle,
+    view_only: bool,
+) -> VncScreenOutcome {
+    let mut outcome = VncScreenOutcome::default();
+    let tex_size = texture.size_vec2();
+    let available = ui.available_size();
+    // Output area: scaled to the pane ("Fit"), or shown at actual pixel
+    // size inside scroll bars ("100%").
+    let scroll = egui::ScrollArea::both()
+        .id_salt("vnc-screen")
+        .auto_shrink([false, false]);
+    let mut image_rect = egui::Rect::NOTHING;
+    let mut pointer_events: Vec<VncInputEvent> = Vec::new();
+    let scroll_output = scroll.show(ui, |ui| {
+        let display_size = if view.fit && tex_size.x > 0.0 && tex_size.y > 0.0 {
+            let scale = (available.x / tex_size.x)
+                .min(available.y / tex_size.y)
+                .max(0.05);
+            egui::vec2(tex_size.x * scale, tex_size.y * scale)
+        } else {
+            tex_size
+        };
+        let size = if view.fit {
+            available.max(egui::Vec2::ZERO)
+        } else {
+            display_size
+        };
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+        ui.painter()
+            .rect_filled(rect, 0.0, Color32::from_rgb(16, 16, 20));
+        image_rect = egui::Rect::from_center_size(rect.center(), display_size);
+        egui::Image::new(texture).paint_at(ui, image_rect);
+
+        if response.clicked() || response.drag_started() {
+            response.request_focus();
+            outcome.activated = true;
+        }
+
+        // Pointer mapping: window point to remote pixel, clamped to the
+        // screen edge so a drag that leaves the pane keeps tracking.
+        let remote_at = |pos: egui::Pos2| -> Option<(u16, u16)> {
+            if view.width == 0 || view.height == 0 || !image_rect.is_positive() {
+                return None;
+            }
+            let rel_x = ((pos.x - image_rect.left()) / image_rect.width()).clamp(0.0, 1.0);
+            let rel_y = ((pos.y - image_rect.top()) / image_rect.height()).clamp(0.0, 1.0);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let x = (rel_x * f32::from(view.width.saturating_sub(1))) as u16;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let y = (rel_y * f32::from(view.height.saturating_sub(1))) as u16;
+            Some((x, y))
+        };
+        let buttons = ui.input(|input| {
+            let mut mask = 0u8;
+            if input.pointer.primary_down() {
+                mask |= 1;
+            }
+            if input.pointer.middle_down() {
+                mask |= 2;
+            }
+            if input.pointer.secondary_down() {
+                mask |= 4;
+            }
+            mask
+        });
+        let pointer_pos = response.hover_pos().or_else(|| {
+            response
+                .dragged()
+                .then(|| ui.input(|input| input.pointer.interact_pos()))
+                .flatten()
+        });
+        let pos = pointer_pos.filter(|pos| image_rect.contains(*pos) || response.dragged());
+        if let Some((x, y)) = pos.and_then(&remote_at) {
+            let next = (x, y, buttons);
+            let changed = view.last_pointer != Some(next);
+            if changed {
+                view.last_pointer = Some(next);
+                pointer_events.push(VncInputEvent::Pointer { x, y, buttons });
+            }
+            // Wheel: forwarded only when the remote fills the pane; at
+            // 100% the local scroll bars own the wheel.
+            let scroll_delta = ui.input(|input| input.smooth_scroll_delta);
+            if view.fit && scroll_delta.y.abs() > 1.0 {
+                let wheel_bit = if scroll_delta.y > 0.0 { 8u8 } else { 16u8 };
+                pointer_events.push(VncInputEvent::Pointer {
+                    x,
+                    y,
+                    buttons: buttons | wheel_bit,
+                });
+                pointer_events.push(VncInputEvent::Pointer { x, y, buttons });
+            }
+        } else if let Some((x, y, held)) = view.last_pointer
+            && held != 0
+        {
+            // The press happened here but the release landed outside the
+            // pane: release the button, or the remote keeps it down.
+            view.last_pointer = Some((x, y, 0));
+            pointer_events.push(VncInputEvent::Pointer { x, y, buttons: 0 });
+        }
+        response
+    });
+
+    let modifiers = ui.input(|input| modifier_bits(input.modifiers));
+    let window_focused = ui.ctx().input(|input| input.focused);
+    let focused = scroll_output.inner.has_focus() && window_focused;
+    let mut keyboard_events: Vec<VncInputEvent> = Vec::new();
+    if focused || scroll_output.inner.hovered() || scroll_output.inner.dragged() {
+        // Modifiers reach the remote as their own key presses, so
+        // Shift+click selects and Ctrl+C interrupts there too.
+        if view.modifier_bits != modifiers {
+            for (keysym, down) in modifier_transitions(view.modifier_bits, modifiers) {
+                keyboard_events.push(VncInputEvent::Key {
+                    keycode: keysym,
+                    down,
+                });
+            }
+            view.modifier_bits = modifiers;
+        }
+    }
+    if focused {
+        ui.input(|input| {
+            for event in &input.events {
+                match event {
+                    egui::Event::Key {
+                        key,
+                        pressed,
+                        modifiers,
+                        ..
+                    } => {
+                        let keysym = egui_key_to_x11(*key).or_else(|| {
+                            (modifiers.ctrl || modifiers.command)
+                                .then(|| accelerator_keysym(*key))
+                                .flatten()
+                        });
+                        let Some(keysym) = keysym else {
+                            continue;
+                        };
+                        if *pressed {
+                            if !view.held_keys.contains(&keysym) {
+                                view.held_keys.push(keysym);
+                            }
+                        } else {
+                            view.held_keys.retain(|held| *held != keysym);
+                        }
+                        keyboard_events.push(VncInputEvent::Key {
+                            keycode: keysym,
+                            down: *pressed,
+                        });
+                    }
+                    egui::Event::Text(text) => {
+                        for ch in text.chars() {
+                            let code = u32::from(ch);
+                            if (0x20..=0x7E).contains(&code) {
+                                keyboard_events.push(VncInputEvent::Key {
+                                    keycode: code,
+                                    down: true,
+                                });
+                                keyboard_events.push(VncInputEvent::Key {
+                                    keycode: code,
+                                    down: false,
+                                });
+                            }
+                        }
+                    }
+                    egui::Event::Paste(text) => {
+                        keyboard_events.push(VncInputEvent::CopyText(text.clone()));
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+    // Leaving the pane (or the window) mid-chord must not leave keys or
+    // modifiers stuck down on the remote.
+    if view.focused && !focused {
+        for (bit, keysym) in MODIFIER_KEYSYMS {
+            if view.modifier_bits & bit != 0 {
+                keyboard_events.push(VncInputEvent::Key {
+                    keycode: keysym,
+                    down: false,
+                });
+            }
+        }
+        view.modifier_bits = 0;
+        for keysym in view.held_keys.drain(..) {
+            keyboard_events.push(VncInputEvent::Key {
+                keycode: keysym,
+                down: false,
+            });
+        }
+    }
+    view.focused = focused;
+
+    if !view_only {
+        outcome.events.extend(pointer_events);
+        outcome.events.extend(keyboard_events);
+    }
+    outcome
 }
 
 use egui::Widget;
@@ -1063,5 +1419,119 @@ fn egui_key_to_x11(key: egui::Key) -> Option<u32> {
         Key::F11 => Some(0xFFC8),
         Key::F12 => Some(0xFFC9),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn compressed(pixels: &[u8]) -> String {
+        use flate2::{Compression, write::ZlibEncoder};
+        use std::io::Write;
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(pixels).expect("compress pixels");
+        B64.encode(encoder.finish().expect("finish compression"))
+    }
+
+    fn frame(region: Option<VncRegion>, pixels: &[u8]) -> VncFrame {
+        VncFrame {
+            session: "s".into(),
+            width: 2,
+            height: 2,
+            revision: 3,
+            status: VncSessionStatus::Connected,
+            error: None,
+            zlib_rgba: compressed(pixels),
+            region,
+            clipboard: None,
+        }
+    }
+
+    #[test]
+    fn a_partial_frame_decodes_to_region_pixels_only() {
+        let region = VncRegion {
+            x: 1,
+            y: 0,
+            width: 1,
+            height: 2,
+        };
+        let pixels = [0u8, 255, 0, 255, 0, 0, 255, 255];
+        let decoded = decode_frame(frame(Some(region), &pixels)).expect("region frame decodes");
+        assert_eq!(decoded.region, Some(region));
+        assert_eq!(decoded.width, 2, "the record keeps the remote size");
+        assert_eq!(decoded.height, 2);
+        let image = decoded.image.expect("region pixels decode");
+        assert_eq!(image.size, [1, 2], "the image covers the region only");
+        assert_eq!(
+            image.pixels[0],
+            Color32::from_rgba_unmultiplied(0, 255, 0, 255)
+        );
+        assert_eq!(
+            image.pixels[1],
+            Color32::from_rgba_unmultiplied(0, 0, 255, 255)
+        );
+    }
+
+    #[test]
+    fn a_frame_without_a_region_decodes_at_the_remote_size() {
+        let pixels = [1u8, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255];
+        let decoded = decode_frame(frame(None, &pixels)).expect("full frame decodes");
+        assert_eq!(decoded.region, None);
+        let image = decoded.image.expect("full pixels decode");
+        assert_eq!(image.size, [2, 2]);
+    }
+
+    #[test]
+    fn modifier_transitions_report_each_changed_key_once() {
+        assert_eq!(
+            modifier_transitions(0, 0b0011),
+            vec![(0xFFE1, true), (0xFFE3, true)],
+            "newly pressed modifiers go down in keysym order"
+        );
+        assert_eq!(
+            modifier_transitions(0b0101, 0),
+            vec![(0xFFE1, false), (0xFFE9, false)],
+            "every released modifier goes up"
+        );
+        assert!(modifier_transitions(0b1010, 0b1010).is_empty());
+        assert_eq!(
+            modifier_transitions(0b0001, 0b1000),
+            vec![(0xFFE1, false), (0xFFEB, true)],
+            "a swap releases the old key before pressing the new one"
+        );
+    }
+
+    #[test]
+    fn modifier_bits_map_command_to_meta_without_double_counting_ctrl() {
+        let none = egui::Modifiers::default();
+        assert_eq!(modifier_bits(none), 0);
+        let shift_alt = egui::Modifiers {
+            shift: true,
+            alt: true,
+            ..none
+        };
+        assert_eq!(modifier_bits(shift_alt), 1 | 4);
+        // macOS Command is `command` without `ctrl`.
+        let command = egui::Modifiers {
+            command: true,
+            mac_cmd: true,
+            ..none
+        };
+        assert_eq!(modifier_bits(command), 8);
+        // Elsewhere `command` mirrors Ctrl: one Control key, not two.
+        let ctrl = egui::Modifiers {
+            ctrl: true,
+            command: true,
+            ..none
+        };
+        assert_eq!(modifier_bits(ctrl), 2);
+    }
+
+    #[test]
+    fn accelerator_keys_fall_back_to_keycodes_for_letters() {
+        assert_eq!(accelerator_keysym(egui::Key::C), Some(u32::from('c')));
+        assert_eq!(accelerator_keysym(egui::Key::V), Some(u32::from('v')));
+        assert_eq!(accelerator_keysym(egui::Key::F5), None);
     }
 }

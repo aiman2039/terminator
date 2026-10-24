@@ -149,6 +149,7 @@ impl App {
             vnc_views: HashMap::new(),
             vnc_sidebar: crate::vnc_ui::VncSidebarState::default(),
             visible_vnc: HashSet::new(),
+            pending_vnc_disconnect: None,
             player: player::Controller::new(services),
             markdown,
             visible_images: HashSet::new(),

@@ -704,6 +704,10 @@ pub(super) fn paint_unified_editor(
                         let focused_before =
                             ui.memory(|memory| memory.focused() == Some(editor_id));
                         ui.scope_builder(egui::UiBuilder::new().max_rect(code_rect), |ui| {
+                            // egui 0.37 floors a text edit at `interact_size.y`.
+                            // Pin it to the row so the row pitch stays the font
+                            // line height instead of the toolbar height.
+                            ui.spacing_mut().interact_size.y = metrics.row_h;
                             let mut layouter =
                                 |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
                                     ui.ctx().fonts_mut(|fonts| {

@@ -227,6 +227,7 @@ pub(crate) enum Job {
     VncFrame {
         session: String,
         since: u64,
+        regions: bool,
     },
 }
 impl Job {

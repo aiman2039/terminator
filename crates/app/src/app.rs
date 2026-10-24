@@ -50,4 +50,6 @@ mod tabs;
 mod terminal_find_tests;
 pub(crate) mod types;
 mod updates;
+#[cfg(test)]
+mod vnc_tests;
 pub(crate) mod window;

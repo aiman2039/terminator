@@ -100,7 +100,11 @@ impl App {
                 status: None,
             },
             Some(Tab::Vnc {
-                label, host, port, ..
+                label,
+                session,
+                host,
+                port,
+                ..
             }) => TabFace {
                 label: if !label.trim().is_empty() {
                     label.clone()
@@ -112,7 +116,28 @@ impl App {
                 icon: "Monitor",
                 sid: None,
                 brand: None,
-                status: None,
+                // Connection state replaces the kind glyph, the way hook
+                // lifecycle does for terminals: one glance answers "is the
+                // remote still up" without reading the pane.
+                status: self
+                    .state
+                    .vnc_sessions
+                    .iter()
+                    .find(|candidate| &candidate.id == session)
+                    .map(|candidate| {
+                        use terminator_core::vnc::VncSessionStatus;
+                        let (state, icon) = match candidate.status {
+                            VncSessionStatus::Connected => (AgentState::Running, "Circle"),
+                            VncSessionStatus::Connecting => (AgentState::Running, "LoaderCircle"),
+                            VncSessionStatus::Failed => (AgentState::Failed, "CircleAlert"),
+                            VncSessionStatus::Disconnected => (AgentState::Stopped, "CircleStop"),
+                        };
+                        (
+                            state,
+                            icon,
+                            crate::sidebar_ui::state_color(state, &self.theme),
+                        )
+                    }),
             },
             None => TabFace {
                 label: "Workspace".into(),

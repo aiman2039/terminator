@@ -364,6 +364,10 @@ impl eframe::App for App {
         self.seed_floating_visibility();
         self.images
             .retain(|path, _| self.visible_images.contains(path));
+        // View state and remote sessions both follow the tabs now that the
+        // dock is checked back in and every copy has had its say.
+        self.prune_vnc_views();
+        self.drain_pending_vnc_disconnect();
         self.markdown.end_frame(&ctx);
         self.backends
             .retain(|sid, _| self.visible_sessions.contains(sid));

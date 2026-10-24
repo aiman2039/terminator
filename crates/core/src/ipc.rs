@@ -44,6 +44,10 @@ pub enum Request {
     VncFrame {
         session: String,
         since: u64,
+        /// Ask for incremental updates. Old daemons ignore the field, and
+        /// the reply's `region` decides whether the pixels are partial.
+        #[serde(default)]
+        regions: bool,
     },
     PruneHistory {
         budget: u64,

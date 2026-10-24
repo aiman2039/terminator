@@ -2,6 +2,9 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 pub const CAPABILITY: &str = "vnc-v1";
+/// Incremental frame updates: the daemon may answer a frame request that
+/// carries `regions: true` with only the changed rectangle.
+pub const REGIONS_CAPABILITY: &str = "vnc-regions-v1";
 pub const DEFAULT_PORT: u16 = 5900;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +119,48 @@ pub enum VncInputEvent {
     Refresh { full: bool },
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VncRegion {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+
+impl VncRegion {
+    #[must_use]
+    pub fn is_empty(self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+
+    /// Smallest rectangle covering both inputs.
+    #[must_use]
+    pub fn union(self, other: Self) -> Self {
+        if self.is_empty() {
+            return other;
+        }
+        if other.is_empty() {
+            return self;
+        }
+        let x = self.x.min(other.x);
+        let y = self.y.min(other.y);
+        let right = self
+            .x
+            .saturating_add(self.width)
+            .max(other.x.saturating_add(other.width));
+        let bottom = self
+            .y
+            .saturating_add(self.height)
+            .max(other.y.saturating_add(other.height));
+        Self {
+            x,
+            y,
+            width: right.saturating_sub(x),
+            height: bottom.saturating_sub(y),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VncFrame {
     pub session: String,
@@ -126,8 +171,15 @@ pub struct VncFrame {
     #[serde(default)]
     pub error: Option<String>,
     /// Zlib-compressed RGBA pixels, base64-encoded. Empty when width or height is 0.
+    /// With `region` set, the pixels cover that rectangle instead of the
+    /// whole frame; `width`/`height` always describe the full frame.
     #[serde(default)]
     pub zlib_rgba: String,
+    /// Changed rectangle inside the frame, for incremental updates
+    /// (`regions: true` on the request). Absent means the pixels cover
+    /// the whole frame.
+    #[serde(default)]
+    pub region: Option<VncRegion>,
     #[serde(default)]
     pub clipboard: Option<String>,
 }
@@ -207,5 +259,54 @@ mod tests {
         profile.host = "127.0.0.1".into();
         profile.port = 0;
         assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn region_union_covers_both_rectangles() {
+        let a = VncRegion {
+            x: 4,
+            y: 8,
+            width: 16,
+            height: 16,
+        };
+        let b = VncRegion {
+            x: 0,
+            y: 20,
+            width: 8,
+            height: 4,
+        };
+        let union = a.union(b);
+        assert_eq!(
+            union,
+            VncRegion {
+                x: 0,
+                y: 8,
+                width: 20,
+                height: 16
+            }
+        );
+        assert_eq!(a.union(VncRegion::default()), a);
+        assert_eq!(VncRegion::default().union(b), b);
+    }
+
+    #[test]
+    fn a_frame_without_a_region_still_decodes() {
+        // Older daemons never send the field: decode must tolerate both.
+        let json = r#"{"session":"s","width":4,"height":4,"revision":1,
+            "status":"connected","zlib_rgba":""}"#;
+        let frame: VncFrame = serde_json::from_str(json).expect("legacy frame decodes");
+        assert_eq!(frame.region, None);
+        let with_region = VncFrame {
+            region: Some(VncRegion {
+                x: 1,
+                y: 2,
+                width: 3,
+                height: 4,
+            }),
+            ..frame
+        };
+        let encoded = serde_json::to_string(&with_region).expect("frame encodes");
+        let decoded: VncFrame = serde_json::from_str(&encoded).expect("frame decodes");
+        assert_eq!(decoded.region, with_region.region);
     }
 }

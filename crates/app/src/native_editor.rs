@@ -12,7 +12,7 @@ use super::workspace::WorkspaceTab;
 use super::*;
 use anyhow::Context as _;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
 use terminator_native_edit::blocks::{BlockKind, parse_blocks};
 use terminator_native_edit::doc::{Buffer, Doc};
@@ -73,6 +73,12 @@ fn vimrc_options() -> VimrcOptions {
 type LoadResult = anyhow::Result<LoadedFile>;
 type SaveResult = anyhow::Result<Option<SystemTime>>;
 
+/// How long a disk modification-time reading stays valid. The header
+/// re-checks the file on every frame; stat-ing a network or cold volume
+/// that often is wasted work, and a sub-second delay before a clean buffer
+/// follows an external edit is invisible.
+const MTIME_TTL: Duration = Duration::from_millis(900);
+
 pub struct NativeDoc {
     pub path: PathBuf,
     doc: Option<Doc>,
@@ -80,8 +86,15 @@ pub struct NativeDoc {
     engine: VimEngine,
     highlight: HighlightCache,
     insert_first: bool,
-    saved_text: String,
+    /// Buffer revision that matches the bytes on disk: the dirty check
+    /// compares revisions instead of whole texts, so typing costs O(1)
+    /// per frame instead of one full-text copy per frame.
+    saved_revision: u64,
+    /// Revision of the text handed to the in-flight save. Edits typed
+    /// while the write runs keep the buffer dirty when it lands.
+    save_revision: u64,
     loaded_mtime: Option<SystemTime>,
+    mtime_check: Option<(Instant, Option<SystemTime>)>,
     load_error: Option<String>,
     save_error: Option<String>,
     loading: bool,
@@ -102,8 +115,10 @@ impl NativeDoc {
             engine,
             highlight: HighlightCache::default(),
             insert_first,
-            saved_text: String::new(),
+            saved_revision: 0,
+            save_revision: 0,
             loaded_mtime: None,
+            mtime_check: None,
             load_error: None,
             save_error: None,
             loading: false,
@@ -117,7 +132,19 @@ impl NativeDoc {
     pub fn dirty(&self) -> bool {
         self.doc
             .as_ref()
-            .is_some_and(|doc| doc.text() != self.saved_text)
+            .is_some_and(|doc| doc.revision() != self.saved_revision)
+    }
+
+    /// Disk modification time, re-stat-ed at most every [`MTIME_TTL`].
+    fn disk_mtime_cached(&mut self) -> Option<SystemTime> {
+        if let Some((checked, mtime)) = self.mtime_check
+            && checked.elapsed() < MTIME_TTL
+        {
+            return mtime;
+        }
+        let mtime = disk_mtime(&self.path);
+        self.mtime_check = Some((Instant::now(), mtime));
+        mtime
     }
 
     fn ensure_loading(&mut self, services: &gui_services::Services) {
@@ -159,9 +186,11 @@ impl NativeDoc {
             self.loading = false;
             match result {
                 Ok(loaded) => {
-                    self.saved_text.clone_from(&loaded.text);
                     self.loaded_mtime = loaded.mtime;
+                    self.mtime_check = None;
                     self.doc = Some(Doc::new(loaded.text));
+                    self.saved_revision = self.doc.as_ref().map_or(0, Doc::revision);
+                    self.save_revision = self.saved_revision;
                     if self.insert_first {
                         self.insert_first = false;
                         if let Some(doc) = self.doc.as_mut() {
@@ -181,10 +210,11 @@ impl NativeDoc {
             self.saving = false;
             match result {
                 Ok(mtime) => {
-                    if let Some(doc) = self.doc.as_ref() {
-                        self.saved_text = doc.text();
-                    }
+                    // The written text was the snapshot taken at save start:
+                    // edits typed while the write ran keep the buffer dirty.
+                    self.saved_revision = self.save_revision;
                     self.loaded_mtime = mtime;
+                    self.mtime_check = None;
                     self.save_error = None;
                     self.force_save = false;
                 }
@@ -208,6 +238,7 @@ impl NativeDoc {
         self.save_error = None;
         let path = self.path.clone();
         let text = doc.text();
+        self.save_revision = doc.revision();
         let expected = self.loaded_mtime;
         let force = self.force_save;
         let service = services.clone();
@@ -790,6 +821,73 @@ impl App {
             }
         }
 
+        // Tab-close prompt for this pane: an in-pane bar, not a modal, so
+        // the rest of the GUI stays usable while the choice is pending.
+        // Quit-flow prompts carry no issuer and stay modal (`native_close_modal`).
+        if let Some((prompt, issuer)) = self.native_close_prompt.clone()
+            && prompt == path
+            && issuer.is_some()
+        {
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let enabled = !self
+                .native_docs
+                .get(path)
+                .is_some_and(|doc| doc.saving || doc.loading);
+            let bar = appearance::unsaved_close_bar(
+                ui,
+                appearance::UnsavedCloseBar {
+                    theme: &self.theme,
+                    message: &format!("{name} has unsaved changes."),
+                    enabled,
+                },
+            );
+            if let Some(choice) = bar.choice() {
+                self.native_close_prompt = None;
+                match choice {
+                    appearance::UnsavedCloseChoice::Save => {
+                        self.apply_native_close_choice(
+                            path,
+                            NativeCloseChoice::SaveClose,
+                            issuer.clone(),
+                        );
+                    }
+                    // Deferred: the workspace is checked out while this view
+                    // renders, so the close runs after it is checked back in.
+                    appearance::UnsavedCloseChoice::Discard => {
+                        self.pending_native_close
+                            .push((path.to_owned(), false, issuer.clone()))
+                    }
+                    appearance::UnsavedCloseChoice::Cancel => {
+                        if let Some(doc) = self.native_docs.get(path) {
+                            let focus = source_focus_id(&format!(
+                                "{:?}",
+                                ui.make_persistent_id((
+                                    path,
+                                    project,
+                                    tab,
+                                    node,
+                                    ui.ctx().viewport_id()
+                                ))
+                            ));
+                            let _ = doc;
+                            ui.memory_mut(|memory| memory.request_focus(focus));
+                        }
+                    }
+                }
+                if matches!(
+                    choice,
+                    appearance::UnsavedCloseChoice::Discard | appearance::UnsavedCloseChoice::Save
+                ) {
+                    return;
+                }
+            }
+            ui.separator();
+        }
+
         let project_root = self.selected_project().map(|project| project.path.clone());
         let breadcrumb = self
             .selected_project()
@@ -889,7 +987,9 @@ impl App {
                     .map(|symbol| symbol.name.as_str())
             });
             let mut heading_jump = None;
-            ui.horizontal(|ui| {
+            // Wrapped: on a narrow pane the mode badge and buttons move to
+            // a second row instead of being clipped off the edge.
+            ui.horizontal_wrapped(|ui| {
                 let title_width = (ui.available_width() - if is_markdown { 260.0 } else { 200.0 })
                     .clamp(48.0, 260.0);
                 ui.add_sized(
@@ -955,7 +1055,9 @@ impl App {
                     })
                     .response
                     .on_hover_text("Go to heading");
-                } else {
+                } else if vim {
+                    // Modeless editing has no mode to report: the badge
+                    // would always read NORMAL and only add noise.
                     let mode = doc.engine.mode();
                     ui.colored_label(mode_color(mode), format!("-- {} --", mode_name(mode)));
                 }
@@ -1062,7 +1164,7 @@ impl App {
                     }
                 });
             }
-            let on_disk = disk_mtime(path);
+            let on_disk = doc.disk_mtime_cached();
             if !doc.dirty() && doc.doc.is_some() && on_disk != doc.loaded_mtime && !doc.loading {
                 // Clean buffer follows the disk without asking; nothing is lost.
                 doc.doc = None;
@@ -1247,14 +1349,38 @@ impl App {
             // place the cursor directly; the buffer is borrowed here.
             if !problems.is_empty() {
                 let mut jumps: Vec<(usize, usize)> = Vec::new();
-                ui.horizontal(|ui| {
-                    ui.weak(format!(
-                        "{} problem{}",
-                        problems.len(),
-                        if problems.len() == 1 { "" } else { "s" }
+                let errors = problems
+                    .iter()
+                    .filter(|problem| problem.severity == Some(native_lsp::Severity::Error))
+                    .count();
+                let warnings = problems
+                    .iter()
+                    .filter(|problem| problem.severity == Some(native_lsp::Severity::Warning))
+                    .count();
+                let mut summary = format!(
+                    "{} problem{}",
+                    problems.len(),
+                    if problems.len() == 1 { "" } else { "s" }
+                );
+                if errors > 0 {
+                    summary.push_str(&format!(
+                        " · {errors} error{}",
+                        if errors == 1 { "" } else { "s" }
                     ));
+                }
+                if warnings > 0 {
+                    summary.push_str(&format!(
+                        " · {warnings} warning{}",
+                        if warnings == 1 { "" } else { "s" }
+                    ));
+                }
+                ui.horizontal(|ui| {
+                    ui.weak(summary);
                 });
-                for problem in problems.iter().take(5) {
+                // The panel must not push the source view off screen; the
+                // first five stay clickable and the rest are counted.
+                const LISTED: usize = 5;
+                for problem in problems.iter().take(LISTED) {
                     let line = usize::try_from(problem.range.start.line).unwrap_or(usize::MAX);
                     let row = doc
                         .doc
@@ -1275,6 +1401,9 @@ impl App {
                     if ui.small_button(label).clicked() {
                         jumps.push((line, col));
                     }
+                }
+                if problems.len() > LISTED {
+                    ui.weak(format!("+{} more", problems.len().saturating_sub(LISTED)));
                 }
                 for (line, col) in jumps {
                     if let Some(live) = doc.doc.as_mut() {
@@ -1745,6 +1874,11 @@ impl App {
         let Some((path, issuer)) = self.native_close_prompt.clone() else {
             return;
         };
+        // Tab-close prompts render as an in-pane bar inside the issuing
+        // view; the modal would steal input from the rest of the GUI.
+        if issuer.is_some() {
+            return;
+        }
         if !self.native_dirty(&path) {
             self.close_native_tab(&path, false, issuer);
             return;
@@ -1799,7 +1933,10 @@ impl App {
 impl NativeDoc {
     pub(super) fn dirty_for_test(path: PathBuf) -> Self {
         let mut doc = Self::new(path, true);
-        doc.doc = Some(Doc::new("unsaved"));
+        // The buffer carries an edit the saved revision never saw.
+        let mut buffer = Doc::new("unsaved");
+        buffer.insert(7, " edit");
+        doc.doc = Some(buffer);
         doc
     }
 }
@@ -1820,7 +1957,7 @@ mod view_buffer_tests {
         native.engine.press_key(&mut buffer, VimKey::Char('i'));
         native.engine.type_text(&mut buffer, "saved ");
         native.engine.press_key(&mut buffer, VimKey::Escape);
-        native.saved_text = buffer.text();
+        native.saved_revision = buffer.revision();
         native.doc = Some(buffer);
         app.native_docs.insert(path.clone(), native);
         app.layouts.insert(
@@ -1852,5 +1989,68 @@ mod view_buffer_tests {
         let buffer = native.doc.as_mut().unwrap();
         native.engine.undo(buffer);
         assert_eq!(buffer.text(), "original");
+    }
+
+    #[test]
+    fn an_edit_during_a_save_stays_unsaved_when_the_write_lands() {
+        let mut native = NativeDoc::new(PathBuf::from("/tmp/save-race.txt"), true);
+        native.doc = Some(Doc::new("one"));
+        native.saved_revision = native.doc.as_ref().map_or(0, Doc::revision);
+        assert!(!native.dirty(), "a freshly loaded buffer is clean");
+        // The write snapshots the revision it is sending to disk.
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        native.save_rx = Some(rx);
+        native.saving = true;
+        native.save_revision = native.doc.as_ref().map_or(0, Doc::revision);
+        // Typing while the write runs.
+        native.doc.as_mut().expect("buffer").insert(3, " more");
+        assert!(native.dirty());
+        tx.send(Ok(Some(SystemTime::now())))
+            .expect("deliver the save result");
+        native.poll();
+        assert!(!native.saving);
+        assert!(
+            native.dirty(),
+            "the buffer changed after the snapshot: it is still unsaved"
+        );
+        assert_eq!(native.doc.as_ref().expect("buffer").text(), "one more");
+
+        // A save that takes the newer text clears the flag again.
+        native.save_revision = native.doc.as_ref().map_or(0, Doc::revision);
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        native.save_rx = Some(rx);
+        native.saving = true;
+        tx.send(Ok(Some(SystemTime::now())))
+            .expect("deliver the save result");
+        native.poll();
+        assert!(!native.dirty(), "the written revision is clean again");
+    }
+
+    #[test]
+    fn disk_mtime_reads_are_throttled_between_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("throttled.txt");
+        std::fs::write(&path, "one").unwrap();
+        let mut native = NativeDoc::new(path, true);
+        assert!(native.disk_mtime_cached().is_some());
+        // Inside the TTL the recorded reading stands in for a fresh stat.
+        native.mtime_check = Some((Instant::now(), Some(SystemTime::UNIX_EPOCH)));
+        assert_eq!(
+            native.disk_mtime_cached(),
+            Some(SystemTime::UNIX_EPOCH),
+            "a reading younger than the TTL is reused"
+        );
+        // Past the TTL the file is checked again.
+        native.mtime_check = Some((
+            Instant::now()
+                .checked_sub(MTIME_TTL + Duration::from_millis(1))
+                .expect("instant inside the clock range"),
+            Some(SystemTime::UNIX_EPOCH),
+        ));
+        assert_ne!(
+            native.disk_mtime_cached(),
+            Some(SystemTime::UNIX_EPOCH),
+            "the expired reading is replaced with a fresh stat"
+        );
     }
 }

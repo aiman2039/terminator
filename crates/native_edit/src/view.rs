@@ -7,10 +7,11 @@ pub use keys::{
     IdeAction, command_prompt, ctrl_h_is_motion, ctrl_v_is_block, echo_of_handled_key, egui_key,
     ide_shortcut, mode_color, mode_name, source_focus_id,
 };
-pub use render::{
-    DiagnosticMark, SourceOptions, SourceOutcome, char_display_width, col_at_display_x, display_x,
-    show_source, status_line,
-};
+pub use render::{DiagnosticMark, SourceOptions, SourceOutcome, show_source, status_line};
+
+/// Display layout helpers, re-exported for hosts that map pointer
+/// positions onto buffer columns.
+pub use crate::rows::{VisualRow, char_display_width, col_at_display_x, display_x, visual_rows};
 
 /// Font family the host registers for italic theme spans.
 pub const ITALIC_FAMILY: &str = "Terminal Italic";

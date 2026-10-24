@@ -124,8 +124,12 @@ impl Shared {
                 self.vnc_input(&session, events)?;
                 return Ok(Response::Ok);
             }
-            Request::VncFrame { session, since } => {
-                return match self.vnc_frame(&session, since)? {
+            Request::VncFrame {
+                session,
+                since,
+                regions,
+            } => {
+                return match self.vnc_frame(&session, since, regions)? {
                     Some(frame) => Ok(Response::VncFrame(Box::new(frame))),
                     None => Ok(Response::Unchanged),
                 };

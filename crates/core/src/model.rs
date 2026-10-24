@@ -354,6 +354,7 @@ pub const NTFY_CAPABILITY: &str = "ntfy-v1";
 pub const NOTIFICATION_SOUND_CAPABILITY: &str = "notification-sound-v1";
 pub const AGENT_PRESENCE_CAPABILITY: &str = agents::CAPABILITY;
 pub const VNC_CAPABILITY: &str = vnc::CAPABILITY;
+pub const VNC_REGIONS_CAPABILITY: &str = vnc::REGIONS_CAPABILITY;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TerminalNotice {
     pub id: String,
