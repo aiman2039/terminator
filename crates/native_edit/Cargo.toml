@@ -7,7 +7,7 @@ license.workspace = true
 
 [dependencies]
 base64 = "0.23"
-egui = { version = "0.36", default-features = false }
+egui = { version = "0.37", default-features = false }
 ignore = "0.4"
 lsp-types = "0.97"
 nucleo = "0.5"
