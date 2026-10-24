@@ -27,6 +27,23 @@ impl Workspace {
                 Tab::Browser { id, target } if id.is_empty() => {
                     matches!(existing, Tab::Browser { target: current, .. } if current == target)
                 }
+                Tab::Vnc {
+                    id,
+                    session,
+                    host,
+                    port,
+                    ..
+                } if id.is_empty() => {
+                    matches!(
+                        existing,
+                        Tab::Vnc {
+                            session: s,
+                            host: h,
+                            port: p,
+                            ..
+                        } if s == session && h == host && p == port
+                    )
+                }
                 _ => existing == pane,
             })
         })

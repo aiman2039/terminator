@@ -12,7 +12,7 @@ use std::{
 };
 use terminator_core::*;
 
-use crate::{helper, ntfy, storage, terminal_events};
+use crate::{helper, ntfy, storage, terminal_events, vnc_session};
 
 /// Lock shared daemon state without cascading a previous panic. A minor bug
 /// in one request must degrade that connection, never poison the daemon for
@@ -55,6 +55,7 @@ pub(crate) struct Shared {
     pub(crate) state: Mutex<State>,
     pub(crate) store: Mutex<storage::Store>,
     pub(crate) sessions: Mutex<HashMap<String, Arc<Mutex<Runtime>>>>,
+    pub(crate) vnc_sessions: Mutex<HashMap<String, Arc<Mutex<vnc_session::VncRuntime>>>>,
     pub(crate) paths: Paths,
     pub(crate) auth: String,
     pub(crate) focused: Mutex<(bool, Instant)>,

@@ -27,6 +27,8 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("open_settings", "Settings"),
     ("open_palette", "Search Everywhere"),
     ("next_attention", "Next agent needing attention"),
+    ("new_browser", "New browser tab"),
+    ("new_vnc", "New VNC viewer"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

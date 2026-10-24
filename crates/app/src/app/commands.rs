@@ -107,6 +107,8 @@ impl App {
                 }
             }
             "next_attention" => self.next_attention(),
+            "new_browser" => self.open_new_browser_tab(None),
+            "new_vnc" => self.open_new_vnc_tab(None),
             _ => {}
         }
     }

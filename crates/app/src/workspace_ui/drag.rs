@@ -96,6 +96,17 @@ impl App {
                 "Blame {}",
                 path.file_name().unwrap_or_default().to_string_lossy()
             ),
+            Tab::Vnc {
+                label, host, port, ..
+            } => {
+                if !label.trim().is_empty() {
+                    label.clone()
+                } else if !host.trim().is_empty() {
+                    format!("{host}:{port}")
+                } else {
+                    "VNC Viewer".into()
+                }
+            }
         }
     }
 

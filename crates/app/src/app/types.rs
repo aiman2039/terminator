@@ -89,6 +89,20 @@ pub(crate) enum Tab {
         cwd: PathBuf,
         path: PathBuf,
     },
+    Vnc {
+        #[serde(default)]
+        id: String,
+        #[serde(default)]
+        session: String,
+        #[serde(default)]
+        profile_id: Option<String>,
+        #[serde(default)]
+        host: String,
+        #[serde(default)]
+        port: u16,
+        #[serde(default)]
+        label: String,
+    },
 }
 
 /// Exact source of a view action. File paths identify buffers, not editor views.
@@ -100,7 +114,7 @@ pub(crate) struct PaneSource {
 }
 impl Tab {
     pub(crate) fn key(&self) -> String {
-        if let Self::Browser { id, .. } = self
+        if let Self::Browser { id, .. } | Self::Vnc { id, .. } = self
             && !id.is_empty()
         {
             return id.clone();
@@ -117,7 +131,7 @@ impl Tab {
 
     pub(crate) fn layout_version(&self) -> u32 {
         match self {
-            Self::NativeEditor { .. } => 7,
+            Self::NativeEditor { .. } | Self::Vnc { .. } => 7,
             Self::Browser { .. } => 6,
             Self::Player => 5,
             Self::Image { .. } => 3,
@@ -206,6 +220,14 @@ pub(crate) enum Job {
         query: search::Query,
         show_ignored: bool,
     },
+    VncConnectTab {
+        tab_id: String,
+        request: Request,
+    },
+    VncFrame {
+        session: String,
+        since: u64,
+    },
 }
 impl Job {
     pub(crate) fn rpc(request: Request, after: After) -> Self {
@@ -246,6 +268,12 @@ pub(crate) enum Update {
     OpenImage(String, PathBuf, After),
     OpenNativeEditor(String, PathBuf, After),
     OpenBrowser(String, BrowserTarget, After),
+    VncConnected(terminator_core::vnc::VncSession, After),
+    VncTabConnected(String, Result<terminator_core::vnc::VncSession, String>),
+    VncFrame(
+        String,
+        Result<Option<crate::vnc_ui::VncDecodedFrame>, String>,
+    ),
     FocusViewport(egui::ViewportId),
     RevealFileSession(String, String),
     Image(PathBuf, u64, Result<egui::ColorImage, String>),

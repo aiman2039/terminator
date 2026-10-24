@@ -242,7 +242,8 @@ impl App {
                     | Tab::Player
                     | Tab::NativeEditor { .. }
                     | Tab::CommitLog { .. }
-                    | Tab::Blame { .. } => true,
+                    | Tab::Blame { .. }
+                    | Tab::Vnc { .. } => true,
                 };
                 let survives = old_group
                     .as_ref()

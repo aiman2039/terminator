@@ -99,6 +99,21 @@ impl App {
                 brand: None,
                 status: None,
             },
+            Some(Tab::Vnc {
+                label, host, port, ..
+            }) => TabFace {
+                label: if !label.trim().is_empty() {
+                    label.clone()
+                } else if !host.trim().is_empty() {
+                    format!("{host}:{port}")
+                } else {
+                    "VNC Viewer".into()
+                },
+                icon: "Monitor",
+                sid: None,
+                brand: None,
+                status: None,
+            },
             None => TabFace {
                 label: "Workspace".into(),
                 icon: "Terminal",
@@ -628,13 +643,21 @@ impl App {
                     [30.0, 30.0],
                     egui::Button::new(RichText::new("+").size(18.0)).frame(false),
                 )
-                .on_hover_text("New top-level terminal tab");
+                .on_hover_text("New tab (right-click for Browser or VNC)");
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "workspace-plus", plus_response.rect);
             let plus_rect = plus_response.rect;
             if plus_response.clicked() && self.pane_drag.is_none() {
                 self.create(None);
             }
+            appearance::context_menu(&plus_response, |ui| {
+                self.workspace_new_tab_menu(ui);
+            });
+            appearance::icon_menu_button(ui, "ChevronDown", |ui| {
+                self.workspace_new_tab_menu(ui);
+            })
+            .response
+            .on_hover_text("New terminal, browser, or VNC tab");
             let recent: Vec<(String, String, bool)> = workspace
                 .recent_tabs
                 .iter()

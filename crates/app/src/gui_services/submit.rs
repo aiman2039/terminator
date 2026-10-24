@@ -604,6 +604,12 @@ impl Services {
                         _ => {}
                     }
                 }
+                Response::VncCreated(session) => {
+                    if let Ok(Response::State(state)) = client.rpc(Request::Snapshot).await {
+                        updates.push(Update::State(state));
+                    }
+                    updates.push(Update::VncConnected(session, after));
+                }
                 Response::Text(text) => {
                     if let After::Text(key) = after {
                         updates.push(Update::Text(key, text));
@@ -991,6 +997,39 @@ impl Services {
                         .await?;
                     Ok(vec![Update::RestartFinished(message)])
                 })?;
+            }
+            Job::VncConnectTab { tab_id, request } => {
+                let result = match client.rpc(request).await {
+                    Ok(Response::VncCreated(session)) => {
+                        if let Ok(Response::State(state)) = client.rpc(Request::Snapshot).await {
+                            updates.push(Update::State(state));
+                        }
+                        Ok(session)
+                    }
+                    Ok(_) => Err("Unexpected VNC connection response".into()),
+                    Err(err) => Err(format!("{err:#}")),
+                };
+                updates.push(Update::VncTabConnected(tab_id, result));
+            }
+            Job::VncFrame { session, since } => {
+                let result = match client
+                    .rpc(Request::VncFrame {
+                        session: session.clone(),
+                        since,
+                    })
+                    .await
+                {
+                    Ok(Response::VncFrame(frame)) => self
+                        .cpu()
+                        .run(&cancel, move || crate::vnc_ui::decode_frame(*frame))
+                        .await
+                        .map(Some)
+                        .map_err(|e| format!("{e:#}")),
+                    Ok(Response::Unchanged) => Ok(None),
+                    Ok(_) => Err("Unexpected VNC frame response".into()),
+                    Err(err) => Err(format!("{err:#}")),
+                };
+                updates.push(Update::VncFrame(session, result));
             }
             Job::Workspace(root, op) => {
                 let reply = op.clone();

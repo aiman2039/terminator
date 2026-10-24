@@ -2,6 +2,60 @@ use super::super::*;
 use super::header::click_enabled_menu_item;
 use super::tab_menu::{WorkspaceTabMenu, WorkspaceTabMenuSpec, click_menu_item, split_action};
 impl App {
+    pub(super) fn workspace_new_tab_menu(&mut self, ui: &mut egui::Ui) {
+        if appearance::menu_item(
+            ui,
+            "New Terminal",
+            "Terminal",
+            &self.shortcut_label("new_terminal"),
+        )
+        .clicked()
+        {
+            self.create(None);
+            ui.close();
+        }
+        if appearance::menu_item(
+            ui,
+            "New Browser Tab",
+            "Globe",
+            &self.shortcut_label("new_browser"),
+        )
+        .clicked()
+        {
+            self.open_new_browser_tab(None);
+            ui.close();
+        }
+        if appearance::menu_item(
+            ui,
+            "New VNC Viewer",
+            "Monitor",
+            &self.shortcut_label("new_vnc"),
+        )
+        .clicked()
+        {
+            self.open_new_vnc_tab(None);
+            ui.close();
+        }
+        let profiles = self.state.vnc_profiles.clone();
+        if !profiles.is_empty() {
+            ui.separator();
+            ui.weak("VNC Connections");
+            for profile in &profiles {
+                if appearance::menu_item(
+                    ui,
+                    &profile.display_name(),
+                    "Monitor",
+                    &profile.endpoint(),
+                )
+                .clicked()
+                {
+                    self.connect_vnc_profile(profile, None);
+                    ui.close();
+                }
+            }
+        }
+    }
+
     pub(super) fn workspace_tab_menu(
         &mut self,
         ui: &mut egui::Ui,
@@ -82,6 +136,31 @@ impl App {
                 ui.close();
             }
         }
+        if !strip && window.is_none() {
+            ui.separator();
+            if appearance::menu_item(
+                ui,
+                "New Browser Tab",
+                "Globe",
+                &self.shortcut_label("new_browser"),
+            )
+            .clicked()
+            {
+                self.open_new_browser_tab(None);
+                ui.close();
+            }
+            if appearance::menu_item(
+                ui,
+                "New VNC Viewer",
+                "Monitor",
+                &self.shortcut_label("new_vnc"),
+            )
+            .clicked()
+            {
+                self.open_new_vnc_tab(None);
+                ui.close();
+            }
+        }
         let tabs_in_pane = pane.and_then(|pane| {
             if strip {
                 self.strip_pane_tabs.get(&pane).cloned()
@@ -120,6 +199,17 @@ impl App {
                         "Blame {}",
                         path.file_name().unwrap_or_default().to_string_lossy()
                     ),
+                    Tab::Vnc {
+                        label, host, port, ..
+                    } => {
+                        if !label.trim().is_empty() {
+                            label.clone()
+                        } else if !host.trim().is_empty() {
+                            format!("{host}:{port}")
+                        } else {
+                            "VNC Viewer".into()
+                        }
+                    }
                 };
                 if appearance::menu_item(ui, &label, "Terminal", "").clicked() {
                     if strip {

@@ -8,6 +8,7 @@ mod presence;
 mod review;
 mod terminal_env;
 mod terminal_events;
+mod vnc_session;
 
 #[derive(Clone, Copy)]
 enum Launch {
@@ -141,6 +142,7 @@ fn main() -> Result<()> {
         SCREEN_CAPABILITY.into(),
         METADATA_SETTINGS_CAPABILITY.into(),
         AGENT_PRESENCE_CAPABILITY.into(),
+        VNC_CAPABILITY.into(),
     ];
     if catalog_paths.is_some() {
         state.daemon_build = Some(generations::build_identity(
@@ -160,6 +162,7 @@ fn main() -> Result<()> {
         state: Mutex::new(state),
         store: Mutex::new(store),
         sessions: Mutex::new(HashMap::new()),
+        vnc_sessions: Mutex::new(HashMap::new()),
         paths,
         auth,
         focused: Mutex::new((false, Instant::now())),
