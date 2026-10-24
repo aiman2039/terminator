@@ -29,7 +29,7 @@ multiple-versions = "warn"
 wildcards = "allow"
 deny = []
 # Transitive-only duplicates pinned by upstream majors; none are direct deps
-# we can unify. Revisit on eframe/egui, resvg, wry/gtk, or tungstenite upgrades.
+# we can unify. Revisit on eframe/egui, resvg, merman, wgpu, wry/gtk, or tungstenite upgrades.
 skip = [
     # eframe 0.36 / winit stack: unify on egui-ecosystem upgrade.
     { crate = "accesskit_consumer", reason = "0.36 unix vs 0.38 macos, both via egui-winit 0.36" },
@@ -49,6 +49,10 @@ skip = [
     { crate = "quick-xml", reason = "0.41 via smithay/winit vs 0.42 via plist/syntect" },
     { crate = "rustix", reason = "0.38 via calloop 0.13 vs 1.x via async stack" },
     { crate = "smithay-client-toolkit", reason = "0.19 via winit vs 0.20 via smithay-clipboard" },
+    # wgpu 30 / naga vs syntect: unify on a wgpu or syntect upgrade.
+    { crate = "bit-set", reason = "0.8 via fancy-regex/syntect vs 0.10 via naga/wgpu 30" },
+    { crate = "bit-vec", reason = "0.8 via bit-set 0.8/syntect vs 0.9 via naga/wgpu 30" },
+    { crate = "rustc-hash", reason = "1.1 via naga/wgpu 30 vs 2.1 via merman and egui-wgpu" },
     # gtk 0.18 / wry 0.57 stack: unify if wry/gtk ever moves off gtk3.
     { crate = "heck", reason = "0.4 via glib vs 0.5 via clap/egui_dock" },
     { crate = "proc-macro-crate", reason = "v1/v2 via gtk/glib vs v3 via zbus" },
@@ -63,11 +67,25 @@ skip = [
     { crate = "float-cmp", reason = "0.9 via resvg/tiny-skia vs 0.10 via spectrum-analyzer" },
     { crate = "gif", reason = "0.13 via resvg vs 0.14 via image" },
     { crate = "kurbo", reason = "0.11 via resvg vs 0.13 via vello/epaint" },
+    { crate = "svgtypes", reason = "0.15 via resvg 0.45/usvg vs 0.16 via merman-render; resvg stays on 0.45 until egui_extras moves" },
+    { crate = "roxmltree", reason = "0.20 via usvg/resvg 0.45 vs 0.21 via merman-render" },
+    # merman 0.9 pulls lol_html cssparser 0.36 and its own cssparser 0.38.
+    { crate = "cssparser", reason = "0.36 via lol_html/selectors vs 0.38 via merman-render" },
+    { crate = "cssparser-macros", reason = "0.6 via cssparser 0.36 vs 0.7 via cssparser 0.38" },
+    { crate = "phf", reason = "0.13 via accesskit/lol_html vs 0.14 via merman cssparser 0.38" },
+    { crate = "phf_generator", reason = "0.13 via phf 0.13 vs 0.14 via phf 0.14" },
+    { crate = "phf_macros", reason = "0.13 via phf 0.13 vs 0.14 via phf 0.14" },
+    { crate = "phf_shared", reason = "0.13 via phf 0.13 vs 0.14 via phf 0.14" },
+    # rfd 0.17 vs eframe 0.36.
+    { crate = "pollster", reason = "0.4 via rfd vs 1.0 via eframe" },
     { crate = "miniz_oxide", reason = "0.8 via png 0.17 vs 0.9 via flate2" },
     { crate = "png", reason = "0.17 via resvg vs 0.18 via image" },
     { crate = "zune-core", reason = "0.4 via resvg vs 0.5 via image" },
     { crate = "zune-jpeg", reason = "0.4 via resvg vs 0.5 via image" },
     # tungstenite 0.28 (rand 0.9) vs reqwest/hickory (rand 0.10): unify on tungstenite upgrade.
+    { crate = "block-buffer", reason = "0.10 via sha1/tungstenite vs 0.12 via sha2 0.11" },
+    { crate = "crypto-common", reason = "0.1 via digest 0.10/tungstenite vs 0.2 via sha2 0.11" },
+    { crate = "digest", reason = "0.10 via sha1/tungstenite vs 0.11 via sha2 0.11" },
     { crate = "cpufeatures", reason = "0.2 via tungstenite vs 0.3 via chacha20/rand 0.10" },
     { crate = "rand", reason = "0.9 via tungstenite vs 0.10 via hickory" },
     { crate = "rand_core", reason = "0.9 via tungstenite vs 0.10 via chacha20" },

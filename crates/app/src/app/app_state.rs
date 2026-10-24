@@ -14,9 +14,12 @@ use super::super::*;
 pub struct App {
     pub(crate) file_activation: Option<FileActivation>,
     pub(crate) git_commit: String,
+    pub(crate) git_amend: bool,
+    pub(crate) git_signoff: bool,
     pub(crate) git_history: bool,
     pub(crate) git_branches: Vec<String>,
     pub(crate) git_log: Vec<(String, String)>,
+    pub(crate) git_shelves: Vec<(String, String)>,
     pub(crate) git_list_root: Option<PathBuf>,
     pub(crate) git_collapse: u64,
     /// Branch comparison for the current Git root (upstream, ahead/behind,
@@ -217,6 +220,8 @@ pub struct App {
     /// (not the pane snapshot ghost) follows the pointer there.
     pub(crate) strip_new_tab_hover: bool,
     pub(crate) focus_tab: Option<Tab>,
+    /// Diff navigation requested while its dock is checked out for painting.
+    pub(crate) diff_replacement: Option<(Tab, Tab)>,
     pub(crate) terminal_context: HashMap<String, String>,
     pub(crate) missing_projects: HashSet<String>,
     pub(crate) texts: HashMap<String, String>,
@@ -265,6 +270,8 @@ pub struct App {
     pub(crate) browse_target: Option<BrowseTarget>,
     pub(crate) palette_open: bool,
     pub(crate) palette_query: String,
+    /// Bit set of palette chips. `0` means every kind in the current project.
+    pub(crate) palette_filters: u8,
     pub(crate) palette_index: usize,
     pub(crate) palette_cache: Option<palette::PaletteCache>,
     pub(crate) palette_query_changed_at: Instant,

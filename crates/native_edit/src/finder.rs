@@ -118,10 +118,29 @@ impl FileIndex {
     /// categories. The caller can merge all kinds into one fuzzy list.
     #[must_use]
     pub fn query_scored(&self, pattern: &str, limit: usize) -> Vec<(u16, IndexedFile)> {
+        self.query_scored_in(None, &[], pattern, limit)
+    }
+
+    /// Same ranking as [`Self::query_scored`], limited to files under `root`.
+    /// `None` searches the whole index. `exclude` drops nested roots before
+    /// the limit, so those files cannot fill the result list.
+    #[must_use]
+    pub fn query_scored_in(
+        &self,
+        root: Option<&Path>,
+        exclude: &[PathBuf],
+        pattern: &str,
+        limit: usize,
+    ) -> Vec<(u16, IndexedFile)> {
+        let allowed = |path: &Path| {
+            root.is_none_or(|root| path.starts_with(root))
+                && exclude.iter().all(|child| !path.starts_with(child))
+        };
         if pattern.is_empty() {
             return self
                 .files
                 .iter()
+                .filter(|file| allowed(&file.path))
                 .take(limit)
                 .map(|file| (0, file.clone()))
                 .collect();
@@ -132,6 +151,9 @@ impl FileIndex {
         let needle = nucleo::Utf32Str::new(pattern, &mut needle_buf);
         let mut scored: Vec<(u16, &IndexedFile)> = Vec::new();
         for file in &self.files {
+            if !allowed(&file.path) {
+                continue;
+            }
             let haystack = nucleo::Utf32Str::new(&file.display, &mut haystack_buf);
             if let Some(score) = matcher.fuzzy_match(haystack, needle) {
                 scored.push((score, file));

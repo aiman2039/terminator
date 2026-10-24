@@ -330,22 +330,24 @@ pub fn hunks(o: &Options) -> Result<()> {
             {"at_ms":5900,"target":"diff-undo"},
             {"at_ms":6500,"target":"diff-side-by-side"},
             {"at_ms":7100,"target":"diff-marker-1"},
-                {"at_ms":7500,"target":"diff-gap-0"},
                 {"at_ms":8200,"target":"diff-marker-0"},
                 {"at_ms":8600,"target":"diff-menu"},
                 {"at_ms":9000,"target":"Collapse unchanged lines"},
-                {"at_ms":9700,"target":"diff-edit"},
-                {"at_ms":10100,"target":"diff-edit-old"},
-                {"at_ms":10400,"target":"diff-edit-old","key":"A","command":true},
-                {"at_ms":10700,"target":"diff-edit-old","copy":true},
-                {"at_ms":11000,"target":"diff-edit-local"},
-                {"at_ms":11300,"target":"diff-edit-local","text":edited},
-                {"at_ms":11600,"target":"diff-edit-local","key":"A","command":true},
-                {"at_ms":11900,"target":"diff-edit-local","copy":true,"capture":true},
-                {"at_ms":12300,"target":"diff-edit-save"},
-                {"at_ms":13300,"target":"diff-undo"}
+                {"at_ms":9700,"target":"diff-right-editor"},
+                {"at_ms":10100,"target":"diff-right-editor","text":edited},
+                {"at_ms":10700,"target":"diff-edit-save"},
+                {"at_ms":11700,"target":"diff-undo"},
+                {"at_ms":12700,"target":"diff-unified"},
+                {"at_ms":13000,"target":"diff-unified-edit-1"},
+                {"at_ms":13300,"target":"diff-unified-edit-1","input":"unified edit"},
+                {"at_ms":13900,"target":"diff-unified-edit-1","key":"Z","command":true},
+                {"at_ms":14500,"target":"diff-unified-edit-1"},
+                {"at_ms":14800,"target":"diff-unified-edit-1","key":"A","command":true},
+                {"at_ms":15100,"target":"diff-unified-edit-1","copy":true},
+                {"at_ms":15400,"target":"diff-unified-edit-1","input":"unified edit"},
+                {"at_ms":16000,"target":"diff-edit-save"}
         ]),
-        14100,
+        17100,
         |_| {
             h.wait(
                 |_| {
@@ -370,24 +372,24 @@ pub fn hunks(o: &Options) -> Result<()> {
                 |_| fs::read_to_string(&source).is_ok_and(|text| text == changed),
                 5,
             )?;
+            h.wait(
+                |_| fs::read_to_string(&source).is_ok_and(|text| text.contains("unified edit")),
+                8,
+            )?;
             Ok(())
         },
     )?;
     ensure!(
-        log.contains(&format!("Fixture copied text: {middle:?}")),
-        "Old-side selection did not copy the index snapshot"
-    );
-    ensure!(
-        log.contains(&format!("Fixture copied text: {edited:?}")),
-        "Local-side selection did not copy the draft"
+        log.contains("Fixture copied text: \"line 0\""),
+        "Unified undo did not restore the original row"
     );
     ensure!(
         git(&root, &["show", ":hunks.txt"])? == middle.as_bytes(),
         "Hunk stage changed the wrong lines"
     );
     ensure!(
-        fs::read_to_string(&source)? == changed,
-        "Discard undo did not restore the working file"
+        fs::read_to_string(&source)?.contains("unified edit"),
+        "Unified editing and save did not update the working file"
     );
     ensure!(
         sessions(&h.state()?).len() == before,

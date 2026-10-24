@@ -18,7 +18,17 @@ pub enum Op {
         untracked: bool,
     },
     Delete(PathBuf),
-    Commit(String),
+    Commit {
+        message: String,
+        amend: bool,
+        signoff: bool,
+        push: bool,
+    },
+    /// Shelve staged paths with `git stash push --staged`.
+    Shelve(Vec<PathBuf>),
+    Shelves,
+    Unshelve(String),
+    DropShelf(String),
     Branches,
     Switch(String),
     Log,
@@ -39,6 +49,7 @@ pub enum Op {
 pub enum Report {
     Message(String),
     Branches(Vec<String>),
+    Shelves(Vec<(String, String)>),
     Log(Vec<(String, String)>),
     Compare(CompareData),
 }
@@ -80,7 +91,24 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
             }
         }
         Op::Delete(path) => delete(root, &path),
-        Op::Commit(message) => commit(root, &message),
+        Op::Commit {
+            message,
+            amend,
+            signoff,
+            push,
+        } => commit(root, &message, amend, signoff, push),
+        Op::Shelve(paths) => shelve(root, &paths),
+        Op::Shelves => Ok(Report::Shelves(shelves(root)?)),
+        Op::Unshelve(reference) => {
+            valid_shelf_ref(&reference)?;
+            git_text(root, &["stash", "pop", "--quiet", &reference])?;
+            Ok(Report::Message("Unshelved".into()))
+        }
+        Op::DropShelf(reference) => {
+            valid_shelf_ref(&reference)?;
+            git_text(root, &["stash", "drop", "--quiet", &reference])?;
+            Ok(Report::Message("Shelf dropped".into()))
+        }
         Op::Branches => Ok(Report::Branches(branches(root)?)),
         Op::Switch(name) => switch(root, &name),
         Op::Log => Ok(Report::Log(log(root)?)),
@@ -156,17 +184,77 @@ fn git_path(root: &Path, prefix: &[&str], path: &Path, verb: &str) -> Result<Rep
     Ok(Report::Message(format!("{verb} {relative}")))
 }
 
-fn commit(root: &Path, message: &str) -> Result<Report> {
+fn commit(root: &Path, message: &str, amend: bool, signoff: bool, push: bool) -> Result<Report> {
     let message = message.trim();
-    ensure!(!message.is_empty(), "Commit message is empty");
+    ensure!(amend || !message.is_empty(), "Commit message is empty");
     ensure!(
         !message.contains('\0'),
         "Commit message contains a null byte"
     );
+    // Amending with no message keeps the previous message untouched.
+    let mut args: Vec<&str> = vec!["commit"];
+    if amend {
+        args.push("--amend");
+    }
+    if signoff {
+        args.push("--signoff");
+    }
     let mut options = git_options();
-    options.input = Some(message.as_bytes().to_vec());
-    run_command(git::command(root, &["commit", "-F", "-"]), options)?;
+    if amend && message.is_empty() {
+        args.push("--no-edit");
+    } else {
+        args.extend(["-F", "-"]);
+        options.input = Some(message.as_bytes().to_vec());
+    }
+    run_command(git::command(root, &args), options)?;
+    if push {
+        git_text(root, &["push"])?;
+        return Ok(Report::Message("Committed and pushed".into()));
+    }
     Ok(Report::Message("Committed".into()))
+}
+
+/// Only `stash@{N}` references may reach `git stash pop/drop`.
+fn valid_shelf_ref(reference: &str) -> Result<()> {
+    let inner = reference
+        .strip_prefix("stash@{")
+        .and_then(|rest| rest.strip_suffix('}'))
+        .unwrap_or_default();
+    ensure!(
+        !inner.is_empty() && inner.chars().all(|c| c.is_ascii_digit()),
+        "Invalid shelf reference"
+    );
+    Ok(())
+}
+
+fn shelve(root: &Path, paths: &[PathBuf]) -> Result<Report> {
+    ensure!(!paths.is_empty(), "Nothing staged to shelve");
+    let mut relatives = Vec::new();
+    for path in paths {
+        relatives.push(relative_arg(root, path)?);
+    }
+    let mut args: Vec<&str> = vec![
+        "stash",
+        "push",
+        "--staged",
+        "-m",
+        "Shelve (Terminator)",
+        "--",
+    ];
+    args.extend(relatives.iter().map(String::as_str));
+    git_text(root, &args)?;
+    Ok(Report::Message("Shelved staged changes".into()))
+}
+
+fn shelves(root: &Path) -> Result<Vec<(String, String)>> {
+    let text = git_text(root, &["stash", "list", "--format=%gd%x09%gs"])?;
+    Ok(text
+        .lines()
+        .filter_map(|line| {
+            let (reference, message) = line.split_once('\t')?;
+            Some((reference.to_owned(), message.to_owned()))
+        })
+        .collect())
 }
 
 fn branches(root: &Path) -> Result<Vec<String>> {
@@ -492,7 +580,16 @@ mod tests {
         perform(root, Op::Stage(path.clone())).unwrap();
         fs::write(root.join("new.txt"), "new\n").unwrap();
         perform(root, Op::Stage(root.join("new.txt"))).unwrap();
-        perform(root, Op::Commit("next\n".into())).unwrap();
+        perform(
+            root,
+            Op::Commit {
+                message: "next\n".into(),
+                amend: false,
+                signoff: false,
+                push: false,
+            },
+        )
+        .unwrap();
         fs::write(&path, "dirty\n").unwrap();
         perform(
             root,
@@ -515,6 +612,101 @@ mod tests {
         assert!(!root.join("scratch.txt").exists());
         let outside = dir.path().join("../nope.txt");
         assert!(perform(root, Op::Stage(outside)).is_err());
+    }
+
+    #[test]
+    fn amend_signoff_and_push_commit_variants() {
+        let dir = repo();
+        let root = dir.path();
+        let subject = |root: &Path| git_text(root, &["log", "-1", "--pretty=%s"]).unwrap();
+        let body = |root: &Path| git_text(root, &["log", "-1", "--pretty=%b"]).unwrap();
+        // Amend with an empty message keeps the previous subject.
+        fs::write(root.join("a.txt"), "amended\n").unwrap();
+        perform(root, Op::Stage(root.join("a.txt"))).unwrap();
+        perform(
+            root,
+            Op::Commit {
+                message: String::new(),
+                amend: true,
+                signoff: true,
+                push: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(subject(root), "base");
+        assert!(body(root).contains("Signed-off-by: Ops <ops@example.com>"));
+        // Amend with a message replaces the subject.
+        fs::write(root.join("a.txt"), "again\n").unwrap();
+        perform(root, Op::Stage(root.join("a.txt"))).unwrap();
+        perform(
+            root,
+            Op::Commit {
+                message: "renamed".into(),
+                amend: true,
+                signoff: false,
+                push: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(subject(root), "renamed");
+        // Push goes to a bare remote configured as upstream.
+        let remote = tempfile::tempdir().unwrap();
+        git(remote.path(), &["init", "-q", "--bare", "-b", "main"]);
+        let remote_arg = remote.path().to_string_lossy().into_owned();
+        git(root, &["remote", "add", "origin", &remote_arg]);
+        git(root, &["push", "-q", "-u", "origin", "main"]);
+        fs::write(root.join("a.txt"), "pushed\n").unwrap();
+        perform(root, Op::Stage(root.join("a.txt"))).unwrap();
+        let report = perform(
+            root,
+            Op::Commit {
+                message: "pushed change".into(),
+                amend: false,
+                signoff: false,
+                push: true,
+            },
+        )
+        .unwrap();
+        assert!(matches!(report, Report::Message(ref m) if m == "Committed and pushed"));
+        let remote_head = git_text(remote.path(), &["rev-parse", "main"]).unwrap();
+        let local_head = git_text(root, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(remote_head, local_head);
+    }
+
+    #[test]
+    fn shelve_unshelve_and_drop_roundtrip() {
+        let dir = repo();
+        let root = dir.path();
+        assert!(valid_shelf_ref("stash@{0}").is_ok());
+        assert!(valid_shelf_ref("stash@{12}").is_ok());
+        assert!(valid_shelf_ref("--all").is_err());
+        assert!(valid_shelf_ref("stash@{x}").is_err());
+        assert!(perform(root, Op::Shelve(vec![])).is_err());
+        fs::write(root.join("a.txt"), "shelved\n").unwrap();
+        perform(root, Op::Stage(root.join("a.txt"))).unwrap();
+        perform(root, Op::Shelve(vec![root.join("a.txt")])).unwrap();
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "base\n");
+        let Report::Shelves(list) = perform(root, Op::Shelves).unwrap() else {
+            panic!("shelves report");
+        };
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].0, "stash@{0}");
+        assert!(list[0].1.contains("Shelve (Terminator)"));
+        perform(root, Op::Unshelve("stash@{0}".into())).unwrap();
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "shelved\n");
+        let Report::Shelves(list) = perform(root, Op::Shelves).unwrap() else {
+            panic!("shelves report");
+        };
+        assert!(list.is_empty());
+        // Drop removes a shelf without touching the worktree.
+        perform(root, Op::Stage(root.join("a.txt"))).unwrap();
+        perform(root, Op::Shelve(vec![root.join("a.txt")])).unwrap();
+        perform(root, Op::DropShelf("stash@{0}".into())).unwrap();
+        let Report::Shelves(list) = perform(root, Op::Shelves).unwrap() else {
+            panic!("shelves report");
+        };
+        assert!(list.is_empty());
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "base\n");
     }
 
     #[test]

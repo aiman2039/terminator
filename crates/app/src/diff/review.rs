@@ -53,7 +53,9 @@ impl Gap {
 
 #[derive(Default)]
 pub(crate) struct State {
-    pub editor: Option<Edit>,
+    /// Always-on working-tree buffer for the split diff's right pane. The
+    /// diff view itself is the editor; there is no separate edit mode.
+    pub buffer: Option<Edit>,
     pub saving_edits: bool,
     pub selected: Option<usize>,
     pub jump: bool,
@@ -64,14 +66,58 @@ pub(crate) struct State {
     pub message: Option<String>,
 }
 
+/// One row of the live unified editor, recomputed from the left text vs the
+/// current buffer on every revision: the whole file, not just hunk windows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum LiveRow {
+    /// A line present in the buffer; `changed` marks insert/replace lines.
+    Edit {
+        old: Option<usize>,
+        new: usize,
+        changed: Option<LiveTint>,
+    },
+    /// A line only in the left text, painted read-only between buffer lines.
+    Gone { old: usize, text: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LiveTint {
+    Added,
+    Changed,
+}
+
+/// `(key, per-line syntax spans, per-line span validity)`.
+pub(crate) type SpanCache = (
+    u64,
+    std::sync::Arc<Vec<Vec<super::DiffSpan>>>,
+    std::sync::Arc<Vec<bool>>,
+);
+
 pub(crate) struct Edit {
     pub document: std::sync::Arc<super::DiffDocument>,
     pub text: String,
+    /// Syntax spans for `text`, keyed by a hash of the text and tint colors.
+    /// The `bool` per line says the spans reproduce that line exactly, so the
+    /// layouter never has to re-validate them on the hot path.
+    pub right_spans: Option<SpanCache>,
+    /// Diff tints recomputed live from `document.left_text` vs `text`,
+    /// under the same key as `right_spans`.
+    pub live_tints: Option<(u64, std::sync::Arc<Vec<Option<eframe::egui::Color32>>>)>,
+    /// Buffer-level undo/redo for the unified editor (split uses the text
+    /// widget's own undoer). Snapshots are whole-buffer text; `burst` is the
+    /// last snapshot time so a typing burst is one undo unit.
+    pub undo: Vec<String>,
+    pub redo: Vec<String>,
+    pub burst: f64,
+    /// Live unified rows for the current revision, same key as `right_spans`.
+    pub live_rows: Option<(u64, std::sync::Arc<Vec<LiveRow>>)>,
+    /// Syntax spans for the immutable left text, computed once.
+    pub left_spans: Option<std::sync::Arc<Vec<Vec<super::DiffSpan>>>>,
 }
 
 impl State {
     pub fn unsaved_edits(&self) -> bool {
-        self.editor
+        self.buffer
             .as_ref()
             .is_some_and(|edit| edit.text != edit.document.right_text)
     }

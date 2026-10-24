@@ -1740,7 +1740,12 @@ mod tests {
         assert_eq!(app.git_list_root, Some(root.clone()));
         app.update_tx
             .send(Update::Workspace(
-                workspace_ops::Op::Commit("nope".into()),
+                workspace_ops::Op::Commit {
+                    message: "nope".into(),
+                    amend: false,
+                    signoff: false,
+                    push: false,
+                },
                 Err("commit failed".into()),
             ))
             .unwrap();
@@ -1748,7 +1753,12 @@ mod tests {
         assert_eq!(app.git_list_root, Some(root.clone()));
         app.update_tx
             .send(Update::Workspace(
-                workspace_ops::Op::Commit("yes".into()),
+                workspace_ops::Op::Commit {
+                    message: "yes".into(),
+                    amend: false,
+                    signoff: false,
+                    push: false,
+                },
                 Ok(workspace_ops::Report::Message("Committed".into())),
             ))
             .unwrap();
