@@ -59,12 +59,9 @@ impl Diagnostics {
         // A fixture owns its input. Do not let concurrent desktop typing or
         // clipboard shortcuts reach its shells/editors or leak into captures.
         if std::env::var_os("TERMINATOR_TEST_NATIVE_INPUT").is_none() {
-            input.events.retain(|event| {
-                matches!(
-                    event,
-                    egui::Event::Screenshot { .. } | egui::Event::WindowFocused(_)
-                )
-            });
+            input
+                .events
+                .retain(|event| matches!(event, egui::Event::WindowFocused(_)));
         }
         if std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some() {
             input.focused = true;
@@ -83,10 +80,13 @@ impl Diagnostics {
         } else if let Some(action) = self.actions.get(self.action_index)
             && self.started.elapsed().as_millis() >= u128::from(action.at_ms)
             && let Some(rect) = ctx.data(|d| {
-                d.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", &action.target)))
+                d.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", &action.target)))
                     .filter(|_| {
-                        d.get_temp::<u64>(egui::Id::new(("fixture-target-frame", &action.target)))
-                            .is_none_or(|frame| frame.checked_add(1) == Some(current_frame))
+                        d.get_temp::<u64>(egui::Id::unique((
+                            "fixture-target-frame",
+                            &action.target,
+                        )))
+                        .is_none_or(|frame| frame.checked_add(1) == Some(current_frame))
                     })
             })
         {
@@ -114,6 +114,7 @@ impl Diagnostics {
                         _ => egui::TouchPhase::Move,
                     },
                     delta: egui::vec2(action.scroll_x.unwrap_or_default(), delta),
+                    source: egui::MouseWheelSource::Unknown,
                     modifiers: egui::Modifiers {
                         shift: action.shift,
                         ..Default::default()
@@ -202,7 +203,7 @@ impl Diagnostics {
                 }
             }
             if action.capture {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+                self.request_fixture_capture(ctx);
             }
             eprintln!("Fixture action: {}", action.target);
             self.action_index = self.action_index.saturating_add(1);
@@ -212,8 +213,50 @@ impl Diagnostics {
         self.action_index
     }
 
+    fn request_fixture_capture(&self, ctx: &egui::Context) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        let callback_ctx = ctx.clone();
+        ctx.request_screenshot(move |image| {
+            eprintln!(
+                "Native fixture captured {}x{}",
+                image.width(),
+                image.height()
+            );
+            let bytes = image
+                .pixels
+                .iter()
+                .flat_map(eframe::egui::Color32::to_array)
+                .collect::<Vec<_>>();
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = image::save_buffer(
+                &path,
+                &bytes,
+                u32::try_from(image.width()).unwrap_or(u32::MAX),
+                u32::try_from(image.height()).unwrap_or(u32::MAX),
+                image::ColorType::Rgba8,
+            ) {
+                eprintln!("Capture failed: {e}");
+            }
+            if std::env::var_os("TERMINATOR_TEST_KEEP_OPEN").is_none() {
+                if cfg!(target_os = "macos")
+                    && std::env::var_os("TERMINATOR_TEST_NATIVE_QUIT").is_some()
+                {
+                    crate::updater::fixture_native_quit();
+                } else {
+                    callback_ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+        });
+    }
+
     pub fn frame(&mut self, ctx: &egui::Context) {
-        let Some(path) = &self.path else { return };
+        if self.path.is_none() {
+            return;
+        }
         if !self.scale_configured {
             let scale = std::env::var("TERMINATOR_TEST_SCALE")
                 .ok()
@@ -301,41 +344,6 @@ impl Diagnostics {
                 self.input_phase = self.input_phase.saturating_add(1);
             }
         }
-        for event in ctx.input(|i| i.events.clone()) {
-            if let egui::Event::Screenshot { image, .. } = event {
-                eprintln!(
-                    "Native fixture captured {}x{}",
-                    image.width(),
-                    image.height()
-                );
-                let bytes = image
-                    .pixels
-                    .iter()
-                    .flat_map(eframe::egui::Color32::to_array)
-                    .collect::<Vec<_>>();
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if let Err(e) = image::save_buffer(
-                    path,
-                    &bytes,
-                    u32::try_from(image.width()).unwrap_or(u32::MAX),
-                    u32::try_from(image.height()).unwrap_or(u32::MAX),
-                    image::ColorType::Rgba8,
-                ) {
-                    eprintln!("Capture failed: {e}");
-                }
-                if std::env::var_os("TERMINATOR_TEST_KEEP_OPEN").is_none() {
-                    if cfg!(target_os = "macos")
-                        && std::env::var_os("TERMINATOR_TEST_NATIVE_QUIT").is_some()
-                    {
-                        crate::updater::fixture_native_quit();
-                    } else {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                }
-            }
-        }
         if std::env::var_os("TERMINATOR_TEST_PASSIVE_CAPTURE").is_some()
             && self.started.elapsed() > Duration::from_secs(3)
         {
@@ -399,7 +407,7 @@ impl Diagnostics {
             // action is never logged and the driver kills the window.
             && self.action_index >= self.actions.len()
         {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            self.request_fixture_capture(ctx);
             self.requested = true;
             eprintln!("Native fixture requested capture");
         } else if self.requested
@@ -468,8 +476,8 @@ struct FixtureAction {
 pub fn record(ctx: &egui::Context, name: &str, rect: egui::Rect) {
     let frame = ctx.cumulative_frame_nr();
     ctx.data_mut(|data| {
-        data.insert_temp(egui::Id::new(("fixture-target", name)), rect);
-        data.insert_temp(egui::Id::new(("fixture-target-frame", name)), frame);
+        data.insert_temp(egui::Id::unique(("fixture-target", name)), rect);
+        data.insert_temp(egui::Id::unique(("fixture-target-frame", name)), frame);
     });
 }
 
@@ -487,9 +495,9 @@ pub fn record_ui(ui: &egui::Ui, name: &str, rect: egui::Rect) {
 pub fn current_rect(ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
     let current = ctx.cumulative_frame_nr();
     ctx.data(|data| {
-        let frame = data.get_temp::<u64>(egui::Id::new(("fixture-target-frame", name)))?;
+        let frame = data.get_temp::<u64>(egui::Id::unique(("fixture-target-frame", name)))?;
         (frame == current || frame.checked_add(1) == Some(current))
-            .then(|| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+            .then(|| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
             .flatten()
     })
 }
@@ -499,7 +507,7 @@ pub fn record_response(ctx: &egui::Context, name: &str, response: &egui::Respons
         record(ctx, name, response.rect);
     } else {
         ctx.data_mut(|data| {
-            data.remove::<egui::Rect>(egui::Id::new(("fixture-target", name)));
+            data.remove::<egui::Rect>(egui::Id::unique(("fixture-target", name)));
         });
     }
 }

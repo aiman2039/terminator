@@ -75,11 +75,11 @@ version = "0.2"
 optional = true
 
 [dependencies.egui]
-version = "0.36.0"
+version = "0.37.0"
 default-features = false
 
 [dependencies.egui_commonmark_backend]
-version = "0.25.0"
+version = "0.26.0"
 default-features = false
 
 [dependencies.egui_commonmark_macros]
@@ -88,7 +88,7 @@ optional = true
 default-features = false
 
 [dependencies.egui_extras]
-version = "0.36.0"
+version = "0.37.0"
 default-features = false
 
 [dependencies.pulldown-cmark]
@@ -96,7 +96,7 @@ version = "0.13"
 default-features = false
 
 [dev-dependencies.eframe]
-version = "0.36.0"
+version = "0.37.0"
 features = [
     "default_fonts",
     "glow",

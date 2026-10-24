@@ -99,6 +99,14 @@ pub(super) fn context(job: &Job) -> OperationContext {
         Job::TestNtfy { .. } => ("platform", "ntfy-test".into(), Policy::ReplaceableRead),
         Job::Preferences(_) => ("catalog", "preferences".into(), Policy::OrderedMutation),
         Job::SaveAppearance(..) => ("catalog", "appearance".into(), Policy::OrderedMutation),
+        Job::VncFrame { session, .. } => {
+            ("vnc", format!("frame:{session}"), Policy::ReplaceableRead)
+        }
+        Job::VncConnectTab { tab_id, .. } => (
+            "daemon",
+            format!("vnc-connect:{tab_id}"),
+            Policy::OrderedMutation,
+        ),
         _ => ("daemon", "workspace".into(), Policy::OrderedMutation),
     };
     let mut context = OperationContext::new(subsystem, resource, policy);

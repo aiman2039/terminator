@@ -93,9 +93,7 @@ pub(super) fn explorer_toggle(
             },
         );
     }
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, tip)
-    });
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tip));
     #[cfg(feature = "test-support")]
     diagnostics::record(ui.ctx(), target, response.rect);
     let _ = target;
@@ -149,9 +147,8 @@ pub(super) fn explorer_segmented(ui: &mut egui::Ui, mode: &mut ExplorerSearchMod
                 ui.visuals().weak_text_color()
             },
         );
-        response.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)
-        });
+        response
+            .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), target, cell);
         let _ = target;

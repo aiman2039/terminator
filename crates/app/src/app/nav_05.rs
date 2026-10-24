@@ -48,7 +48,10 @@ mod tests {
                         output.textures_delta.clear();
                         let target = |name: &str| {
                             ctx.data(|data| {
-                                data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name)))
+                                data.get_temp::<egui::Rect>(egui::Id::unique((
+                                    "fixture-target",
+                                    name,
+                                )))
                             })
                             .unwrap()
                         };
@@ -102,7 +105,7 @@ mod tests {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.projects(ui));
         output.textures_delta.clear();
         let target = |name: &str| {
-            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
         };
         assert!(target("session-row:live-shell").is_some());
         assert!(target("session-row:open-file").is_none());
@@ -314,7 +317,7 @@ mod tests {
         );
         output.textures_delta.clear();
         let target = |name: &str| {
-            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
                 .unwrap()
         };
         let add = target("project-add");
@@ -379,7 +382,7 @@ mod tests {
         // way a user does: click the painted field.
         let rect = ctx
             .data(|data| {
-                data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", "project-filter")))
+                data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", "project-filter")))
             })
             .expect("project filter geometry");
         let pos = rect.center();

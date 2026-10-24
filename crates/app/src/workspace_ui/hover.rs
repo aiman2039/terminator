@@ -37,7 +37,7 @@ pub(super) fn advance_menu_modifier(held: bool, events: &[egui::Event]) -> (bool
 }
 
 pub(crate) fn link_menu_modifier_pressed(ctx: &egui::Context) -> bool {
-    let key = egui::Id::new(("terminal-link-menu-modifier", ctx.viewport_id()));
+    let key = egui::Id::unique(("terminal-link-menu-modifier", ctx.viewport_id()));
     let frame = ctx.cumulative_frame_nr();
     let previous = ctx.data(|data| data.get_temp::<MenuModifier>(key));
     if let Some(previous) = previous.filter(|previous| previous.frame == frame) {
@@ -81,7 +81,7 @@ impl App {
         rects: Vec<egui::Rect>,
         strip: bool,
     ) {
-        let key = egui::Id::new(("terminal-hover-copy", ui.ctx().viewport_id()));
+        let key = egui::Id::unique(("terminal-hover-copy", ui.ctx().viewport_id()));
         let hover = HoverCopy {
             session: sid.to_owned(),
             target: target.clone(),
@@ -106,7 +106,7 @@ impl App {
         {
             return;
         }
-        let key = egui::Id::new(("terminal-hover-copy", ctx.viewport_id()));
+        let key = egui::Id::unique(("terminal-hover-copy", ctx.viewport_id()));
         let Some(hover) = ctx.data(|data| data.get_temp::<HoverCopy>(key)) else {
             return;
         };

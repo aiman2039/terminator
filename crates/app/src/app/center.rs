@@ -51,7 +51,7 @@ impl App {
         ui.add_space(6.0);
         ui.add(
             appearance::singleline(&mut self.search)
-                .id(egui::Id::new("scrollback-search"))
+                .id(egui::Id::unique("scrollback-search"))
                 .hint_text("Search scrollback…")
                 .desired_width(400.0),
         );
@@ -280,6 +280,7 @@ impl App {
         self.apply_float_pane(&project, &mut dock);
         self.paint_session_focus(ui, &dock);
         self.layouts.insert(project.clone(), dock);
+        self.apply_diff_replacement();
         if self.pending_layout_save {
             self.pending_layout_save = false;
             self.note_focus_baselines();
@@ -395,7 +396,7 @@ impl App {
         let style = self.dock_style(ui);
         self.refresh_float_pane_maps(dock);
         DockArea::new(dock)
-            .id(egui::Id::new(("float-dock", viewport)))
+            .id(egui::Id::unique(("float-dock", viewport)))
             .style(style)
             .show_add_buttons(true)
             .show_leaf_close_all_buttons(false)
@@ -430,7 +431,7 @@ impl App {
             .or(dock.tabs.first())
             .map(|tab| tab.id.clone());
         DockArea::new(dock)
-            .id(egui::Id::new(("main-dock", project, &tab)))
+            .id(egui::Id::unique(("main-dock", project, &tab)))
             .style(style)
             .show_add_buttons(true)
             .show_leaf_close_all_buttons(false)

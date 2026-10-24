@@ -113,7 +113,7 @@ impl App {
                         &mut snapshot,
                         "attention",
                         serde_json::json!(ctx.data(|data| {
-                            data.get_temp::<(usize, bool)>(egui::Id::new("attention-state"))
+                            data.get_temp::<(usize, bool)>(egui::Id::unique("attention-state"))
                         })),
                     );
                     insert(
@@ -125,7 +125,7 @@ impl App {
                         &mut snapshot,
                         "agent_bar_badge",
                         serde_json::json!(ctx.data(|data| {
-                            data.get_temp::<String>(egui::Id::new("agent-bar-badge"))
+                            data.get_temp::<String>(egui::Id::unique("agent-bar-badge"))
                         })),
                     );
                     insert(&mut snapshot, "markdown", self.markdown.diagnostics());

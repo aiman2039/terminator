@@ -96,6 +96,17 @@ impl App {
                 "Blame {}",
                 path.file_name().unwrap_or_default().to_string_lossy()
             ),
+            Tab::Vnc {
+                label, host, port, ..
+            } => {
+                if !label.trim().is_empty() {
+                    label.clone()
+                } else if !host.trim().is_empty() {
+                    format!("{host}:{port}")
+                } else {
+                    "VNC Viewer".into()
+                }
+            }
         }
     }
 
@@ -124,7 +135,7 @@ impl App {
         };
         let painter = ui.ctx().layer_painter(egui::LayerId::new(
             egui::Order::Tooltip,
-            egui::Id::new("drag-ghost"),
+            egui::Id::unique("drag-ghost"),
         ));
         let mut job = egui::text::LayoutJob::simple(
             self.drag_title(pane),
@@ -221,7 +232,7 @@ impl App {
         };
         let painter = ui.ctx().layer_painter(egui::LayerId::new(
             egui::Order::Tooltip,
-            egui::Id::new("tab-ghost"),
+            egui::Id::unique("tab-ghost"),
         ));
         let mut job = egui::text::LayoutJob::simple(
             title,

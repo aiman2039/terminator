@@ -30,6 +30,8 @@ pub enum SidebarTool {
     Problems,
     #[serde(alias = "Structure")]
     Structure,
+    #[serde(alias = "Vnc")]
+    Vnc,
 }
 
 /// Explorer search behavior: filter the visible tree by name, or search file

@@ -25,7 +25,7 @@ mod dropped_file;
 mod safe_area;
 mod window_settings;
 
-pub use window_settings::WindowSettings;
+pub use window_settings::{WindowGeometry, WindowSettings};
 
 use raw_window_handle::HasDisplayHandle;
 
@@ -127,6 +127,9 @@ pub struct State {
     ime_rect_px: Option<egui::Rect>,
     old_ime_purpose: egui::IMEPurpose,
 
+    /// When false, Cut/Copy/Paste shortcuts stay ordinary key events.
+    clipboard_shortcuts: bool,
+
     /// Used by [`State::try_on_ime_processed_keyboard_input`] to track key
     /// release events that should be filtered out. See comments in that method
     /// for details.
@@ -177,6 +180,7 @@ impl State {
             allow_ime: false,
             ime_rect_px: None,
             old_ime_purpose: egui::IMEPurpose::Normal,
+            clipboard_shortcuts: true,
             #[cfg(target_os = "windows")]
             pressed_processed_physical_keys: HashSet::new(),
         };
@@ -224,6 +228,19 @@ impl State {
     /// Places the text onto the clipboard.
     pub fn set_clipboard_text(&mut self, text: String) {
         self.clipboard.set_text(text);
+    }
+
+    /// Fetches an image from the clipboard when the platform backend supports it.
+    pub fn clipboard_image(&mut self) -> Option<egui::ColorImage> {
+        self.clipboard.get_image()
+    }
+
+    /// Should platform Cut/Copy/Paste shortcuts become egui clipboard events?
+    ///
+    /// Default: `true`.
+    #[inline]
+    pub fn set_clipboard_shortcuts(&mut self, enabled: bool) {
+        self.clipboard_shortcuts = enabled;
     }
 
     /// Returns [`false`] or the last value that [`Window::set_ime_allowed()`] was called with, used for debouncing.
@@ -562,6 +579,7 @@ impl State {
                     unit: egui::MouseWheelUnit::Point,
                     delta: Vec2::new(delta.x, delta.y) / pixels_per_point,
                     phase: to_egui_touch_phase(*phase),
+                    source: egui::MouseWheelSource::Trackpad,
                     modifiers: self.modifiers,
                 });
                 EventResponse {
@@ -959,10 +977,21 @@ impl State {
             };
             let phase = to_egui_touch_phase(phase);
             let modifiers = self.modifiers;
+            let source = if cfg!(target_os = "macos") {
+                match unit {
+                    egui::MouseWheelUnit::Point => egui::MouseWheelSource::Trackpad,
+                    egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => {
+                        egui::MouseWheelSource::Wheel
+                    }
+                }
+            } else {
+                egui::MouseWheelSource::Unknown
+            };
             self.egui_input.events.push(egui::Event::MouseWheel {
                 unit,
                 delta,
                 phase,
+                source,
                 modifiers,
             });
         }
@@ -1021,7 +1050,7 @@ impl State {
             let produced = pressed.then(|| event.text_with_all_modifiers()).flatten();
             let (active_key, modifiers) =
                 apply_control_character(active_key, self.modifiers, produced);
-            if pressed {
+            if pressed && self.clipboard_shortcuts {
                 if is_cut_command(modifiers, active_key) {
                     self.egui_input.events.push(egui::Event::Cut);
                     return;
@@ -1129,6 +1158,9 @@ impl State {
             match command {
                 egui::OutputCommand::CopyText(text) => {
                     self.clipboard.set_text(text);
+                }
+                egui::OutputCommand::TextSelectionSettled(text) => {
+                    self.clipboard.set_primary_text(text);
                 }
                 egui::OutputCommand::CopyImage(image) => {
                     self.clipboard.set_image(&image);
@@ -1817,12 +1849,21 @@ fn translate_cursor(cursor_icon: egui::CursorIcon) -> Option<winit::window::Curs
 
 // Helpers for egui Viewports
 // ---------------------------------------------------------------------------
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(Debug)]
 pub enum ActionRequested {
-    Screenshot(egui::UserData),
+    Screenshot(egui::ScreenshotCallback),
     Cut,
     Copy,
     Paste,
+    /// Run `App::ui` and paint a frame even while the window is hidden.
+    PaintWhileHidden,
+}
+
+impl ActionRequested {
+    /// A screenshot of a hidden window still needs a painted frame.
+    pub fn wants_paint(&self) -> bool {
+        matches!(self, Self::Screenshot(_) | Self::PaintWhileHidden)
+    }
 }
 
 pub fn process_viewport_commands(
@@ -2059,8 +2100,11 @@ fn process_viewport_command(
                 log::warn!("{command:?}: {err}");
             }
         }
-        ViewportCommand::Screenshot(user_data) => {
-            actions_requested.push(ActionRequested::Screenshot(user_data));
+        ViewportCommand::Screenshot(callback) => {
+            actions_requested.push(ActionRequested::Screenshot(callback));
+        }
+        ViewportCommand::RequestPaintWhileHidden => {
+            actions_requested.push(ActionRequested::PaintWhileHidden);
         }
         ViewportCommand::RequestCut => {
             actions_requested.push(ActionRequested::Cut);
@@ -2095,12 +2139,25 @@ pub fn create_window(
 ) -> Result<Window, winit::error::OsError> {
     profiling::function_scope!();
 
-    let mut window_attributes = create_winit_window_attributes(egui_ctx, viewport_builder.clone());
+    let window_attributes = apply_monitor_to_window_attributes(
+        create_winit_window_attributes(egui_ctx, viewport_builder.clone()),
+        viewport_builder,
+        event_loop,
+    );
 
-    // Resolve target monitor index → MonitorHandle, so the window is created
-    // directly in borderless fullscreen on the requested output. This is the
-    // only reliable way to target a specific monitor under Wayland, and also
-    // avoids the Mutter race where OuterPosition is ignored pre-mapping.
+    let window = event_loop.create_window(window_attributes)?;
+    apply_viewport_builder_to_window(egui_ctx, &window, viewport_builder);
+    Ok(window)
+}
+
+/// Apply [`ViewportBuilder::with_monitor`] to freshly built window attributes.
+///
+/// Glow and per-viewport window creation call this. Without it, `with_monitor` does nothing.
+pub fn apply_monitor_to_window_attributes(
+    mut window_attributes: winit::window::WindowAttributes,
+    viewport_builder: &ViewportBuilder,
+    event_loop: &ActiveEventLoop,
+) -> winit::window::WindowAttributes {
     if let Some(idx) = viewport_builder.monitor {
         if let Some(monitor) = event_loop.available_monitors().nth(idx) {
             window_attributes = window_attributes
@@ -2112,10 +2169,7 @@ pub fn create_window(
             );
         }
     }
-
-    let window = event_loop.create_window(window_attributes)?;
-    apply_viewport_builder_to_window(egui_ctx, &window, viewport_builder);
-    Ok(window)
+    window_attributes
 }
 
 pub fn create_winit_window_attributes(

@@ -373,7 +373,7 @@ mod tests {
 
     #[cfg(feature = "test-support")]
     fn recorded_target(ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
-        ctx.data(|data| data.get_temp(egui::Id::new(("fixture-target", name))))
+        ctx.data(|data| data.get_temp(egui::Id::unique(("fixture-target", name))))
     }
 
     #[cfg(feature = "test-support")]
@@ -451,8 +451,11 @@ mod tests {
                         history: false,
                         view_list: false,
                         commits: &[],
+                        shelves: &[],
                         branches: &branches,
                         commit_draft: &mut draft,
+                        amend: &mut false,
+                        signoff: &mut false,
                         collapse_generation: 0,
                         open_shortcut: "",
                         compare: Some(&compare),
@@ -523,8 +526,11 @@ mod tests {
                         history: false,
                         view_list: false,
                         commits: &[],
+                        shelves: &[],
                         branches: &branches,
                         commit_draft: &mut draft,
+                        amend: &mut false,
+                        signoff: &mut false,
                         collapse_generation: 0,
                         open_shortcut: "",
                         compare: Some(&compare),

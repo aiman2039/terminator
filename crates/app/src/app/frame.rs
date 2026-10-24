@@ -134,6 +134,7 @@ impl eframe::App for App {
         self.visible_sessions.clear();
         self.visible_images.clear();
         self.visible_browsers.clear();
+        self.visible_vnc.clear();
         self.markdown.begin_frame();
         #[cfg(feature = "test-support")]
         self.diagnostics.frame(&ctx);

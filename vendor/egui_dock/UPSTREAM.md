@@ -1,6 +1,7 @@
 # egui_dock local patch
 
 Vendored crates.io egui_dock 0.21.1, retaining upstream MIT license.
+Depends on egui 0.37. Window ids use `Id::unique`.
 Adds default no-op `trailing_controls_width` and `trailing_controls` TabViewer callbacks.
 The leaf reserves their width alongside the add button before clipping/scrolling tabs,
 and renders the controls adjacent to it. Existing docking and scroll code is retained.

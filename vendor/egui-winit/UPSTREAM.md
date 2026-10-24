@@ -1,6 +1,17 @@
-Vendored egui-winit 0.36.1 from https://github.com/emilk/egui at
-4c1f2fae95475a40e524884ebb298bcb1714b08e (crates/egui-winit).
-MIT and Apache-2.0 licenses retained. Cargo.toml is the published crate manifest.
+Vendored egui-winit from https://github.com/emilk/egui at
+4c1f2fae95475a40e524884ebb298bcb1714b08e (crates/egui-winit), originally 0.36.1.
+The package version is 0.37.0 so it matches eframe 0.37. MIT and Apache-2.0
+licenses retained. Cargo.toml is the published crate manifest.
+
+## eframe 0.37 surface (2026-10-24)
+
+eframe 0.37 calls APIs that the 0.36 fork did not have. This fork now has
+`MouseWheel` `source`, `ActionRequested::Screenshot` as `ScreenshotCallback`,
+`PaintWhileHidden`, `apply_monitor_to_window_attributes`,
+`State::clipboard_image`, `State::set_clipboard_shortcuts`, primary-selection
+clipboard text, and the egui 0.37 `WindowSettings` restore shape.
+`accesskit_winit` is 0.34 so it shares egui's AccessKit `TreeUpdate`.
+Image-only keyboard paste still emits an empty `Event::Paste`.
 
 ## Missing accessibility focus target (2026-10-20)
 

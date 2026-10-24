@@ -8,7 +8,7 @@ use terminator_core::*;
 use super::super::*;
 #[cfg(feature = "test-support")]
 pub(super) fn header_target(ctx: &egui::Context) -> impl Fn(&str) -> Option<egui::Rect> + '_ {
-    |name| ctx.data(|data| data.get_temp(egui::Id::new(("fixture-target", name))))
+    |name| ctx.data(|data| data.get_temp(egui::Id::unique(("fixture-target", name))))
 }
 
 #[cfg(feature = "test-support")]
@@ -401,7 +401,7 @@ pub(super) fn notice_fixture(
 
 #[cfg(feature = "test-support")]
 pub(super) fn agent_target(ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
-    ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+    ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
 }
 
 #[cfg(feature = "test-support")]

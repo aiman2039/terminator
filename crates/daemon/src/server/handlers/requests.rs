@@ -19,11 +19,13 @@ impl Shared {
                 | Request::Settings(_)
                 | Request::WorktreeAdd { .. }
                 | Request::WorktreeRemove { .. }
+                | Request::VncProfileSave { .. }
+                | Request::VncProfileRemove { .. }
         );
         let admission = shared_write
             || matches!(
                 &request,
-                Request::Create { .. } | Request::CreateReview { .. }
+                Request::Create { .. } | Request::CreateReview { .. } | Request::VncConnect { .. }
             );
         let coordinated = admission
             || matches!(
@@ -62,6 +64,72 @@ impl Shared {
             }
         }
         match request {
+            Request::VncProfileSave { mut profile } => {
+                profile.host = profile.host.trim().to_string();
+                profile.name = profile.name.trim().to_string();
+                profile.username = profile.username.trim().to_string();
+                if profile.id.trim().is_empty() {
+                    profile.id = id();
+                }
+                profile.validate()?;
+                let mut state = relock(&self.state);
+                if let Some(existing) = state.vnc_profiles.iter_mut().find(|p| p.id == profile.id) {
+                    if profile.last_connected == 0 {
+                        profile.last_connected = existing.last_connected;
+                    }
+                    *existing = profile;
+                } else {
+                    ensure!(
+                        state.vnc_profiles.len() < 256,
+                        "Too many saved VNC profiles"
+                    );
+                    state.vnc_profiles.push(profile);
+                }
+                state.revision = state.revision.saturating_add(1);
+            }
+            Request::VncProfileRemove { id } => {
+                let mut state = relock(&self.state);
+                state.vnc_profiles.retain(|p| p.id != id);
+                state.revision = state.revision.saturating_add(1);
+            }
+            Request::VncConnect {
+                project,
+                profile_id,
+                host,
+                port,
+                username,
+                password,
+                shared,
+                view_only,
+                label,
+            } => {
+                return Ok(Response::VncCreated(self.vnc_connect(
+                    crate::vnc_session::VncConnectSpec {
+                        project,
+                        profile_id,
+                        host,
+                        port,
+                        username,
+                        password,
+                        shared,
+                        view_only,
+                        label,
+                    },
+                )?));
+            }
+            Request::VncDisconnect { session } => {
+                self.vnc_disconnect(&session)?;
+            }
+            Request::VncInput { session, events } => {
+                self.vnc_input(&session, events)?;
+                return Ok(Response::Ok);
+            }
+            Request::VncFrame { session, since } => {
+                return match self.vnc_frame(&session, since)? {
+                    Some(frame) => Ok(Response::VncFrame(Box::new(frame))),
+                    None => Ok(Response::Unchanged),
+                };
+            }
             Request::PruneHistory { budget } => {
                 let (tx, rx) = mpsc::channel();
                 self.history.send(HistoryJob::Prune(budget, tx))?;

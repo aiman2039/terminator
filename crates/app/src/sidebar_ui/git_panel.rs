@@ -24,11 +24,13 @@ impl App {
         self.git_list_root = Some(root);
         self.git_branches.clear();
         self.git_log.clear();
+        self.git_shelves.clear();
         self.git_compare = None;
         self.git_compare_root = None;
         self.git_base_ref = None;
         self.queue_workspace(workspace_ops::Op::Branches);
         self.queue_workspace(workspace_ops::Op::Log);
+        self.queue_workspace(workspace_ops::Op::Shelves);
         self.queue_workspace(workspace_ops::Op::Compare { base: None });
     }
 }
@@ -54,8 +56,11 @@ pub struct GitPanelInput<'a> {
     pub history: bool,
     pub view_list: bool,
     pub commits: &'a [(String, String)],
+    pub shelves: &'a [(String, String)],
     pub branches: &'a [String],
     pub commit_draft: &'a mut String,
+    pub amend: &'a mut bool,
+    pub signoff: &'a mut bool,
     pub collapse_generation: u64,
     pub open_shortcut: &'a str,
     /// Branch comparison for the current root, when available.
@@ -84,6 +89,11 @@ pub struct GitPanelOutcome {
     pub history: Option<bool>,
     pub collapse: bool,
     pub commit: bool,
+    pub commit_push: bool,
+    /// Shelve every staged (checked) path.
+    pub shelve: bool,
+    pub unshelve: Option<String>,
+    pub drop_shelf: Option<String>,
     pub switch: Option<String>,
     pub stage: Vec<PathBuf>,
     pub unstage: Vec<PathBuf>,
@@ -168,8 +178,23 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
                 egui::TextEdit::multiline(input.commit_draft)
                     .hint_text("Message")
                     .desired_width(ui.available_width())
-                    .desired_rows(3),
+                    .desired_rows(2),
             );
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let amend = ui
+                    .checkbox(input.amend, "Amend")
+                    .on_hover_text("Amend the last commit");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "git-amend", amend.rect);
+                let signoff = ui
+                    .checkbox(input.signoff, "Sign-off")
+                    .on_hover_text("Add a Signed-off-by trailer");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "git-signoff", signoff.rect);
+                #[cfg(not(feature = "test-support"))]
+                let _ = (&amend, &signoff);
+            });
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let stage_all = ui
@@ -182,16 +207,68 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
                 if stage_all.clicked() {
                     outcome.stage_all = true;
                 }
-                let commit = ui.add_enabled(
-                    staged && !input.commit_draft.trim().is_empty(),
-                    egui::Button::new("Commit"),
-                );
+                // Amending with an empty message keeps the previous message.
+                let can_commit = staged && (*input.amend || !input.commit_draft.trim().is_empty());
+                let commit = ui.add_enabled(can_commit, egui::Button::new("Commit"));
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "git-commit", commit.rect);
                 if commit.clicked() {
                     outcome.commit = true;
                 }
+                let commit_push = ui.add_enabled(can_commit, egui::Button::new("Commit and Push"));
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "git-commit-push", commit_push.rect);
+                if commit_push.clicked() {
+                    outcome.commit_push = true;
+                }
+                let shelve = ui
+                    .add_enabled(staged, egui::Button::new("Shelve"))
+                    .on_hover_text("Shelve staged changes (git stash)");
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), "git-shelve", shelve.rect);
+                if shelve.clicked() {
+                    outcome.shelve = true;
+                }
             });
+            if !input.shelves.is_empty() {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("SHELVED {}", input.shelves.len()))
+                            .small()
+                            .strong(),
+                    )
+                    .selectable(false),
+                );
+                for (reference, message) in input.shelves {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        ui.add(egui::Label::new(message).truncate())
+                            .on_hover_text(format!("{reference} {message}"));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let drop = ui.small_button("Drop");
+                            #[cfg(feature = "test-support")]
+                            diagnostics::record(
+                                ui.ctx(),
+                                &format!("git-shelf-drop-{reference}"),
+                                drop.rect,
+                            );
+                            if drop.clicked() {
+                                outcome.drop_shelf = Some(reference.clone());
+                            }
+                            let unshelve = ui.small_button("Unshelve");
+                            #[cfg(feature = "test-support")]
+                            diagnostics::record(
+                                ui.ctx(),
+                                &format!("git-shelf-unshelve-{reference}"),
+                                unshelve.rect,
+                            );
+                            if unshelve.clicked() {
+                                outcome.unshelve = Some(reference.clone());
+                            }
+                        });
+                    });
+                }
+            }
         }
         if input.history {
             appearance::sidebar_scroll("git-log").show(ui, |ui| {
@@ -481,6 +558,71 @@ fn git_compare_row(
     });
 }
 
+/// Inclusion state of a file, folder, or group checkbox.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheckState {
+    Unchecked,
+    Checked,
+    Partial,
+}
+
+/// Aggregate checkbox state: all, none, or some children included.
+pub fn check_state(checked: usize, total: usize) -> CheckState {
+    if total == 0 || checked == 0 {
+        CheckState::Unchecked
+    } else if checked >= total {
+        CheckState::Checked
+    } else {
+        CheckState::Partial
+    }
+}
+
+/// Small tri-state checkbox painted to fit the 20px Git rows. Returns true
+/// when clicked; the caller decides whether that means include or exclude.
+fn tri_checkbox(ui: &mut egui::Ui, state: CheckState) -> bool {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(14.0, GIT_TREE_ROW_HEIGHT), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let box_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(13.0, 13.0));
+        let visuals = ui.visuals();
+        let (fill, stroke) = match state {
+            CheckState::Unchecked => (
+                visuals.widgets.inactive.bg_fill,
+                visuals.widgets.inactive.bg_stroke,
+            ),
+            _ => (visuals.selection.bg_fill, egui::Stroke::NONE),
+        };
+        ui.painter()
+            .rect(box_rect, 3, fill, stroke, egui::StrokeKind::Inside);
+        let mark = visuals.selection.stroke.color;
+        match state {
+            CheckState::Checked => {
+                let c = box_rect.center();
+                ui.painter().line_segment(
+                    [egui::pos2(c.x - 3.5, c.y), egui::pos2(c.x - 1.0, c.y + 2.5)],
+                    egui::Stroke::new(1.6, mark),
+                );
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(c.x - 1.0, c.y + 2.5),
+                        egui::pos2(c.x + 3.5, c.y - 2.5),
+                    ],
+                    egui::Stroke::new(1.6, mark),
+                );
+            }
+            CheckState::Partial => {
+                let c = box_rect.center();
+                ui.painter().line_segment(
+                    [egui::pos2(c.x - 3.0, c.y), egui::pos2(c.x + 3.0, c.y)],
+                    egui::Stroke::new(1.8, mark),
+                );
+            }
+            CheckState::Unchecked => {}
+        }
+    }
+    response.clicked()
+}
+
 /// One changed file: diffstat, status letter, click-to-diff, and context menu.
 fn git_change_row(
     ui: &mut egui::Ui,
@@ -500,21 +642,40 @@ fn git_change_row(
         Some((added, _)) => format!("+{added} {letter}"),
         None => letter.to_string(),
     };
-    let response = appearance::file_row(
-        ui,
-        label,
-        icons::file_icon(&change.path),
-        false,
-        GIT_TREE_ROW_HEIGHT,
-        &trailing,
-        git_color(ctx.theme, letter),
-    )
-    .on_hover_text(format!(
-        "{}\n{} ({})",
-        change.path.display(),
-        terminator_git::status_description(letter),
-        group.label()
-    ));
+    // Checked means staged (included in the next commit). Conflicts must be
+    // resolved first, so they get no checkbox.
+    let mut check_clicked = false;
+    let response = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if group != terminator_git::GitGroup::Conflicts {
+                let checked = usize::from(group == terminator_git::GitGroup::Staged);
+                check_clicked = tri_checkbox(ui, check_state(checked, 1));
+            }
+            appearance::file_row(
+                ui,
+                label,
+                icons::file_icon(&change.path),
+                false,
+                GIT_TREE_ROW_HEIGHT,
+                &trailing,
+                git_color(ctx.theme, letter),
+            )
+        })
+        .inner
+        .on_hover_text(format!(
+            "{}\n{} ({})",
+            change.path.display(),
+            terminator_git::status_description(letter),
+            group.label()
+        ));
+    if check_clicked {
+        if group == terminator_git::GitGroup::Staged {
+            outcome.unstage.push(change.path.clone());
+        } else {
+            outcome.stage.push(change.path.clone());
+        }
+    }
     #[cfg(feature = "test-support")]
     diagnostics::record(
         ui.ctx(),
@@ -632,8 +793,18 @@ fn git_group_section(
         id,
         collapse_generation == 0,
     );
+    let mut group_check_clicked = false;
     let _ = state
         .show_header(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if group != terminator_git::GitGroup::Conflicts {
+                let checked = if group == terminator_git::GitGroup::Staged {
+                    total
+                } else {
+                    0
+                };
+                group_check_clicked = tri_checkbox(ui, check_state(checked, total));
+            }
             ui.add(
                 egui::Label::new(RichText::new(format!("{label} {total}")).small().strong())
                     .selectable(false),
@@ -667,6 +838,15 @@ fn git_group_section(
             ui.spacing_mut().item_spacing.y = 0.0;
             git_change_tree(ui, ctx, outcome, tree, "", group);
         });
+    if group_check_clicked {
+        for change in entries {
+            if group == terminator_git::GitGroup::Staged {
+                outcome.unstage.push(change.path.clone());
+            } else {
+                outcome.stage.push(change.path.clone());
+            }
+        }
+    }
 }
 
 /// Prepared once per accepted filesystem/Git result, reused while scrolling.
@@ -774,7 +954,26 @@ pub(super) fn build_change_tree(
             }
         }
     }
+    compress_change_tree(&mut tree);
     tree
+}
+
+/// Merge single-child directory chains into one `a/b/c` node (`JetBrains` style).
+/// style. A directory with files or several subdirectories stops the chain.
+fn compress_change_tree(node: &mut ChangeTree) {
+    let entries: Vec<(String, ChangeTree)> = std::mem::take(&mut node.dirs).into_iter().collect();
+    for (mut key, mut child) in entries {
+        while child.files.is_empty() && child.dirs.len() == 1 {
+            let (next_key, next) = std::mem::take(&mut child.dirs)
+                .into_iter()
+                .next()
+                .unwrap_or_default();
+            key = format!("{key}/{next_key}");
+            child = next;
+        }
+        compress_change_tree(&mut child);
+        node.dirs.insert(key, child);
+    }
 }
 
 fn git_change_tree(
@@ -794,9 +993,19 @@ fn git_change_tree(
         let id = ui.make_persistent_id(("git-tree", key.clone(), group.label()));
         let count = child.count_files();
         let mut folder_response = None;
+        let mut folder_check_clicked = false;
         let mut header =
             egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
                 .show_header(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    if group != terminator_git::GitGroup::Conflicts {
+                        let checked = if group == terminator_git::GitGroup::Staged {
+                            count
+                        } else {
+                            0
+                        };
+                        folder_check_clicked = tri_checkbox(ui, check_state(checked, count));
+                    }
                     let trailing = count.to_string();
                     folder_response = Some(appearance::file_row(
                         ui,
@@ -808,6 +1017,17 @@ fn git_change_tree(
                         appearance::color(&ctx.theme.secondary),
                     ));
                 });
+        if folder_check_clicked {
+            let mut files = Vec::new();
+            child.collect(&mut files);
+            for change in files {
+                if group == terminator_git::GitGroup::Staged {
+                    outcome.unstage.push(change.path.clone());
+                } else {
+                    outcome.stage.push(change.path.clone());
+                }
+            }
+        }
         if folder_response
             .as_ref()
             .is_some_and(eframe::egui::Response::clicked)
@@ -961,4 +1181,46 @@ fn git_committed_row(
             ui.close();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn change(path: &str) -> terminator_git::Change {
+        terminator_git::Change {
+            path: PathBuf::from(path),
+            status: " M".into(),
+        }
+    }
+
+    #[test]
+    fn check_state_covers_all_none_and_some() {
+        assert_eq!(check_state(0, 0), CheckState::Unchecked);
+        assert_eq!(check_state(0, 3), CheckState::Unchecked);
+        assert_eq!(check_state(3, 3), CheckState::Checked);
+        assert_eq!(check_state(1, 3), CheckState::Partial);
+    }
+
+    #[test]
+    fn change_tree_compresses_single_child_chains() {
+        let root = Path::new("/repo");
+        let deep = change("/repo/apps/backend/.sqlx/query.json");
+        let top = change("/repo/apps/top.rs");
+        let tree = build_change_tree(&[&deep, &top], Some(root));
+        // `apps` holds a file, so it stays; the chain under it compresses.
+        let apps = tree.dirs.get("apps").expect("apps node");
+        assert!(apps.dirs.contains_key("backend/.sqlx"));
+        assert_eq!(apps.count_files(), 2);
+    }
+
+    #[test]
+    fn change_tree_keeps_branching_directories_separate() {
+        let root = Path::new("/repo");
+        let a = change("/repo/src/a.rs");
+        let b = change("/repo/tests/b.rs");
+        let tree = build_change_tree(&[&a, &b], Some(root));
+        assert!(tree.dirs.contains_key("src"));
+        assert!(tree.dirs.contains_key("tests"));
+    }
 }

@@ -342,7 +342,7 @@ mod macos {
             #[cfg(feature = "test-support")]
             ui.ctx().data_mut(|data| {
                 data.insert_temp(
-                    egui::Id::new(("fixture-target", "check-for-updates")),
+                    egui::Id::unique(("fixture-target", "check-for-updates")),
                     check.rect,
                 );
             });

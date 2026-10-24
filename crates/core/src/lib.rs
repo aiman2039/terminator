@@ -20,6 +20,7 @@ pub mod signals;
 pub mod snapshot;
 pub mod transport;
 pub mod ui_control;
+pub mod vnc;
 pub mod worktrees;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -32,7 +33,7 @@ pub use model::{
     EditorMode, HookEvent, Lifecycle, METADATA_SETTINGS_CAPABILITY, NOTIFICATION_SOUND_CAPABILITY,
     NTFY_CAPABILITY, Notification, Project, Resume, ReviewMode, SCREEN_CAPABILITY,
     SHUTDOWN_IF_IDLE_CAPABILITY, STABLE_HELPER_CAPABILITY, Session, SessionKind, Settings, State,
-    TERMINAL_NOTICES_CAPABILITY, TerminalNotice, WORKTREES_CAPABILITY,
+    TERMINAL_NOTICES_CAPABILITY, TerminalNotice, VNC_CAPABILITY, WORKTREES_CAPABILITY,
 };
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]

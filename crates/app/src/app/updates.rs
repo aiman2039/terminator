@@ -30,6 +30,13 @@ impl App {
                             if matches!(completion.context.subsystem, "diff" | "files") {
                                 self.loading.remove(key);
                             }
+                            if completion.context.subsystem == "vnc"
+                                && let Some(sid) =
+                                    completion.context.resource.strip_prefix("frame:")
+                                && let Some(view) = self.vnc_views.get_mut(sid)
+                            {
+                                view.fetching = false;
+                            }
                             if completion.context.subsystem == "images"
                                 && let Some(preview) = self.images.values_mut().find(|preview| {
                                     preview.generation == completion.context.generation
@@ -253,6 +260,82 @@ impl App {
                         existing.unwrap_or_else(|| Tab::Browser { id: id(), target }),
                         after,
                     );
+                }
+                Update::VncConnected(session, after) => {
+                    let project = if !session.project_id.is_empty() {
+                        session.project_id.clone()
+                    } else if let Some(selected) = &self.selected {
+                        selected.clone()
+                    } else {
+                        continue;
+                    };
+                    let tab = Tab::Vnc {
+                        id: id(),
+                        session: session.id,
+                        profile_id: session.profile_id,
+                        host: session.host,
+                        port: session.port,
+                        label: session.label,
+                    };
+                    self.place_gui_tab(project, tab, after);
+                    ctx.request_repaint();
+                }
+                Update::VncTabConnected(tab_id, result) => {
+                    match result {
+                        Ok(session) => {
+                            for workspace in self.layouts.values_mut() {
+                                for group in &mut workspace.tabs {
+                                    for tab in group
+                                        .primary
+                                        .iter_mut()
+                                        .chain(group.layout.iter_all_tabs_mut().map(|(_, t)| t))
+                                    {
+                                        if let Tab::Vnc {
+                                            id,
+                                            session: sid,
+                                            profile_id,
+                                            host,
+                                            port,
+                                            label,
+                                        } = tab
+                                            && *id == tab_id
+                                        {
+                                            sid.clone_from(&session.id);
+                                            profile_id.clone_from(&session.profile_id);
+                                            host.clone_from(&session.host);
+                                            *port = session.port;
+                                            label.clone_from(&session.label);
+                                        }
+                                    }
+                                }
+                            }
+                            self.pending_layout_save = true;
+                        }
+                        Err(err) => {
+                            let view = self.vnc_views.entry(format!("draft:{tab_id}")).or_default();
+                            view.error = Some(err);
+                        }
+                    }
+                    ctx.request_repaint();
+                }
+                Update::VncFrame(session, result) => {
+                    match result {
+                        Ok(Some(decoded)) => {
+                            self.apply_vnc_frame(ctx, decoded);
+                        }
+                        Ok(None) => {
+                            if let Some(view) = self.vnc_views.get_mut(&session) {
+                                view.fetching = false;
+                            }
+                        }
+                        Err(err) => {
+                            if let Some(view) = self.vnc_views.get_mut(&session) {
+                                view.fetching = false;
+                                view.error = Some(err);
+                            }
+                        }
+                    }
+                    ctx.request_repaint();
                 }
                 Update::Image(path, generation, result) => {
                     let used: usize = self
@@ -596,7 +679,7 @@ impl App {
                     match result {
                         Ok(outcome) => {
                             if review.saving_edits {
-                                review.editor = None;
+                                review.buffer = None;
                             }
                             if undoing {
                                 review.undo.pop();
@@ -760,12 +843,17 @@ impl App {
                         self.refresh_request = None;
                         if matches!(
                             op,
-                            workspace_ops::Op::Commit(_) | workspace_ops::Op::Switch(_)
+                            workspace_ops::Op::Commit { .. }
+                                | workspace_ops::Op::Switch(_)
+                                | workspace_ops::Op::Shelve(_)
+                                | workspace_ops::Op::Unshelve(_)
+                                | workspace_ops::Op::DropShelf(_)
                         ) {
                             self.git_list_root = None;
                         }
                     }
                     Ok(workspace_ops::Report::Branches(names)) => self.git_branches = names,
+                    Ok(workspace_ops::Report::Shelves(list)) => self.git_shelves = list,
                     Ok(workspace_ops::Report::Log(rows)) => self.git_log = rows,
                     Ok(workspace_ops::Report::Compare(data)) => {
                         self.git_compare_root.clone_from(&data.root);

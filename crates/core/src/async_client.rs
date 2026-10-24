@@ -380,6 +380,9 @@ impl Client {
                         helper: state.attachment_helper_executable.clone(),
                     });
                     aggregate.sessions.extend(state.sessions.iter().cloned());
+                    aggregate
+                        .vnc_sessions
+                        .extend(state.vnc_sessions.iter().cloned());
                     aggregate.agents.extend(state.agents.iter().cloned());
                     aggregate
                         .notifications
@@ -432,7 +435,10 @@ impl Client {
                 | Request::EditorSave { session }
                 | Request::EditorStatus { session }
                 | Request::Screen { session }
-                | Request::History { session } => session.len() <= 128,
+                | Request::History { session }
+                | Request::VncFrame { session, .. }
+                | Request::VncDisconnect { session } => session.len() <= 128,
+                Request::VncInput { session, events } => session.len() <= 128 && events.len() <= 32,
                 _ => false,
             };
         let encode = move || -> Result<Vec<u8>> {
@@ -554,6 +560,7 @@ pub fn read_only(request: &Request) -> bool {
             | Request::EditorStatus { .. }
             | Request::WorktreeList { .. }
             | Request::ShellCommand { .. }
+            | Request::VncFrame { .. }
     )
 }
 

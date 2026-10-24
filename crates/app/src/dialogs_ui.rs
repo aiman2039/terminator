@@ -245,7 +245,7 @@ impl App {
                 .or(presented.brand_label.as_deref());
             self.popups
                 .window(ctx, "Agent needs attention")
-                .id(egui::Id::new("notice-detail"))
+                .id(egui::Id::unique("notice-detail"))
                 .open(&mut open)
                 .default_width(480.0)
                 .show(ctx, |ui| {

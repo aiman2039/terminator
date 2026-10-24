@@ -189,9 +189,36 @@ impl App {
         if let Some(name) = outcome.switch {
             self.queue_workspace(workspace_ops::Op::Switch(name));
         }
-        if outcome.commit {
+        if outcome.commit || outcome.commit_push {
             let message = std::mem::take(&mut self.git_commit);
-            self.queue_workspace(workspace_ops::Op::Commit(message));
+            self.queue_workspace(workspace_ops::Op::Commit {
+                message,
+                amend: self.git_amend,
+                signoff: self.git_signoff,
+                push: outcome.commit_push,
+            });
+            self.git_amend = false;
+        }
+        if outcome.shelve {
+            let paths: Vec<PathBuf> = self
+                .context
+                .as_ref()
+                .map(|context| {
+                    context
+                        .changes
+                        .iter()
+                        .filter(|change| change.in_group(terminator_git::GitGroup::Staged))
+                        .map(|change| change.path.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.queue_workspace(workspace_ops::Op::Shelve(paths));
+        }
+        if let Some(reference) = outcome.unshelve {
+            self.queue_workspace(workspace_ops::Op::Unshelve(reference));
+        }
+        if let Some(reference) = outcome.drop_shelf {
+            self.queue_workspace(workspace_ops::Op::DropShelf(reference));
         }
         for path in outcome.stage {
             self.queue_workspace(workspace_ops::Op::Stage(path));

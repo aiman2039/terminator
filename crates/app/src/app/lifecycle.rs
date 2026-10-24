@@ -70,9 +70,12 @@ impl App {
         Self {
             file_activation: None,
             git_commit: String::new(),
+            git_amend: false,
+            git_signoff: false,
             git_history: false,
             git_branches: Vec::new(),
             git_log: Vec::new(),
+            git_shelves: Vec::new(),
             git_list_root: None,
             git_collapse: 0,
             git_compare: None,
@@ -143,6 +146,9 @@ impl App {
             visible_browsers: Vec::new(),
             browser_urls: HashMap::new(),
             browser_submit: None,
+            vnc_views: HashMap::new(),
+            vnc_sidebar: crate::vnc_ui::VncSidebarState::default(),
+            visible_vnc: HashSet::new(),
             player: player::Controller::new(services),
             markdown,
             visible_images: HashSet::new(),
@@ -196,6 +202,7 @@ impl App {
             pane_drag_snapshot: Vec::new(),
             drop_preview_origin: None,
             focus_tab: None,
+            diff_replacement: None,
             terminal_context: HashMap::new(),
             missing_projects: HashSet::new(),
             texts: HashMap::new(),
@@ -241,6 +248,7 @@ impl App {
             browse_target: None,
             palette_open: false,
             palette_query: String::new(),
+            palette_filters: 0,
             palette_index: 0,
             palette_cache: None,
             palette_query_changed_at: Instant::now(),
@@ -325,7 +333,7 @@ impl App {
         }
     }
     pub(crate) fn fixture_rect(&self, ctx: &egui::Context, name: &str) -> Option<[f32; 4]> {
-        ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+        ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
             .map(|r| [r.min.x, r.min.y, r.width(), r.height()])
     }
 }

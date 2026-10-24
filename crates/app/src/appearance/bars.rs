@@ -230,12 +230,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
         );
     }
     bar.widget_info(|| {
-        egui::WidgetInfo::selected(
-            egui::WidgetType::SelectableLabel,
-            ui.is_enabled(),
-            active,
-            title,
-        )
+        egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), active, title)
     });
     let bar_id = bar.id;
     let button =
@@ -245,7 +240,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
                 .on_hover_text(tip)
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tip)
+                egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip)
             });
             if response.hovered() {
                 ui.painter()

@@ -185,7 +185,7 @@ impl Viewer<'_> {
             markdown::Mode::Preview => link = self.app.markdown.retain(sid).show(ui, sid),
             markdown::Mode::Split => {
                 let width = ui.available_width();
-                egui::Panel::left(egui::Id::new(("markdown-editor", sid)))
+                egui::Panel::left(egui::Id::unique(("markdown-editor", sid)))
                     .resizable(true)
                     .default_size(width * 0.5)
                     .size_range(80.0..=(width - 80.0).max(80.0))
@@ -236,7 +236,7 @@ impl Viewer<'_> {
             let Some(backend) = self.app.backends.get_mut(sid) else {
                 return;
             };
-            let id = egui::Id::new(("terminal-find", sid));
+            let id = egui::Id::unique(("terminal-find", sid));
             ui.horizontal(|ui| {
                 let response = ui.add(
                     appearance::singleline(&mut find.query)

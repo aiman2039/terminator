@@ -44,7 +44,7 @@ pub fn framed_icon_button(
 /// Single-line field. Placeholder and typed text share a vertical center,
 /// including when the field is stretched to a toolbar row.
 pub fn singleline(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
-    egui::TextEdit::singleline(text).vertical_align(egui::Align::Center)
+    egui::TextEdit::singleline(text).align(egui::Align2::LEFT_CENTER)
 }
 
 /// Sidebar toolbar glyph size. Every frameless icon control shares it so the
@@ -132,9 +132,7 @@ pub fn selectable_icon(ui: &mut egui::Ui, icon: &str, tip: &str, selected: bool)
         );
     }
     paint_centered_icon(ui, response.rect, icon, TOOLBAR_ICON, ICON_COLOR);
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, tip)
-    });
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tip));
     response
 }
 
@@ -189,9 +187,7 @@ pub fn stripe_button(
             dot,
         );
     }
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)
-    });
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
     response
 }
 
@@ -233,6 +229,7 @@ pub fn tool_button(
         SidebarTool::Info => "Info",
         SidebarTool::Problems => "CircleAlert",
         SidebarTool::Structure => "ListTree",
+        SidebarTool::Vnc => "Monitor",
     };
     egui::Image::new(crate::icons::source(icon))
         .tint(tint)
@@ -240,9 +237,7 @@ pub fn tool_button(
             ui,
             egui::Rect::from_center_size(response.rect.center(), egui::vec2(16.0, 16.0)),
         );
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, label)
-    });
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
     response
 }
 /// Orca dark menu recipe from `ui/context-menu.tsx` and `.dark` tokens in `main.css`.
@@ -340,9 +335,7 @@ pub fn compact_menu_button<R>(
 ) -> egui::InnerResponse<Option<R>> {
     let size = egui::Vec2::splat(TOOLBAR_BUTTON);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
-    });
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     if response.hovered() || response.is_pointer_button_down_on() {
         ui.painter()
             .rect_filled(rect, WIDGET_RADIUS, ui.visuals().widgets.hovered.bg_fill);

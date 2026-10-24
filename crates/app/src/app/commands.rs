@@ -107,6 +107,8 @@ impl App {
                 }
             }
             "next_attention" => self.next_attention(),
+            "new_browser" => self.open_new_browser_tab(None),
+            "new_vnc" => self.open_new_vnc_tab(None),
             _ => {}
         }
     }
@@ -210,6 +212,7 @@ impl App {
         self.palette_open = true;
         self.palette_query.clear();
         self.palette_index = 0;
+        self.palette_filters = 0;
         self.palette_cache = None;
         self.palette_query_changed_at = Instant::now();
         self.lsp.clear_workspace_symbols();
@@ -224,7 +227,7 @@ impl App {
         };
         self.terminal_find.entry(sid.clone()).or_default();
         ctx.memory_mut(|memory| {
-            memory.request_focus(egui::Id::new(("terminal-find", sid)));
+            memory.request_focus(egui::Id::unique(("terminal-find", sid)));
         });
     }
 
@@ -288,7 +291,7 @@ impl App {
         self.search_open = true;
         self.texts.remove(&format!("history:{sid}"));
         ctx.memory_mut(|memory| {
-            memory.request_focus(egui::Id::new("scrollback-search"));
+            memory.request_focus(egui::Id::unique("scrollback-search"));
         });
     }
 

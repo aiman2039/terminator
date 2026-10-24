@@ -31,7 +31,7 @@ impl App {
     }
 
     pub(crate) fn explorer_toolbar(&mut self, ui: &mut egui::Ui, cwd: &std::path::Path) {
-        let host = ui.id();
+        let host = ui.scope_id();
         let reveal_enabled = self.explorer_reveal_candidate().is_some();
         let reveal_disabled_note = if self.focused_local_file().is_some() {
             "The focused file is outside the Explorer folder"
@@ -351,7 +351,7 @@ impl App {
     /// Scoped to the hosting sidebar: Explorer can render on both sides in
     /// one frame, and an absolute ID would clash between the two copies.
     pub(crate) fn explorer_name_prompt_id(ui: &egui::Ui) -> egui::Id {
-        ui.id().with("explorer-name-prompt")
+        ui.scope_id().with("explorer-name-prompt")
     }
 
     pub(crate) fn open_name_prompt(&mut self, prompt: workspace_ops::NamePrompt) {

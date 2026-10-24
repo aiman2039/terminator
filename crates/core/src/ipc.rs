@@ -7,10 +7,44 @@ use std::{
 };
 
 use super::{HookEvent, MAX_FRAME, PROTOCOL_VERSION, Paths, Session, Settings, State};
-use crate::{generations, idle_close, snapshot, transport, worktrees};
+use crate::{generations, idle_close, snapshot, transport, vnc, worktrees};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Request {
+    VncProfileSave {
+        profile: vnc::VncProfile,
+    },
+    VncProfileRemove {
+        id: String,
+    },
+    VncConnect {
+        project: String,
+        #[serde(default)]
+        profile_id: Option<String>,
+        host: String,
+        port: u16,
+        #[serde(default)]
+        username: String,
+        #[serde(default)]
+        password: String,
+        #[serde(default)]
+        shared: bool,
+        #[serde(default)]
+        view_only: bool,
+        #[serde(default)]
+        label: Option<String>,
+    },
+    VncDisconnect {
+        session: String,
+    },
+    VncInput {
+        session: String,
+        events: Vec<vnc::VncInputEvent>,
+    },
+    VncFrame {
+        session: String,
+        since: u64,
+    },
     PruneHistory {
         budget: u64,
     },
@@ -142,6 +176,12 @@ impl Request {
     #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
+            Self::VncProfileSave { .. } => "VncProfileSave",
+            Self::VncProfileRemove { .. } => "VncProfileRemove",
+            Self::VncConnect { .. } => "VncConnect",
+            Self::VncDisconnect { .. } => "VncDisconnect",
+            Self::VncInput { .. } => "VncInput",
+            Self::VncFrame { .. } => "VncFrame",
             Self::PruneHistory { .. } => "PruneHistory",
             Self::Archived { request, .. } => request.name(),
             Self::CloseIdleSessions { .. } => "CloseIdleSessions",
@@ -199,6 +239,8 @@ pub enum Response {
     IdleSessionsClosed(Vec<idle_close::Outcome>),
     SnapshotChunk { data: String, last: bool },
     Worktrees(Vec<worktrees::GitWorktree>),
+    VncCreated(vnc::VncSession),
+    VncFrame(Box<vnc::VncFrame>),
     Unchanged,
     Ok,
     State(Box<State>),
@@ -338,6 +380,9 @@ pub(crate) fn redirect_allowed(request: &Request) -> bool {
             | Request::Settings(_)
             | Request::WorktreeAdd { .. }
             | Request::WorktreeRemove { .. }
+            | Request::VncProfileSave { .. }
+            | Request::VncProfileRemove { .. }
+            | Request::VncConnect { .. }
     )
 }
 

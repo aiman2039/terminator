@@ -708,7 +708,7 @@ mod tests {
         );
         output.textures_delta.clear();
         let rect = |name: &str| {
-            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
         };
         let left = rect("toggle-left-sidebar").expect("left toggle");
         let right = rect("toggle-right-sidebar").expect("right toggle");

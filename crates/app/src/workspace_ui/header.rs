@@ -198,6 +198,12 @@ pub(super) fn header_action_view(action: HeaderAction) -> HeaderActionView {
             #[cfg(feature = "test-support")]
             target: "tool-Structure",
         },
+        HeaderAction::Tool(SidebarTool::Vnc) => HeaderActionView {
+            label: "VNC",
+            icon: "Monitor",
+            #[cfg(feature = "test-support")]
+            target: "tool-Vnc",
+        },
         HeaderAction::IdeMode => HeaderActionView {
             label: "IDE mode",
             icon: "LayoutDashboard",
@@ -295,7 +301,7 @@ pub(super) fn paint_window_controls(ui: &egui::Ui, rect: egui::Rect) {
         let response = ui
             .interact(
                 control,
-                ui.id().with(("window-control", tip)),
+                ui.scope_id().with(("window-control", tip)),
                 egui::Sense::click(),
             )
             .on_hover_text(tip);

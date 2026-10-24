@@ -82,7 +82,7 @@ pub(crate) fn window_resize_edges(ui: &mut egui::Ui) {
     // Panels own their full rectangles. Put only the narrow resize hit regions
     // above them, so the status bar cannot swallow edge drags.
     for (index, (rect, direction, cursor)) in regions.into_iter().enumerate() {
-        egui::Area::new(egui::Id::new(("window-resize", index)))
+        egui::Area::new(egui::Id::unique(("window-resize", index)))
             .order(egui::Order::Foreground)
             .fixed_pos(rect.min)
             .movable(false)

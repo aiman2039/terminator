@@ -135,7 +135,7 @@ pub fn ctrl_h_is_motion(vim: bool, mode: Mode) -> bool {
 /// header-button clicks instead of stranding keys on Save/Reload.
 #[must_use]
 pub fn source_focus_id(id: &str) -> egui::Id {
-    egui::Id::new(("native-source-focus", id))
+    egui::Id::unique(("native-source-focus", id))
 }
 
 /// True when a Text event only echoes a keypress already handled as a

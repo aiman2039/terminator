@@ -3,7 +3,9 @@
 Source: https://github.com/lampsitter/egui_commonmark
 
 Version: crates.io `egui_commonmark` 0.25.0. Retains the MIT and Apache-2.0
-license files. The backend remains the upstream registry dependency.
+license files. The backend is crates.io `egui_commonmark_backend` 0.26.0
+with egui 0.37. The parser calls `viewer_cache` and the 0.26 `end` methods.
+Search-scroll arguments stay off. Split points use `SplitPoint`.
 
 Local change: table header and body cells use `horizontal_wrapped` instead
 of `horizontal`, so explicit text newlines advance to the next line.

@@ -15,9 +15,9 @@ pub(super) enum DiffGutter {
 }
 
 pub(super) struct DiffMetrics {
-    font: egui::FontId,
+    pub(super) font: egui::FontId,
     digit_w: f32,
-    row_h: f32,
+    pub(super) row_h: f32,
     digits: u32,
 }
 
@@ -61,18 +61,18 @@ pub(super) fn diff_row_height(ui: &egui::Ui) -> f32 {
 
 #[derive(Clone, Copy)]
 pub(super) struct GutterCols {
-    old_right: Option<f32>,
-    new_right: Option<f32>,
-    sign: f32,
-    code: f32,
+    pub(super) old_right: Option<f32>,
+    pub(super) new_right: Option<f32>,
+    pub(super) sign: f32,
+    pub(super) code: f32,
 }
 
 pub(super) struct DiffPaint<'a> {
-    width: f32,
-    line: &'a diff::DiffLine,
-    gutter: DiffGutter,
-    colors: DiffColors,
-    metrics: &'a DiffMetrics,
+    pub(super) width: f32,
+    pub(super) line: &'a diff::DiffLine,
+    pub(super) gutter: DiffGutter,
+    pub(super) colors: DiffColors,
+    pub(super) metrics: &'a DiffMetrics,
 }
 
 pub(super) struct DiffSidePaint<'a> {
@@ -84,12 +84,12 @@ pub(super) struct DiffSidePaint<'a> {
 }
 
 pub(super) struct DiffGutterPaint<'a> {
-    rect: egui::Rect,
-    cols: GutterCols,
-    line: &'a diff::DiffLine,
-    sign: &'static str,
-    colors: DiffColors,
-    metrics: &'a DiffMetrics,
+    pub(super) rect: egui::Rect,
+    pub(super) cols: GutterCols,
+    pub(super) line: &'a diff::DiffLine,
+    pub(super) sign: &'static str,
+    pub(super) colors: DiffColors,
+    pub(super) metrics: &'a DiffMetrics,
 }
 
 pub(super) struct DiffNumberPaint<'a> {
@@ -115,8 +115,8 @@ pub(super) fn diff_content_width(
     metrics: &DiffMetrics,
     scroll_key: &str,
 ) -> f32 {
-    let cache_id = egui::Id::new(("diff-width", scroll_key, split));
-    let fingerprint = egui::Id::new((
+    let cache_id = egui::Id::unique(("diff-width", scroll_key, split));
+    let fingerprint = egui::Id::unique((
         doc,
         &metrics.font,
         metrics.digit_w.to_bits(),
@@ -223,6 +223,20 @@ pub(super) fn paint_diff_document(
 pub(super) const DIFF_SPLIT_GAP: f32 = 72.0;
 pub(super) const DIFF_SPLIT_MIN_PANE: f32 = 40.0;
 
+/// `(left, gap, right)` rects for a split diff at the given pane ratio.
+pub(super) fn split_rects(full: egui::Rect, ratio: f32) -> (egui::Rect, egui::Rect, egui::Rect) {
+    let usable = (full.width() - DIFF_SPLIT_GAP).max(1.0);
+    let min_pane = DIFF_SPLIT_MIN_PANE.min(usable / 2.0);
+    let left_width = (ratio * usable).clamp(min_pane, usable - min_pane);
+    let left = egui::Rect::from_min_size(full.min, egui::vec2(left_width, full.height()));
+    let gap = egui::Rect::from_min_size(
+        egui::pos2(full.left() + left_width, full.top()),
+        egui::vec2(DIFF_SPLIT_GAP, full.height()),
+    );
+    let right = egui::Rect::from_min_max(egui::pos2(gap.right(), full.top()), full.max);
+    (left, gap, right)
+}
+
 #[derive(Clone, Copy)]
 pub(super) enum SplitPane {
     Left,
@@ -246,13 +260,7 @@ pub(super) fn paint_diff_split(
     let full = ui.available_rect_before_wrap();
     let usable = (full.width() - DIFF_SPLIT_GAP).max(1.0);
     let min_pane = DIFF_SPLIT_MIN_PANE.min(usable / 2.0);
-    let left_width = (*ratio * usable).clamp(min_pane, usable - min_pane);
-    let left_rect = egui::Rect::from_min_size(full.min, egui::vec2(left_width, full.height()));
-    let gap_rect = egui::Rect::from_min_size(
-        egui::pos2(full.left() + left_width, full.top()),
-        egui::vec2(DIFF_SPLIT_GAP, full.height()),
-    );
-    let right_rect = egui::Rect::from_min_max(egui::pos2(gap_rect.right(), full.top()), full.max);
+    let (left_rect, gap_rect, right_rect) = split_rects(full, *ratio);
     // Paint both panes at the same frame-start offset so corresponding lines
     // stay aligned; whichever pane the user scrolled becomes next frame's shared
     // offset.
@@ -288,8 +296,8 @@ pub(super) fn paint_diff_split(
     let pointer = ui.ctx().input(|input| input.pointer.hover_pos());
     let over_left = pointer.is_some_and(|pos| left_rect.contains(pos));
     let over_right = pointer.is_some_and(|pos| right_rect.contains(pos));
-    let left_offset = left.state.offset.y;
-    let right_offset = right.state.offset.y;
+    let left_offset = left.state.unclamped_offset().y;
+    let right_offset = right.state.unclamped_offset().y;
     *sync = match (over_left, over_right) {
         (true, false) => left_offset,
         (false, true) => right_offset,
@@ -306,7 +314,7 @@ pub(super) fn paint_diff_split(
         egui::Rect::from_center_size(gap_rect.center(), egui::vec2(6.0, gap_rect.height()));
     let response = ui.interact(
         handle,
-        ui.id().with(("diff-split-drag", scroll_key)),
+        ui.scope_id().with(("diff-split-drag", scroll_key)),
         egui::Sense::drag(),
     );
     if response.hovered() || response.dragged() {
@@ -533,6 +541,8 @@ pub(super) fn comparison_headers(
     split: bool,
     ratio: f32,
     path: &std::path::Path,
+    editable: bool,
+    staged: bool,
 ) {
     let full = ui.available_rect_before_wrap();
     let header =
@@ -557,12 +567,19 @@ pub(super) fn comparison_headers(
     } else {
         vec![(header, format!("{} → {}", doc.left_label, doc.right_label))]
     };
-    for (rect, label) in labels {
+    for (index, (rect, label)) in labels.into_iter().enumerate() {
+        let side_editable = editable && (!split || index == 1);
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_clip_rect(rect.intersect(ui.clip_rect()));
             ui.horizontal(|ui| {
                 ui.strong(label);
-                ui.weak("Read-only");
+                ui.weak(if side_editable {
+                    "Editable"
+                } else if staged {
+                    "Staged · Read-only"
+                } else {
+                    "Read-only"
+                });
             });
             ui.add(
                 egui::Label::new(
@@ -747,7 +764,7 @@ pub(super) fn paint_diff_line(ui: &mut egui::Ui, paint: DiffPaint<'_>) {
         ui.auto_id_with("diff-code-selection"),
         egui::Sense::click_and_drag(),
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, code.text()));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, code.text()));
     egui::text_selection::LabelSelectionState::label_text_selection(
         ui,
         &response,

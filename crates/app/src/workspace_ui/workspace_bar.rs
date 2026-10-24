@@ -99,6 +99,21 @@ impl App {
                 brand: None,
                 status: None,
             },
+            Some(Tab::Vnc {
+                label, host, port, ..
+            }) => TabFace {
+                label: if !label.trim().is_empty() {
+                    label.clone()
+                } else if !host.trim().is_empty() {
+                    format!("{host}:{port}")
+                } else {
+                    "VNC Viewer".into()
+                },
+                icon: "Monitor",
+                sid: None,
+                brand: None,
+                status: None,
+            },
             None => TabFace {
                 label: "Workspace".into(),
                 icon: "Terminal",
@@ -218,8 +233,8 @@ impl App {
             let overflow = content_width > width;
             let width = (width - if overflow { 58.0 } else { 0.0 }).max(1.0);
             let scroll_id = ui.make_persistent_id(egui::IdSalt::new(("workspace-tabs", project)));
-            let offset =
-                egui::scroll_area::State::load(ui.ctx(), scroll_id).map_or(0.0, |s| s.offset.x);
+            let offset = egui::scroll_area::State::load(ui.ctx(), scroll_id)
+                .map_or(0.0, |s| s.unclamped_offset().x);
             let mut direction = 0.0;
             if overflow {
                 let left = ui
@@ -474,7 +489,7 @@ impl App {
                             let close_response = ui
                                 .interact(
                                     close_rect,
-                                    egui::Id::new(("close-workspace", project, &group.id)),
+                                    egui::Id::unique(("close-workspace", project, &group.id)),
                                     egui::Sense::click(),
                                 )
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -548,7 +563,7 @@ impl App {
                                 });
                             response.widget_info(|| {
                                 egui::WidgetInfo::selected(
-                                    egui::WidgetType::SelectableLabel,
+                                    egui::Role::Button,
                                     true,
                                     active,
                                     &face.label,
@@ -606,7 +621,7 @@ impl App {
                 let max_offset = (scroll.content_size.x - scroll.inner_rect.width()).max(0.0);
                 let right = ui
                     .add_enabled(
-                        scroll.state.offset.x < max_offset - 0.5,
+                        scroll.state.unclamped_offset().x < max_offset - 0.5,
                         egui::Button::new("›").min_size(egui::vec2(27.0, 30.0)),
                     )
                     .on_hover_text("Scroll tabs right");
@@ -616,9 +631,10 @@ impl App {
                     direction = 1.0;
                 }
                 if direction != 0.0 {
-                    scroll.state.offset.x = (scroll.state.offset.x
-                        + direction * scroll.inner_rect.width().max(1.0) * 0.8)
+                    let mut offset = scroll.state.unclamped_offset();
+                    offset.x = (offset.x + direction * scroll.inner_rect.width().max(1.0) * 0.8)
                         .clamp(0.0, max_offset);
+                    super::write_scroll_offset(&mut scroll.state, offset);
                     scroll.state.store(ui.ctx(), scroll.id);
                     ui.ctx().request_repaint();
                 }
@@ -628,13 +644,21 @@ impl App {
                     [30.0, 30.0],
                     egui::Button::new(RichText::new("+").size(18.0)).frame(false),
                 )
-                .on_hover_text("New top-level terminal tab");
+                .on_hover_text("New tab (right-click for Browser or VNC)");
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "workspace-plus", plus_response.rect);
             let plus_rect = plus_response.rect;
             if plus_response.clicked() && self.pane_drag.is_none() {
                 self.create(None);
             }
+            appearance::context_menu(&plus_response, |ui| {
+                self.workspace_new_tab_menu(ui);
+            });
+            appearance::icon_menu_button(ui, "ChevronDown", |ui| {
+                self.workspace_new_tab_menu(ui);
+            })
+            .response
+            .on_hover_text("New terminal, browser, or VNC tab");
             let recent: Vec<(String, String, bool)> = workspace
                 .recent_tabs
                 .iter()

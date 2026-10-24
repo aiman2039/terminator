@@ -8,6 +8,565 @@ use super::tabs::cached_terminal_theme;
 pub(crate) mod tests {
 
     #[test]
+    fn diff_neighbors_walks_the_sibling_list() {
+        let paths: Vec<std::path::PathBuf> = ["/repo/a.rs", "/repo/b.rs", "/repo/c.rs"]
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        let (prev, next, pos, total) =
+            super::super::diff_view::diff_neighbors(&paths, std::path::Path::new("/repo/b.rs"));
+        assert_eq!(prev.as_deref(), Some(std::path::Path::new("/repo/a.rs")));
+        assert_eq!(next.as_deref(), Some(std::path::Path::new("/repo/c.rs")));
+        assert_eq!((pos, total), (2, 3));
+        let (prev, next, pos, _) =
+            super::super::diff_view::diff_neighbors(&paths, std::path::Path::new("/repo/a.rs"));
+        assert!(prev.is_none());
+        assert!(next.is_some());
+        assert_eq!(pos, 1);
+        let (prev, next, pos, total) =
+            super::super::diff_view::diff_neighbors(&paths, std::path::Path::new("/repo/z.rs"));
+        assert!(prev.is_none() && next.is_none());
+        assert_eq!((pos, total), (0, 3));
+    }
+
+    #[test]
+    fn staged_diff_switches_to_working_tree_after_dock_returns() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        let (jobs, requests) = std::sync::mpsc::channel();
+        app.jobs = jobs.into();
+        app.selected = Some("project".into());
+        let staged = Tab::Diff {
+            cwd: "/repo".into(),
+            path: "/repo/file.rs".into(),
+            staged: true,
+        };
+        let working = Tab::Diff {
+            cwd: "/repo".into(),
+            path: "/repo/file.rs".into(),
+            staged: false,
+        };
+        app.layouts.insert(
+            "project".into(),
+            Workspace::from_layout(egui_dock::DockState::new(vec![staged.clone()])),
+        );
+
+        // The active dock is absent while its viewer runs. The request must
+        // survive until the dock is returned at the end of the frame.
+        let dock = app.layouts.remove("project").unwrap();
+        app.open_working_diff(&staged);
+        app.apply_diff_replacement();
+        assert!(app.diff_replacement.is_some());
+        assert!(requests.try_recv().is_err());
+
+        app.layouts.insert("project".into(), dock);
+        app.apply_diff_replacement();
+        assert!(app.diff_replacement.is_none());
+        let workspace = &app.layouts["project"];
+        assert_eq!(workspace.tabs[0].primary, Some(working.clone()));
+        assert!(workspace.iter_all_tabs().any(|(_, tab)| tab == &working));
+        assert!(app.loading.contains(&working.key()));
+        assert_eq!(app.focus_tab, Some(working.clone()));
+        let Job::Diff(requested) = requests.try_recv().unwrap() else {
+            panic!("working-tree diff job was not queued");
+        };
+        assert_eq!(requested, working);
+    }
+
+    #[test]
+    fn highlighted_editor_job_keeps_buffer_text_and_tints() {
+        let doc = diff::build_with_context(
+            std::path::Path::new("file.rs"),
+            "let a = 1;\n",
+            "let a = 2;\n",
+            false,
+            3,
+        );
+        let colors = DiffColors {
+            added: Color32::GREEN,
+            deleted: Color32::RED,
+            accent: Color32::BLUE,
+            text: Color32::WHITE,
+        };
+        let right_tints =
+            super::super::diff_edit::live_tints(&doc.left_text, &doc.right_text, colors);
+        let spans = diff::highlight_spans(std::path::Path::new("file.rs"), &doc.right_text);
+        let valid: Vec<bool> = spans.iter().map(|line| !line.is_empty()).collect();
+        let job = super::super::diff_edit::highlighted_job(
+            &doc.right_text,
+            &spans,
+            &valid,
+            &right_tints,
+            egui::FontId::monospace(12.0),
+            Color32::WHITE,
+            f32::INFINITY,
+        );
+        // A TextEdit layouter must reproduce the buffer text exactly.
+        assert_eq!(job.text, doc.right_text);
+        // The changed line carries a diff tint background.
+        assert!(right_tints.iter().any(|tint| tint.is_some()));
+    }
+
+    #[test]
+    fn live_tints_track_edits_as_they_happen() {
+        let colors = DiffColors {
+            added: Color32::GREEN,
+            deleted: Color32::RED,
+            accent: Color32::BLUE,
+            text: Color32::WHITE,
+        };
+        let tints = super::super::diff_edit::live_tints("a\nb\nc\n", "a\nB\nc\nd\n", colors);
+        assert_eq!(tints[0], None);
+        assert!(tints[1].is_some(), "replaced line is tinted");
+        assert_eq!(tints[2], None);
+        assert!(tints[3].is_some(), "inserted line is tinted");
+        // Fixing the change removes its tint immediately.
+        let clean = super::super::diff_edit::live_tints("a\nb\n", "a\nb\n", colors);
+        assert!(clean.iter().all(|tint| tint.is_none()));
+        // An insertion shifts later tints with the text.
+        let shifted = super::super::diff_edit::live_tints("a\nb\n", "x\na\nb\n", colors);
+        assert!(shifted[0].is_some());
+        assert_eq!(shifted[1], None);
+    }
+
+    #[cfg(feature = "test-support")]
+    fn fixture_target(ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
+        ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
+    }
+
+    #[cfg(feature = "test-support")]
+    fn run_diff_frames(
+        app: &mut App,
+        ctx: &egui::Context,
+        tab: &Tab,
+        frames: &[(f64, Vec<egui::Event>)],
+    ) {
+        for (time, events) in frames {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 600.0),
+                    )),
+                    time: Some(*time),
+                    events: events.clone(),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::ScrollArea::new([false, false]).show(ui, |ui| {
+                        let available = ui.available_rect_before_wrap();
+                        ui.expand_to_include_rect(available);
+                        app.diff_view(ui, tab);
+                    });
+                },
+            );
+            output.textures_delta.clear();
+        }
+    }
+
+    #[cfg(feature = "test-support")]
+    fn click_and_type(app: &mut App, ctx: &egui::Context, tab: &Tab, target: &str, text: &str) {
+        // Times keep moving forward across calls within one test.
+        let base = ctx.input(|input| input.time);
+        run_diff_frames(app, ctx, tab, &[(base + 0.1, vec![]), (base + 0.2, vec![])]);
+        let rect = fixture_target(ctx, target)
+            .unwrap_or_else(|| panic!("editor target {target} was not painted"));
+        let pos = rect.center();
+        let click = |pressed: bool| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        run_diff_frames(
+            app,
+            ctx,
+            tab,
+            &[
+                (base + 0.3, click(true)),
+                (base + 0.4, click(false)),
+                (base + 0.45, vec![]),
+                (base + 0.5, vec![egui::Event::Text(text.to_owned())]),
+                (base + 0.6, vec![]),
+                (base + 0.7, vec![]),
+            ],
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    fn buffer_text(app: &App, tab: &Tab) -> String {
+        app.diff_reviews
+            .get(&tab.key())
+            .and_then(|review| review.buffer.as_ref())
+            .map(|buffer| buffer.text.clone())
+            .unwrap_or_default()
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn typing_in_unified_diff_edits_the_buffer_and_tints_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        crate::appearance::install(&ctx);
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        let tab = Tab::Diff {
+            cwd: "/repo".into(),
+            path: "/repo/file.rs".into(),
+            staged: false,
+        };
+        let doc = diff::build_with_context(
+            std::path::Path::new("file.rs"),
+            "let a = 1;\nlet b = 2;\n",
+            "let a = 1;\nlet b = 3;\n",
+            false,
+            3,
+        );
+        app.diffs.insert(tab.key(), Ok(doc.into()));
+        // Edit the already-changed line 2.
+        click_and_type(&mut app, &ctx, &tab, "diff-unified-edit-2", "X");
+        let text = buffer_text(&app, &tab);
+        assert!(
+            text.contains('X'),
+            "unified typing must reach the buffer, got {text:?}"
+        );
+        // Changing the untouched line 1 must tint it in the same session.
+        click_and_type(&mut app, &ctx, &tab, "diff-unified-edit-1", "Y");
+        assert!(
+            buffer_text(&app, &tab).contains('Y'),
+            "line 1 typing must reach the buffer, got {:?}",
+            buffer_text(&app, &tab)
+        );
+        let review = app.diff_reviews.get(&tab.key()).expect("review state");
+        let buffer = review.buffer.as_ref().expect("buffer");
+        let (_, tints) = buffer.live_tints.as_ref().expect("live tints cached");
+        assert!(
+            tints.first().is_some_and(|tint| tint.is_some()),
+            "line 1 must tint live after editing it, tints: {tints:?}"
+        );
+        assert!(buffer_text(&app, &tab).contains('Y'));
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn typing_in_split_diff_edits_the_buffer_and_tints_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        crate::appearance::install(&ctx);
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        let tab = Tab::Diff {
+            cwd: "/repo".into(),
+            path: "/repo/file.rs".into(),
+            staged: false,
+        };
+        app.diff_split.insert(tab.key());
+        let doc = diff::build_with_context(
+            std::path::Path::new("file.rs"),
+            "let a = 1;\nlet b = 2;\n",
+            "let a = 1;\nlet b = 3;\n",
+            false,
+            3,
+        );
+        app.diffs.insert(tab.key(), Ok(doc.into()));
+        click_and_type(&mut app, &ctx, &tab, "diff-right-editor", "Z");
+        let text = buffer_text(&app, &tab);
+        assert!(
+            text.contains('Z'),
+            "split typing must reach the buffer, got {text:?}"
+        );
+        let review = app.diff_reviews.get(&tab.key()).expect("review state");
+        let buffer = review.buffer.as_ref().expect("buffer");
+        // Tint and syntax caches must describe the text just typed, not the
+        // document the tab was opened with.
+        let tint_key = buffer.live_tints.as_ref().expect("live tints cached").0;
+        let span_key = buffer.right_spans.as_ref().expect("spans cached").0;
+        assert_eq!(tint_key, span_key, "caches must track the edited revision");
+        assert!(
+            buffer
+                .live_tints
+                .as_ref()
+                .is_some_and(|(_, tints)| tints.iter().any(|tint| tint.is_some())),
+            "edited lines must carry a live tint"
+        );
+    }
+
+    #[test]
+    fn live_rows_cover_the_whole_file_and_track_blocks() {
+        use diff::review::{LiveRow, LiveTint};
+        let rows = super::super::diff_edit::live_rows("a\nb\nc\nd\n", "a\nB\nc\nd\ne\n");
+        // Delete of b (Gone) + B (Changed) + appended e (Added), rest equal.
+        assert!(matches!(rows[0], LiveRow::Edit { changed: None, .. }));
+        assert!(matches!(rows[1], LiveRow::Gone { old: 1, .. }));
+        assert!(matches!(
+            rows[2],
+            LiveRow::Edit {
+                changed: Some(LiveTint::Changed),
+                ..
+            }
+        ));
+        assert!(matches!(
+            rows[5],
+            LiveRow::Edit {
+                changed: Some(LiveTint::Added),
+                ..
+            }
+        ));
+        let edits = rows
+            .iter()
+            .filter(|row| matches!(row, LiveRow::Edit { .. }))
+            .count();
+        assert_eq!(edits, 5, "every buffer line is an editable row");
+        assert_eq!(
+            super::super::diff_edit::replace_line("", 0, "x"),
+            "x",
+            "an empty file gains its first line"
+        );
+    }
+
+    #[test]
+    fn row_ops_split_and_join_lines() {
+        use super::super::diff_edit::{RowOp, apply_row_op};
+        let split = apply_row_op(
+            "alpha\nbeta\n",
+            &RowOp::Split {
+                line: 0,
+                head: "al".into(),
+                tail: "pha".into(),
+            },
+        );
+        assert_eq!(split, "al\npha\nbeta\n");
+        let joined = apply_row_op(&split, &RowOp::JoinPrev { line: 1 });
+        assert_eq!(joined, "alpha\nbeta\n");
+        let joined_next = apply_row_op("alpha\nbeta\n", &RowOp::JoinNext { line: 0 });
+        assert_eq!(joined_next, "alphabeta\n");
+        // Out-of-range ops are no-ops.
+        assert_eq!(apply_row_op("a\n", &RowOp::JoinPrev { line: 0 }), "a\n");
+    }
+
+    #[cfg(feature = "test-support")]
+    fn click_and_key(app: &mut App, ctx: &egui::Context, tab: &Tab, target: &str, key: egui::Key) {
+        let base = ctx.input(|input| input.time);
+        run_diff_frames(app, ctx, tab, &[(base + 0.1, vec![]), (base + 0.2, vec![])]);
+        let rect = fixture_target(ctx, target)
+            .unwrap_or_else(|| panic!("editor target {target} was not painted"));
+        let pos = rect.center();
+        let click = |pressed: bool| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        run_diff_frames(
+            app,
+            ctx,
+            tab,
+            &[
+                (base + 0.3, click(true)),
+                (base + 0.4, click(false)),
+                (base + 0.45, vec![]),
+                (
+                    base + 0.5,
+                    vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                ),
+                (base + 0.6, vec![]),
+                (base + 0.7, vec![]),
+            ],
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    fn click_and_shortcut(
+        app: &mut App,
+        ctx: &egui::Context,
+        tab: &Tab,
+        target: &str,
+        shift: bool,
+    ) {
+        let base = ctx.input(|input| input.time);
+        run_diff_frames(app, ctx, tab, &[(base + 0.1, vec![]), (base + 0.2, vec![])]);
+        let rect = fixture_target(ctx, target)
+            .unwrap_or_else(|| panic!("editor target {target} was not painted"));
+        let pos = rect.center();
+        let click = |pressed: bool| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        let mut modifiers = egui::Modifiers::COMMAND;
+        modifiers.shift = shift;
+        run_diff_frames(
+            app,
+            ctx,
+            tab,
+            &[
+                (base + 0.3, click(true)),
+                (base + 0.4, click(false)),
+                (base + 0.45, vec![]),
+                (
+                    base + 0.5,
+                    vec![egui::Event::Key {
+                        key: egui::Key::Z,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                ),
+                (base + 0.6, vec![]),
+                (base + 0.7, vec![]),
+                (base + 0.8, vec![]),
+            ],
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn undo_redo_in_unified_restores_buffer_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        crate::appearance::install(&ctx);
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        let tab = Tab::Diff {
+            cwd: "/repo".into(),
+            path: "/repo/file.rs".into(),
+            staged: false,
+        };
+        let original = "let a = 1;\nlet b = 3;\n";
+        let doc = diff::build_with_context(
+            std::path::Path::new("file.rs"),
+            "let a = 1;\nlet b = 2;\n",
+            original,
+            false,
+            3,
+        );
+        app.diffs.insert(tab.key(), Ok(doc.into()));
+        click_and_type(&mut app, &ctx, &tab, "diff-unified-edit-1", "X");
+        let edited = buffer_text(&app, &tab);
+        assert_ne!(edited, original, "typing must change the buffer first");
+        click_and_shortcut(&mut app, &ctx, &tab, "diff-unified-edit-1", false);
+        assert_eq!(
+            buffer_text(&app, &tab),
+            original,
+            "Cmd+Z must restore the pre-edit buffer"
+        );
+        click_and_shortcut(&mut app, &ctx, &tab, "diff-unified-edit-1", true);
+        assert_eq!(
+            buffer_text(&app, &tab),
+            edited,
+            "Cmd+Shift+Z must redo the edit"
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn enter_in_unified_inserts_a_new_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        crate::appearance::install(&ctx);
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        let tab = Tab::Diff {
+            cwd: "/repo".into(),
+            path: "/repo/file.rs".into(),
+            staged: false,
+        };
+        let doc = diff::build_with_context(
+            std::path::Path::new("file.rs"),
+            "let a = 1;\nlet b = 2;\n",
+            "let a = 1;\nlet b = 3;\n",
+            false,
+            3,
+        );
+        app.diffs.insert(tab.key(), Ok(doc.into()));
+        click_and_key(
+            &mut app,
+            &ctx,
+            &tab,
+            "diff-unified-edit-2",
+            egui::Key::Enter,
+        );
+        let text = buffer_text(&app, &tab);
+        assert!(
+            text.contains(";\n") && text.lines().count() >= 3,
+            "Enter must split the unified row into a new line, got {text:?}"
+        );
+        // Focus must follow the new line so typing continues there.
+        let focused = ctx.memory(|memory| memory.focused());
+        assert_eq!(
+            focused,
+            Some(egui::Id::unique((tab.key(), "unified-line", 3_u32))),
+            "focus must move to the split line"
+        );
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn typing_in_unified_gap_line_edits_and_highlights_its_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        crate::appearance::install(&ctx);
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        let tab = Tab::Diff {
+            cwd: "/repo".into(),
+            path: "/repo/file.rs".into(),
+            staged: false,
+        };
+        let left: String = (1..=12).fold(String::new(), |mut acc, n| {
+            use std::fmt::Write as _;
+            let _ = writeln!(acc, "line {n}");
+            acc
+        });
+        let mut right = left.clone();
+        right = right.replace("line 12", "line twelve");
+        let doc =
+            diff::build_with_context(std::path::Path::new("file.rs"), &left, &right, false, 3);
+        app.diffs.insert(tab.key(), Ok(doc.into()));
+        // Line 1 sits in a collapsed gap in the old grouped view; it must be
+        // editable here exactly like in split view.
+        click_and_type(&mut app, &ctx, &tab, "diff-unified-edit-1", "Q");
+        assert!(
+            buffer_text(&app, &tab).lines().next() == Some("line 1Q"),
+            "gap line must accept edits, got {:?}",
+            buffer_text(&app, &tab)
+        );
+        let review = app.diff_reviews.get(&tab.key()).expect("review state");
+        let buffer = review.buffer.as_ref().expect("buffer");
+        let (_, rows) = buffer.live_rows.as_ref().expect("live rows cached");
+        assert!(
+            rows.iter().any(|row| matches!(
+                row,
+                diff::review::LiveRow::Edit {
+                    new: 0,
+                    changed: Some(_),
+                    ..
+                }
+            )),
+            "the edited gap line must join a highlighted block live: {rows:?}"
+        );
+    }
+
+    #[test]
     fn ide_mode_icon_differs_from_sidebar_toggles() {
         let ide = header_action_view(HeaderAction::IdeMode).icon;
         assert_ne!(ide, "PanelRight");
@@ -71,7 +630,7 @@ pub(crate) mod tests {
             left_label: "Index".into(),
             right_label: "Working tree".into(),
             left_text: String::new(),
-            right_text: String::new(),
+            right_text: "visible-diff-marker\n".into(),
             unified: vec![sample_line()],
             split: vec![],
             ..Default::default()
@@ -141,9 +700,16 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
         let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
-        app.diff_reviews.entry("diff".into()).or_default().editor = Some(diff::review::Edit {
+        app.diff_reviews.entry("diff".into()).or_default().buffer = Some(diff::review::Edit {
             document: std::sync::Arc::new(sample_doc()),
             text: "unsaved".into(),
+            right_spans: None,
+            live_tints: None,
+            live_rows: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            burst: 0.0,
+            left_spans: None,
         });
         assert!(app.block_unsaved_diff(Some("diff")));
         app.begin_exit();
@@ -180,13 +746,21 @@ pub(crate) mod tests {
     }
 
     fn paint_doc(doc: diff::DiffDocument, split: bool) -> Vec<(egui::Pos2, String)> {
+        paint_doc_staged(doc, split, false)
+    }
+
+    fn paint_doc_staged(
+        doc: diff::DiffDocument,
+        split: bool,
+        staged: bool,
+    ) -> Vec<(egui::Pos2, String)> {
         let dir = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
         let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
         let tab = Tab::Diff {
             cwd: "/repo".into(),
             path: "/repo/file.rs".into(),
-            staged: false,
+            staged,
         };
         if split {
             app.diff_split.insert(tab.key());
@@ -220,7 +794,7 @@ pub(crate) mod tests {
     ) -> &'a (egui::Pos2, String) {
         painted
             .iter()
-            .find(|(_, text)| text == needle)
+            .find(|(_, text)| text == needle || text.lines().any(|line| line.trim_end() == needle))
             .unwrap_or_else(|| panic!("{needle} was not painted: {painted:?}"))
     }
 
@@ -302,8 +876,8 @@ pub(crate) mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
-                left_text: String::new(),
-                right_text: String::new(),
+                left_text: "f\nf\nf\nf\nf\nf\nf\nx\nthis-is-a-much-longer-equal-line\n".into(),
+                right_text: "f\nf\nf\nf\nf\nf\nf\nx\nthis-is-a-much-longer-equal-line\n".into(),
                 unified: vec![
                     line(diff::LineKind::Equal, Some(8), Some(8), "x"),
                     line(
@@ -334,8 +908,9 @@ pub(crate) mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
-                left_text: String::new(),
-                right_text: String::new(),
+                // 100 lines force a 3-digit gutter; the deleted row is visible.
+                left_text: format!("f\nf\nremoved-line\n{}", "f\n".repeat(97)),
+                right_text: "f\n".repeat(99),
                 unified: vec![line(
                     diff::LineKind::Delete,
                     Some(100),
@@ -347,7 +922,7 @@ pub(crate) mod tests {
             },
             false,
         );
-        let number = require_text(&painted, "100");
+        let number = require_text(&painted, "3");
         let sign = require_text(&painted, "-");
         let code = require_text(&painted, "removed-line");
         assert!(
@@ -370,15 +945,16 @@ pub(crate) mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
-                left_text: String::new(),
-                right_text: String::new(),
+                // 102 lines force a 3-digit gutter; the inserted row is visible.
+                left_text: "f\n".repeat(101),
+                right_text: format!("f\nf\nadded-line\n{}", "f\n".repeat(99)),
                 unified: vec![line(diff::LineKind::Insert, None, Some(102), "added-line")],
                 split: vec![],
                 ..Default::default()
             },
             false,
         );
-        let number = require_text(&painted, "102");
+        let number = require_text(&painted, "3");
         let sign = require_text(&painted, "+");
         assert!(
             sign.0.x > number.0.x,
@@ -394,8 +970,8 @@ pub(crate) mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
-                left_text: String::new(),
-                right_text: String::new(),
+                left_text: "\n\n\n\nleft-only\n".into(),
+                right_text: "\n\n\n\n\nright-only\n".into(),
                 unified: vec![],
                 split: vec![diff::SplitRow {
                     left: Some(line(diff::LineKind::Delete, Some(5), None, "left-only")),
@@ -435,8 +1011,8 @@ pub(crate) mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
-                left_text: String::new(),
-                right_text: String::new(),
+                left_text: "row-a\nrow-b\n".into(),
+                right_text: "row-a\nrow-b\n".into(),
                 unified: vec![
                     line(diff::LineKind::Equal, Some(1), Some(1), "row-a"),
                     line(diff::LineKind::Equal, Some(2), Some(2), "row-b"),
@@ -461,15 +1037,15 @@ pub(crate) mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
-                left_text: String::new(),
-                right_text: String::new(),
+                left_text: format!("f\nf\nunchanged\n{}", "f\n".repeat(94)),
+                right_text: format!("f\nf\nunchanged\n{}", "f\n".repeat(94)),
                 unified: vec![line(diff::LineKind::Equal, Some(97), Some(97), "unchanged")],
                 split: vec![],
                 ..Default::default()
             },
             false,
         );
-        let numbers: Vec<_> = painted.iter().filter(|(_, text)| text == "97").collect();
+        let numbers: Vec<_> = painted.iter().filter(|(_, text)| text == "3").collect();
         assert_eq!(
             numbers.len(),
             2,
@@ -478,7 +1054,7 @@ pub(crate) mod tests {
         let gap = (numbers[1].0.x - numbers[0].0.x).abs();
         assert!(
             gap > 8.0,
-            "old and new 97 must be distinct columns, got {} and {}",
+            "old and new numbers must be distinct columns, got {} and {}",
             numbers[0].0.x,
             numbers[1].0.x
         );
@@ -486,7 +1062,8 @@ pub(crate) mod tests {
 
     #[test]
     fn hunk_header_paints_no_line_numbers() {
-        let painted = paint_doc(
+        // Grouped (staged, read-only) unified view still paints hunk headers.
+        let painted = paint_doc_staged(
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
@@ -497,6 +1074,7 @@ pub(crate) mod tests {
                 ..Default::default()
             },
             false,
+            true,
         );
         let header = require_text(&painted, "@@ -3,2 +3,2 @@");
         assert!(
@@ -515,15 +1093,16 @@ pub(crate) mod tests {
             diff::DiffDocument {
                 left_label: "Index".into(),
                 right_label: "Working tree".into(),
-                left_text: String::new(),
-                right_text: String::new(),
+                // 10,000 lines force a 5-digit gutter; the inserted row is visible.
+                left_text: "f\n".repeat(9999),
+                right_text: format!("f\nf\nwide-line\n{}", "f\n".repeat(9997)),
                 unified: vec![line(diff::LineKind::Insert, None, Some(10000), "wide-line")],
                 split: vec![],
                 ..Default::default()
             },
             false,
         );
-        let number = require_text(&painted, "10000");
+        let number = require_text(&painted, "3");
         let sign = require_text(&painted, "+");
         assert!(
             sign.0.x > number.0.x + 8.0,
@@ -562,7 +1141,7 @@ pub(crate) mod tests {
                 left_label: "old".into(),
                 right_label: "new".into(),
                 left_text: String::new(),
-                right_text: String::new(),
+                right_text: "insert-only\npaired-right\n".into(),
                 unified: vec![],
                 split: vec![
                     diff::SplitRow {
@@ -680,7 +1259,9 @@ pub(crate) mod tests {
         for area in &areas {
             assert!(area.content_size.x > 1000.0);
             let mut state = area.state;
-            state.offset.x = area.content_size.x - area.inner_rect.width();
+            let mut offset = state.unclamped_offset();
+            offset.x = area.content_size.x - area.inner_rect.width();
+            super::super::write_scroll_offset(&mut state, offset);
             state.store(&ctx, area.id);
         }
         let (_, shapes) = scroll_doc(&ctx, &doc, true);
@@ -731,7 +1312,9 @@ pub(crate) mod tests {
         let (areas, _) = scroll_doc(&ctx, &doc, true);
         for area in &areas {
             let mut state = area.state;
-            state.offset.x = area.content_size.x - area.inner_rect.width();
+            let mut offset = state.unclamped_offset();
+            offset.x = area.content_size.x - area.inner_rect.width();
+            super::super::write_scroll_offset(&mut state, offset);
             state.store(&ctx, area.id);
         }
         let (areas, shapes) = scroll_doc(&ctx, &doc, true);
@@ -756,22 +1339,24 @@ pub(crate) mod tests {
         let (before, _) = scroll_doc(&ctx, &doc, false);
         let width = before[0].content_size.x;
         let mut state = before[0].state;
-        state.offset = egui::vec2(250.0, 900.0);
+        super::super::write_scroll_offset(&mut state, egui::vec2(250.0, 900.0));
         state.store(&ctx, before[0].id);
         let (after, _) = scroll_doc(&ctx, &doc, false);
         assert_eq!(after[0].content_size.x, width);
-        assert_eq!(after[0].state.offset, egui::vec2(250.0, 900.0));
+        assert_eq!(after[0].state.unclamped_offset(), egui::vec2(250.0, 900.0));
         // Each split pane scrolls horizontally on its own.
         scroll_doc(&ctx, &doc, true);
         let (areas, _) = scroll_doc(&ctx, &doc, true);
         assert_ne!(before[0].id, areas[0].id);
         assert_ne!(areas[0].id, areas[1].id);
         let mut left_state = areas[0].state;
-        left_state.offset.x = 200.0;
+        let mut offset = left_state.unclamped_offset();
+        offset.x = 200.0;
+        super::super::write_scroll_offset(&mut left_state, offset);
         left_state.store(&ctx, areas[0].id);
         let (areas, _) = scroll_doc(&ctx, &doc, true);
-        assert_eq!(areas[0].state.offset.x, 200.0);
-        assert_ne!(areas[1].state.offset.x, 200.0);
+        assert_eq!(areas[0].state.unclamped_offset().x, 200.0);
+        assert_ne!(areas[1].state.unclamped_offset().x, 200.0);
     }
 
     #[test]
@@ -815,7 +1400,7 @@ pub(crate) mod tests {
         frame(Vec::new(), &mut ratio);
         let handle = ctx
             .data(|d| {
-                d.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", "diff-split-handle")))
+                d.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", "diff-split-handle")))
             })
             .expect("split handle must be recorded");
         let start = handle.center();

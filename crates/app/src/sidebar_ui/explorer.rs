@@ -54,7 +54,7 @@ impl App {
                         && !session.review
                 })
                 .and_then(|session| session.file.clone()),
-            Tab::CommitLog { .. } | Tab::Player => None,
+            Tab::CommitLog { .. } | Tab::Player | Tab::Vnc { .. } => None,
         }
     }
 
@@ -367,7 +367,7 @@ impl App {
 
     #[cfg(test)]
     pub(crate) fn tree(&mut self, ui: &mut egui::Ui, path: &std::path::Path, _depth: usize) {
-        self.tree_with_host(ui, path, ui.id());
+        self.tree_with_host(ui, path, ui.scope_id());
     }
 
     fn tree_with_host(&mut self, ui: &mut egui::Ui, path: &Path, host: egui::Id) {
@@ -589,7 +589,7 @@ impl App {
                 let response = ui.add_sized(
                     egui::vec2(width, 22.0),
                     appearance::singleline(&mut self.preferences.history_filter)
-                        .id(ui.id().with("history-filter"))
+                        .id(ui.scope_id().with("history-filter"))
                         .hint_text("Filter by name"),
                 );
                 #[cfg(feature = "test-support")]
@@ -688,6 +688,10 @@ impl App {
             self.structure_panel(ui);
             return;
         }
+        if tool == SidebarTool::Vnc {
+            self.vnc_sidebar(ui);
+            return;
+        }
         if tool == SidebarTool::Agents {
             self.agents_view(ui);
             return;
@@ -700,7 +704,7 @@ impl App {
                 self.explorer_reveal = None;
             }
             self.pending_delete_bar(ui);
-            let host = ui.id();
+            let host = ui.scope_id();
             let root_override = self
                 .explorer_reveal
                 .as_ref()
@@ -761,8 +765,11 @@ impl App {
                     history: self.git_history,
                     view_list: self.preferences.git_view_list,
                     commits: &self.git_log,
+                    shelves: &self.git_shelves,
                     branches: &self.git_branches,
                     commit_draft: &mut draft,
+                    amend: &mut self.git_amend,
+                    signoff: &mut self.git_signoff,
                     collapse_generation: self.git_collapse,
                     open_shortcut: &open_shortcut,
                     compare: self
