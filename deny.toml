@@ -63,6 +63,7 @@ skip = [
     { crate = "float-cmp", reason = "0.9 via resvg/tiny-skia vs 0.10 via spectrum-analyzer" },
     { crate = "gif", reason = "0.13 via resvg vs 0.14 via image" },
     { crate = "kurbo", reason = "0.11 via resvg vs 0.13 via vello/epaint" },
+    { crate = "svgtypes", reason = "0.15 via resvg 0.45/usvg vs 0.16 via merman-render; resvg stays on 0.45 until egui_extras moves" },
     { crate = "miniz_oxide", reason = "0.8 via png 0.17 vs 0.9 via flate2" },
     { crate = "png", reason = "0.17 via resvg vs 0.18 via image" },
     { crate = "zune-core", reason = "0.4 via resvg vs 0.5 via image" },
