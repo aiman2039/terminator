@@ -625,7 +625,7 @@ mod focus_tests {
     #[test]
     fn pressing_terminal_takes_focus_from_an_editor_before_key_release() {
         let ctx = egui::Context::default();
-        let editor_id = Id::new("split-source-editor");
+        let editor_id = Id::unique("split-source-editor");
         let mut center = Pos2::ZERO;
         for frame in 0..3 {
             let events = if frame == 2 {

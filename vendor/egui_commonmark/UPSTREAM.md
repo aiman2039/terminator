@@ -21,6 +21,7 @@ List item content sets its first row to the body text height. The default
 interaction height in `horizontal_wrapped` otherwise moves the text baseline
 below the number. Number painting and the existing gutter remain unchanged.
 
+Table state uses `Ui::scope_id`. The scrollable entry takes `AsIdSalt` and `Id::unique`.
 The internal scrollable renderer uses the same `pulldown_cmark` feature gate
 as its public entry point. Scroll-only types use qualified `egui::Id` and
 `egui::Pos2` paths so builds without that feature have no unused imports or

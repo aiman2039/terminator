@@ -59,7 +59,7 @@ impl RepaintBudget {
 
 fn repaint_budget(ctx: &egui::Context) -> Arc<Mutex<RepaintBudget>> {
     ctx.data_mut(|data| {
-        data.get_temp_mut_or_default::<Arc<Mutex<RepaintBudget>>>(egui::Id::new(
+        data.get_temp_mut_or_default::<Arc<Mutex<RepaintBudget>>>(egui::Id::unique(
             "egui_term::repaint_budget",
         ))
         .clone()

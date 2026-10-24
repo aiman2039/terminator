@@ -16,7 +16,8 @@ Image-only keyboard paste still emits an empty `Event::Paste`.
 ## Missing accessibility focus target (2026-10-20)
 
 Check egui's complete accessibility update before passing it to AccessKit.
-If the focused node is absent, use the window root and log a warning. This
+If the focused node is absent, use the window root and log a warning. The
+regression requests focus with `Id::unique`. This
 prevents a malformed focus request from causing an AccessKit panic during
 the update or a later macOS window focus event. Incremental updates are
 unchanged. This does not catch panics or resume an invalid consumer tree.

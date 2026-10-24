@@ -24,7 +24,7 @@ pub enum TabAddAlign {
 /// # struct MyTabViewer;
 /// # impl TabViewer for MyTabViewer {
 /// #     type Tab = ();
-/// #     fn id(&mut self, tab: &mut Self::Tab) -> Id { Id::new(tab) }
+/// #     fn id(&mut self, tab: &mut Self::Tab) -> Id { Id::unique(tab) }
 /// #     fn title(&mut self, tab: &mut Self::Tab) -> WidgetText { WidgetText::default() }
 /// #     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {}
 /// # }

@@ -1358,7 +1358,7 @@ mod accessibility_tests {
         ctx.enable_accesskit();
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.label("Visible control");
-            ui.memory_mut(|memory| memory.request_focus(egui::Id::new("missing-widget")));
+            ui.memory_mut(|memory| memory.request_focus(egui::Id::unique("missing-widget")));
         });
         output.textures_delta.clear();
         let mut update = output.platform_output.accesskit_update.unwrap();

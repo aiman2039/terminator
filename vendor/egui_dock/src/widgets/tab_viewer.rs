@@ -9,9 +9,9 @@ pub trait TabViewer {
 
     /// Unique ID for this tab.
     ///
-    /// Assuming `Tab` implements `Hash`, you can simply do `Id::new(tab)`.
+    /// Assuming `Tab` implements `Hash`, you can simply do `Id::unique(tab)`.
     /// If that is not possible, but tab names are guaranteed to be unique,
-    /// one could also implement this as `Id::new(self.title(tab).text())`.
+    /// one could also implement this as `Id::unique(self.title(tab).text())`.
     fn id(&mut self, tab: &mut Self::Tab) -> Id;
 
     /// The title to be displayed in the tab bar.
