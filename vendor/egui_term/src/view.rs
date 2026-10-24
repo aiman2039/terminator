@@ -223,6 +223,7 @@ impl<'a> TerminalView<'a> {
                     delta,
                     phase,
                     modifiers,
+                    source: _,
                 } => {
                     let now = layout.ctx.input(|i| i.time);
                     // Start is not a reset. macOS delivers momentum-begin and
@@ -580,7 +581,7 @@ fn flush_text_run(painter: &Painter, shapes: &mut Vec<Shape>, run: &mut TextRun)
 fn focus_terminal(layout: &Response) {
     // A keyboard target also needs a node in the accessibility tree.
     layout.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Other, layout.enabled(), "Terminal")
+        egui::WidgetInfo::labeled(egui::Role::Unknown, layout.enabled(), "Terminal")
     });
     // A terminal that is the active session stays "focused" for as long as the
     // app says so, but it must not yank keyboard focus back from another widget
@@ -624,7 +625,7 @@ mod focus_tests {
     #[test]
     fn pressing_terminal_takes_focus_from_an_editor_before_key_release() {
         let ctx = egui::Context::default();
-        let editor_id = Id::new("split-source-editor");
+        let editor_id = Id::unique("split-source-editor");
         let mut center = Pos2::ZERO;
         for frame in 0..3 {
             let events = if frame == 2 {
@@ -1653,6 +1654,7 @@ mod scroll_tests {
                 unit: MouseWheelUnit::Line,
                 delta: Vec2::new(0.0, 1.0),
                 phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
                 modifiers: Modifiers::NONE,
             };
             assert!(!input_event_applies(&event, &layout, false, false));

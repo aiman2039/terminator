@@ -31,13 +31,12 @@ deny = []
 # Transitive-only duplicates pinned by upstream majors; none are direct deps
 # we can unify. Revisit on eframe/egui, resvg, merman, wgpu, wry/gtk, or tungstenite upgrades.
 skip = [
-    # eframe 0.36 / winit stack: unify on egui-ecosystem upgrade.
-    { crate = "accesskit_consumer", reason = "0.36 unix vs 0.38 macos, both via egui-winit 0.36" },
+    # eframe 0.37 / winit stack.
     { crate = "bitflags", reason = "v1 via core-graphics/winit, v2 elsewhere" },
     { crate = "block2", reason = "0.5 via accesskit_macos vs 0.6 via glutin" },
-    { crate = "calloop", reason = "0.13 via winit vs 0.14 via smithay-clipboard" },
-    { crate = "calloop-wayland-source", reason = "0.3 via winit vs 0.4 via smithay-clipboard" },
     { crate = "cfg_aliases", reason = "0.1 via portable-pty/nix vs 0.2 via glutin" },
+    { crate = "cpal", reason = "0.17 direct player pin vs 0.18 via rodio 0.23" },
+    { crate = "mach2", reason = "0.5 via cpal 0.17 vs 0.6 via cpal 0.18/rodio" },
     { crate = "core-foundation", reason = "0.9 via core-graphics/winit vs 0.10 via reqwest stack" },
     { crate = "foldhash", reason = "0.1 via hashbrown 0.15 vs 0.2 via hashbrown 0.16" },
     { crate = "getrandom", reason = "0.3 via ahash/eframe vs 0.4 via rand 0.10" },
@@ -47,8 +46,7 @@ skip = [
     { crate = "objc2-app-kit", reason = "0.2 via accesskit_macos vs 0.3 via arboard" },
     { crate = "objc2-foundation", reason = "0.2 via accesskit_macos vs 0.3 via arboard" },
     { crate = "quick-xml", reason = "0.41 via smithay/winit vs 0.42 via plist/syntect" },
-    { crate = "rustix", reason = "0.38 via calloop 0.13 vs 1.x via async stack" },
-    { crate = "smithay-client-toolkit", reason = "0.19 via winit vs 0.20 via smithay-clipboard" },
+    { crate = "rustix", reason = "0.38 vs 1.x on the async stack" },
     # wgpu 30 / naga vs syntect: unify on a wgpu or syntect upgrade.
     { crate = "bit-set", reason = "0.8 via fancy-regex/syntect vs 0.10 via naga/wgpu 30" },
     { crate = "bit-vec", reason = "0.8 via bit-set 0.8/syntect vs 0.9 via naga/wgpu 30" },

@@ -302,14 +302,14 @@ impl<'f> CommonMarkViewer<'f> {
     #[cfg(feature = "pulldown_cmark")]
     pub fn show_scrollable(
         self,
-        source_id: impl egui::AsId,
+        source_id: impl egui::AsIdSalt,
         ui: &mut egui::Ui,
         cache: &mut CommonMarkCache,
         text: &str,
     ) {
         egui_commonmark_backend::prepare_show(cache, ui.ctx());
         parsers::pulldown::CommonMarkViewerInternal::new().show_scrollable(
-            egui::Id::new(source_id),
+            egui::Id::unique(source_id),
             ui,
             cache,
             &self.options,

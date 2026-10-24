@@ -649,7 +649,7 @@ mod tests {
             now(),
         )];
         let target = |name: &str| {
-            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
         };
         // The right sidebar never paints the bell, even with waiting notices.
         for tool in [

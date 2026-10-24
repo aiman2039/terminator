@@ -56,7 +56,10 @@ impl App {
             });
             #[cfg(feature = "test-support")]
             ui.ctx().data_mut(|data| {
-                data.insert_temp(egui::Id::new("attention-state"), (pending, popup.is_some()))
+                data.insert_temp(
+                    egui::Id::unique("attention-state"),
+                    (pending, popup.is_some()),
+                )
             });
             let _ = popup;
         });
@@ -526,8 +529,7 @@ fn attention_status_glyph(
         ui.label(attention_status_detail(state));
     });
     appearance::paint_centered_icon(ui, response.rect, attention_status_icon(state), 14.0, tint);
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, state.label()));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, state.label()));
     response
 }
 

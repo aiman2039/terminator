@@ -301,7 +301,7 @@ pub(super) fn paint_window_controls(ui: &egui::Ui, rect: egui::Rect) {
         let response = ui
             .interact(
                 control,
-                ui.id().with(("window-control", tip)),
+                ui.scope_id().with(("window-control", tip)),
                 egui::Sense::click(),
             )
             .on_hover_text(tip);

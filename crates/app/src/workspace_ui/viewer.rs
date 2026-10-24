@@ -208,9 +208,9 @@ impl TabViewer for Viewer<'_> {
     }
     fn id(&mut self, tab: &mut Tab) -> egui::Id {
         if matches!(tab, Tab::NativeEditor { .. }) {
-            egui::Id::new((tab.key(), &self.project, &self.tab, self.render_tab))
+            egui::Id::unique((tab.key(), &self.project, &self.tab, self.render_tab))
         } else {
-            egui::Id::new(tab.key())
+            egui::Id::unique(tab.key())
         }
     }
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
@@ -951,7 +951,7 @@ impl TabViewer for Viewer<'_> {
                             appearance::singleline(
                                 self.app.history_filter.entry(sid_key.clone()).or_default(),
                             )
-                            .id(egui::Id::new(("history-filter", sid_key)))
+                            .id(egui::Id::unique(("history-filter", sid_key)))
                             .hint_text("Filter saved scrollback")
                             .desired_width(220.0),
                         );

@@ -220,7 +220,7 @@ mod tests {
             |text: &[String], needle: &str| text.iter().any(|line| line.contains(needle));
         let marked = |ctx: &egui::Context, name: &str| {
             ctx.data(|data| {
-                data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name)))
+                data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name)))
                     .is_some()
             })
         };

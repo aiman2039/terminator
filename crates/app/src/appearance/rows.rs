@@ -351,9 +351,8 @@ fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
     // Keep geometry and interaction IDs stable while avoiding text layout and
     // image loading for rows outside the sidebar viewport.
     if !ui.is_rect_visible(response.rect) {
-        response.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)
-        });
+        response
+            .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
         return response;
     }
     if response.hovered() || selected {
@@ -462,9 +461,7 @@ fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
             },
         );
     }
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)
-    });
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
     response
 }
 
@@ -520,7 +517,7 @@ pub fn markdown_header(
         );
     }
     title_response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), title));
+        .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), title));
     let mut left = title_rect.right();
     let modes = [
         (Mode::Edit, 44.0),
@@ -569,7 +566,7 @@ pub fn markdown_header(
         );
         response.widget_info(|| {
             egui::WidgetInfo::selected(
-                egui::WidgetType::SelectableLabel,
+                egui::Role::Button,
                 ui.is_enabled(),
                 selected,
                 option.label(),
@@ -634,8 +631,6 @@ fn header_icon(
             ui,
             egui::Rect::from_center_size(rect.center(), egui::vec2(14.0, 14.0)),
         );
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
-    });
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     response
 }

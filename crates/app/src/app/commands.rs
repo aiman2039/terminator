@@ -227,7 +227,7 @@ impl App {
         };
         self.terminal_find.entry(sid.clone()).or_default();
         ctx.memory_mut(|memory| {
-            memory.request_focus(egui::Id::new(("terminal-find", sid)));
+            memory.request_focus(egui::Id::unique(("terminal-find", sid)));
         });
     }
 
@@ -291,7 +291,7 @@ impl App {
         self.search_open = true;
         self.texts.remove(&format!("history:{sid}"));
         ctx.memory_mut(|memory| {
-            memory.request_focus(egui::Id::new("scrollback-search"));
+            memory.request_focus(egui::Id::unique("scrollback-search"));
         });
     }
 

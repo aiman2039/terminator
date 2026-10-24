@@ -1,4 +1,4 @@
-Vendored from https://github.com/kemokempo/egui_term at 31bbc7ab8503c9518fcee5717cfa29011e59f451. MIT license retained. Workspace manifest simplified and egui advanced from 0.35 to 0.36 for egui_dock compatibility. Local changes are documented here as made.
+Vendored from https://github.com/kemokempo/egui_term at 31bbc7ab8503c9518fcee5717cfa29011e59f451. MIT license retained. Workspace manifest simplified. egui is 0.37. `MouseWheel` matches include `source`. The terminal widget role is `Role::Unknown`. Local changes are documented here as made. The repaint-budget key uses `Id::unique`.
 
 Local integration changes: expose a path token lookup for the context menu; allow keyboard input to the focused terminal when the pointer is elsewhere while preserving pointer hit testing.
 

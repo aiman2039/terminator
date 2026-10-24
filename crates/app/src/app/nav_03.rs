@@ -247,7 +247,7 @@ mod tests {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             let mut text = String::new();
             let response =
-                ui.add(appearance::singleline(&mut text).id(egui::Id::new("select-all-probe")));
+                ui.add(appearance::singleline(&mut text).id(egui::Id::unique("select-all-probe")));
             response.request_focus();
         });
         output.textures_delta.clear();
@@ -289,7 +289,7 @@ mod tests {
         assert!(app.search_open);
         assert_eq!(
             ctx.memory(eframe::egui::Memory::focused),
-            Some(egui::Id::new("scrollback-search"))
+            Some(egui::Id::unique("scrollback-search"))
         );
     }
 

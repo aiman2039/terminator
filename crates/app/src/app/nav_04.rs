@@ -654,7 +654,7 @@ mod tests {
                 ignored: true,
             }],
         );
-        let host = egui::Id::new("left-explorer");
+        let host = egui::Id::unique("left-explorer");
         assert!(app.reveal_current_file_in_explorer(host));
         assert!(app.expanded_dirs.contains(&src));
         assert!(app.expanded_dirs.contains(&deep));
@@ -692,7 +692,7 @@ mod tests {
                 ..Default::default()
             },
             |ui| {
-                app.explorer_reveal.as_mut().unwrap().host = ui.id();
+                app.explorer_reveal.as_mut().unwrap().host = ui.scope_id();
                 app.sidebar_tool(SidebarTool::Explorer, ui);
             },
         );

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 [dependencies]
-egui = "0.36"
+egui = "0.37"
 alacritty_terminal = "0.26"
 anyhow = "1"
 open = "5"

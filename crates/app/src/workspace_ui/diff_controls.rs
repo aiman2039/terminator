@@ -29,12 +29,14 @@ pub(super) fn jump(
     let top = hunk.row(split) as f32 * diff_row_height(ui);
     for output in scroll {
         let mut state = output.state;
-        state.offset.y = (top - diff_row_height(ui))
+        let mut offset = state.unclamped_offset();
+        offset.y = (top - diff_row_height(ui))
             .max(0.0)
             .min((output.content_size.y - output.inner_rect.height()).max(0.0));
         if split {
-            *sync = state.offset.y;
+            *sync = offset.y;
         }
+        super::write_scroll_offset(&mut state, offset);
         state.store(ui.ctx(), output.id);
     }
     ui.ctx().request_repaint();
@@ -118,7 +120,8 @@ pub(super) fn paint(
     for (index, gap) in doc.gaps.iter().enumerate().filter(|_| !editor_pane) {
         for (side, output) in scroll.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
-            let y = output.inner_rect.top() + gap.row(split) as f32 * row_h - output.state.offset.y;
+            let y = output.inner_rect.top() + gap.row(split) as f32 * row_h
+                - output.state.unclamped_offset().y;
             let rect = egui::Rect::from_min_size(
                 egui::pos2(output.inner_rect.left(), y),
                 egui::vec2(output.inner_rect.width(), row_h),
@@ -130,7 +133,7 @@ pub(super) fn paint(
             let click = ui
                 .interact(
                     rect,
-                    ui.id().with(("diff-gap", index, side)),
+                    ui.scope_id().with(("diff-gap", index, side)),
                     egui::Sense::click(),
                 )
                 .on_hover_text(format!("Show {} unchanged lines", gap.old.len()))
@@ -158,7 +161,7 @@ pub(super) fn paint(
         let click = ui
             .interact(
                 marker.expand(2.0),
-                ui.id().with(("diff-marker", index)),
+                ui.scope_id().with(("diff-marker", index)),
                 egui::Sense::click(),
             )
             .on_hover_text(format!(
@@ -188,14 +191,14 @@ pub(super) fn paint(
         let left = egui::Rect::from_min_size(
             egui::pos2(
                 first.inner_rect.left(),
-                first.inner_rect.top() + row_top - first.state.offset.y,
+                first.inner_rect.top() + row_top - first.state.unclamped_offset().y,
             ),
             egui::vec2(first.inner_rect.width(), old_height.max(1.0)),
         );
         let right = egui::Rect::from_min_size(
             egui::pos2(
                 last.inner_rect.left(),
-                last.inner_rect.top() + row_top - last.state.offset.y,
+                last.inner_rect.top() + row_top - last.state.unclamped_offset().y,
             ),
             egui::vec2(last.inner_rect.width(), new_height.max(1.0)),
         );
@@ -385,8 +388,8 @@ mod tests {
                             #[allow(clippy::cast_precision_loss)]
                             let top = output.inner_rect.top()
                                 + doc.hunks.get(1).unwrap().row(split) as f32 * diff_row_height(ui)
-                                - output.state.offset.y;
-                            visible = output.state.offset.y > 1000.0
+                                - output.state.unclamped_offset().y;
+                            visible = output.state.unclamped_offset().y > 1000.0
                                 && output.inner_rect.y_range().contains(top);
                             assert!(
                                 !visible || top + diff_row_height(ui) <= output.inner_rect.bottom()

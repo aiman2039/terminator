@@ -132,7 +132,7 @@ pub(crate) mod tests {
 
     #[cfg(feature = "test-support")]
     fn fixture_target(ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
-        ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+        ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
     }
 
     #[cfg(feature = "test-support")]
@@ -515,7 +515,7 @@ pub(crate) mod tests {
         let focused = ctx.memory(|memory| memory.focused());
         assert_eq!(
             focused,
-            Some(egui::Id::new((tab.key(), "unified-line", 3_u32))),
+            Some(egui::Id::unique((tab.key(), "unified-line", 3_u32))),
             "focus must move to the split line"
         );
     }
@@ -1259,7 +1259,9 @@ pub(crate) mod tests {
         for area in &areas {
             assert!(area.content_size.x > 1000.0);
             let mut state = area.state;
-            state.offset.x = area.content_size.x - area.inner_rect.width();
+            let mut offset = state.unclamped_offset();
+            offset.x = area.content_size.x - area.inner_rect.width();
+            super::super::write_scroll_offset(&mut state, offset);
             state.store(&ctx, area.id);
         }
         let (_, shapes) = scroll_doc(&ctx, &doc, true);
@@ -1310,7 +1312,9 @@ pub(crate) mod tests {
         let (areas, _) = scroll_doc(&ctx, &doc, true);
         for area in &areas {
             let mut state = area.state;
-            state.offset.x = area.content_size.x - area.inner_rect.width();
+            let mut offset = state.unclamped_offset();
+            offset.x = area.content_size.x - area.inner_rect.width();
+            super::super::write_scroll_offset(&mut state, offset);
             state.store(&ctx, area.id);
         }
         let (areas, shapes) = scroll_doc(&ctx, &doc, true);
@@ -1335,22 +1339,24 @@ pub(crate) mod tests {
         let (before, _) = scroll_doc(&ctx, &doc, false);
         let width = before[0].content_size.x;
         let mut state = before[0].state;
-        state.offset = egui::vec2(250.0, 900.0);
+        super::super::write_scroll_offset(&mut state, egui::vec2(250.0, 900.0));
         state.store(&ctx, before[0].id);
         let (after, _) = scroll_doc(&ctx, &doc, false);
         assert_eq!(after[0].content_size.x, width);
-        assert_eq!(after[0].state.offset, egui::vec2(250.0, 900.0));
+        assert_eq!(after[0].state.unclamped_offset(), egui::vec2(250.0, 900.0));
         // Each split pane scrolls horizontally on its own.
         scroll_doc(&ctx, &doc, true);
         let (areas, _) = scroll_doc(&ctx, &doc, true);
         assert_ne!(before[0].id, areas[0].id);
         assert_ne!(areas[0].id, areas[1].id);
         let mut left_state = areas[0].state;
-        left_state.offset.x = 200.0;
+        let mut offset = left_state.unclamped_offset();
+        offset.x = 200.0;
+        super::super::write_scroll_offset(&mut left_state, offset);
         left_state.store(&ctx, areas[0].id);
         let (areas, _) = scroll_doc(&ctx, &doc, true);
-        assert_eq!(areas[0].state.offset.x, 200.0);
-        assert_ne!(areas[1].state.offset.x, 200.0);
+        assert_eq!(areas[0].state.unclamped_offset().x, 200.0);
+        assert_ne!(areas[1].state.unclamped_offset().x, 200.0);
     }
 
     #[test]
@@ -1394,7 +1400,7 @@ pub(crate) mod tests {
         frame(Vec::new(), &mut ratio);
         let handle = ctx
             .data(|d| {
-                d.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", "diff-split-handle")))
+                d.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", "diff-split-handle")))
             })
             .expect("split handle must be recorded");
         let start = handle.center();

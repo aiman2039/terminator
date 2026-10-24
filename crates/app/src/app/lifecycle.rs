@@ -333,7 +333,7 @@ impl App {
         }
     }
     pub(crate) fn fixture_rect(&self, ctx: &egui::Context, name: &str) -> Option<[f32; 4]> {
-        ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("fixture-target", name))))
+        ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
             .map(|r| [r.min.x, r.min.y, r.width(), r.height()])
     }
 }

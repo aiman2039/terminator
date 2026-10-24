@@ -176,7 +176,7 @@ pub fn combo_or_custom(
                     ui.selectable_label(!*custom && *value == option.value, &option.label);
                 #[cfg(test)]
                 ui.ctx().data_mut(|data| {
-                    data.insert_temp(egui::Id::new((id, option.label.as_str())), response.rect)
+                    data.insert_temp(egui::Id::unique((id, option.label.as_str())), response.rect)
                 });
                 if response.clicked() {
                     value.clone_from(&option.value);
@@ -187,7 +187,7 @@ pub fn combo_or_custom(
             let response = ui.selectable_label(selected == "Custom", "Custom");
             #[cfg(test)]
             ui.ctx()
-                .data_mut(|data| data.insert_temp(egui::Id::new((id, "Custom")), response.rect));
+                .data_mut(|data| data.insert_temp(egui::Id::unique((id, "Custom")), response.rect));
             if response.clicked() {
                 *custom = true;
                 changed = true;
@@ -195,7 +195,7 @@ pub fn combo_or_custom(
         });
     #[cfg(test)]
     ui.ctx()
-        .data_mut(|data| data.insert_temp(egui::Id::new((id, "combo")), combo.response.rect));
+        .data_mut(|data| data.insert_temp(egui::Id::unique((id, "combo")), combo.response.rect));
     let _ = combo;
     changed
 }
@@ -252,7 +252,7 @@ mod tests {
             (field_visible, value.clone())
         };
         let rect = |name| {
-            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new(("test-binary", name))))
+            ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("test-binary", name))))
                 .unwrap()
         };
         let click = |rect: egui::Rect| {

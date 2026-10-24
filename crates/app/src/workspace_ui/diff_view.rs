@@ -521,7 +521,7 @@ impl App {
                         );
                         let response = ui.interact(
                             handle,
-                            ui.id().with(("diff-split-drag", &key)),
+                            ui.scope_id().with(("diff-split-drag", &key)),
                             egui::Sense::drag(),
                         );
                         if response.hovered() || response.dragged() {
@@ -547,15 +547,15 @@ impl App {
                         let over_left = pointer.is_some_and(|pos| left_rect.contains(pos));
                         let over_right = pointer.is_some_and(|pos| right_rect.contains(pos));
                         sync = match (over_left, over_right) {
-                            (true, false) => left.state.offset.y,
-                            (false, true) => right.state.offset.y,
+                            (true, false) => left.state.unclamped_offset().y,
+                            (false, true) => right.state.unclamped_offset().y,
                             _ => {
-                                if (left.state.offset.y - frame_sync).abs()
-                                    >= (right.state.offset.y - frame_sync).abs()
+                                if (left.state.unclamped_offset().y - frame_sync).abs()
+                                    >= (right.state.unclamped_offset().y - frame_sync).abs()
                                 {
-                                    left.state.offset.y
+                                    left.state.unclamped_offset().y
                                 } else {
-                                    right.state.offset.y
+                                    right.state.unclamped_offset().y
                                 }
                             }
                         };

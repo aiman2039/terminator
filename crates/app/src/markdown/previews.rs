@@ -46,7 +46,7 @@ impl Preview {
     pub(super) fn apply(&mut self, result: Result<Document, String>) {
         match result {
             Ok(document) => {
-                self.cache.clear_scrollable();
+                self.cache.clear_viewers();
                 self.cache.link_hooks_clear();
                 self.mermaid_textures.clear();
                 for link in document.links.keys() {
@@ -135,7 +135,7 @@ impl Preview {
                 })
                 .collect();
         }
-        egui::Panel::bottom(egui::Id::new(("markdown-status", sid)))
+        egui::Panel::bottom(egui::Id::unique(("markdown-status", sid)))
             .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(12, 4)))
             .show(ui, |ui| {
                 let label = if ui.available_width() < 360.0 {
@@ -232,7 +232,7 @@ impl Preview {
         self.cache_scroll_height = output.content_size.y;
         let scroll_range = (output.content_size.y - output.inner_rect.height()).max(0.0);
         self.scroll_fraction = if scroll_range > 0.0 {
-            (output.state.offset.y / scroll_range).clamp(0.0, 1.0)
+            (output.state.unclamped_offset().y / scroll_range).clamp(0.0, 1.0)
         } else {
             0.0
         };

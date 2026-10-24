@@ -34,7 +34,7 @@ impl App {
         let badge = self.agent_bar_badge();
         #[cfg(feature = "test-support")]
         ui.ctx().data_mut(|data| {
-            data.insert_temp(egui::Id::new("agent-bar-badge"), badge);
+            data.insert_temp(egui::Id::unique("agent-bar-badge"), badge);
         });
         #[cfg(not(feature = "test-support"))]
         let _ = (ui, badge);
@@ -63,8 +63,7 @@ impl App {
             self.preferences.left_agents,
             appearance::ICON_COLOR,
         );
-        response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Agents"));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Agents"));
         let count = waiting.saturating_add(unread);
         if count > 0 {
             paint_header_count(
@@ -264,7 +263,7 @@ impl App {
             let response = ui.add_sized(
                 egui::vec2(width, 22.0),
                 appearance::singleline(&mut self.preferences.agents_search)
-                    .id(ui.id().with("agents-search"))
+                    .id(ui.scope_id().with("agents-search"))
                     .hint_text("Search agents"),
             );
             #[cfg(feature = "test-support")]

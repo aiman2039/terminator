@@ -198,7 +198,7 @@ impl Viewer<'_> {
                     content.display_offset,
                     content.terminal_mode.bits(),
                 );
-                let key = egui::Id::new(("scroll-evidence", sid));
+                let key = egui::Id::unique(("scroll-evidence", sid));
                 if ui.ctx().data(|d| d.get_temp::<(bool, usize, u32)>(key)) != Some(snapshot) {
                     eprintln!(
                         "Scroll evidence: session={sid} focused={} offset={} modes={}",
@@ -276,7 +276,7 @@ impl Viewer<'_> {
                 eprintln!("Terminal file menu opened: {}", resolved.display());
             }
         }
-        let menu_key = egui::Id::new(("terminal-menu-target", sid.as_str()));
+        let menu_key = egui::Id::unique(("terminal-menu-target", sid.as_str()));
         if response.secondary_clicked() {
             let selected = self
                 .app
@@ -431,7 +431,7 @@ impl Viewer<'_> {
         {
             let mut open = true;
             egui::Popup::from_response(&response)
-                .id(egui::Id::new((
+                .id(egui::Id::unique((
                     "terminal-hover",
                     sid.as_str(),
                     popup.key.as_str(),

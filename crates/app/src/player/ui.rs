@@ -401,7 +401,7 @@ fn playlist_footer(app: &mut App, ui: &mut Ui, project: &str) {
             appearance::singleline(&mut app.player.playlist_draft)
                 .hint_text("Name")
                 .desired_width(160.0)
-                .id(egui::Id::new("player-playlist-name")),
+                .id(egui::Id::unique("player-playlist-name")),
         );
     }
     ui.horizontal(|ui| {
@@ -419,7 +419,7 @@ fn url_row(app: &mut App, ui: &mut Ui, project: &str) {
             appearance::singleline(&mut app.player.station_draft)
                 .hint_text("https://host/stream")
                 .desired_width(260.0)
-                .id(egui::Id::new("player-station-url")),
+                .id(egui::Id::unique("player-station-url")),
         );
         if ui.button("Add").clicked() {
             app.add_custom_station(project);
@@ -693,13 +693,13 @@ fn radio_panel(app: &mut App, ui: &mut Ui, project: &str) {
             appearance::singleline(&mut app.player.radio_draft_name)
                 .hint_text("Name")
                 .desired_width(100.0)
-                .id(egui::Id::new("player-radio-name")),
+                .id(egui::Id::unique("player-radio-name")),
         );
         ui.add(
             appearance::singleline(&mut app.player.station_draft)
                 .hint_text("https://host/stream")
                 .desired_width(180.0)
-                .id(egui::Id::new("player-station-url")),
+                .id(egui::Id::unique("player-station-url")),
         );
         if ui.button("Add station").clicked() {
             app.add_custom_station(project);
@@ -738,7 +738,7 @@ fn mode_toggle(app: &mut App, ui: &mut Ui) {
 
 fn mode_half(ui: &mut Ui, rect: Rect, icon: &str, tip: &str, active: bool) -> egui::Response {
     let response = ui
-        .interact(rect, ui.id().with(icon), Sense::click())
+        .interact(rect, ui.scope_id().with(icon), Sense::click())
         .on_hover_text(tip);
     if active {
         ui.painter()
@@ -797,7 +797,7 @@ fn v_slider(
     groove: Color32,
     thumb: Color32,
 ) -> Option<f32> {
-    let response = ui.interact(rect, ui.id().with(id), Sense::click_and_drag());
+    let response = ui.interact(rect, ui.scope_id().with(id), Sense::click_and_drag());
     ui.painter().rect_filled(rect, 2.0, groove);
     let y = rect.max.y - 4.0 - (rect.height() - 8.0) * value.clamp(0.0, 1.0);
     let knob = Rect::from_center_size(pos2(rect.center().x, y), vec2(rect.width() + 4.0, 6.0));

@@ -373,7 +373,7 @@ mod tests {
 
     #[cfg(feature = "test-support")]
     fn recorded_target(ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
-        ctx.data(|data| data.get_temp(egui::Id::new(("fixture-target", name))))
+        ctx.data(|data| data.get_temp(egui::Id::unique(("fixture-target", name))))
     }
 
     #[cfg(feature = "test-support")]

@@ -1120,7 +1120,7 @@ impl App {
                 markdown::Mode::Split => {
                     let width = ui.available_width();
                     Some(
-                        egui::Panel::left(egui::Id::new(("native-markdown-editor", path)))
+                        egui::Panel::left(egui::Id::unique(("native-markdown-editor", path)))
                             .resizable(true)
                             .default_size(width * 0.5)
                             .size_range(80.0..=(width - 80.0).max(80.0))

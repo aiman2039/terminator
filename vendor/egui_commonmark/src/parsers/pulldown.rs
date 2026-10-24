@@ -11,6 +11,15 @@ use egui_commonmark_backend::misc::*;
 use egui_commonmark_backend::pulldown::*;
 use pulldown_cmark::{CowStr, HeadingLevel};
 
+/// Backend 0.26 stores scroll state on [`ViewerCache`], keyed by source id.
+fn scroll_cache<'a>(cache: &'a mut CommonMarkCache, id: &Id) -> &'a mut ViewerCache {
+    viewer_cache(cache, id)
+}
+
+fn viewer_id(options: &CommonMarkOptions) -> Id {
+    options.source_id.unwrap_or(Id::NULL)
+}
+
 /// Newline logic is constructed by the following:
 /// All elements try to insert a newline before them (if they are allowed)
 /// and end their own line.
@@ -225,12 +234,15 @@ impl CommonMarkViewerInternal {
                     let split_point_exists = scroll_cache
                         .split_points
                         .iter()
-                        .any(|(i, _, _)| *i == index);
+                        .any(|point| point.event_index == index);
 
                     if !split_point_exists {
-                        scroll_cache
-                            .split_points
-                            .push((index, start_position, end_position));
+                        scroll_cache.split_points.push(SplitPoint {
+                            event_index: index,
+                            vstart: start_position,
+                            vend: end_position,
+                            src_span: 0..0,
+                        });
                     }
                 }
 
@@ -240,7 +252,9 @@ impl CommonMarkViewerInternal {
             }
 
             // deferral to make it consistent no matter whether the target is before or after the link
-            *cache.scroll_to_id_target_mut() = self.deferred_scroll_to_heading.take();
+            let source_id = viewer_id(options);
+            *scroll_cache(cache, &source_id).scroll_to_id_target_mut() =
+                self.deferred_scroll_to_heading.take();
 
             if let Some(source_id) = split_points_id {
                 scroll_cache(cache, &source_id).page_size =
@@ -302,18 +316,18 @@ impl CommonMarkViewerInternal {
                     let (first_event_index, _, first_end_position) = scroll_cache
                         .split_points
                         .iter()
-                        .filter(|(_, _, end_position)| end_position.y < viewport.min.y)
+                        .filter(|point| point.vend.y < viewport.min.y)
                         .nth_back(1)
-                        .copied()
+                        .map(|point| (point.event_index, point.vstart, point.vend))
                         .unwrap_or((0, egui::Pos2::ZERO, egui::Pos2::ZERO));
 
                     // finding the last element that's just outside the viewport
                     let last_event_index = scroll_cache
                         .split_points
                         .iter()
-                        .filter(|(_, start_position, _)| start_position.y > viewport.max.y)
+                        .filter(|point| point.vstart.y > viewport.max.y)
                         .nth(1)
-                        .map(|(index, _, _)| *index)
+                        .map(|point| point.event_index)
                         .unwrap_or(num_rows);
 
                     ui.allocate_space(first_end_position.to_vec2());
@@ -517,7 +531,7 @@ impl CommonMarkViewerInternal {
         if self.is_table {
             self.line.try_insert_start(ui);
 
-            let id = ui.id().with("_table").with(self.curr_table);
+            let id = ui.scope_id().with("_table").with(self.curr_table);
             self.curr_table += 1;
 
             egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -668,12 +682,18 @@ impl CommonMarkViewerInternal {
                 self.line.try_insert_start(ui);
             }
             pulldown_cmark::Tag::Heading { level, id, .. } => {
-                if let Some(scroll_target) = cache.scroll_to_id_target()
+                let source_id = viewer_id(options);
+                let scroll_target = scroll_cache(cache, &source_id)
+                    .scroll_to_id_target()
+                    .map(str::to_owned);
+                if let Some(scroll_target) = scroll_target
                     && let Some(id) = id
                     && id.into_string() == scroll_target
                 {
                     ui.scroll_to_cursor(Some(egui::Align::TOP));
-                    cache.scroll_to_id_target_mut().take();
+                    scroll_cache(cache, &source_id)
+                        .scroll_to_id_target_mut()
+                        .take();
                 }
 
                 // Headings should always insert a newline even if it is at the start.
@@ -699,13 +719,15 @@ impl CommonMarkViewerInternal {
                     pulldown_cmark::CodeBlockKind::Fenced(lang) => {
                         self.code_block = Some(crate::CodeBlock {
                             lang: Some(lang.to_string()),
-                            content: "".to_string(),
+                            content: String::new(),
+                            chunks: Vec::new(),
                         });
                     }
                     pulldown_cmark::CodeBlockKind::Indented => {
                         self.code_block = Some(crate::CodeBlock {
                             lang: None,
-                            content: "".to_string(),
+                            content: String::new(),
+                            chunks: Vec::new(),
                         });
                     }
                 }
@@ -757,6 +779,7 @@ impl CommonMarkViewerInternal {
                 self.link = Some(crate::Link {
                     destination: dest_url.to_string(),
                     text: Vec::new(),
+                    chunks: Vec::new(),
                 });
             }
             pulldown_cmark::Tag::Image { dest_url, .. } => {
@@ -846,12 +869,19 @@ impl CommonMarkViewerInternal {
             }
             pulldown_cmark::TagEnd::Link => {
                 if let Some(link) = self.link.take() {
-                    link.end(ui, cache, options, &mut self.deferred_scroll_to_heading);
+                    let _ = link.end(
+                        ui,
+                        cache,
+                        options,
+                        &mut self.deferred_scroll_to_heading,
+                        false,
+                        0.0,
+                    );
                 }
             }
             pulldown_cmark::TagEnd::Image => {
                 if let Some(image) = self.image.take() {
-                    image.end(ui, options);
+                    let _ = image.end(ui, cache, options, false, 0.0);
                 }
             }
             pulldown_cmark::TagEnd::HtmlBlock => {
@@ -878,7 +908,7 @@ impl CommonMarkViewerInternal {
         max_width: f32,
     ) {
         if let Some(block) = self.code_block.take() {
-            block.end(ui, cache, options, max_width);
+            let _ = block.end(ui, cache, options, max_width, false, 0.0);
             self.line.try_insert_end(ui);
         }
     }

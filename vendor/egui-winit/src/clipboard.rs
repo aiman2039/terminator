@@ -120,6 +120,70 @@ impl Clipboard {
         self.clipboard = text;
     }
 
+    /// Read an image from the clipboard when arboard is enabled.
+    pub fn get_image(&mut self) -> Option<egui::ColorImage> {
+        #[cfg(all(
+            not(any(target_os = "android", target_os = "ios")),
+            feature = "arboard",
+        ))]
+        if let Some(clipboard) = &mut self.arboard {
+            return match clipboard.get_image() {
+                Ok(image) => Some(egui::ColorImage::from_rgba_unmultiplied(
+                    [image.width, image.height],
+                    &image.bytes,
+                )),
+                Err(err) => {
+                    log::debug!("arboard paste-image error: {err}");
+                    None
+                }
+            };
+        }
+
+        None
+    }
+
+    /// Set the X11/Wayland PRIMARY selection. No-op on other platforms.
+    pub fn set_primary_text(&mut self, text: String) {
+        #[cfg(all(
+            any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd",
+                target_os = "openbsd"
+            ),
+            feature = "smithay-clipboard"
+        ))]
+        if let Some(clipboard) = &mut self.smithay {
+            clipboard.store_primary(text);
+            return;
+        }
+
+        #[cfg(all(
+            any(
+                target_os = "linux",
+                target_os = "dragonfly",
+                target_os = "freebsd",
+                target_os = "netbsd",
+                target_os = "openbsd"
+            ),
+            feature = "arboard",
+        ))]
+        if let Some(clipboard) = &mut self.arboard {
+            use arboard::SetExtLinux as _;
+            if let Err(err) = clipboard
+                .set()
+                .clipboard(arboard::LinuxClipboardKind::Primary)
+                .text(text)
+            {
+                log::error!("arboard primary copy error: {err}");
+            }
+            return;
+        }
+
+        _ = text;
+    }
+
     pub fn set_image(&mut self, image: &egui::ColorImage) {
         #[cfg(all(
             not(any(target_os = "android", target_os = "ios")),

@@ -367,7 +367,7 @@ impl App {
 
     #[cfg(test)]
     pub(crate) fn tree(&mut self, ui: &mut egui::Ui, path: &std::path::Path, _depth: usize) {
-        self.tree_with_host(ui, path, ui.id());
+        self.tree_with_host(ui, path, ui.scope_id());
     }
 
     fn tree_with_host(&mut self, ui: &mut egui::Ui, path: &Path, host: egui::Id) {
@@ -589,7 +589,7 @@ impl App {
                 let response = ui.add_sized(
                     egui::vec2(width, 22.0),
                     appearance::singleline(&mut self.preferences.history_filter)
-                        .id(ui.id().with("history-filter"))
+                        .id(ui.scope_id().with("history-filter"))
                         .hint_text("Filter by name"),
                 );
                 #[cfg(feature = "test-support")]
@@ -704,7 +704,7 @@ impl App {
                 self.explorer_reveal = None;
             }
             self.pending_delete_bar(ui);
-            let host = ui.id();
+            let host = ui.scope_id();
             let root_override = self
                 .explorer_reveal
                 .as_ref()

@@ -597,7 +597,7 @@ impl App {
                 // Distinct area id: an in-strip reorder stays here. Dragging
                 // the tab out of this rect promotes it to a pane drag, which
                 // the main pane accepts.
-                .id(egui::Id::new("ide-strip-dock"))
+                .id(egui::Id::unique("ide-strip-dock"))
                 .style(style)
                 .show_add_buttons(true)
                 .show_leaf_close_all_buttons(false)

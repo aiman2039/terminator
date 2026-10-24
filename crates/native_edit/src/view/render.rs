@@ -252,7 +252,7 @@ pub fn show_source<B: Buffer>(
         // drops it as a disappeared widget after the focus request.
         let focus = ui.interact(response.rect, focus_id, Sense::focusable_noninteractive());
         focus.widget_info(|| {
-            egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, ui.is_enabled(), "Source editor")
+            egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), "Source editor")
         });
         if response.clicked() || (response.secondary_clicked() && engine.selection().is_none()) {
             ui.memory_mut(|memory| memory.request_focus(focus_id));
@@ -827,7 +827,7 @@ pub fn show_source<B: Buffer>(
     });
     let scroll_range = (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
     let scroll_fraction = if scroll_range > 0.0 {
-        (scroll_output.state.offset.y / scroll_range).clamp(0.0, 1.0)
+        (scroll_output.state.unclamped_offset().y / scroll_range).clamp(0.0, 1.0)
     } else {
         0.0
     };

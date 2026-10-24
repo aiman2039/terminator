@@ -115,8 +115,8 @@ pub(super) fn diff_content_width(
     metrics: &DiffMetrics,
     scroll_key: &str,
 ) -> f32 {
-    let cache_id = egui::Id::new(("diff-width", scroll_key, split));
-    let fingerprint = egui::Id::new((
+    let cache_id = egui::Id::unique(("diff-width", scroll_key, split));
+    let fingerprint = egui::Id::unique((
         doc,
         &metrics.font,
         metrics.digit_w.to_bits(),
@@ -296,8 +296,8 @@ pub(super) fn paint_diff_split(
     let pointer = ui.ctx().input(|input| input.pointer.hover_pos());
     let over_left = pointer.is_some_and(|pos| left_rect.contains(pos));
     let over_right = pointer.is_some_and(|pos| right_rect.contains(pos));
-    let left_offset = left.state.offset.y;
-    let right_offset = right.state.offset.y;
+    let left_offset = left.state.unclamped_offset().y;
+    let right_offset = right.state.unclamped_offset().y;
     *sync = match (over_left, over_right) {
         (true, false) => left_offset,
         (false, true) => right_offset,
@@ -314,7 +314,7 @@ pub(super) fn paint_diff_split(
         egui::Rect::from_center_size(gap_rect.center(), egui::vec2(6.0, gap_rect.height()));
     let response = ui.interact(
         handle,
-        ui.id().with(("diff-split-drag", scroll_key)),
+        ui.scope_id().with(("diff-split-drag", scroll_key)),
         egui::Sense::drag(),
     );
     if response.hovered() || response.dragged() {
@@ -764,7 +764,7 @@ pub(super) fn paint_diff_line(ui: &mut egui::Ui, paint: DiffPaint<'_>) {
         ui.auto_id_with("diff-code-selection"),
         egui::Sense::click_and_drag(),
     );
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, code.text()));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, code.text()));
     egui::text_selection::LabelSelectionState::label_text_selection(
         ui,
         &response,

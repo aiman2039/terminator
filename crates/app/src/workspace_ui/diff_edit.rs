@@ -271,7 +271,7 @@ pub(super) fn paint_right_editor(
                                 })
                             };
                         let editor = egui::TextEdit::multiline(&mut buffer.text)
-                            .id(egui::Id::new((key, "diff-right-text")))
+                            .id(egui::Id::unique((key, "diff-right-text")))
                             .font(egui::TextStyle::Monospace)
                             .frame(egui::Frame::NONE)
                             .margin(egui::Margin::ZERO)
@@ -299,7 +299,7 @@ pub(super) fn paint_right_editor(
             clippy::cast_sign_loss,
             clippy::arithmetic_side_effects
         )]
-        let first = (output.state.offset.y / row_h).floor().max(0.0) as usize;
+        let first = (output.state.unclamped_offset().y / row_h).floor().max(0.0) as usize;
         #[allow(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
@@ -309,7 +309,8 @@ pub(super) fn paint_right_editor(
         for (index, tint) in tints.iter().enumerate().skip(first).take(visible) {
             let Some(tint) = tint else { continue };
             #[allow(clippy::cast_precision_loss)]
-            let top = output.inner_rect.top() + index as f32 * row_h - output.state.offset.y;
+            let top =
+                output.inner_rect.top() + index as f32 * row_h - output.state.unclamped_offset().y;
             let block = egui::Rect::from_min_max(
                 egui::pos2(rect.left(), top),
                 egui::pos2(rect.right(), top + row_h),
@@ -329,7 +330,7 @@ pub(super) fn paint_right_editor(
             clippy::cast_sign_loss,
             clippy::arithmetic_side_effects
         )]
-        let first = (output.state.offset.y / row_h).floor().max(0.0) as usize;
+        let first = (output.state.unclamped_offset().y / row_h).floor().max(0.0) as usize;
         #[allow(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
@@ -338,7 +339,8 @@ pub(super) fn paint_right_editor(
         let visible = (output.inner_rect.height() / row_h).ceil() as usize + 1;
         for index in first..line_count.min(first.saturating_add(visible)) {
             #[allow(clippy::cast_precision_loss)]
-            let center_y = output.inner_rect.top() + index as f32 * row_h - output.state.offset.y
+            let center_y = output.inner_rect.top() + index as f32 * row_h
+                - output.state.unclamped_offset().y
                 + row_h / 2.0;
             painter.text(
                 egui::pos2(editor_rect.left() - 5.0, center_y),
@@ -545,8 +547,9 @@ pub(super) fn paint_unified_editor(
         let focused = ui.memory(|memory| memory.focused());
         let line_count = buffer.text.split_inclusive('\n').count();
         let ours = focused.is_some_and(|id| {
-            (1..=line_count.saturating_add(2))
-                .any(|n| id == egui::Id::new((key, "unified-line", u32::try_from(n).unwrap_or(1))))
+            (1..=line_count.saturating_add(2)).any(|n| {
+                id == egui::Id::unique((key, "unified-line", u32::try_from(n).unwrap_or(1)))
+            })
         });
         if ours {
             let mut shift_command = egui::Modifiers::COMMAND;
@@ -677,7 +680,7 @@ pub(super) fn paint_unified_editor(
                             spans.get(line_index).cloned().unwrap_or_default();
                         let line_valid = valid.get(line_index).copied().unwrap_or(false);
                         let new_no = line.new_no.unwrap_or(1);
-                        let editor_id = egui::Id::new((key, "unified-line", new_no));
+                        let editor_id = egui::Id::unique((key, "unified-line", new_no));
                         // Virtualized rows can lose the text widget's click to
                         // the dock. Hold focus across press and release so the
                         // dock cannot clear it before the next keyboard event.
@@ -795,7 +798,7 @@ pub(super) fn paint_unified_editor(
                                 };
                                 if let Some(next) = target {
                                     ui.memory_mut(|memory| {
-                                        memory.request_focus(egui::Id::new((
+                                        memory.request_focus(egui::Id::unique((
                                             key,
                                             "unified-line",
                                             next,
@@ -825,7 +828,7 @@ pub(super) fn paint_unified_editor(
         }
     }
     if let Some((line_no, char_pos)) = focus_after {
-        let id = egui::Id::new((key, "unified-line", line_no));
+        let id = egui::Id::unique((key, "unified-line", line_no));
         ui.memory_mut(|memory| memory.request_focus(id));
         if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
             state

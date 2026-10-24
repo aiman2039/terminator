@@ -13,7 +13,7 @@
 edition = "2024"
 rust-version = "1.95"
 name = "egui-winit"
-version = "0.36.1"
+version = "0.37.0"
 authors = ["Emil Ernerfeldt <emil.ernerfeldt@gmail.com>"]
 build = false
 include = [
@@ -92,7 +92,7 @@ name = "egui_winit"
 path = "src/lib.rs"
 
 [dependencies.accesskit_winit]
-version = "0.32.0"
+version = "0.34.0"
 optional = true
 
 [dependencies.bytemuck]
@@ -104,7 +104,7 @@ version = "0.2.12"
 optional = true
 
 [dependencies.egui]
-version = "0.36.1"
+version = "0.37.0"
 default-features = false
 
 [dependencies.log]

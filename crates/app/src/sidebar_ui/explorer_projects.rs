@@ -196,7 +196,7 @@ impl App {
                 let filter = ui.add_sized(
                     [ui.available_width(), appearance::TOOLBAR_BUTTON],
                     appearance::singleline(&mut self.preferences.project_filter)
-                        .id(ui.id().with("project-filter"))
+                        .id(ui.scope_id().with("project-filter"))
                         .hint_text("Filter projects"),
                 );
                 #[cfg(feature = "test-support")]
@@ -489,7 +489,7 @@ impl App {
                         let field = ui.add_sized(
                             [160.0, self.theme.row_height()],
                             appearance::singleline(&mut self.rename_group_text)
-                                .id(ui.id().with(("rename-group", tab_id.as_str())))
+                                .id(ui.scope_id().with(("rename-group", tab_id.as_str())))
                                 .hint_text(&group_label),
                         );
                         if self.rename_group_focus {
