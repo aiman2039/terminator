@@ -59,7 +59,7 @@ impl Workspace {
             );
             for group in &mut workspace.tabs {
                 for (_, pane) in group.layout.iter_all_tabs_mut() {
-                    if let Tab::Browser { id, .. } = pane
+                    if let Tab::Browser { id, .. } | Tab::Vnc { id, .. } = pane
                         && id.is_empty()
                     {
                         *id = terminator_core::id();
@@ -79,6 +79,11 @@ impl Workspace {
                             _ => None,
                         })
                         .unwrap_or_else(terminator_core::id);
+                }
+                if let Some(Tab::Vnc { id, .. }) = &mut group.primary
+                    && id.is_empty()
+                {
+                    *id = terminator_core::id();
                 }
             }
             for tab in &workspace.tabs {
@@ -144,7 +149,7 @@ impl Workspace {
         {
             self.return_tabs.insert(id.clone(), self.active.clone());
         }
-        if let Tab::Browser { id, .. } = &mut pane
+        if let Tab::Browser { id, .. } | Tab::Vnc { id, .. } = &mut pane
             && id.is_empty()
         {
             *id = terminator_core::id();

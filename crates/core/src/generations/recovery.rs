@@ -6,6 +6,7 @@ use super::ownership::{claim_dead_owner, owner_is_serving};
 
 pub fn clear_owned(state: &mut State) {
     state.sessions.clear();
+    state.vnc_sessions.clear();
     state.agents.clear();
     state.notifications.clear();
     state.terminal_notices.clear();
@@ -217,6 +218,7 @@ pub fn snapshot(paths: &Paths) -> Result<State> {
             helper: state.attachment_helper_executable,
         });
         aggregate.sessions.extend(state.sessions);
+        aggregate.vnc_sessions.extend(state.vnc_sessions);
         aggregate.agents.extend(state.agents);
         aggregate.notifications.extend(state.notifications);
         aggregate.terminal_notices.extend(state.terminal_notices);

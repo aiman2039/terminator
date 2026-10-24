@@ -233,6 +233,7 @@ pub fn tool_button(
         SidebarTool::Info => "Info",
         SidebarTool::Problems => "CircleAlert",
         SidebarTool::Structure => "ListTree",
+        SidebarTool::Vnc => "Monitor",
     };
     egui::Image::new(crate::icons::source(icon))
         .tint(tint)

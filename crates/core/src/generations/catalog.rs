@@ -422,6 +422,7 @@ impl Catalog {
         let shared: State = serde_json::from_str(&json)?;
         state.projects = shared.projects;
         state.worktrees = shared.worktrees;
+        state.vnc_profiles = shared.vnc_profiles;
         state.settings = shared.settings;
         state.selected_project = shared.selected_project;
         state.catalog_revision = u64::try_from(self.0.query_row(

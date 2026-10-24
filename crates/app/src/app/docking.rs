@@ -399,7 +399,7 @@ impl App {
                 Tab::Browser { target, .. } => {
                     target.file().and_then(Path::parent).map(PathBuf::from)
                 }
-                Tab::Player => None,
+                Tab::Player | Tab::Vnc { .. } => None,
                 Tab::CommitLog { cwd } | Tab::Blame { cwd, .. } => Some(cwd.clone()),
             })
             .or_else(|| self.selected_project().map(|p| p.path.clone()));
@@ -458,7 +458,7 @@ impl App {
                 Tab::Browser { target, .. } => {
                     target.file().and_then(Path::parent).map(PathBuf::from)
                 }
-                Tab::Player => None,
+                Tab::Player | Tab::Vnc { .. } => None,
                 Tab::CommitLog { cwd } | Tab::Blame { cwd, .. } => Some(cwd.clone()),
             })
             .or_else(|| {
@@ -650,6 +650,17 @@ impl App {
                 "Blame {}",
                 path.file_name().unwrap_or_default().to_string_lossy()
             ),
+            Tab::Vnc {
+                label, host, port, ..
+            } => {
+                if !label.trim().is_empty() {
+                    label.clone()
+                } else if !host.trim().is_empty() {
+                    format!("{host}:{port}")
+                } else {
+                    "VNC Viewer".into()
+                }
+            }
             Tab::Browser { .. } | Tab::Player => "Terminator".into(),
         }
     }

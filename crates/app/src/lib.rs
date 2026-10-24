@@ -42,6 +42,7 @@ mod palette;
 mod settings_controls;
 mod shortcuts;
 mod ui_control;
+mod vnc_ui;
 mod worktree_ui;
 use file_actions::FileAction;
 mod close_idle;

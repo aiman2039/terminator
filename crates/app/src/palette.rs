@@ -57,6 +57,9 @@ pub(crate) enum PaletteItem {
     Action(&'static str, &'static str),
     AddProject,
     NewTerminal,
+    NewBrowserTab,
+    NewVncViewer,
+    VncProfile(String, String),
     NewWorktree,
     OpenPlayer,
     ToggleIdeMode,
@@ -78,6 +81,7 @@ impl PaletteItem {
             Self::Symbol { .. } => "Symbol",
             Self::Settings(..) => "Settings",
             Self::ApplyLayout(..) => "Layout",
+            Self::VncProfile(..) => "VNC",
             _ => "Action",
         }
     }
@@ -96,6 +100,9 @@ impl PaletteItem {
             Self::Action(_, name) => (*name).into(),
             Self::AddProject => "Add project".into(),
             Self::NewTerminal => "New terminal".into(),
+            Self::NewBrowserTab => "New browser tab".into(),
+            Self::NewVncViewer => "New VNC viewer".into(),
+            Self::VncProfile(_, name) => name.clone(),
             Self::NewWorktree => "New task worktree".into(),
             Self::OpenPlayer => "Open player".into(),
             Self::ToggleIdeMode => "Toggle IDE mode".into(),
@@ -112,6 +119,8 @@ impl PaletteItem {
         match self {
             Self::AddProject
             | Self::NewTerminal
+            | Self::NewBrowserTab
+            | Self::NewVncViewer
             | Self::NewWorktree
             | Self::OpenPlayer
             | Self::ToggleIdeMode
@@ -184,6 +193,12 @@ impl PaletteItem {
                 .map_or_else(String::new, |project| project.path.display().to_string()),
             Self::Settings(section) => section.keywords().into(),
             Self::Action(key, _) => app.shortcut_label(key),
+            Self::VncProfile(id, _) => app
+                .state
+                .vnc_profiles
+                .iter()
+                .find(|p| &p.id == id)
+                .map_or_else(String::new, |p| p.endpoint()),
             _ => String::new(),
         }
     }
@@ -319,6 +334,8 @@ impl App {
         items.extend([
             PaletteItem::AddProject,
             PaletteItem::NewTerminal,
+            PaletteItem::NewBrowserTab,
+            PaletteItem::NewVncViewer,
             PaletteItem::NextAttention,
             PaletteItem::OpenPlayer,
             PaletteItem::ToggleIdeMode,
@@ -327,8 +344,16 @@ impl App {
             PaletteItem::ToggleIdeSidebarHeight,
             PaletteItem::SaveLayout,
         ]);
+        for profile in &self.state.vnc_profiles {
+            items.push(PaletteItem::VncProfile(
+                profile.id.clone(),
+                profile.display_name(),
+            ));
+        }
         const EXPLICIT: &[&str] = &[
             "new_terminal",
+            "new_browser",
+            "new_vnc",
             "next_attention",
             "toggle_ide_mode",
             "move_to_main",
@@ -673,6 +698,14 @@ impl App {
             PaletteItem::AddProject => self.add_project = true,
             PaletteItem::Action(key, _) => self.run_shortcut(ctx, key),
             PaletteItem::NewTerminal => self.create(None),
+            PaletteItem::NewBrowserTab => self.open_new_browser_tab(None),
+            PaletteItem::NewVncViewer => self.open_new_vnc_tab(None),
+            PaletteItem::VncProfile(id, _) => {
+                if let Some(profile) = self.state.vnc_profiles.iter().find(|p| p.id == id).cloned()
+                {
+                    self.connect_vnc_profile(&profile, None);
+                }
+            }
             PaletteItem::NextAttention => self.next_attention(),
             PaletteItem::NewWorktree => self.open_worktree_wizard(),
             PaletteItem::OpenPlayer => self.open_player(),

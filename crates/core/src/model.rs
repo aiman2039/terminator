@@ -5,7 +5,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 use super::{
     MAX_AGENTS, MAX_NOTIFICATIONS, MAX_RECENT_EVENTS, PROTOCOL_VERSION, Paths, id, now, quote,
 };
-use crate::{agents, generations, worktrees};
+use crate::{agents, generations, vnc, worktrees};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -291,6 +291,8 @@ impl Default for Settings {
                 ("open_settings".into(), "command+,".into()),
                 ("open_palette".into(), "command+P".into()),
                 ("next_attention".into(), "command+shift+J".into()),
+                ("new_browser".into(), "command+alt+B".into()),
+                ("new_vnc".into(), "command+alt+V".into()),
             ]
             .into(),
         }
@@ -351,6 +353,7 @@ pub const DIFF_CLOSE_SETTINGS_CAPABILITY: &str = "diff-close-settings-v1";
 pub const NTFY_CAPABILITY: &str = "ntfy-v1";
 pub const NOTIFICATION_SOUND_CAPABILITY: &str = "notification-sound-v1";
 pub const AGENT_PRESENCE_CAPABILITY: &str = agents::CAPABILITY;
+pub const VNC_CAPABILITY: &str = vnc::CAPABILITY;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TerminalNotice {
     pub id: String,
@@ -383,6 +386,10 @@ pub struct State {
     pub projects: Vec<Project>,
     pub worktrees: Vec<worktrees::Registration>,
     pub sessions: Vec<Session>,
+    #[serde(default)]
+    pub vnc_profiles: Vec<vnc::VncProfile>,
+    #[serde(default)]
+    pub vnc_sessions: Vec<vnc::VncSession>,
     pub agents: Vec<Agent>,
     pub notifications: Vec<Notification>,
     pub terminal_notices: Vec<TerminalNotice>,
@@ -545,6 +552,7 @@ impl State {
         }
         // Presence is live observation only; a restart clears it.
         self.presence.clear();
+        self.vnc_sessions.clear();
         self.revision = self.revision.saturating_add(1);
     }
     pub fn apply_hook(&mut self, e: HookEvent) -> Result<Option<String>> {

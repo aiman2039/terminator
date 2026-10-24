@@ -214,6 +214,28 @@ mod tests {
         assert!(restored.contains(&Tab::NativeEditor {
             path: "/notes/todo.md".into()
         }));
+        workspace.add(
+            "vnc".into(),
+            Tab::Vnc {
+                id: String::new(),
+                session: "vnc-1".into(),
+                profile_id: Some("prof-1".into()),
+                host: "127.0.0.1".into(),
+                port: 5900,
+                label: "Local VM".into(),
+            },
+        );
+        assert_eq!(workspace.version, 7);
+        let saved = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
+        let restored = Workspace::load(saved).unwrap();
+        assert!(restored.contains(&Tab::Vnc {
+            id: String::new(),
+            session: "vnc-1".into(),
+            profile_id: Some("prof-1".into()),
+            host: "127.0.0.1".into(),
+            port: 5900,
+            label: "Local VM".into(),
+        }));
     }
 
     #[test]

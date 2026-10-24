@@ -174,6 +174,31 @@ impl TabViewer for Viewer<'_> {
                     ui.close();
                 }
             }
+            if !self.strip && self.window.is_none() {
+                ui.separator();
+                if appearance::menu_item(
+                    ui,
+                    "New Browser Tab",
+                    "Globe",
+                    &self.app.shortcut_label("new_browser"),
+                )
+                .clicked()
+                {
+                    self.app.open_new_browser_tab(None);
+                    ui.close();
+                }
+                if appearance::menu_item(
+                    ui,
+                    "New VNC Viewer",
+                    "Monitor",
+                    &self.app.shortcut_label("new_vnc"),
+                )
+                .clicked()
+                {
+                    self.app.open_new_vnc_tab(None);
+                    ui.close();
+                }
+            }
         })
         .response
         .on_hover_text("New tab or split this pane");
@@ -239,6 +264,16 @@ impl TabViewer for Viewer<'_> {
                 "Blame {}",
                 path.file_name().unwrap_or_default().to_string_lossy()
             )
+            .into(),
+            Tab::Vnc {
+                label, host, port, ..
+            } => if !label.trim().is_empty() {
+                label.clone()
+            } else if !host.trim().is_empty() {
+                format!("{host}:{port}")
+            } else {
+                "VNC Viewer".into()
+            }
             .into(),
         }
     }
@@ -583,6 +618,18 @@ impl TabViewer for Viewer<'_> {
             ),
             Tab::CommitLog { .. } => self.app.commit_log_view(ui, tab),
             Tab::Blame { .. } => self.app.blame_view(ui, tab),
+            Tab::Vnc {
+                id,
+                session,
+                profile_id,
+                host,
+                port,
+                label,
+            } => {
+                let tab_id = id.clone();
+                self.app
+                    .vnc_view(ui, &tab_id, session, profile_id, host, port, label);
+            }
             Tab::Terminal(sid) => {
                 let Some(session) = self
                     .app

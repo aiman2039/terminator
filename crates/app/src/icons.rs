@@ -347,6 +347,8 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         "FileKey" => egui::include_image!("../assets/icons/file-key.svg"),
         "FileSliders" => egui::include_image!("../assets/icons/file-sliders.svg"),
         "Smartphone" => egui::include_image!("../assets/icons/smartphone.svg"),
+        "Monitor" => egui::include_image!("../assets/icons/monitor.svg"),
+        "Globe" => egui::include_image!("../assets/icons/globe.svg"),
         "ChevronDown" => egui::include_image!("../assets/icons/chevron-down.svg"),
         "Database" => egui::include_image!("../assets/icons/database.svg"),
         "File" => egui::include_image!("../assets/icons/file.svg"),

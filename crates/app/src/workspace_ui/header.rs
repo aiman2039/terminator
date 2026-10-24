@@ -198,6 +198,12 @@ pub(super) fn header_action_view(action: HeaderAction) -> HeaderActionView {
             #[cfg(feature = "test-support")]
             target: "tool-Structure",
         },
+        HeaderAction::Tool(SidebarTool::Vnc) => HeaderActionView {
+            label: "VNC",
+            icon: "Monitor",
+            #[cfg(feature = "test-support")]
+            target: "tool-Vnc",
+        },
         HeaderAction::IdeMode => HeaderActionView {
             label: "IDE mode",
             icon: "LayoutDashboard",

@@ -54,7 +54,7 @@ impl App {
                         && !session.review
                 })
                 .and_then(|session| session.file.clone()),
-            Tab::CommitLog { .. } | Tab::Player => None,
+            Tab::CommitLog { .. } | Tab::Player | Tab::Vnc { .. } => None,
         }
     }
 
@@ -686,6 +686,10 @@ impl App {
         }
         if tool == SidebarTool::Structure {
             self.structure_panel(ui);
+            return;
+        }
+        if tool == SidebarTool::Vnc {
+            self.vnc_sidebar(ui);
             return;
         }
         if tool == SidebarTool::Agents {

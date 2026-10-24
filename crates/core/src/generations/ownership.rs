@@ -78,7 +78,14 @@ pub fn owner_for(paths: &Paths, request: &Request) -> Result<Paths> {
         Request::Hook(e) => Some(e.terminal_session_id.as_str()),
         _ => None,
     };
+    let vnc_session = match request {
+        Request::VncDisconnect { session }
+        | Request::VncInput { session, .. }
+        | Request::VncFrame { session, .. } => Some(session.as_str()),
+        _ => None,
+    };
     if session.is_some()
+        || vnc_session.is_some()
         || matches!(
             request,
             Request::Notice { .. } | Request::DismissTerminalNotice { .. }
@@ -94,6 +101,12 @@ pub fn owner_for(paths: &Paths, request: &Request) -> Result<Paths> {
                 Request::DismissTerminalNotice { id } => {
                     state.terminal_notices.iter().any(|n| &n.id == id)
                 }
+                Request::VncDisconnect { .. }
+                | Request::VncInput { .. }
+                | Request::VncFrame { .. } => state
+                    .vnc_sessions
+                    .iter()
+                    .any(|s| Some(s.id.as_str()) == vnc_session),
                 _ => state
                     .sessions
                     .iter()
