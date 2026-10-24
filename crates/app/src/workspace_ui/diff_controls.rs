@@ -88,12 +88,13 @@ pub(super) fn paint_connector(
     painter.add(egui::Shape::line(bottom, stroke));
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
 pub(super) fn paint(
     ui: &mut egui::Ui,
     doc: &diff::DiffDocument,
     split: bool,
     staged: bool,
+    editor_pane: bool,
     enabled: bool,
     review: &mut diff::review::State,
     scroll: &[egui::scroll_area::ScrollAreaOutput<()>],
@@ -111,7 +112,10 @@ pub(super) fn paint(
     let row_h = diff_row_height(ui);
     let count = diff_row_count(doc, split).max(1);
     let pointer = ui.ctx().input(|input| input.pointer.hover_pos());
-    for (index, gap) in doc.gaps.iter().enumerate() {
+    // In the live editor views the rows are the full file, so document gaps
+    // do not exist there; their click widgets would also cover editor rows
+    // and steal clicks (and keyboard focus) from the text editors.
+    for (index, gap) in doc.gaps.iter().enumerate().filter(|_| !editor_pane) {
         for (side, output) in scroll.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let y = output.inner_rect.top() + gap.row(split) as f32 * row_h - output.state.offset.y;
@@ -198,7 +202,7 @@ pub(super) fn paint(
         if !left.intersects(first.inner_rect) && !right.intersects(last.inner_rect) {
             continue;
         }
-        if split {
+        if split && !editor_pane {
             let gap_clip = egui::Rect::from_min_max(
                 egui::pos2(first.inner_rect.right(), first.inner_rect.top()),
                 egui::pos2(last.inner_rect.left(), last.inner_rect.bottom()),
@@ -214,7 +218,9 @@ pub(super) fn paint(
             if !visible.is_positive() {
                 continue;
             }
-            if selected {
+            // The editor pane's rows are buffer lines, not diff rows: an
+            // outline there would frame the wrong lines. Rail + tints speak.
+            if selected && !(editor_pane && side == 1) {
                 ui.painter().with_clip_rect(clip).rect_stroke(
                     *rect,
                     0.0,

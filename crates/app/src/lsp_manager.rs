@@ -161,6 +161,9 @@ pub struct LspManager {
     /// Last empty outline answer per path (indexing retry gate).
     symbols_retry: HashMap<PathBuf, Instant>,
     workspace_symbol_query: String,
+    /// `Some` limits `workspace/symbol` to servers for that project.
+    /// `None` asks every ready server.
+    workspace_symbol_root: Option<PathBuf>,
     workspace_symbol_generation: u64,
     workspace_symbols: HashMap<ServerKey, Vec<L::WorkspaceSymbolHit>>,
     search_revision: u64,
@@ -195,6 +198,7 @@ impl LspManager {
             symbols_rev: std::collections::HashMap::new(),
             symbols_retry: HashMap::new(),
             workspace_symbol_query: String::new(),
+            workspace_symbol_root: None,
             workspace_symbol_generation: 0,
             workspace_symbols: HashMap::new(),
             search_revision: 0,
@@ -646,10 +650,14 @@ impl LspManager {
     }
 
     pub fn clear_workspace_symbols(&mut self) {
-        if self.workspace_symbol_query.is_empty() && self.workspace_symbols.is_empty() {
+        if self.workspace_symbol_query.is_empty()
+            && self.workspace_symbols.is_empty()
+            && self.workspace_symbol_root.is_none()
+        {
             return;
         }
         self.workspace_symbol_query.clear();
+        self.workspace_symbol_root = None;
         self.workspace_symbol_generation = self.workspace_symbol_generation.wrapping_add(1);
         self.workspace_symbols.clear();
         self.search_revision = self.search_revision.wrapping_add(1);
@@ -661,19 +669,31 @@ impl LspManager {
     }
 
     /// Ask each ready project server for matching symbols once per query.
-    /// A later query discards old pending replies by generation.
-    pub fn request_workspace_symbols(&mut self, query: &str) {
+    /// `root` keeps the request on servers for that project. A later query or
+    /// a different root discards old pending replies by generation.
+    pub fn request_scoped_symbols(&mut self, query: &str, root: Option<&Path>) {
         let query = query.trim();
         if query.is_empty() {
             self.clear_workspace_symbols();
             return;
         }
-        if self.workspace_symbol_query != query {
+        let root_changed = match (&self.workspace_symbol_root, root) {
+            (None, None) => false,
+            (Some(current), Some(next)) => current.as_path() != next,
+            _ => true,
+        };
+        if self.workspace_symbol_query != query || root_changed {
             self.clear_workspace_symbols();
             query.clone_into(&mut self.workspace_symbol_query);
+            self.workspace_symbol_root = root.map(Path::to_path_buf);
         }
         let generation = self.workspace_symbol_generation;
         for (key, server) in &mut self.servers {
+            if self.workspace_symbol_root.as_ref().is_some_and(|root| {
+                key.root != *root && !key.root.starts_with(root) && !root.starts_with(&key.root)
+            }) {
+                continue;
+            }
             if !server.ready || self.workspace_symbols.contains_key(key)
                 || server.pending.values().any(|pending| matches!(pending, Pending::WorkspaceSymbols { generation: pending_generation } if *pending_generation == generation))
             {
@@ -1900,13 +1920,13 @@ mod tests {
                 ready: true,
             },
         );
-        manager.request_workspace_symbols("old");
+        manager.request_scoped_symbols("old", None);
         assert!(manager.workspace_symbols_pending());
         let mut decoder = L::FrameDecoder::default();
         let request = decoder.feed(&outbox.try_recv().unwrap()).remove(0);
         let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
         assert_eq!(request["method"], "workspace/symbol");
-        manager.request_workspace_symbols("new");
+        manager.request_scoped_symbols("new", None);
         let newer = decoder.feed(&outbox.try_recv().unwrap()).remove(0);
         let newer: serde_json::Value = serde_json::from_slice(&newer).unwrap();
         let location = serde_json::json!({

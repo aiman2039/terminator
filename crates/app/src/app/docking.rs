@@ -737,6 +737,7 @@ impl App {
             // An emptied window drops its dock and goes away with it.
         }
         self.floating = keep;
+        self.apply_diff_replacement();
         for (project, home, dock) in closed {
             self.dock_back_window(project, home, dock);
         }

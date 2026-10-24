@@ -210,6 +210,7 @@ impl App {
         self.palette_open = true;
         self.palette_query.clear();
         self.palette_index = 0;
+        self.palette_filters = 0;
         self.palette_cache = None;
         self.palette_query_changed_at = Instant::now();
         self.lsp.clear_workspace_symbols();

@@ -761,8 +761,11 @@ impl App {
                     history: self.git_history,
                     view_list: self.preferences.git_view_list,
                     commits: &self.git_log,
+                    shelves: &self.git_shelves,
                     branches: &self.git_branches,
                     commit_draft: &mut draft,
+                    amend: &mut self.git_amend,
+                    signoff: &mut self.git_signoff,
                     collapse_generation: self.git_collapse,
                     open_shortcut: &open_shortcut,
                     compare: self

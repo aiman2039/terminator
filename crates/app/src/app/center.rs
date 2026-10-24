@@ -280,6 +280,7 @@ impl App {
         self.apply_float_pane(&project, &mut dock);
         self.paint_session_focus(ui, &dock);
         self.layouts.insert(project.clone(), dock);
+        self.apply_diff_replacement();
         if self.pending_layout_save {
             self.pending_layout_save = false;
             self.note_focus_baselines();

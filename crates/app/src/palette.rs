@@ -1,5 +1,6 @@
-//! Search Everywhere across projects, files, symbols, sessions, agents,
-//! actions, and settings. File scans and LSP symbol requests stay async.
+//! Search the current project: files, symbols, sessions, and agents.
+//! Actions and settings stay global. The Projects filter lists every
+//! project. File scans and LSP symbol requests stay async.
 use super::*;
 use std::collections::HashSet;
 use std::path::Path;
@@ -9,7 +10,27 @@ use terminator_native_edit::lsp as native_lsp;
 
 const MAX_RESULTS: usize = 80;
 const FILE_RESULTS: usize = 40;
+/// Recent files shown before sessions when the field is empty.
+const RECENT_RESULTS: usize = 8;
 const SYMBOL_QUERY_DELAY: Duration = Duration::from_millis(180);
+
+const FILTER_FILES: u8 = 1 << 0;
+const FILTER_SYMBOLS: u8 = 1 << 1;
+const FILTER_PROJECTS: u8 = 1 << 2;
+const FILTER_SESSIONS: u8 = 1 << 3;
+const FILTER_AGENTS: u8 = 1 << 4;
+const FILTER_ACTIONS: u8 = 1 << 5;
+const FILTER_SETTINGS: u8 = 1 << 6;
+
+const PALETTE_FILTERS: &[(&str, u8)] = &[
+    ("Files", FILTER_FILES),
+    ("Symbols", FILTER_SYMBOLS),
+    ("Projects", FILTER_PROJECTS),
+    ("Sessions", FILTER_SESSIONS),
+    ("Agents", FILTER_AGENTS),
+    ("Actions", FILTER_ACTIONS),
+    ("Settings", FILTER_SETTINGS),
+];
 
 fn compact_path(path: &Path) -> String {
     let parts: Vec<String> = path
@@ -37,6 +58,8 @@ pub(crate) struct PaletteCache {
     state_revision: u64,
     file_index_at: Option<Instant>,
     lsp_revision: u64,
+    filters: u8,
+    project: Option<String>,
     items: Vec<PaletteItem>,
 }
 
@@ -212,6 +235,18 @@ impl PaletteItem {
             Self::Session(..) => 4,
             Self::Settings(..) => 5,
             _ => 6,
+        }
+    }
+
+    fn filter_bit(&self) -> u8 {
+        match self {
+            Self::File(_) => FILTER_FILES,
+            Self::Symbol { .. } => FILTER_SYMBOLS,
+            Self::Project(..) => FILTER_PROJECTS,
+            Self::Session(..) => FILTER_SESSIONS,
+            Self::Agent(..) => FILTER_AGENTS,
+            Self::Settings(_) => FILTER_SETTINGS,
+            _ => FILTER_ACTIONS,
         }
     }
 }
@@ -435,32 +470,160 @@ impl App {
         }
     }
 
-    pub(super) fn filtered_palette(&self) -> Vec<PaletteItem> {
-        let query = self.palette_query.trim();
-        let items = self.palette_items();
-        if query.is_empty() {
-            let mut out: Vec<_> = items
+    fn palette_project_root(&self) -> Option<&Path> {
+        self.selected_project()
+            .map(|project| project.path.as_path())
+    }
+
+    /// Other projects whose path sits inside the selected project.
+    fn palette_exclude_roots(&self) -> Vec<PathBuf> {
+        let Some(selected) = self.selected_project() else {
+            return Vec::new();
+        };
+        self.state
+            .projects
+            .iter()
+            .filter(|project| {
+                project.id != selected.id
+                    && self.project_available(&project.id)
+                    && project.path.starts_with(&selected.path)
+            })
+            .map(|project| project.path.clone())
+            .collect()
+    }
+
+    /// The file belongs to the selected project, not to a nested one.
+    fn path_in_palette_project(&self, path: &Path) -> bool {
+        let Some(selected) = self.selected_project() else {
+            return false;
+        };
+        self.project_for_palette_path(path)
+            .is_some_and(|owner| owner.id == selected.id)
+    }
+
+    /// No chip: every kind in the current project, except the project list.
+    /// The Projects chip is the way to open another project.
+    fn palette_wants(&self, kind: u8) -> bool {
+        if self.palette_filters == 0 {
+            kind != FILTER_PROJECTS
+        } else {
+            self.palette_filters & kind != 0
+        }
+    }
+
+    fn session_in_palette_project(&self, id: &str) -> bool {
+        let Some(project) = self.selected_project() else {
+            return false;
+        };
+        self.state
+            .sessions
+            .iter()
+            .any(|session| session.id == id && session.project_id == project.id)
+    }
+
+    fn palette_accept(&self, item: &PaletteItem) -> bool {
+        let kind = item.filter_bit();
+        if !self.palette_wants(kind) {
+            return false;
+        }
+        // An empty field shows files, sessions, and agents. Actions,
+        // settings, and symbols appear after the user types, or when
+        // that filter is on.
+        if self.palette_query.trim().is_empty()
+            && self.palette_filters == 0
+            && matches!(kind, FILTER_ACTIONS | FILTER_SETTINGS | FILTER_SYMBOLS)
+        {
+            return false;
+        }
+        match item {
+            PaletteItem::File(path) | PaletteItem::Symbol { path, .. } => {
+                self.path_in_palette_project(path)
+            }
+            PaletteItem::Session(id, _) | PaletteItem::Agent(id, _, _) => {
+                self.session_in_palette_project(id)
+            }
+            _ => true,
+        }
+    }
+
+    /// Empty field: a few recent files, then live sessions and agents,
+    /// then more files from this project.
+    fn idle_palette(&self, items: Vec<PaletteItem>) -> Vec<PaletteItem> {
+        let mut out = Vec::new();
+        let mut seen_files = HashSet::new();
+        if self.palette_wants(FILTER_FILES) {
+            for path in &self.preferences.recent_native_files {
+                if !self.path_in_palette_project(path) {
+                    continue;
+                }
+                if seen_files.insert(path.clone()) {
+                    out.push(PaletteItem::File(path.clone()));
+                }
+                if seen_files.len() >= RECENT_RESULTS {
+                    break;
+                }
+            }
+        }
+        out.extend(
+            items
                 .iter()
-                .filter(|item| !matches!(item, PaletteItem::File(_)))
-                .take(MAX_RESULTS.saturating_sub(FILE_RESULTS))
-                .cloned()
-                .collect();
+                .filter(|item| {
+                    self.palette_accept(item)
+                        && matches!(item, PaletteItem::Session(..) | PaletteItem::Agent(..))
+                })
+                .cloned(),
+        );
+        if self.palette_filters != 0 {
+            out.extend(
+                items
+                    .iter()
+                    .filter(|item| {
+                        self.palette_accept(item)
+                            && !matches!(
+                                item,
+                                PaletteItem::File(_)
+                                    | PaletteItem::Session(..)
+                                    | PaletteItem::Agent(..)
+                            )
+                    })
+                    .cloned(),
+            );
+        }
+        if self.palette_wants(FILTER_FILES) {
+            let room = FILE_RESULTS.saturating_sub(seen_files.len());
             if self.file_index.is_empty() {
                 out.extend(
                     items
                         .into_iter()
-                        .filter(|item| matches!(item, PaletteItem::File(_)))
-                        .take(FILE_RESULTS),
+                        .filter(|item| {
+                            let PaletteItem::File(path) = item else {
+                                return false;
+                            };
+                            self.palette_accept(item) && seen_files.insert(path.clone())
+                        })
+                        .take(room),
                 );
-            } else {
+            } else if let Some(root) = self.palette_project_root() {
+                let exclude = self.palette_exclude_roots();
                 out.extend(
                     self.file_index
-                        .query("", FILE_RESULTS)
+                        .query_scored_in(Some(root), &exclude, "", room)
                         .into_iter()
+                        .map(|(_, file)| file.path)
+                        .filter(|path| seen_files.insert(path.clone()))
                         .map(PaletteItem::File),
                 );
             }
-            return out;
+        }
+        out.truncate(MAX_RESULTS);
+        out
+    }
+
+    pub(super) fn filtered_palette(&self) -> Vec<PaletteItem> {
+        let query = self.palette_query.trim();
+        let items = self.palette_items();
+        if query.is_empty() {
+            return self.idle_palette(items);
         }
 
         let mut matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
@@ -469,6 +632,13 @@ impl App {
         let mut haystack_buf = Vec::new();
         let mut ranked: Vec<(u16, u8, String, PaletteItem)> = Vec::new();
         for item in items {
+            if !self.palette_accept(&item) {
+                continue;
+            }
+            // A ready index ranks files on its own, under the current project.
+            if !self.file_index.is_empty() && matches!(item, PaletteItem::File(_)) {
+                continue;
+            }
             let text = item.search_text(self);
             let haystack = nucleo::Utf32Str::new(&text, &mut haystack_buf);
             if let Some(score) = matcher.fuzzy_match(haystack, needle) {
@@ -483,8 +653,15 @@ impl App {
                 ranked.push((score.saturating_add(boost), item.kind_rank(), title, item));
             }
         }
-        if !self.file_index.is_empty() {
-            for (score, file) in self.file_index.query_scored(query, FILE_RESULTS) {
+        if self.palette_wants(FILTER_FILES)
+            && let Some(root) = self.palette_project_root()
+            && !self.file_index.is_empty()
+        {
+            let exclude = self.palette_exclude_roots();
+            for (score, file) in
+                self.file_index
+                    .query_scored_in(Some(root), &exclude, query, FILE_RESULTS)
+            {
                 let item = PaletteItem::File(file.path);
                 let title = item.title();
                 let boost = if title.eq_ignore_ascii_case(query) {
@@ -513,8 +690,15 @@ impl App {
         self.lsp.poll();
         self.lsp.request_open_document_symbols();
         ui.set_min_size(ui.available_size());
+        let project_name = self
+            .selected_project()
+            .map(|project| project.name.clone())
+            .unwrap_or_default();
         ui.horizontal(|ui| {
-            ui.strong("Search Everywhere");
+            ui.strong("Search");
+            if !project_name.is_empty() {
+                ui.weak(format!("· {project_name}"));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if appearance::sidebar_action(ui, "X", "Close").clicked() {
                     self.close_palette();
@@ -522,10 +706,39 @@ impl App {
             });
         });
         ui.add_space(8.0);
-        ui.weak("Files · Symbols · Projects · Sessions · Agents · Actions · Settings");
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for (name, bit) in PALETTE_FILTERS {
+                let on = self.palette_filters & bit != 0;
+                let response = ui
+                    .add(
+                        egui::Button::new(*name)
+                            .small()
+                            .selected(on)
+                            .frame(true)
+                            .corner_radius(egui::CornerRadius::same(appearance::WIDGET_RADIUS)),
+                    )
+                    .on_hover_text(format!("Show {name}"));
+                #[cfg(feature = "test-support")]
+                diagnostics::record(ui.ctx(), &format!("palette-filter:{name}"), response.rect);
+                if response.clicked() {
+                    if on {
+                        self.palette_filters &= !bit;
+                    } else {
+                        self.palette_filters |= bit;
+                    }
+                    self.palette_index = 0;
+                }
+            }
+        });
+        let hint = if project_name.is_empty() {
+            "Search…".to_string()
+        } else {
+            format!("Search {project_name}…")
+        };
         let search = ui.add(
             appearance::singleline(&mut self.palette_query)
-                .hint_text("Search everywhere…")
+                .hint_text(hint)
                 .desired_width(f32::INFINITY),
         );
         #[cfg(feature = "test-support")]
@@ -535,22 +748,39 @@ impl App {
             self.palette_query_changed_at = Instant::now();
             self.lsp.clear_workspace_symbols();
         }
-        search.request_focus();
-        if self.palette_query.trim().chars().count() >= 2 {
-            if self.palette_query_changed_at.elapsed() >= SYMBOL_QUERY_DELAY {
-                self.lsp.request_workspace_symbols(&self.palette_query);
-            } else {
-                ui.ctx().request_repaint_after(SYMBOL_QUERY_DELAY);
+        // A pressed pointer is choosing a filter. Focus returns on release
+        // so that click is not taken by the field.
+        if !ui.input(|input| input.pointer.primary_down()) {
+            search.request_focus();
+        }
+        if self.palette_wants(FILTER_SYMBOLS) {
+            if self.palette_query.trim().chars().count() >= 2 {
+                if self.palette_query_changed_at.elapsed() >= SYMBOL_QUERY_DELAY {
+                    let scoped_path = self.selected_project().map(|project| project.path.clone());
+                    if let Some(path) = scoped_path.as_deref() {
+                        self.lsp
+                            .request_scoped_symbols(&self.palette_query, Some(path));
+                    } else {
+                        self.lsp.clear_workspace_symbols();
+                    }
+                } else {
+                    ui.ctx().request_repaint_after(SYMBOL_QUERY_DELAY);
+                }
             }
+        } else {
+            self.lsp.clear_workspace_symbols();
         }
         if self.lsp.workspace_symbols_pending() {
             ui.ctx().request_repaint_after(Duration::from_millis(50));
         }
+        let project_id = self.selected_project().map(|project| project.id.clone());
         let stale = self.palette_cache.as_ref().is_none_or(|cache| {
             cache.query != self.palette_query
                 || cache.state_revision != self.state.revision
                 || cache.file_index_at != self.file_index_at
                 || cache.lsp_revision != self.lsp.search_revision()
+                || cache.filters != self.palette_filters
+                || cache.project != project_id
         });
         if stale {
             self.palette_cache = Some(PaletteCache {
@@ -558,6 +788,8 @@ impl App {
                 state_revision: self.state.revision,
                 file_index_at: self.file_index_at,
                 lsp_revision: self.lsp.search_revision(),
+                filters: self.palette_filters,
+                project: project_id,
                 items: self.filtered_palette(),
             });
         }
@@ -636,6 +868,7 @@ impl App {
         self.palette_open = false;
         self.palette_query.clear();
         self.palette_index = 0;
+        self.palette_filters = 0;
         self.palette_cache = None;
         self.lsp.clear_workspace_symbols();
     }
@@ -706,6 +939,13 @@ mod tests {
     fn file_search_reaches_entries_after_the_empty_result_limit() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+        app.state.projects.push(Project {
+            id: "p".into(),
+            name: "p".into(),
+            path: dir.path().into(),
+            layout: serde_json::Value::Null,
+        });
+        app.selected = Some("p".into());
         app.dirs.insert(
             dir.path().into(),
             (0..50)
@@ -741,6 +981,13 @@ mod tests {
         std::fs::write(root.join("src/main.rs"), "").unwrap();
         std::fs::write(root.join("src/lib.rs"), "").unwrap();
         let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+        app.state.projects.push(Project {
+            id: "p".into(),
+            name: "p".into(),
+            path: root.clone(),
+            layout: serde_json::Value::Null,
+        });
+        app.selected = Some("p".into());
         app.file_index = FileIndex::scan(&[root], MAX_INDEX_FILES);
         app.palette_query = "main".into();
         let files: Vec<PathBuf> = app
@@ -846,6 +1093,7 @@ mod tests {
             path: "/a".into(),
             layout: serde_json::Value::Null,
         });
+        app.selected = Some("a".into());
         app.state.sessions.push(Session {
             id: "shell".into(),
             project_id: "a".into(),
@@ -923,5 +1171,235 @@ mod tests {
         );
         assert_eq!(app.selected.as_deref(), Some("b"));
         assert_eq!(app.native_pending_line.get(&file), Some(&8));
+    }
+
+    fn project_at(app: &mut App, id: &str, path: std::path::PathBuf) {
+        app.state.projects.push(Project {
+            id: id.into(),
+            name: id.into(),
+            path,
+            layout: serde_json::Value::Null,
+        });
+    }
+
+    #[test]
+    fn search_stays_inside_the_selected_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+        for id in ["a", "b"] {
+            let path = dir.path().join(id);
+            std::fs::create_dir_all(&path).unwrap();
+            project_at(&mut app, id, path.clone());
+            app.dirs.insert(
+                path.clone(),
+                vec![terminator_git::Entry {
+                    path: path.join("main.rs"),
+                    directory: false,
+                    ignored: false,
+                }],
+            );
+            app.state.sessions.push(Session {
+                id: id.into(),
+                project_id: id.into(),
+                label: format!("{id} shell"),
+                cwd: path,
+                kind: SessionKind::Shell,
+                file: None,
+                lifecycle: Lifecycle::Running,
+                review: false,
+                created: 1,
+                exit_code: None,
+                rows: 24,
+                cols: 80,
+                generation: "test".into(),
+                pid: Some(1),
+                truncated: false,
+                cwd_confirmed: true,
+            });
+        }
+        app.selected = Some("a".into());
+        app.palette_query = "main".into();
+        let files = app.filtered_palette();
+        assert!(
+            files
+                .iter()
+                .any(|item| matches!(item, PaletteItem::File(path) if path.ends_with("a/main.rs")))
+        );
+        assert!(
+            !files
+                .iter()
+                .any(|item| matches!(item, PaletteItem::File(path) if path.ends_with("b/main.rs")))
+        );
+        app.palette_query = "shell".into();
+        let sessions = app.filtered_palette();
+        assert!(
+            sessions
+                .iter()
+                .any(|item| matches!(item, PaletteItem::Session(id, _) if id == "a"))
+        );
+        assert!(
+            !sessions
+                .iter()
+                .any(|item| matches!(item, PaletteItem::Session(id, _) if id == "b"))
+        );
+        app.palette_query.clear();
+        assert!(
+            !app.filtered_palette()
+                .iter()
+                .any(|item| matches!(item, PaletteItem::Project(..)))
+        );
+        app.palette_filters = super::FILTER_PROJECTS;
+        let projects = app.filtered_palette();
+        assert!(
+            projects
+                .iter()
+                .any(|item| matches!(item, PaletteItem::Project(id, _) if id == "b"))
+        );
+        assert!(
+            projects
+                .iter()
+                .all(|item| matches!(item, PaletteItem::Project(..)))
+        );
+    }
+
+    #[test]
+    fn file_filter_drops_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+        project_at(&mut app, "p", dir.path().into());
+        app.selected = Some("p".into());
+        app.dirs.insert(
+            dir.path().into(),
+            vec![terminator_git::Entry {
+                path: dir.path().join("font.rs"),
+                directory: false,
+                ignored: false,
+            }],
+        );
+        app.palette_filters = super::FILTER_FILES;
+        app.palette_query = "font".into();
+        let items = app.filtered_palette();
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, PaletteItem::File(path) if path.ends_with("font.rs")))
+        );
+        assert!(
+            items
+                .iter()
+                .all(|item| matches!(item, PaletteItem::File(_)))
+        );
+    }
+
+    fn live_shell(id: &str, project: &str, cwd: std::path::PathBuf) -> Session {
+        Session {
+            id: id.into(),
+            project_id: project.into(),
+            label: format!("{id} shell"),
+            cwd,
+            kind: SessionKind::Shell,
+            file: None,
+            lifecycle: Lifecycle::Running,
+            review: false,
+            created: 1,
+            exit_code: None,
+            rows: 24,
+            cols: 80,
+            generation: "test".into(),
+            pid: Some(1),
+            truncated: false,
+            cwd_confirmed: true,
+        }
+    }
+
+    #[test]
+    fn empty_search_leads_with_recent_files_then_sessions() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+        project_at(&mut app, "p", root.clone());
+        app.selected = Some("p".into());
+        let recent = root.join("recent.rs");
+        let other = root.join("other.rs");
+        app.dirs.insert(
+            root.clone(),
+            vec![
+                terminator_git::Entry {
+                    path: other.clone(),
+                    directory: false,
+                    ignored: false,
+                },
+                terminator_git::Entry {
+                    path: recent.clone(),
+                    directory: false,
+                    ignored: false,
+                },
+            ],
+        );
+        app.preferences.recent_native_files = vec![recent.clone()];
+        app.state.sessions.push(live_shell("shell", "p", root));
+        let items = app.filtered_palette();
+        let recent_at = items
+            .iter()
+            .position(|item| matches!(item, PaletteItem::File(path) if path == &recent));
+        let session_at = items
+            .iter()
+            .position(|item| matches!(item, PaletteItem::Session(id, _) if id == "shell"));
+        let other_at = items
+            .iter()
+            .position(|item| matches!(item, PaletteItem::File(path) if path == &other));
+        assert_eq!(
+            (recent_at, session_at, other_at),
+            (Some(0), Some(1), Some(2))
+        );
+        assert!(items.iter().all(|item| {
+            matches!(
+                item,
+                PaletteItem::File(_) | PaletteItem::Session(..) | PaletteItem::Agent(..)
+            )
+        }));
+        app.palette_filters = super::FILTER_ACTIONS;
+        assert!(
+            app.filtered_palette()
+                .iter()
+                .any(|item| item.filter_bit() == super::FILTER_ACTIONS)
+        );
+    }
+
+    #[test]
+    fn nested_project_files_stay_in_that_project() {
+        use terminator_native_edit::finder::FileIndex;
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("parent");
+        let child = parent.join("child");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(parent.join("own.rs"), "").unwrap();
+        std::fs::write(child.join("own.rs"), "").unwrap();
+        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+        project_at(&mut app, "parent", parent.clone());
+        project_at(&mut app, "child", child.clone());
+        app.file_index = FileIndex::scan(&[parent], MAX_INDEX_FILES);
+        app.selected = Some("parent".into());
+        app.palette_query = "own".into();
+        let parent_hits = app.filtered_palette();
+        assert!(parent_hits.iter().any(
+            |item| matches!(item, PaletteItem::File(path) if path.ends_with("parent/own.rs"))
+        ));
+        assert!(
+            !parent_hits.iter().any(
+                |item| matches!(item, PaletteItem::File(path) if path.ends_with("child/own.rs"))
+            )
+        );
+        app.selected = Some("child".into());
+        let child_hits = app.filtered_palette();
+        assert!(
+            child_hits.iter().any(
+                |item| matches!(item, PaletteItem::File(path) if path.ends_with("child/own.rs"))
+            )
+        );
+        assert!(!child_hits.iter().any(
+            |item| matches!(item, PaletteItem::File(path) if path.ends_with("parent/own.rs"))
+        ));
     }
 }

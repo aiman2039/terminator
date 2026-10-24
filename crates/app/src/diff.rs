@@ -144,6 +144,11 @@ fn decode_side(bytes: &[u8]) -> Result<String> {
     Ok(String::from_utf8_lossy(bytes).into_owned())
 }
 
+/// Syntax-highlighted spans per line, for the in-diff editor.
+pub(crate) fn highlight_spans(path: &Path, text: &str) -> Vec<Vec<DiffSpan>> {
+    highlight_file(path, text)
+}
+
 fn syntaxes() -> &'static SyntaxSet {
     terminator_native_edit::highlight::syntax_set()
 }

@@ -596,7 +596,7 @@ impl App {
                     match result {
                         Ok(outcome) => {
                             if review.saving_edits {
-                                review.editor = None;
+                                review.buffer = None;
                             }
                             if undoing {
                                 review.undo.pop();
@@ -760,12 +760,17 @@ impl App {
                         self.refresh_request = None;
                         if matches!(
                             op,
-                            workspace_ops::Op::Commit(_) | workspace_ops::Op::Switch(_)
+                            workspace_ops::Op::Commit { .. }
+                                | workspace_ops::Op::Switch(_)
+                                | workspace_ops::Op::Shelve(_)
+                                | workspace_ops::Op::Unshelve(_)
+                                | workspace_ops::Op::DropShelf(_)
                         ) {
                             self.git_list_root = None;
                         }
                     }
                     Ok(workspace_ops::Report::Branches(names)) => self.git_branches = names,
+                    Ok(workspace_ops::Report::Shelves(list)) => self.git_shelves = list,
                     Ok(workspace_ops::Report::Log(rows)) => self.git_log = rows,
                     Ok(workspace_ops::Report::Compare(data)) => {
                         self.git_compare_root.clone_from(&data.root);
