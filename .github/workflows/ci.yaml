@@ -38,9 +38,10 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" /var/cache/apt/archives
       - name: Restore apt package cache
         if: runner.os == 'Linux'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
-          path: /var/cache/apt/archives
+          # Glob skips the root-owned partial/ dir, which tar cannot read.
+          path: /var/cache/apt/archives/*.deb
           key: apt-checks-${{ matrix.os }}-${{ hashFiles('.github/workflows/ci.yaml') }}
           restore-keys: |
             apt-checks-${{ matrix.os }}-
@@ -118,9 +119,10 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" /var/cache/apt/archives
       - name: Restore apt package cache
         if: runner.os == 'Linux'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
-          path: /var/cache/apt/archives
+          # Glob skips the root-owned partial/ dir, which tar cannot read.
+          path: /var/cache/apt/archives/*.deb
           key: apt-e2e-${{ matrix.os }}-${{ hashFiles('.github/workflows/ci.yaml') }}
           restore-keys: |
             apt-e2e-${{ matrix.os }}-
@@ -183,9 +185,10 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" /var/cache/apt/archives
       - name: Restore apt package cache
         if: runner.os == 'Linux'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
-          path: /var/cache/apt/archives
+          # Glob skips the root-owned partial/ dir, which tar cannot read.
+          path: /var/cache/apt/archives/*.deb
           key: apt-native-gui-${{ matrix.os }}-${{ hashFiles('.github/workflows/ci.yaml') }}
           restore-keys: |
             apt-native-gui-${{ matrix.os }}-
@@ -251,9 +254,10 @@ jobs:
           sudo mkdir -p /var/cache/apt/archives
           sudo chown -R "$(id -u):$(id -g)" /var/cache/apt/archives
       - name: Restore apt package cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
-          path: /var/cache/apt/archives
+          # Glob skips the root-owned partial/ dir, which tar cannot read.
+          path: /var/cache/apt/archives/*.deb
           key: apt-coverage-${{ hashFiles('.github/workflows/ci.yaml') }}
           restore-keys: |
             apt-coverage-

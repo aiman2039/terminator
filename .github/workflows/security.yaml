@@ -170,7 +170,7 @@ jobs:
             echo "present=false" >> "$GITHUB_OUTPUT"
             echo "::notice::NVD_API_KEY not configured; skipping OWASP Dependency-Check"
           fi
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         if: steps.creds.outputs.present == 'true'
         with:
           path: owasp-data
