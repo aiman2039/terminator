@@ -21,6 +21,7 @@ impl Shared {
                 | Request::WorktreeRemove { .. }
                 | Request::VncProfileSave { .. }
                 | Request::VncProfileRemove { .. }
+                | Request::VncForgetCredential { .. }
         );
         let admission = shared_write
             || matches!(
@@ -60,11 +61,32 @@ impl Shared {
                 ));
             }
             if coordinated {
-                catalog.refresh(&mut state)?;
+                let mut refreshed = state.clone();
+                catalog.refresh(&mut refreshed)?;
+                if refreshed
+                    .vnc_profiles
+                    .iter()
+                    .any(|p| !p.password.is_empty())
+                {
+                    ensure!(
+                        crate::vnc_session::credentials::migrate(
+                            paths,
+                            &mut refreshed.vnc_profiles
+                        ) == 0,
+                        "Unlock the OS credential store to migrate legacy VNC passwords"
+                    );
+                    if catalog.active()?.as_deref() == Some(&refreshed.generation) {
+                        catalog.save_workspace(&refreshed)?;
+                    }
+                }
+                *state = refreshed;
             }
         }
         match request {
-            Request::VncProfileSave { mut profile } => {
+            Request::VncProfileSave {
+                mut profile,
+                forget_password,
+            } => {
                 profile.host = profile.host.trim().to_string();
                 profile.name = profile.name.trim().to_string();
                 profile.username = profile.username.trim().to_string();
@@ -72,6 +94,42 @@ impl Shared {
                     profile.id = id();
                 }
                 profile.validate()?;
+                let paths = self.catalog_paths.as_ref().unwrap_or(&self.paths);
+                let previous = relock(&self.state)
+                    .vnc_profiles
+                    .iter()
+                    .find(|p| p.id == profile.id)
+                    .cloned();
+                let previous_saved = previous.as_ref().is_some_and(|p| p.credential_saved);
+                if let Some(previous) = previous.as_ref().filter(|p| p.credential_saved) {
+                    ensure!(
+                        forget_password
+                            || !profile.password.is_empty()
+                            || (previous.host == profile.host
+                                && previous.port == profile.port
+                                && previous.username == profile.username
+                                && previous.options.transport == profile.options.transport
+                                && previous.options.ssh == profile.options.ssh
+                                && previous.options.tls_server_name
+                                    == profile.options.tls_server_name
+                                && previous.options.tls_ca_file == profile.options.tls_ca_file),
+                        "Enter a password or forget the saved credential before changing the authentication endpoint"
+                    );
+                }
+                if forget_password {
+                    crate::vnc_session::credentials::forget(
+                        paths,
+                        previous.as_ref().unwrap_or(&profile),
+                    )?;
+                    zeroize::Zeroize::zeroize(&mut profile.password);
+                    profile.credential_saved = false;
+                } else if !profile.password.is_empty() {
+                    crate::vnc_session::credentials::save(paths, &profile, &profile.password)?;
+                    zeroize::Zeroize::zeroize(&mut profile.password);
+                    profile.credential_saved = true;
+                } else {
+                    profile.credential_saved = previous_saved;
+                }
                 let mut state = relock(&self.state);
                 if let Some(existing) = state.vnc_profiles.iter_mut().find(|p| p.id == profile.id) {
                     if profile.last_connected == 0 {
@@ -87,12 +145,51 @@ impl Shared {
                 }
                 state.revision = state.revision.saturating_add(1);
             }
+            Request::VncForgetCredential { id } => {
+                let profile = relock(&self.state)
+                    .vnc_profiles
+                    .iter()
+                    .find(|p| p.id == id)
+                    .cloned()
+                    .context("Unknown VNC profile")?;
+                crate::vnc_session::credentials::forget(
+                    self.catalog_paths.as_ref().unwrap_or(&self.paths),
+                    &profile,
+                )?;
+                let mut state = relock(&self.state);
+                if let Some(profile) = state.vnc_profiles.iter_mut().find(|p| p.id == id) {
+                    profile.password.clear();
+                    profile.credential_saved = false;
+                }
+                state.revision = state.revision.saturating_add(1);
+            }
+            Request::VncTransfer { session, transfer } => {
+                self.vnc_transfer(&session, transfer)?;
+                return Ok(Response::Ok);
+            }
+            Request::VncTransferStatus { session, id } => {
+                return Ok(Response::VncTransferStatus(
+                    self.vnc_transfer_status(&session, &id)?,
+                ));
+            }
             Request::VncProfileRemove { id } => {
+                let profile = relock(&self.state)
+                    .vnc_profiles
+                    .iter()
+                    .find(|p| p.id == id && p.credential_saved)
+                    .cloned();
+                if let Some(profile) = profile {
+                    crate::vnc_session::credentials::forget(
+                        self.catalog_paths.as_ref().unwrap_or(&self.paths),
+                        &profile,
+                    )?;
+                }
                 let mut state = relock(&self.state);
                 state.vnc_profiles.retain(|p| p.id != id);
                 state.revision = state.revision.saturating_add(1);
             }
             Request::VncConnect {
+                options,
                 project,
                 profile_id,
                 host,
@@ -105,6 +202,7 @@ impl Shared {
             } => {
                 return Ok(Response::VncCreated(self.vnc_connect(
                     crate::vnc_session::VncConnectSpec {
+                        options,
                         project,
                         profile_id,
                         host,
@@ -264,7 +362,14 @@ impl Shared {
             Request::Snapshot => {
                 let mut state = relock(&self.state);
                 presence::expire_observations(&mut state, now());
-                return Ok(Response::State(Box::new(state.clone())));
+                let mut snapshot = state.clone();
+                for profile in &mut snapshot.vnc_profiles {
+                    if !profile.password.is_empty() {
+                        profile.credential_saved = true;
+                        profile.password.clear();
+                    }
+                }
+                return Ok(Response::State(Box::new(snapshot)));
             }
             Request::Heartbeat { focused } => {
                 *relock(&self.focused) = (focused, Instant::now());

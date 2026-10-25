@@ -282,6 +282,8 @@ impl App {
                 "minimize" => egui::ViewportCommand::Minimized(true),
                 "maximize" => egui::ViewportCommand::Maximized(true),
                 "restore" => {
+                    self.vnc_fullscreen = None;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
                     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                     egui::ViewportCommand::Maximized(false)
                 }

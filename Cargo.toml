@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/*"]
-exclude = ["vendor/egui_term", "vendor/egui_dock", "vendor/egui-winit", "vendor/vt100", "vendor/egui_commonmark"]
+exclude = ["vendor/egui_term", "vendor/egui_dock", "vendor/egui-winit", "vendor/vt100", "vendor/egui_commonmark", "vendor/vnc-rs"]
 resolver = "2"
 [workspace.package]
 version = "0.134.0"
@@ -27,6 +27,7 @@ lto = "thin"
 codegen-units = 8
 
 [patch.crates-io]
+vnc-rs = { path = "vendor/vnc-rs" }
 egui_commonmark = { path = "vendor/egui_commonmark" }
 egui_dock = { path = "vendor/egui_dock" }
 egui-winit = { path = "vendor/egui-winit" }

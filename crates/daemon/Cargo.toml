@@ -21,12 +21,26 @@ fs2 = "0.4"
 rustix.workspace = true
 notify-rust = "4"
 tempfile = "3"
-tokio = { version = "1", features = ["rt", "net", "time", "sync", "io-util", "macros"] }
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "io-util", "macros", "process", "fs"] }
 vnc = { package = "vnc-rs", version = "0.6" }
 flate2 = "1"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+rustls-platform-verifier = "0.6"
+openssh-sftp-client = "0.15"
+zeroize = "1"
+sha2 = "0.10"
+socket2 = "0.6"
+futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust", "vendored"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6.3", features = ["windows-native"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6.3", features = ["apple-native"] }
 core-foundation = "0.10"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSUserNotification"] }

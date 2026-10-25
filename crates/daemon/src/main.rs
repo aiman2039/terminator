@@ -144,6 +144,7 @@ fn main() -> Result<()> {
         AGENT_PRESENCE_CAPABILITY.into(),
         VNC_CAPABILITY.into(),
         VNC_REGIONS_CAPABILITY.into(),
+        vnc::FEATURES_CAPABILITY.into(),
     ];
     if catalog_paths.is_some() {
         state.daemon_build = Some(generations::build_identity(
@@ -153,6 +154,18 @@ fn main() -> Result<()> {
         )?);
         state.daemon_catalog_version = Some(generations::CATALOG_VERSION);
         state.capabilities.push(generations::CAPABILITY.into());
+    }
+    let credential_paths = catalog_paths.as_ref().unwrap_or(&paths);
+    let pending = vnc_session::credentials::migrate(credential_paths, &mut state.vnc_profiles);
+    ensure!(
+        pending == 0,
+        "{pending} legacy VNC passwords could not be migrated; unlock the OS credential store before restarting. Existing saved state was not overwritten"
+    );
+    if let Some(root) = &catalog_paths {
+        let catalog = generations::Catalog::open(root)?;
+        if catalog.active()?.as_deref() == Some(&state.generation) {
+            catalog.save_workspace(&state)?;
+        }
     }
     store.save(&state)?;
     let (history, history_rx) = mpsc::sync_channel::<HistoryJob>(512);
@@ -175,6 +188,7 @@ fn main() -> Result<()> {
         ntfy: ntfy::start(),
         ntfy_cooldown: Mutex::new(ntfy::Cooldown::default()),
     });
+    vnc_session::credentials::finish_activation(Arc::downgrade(&shared));
     let weak = Arc::downgrade(&shared);
     thread::spawn(move || {
         let Some(shared) = weak.upgrade() else { return };

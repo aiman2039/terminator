@@ -998,6 +998,69 @@ impl Services {
                     Ok(vec![Update::RestartFinished(message)])
                 })?;
             }
+            Job::VncPickTransfer {
+                session,
+                direction,
+                remote,
+            } => {
+                let upload = direction == terminator_core::vnc::TransferDirection::Upload;
+                let picked = self
+                    .fs()
+                    .run(&cancel, move || {
+                        let dialog = rfd::FileDialog::new().set_title(if upload {
+                            "Upload via SFTP"
+                        } else {
+                            "Save SFTP download to a new file"
+                        });
+                        Ok(if upload {
+                            dialog.pick_file()
+                        } else {
+                            dialog.save_file()
+                        })
+                    })
+                    .await;
+                let result = match picked {
+                    Ok(Some(local)) => {
+                        let id = terminator_core::id();
+                        let request = Request::VncTransfer {
+                            session: session.clone(),
+                            transfer: terminator_core::vnc::VncTransfer {
+                                id: id.clone(),
+                                direction,
+                                local,
+                                remote,
+                            },
+                        };
+                        match client.rpc(request).await {
+                            Ok(Response::Ok) => Ok(Some(terminator_core::vnc::VncTransferStatus {
+                                id,
+                                done: false,
+                                bytes: 0,
+                                error: None,
+                            })),
+                            Ok(_) => Err("Unexpected SFTP transfer response".into()),
+                            Err(e) => Err(format!("{e:#}")),
+                        }
+                    }
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(format!("{e:#}")),
+                };
+                updates.push(Update::VncTransfer(session, result));
+            }
+            Job::VncTransferPoll { session, id } => {
+                let result = match client
+                    .rpc(Request::VncTransferStatus {
+                        session: session.clone(),
+                        id,
+                    })
+                    .await
+                {
+                    Ok(Response::VncTransferStatus(status)) => Ok(Some(status)),
+                    Ok(_) => Err("Unexpected SFTP transfer status".into()),
+                    Err(e) => Err(format!("{e:#}")),
+                };
+                updates.push(Update::VncTransfer(session, result));
+            }
             Job::VncConnectTab { tab_id, request } => {
                 let result = match client.rpc(request).await {
                     Ok(Response::VncCreated(session)) => {

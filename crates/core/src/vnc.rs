@@ -1,3 +1,6 @@
+mod options;
+pub use options::*;
+
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +26,10 @@ pub struct VncProfile {
     pub view_only: bool,
     #[serde(default)]
     pub last_connected: u64,
+    #[serde(default)]
+    pub options: VncOptions,
+    #[serde(default)]
+    pub credential_saved: bool,
 }
 
 fn default_true() -> bool {
@@ -31,7 +38,23 @@ fn default_true() -> bool {
 
 impl VncProfile {
     pub fn validate(&self) -> Result<()> {
-        ensure!(!self.id.trim().is_empty(), "VNC profile ID is required");
+        ensure!(
+            !self.id.is_empty()
+                && self.id.len() <= 128
+                && self
+                    .id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)),
+            "Invalid VNC profile ID"
+        );
+        ensure!(
+            self.username.len() <= 4096 && !self.username.chars().any(char::is_control),
+            "Invalid VNC username"
+        );
+        ensure!(
+            self.password.len() <= 4096,
+            "VNC password exceeds 4096 bytes"
+        );
         ensure!(
             !self.host.trim().is_empty() && self.host.len() <= 255,
             "VNC host must be 1–255 characters"
@@ -41,6 +64,7 @@ impl VncProfile {
             self.name.len() <= 255,
             "VNC profile name must be at most 255 characters"
         );
+        self.options.validate()?;
         Ok(())
     }
 
@@ -109,6 +133,12 @@ pub struct VncSession {
     pub error: Option<String>,
     pub created: u64,
     pub generation: String,
+    #[serde(default)]
+    pub options: VncOptions,
+    #[serde(default)]
+    pub retry_attempt: u8,
+    #[serde(default)]
+    pub retry_in_seconds: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +147,8 @@ pub enum VncInputEvent {
     Key { keycode: u32, down: bool },
     CopyText(String),
     Refresh { full: bool },
+    Resize { width: u16, height: u16 },
+    TypeText(String),
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,6 +214,48 @@ pub struct VncFrame {
     pub region: Option<VncRegion>,
     #[serde(default)]
     pub clipboard: Option<String>,
+    #[serde(default)]
+    pub cursor: Option<VncCursor>,
+    #[serde(default)]
+    pub monitors: Vec<VncMonitor>,
+    #[serde(default)]
+    pub resize_supported: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VncCursor {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub rgba: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VncMonitor {
+    pub id: u32,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransferDirection {
+    Upload,
+    Download,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VncTransfer {
+    pub id: String,
+    pub direction: TransferDirection,
+    pub local: std::path::PathBuf,
+    pub remote: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VncTransferStatus {
+    pub id: String,
+    pub done: bool,
+    pub bytes: u64,
+    pub error: Option<String>,
 }
 
 /// Parse a `host` or `host:port` string into `(host, port)`.
@@ -240,6 +314,8 @@ mod tests {
     #[test]
     fn profile_validation_rejects_empty_host_or_zero_port() {
         let mut profile = VncProfile {
+            options: VncOptions::default(),
+            credential_saved: false,
             id: "p1".into(),
             name: "Dev VM".into(),
             host: "127.0.0.1".into(),

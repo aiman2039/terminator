@@ -1,7 +1,16 @@
+mod connection;
+pub(crate) mod credentials;
+mod input;
+mod quality;
+mod reconnect;
+mod transfer;
+mod transport;
+
 use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use flate2::{Compression, write::ZlibEncoder};
 use std::{
+    collections::HashMap,
     io::Write,
     sync::{Arc, Mutex},
     thread,
@@ -12,10 +21,7 @@ use terminator_core::{
     vnc::{VncFrame, VncInputEvent, VncRegion, VncSession, VncSessionStatus},
 };
 use tokio::sync::mpsc;
-use vnc::{
-    ClientKeyEvent, ClientMouseEvent, PixelFormat, Rect, VncConnector, VncEncoding, VncEvent,
-    X11Event,
-};
+use vnc::{ClientKeyEvent, PixelFormat, Rect, VncConnector, VncEvent, X11Event};
 
 use crate::server::{Shared, relock};
 
@@ -34,7 +40,13 @@ pub(crate) struct VncRuntime {
     pub(crate) error: Option<String>,
     pub(crate) clipboard: Option<String>,
     pub(crate) view_only: bool,
-    pub(crate) input_tx: Option<mpsc::UnboundedSender<VncInputEvent>>,
+    pub(crate) input_tx: Option<mpsc::Sender<VncInputEvent>>,
+    pub(crate) options: terminator_core::vnc::VncOptions,
+    pub(crate) cursor: Option<terminator_core::vnc::VncCursor>,
+    pub(crate) monitors: Vec<terminator_core::vnc::VncMonitor>,
+    pub(crate) resize_supported: bool,
+    pub(crate) last_encoded_bytes: usize,
+    pub(crate) transfers: HashMap<String, terminator_core::vnc::VncTransferStatus>,
     /// Union of framebuffer rectangles changed since the last encode; see
     /// [`VncRuntime::encode_frame`]. `None` means the whole frame is stale.
     dirty: Option<VncRegion>,
@@ -45,7 +57,7 @@ pub(crate) struct VncRuntime {
 }
 
 impl VncRuntime {
-    fn new(view_only: bool, input_tx: mpsc::UnboundedSender<VncInputEvent>) -> Self {
+    fn new(view_only: bool, input_tx: mpsc::Sender<VncInputEvent>) -> Self {
         Self {
             width: 0,
             height: 0,
@@ -56,6 +68,12 @@ impl VncRuntime {
             clipboard: None,
             view_only,
             input_tx: Some(input_tx),
+            options: terminator_core::vnc::VncOptions::default(),
+            cursor: None,
+            monitors: Vec::new(),
+            resize_supported: false,
+            last_encoded_bytes: 0,
+            transfers: HashMap::new(),
             dirty: None,
             encoded_revision: 0,
             last_poll: None,
@@ -63,8 +81,16 @@ impl VncRuntime {
     }
 
     fn resize(&mut self, width: u16, height: u16) {
-        let width = width.min(MAX_DIMENSION);
-        let height = height.min(MAX_DIMENSION);
+        if width == 0
+            || height == 0
+            || width > MAX_DIMENSION
+            || height > MAX_DIMENSION
+            || usize::from(width).saturating_mul(usize::from(height)) > 32 * 1024 * 1024
+        {
+            self.status = VncSessionStatus::Failed;
+            self.error = Some("Remote desktop exceeds the supported dimensions".into());
+            return;
+        }
         if self.width == width && self.height == height && !self.rgba.is_empty() {
             return;
         }
@@ -201,6 +227,9 @@ impl VncRuntime {
             None
         };
         let mut frame = VncFrame {
+            cursor: self.cursor.clone(),
+            monitors: self.monitors.clone(),
+            resize_supported: self.resize_supported,
             session: session.to_owned(),
             width: self.width,
             height: self.height,
@@ -209,7 +238,11 @@ impl VncRuntime {
             error: self.error.clone(),
             zlib_rgba: String::new(),
             region: None,
-            clipboard: self.clipboard.clone(),
+            clipboard: if self.options.clipboard.receive() {
+                self.clipboard.clone()
+            } else {
+                None
+            },
         };
         if let Some((region, pixels)) = region.and_then(|region| self.region_pixels(region)) {
             frame.zlib_rgba = encode_pixels(&pixels)?;
@@ -217,6 +250,7 @@ impl VncRuntime {
         } else if self.width > 0 && self.height > 0 && !self.rgba.is_empty() {
             frame.zlib_rgba = encode_pixels(&self.rgba)?;
         }
+        self.last_encoded_bytes = frame.zlib_rgba.len();
         self.dirty = None;
         self.encoded_revision = self.revision;
         Ok(frame)
@@ -273,6 +307,7 @@ fn encode_pixels(pixels: &[u8]) -> Result<String> {
 }
 
 pub(crate) struct VncConnectSpec {
+    pub(crate) options: terminator_core::vnc::VncOptions,
     pub(crate) project: String,
     pub(crate) profile_id: Option<String>,
     pub(crate) host: String,
@@ -287,6 +322,7 @@ pub(crate) struct VncConnectSpec {
 impl Shared {
     pub(crate) fn vnc_connect(self: &Arc<Self>, spec: VncConnectSpec) -> Result<VncSession> {
         let VncConnectSpec {
+            mut options,
             project,
             profile_id,
             host,
@@ -300,6 +336,32 @@ impl Shared {
         let host = host.trim().to_owned();
         ensure!(!host.is_empty() && host.len() <= 255, "Invalid VNC host");
         ensure!(port > 0, "Invalid VNC port");
+        ensure!(
+            password.len() <= 4096
+                && username.len() <= 4096
+                && !username.chars().any(char::is_control),
+            "VNC credentials exceed their supported limits"
+        );
+        options.validate()?;
+        let saved_profile = profile_id.as_ref().and_then(|pid| {
+            relock(&self.state)
+                .vnc_profiles
+                .iter()
+                .find(|p| &p.id == pid)
+                .cloned()
+        });
+        if let Some(profile) = &saved_profile {
+            ensure!(
+                profile.host == host && profile.port == port,
+                "Saved credentials cannot be used for another VNC endpoint"
+            );
+            options = profile.options.clone();
+            if password.is_empty() && profile.credential_saved {
+                password =
+                    credentials::load(self.catalog_paths.as_ref().unwrap_or(&self.paths), profile)?;
+            }
+        }
+        options.validate()?;
         let sid = id();
         let now_ts = now();
         // A reconnect to the same endpoint leaves the previous dead record
@@ -342,6 +404,9 @@ impl Shared {
                 .filter(|l| !l.is_empty())
                 .unwrap_or_else(|| format!("{host}:{port}"));
             let record = VncSession {
+                options: options.clone(),
+                retry_attempt: 0,
+                retry_in_seconds: 0,
                 id: sid.clone(),
                 project_id: project,
                 profile_id,
@@ -377,8 +442,9 @@ impl Shared {
 
         // Unbounded: input must never be dropped or block the RPC thread,
         // and an unbounded send from an async context is immediate.
-        let (input_tx, input_rx) = mpsc::unbounded_channel::<VncInputEvent>();
+        let (input_tx, input_rx) = mpsc::channel::<VncInputEvent>(256);
         let runtime = Arc::new(Mutex::new(VncRuntime::new(view_only, input_tx)));
+        relock(&runtime).options = options.clone();
         relock(&self.vnc_sessions).insert(sid.clone(), Arc::clone(&runtime));
 
         let shared_ref = Arc::clone(self);
@@ -389,11 +455,14 @@ impl Shared {
                     &shared_ref,
                     &runtime,
                     &session_id,
-                    host,
-                    port,
-                    password,
-                    shared,
-                    view_only,
+                    connection::ConnectionSpec {
+                        host,
+                        port,
+                        username,
+                        password: zeroize::Zeroizing::new(password),
+                        shared,
+                        options,
+                    },
                     input_rx,
                 );
             }));
@@ -433,15 +502,30 @@ impl Shared {
             .get(session)
             .cloned()
             .context("VNC session is not live")?;
-        let tx = {
-            let rt = relock(&runtime);
-            if rt.view_only {
-                return Ok(());
-            }
-            rt.input_tx.clone().context("VNC session is closed")?
+        let rt = relock(&runtime);
+        let events = if rt.view_only {
+            events
+                .into_iter()
+                .filter(|e| matches!(e, VncInputEvent::Refresh { .. }))
+                .collect()
+        } else {
+            events
         };
+        if events.is_empty() {
+            return Ok(());
+        }
+        ensure!(
+            rt.status == VncSessionStatus::Connected,
+            "VNC input is disabled while disconnected or reconnecting"
+        );
+        input::validate(&events, &rt.options, rt.view_only)?;
+        let tx = rt.input_tx.as_ref().context("VNC session is closed")?;
+        ensure!(
+            tx.capacity() >= events.len(),
+            "VNC input queue is full; wait before sending more input"
+        );
         for event in events {
-            let _ = tx.send(event);
+            tx.try_send(event).context("VNC input queue closed")?;
         }
         Ok(())
     }
@@ -475,12 +559,8 @@ fn run_vnc_thread(
     shared: &Arc<Shared>,
     runtime: &Arc<Mutex<VncRuntime>>,
     session_id: &str,
-    host: String,
-    port: u16,
-    password: String,
-    allow_shared: bool,
-    view_only: bool,
-    input_rx: mpsc::UnboundedReceiver<VncInputEvent>,
+    spec: connection::ConnectionSpec,
+    input_rx: mpsc::Receiver<VncInputEvent>,
 ) {
     let Ok(rt) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -494,185 +574,13 @@ fn run_vnc_thread(
         );
         return;
     };
-    rt.block_on(run_vnc_session(
+    rt.block_on(reconnect::run(
         Arc::clone(shared),
         Arc::clone(runtime),
         session_id.to_owned(),
-        host,
-        port,
-        password,
-        allow_shared,
-        view_only,
+        spec,
         input_rx,
     ));
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn run_vnc_session(
-    shared: Arc<Shared>,
-    runtime: Arc<Mutex<VncRuntime>>,
-    session_id: String,
-    host: String,
-    port: u16,
-    password: String,
-    allow_shared: bool,
-    view_only: bool,
-    mut input_rx: mpsc::UnboundedReceiver<VncInputEvent>,
-) {
-    let endpoint = if host.contains(':') && !host.starts_with('[') {
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
-    };
-    let tcp = match tokio::time::timeout(
-        Duration::from_secs(10),
-        tokio::net::TcpStream::connect(&endpoint),
-    )
-    .await
-    {
-        Ok(Ok(stream)) => stream,
-        Ok(Err(err)) => {
-            mark_failed(
-                &shared,
-                &runtime,
-                &session_id,
-                format!("Connection failed: {err}"),
-            );
-            return;
-        }
-        Err(_) => {
-            mark_failed(
-                &shared,
-                &runtime,
-                &session_id,
-                format!("Connection to {endpoint} timed out"),
-            );
-            return;
-        }
-    };
-    let _ = tcp.set_nodelay(true);
-    let connector = VncConnector::new(tcp)
-        .set_auth_method(async move { Ok(password) })
-        .add_encoding(VncEncoding::Tight)
-        .add_encoding(VncEncoding::Zrle)
-        .add_encoding(VncEncoding::CopyRect)
-        .add_encoding(VncEncoding::Raw)
-        .add_encoding(VncEncoding::DesktopSizePseudo)
-        .allow_shared(allow_shared)
-        .set_pixel_format(PixelFormat::rgba());
-
-    let client = match connector.build() {
-        Ok(state) => match tokio::time::timeout(Duration::from_secs(15), state.try_start()).await {
-            Ok(Ok(started)) => match started.finish() {
-                Ok(client) => client,
-                Err(err) => {
-                    mark_failed(
-                        &shared,
-                        &runtime,
-                        &session_id,
-                        format!("VNC handshake failed: {err}"),
-                    );
-                    return;
-                }
-            },
-            Ok(Err(err)) => {
-                mark_failed(
-                    &shared,
-                    &runtime,
-                    &session_id,
-                    format!("VNC authentication failed: {err}"),
-                );
-                return;
-            }
-            Err(_) => {
-                mark_failed(
-                    &shared,
-                    &runtime,
-                    &session_id,
-                    "VNC authentication timed out".into(),
-                );
-                return;
-            }
-        },
-        Err(err) => {
-            mark_failed(
-                &shared,
-                &runtime,
-                &session_id,
-                format!("VNC setup failed: {err}"),
-            );
-            return;
-        }
-    };
-
-    mark_connected(&shared, &runtime, &session_id);
-    let _ = client.input(X11Event::FullRefresh).await;
-
-    let mut refresh_tick = tokio::time::interval(Duration::from_millis(33));
-    refresh_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-    loop {
-        tokio::select! {
-            event = client.recv_event() => {
-                match event {
-                    Ok(vnc_event) => {
-                        if !apply_vnc_event(&shared, &runtime, &session_id, vnc_event) {
-                            break;
-                        }
-                        while let Ok(Some(more)) = client.poll_event().await {
-                            if !apply_vnc_event(&shared, &runtime, &session_id, more) {
-                                let _ = client.close().await;
-                                return;
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        mark_disconnected(&shared, &runtime, &session_id, Some(err.to_string()));
-                        break;
-                    }
-                }
-            }
-            input = input_rx.recv() => {
-                let Some(input) = input else {
-                    break;
-                };
-                if view_only && !matches!(input, VncInputEvent::Refresh { .. }) {
-                    continue;
-                }
-                let x11 = to_x11_event(input);
-                if client.input(x11).await.is_err() {
-                    mark_disconnected(&shared, &runtime, &session_id, None);
-                    break;
-                }
-            }
-            _ = refresh_tick.tick() => {
-                // An unwatched session stops asking the server for damage:
-                // no viewer is polling, so the bandwidth would be wasted.
-                let watched = relock(&runtime).polled_recently();
-                if watched && client.input(X11Event::Refresh).await.is_err() {
-                    mark_disconnected(&shared, &runtime, &session_id, None);
-                    break;
-                }
-            }
-        }
-    }
-    let _ = client.close().await;
-}
-
-fn to_x11_event(event: VncInputEvent) -> X11Event {
-    match event {
-        VncInputEvent::Pointer { x, y, buttons } => X11Event::PointerEvent(ClientMouseEvent {
-            position_x: x,
-            position_y: y,
-            bottons: buttons,
-        }),
-        VncInputEvent::Key { keycode, down } => {
-            X11Event::KeyEvent(ClientKeyEvent { keycode, down })
-        }
-        VncInputEvent::CopyText(text) => X11Event::CopyText(text),
-        VncInputEvent::Refresh { full: true } => X11Event::FullRefresh,
-        VncInputEvent::Refresh { full: false } => X11Event::Refresh,
-    }
 }
 
 fn apply_vnc_event(
@@ -686,6 +594,9 @@ fn apply_vnc_event(
             {
                 let mut rt = relock(runtime);
                 rt.resize(screen.width, screen.height);
+                if rt.status == VncSessionStatus::Failed {
+                    return false;
+                }
                 rt.status = VncSessionStatus::Connected;
             }
             let mut state = relock(&shared.state);
@@ -702,6 +613,21 @@ fn apply_vnc_event(
                 {
                     let mut rt = relock(runtime);
                     rt.resize(layout.width, layout.height);
+                    if rt.status == VncSessionStatus::Failed {
+                        return false;
+                    }
+                    rt.monitors = layout
+                        .screens
+                        .iter()
+                        .map(|s| terminator_core::vnc::VncMonitor {
+                            id: s.id,
+                            x: s.x,
+                            y: s.y,
+                            width: s.width,
+                            height: s.height,
+                        })
+                        .collect();
+                    rt.resize_supported = true;
                 }
                 let mut state = relock(&shared.state);
                 if let Some(rec) = state.vnc_sessions.iter_mut().find(|s| s.id == session_id) {
@@ -723,18 +649,52 @@ fn apply_vnc_event(
             true
         }
         VncEvent::JpegImage(rect, bytes) => {
-            if let Ok(decoded) =
-                image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg)
+            let mut reader = image::ImageReader::with_format(
+                std::io::Cursor::new(bytes),
+                image::ImageFormat::Jpeg,
+            );
+            let mut limits = image::Limits::default();
+            limits.max_image_width = Some(u32::from(MAX_DIMENSION));
+            limits.max_image_height = Some(u32::from(MAX_DIMENSION));
+            limits.max_alloc = Some(128 * 1024 * 1024);
+            reader.limits(limits);
+            if let Ok(decoded) = reader.decode() {
+                if decoded.width() != u32::from(rect.width)
+                    || decoded.height() != u32::from(rect.height)
+                {
+                    return false;
+                }
+                relock(runtime).blit_rgba(rect, &decoded.into_rgba8().into_raw());
+                true
+            } else {
+                false
+            }
+        }
+        VncEvent::SetCursor(rect, pixels) => {
+            if rect.width <= 256
+                && rect.height <= 256
+                && pixels.len()
+                    == usize::from(rect.width)
+                        .saturating_mul(usize::from(rect.height))
+                        .saturating_mul(4)
             {
-                let rgba = decoded.into_rgba8().into_raw();
                 let mut rt = relock(runtime);
-                rt.blit_rgba(rect, &rgba);
+                rt.cursor = Some(terminator_core::vnc::VncCursor {
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.width,
+                    height: rect.height,
+                    rgba: B64.encode(pixels),
+                });
+                rt.revision = rt.revision.saturating_add(1);
             }
             true
         }
         VncEvent::Text(text) => {
             let mut rt = relock(runtime);
-            rt.clipboard = Some(text);
+            if rt.options.clipboard.receive() && text.len() <= terminator_core::vnc::MAX_CLIPBOARD {
+                rt.clipboard = Some(text);
+            }
             rt.revision = rt.revision.saturating_add(1);
             true
         }
@@ -756,6 +716,8 @@ fn mark_connected(shared: &Arc<Shared>, runtime: &Arc<Mutex<VncRuntime>>, sessio
     let mut state = relock(&shared.state);
     if let Some(rec) = state.vnc_sessions.iter_mut().find(|s| s.id == session_id) {
         rec.status = VncSessionStatus::Connected;
+        rec.retry_attempt = 0;
+        rec.retry_in_seconds = 0;
         rec.error = None;
         state.revision = state.revision.saturating_add(1);
     }
@@ -815,7 +777,7 @@ mod tests {
     use std::io::Read;
 
     fn runtime() -> VncRuntime {
-        let (input_tx, _input_rx) = mpsc::unbounded_channel();
+        let (input_tx, _input_rx) = mpsc::channel(256);
         VncRuntime::new(false, input_tx)
     }
 

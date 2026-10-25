@@ -1,5 +1,69 @@
 # Validation evidence — 2026-09-08
 
+## Modular VNC enhancements — 2026-10-26
+
+The VNC code is split into shared policy models, daemon connection/transport,
+credentials, reconnect, input, quality and SFTP modules, and GUI frame/state,
+profiles/settings, keyboard/clipboard, display and transfer modules. The
+MIT/Apache-licensed vnc-rs fork adds certificate-validated VeNCrypt using
+rustls. See `docs/VNC.md` and `vendor/vnc-rs/UPSTREAM.md` for behavior and limits.
+
+Final workspace tests passed: 1,271 tests, 4 ignored. The vendored VNC protocol
+suite passed 42 tests, including strict authentication selection and TLS
+no-fallback behavior. Strict workspace Clippy, root/vendor formatting, and
+whitespace checks passed. Workspace binaries and examples built with test
+support; the debug GUI linker reported its large unwind-table warning.
+The final dependency advisory check passed with warnings denied: 1,352
+advisories checked against 919 dependencies. The unmaintained PEM helper was
+removed in favor of the rustls PKI parser; a fresh daemon verified a real TLS
+connection and rejected a wrong certificate name after that replacement.
+The complete real-PTY integration task exited successfully, including hook
+delivery, recovery, repeated shutdown, attachment cancellation and snapshots.
+
+A bounded Docker fixture exposed only localhost ports: plain VNC 15911,
+certificate-validated VNC 15912, and SSH/SFTP 15922. Tests used a disposable CA,
+keys, known-hosts file, desktop and files. Successful real-server checks cover:
+
+- Plain and TLS authenticated framebuffer delivery; wrong certificate names,
+  plaintext TLS fallback and unknown SSH host keys were rejected.
+- Server-confirmed resize, monitor metadata, remote cursor data, clipboard
+  direction enforcement, bounded input, and Unicode typed text.
+- SFTP upload/download byte equality (294,912 bytes), with both upload and
+  download refusing to overwrite existing destinations.
+- Network interruption, retry, reconnect to the same session, and explicit
+  cancellation of retry through disconnect.
+- OS keychain save/read/delete, absence of the unique dummy password from
+  snapshots and SQLite, and refusal to use it at another endpoint.
+- Legacy plaintext-profile migration through actual GUI/daemon activation,
+  an active catalog with cleared password fields, and authentication using
+  the migrated credential. Dummy keychain entries were removed afterwards.
+
+Runtime validation found and corrected Unicode key-map reuse, SFTP shutdown
+waiting on a retained filesystem handle, and premature shared-catalog writes
+by prepared daemon generations. Candidate failure preserved the previous
+service. Existing archived stores were not erased.
+
+Native GUI checks verified TLS configuration and connection, saved quality/
+retry/cursor/resize settings, server resize to the pane, dedicated fullscreen,
+and restore to normal workspace chrome. Multiple-monitor pointer mapping and
+hidden-tab shortcut capture have focused rendering regressions. Multi-monitor
+hardware, physical OS-reserved keyboard capture, native file-picker input and
+Linux Secret Service/Windows Credential Manager runtime behavior were not
+established by these macOS checks. The Keys menu sends remote system chords
+without claiming OS-wide keyboard interception.
+
+Logs: `/tmp/terminator-vnc-enhancements-tests.log`,
+`/tmp/terminator-vnc-library-tests.log`,
+`/tmp/terminator-vnc-enhancements-clippy.log`,
+`/tmp/terminator-vnc-enhancements-build.log`, and
+`/tmp/terminator-vnc-enhancements-integration.log`, and
+`/tmp/terminator-vnc-enhancements-audit.log`.
+Runtime logs and snapshots are under `/tmp/tvnc-feature-fixtures/`:
+`runtime.log`, `recovery.log`, `keychain.log`, `migration.log`,
+`gui-fullscreen-entry.json`, `gui-final.json`, `gui-final.png`, and
+`parser-final.log`.
+
+
 ## VNC clipboard insertion and IDE Search resize checks — 2026-10-25
 
 The first local VNC run established clipboard transport but did not test

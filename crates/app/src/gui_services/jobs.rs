@@ -99,6 +99,14 @@ pub(super) fn context(job: &Job) -> OperationContext {
         Job::TestNtfy { .. } => ("platform", "ntfy-test".into(), Policy::ReplaceableRead),
         Job::Preferences(_) => ("catalog", "preferences".into(), Policy::OrderedMutation),
         Job::SaveAppearance(..) => ("catalog", "appearance".into(), Policy::OrderedMutation),
+        Job::VncPickTransfer { session, .. } => {
+            ("vnc-transfer", session.clone(), Policy::OrderedMutation)
+        }
+        Job::VncTransferPoll { session, .. } => (
+            "vnc-transfer-status",
+            session.clone(),
+            Policy::ReplaceableRead,
+        ),
         Job::VncFrame { session, .. } => {
             ("vnc", format!("frame:{session}"), Policy::ReplaceableRead)
         }

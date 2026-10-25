@@ -81,7 +81,9 @@ pub fn owner_for(paths: &Paths, request: &Request) -> Result<Paths> {
     let vnc_session = match request {
         Request::VncDisconnect { session }
         | Request::VncInput { session, .. }
-        | Request::VncFrame { session, .. } => Some(session.as_str()),
+        | Request::VncFrame { session, .. }
+        | Request::VncTransfer { session, .. }
+        | Request::VncTransferStatus { session, .. } => Some(session.as_str()),
         _ => None,
     };
     if session.is_some()
@@ -103,7 +105,9 @@ pub fn owner_for(paths: &Paths, request: &Request) -> Result<Paths> {
                 }
                 Request::VncDisconnect { .. }
                 | Request::VncInput { .. }
-                | Request::VncFrame { .. } => state
+                | Request::VncFrame { .. }
+                | Request::VncTransfer { .. }
+                | Request::VncTransferStatus { .. } => state
                     .vnc_sessions
                     .iter()
                     .any(|s| Some(s.id.as_str()) == vnc_session),

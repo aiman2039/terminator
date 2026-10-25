@@ -134,11 +134,49 @@ impl eframe::App for App {
         self.visible_sessions.clear();
         self.visible_images.clear();
         self.visible_browsers.clear();
+        for (key, view) in &mut self.vnc_views {
+            view.visible_last_frame = self.visible_vnc.contains(key);
+        }
         self.visible_vnc.clear();
         self.markdown.begin_frame();
         #[cfg(feature = "test-support")]
         self.diagnostics.frame(&ctx);
+        if self.vnc_captures_shortcuts(&ctx) && ctx.input(|i| i.key_pressed(egui::Key::F8)) {
+            for view in self.vnc_views.values_mut() {
+                view.capture_shortcuts = false;
+            }
+            ctx.input_mut(|i| {
+                i.events.retain(|event| {
+                    !matches!(
+                        event,
+                        egui::Event::Key {
+                            key: egui::Key::F8,
+                            ..
+                        }
+                    )
+                })
+            });
+        }
+        if self.vnc_fullscreen.is_some() && ctx.input(|i| i.key_pressed(egui::Key::F11)) {
+            self.vnc_fullscreen = None;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            ctx.input_mut(|i| {
+                i.events.retain(|event| {
+                    !matches!(
+                        event,
+                        egui::Event::Key {
+                            key: egui::Key::F11,
+                            ..
+                        }
+                    )
+                })
+            });
+        }
+        let capture_vnc = self.vnc_captures_shortcuts(&ctx);
         for action in shortcuts::ACTIONS.iter().map(|(action, _)| *action) {
+            if capture_vnc {
+                continue;
+            }
             if !self.shortcut_allowed(action) || !self.shortcut_applies(action) {
                 continue;
             }
@@ -159,14 +197,15 @@ impl eframe::App for App {
         // shown after the sidebars, so it spans only the center and the
         // sidebars run full height. Both rows sit below the native
         // titlebar band, so tab drags never race window moves.
-        egui::Panel::top("window-header")
-            .exact_size(40.0)
-            .frame(egui::Frame::NONE.fill(appearance::color(&self.theme.surface)))
-            .show(ui, |ui| self.window_header(ui));
-        if !self.state.settings.notifications_side {
-            egui::Panel::top("attention").show(ui, |ui| self.notifications(ui));
-        }
-        egui::Panel::bottom("status").show(ui, |ui| {
+        if self.vnc_fullscreen.is_none() {
+            egui::Panel::top("window-header")
+                .exact_size(40.0)
+                .frame(egui::Frame::NONE.fill(appearance::color(&self.theme.surface)))
+                .show(ui, |ui| self.window_header(ui));
+            if !self.state.settings.notifications_side {
+                egui::Panel::top("attention").show(ui, |ui| self.notifications(ui));
+            }
+            egui::Panel::bottom("status").show(ui, |ui| {
             ui.with_layout(
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
@@ -333,13 +372,14 @@ impl eframe::App for App {
                 self.status_right_end(ui);
             });
         });
-        self.place_ide_columns(ui);
-        // Center-only: shown after the sidebars so the tab strip sits beside
-        // them instead of pushing them down.
-        egui::Panel::top("workspace-tabs")
-            .exact_size(36.0)
-            .frame(egui::Frame::NONE.fill(appearance::color(&self.theme.surface)))
-            .show(ui, |ui| self.window_header_tabs(ui));
+            self.place_ide_columns(ui);
+            // Center-only: shown after the sidebars so the tab strip sits beside
+            // them instead of pushing them down.
+            egui::Panel::top("workspace-tabs")
+                .exact_size(36.0)
+                .frame(egui::Frame::NONE.fill(appearance::color(&self.theme.surface)))
+                .show(ui, |ui| self.window_header_tabs(ui));
+        }
         if self.preferences_writable
             && !self.preferences_pending
             && self.preferences != self.preferences_saved
@@ -353,7 +393,26 @@ impl eframe::App for App {
                     .fill(appearance::color(&self.theme.window))
                     .inner_margin(2),
             )
-            .show(ui, |ui| self.center_pane(ui));
+            .show(ui, |ui| {
+                if let Some(mut tab) = self.vnc_fullscreen.clone() {
+                    if let Tab::Vnc {
+                        id,
+                        session,
+                        profile_id,
+                        host,
+                        port,
+                        label,
+                    } = &mut tab
+                    {
+                        self.vnc_view(ui, id, session, profile_id, host, port, label);
+                    }
+                    if self.vnc_fullscreen.is_some() {
+                        self.vnc_fullscreen = Some(tab);
+                    }
+                } else {
+                    self.center_pane(ui);
+                }
+            });
         self.note_rename_frame(&ctx);
         self.preview_appearance(&ctx);
         // Floating panes render after these prunes (`paint_floating` runs

@@ -261,6 +261,23 @@ impl App {
                         after,
                     );
                 }
+                Update::VncTransfer(session, result) => match result {
+                    Ok(Some(status)) => {
+                        if let Some(view) = self.vnc_views.get_mut(&session) {
+                            view.transfer_status = Some(status);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        if let Some(view) = self.vnc_views.get_mut(&session)
+                            && let Some(status) = &mut view.transfer_status
+                        {
+                            status.done = true;
+                            status.error = Some(error.clone());
+                        }
+                        self.error = Some(error);
+                    }
+                },
                 Update::VncConnected(session, after) => {
                     let project = if !session.project_id.is_empty() {
                         session.project_id.clone()
@@ -283,6 +300,23 @@ impl App {
                 Update::VncTabConnected(tab_id, result) => {
                     match result {
                         Ok(session) => {
+                            if let Some(Tab::Vnc {
+                                id,
+                                session: sid,
+                                profile_id,
+                                host,
+                                port,
+                                label,
+                            }) = &mut self.vnc_fullscreen
+                                && *id == tab_id
+                            {
+                                sid.clone_from(&session.id);
+                                profile_id.clone_from(&session.profile_id);
+                                host.clone_from(&session.host);
+                                *port = session.port;
+                                label.clone_from(&session.label);
+                            }
+
                             for workspace in self.layouts.values_mut() {
                                 for group in &mut workspace.tabs {
                                     for tab in group

@@ -109,6 +109,7 @@ pub struct App {
     pub(crate) visible_browsers: Vec<browser_host::VisibleBrowser>,
     pub(crate) browser_urls: HashMap<String, String>,
     pub(crate) browser_submit: Option<(String, BrowserTarget)>,
+    pub(crate) vnc_fullscreen: Option<Tab>,
     pub(crate) vnc_views: HashMap<String, crate::vnc_ui::VncViewState>,
     pub(crate) vnc_sidebar: crate::vnc_ui::VncSidebarState,
     pub(crate) visible_vnc: HashSet<String>,

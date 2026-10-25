@@ -220,6 +220,15 @@ pub(crate) enum Job {
         query: search::Query,
         show_ignored: bool,
     },
+    VncPickTransfer {
+        session: String,
+        direction: terminator_core::vnc::TransferDirection,
+        remote: String,
+    },
+    VncTransferPoll {
+        session: String,
+        id: String,
+    },
     VncConnectTab {
         tab_id: String,
         request: Request,
@@ -269,6 +278,10 @@ pub(crate) enum Update {
     OpenImage(String, PathBuf, After),
     OpenNativeEditor(String, PathBuf, After),
     OpenBrowser(String, BrowserTarget, After),
+    VncTransfer(
+        String,
+        Result<Option<terminator_core::vnc::VncTransferStatus>, String>,
+    ),
     VncConnected(terminator_core::vnc::VncSession, After),
     VncTabConnected(String, Result<terminator_core::vnc::VncSession, String>),
     VncFrame(

@@ -25,6 +25,9 @@ fn float_window(name: &str, project: &str, home: &str, tabs: Vec<Tab>) -> Floati
 
 fn vnc_session(id: &str, status: VncSessionStatus) -> VncSession {
     VncSession {
+        options: terminator_core::vnc::VncOptions::default(),
+        retry_attempt: 0,
+        retry_in_seconds: 0,
         id: id.into(),
         project_id: "a".into(),
         profile_id: None,
@@ -185,7 +188,7 @@ fn save_and_connect_uses_the_password_without_storing_it() {
     app.save_vnc_profile_form(true);
     let saved_id = match requests.try_recv().unwrap() {
         Job::Control(request, _) => match *request {
-            Request::VncProfileSave { profile } => {
+            Request::VncProfileSave { profile, .. } => {
                 assert!(profile.password.is_empty());
                 profile.id
             }
@@ -262,6 +265,9 @@ fn repeated_vnc_frames_do_not_overwrite_a_new_local_clipboard() {
             app.apply_vnc_frame(
                 &ctx,
                 crate::vnc_ui::VncDecodedFrame {
+                    cursor: None,
+                    monitors: Vec::new(),
+                    resize_supported: false,
                     session: "clipboard-session".into(),
                     width: 1,
                     height: 1,
@@ -293,4 +299,32 @@ fn repeated_vnc_frames_do_not_overwrite_a_new_local_clipboard() {
     assert_eq!(receive("new remote text"), ["new remote text"]);
     assert_eq!(receive(""), [""]);
     assert!(receive("").is_empty());
+}
+
+#[test]
+fn hidden_vnc_views_do_not_capture_application_shortcuts() {
+    let (mut app, ctx, _dir) = fixture();
+    let mut id = None;
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let response = ui.button("Remote focus fixture");
+        response.request_focus();
+        id = Some(response.id);
+    });
+    output.textures_delta.clear();
+    app.vnc_views.insert(
+        "focus-fixture".into(),
+        VncViewState {
+            focused: true,
+            capture_shortcuts: true,
+            focus_id: id,
+            visible_last_frame: true,
+            ..Default::default()
+        },
+    );
+    assert!(app.vnc_captures_shortcuts(&ctx));
+    app.vnc_views
+        .get_mut("focus-fixture")
+        .unwrap()
+        .visible_last_frame = false;
+    assert!(!app.vnc_captures_shortcuts(&ctx));
 }

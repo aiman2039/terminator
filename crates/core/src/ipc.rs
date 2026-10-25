@@ -13,12 +13,27 @@ use crate::{generations, idle_close, snapshot, transport, vnc, worktrees};
 pub enum Request {
     VncProfileSave {
         profile: vnc::VncProfile,
+        #[serde(default)]
+        forget_password: bool,
     },
     VncProfileRemove {
         id: String,
     },
+    VncForgetCredential {
+        id: String,
+    },
+    VncTransfer {
+        session: String,
+        transfer: vnc::VncTransfer,
+    },
+    VncTransferStatus {
+        session: String,
+        id: String,
+    },
     VncConnect {
         project: String,
+        #[serde(default)]
+        options: vnc::VncOptions,
         #[serde(default)]
         profile_id: Option<String>,
         host: String,
@@ -183,6 +198,9 @@ impl Request {
             Self::VncProfileSave { .. } => "VncProfileSave",
             Self::VncProfileRemove { .. } => "VncProfileRemove",
             Self::VncConnect { .. } => "VncConnect",
+            Self::VncForgetCredential { .. } => "VncForgetCredential",
+            Self::VncTransfer { .. } => "VncTransfer",
+            Self::VncTransferStatus { .. } => "VncTransferStatus",
             Self::VncDisconnect { .. } => "VncDisconnect",
             Self::VncInput { .. } => "VncInput",
             Self::VncFrame { .. } => "VncFrame",
@@ -244,6 +262,7 @@ pub enum Response {
     SnapshotChunk { data: String, last: bool },
     Worktrees(Vec<worktrees::GitWorktree>),
     VncCreated(vnc::VncSession),
+    VncTransferStatus(vnc::VncTransferStatus),
     VncFrame(Box<vnc::VncFrame>),
     Unchanged,
     Ok,
@@ -386,6 +405,7 @@ pub(crate) fn redirect_allowed(request: &Request) -> bool {
             | Request::WorktreeRemove { .. }
             | Request::VncProfileSave { .. }
             | Request::VncProfileRemove { .. }
+            | Request::VncForgetCredential { .. }
             | Request::VncConnect { .. }
     )
 }
