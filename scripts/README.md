@@ -435,3 +435,13 @@ All harness launches strip inherited `TERMINATOR_*` variables before applying
 fixture-owned data/runtime/config and test settings. This includes catalog and
 generation routing; setting only a temporary data directory is insufficient.
 See `docs/VALIDATION.md` for measured results and remaining validation boundaries.
+
+
+## Perforce integration check
+
+Install `p4` and `p4d`, then run `bash scripts/test-perforce.sh` from the repository
+root. You can supply absolute binary paths with `P4_BIN` and `P4D_BIN`.
+The script creates and removes its own workspace, server, account, tickets,
+and configuration. It uses a local stdin/stdout connection, clears inherited
+Perforce routing, and runs the ignored `perforce::tests::isolated_server` test.
+It does not use your configured server or workspace.

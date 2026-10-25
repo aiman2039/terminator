@@ -398,6 +398,7 @@ mod tests {
         let context = ContextData {
             cwd: "/repo".into(),
             root: Some("/repo".into()),
+            perforce: None,
             git_dirs: vec![],
             branch: "main".into(),
             changes: vec![
@@ -484,6 +485,7 @@ mod tests {
         let make_context = || ContextData {
             cwd: "/repo".into(),
             root: Some("/repo".into()),
+            perforce: None,
             git_dirs: vec![],
             branch: "main".into(),
             changes: vec![],

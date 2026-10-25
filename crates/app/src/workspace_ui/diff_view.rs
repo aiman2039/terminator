@@ -385,6 +385,7 @@ impl App {
         // a refreshed document only while it holds no unsaved edits.
         if !*staged
             && let Some(document) = &doc
+            && !document.read_only
             && review.buffer.as_ref().is_none_or(|buffer| {
                 !std::sync::Arc::ptr_eq(&buffer.document, document)
                     && buffer.text == buffer.document.right_text
@@ -410,7 +411,7 @@ impl App {
                 split,
                 self.diff_split_ratio,
                 &cwd.join(path),
-                !*staged,
+                !*staged && !doc.read_only,
                 *staged,
             );
             if doc.hunks.is_empty() && doc.unified.is_empty() {

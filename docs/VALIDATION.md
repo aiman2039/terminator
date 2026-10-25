@@ -1,5 +1,34 @@
 # Validation evidence — 2026-09-08
 
+## Perforce source control — 2026-10-26
+
+The Git / Perforce sidebar detects configured Perforce folders when Git is
+absent. Status uses `fstat -Ro` and `reconcile -n -l`; refresh is read-only.
+The native viewer compares the synced have revision with the workspace and
+disables editing and Git hunk actions. File actions run through the bounded
+async process service. Perforce children share a serialization key. Canonical
+filesystem paths and Perforce client-root paths remain separate for macOS aliases.
+
+Validation:
+
+- App library suite: 687 passed, 5 ignored. The initial sandbox run could not
+  bind fixture sockets; the successful run had local socket access.
+- Perforce parser and headless panel tests passed, including the submit
+  confirmation interaction. A separate rendering check covers read-only diffs.
+- `scripts/test-perforce.sh` passed with official P4/P4D 2026.1 binaries and a
+  temporary server over stdin/stdout. It covers detection, opened and offline
+  changes, added/deleted files, spaces and revision characters in file names,
+  path aliases, native snapshot content, reconcile, edit, shelve, unshelve,
+  submit, sync, invalid changelist arguments, and outside-folder rejection.
+- Strict app-library Clippy passed. Test builds report existing unused imports
+  in navigation test modules.
+
+No user Perforce server, login, or workspace was used. No running GUI or daemon
+was replaced. Native desktop appearance, remote server connectivity, SSL/SSO,
+stream switching, resolve, and production workspace behavior remain unverified.
+Revert, resolve, changelist creation, stream changes, and shelf deletion use the
+terminal. Numbered changelist submission includes the entire changelist.
+
 ## Modular VNC enhancements — 2026-10-26
 
 The VNC code is split into shared policy models, daemon connection/transport,

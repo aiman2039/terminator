@@ -556,12 +556,18 @@ impl App {
                 open_shortcut,
                 split_shortcut,
                 focused_file == Some(entry.path.as_path()),
+                self.context
+                    .as_ref()
+                    .is_some_and(|context| context.perforce.is_some()),
             );
             if let Some(action) = outcome.clicked {
                 self.activate_file_action(ui, &entry.path, action);
             }
             if let Some(action) = outcome.menu {
                 self.file_action(ui, action, &entry.path, None);
+            }
+            if let Some(op) = outcome.perforce {
+                self.queue_workspace(workspace_ops::Op::Perforce(op));
             }
             if let Some(local) = outcome.local {
                 self.explorer_local(&entry.path, local, ui);
@@ -740,6 +746,12 @@ impl App {
         }
         self.pending_delete_bar(ui);
         if let Some(context) = self.context.take() {
+            if context.perforce.is_some() {
+                let outcome = super::perforce_panel::panel(ui, &context, &self.theme);
+                self.context = Some(context);
+                self.perform_git_outcome(ui, outcome);
+                return;
+            }
             let prepared = {
                 let cache = self.sidebar_cache.get_mut();
                 let git = cache

@@ -114,7 +114,11 @@ impl App {
                             (StripeTool::Projects, "Folder", "Projects"),
                             (StripeTool::Tool(SidebarTool::Explorer), "Files", "Explorer"),
                             (StripeTool::Tool(SidebarTool::Agents), "Bell", "Agents"),
-                            (StripeTool::Tool(SidebarTool::Git), "GitBranch", "Git"),
+                            (
+                                StripeTool::Tool(SidebarTool::Git),
+                                "GitBranch",
+                                "Git / Perforce",
+                            ),
                             (StripeTool::Tool(SidebarTool::History), "History", "History"),
                             (StripeTool::Tool(SidebarTool::Info), "Info", "Info"),
                             (

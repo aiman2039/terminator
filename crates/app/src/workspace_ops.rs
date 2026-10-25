@@ -10,6 +10,7 @@ use terminator_core::{CommandOptions, git, os_name, run_command};
 
 #[derive(Clone, Debug)]
 pub enum Op {
+    Perforce(crate::perforce::Op),
     Stage(PathBuf),
     Unstage(PathBuf),
     /// Revert a tracked worktree file, or delete an untracked file.
@@ -76,6 +77,7 @@ pub struct CommittedFile {
 
 pub fn perform(root: &Path, op: Op) -> Result<Report> {
     match op {
+        Op::Perforce(_) => bail!("Perforce actions require the async process service"),
         Op::Stage(path) => git_path(root, &["add", "--"], &path, "Staged"),
         Op::Unstage(path) => git_path(root, &["restore", "--staged", "--"], &path, "Unstaged"),
         Op::Discard { path, untracked } => {

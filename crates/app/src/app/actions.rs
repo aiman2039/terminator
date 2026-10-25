@@ -167,6 +167,9 @@ impl App {
         ui: &egui::Ui,
         outcome: sidebar_ui::GitPanelOutcome,
     ) {
+        for op in outcome.perforce {
+            self.queue_workspace(workspace_ops::Op::Perforce(op));
+        }
         if outcome.refresh {
             self.refresh_request = None;
             self.git_list_root = None;
@@ -398,7 +401,13 @@ impl App {
                 .any(|c| c == NVIM_REVIEW_CAPABILITY)
     }
     pub(crate) fn git_root(&self) -> Option<PathBuf> {
-        self.context.as_ref().and_then(|c| c.root.clone())
+        self.context.as_ref().and_then(|context| {
+            context
+                .perforce
+                .as_ref()
+                .map(|workspace| workspace.command_root.clone())
+                .or_else(|| context.root.clone())
+        })
     }
     pub(crate) fn editors_only(&self, ids: &[String]) -> bool {
         !ids.is_empty()

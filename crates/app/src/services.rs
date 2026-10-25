@@ -21,6 +21,7 @@ pub fn project_for_directory<'a>(
 pub struct ContextData {
     pub cwd: PathBuf,
     pub root: Option<PathBuf>,
+    pub perforce: Option<crate::perforce::Workspace>,
     pub git_dirs: Vec<PathBuf>,
     pub branch: String,
     pub changes: Vec<Change>,
@@ -162,6 +163,7 @@ pub fn context_cached(
     let mut result = ContextData {
         cwd: cwd.into(),
         root: None,
+        perforce: None,
         git_dirs: vec![],
         branch: String::new(),
         changes: vec![],
@@ -349,6 +351,7 @@ pub async fn context_async(
     let mut result = ContextData {
         cwd: cwd.clone(),
         root: None,
+        perforce: None,
         git_dirs: vec![],
         branch: String::new(),
         changes: vec![],
@@ -363,14 +366,16 @@ pub async fn context_async(
     let git = |root: PathBuf, args: Vec<std::ffi::OsString>| async move {
         terminator_git::run(service.processes(), service.fs(), &root, args, options()).await
     };
-    let root = match git(
+    let root = if let Ok(bytes) = git(
         cwd.clone(),
         vec!["rev-parse".into(), "--show-toplevel".into()],
     )
     .await
     {
-        Ok(bytes) => PathBuf::from(String::from_utf8_lossy(&bytes).trim()),
-        Err(_) => return result,
+        PathBuf::from(String::from_utf8_lossy(&bytes).trim())
+    } else {
+        crate::perforce::context(service, &mut result, include_stats, cancel).await;
+        return result;
     };
     let root = service
         .fs()

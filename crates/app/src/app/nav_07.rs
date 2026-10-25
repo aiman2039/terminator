@@ -1606,6 +1606,7 @@ mod tests {
         let context = services::ContextData {
             cwd: path.clone(),
             root: None,
+            perforce: None,
             git_dirs: vec![],
             branch: String::new(),
             changes: vec![],
@@ -1710,6 +1711,7 @@ mod tests {
                 services::ContextData {
                     cwd: "/a".into(),
                     root: None,
+                    perforce: None,
                     git_dirs: vec![],
                     branch: "stale".into(),
                     changes: vec![],

@@ -62,6 +62,7 @@ pub struct SplitRow {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct DiffDocument {
+    pub read_only: bool,
     pub left_label: String,
     pub right_label: String,
     pub left_text: String,
@@ -101,7 +102,10 @@ impl DiffDocument {
             self.context,
             revealed,
         );
+        doc.read_only = self.read_only;
         doc.source.clone_from(&self.source);
+        doc.left_label.clone_from(&self.left_label);
+        doc.right_label.clone_from(&self.right_label);
         Ok(doc)
     }
 }
@@ -527,7 +531,14 @@ pub(crate) async fn document_with_context(
         vec!["rev-parse".into(), "--show-toplevel".into()],
         options(),
     )
-    .await?;
+    .await;
+    let root_bytes = match root_bytes {
+        Ok(bytes) => bytes,
+        Err(_) if !staged => {
+            return crate::perforce::document(service, cwd, path, context, cancel).await;
+        }
+        Err(error) => return Err(error),
+    };
     let root = PathBuf::from(std::str::from_utf8(&root_bytes)?.trim());
     let (root, relative) = service
         .fs()

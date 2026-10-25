@@ -329,7 +329,7 @@ pub fn spawn_async(
                 let mut directories = Vec::new();
                 for (path, entries) in raw_directories {
                     let entries = services::directory_with_ignored_async(
-                        &service, path.clone(), entries, context.root.is_some(),
+                        &service, path.clone(), entries, context.root.is_some() && context.perforce.is_none(),
                     ).await;
                     directories.push((path, entries));
                 }
@@ -386,6 +386,7 @@ mod tests {
         let context = services::ContextData {
             cwd: root.clone(),
             root: Some(root.clone()),
+            perforce: None,
             git_dirs: vec![git_dir.clone()],
             branch: String::new(),
             changes: Vec::new(),
