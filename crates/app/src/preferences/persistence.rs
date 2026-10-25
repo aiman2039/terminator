@@ -12,6 +12,23 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TerminalStyle {
+    pub color: Option<String>,
+    pub icon: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VncPasteShortcut {
+    #[default]
+    ShiftInsert,
+    ControlV,
+    ControlShiftV,
+    CommandV,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SidebarTool {
@@ -104,6 +121,9 @@ pub struct UiPreferences {
     pub setup_completed: bool,
     pub expanded: HashMap<String, bool>,
     pub history_expanded: HashMap<String, bool>,
+    /// Terminal title colors and icons, keyed by persistent session ID.
+    pub terminal_styles: HashMap<String, TerminalStyle>,
+    pub vnc_paste_shortcut: VncPasteShortcut,
     pub tool: SidebarTool,
     pub visible: bool,
     /// IDE layout: tool stripes, editor center, terminal strip. Default on
@@ -214,6 +234,8 @@ impl Default for UiPreferences {
             setup_completed: false,
             expanded: HashMap::new(),
             history_expanded: HashMap::new(),
+            terminal_styles: HashMap::new(),
+            vnc_paste_shortcut: VncPasteShortcut::default(),
             tool: SidebarTool::Explorer,
             visible: true,
             ide_mode: true,

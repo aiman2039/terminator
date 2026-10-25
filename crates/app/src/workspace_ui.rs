@@ -13,6 +13,7 @@ mod menus;
 mod tab_menu;
 mod tabs;
 mod terminal_panes;
+mod terminal_style;
 mod terminal_view;
 mod viewer;
 mod views;

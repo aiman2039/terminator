@@ -232,6 +232,7 @@ mod row_tests {
                         terminal_bar(
                             ui,
                             TerminalBarSpec {
+                                title_tint: None,
                                 title: "Terminal",
                                 active: false,
                                 branch: None,
@@ -283,6 +284,7 @@ mod row_tests {
                 terminal_bar(
                     ui,
                     TerminalBarSpec {
+                        title_tint: None,
                         title: "Terminal",
                         active: false,
                         branch: None,

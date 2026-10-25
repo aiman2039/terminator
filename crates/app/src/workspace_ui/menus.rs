@@ -225,6 +225,7 @@ impl App {
         }
     }
     pub(crate) fn rename_action(&mut self, ui: &mut egui::Ui, sid: &str, surface: RenameSurface) {
+        self.terminal_style_menu(ui, sid);
         let shortcut = self.shortcut_label("rename_terminal");
         if appearance::menu_item(ui, "Rename terminal…", "Pencil", &shortcut).clicked() {
             self.begin_rename(sid, surface);

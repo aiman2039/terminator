@@ -82,69 +82,106 @@ impl App {
                     .inner_margin(egui::Margin::symmetric(2, 6)),
             )
             .show(ui, |ui| {
-                for (tool, icon, label) in [
-                    (StripeTool::Projects, "Folder", "Projects"),
-                    (StripeTool::Tool(SidebarTool::Explorer), "Files", "Explorer"),
-                    (StripeTool::Tool(SidebarTool::Agents), "Bell", "Agents"),
-                    (StripeTool::Tool(SidebarTool::Git), "GitBranch", "Git"),
-                    (StripeTool::Tool(SidebarTool::History), "History", "History"),
-                    (StripeTool::Tool(SidebarTool::Info), "Info", "Info"),
-                    (
-                        StripeTool::Tool(SidebarTool::Problems),
-                        "CircleAlert",
-                        "Problems",
+                let bounds = ui.available_rect_before_wrap();
+                let search_height = bounds.height().clamp(0.0, 46.0);
+                let search_rect = egui::Rect::from_min_max(
+                    egui::pos2(bounds.left(), bounds.bottom() - search_height),
+                    bounds.max,
+                );
+                let tools_rect = egui::Rect::from_min_max(
+                    bounds.min,
+                    egui::pos2(
+                        bounds.right(),
+                        (search_rect.top() - ui.spacing().item_spacing.y).max(bounds.top()),
                     ),
-                    (
-                        StripeTool::Tool(SidebarTool::Structure),
-                        "ListTree",
-                        "Structure",
-                    ),
-                    (StripeTool::Tool(SidebarTool::Vnc), "Monitor", "VNC"),
-                ] {
-                    let selected = self.stripe_selected(right, tool);
-                    let badge = if tool == StripeTool::Tool(SidebarTool::Agents) {
-                        let (waiting, unread) = self.attention_counts();
-                        (waiting.saturating_add(unread) > 0).then(|| {
-                            appearance::color(if waiting > 0 {
-                                &self.theme.status_waiting
+                );
+                ui.allocate_rect(bounds, egui::Sense::hover());
+                let mut tools_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .id_salt(("stripe-tools-region", right))
+                        .max_rect(tools_rect)
+                        .layout(egui::Layout::top_down(egui::Align::Center)),
+                );
+                tools_ui.set_clip_rect(ui.clip_rect().intersect(tools_rect));
+                egui::ScrollArea::vertical()
+                    .id_salt(("stripe-tools", right))
+                    .min_scrolled_height(0.0)
+                    .max_height(tools_rect.height())
+                    .auto_shrink([false, false])
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                    .show(&mut tools_ui, |ui| {
+                        for (tool, icon, label) in [
+                            (StripeTool::Projects, "Folder", "Projects"),
+                            (StripeTool::Tool(SidebarTool::Explorer), "Files", "Explorer"),
+                            (StripeTool::Tool(SidebarTool::Agents), "Bell", "Agents"),
+                            (StripeTool::Tool(SidebarTool::Git), "GitBranch", "Git"),
+                            (StripeTool::Tool(SidebarTool::History), "History", "History"),
+                            (StripeTool::Tool(SidebarTool::Info), "Info", "Info"),
+                            (
+                                StripeTool::Tool(SidebarTool::Problems),
+                                "CircleAlert",
+                                "Problems",
+                            ),
+                            (
+                                StripeTool::Tool(SidebarTool::Structure),
+                                "ListTree",
+                                "Structure",
+                            ),
+                            (StripeTool::Tool(SidebarTool::Vnc), "Monitor", "VNC"),
+                        ] {
+                            let selected = self.stripe_selected(right, tool);
+                            let badge = if tool == StripeTool::Tool(SidebarTool::Agents) {
+                                let (waiting, unread) = self.attention_counts();
+                                (waiting.saturating_add(unread) > 0).then(|| {
+                                    appearance::color(if waiting > 0 {
+                                        &self.theme.status_waiting
+                                    } else {
+                                        &self.theme.text
+                                    })
+                                })
                             } else {
-                                &self.theme.text
-                            })
-                        })
-                    } else {
-                        None
-                    };
-                    let response = appearance::stripe_button(ui, icon, label, selected, badge);
-                    #[cfg(feature = "test-support")]
-                    diagnostics::record(
-                        ui.ctx(),
-                        &format!("stripe-{}-{label}", if right { "right" } else { "left" }),
-                        response.rect,
-                    );
-                    #[cfg(feature = "test-support")]
-                    if !right {
-                        let legacy = match label {
-                            "Projects" => Some("stripe-projects"),
-                            "Agents" => Some("stripe-agents"),
-                            _ => None,
-                        };
-                        if let Some(name) = legacy {
-                            diagnostics::record(ui.ctx(), name, response.rect);
+                                None
+                            };
+                            let response =
+                                appearance::stripe_button(ui, icon, label, selected, badge);
+                            #[cfg(feature = "test-support")]
+                            diagnostics::record(
+                                ui.ctx(),
+                                &format!("stripe-{}-{label}", if right { "right" } else { "left" }),
+                                response.rect,
+                            );
+                            #[cfg(feature = "test-support")]
+                            if !right {
+                                let legacy = match label {
+                                    "Projects" => Some("stripe-projects"),
+                                    "Agents" => Some("stripe-agents"),
+                                    _ => None,
+                                };
+                                if let Some(name) = legacy {
+                                    diagnostics::record(ui.ctx(), name, response.rect);
+                                }
+                            }
+                            #[cfg(feature = "test-support")]
+                            if right {
+                                diagnostics::record(
+                                    ui.ctx(),
+                                    &format!("stripe-tool-{label}"),
+                                    response.rect,
+                                );
+                            }
+                            if response.clicked() {
+                                self.stripe_activate(right, tool);
+                            }
                         }
-                    }
-                    #[cfg(feature = "test-support")]
-                    if right {
-                        diagnostics::record(
-                            ui.ctx(),
-                            &format!("stripe-tool-{label}"),
-                            response.rect,
-                        );
-                    }
-                    if response.clicked() {
-                        self.stripe_activate(right, tool);
-                    }
-                }
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                    });
+                let mut search_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .id_salt(("stripe-search-region", right))
+                        .max_rect(search_rect)
+                        .layout(egui::Layout::top_down(egui::Align::Center)),
+                );
+                search_ui.set_clip_rect(ui.clip_rect().intersect(search_rect));
+                search_ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                     let search = appearance::stripe_button(ui, "Search", "Search", false, None);
                     #[cfg(feature = "test-support")]
                     diagnostics::record(
@@ -628,5 +665,47 @@ impl App {
         // and a main-pane shell released here moves into the dock just inserted.
         self.track_strip_tab_drag(ui, strip_rect);
         self.take_main_drop_on_strip(ui, strip_rect);
+    }
+}
+
+#[cfg(all(test, feature = "test-support"))]
+mod stripe_layout_tests {
+    use super::*;
+
+    #[test]
+    fn short_tool_stripes_clip_tools_above_the_search_button() {
+        let (mut app, ctx, _dir) = super::super::nav_common::fixture();
+        for height in [650.0, 220.0, 90.0, 400.0, 70.0, 650.0] {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, height),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.tool_stripe(ui, false),
+            );
+            output.textures_delta.clear();
+            let search = ctx.data(|data| {
+                data.get_temp::<egui::Rect>(egui::Id::unique((
+                    "fixture-target",
+                    "stripe-left-Search",
+                )))
+                .expect("Search remains available")
+            });
+            assert!(search.bottom() <= height);
+            assert_eq!(search.height(), 46.0);
+            for clipped in &output.shapes {
+                if let egui::epaint::Shape::Text(text) = &clipped.shape
+                    && matches!(text.galley.text(), "VNC" | "Structure")
+                {
+                    assert!(
+                        clipped.clip_rect.bottom() <= search.top(),
+                        "height={height}"
+                    );
+                }
+            }
+        }
     }
 }

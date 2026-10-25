@@ -2,7 +2,9 @@ mod persistence;
 mod sorting;
 mod strip;
 
-pub use persistence::{AgentsTab, ExplorerSearchMode, RadioStation, SidebarTool, UiPreferences};
+pub use persistence::{
+    AgentsTab, ExplorerSearchMode, RadioStation, SidebarTool, UiPreferences, VncPasteShortcut,
+};
 // `Playlist` is only named by `lib.rs` tests; keep its old path for them
 // without tripping `unused_imports` on normal builds.
 #[cfg(test)]

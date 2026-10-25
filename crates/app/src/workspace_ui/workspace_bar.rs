@@ -19,11 +19,14 @@ impl App {
                     let presented = self.present_session(sid);
                     TabFace {
                         label: s.label.clone(),
-                        icon: if s.kind == SessionKind::Editor {
-                            "FileCode"
-                        } else {
-                            "Terminal"
-                        },
+                        icon: self.terminal_title_icon(
+                            sid,
+                            if s.kind == SessionKind::Editor {
+                                "FileCode"
+                            } else {
+                                "Terminal"
+                            },
+                        ),
                         sid: Some(sid.clone()),
                         brand: presented.brand_icon,
                         status: presented.lifecycle.map(|lifecycle| {
@@ -171,7 +174,10 @@ impl App {
         });
         TabLeading {
             brand: presented.brand_icon,
-            kind: status.is_none().then_some(kind).flatten(),
+            kind: status
+                .is_none()
+                .then_some(kind.map(|icon| self.terminal_title_icon(sid, icon)))
+                .flatten(),
             status,
         }
     }
@@ -220,7 +226,8 @@ impl App {
                         .filter(|tab| group.layout.find_tab(tab).is_some())
                         .or_else(|| group.layout.iter_all_tabs().next().map(|(_, tab)| tab));
                     let face = self.tab_face(primary);
-                    let width = workspace_tab_width(tab_label_width(ui, &face.label));
+                    let width = workspace_tab_width(tab_label_width(ui, &face.label))
+                        + if face.brand.is_some() { 6.0 } else { 0.0 };
                     let attention = self.cached_tab_attention(&group_terminal_ids(&group.layout));
                     (
                         width
@@ -387,6 +394,17 @@ impl App {
                             } else {
                                 &self.theme.secondary
                             });
+                            let terminal_tint = face
+                                .sid
+                                .as_deref()
+                                .map(|sid| self.terminal_title_color(sid));
+                            if let Some(color) = terminal_tint {
+                                ui.painter().hline(
+                                    rect.x_range(),
+                                    rect.bottom() - 1.0,
+                                    egui::Stroke::new(if active { 2.0 } else { 1.0 }, color),
+                                );
+                            }
                             // Focused terminal identity: stable brand glyph
                             // beside the hook lifecycle status.
                             if let Some(brand) = face.brand {
@@ -421,7 +439,7 @@ impl App {
                                 );
                             } else {
                                 egui::Image::new(icons::source(face.icon))
-                                    .tint(appearance::ICON_COLOR)
+                                    .tint(terminal_tint.unwrap_or(appearance::ICON_COLOR))
                                     .paint_at(ui, icon_rect);
                             }
                             let label_x = if face.brand.is_some() { 36.0 } else { 30.0 };

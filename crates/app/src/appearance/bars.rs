@@ -92,6 +92,7 @@ pub struct TerminalBar {
 
 pub struct TerminalBarSpec<'a> {
     pub title: &'a str,
+    pub title_tint: Option<Color32>,
     pub active: bool,
     pub branch: Option<&'a str>,
     pub status: Option<Color32>,
@@ -135,6 +136,7 @@ pub fn strip_terminal_actions_width() -> f32 {
 pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar {
     let TerminalBarSpec {
         title,
+        title_tint,
         active,
         branch,
         status,
@@ -179,11 +181,13 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
         .is_some()
         .then(|| slot(&mut cursor, TERMINAL_BUTTON));
     let git_rect = slot(&mut cursor, git_width);
-    let tint = if active {
-        ui.visuals().selection.stroke.color
-    } else {
-        ui.visuals().weak_text_color()
-    };
+    let tint = title_tint.unwrap_or_else(|| {
+        if active {
+            ui.visuals().selection.stroke.color
+        } else {
+            ui.visuals().weak_text_color()
+        }
+    });
     // Leading identity icons mirror the workspace strip: stable brand plus
     // hook lifecycle status, or the session-kind glyph for plain shells.
     let mut lead = rect.left() + 8.0;
@@ -206,7 +210,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
     if let Some(icon) = status_icon {
         paint_lead(ui, icon, status_tint.unwrap_or(ICON_COLOR), spin);
     } else if let Some(kind) = kind {
-        paint_lead(ui, kind, ICON_COLOR, false);
+        paint_lead(ui, kind, title_tint.unwrap_or(ICON_COLOR), false);
     }
     let dot_gap = if status.is_some() { 14.0 } else { 0.0 };
     let title_width = (git_rect.left() - dot_gap - lead - 4.0).max(0.0);

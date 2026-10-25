@@ -15,7 +15,22 @@ use terminator_core::{
     },
 };
 
+use crate::preferences::VncPasteShortcut;
 use crate::{After, App, Job, Tab, appearance, icons};
+
+fn connection_endpoint(host: &str, port: &str) -> Result<(String, u16)> {
+    let port = port
+        .trim()
+        .parse::<u16>()
+        .map_err(|_| anyhow::anyhow!("Port must be between 1 and 65535"))?;
+    ensure!(port > 0, "Port must be between 1 and 65535");
+    let (host, port) = parse_host_port(host, port);
+    ensure!(
+        !host.trim().is_empty() && host.len() <= 255,
+        "VNC host must be 1–255 characters"
+    );
+    Ok((host, port))
+}
 
 pub(crate) struct VncDecodedFrame {
     pub(crate) session: String,
@@ -81,6 +96,8 @@ pub(crate) struct VncViewState {
     pub(crate) revision: u64,
     pub(crate) status: VncSessionStatus,
     pub(crate) error: Option<String>,
+    /// The last received clipboard text. Frames repeat it until it changes.
+    pub(crate) remote_clipboard: Option<String>,
     pub(crate) fetching: bool,
     pub(crate) last_poll: Option<Instant>,
     pub(crate) fit: bool,
@@ -119,6 +136,7 @@ impl Default for VncViewState {
             status: VncSessionStatus::Disconnected,
             error: None,
             fetching: false,
+            remote_clipboard: None,
             last_poll: None,
             fit: true,
             last_pointer: None,
@@ -140,6 +158,7 @@ impl Default for VncViewState {
 
 pub(crate) struct VncSidebarState {
     pub(crate) filter: String,
+    pub(crate) error: Option<String>,
     pub(crate) editing_id: Option<String>,
     pub(crate) form_open: bool,
     pub(crate) name: String,
@@ -159,6 +178,7 @@ impl Default for VncSidebarState {
         // without an explicit reset still shows a usable host and port.
         Self {
             filter: String::new(),
+            error: None,
             editing_id: None,
             form_open: false,
             name: String::new(),
@@ -176,6 +196,7 @@ impl Default for VncSidebarState {
 
 impl VncSidebarState {
     pub(crate) fn begin_new(&mut self) {
+        self.error = None;
         self.editing_id = None;
         self.form_open = true;
         self.name.clear();
@@ -190,6 +211,7 @@ impl VncSidebarState {
     }
 
     pub(crate) fn begin_edit(&mut self, profile: &VncProfile) {
+        self.error = None;
         self.editing_id = Some(profile.id.clone());
         self.form_open = true;
         self.name.clone_from(&profile.name);
@@ -323,8 +345,9 @@ impl App {
             entry.force_full = true;
         }
         if let Some(clipboard) = decoded.clipboard
-            && !clipboard.is_empty()
+            && entry.remote_clipboard.as_ref() != Some(&clipboard)
         {
+            entry.remote_clipboard = Some(clipboard.clone());
             ctx.copy_text(clipboard);
         }
     }
@@ -483,6 +506,9 @@ impl App {
                 "New VNC Host"
             });
             ui.add_space(4.0);
+            if let Some(error) = &self.vnc_sidebar.error {
+                ui.colored_label(appearance::color(&self.theme.status_failed), error);
+            }
             ui.label("Name");
             ui.add(
                 appearance::singleline(&mut self.vnc_sidebar.name)
@@ -490,12 +516,15 @@ impl App {
                     .desired_width(f32::INFINITY),
             );
             ui.horizontal(|ui| {
+                let host_width =
+                    (ui.available_width() - 68.0 - ui.spacing().item_spacing.x).max(40.0);
                 ui.vertical(|ui| {
+                    ui.set_width(host_width);
                     ui.label("Host");
                     ui.add(
                         appearance::singleline(&mut self.vnc_sidebar.host)
                             .hint_text("127.0.0.1")
-                            .desired_width((ui.available_width() - 80.0).max(80.0)),
+                            .desired_width(host_width),
                     );
                 });
                 ui.vertical(|ui| {
@@ -524,7 +553,7 @@ impl App {
                     self.vnc_sidebar.show_password = !self.vnc_sidebar.show_password;
                 }
             });
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.checkbox(&mut self.vnc_sidebar.shared, "Shared session");
                 ui.checkbox(&mut self.vnc_sidebar.view_only, "View only");
             });
@@ -533,48 +562,54 @@ impl App {
                 "Save password with this host",
             )
             .on_hover_text("Off: the password is only used for this session");
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let save = ui.button("Save").clicked();
                 let save_connect = ui.button("Save & Connect").clicked();
                 if ui.button("Cancel").clicked() {
+                    self.vnc_sidebar.password.clear();
+                    self.vnc_sidebar.error = None;
                     self.vnc_sidebar.form_open = false;
                 }
                 if save || save_connect {
-                    let (host, parsed_port) = parse_host_port(
-                        &self.vnc_sidebar.host,
-                        self.vnc_sidebar
-                            .port
-                            .trim()
-                            .parse::<u16>()
-                            .unwrap_or(DEFAULT_PORT),
-                    );
-                    if !host.is_empty() {
-                        let profile = VncProfile {
-                            id: self.vnc_sidebar.editing_id.clone().unwrap_or_else(id),
-                            name: self.vnc_sidebar.name.trim().to_owned(),
-                            host,
-                            port: parsed_port,
-                            username: self.vnc_sidebar.username.trim().to_owned(),
-                            password: if self.vnc_sidebar.save_password {
-                                self.vnc_sidebar.password.clone()
-                            } else {
-                                String::new()
-                            },
-                            shared: self.vnc_sidebar.shared,
-                            view_only: self.vnc_sidebar.view_only,
-                            last_connected: 0,
-                        };
-                        self.send(Request::VncProfileSave {
-                            profile: profile.clone(),
-                        });
-                        if save_connect {
-                            self.connect_vnc_profile(&profile, None);
-                        }
-                        self.vnc_sidebar.form_open = false;
-                    }
+                    self.save_vnc_profile_form(save_connect);
                 }
             });
         });
+    }
+
+    pub(crate) fn save_vnc_profile_form(&mut self, connect: bool) {
+        let result = (|| -> Result<VncProfile> {
+            let (host, port) = connection_endpoint(&self.vnc_sidebar.host, &self.vnc_sidebar.port)?;
+            let profile = VncProfile {
+                id: self.vnc_sidebar.editing_id.clone().unwrap_or_else(id),
+                name: self.vnc_sidebar.name.trim().to_owned(),
+                host,
+                port,
+                username: self.vnc_sidebar.username.trim().to_owned(),
+                password: self.vnc_sidebar.password.clone(),
+                shared: self.vnc_sidebar.shared,
+                view_only: self.vnc_sidebar.view_only,
+                last_connected: 0,
+            };
+            profile.validate()?;
+            Ok(profile)
+        })();
+        match result {
+            Ok(profile) => {
+                let mut saved = profile.clone();
+                if !self.vnc_sidebar.save_password {
+                    saved.password.clear();
+                }
+                self.send(Request::VncProfileSave { profile: saved });
+                if connect {
+                    self.connect_vnc_profile(&profile, None);
+                }
+                self.vnc_sidebar.password.clear();
+                self.vnc_sidebar.error = None;
+                self.vnc_sidebar.form_open = false;
+            }
+            Err(error) => self.vnc_sidebar.error = Some(error.to_string()),
+        }
     }
 
     /// Drop view state for sessions and drafts that no open tab uses. Runs
@@ -811,6 +846,26 @@ impl App {
                     open_sidebar = true;
                 }
                 ui.separator();
+                appearance::text_menu_button(ui, "Clipboard", |ui| {
+                    ui.label("Remote paste shortcut (copy and cut follow it)");
+                    for (shortcut, label) in [
+                        (VncPasteShortcut::ShiftInsert, "Shift+Insert"),
+                        (VncPasteShortcut::ControlV, "Ctrl+V"),
+                        (VncPasteShortcut::ControlShiftV, "Ctrl+Shift+V"),
+                        (VncPasteShortcut::CommandV, "Command+V (macOS)"),
+                    ] {
+                        if ui
+                            .selectable_value(
+                                &mut self.preferences.vnc_paste_shortcut,
+                                shortcut,
+                                label,
+                            )
+                            .clicked()
+                        {
+                            ui.close();
+                        }
+                    }
+                });
                 if ui
                     .selectable_label(view.fit, "Fit")
                     .on_hover_text("Scale remote screen to pane")
@@ -938,30 +993,26 @@ impl App {
                         || pass_resp.lost_focus())
                         && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if ui.button("Connect").clicked() || enter {
-                        let fallback = view
-                            .draft_port
-                            .trim()
-                            .parse::<u16>()
-                            .unwrap_or(DEFAULT_PORT);
-                        let (parsed_host, parsed_port) =
-                            parse_host_port(&view.draft_host, fallback);
-                        if !parsed_host.is_empty() {
-                            let title = if view.draft_name.trim().is_empty() {
-                                format!("{parsed_host}:{parsed_port}")
-                            } else {
-                                view.draft_name.trim().to_owned()
-                            };
-                            connect_request = Some(PendingVncConnect {
-                                profile_id: None,
-                                host: parsed_host,
-                                port: parsed_port,
-                                username: view.draft_username.clone(),
-                                password: view.draft_password.clone(),
-                                shared: view.draft_shared,
-                                view_only: view.draft_view_only,
-                                label: Some(title),
-                                save_profile: view.save_profile,
-                            });
+                        match connection_endpoint(&view.draft_host, &view.draft_port) {
+                            Ok((parsed_host, parsed_port)) => {
+                                let title = if view.draft_name.trim().is_empty() {
+                                    format!("{parsed_host}:{parsed_port}")
+                                } else {
+                                    view.draft_name.trim().to_owned()
+                                };
+                                connect_request = Some(PendingVncConnect {
+                                    profile_id: None,
+                                    host: parsed_host,
+                                    port: parsed_port,
+                                    username: view.draft_username.clone(),
+                                    password: view.draft_password.clone(),
+                                    shared: view.draft_shared,
+                                    view_only: view.draft_view_only,
+                                    label: Some(title),
+                                    save_profile: view.save_profile,
+                                });
+                            }
+                            Err(error) => view.error = Some(error.to_string()),
                         }
                     }
                 });
@@ -1081,7 +1132,13 @@ impl App {
         let view_only = daemon_session.as_ref().is_some_and(|s| s.view_only);
         let outcome = {
             let view = self.vnc_views.entry(sid.clone()).or_default();
-            vnc_screen(ui, view, &texture, view_only)
+            vnc_screen(
+                ui,
+                view,
+                &texture,
+                view_only,
+                self.preferences.vnc_paste_shortcut,
+            )
         };
         if outcome.activated {
             self.active_session = None;
@@ -1181,6 +1238,59 @@ fn accelerator_keysym(key: egui::Key) -> Option<u32> {
     Some(u32::from(letter))
 }
 
+/// Translate local clipboard commands into the remote application's shortcuts.
+/// Clipboard transfer alone does not insert text. Local modifiers must not
+/// change the remote chord (for example Command must not modify Shift+Insert).
+fn remote_clipboard_events(
+    event: &egui::Event,
+    shortcut: VncPasteShortcut,
+    held_modifiers: u8,
+) -> Vec<VncInputEvent> {
+    let (modifiers, key) = match (shortcut, event) {
+        (VncPasteShortcut::ShiftInsert, egui::Event::Paste(_)) => (1, 0xFF63),
+        (VncPasteShortcut::ShiftInsert, egui::Event::Copy) => (2, 0xFF63),
+        (VncPasteShortcut::ShiftInsert, egui::Event::Cut) => (1, 0xFFFF),
+        (shortcut, egui::Event::Paste(_)) => (clipboard_modifiers(shortcut), u32::from('v')),
+        (shortcut, egui::Event::Copy) => (clipboard_modifiers(shortcut), u32::from('c')),
+        (shortcut, egui::Event::Cut) => (clipboard_modifiers(shortcut), u32::from('x')),
+        _ => return Vec::new(),
+    };
+    let mut events = Vec::new();
+    for (keycode, down) in modifier_transitions(held_modifiers, 0) {
+        events.push(VncInputEvent::Key { keycode, down });
+    }
+    if let egui::Event::Paste(text) = event {
+        events.push(VncInputEvent::CopyText(text.to_owned()));
+    }
+    for (keycode, down) in modifier_transitions(0, modifiers) {
+        events.push(VncInputEvent::Key { keycode, down });
+    }
+    events.push(VncInputEvent::Key {
+        keycode: key,
+        down: true,
+    });
+    events.push(VncInputEvent::Key {
+        keycode: key,
+        down: false,
+    });
+    for (keycode, down) in modifier_transitions(modifiers, 0)
+        .into_iter()
+        .chain(modifier_transitions(0, held_modifiers))
+    {
+        events.push(VncInputEvent::Key { keycode, down });
+    }
+    events
+}
+
+fn clipboard_modifiers(shortcut: VncPasteShortcut) -> u8 {
+    match shortcut {
+        VncPasteShortcut::ControlV => 2,
+        VncPasteShortcut::ControlShiftV => 3,
+        VncPasteShortcut::CommandV => 8,
+        VncPasteShortcut::ShiftInsert => 1,
+    }
+}
+
 /// One remote screen inside its pane: painting, pointer mapping, wheel,
 /// keyboard events, and the pointer/key release bookkeeping that stops a
 /// key or button from sticking when focus moves away mid-gesture.
@@ -1189,6 +1299,7 @@ fn vnc_screen(
     view: &mut VncViewState,
     texture: &TextureHandle,
     view_only: bool,
+    paste_shortcut: VncPasteShortcut,
 ) -> VncScreenOutcome {
     let mut outcome = VncScreenOutcome::default();
     let tex_size = texture.size_vec2();
@@ -1351,8 +1462,12 @@ fn vnc_screen(
                             }
                         }
                     }
-                    egui::Event::Paste(text) => {
-                        keyboard_events.push(VncInputEvent::CopyText(text.clone()));
+                    egui::Event::Paste(_) | egui::Event::Copy | egui::Event::Cut => {
+                        keyboard_events.extend(remote_clipboard_events(
+                            event,
+                            paste_shortcut,
+                            view.modifier_bits,
+                        ));
                     }
                     _ => {}
                 }
@@ -1533,5 +1648,168 @@ mod tests {
         assert_eq!(accelerator_keysym(egui::Key::C), Some(u32::from('c')));
         assert_eq!(accelerator_keysym(egui::Key::V), Some(u32::from('v')));
         assert_eq!(accelerator_keysym(egui::Key::F5), None);
+    }
+    #[test]
+    fn focused_vnc_clipboard_commands_send_remote_shortcuts() {
+        let ctx = egui::Context::default();
+        let mut view = VncViewState {
+            width: 800,
+            height: 600,
+            ..Default::default()
+        };
+        let texture = ctx.load_texture(
+            "clipboard-test",
+            ColorImage::filled([800, 600], Color32::BLACK),
+            egui::TextureOptions::NEAREST,
+        );
+        let mut paint = |mut events: Vec<egui::Event>, modifiers: egui::Modifiers, view_only| {
+            events.insert(0, egui::Event::ModifiersChanged(modifiers));
+            let mut result = None;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    focused: true,
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    result = Some(vnc_screen(
+                        ui,
+                        &mut view,
+                        &texture,
+                        view_only,
+                        VncPasteShortcut::ShiftInsert,
+                    ));
+                },
+            );
+            output.textures_delta.clear();
+            result.unwrap().events
+        };
+        let none = egui::Modifiers::NONE;
+        paint(vec![], none, false);
+        let pos = egui::pos2(120.0, 170.0);
+        paint(
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: none,
+                },
+            ],
+            none,
+            false,
+        );
+        paint(
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: none,
+            }],
+            none,
+            false,
+        );
+        let command = egui::Modifiers {
+            command: true,
+            mac_cmd: true,
+            ..none
+        };
+        let mut paste = paint(
+            vec![egui::Event::Paste("gui-vnc-paste-ok".into())],
+            command,
+            false,
+        );
+        paste.extend(paint(vec![], none, false));
+        assert!(paste.iter().any(
+            |event| matches!(event,VncInputEvent::CopyText(text) if text=="gui-vnc-paste-ok")
+        ));
+        assert!(paste.iter().any(|event| matches!(
+            event,
+            VncInputEvent::Key {
+                keycode: 0xFF63,
+                down: true
+            }
+        )));
+        assert!(matches!(
+            paste.last(),
+            Some(VncInputEvent::Key {
+                keycode: 0xFFEB,
+                down: false
+            })
+        ));
+        let mut copy = paint(vec![egui::Event::Copy], command, false);
+        copy.extend(paint(vec![], none, false));
+        assert!(
+            !copy
+                .iter()
+                .any(|event| matches!(event, VncInputEvent::CopyText(_)))
+        );
+        assert!(copy.iter().any(|event| matches!(
+            event,
+            VncInputEvent::Key {
+                keycode: 0xFF63,
+                down: true
+            }
+        )));
+        let blocked = paint(
+            vec![
+                egui::Event::Paste("blocked".into()),
+                egui::Event::Copy,
+                egui::Event::Cut,
+            ],
+            none,
+            true,
+        );
+        assert!(blocked.is_empty());
+        println!(
+            "GUI_CLIPBOARD_EVENTS={}",
+            serde_json::json!({"paste":paste,"copy":copy})
+        );
+    }
+
+    #[test]
+    fn clipboard_shortcuts_release_local_modifiers_and_use_the_selected_remote_chord() {
+        for (shortcut, key, modifier) in [
+            (VncPasteShortcut::ShiftInsert, 0xFF63, 0xFFE1),
+            (VncPasteShortcut::ControlV, u32::from('v'), 0xFFE3),
+            (VncPasteShortcut::ControlShiftV, u32::from('v'), 0xFFE3),
+            (VncPasteShortcut::CommandV, u32::from('v'), 0xFFEB),
+        ] {
+            let events = remote_clipboard_events(&egui::Event::Paste("text".into()), shortcut, 8);
+            assert!(matches!(
+                events.first(),
+                Some(VncInputEvent::Key {
+                    keycode: 0xFFEB,
+                    down: false
+                })
+            ));
+            let key_index = events
+                .iter()
+                .position(|e| matches!(e,VncInputEvent::Key {keycode,down:true} if *keycode==key))
+                .unwrap();
+            let transfer = events
+                .iter()
+                .position(|e| matches!(e,VncInputEvent::CopyText(text) if text=="text"))
+                .unwrap();
+            let modifier_index = events
+                .iter()
+                .position(
+                    |e| matches!(e,VncInputEvent::Key {keycode,down:true} if *keycode==modifier),
+                )
+                .unwrap();
+            assert!(transfer < modifier_index && modifier_index < key_index);
+            assert!(matches!(
+                events.last(),
+                Some(VncInputEvent::Key {
+                    keycode: 0xFFEB,
+                    down: true
+                })
+            ));
+        }
     }
 }

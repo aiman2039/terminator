@@ -236,11 +236,17 @@ impl TabViewer for Viewer<'_> {
                 // presentation model: waiting attention first, then failures.
                 let presented = self.app.present_session(sid);
                 if presented.attention.waiting() > 0 {
-                    format!("● {label}").into()
+                    egui::RichText::new(format!("● {label}"))
+                        .color(self.app.terminal_title_color(sid))
+                        .into()
                 } else if presented.attention.failed > 0 {
-                    format!("▲ {label}").into()
+                    egui::RichText::new(format!("▲ {label}"))
+                        .color(self.app.terminal_title_color(sid))
+                        .into()
                 } else {
-                    label.into()
+                    egui::RichText::new(label)
+                        .color(self.app.terminal_title_color(sid))
+                        .into()
                 }
             }
             Tab::Diff { path, staged, .. } => format!(
@@ -311,7 +317,7 @@ impl TabViewer for Viewer<'_> {
         if let Some((icon, tint, spin)) = leading.status {
             paint(icon, tint, spin);
         } else if let Some(kind) = leading.kind {
-            paint(kind, appearance::ICON_COLOR, false);
+            paint(kind, self.app.terminal_title_color(sid), false);
         }
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), &format!("strip-tab-icon:{sid}"), rect);
@@ -702,6 +708,7 @@ impl TabViewer for Viewer<'_> {
                             ui,
                             appearance::TerminalBarSpec {
                                 title: if editing || lone { "" } else { &session.label },
+                                title_tint: Some(self.app.terminal_title_color(sid)),
                                 active: self.app.active_session.as_ref() == Some(sid),
                                 branch: branch.as_deref(),
                                 status: self.app.terminal_status_color(&session),

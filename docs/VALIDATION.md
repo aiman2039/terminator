@@ -1,5 +1,119 @@
 # Validation evidence — 2026-09-08
 
+## VNC clipboard insertion and IDE Search resize checks — 2026-10-25
+
+The first local VNC run established clipboard transport but did not test
+insertion into a remote application. Further review found that GUI Paste
+only sent ClientCutText, GUI Copy/Cut were ignored, and repeated frame data
+could keep replacing the local clipboard. The GUI now sends the configured
+remote clipboard shortcuts and applies remote clipboard text only when it
+changes. Empty clipboard updates are supported. The Clipboard toolbar menu
+selects Shift+Insert, Ctrl+V, Ctrl+Shift+V, or Command+V; the choice persists.
+
+A focused egui rendering test supplies real GUI Paste and Copy events,
+including local Command modifiers, through `vnc_screen`. The resulting
+VncInput events were delivered to the local TigerVNC session. The test Entry
+contained `gui-vnc-paste-ok` after Paste. Copy placed the remote selection
+back on the remote clipboard and returned it through VncFrame. A separate
+live macOS check received a remote clipboard update, copied newer local text,
+then caused further remote frame updates; the local text remained unchanged.
+The previous macOS clipboard text was restored after that check.
+
+Search now owns a fixed, clipped footer in each tool stripe. Tools have a
+separate clipped scroll area with a zero minimum viewport height. Rendering
+regressions cover repeated shrink/grow steps from 650 down to 70 points.
+The rebuilt native GUI was also resized through the bottom panel's
+accessibility resize handle at fractions 0.3, 0.6, 0.8, and 0.4. Both Search
+controls stayed available; native screenshots confirm no overlap at 80%,
+and clicking Search opened the Search view. The resize handle uses the same
+panel size constraints as a pointer drag. Physical pointer dragging was not
+established because desktop input focus remained unavailable to Orca.
+
+Native GUI restart checks show a green GitBranch terminal title and a purple
+Database terminal title in the IDE strip, with aligned icons and labels.
+Style persistence also has regression coverage. These visual checks used
+isolated preferences and sessions, not the installed app's data.
+
+Final validation: `cargo test --workspace --all-features --locked` passed
+1,262 tests (4 ignored). Strict full-workspace Clippy, rustfmt, and whitespace
+checks passed. The workspace binary/example build with test support passed;
+the debug GUI linker reported its existing large unwind-table warning.
+The earlier all-in-one workspace-tabs capture fixture still timed out; direct
+native screenshots and accessibility actions established the focused GUI
+results above instead.
+
+Logs: `/tmp/terminator-all-fixes-workspace-tests.log`,
+`/tmp/terminator-all-fixes-clippy.log`, `/tmp/terminator-all-fixes-build.log`,
+`/tmp/terminator-vnc-gui-events.log`, and
+`/tmp/terminator-local-vnc/clipboard-insertion.log`.
+Screenshots: `/tmp/terminator-local-vnc/terminal-styles.png` and
+`/tmp/terminator-local-vnc/ide-search-terminal-80-percent.png`.
+
+## Local TigerVNC runtime check — 2026-10-25
+
+An isolated Ubuntu 24.04 Docker container, `terminator-vnc-fixture`, runs
+TigerVNC and a Tk test screen at 800 by 600 pixels. The published port is bound
+only to `127.0.0.1:15901`. It does not share the host desktop or repository.
+The container remains running for manual review; stop it with
+`docker stop terminator-vnc-fixture` when finished.
+
+The rebuilt macOS GUI connected through the VNC sidebar's Save & Connect
+form, displayed the test desktop, and reported Connected at 800 by 600.
+Password saving was off. The saved profile's password remained empty while
+the authenticated connection succeeded. Native accessibility writes and
+screenshots verified the form and rendered remote screen.
+
+Eleven runtime checks passed against the real TigerVNC server: authenticated
+RGBA framebuffer delivery (1,920,000 decoded bytes), an unsaved session
+password, server-observed mouse clicks, server-observed typed text,
+framebuffer revisions after input, clipboard transfer in both directions,
+a wrong-password authentication error, view-only suppression of mouse/key/
+clipboard output, disconnect cleanup, and reconnect with a fresh framebuffer.
+Input checks used the daemon's VncInput API; the container's event log and
+entry/clipboard values established their effects. Desktop coordinate input
+through Orca was blocked because macOS reported no focused window, so these
+checks do not establish physical GUI keyboard/mouse delivery.
+
+Artifacts are in `/tmp/terminator-local-vnc/`: `results.json`, `exercise.log`,
+the server screen script, and native GUI snapshot metadata. The client uses
+only `/tmp/terminator-ui-vnc-check`; the installed app and its live sessions
+were not replaced. The user's remote VNC server was not used for this test.
+
+## Terminal titles, system clipboard, and VNC forms — 2026-10-25
+
+The app now enables eframe's system clipboard feature. A standalone check
+linked to the rebuilt egui-winit library copied text inside the library,
+replaced it through macOS `pbcopy`, and confirmed that the next read returned
+the external text. The check restored the previous clipboard text. This
+covers the stale internal clipboard path used by terminal and VNC form paste.
+
+Terminal context menus now save a session title color and icon in
+`ui-preferences.json`. Workspace tabs reserve the extra agent-brand width;
+pane titles use the selected color. A focused rendering regression passed at
+220, 400, and 650-point heights. Tool stripes scroll above a fixed Search
+button, and stripe labels stay clipped inside their button. VNC forms wrap
+controls, reject invalid port values, and keep the session password separate
+from a saved profile when password saving is off.
+
+The workspace binaries/examples build passed with test support. All 760 app
+unit tests passed (4 ignored), including session-only VNC passwords, invalid
+ports, and terminal style persistence. Strict app Clippy and formatting passed.
+The narrow native `workspace-tabs` fixture timed out during capture in quiet
+Glow, visible Glow, and visible Metal runs. These runs do not establish native
+title rendering success. The live VNC form was inspected through native
+accessibility and a screenshot; its host, port, username, and option controls
+were usable. The focused stripe rendering test passed separately.
+
+The supplied VNC endpoint returned an RFB 3.8 banner and authentication types
+19 and 2. Authentication and framebuffer display still require password entry
+in the isolated rebuilt GUI. No remote keyboard or pointer input was sent.
+Test state is isolated under `/tmp/terminator-ui-vnc-check`; the installed app
+and its live daemon were not replaced.
+
+Logs: `/tmp/terminator-ui-fixes-build-network.log`,
+`/tmp/terminator-ui-fixes-tests.log`, `/tmp/terminator-ui-fixes-clippy.log`, and
+`/tmp/terminator-ui-fixes-gui.log`.
+
 ## Release run-2nhmMy audit and Linux hook repair — 2026-10-22
 
 The archived host log stopped at cargo audit: RUSTSEC-2026-0382 affected

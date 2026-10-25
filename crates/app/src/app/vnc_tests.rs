@@ -173,3 +173,124 @@ fn the_tab_face_carries_the_vnc_connection_state() {
     assert_eq!(draft.icon, "Monitor");
     assert_eq!(draft.label, "127.0.0.1:5900");
 }
+
+#[test]
+fn save_and_connect_uses_the_password_without_storing_it() {
+    let (mut app, _ctx, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.vnc_sidebar.begin_new();
+    app.vnc_sidebar.password = "fixture-session-password".into();
+    app.vnc_sidebar.save_password = false;
+    app.save_vnc_profile_form(true);
+    let saved_id = match requests.try_recv().unwrap() {
+        Job::Control(request, _) => match *request {
+            Request::VncProfileSave { profile } => {
+                assert!(profile.password.is_empty());
+                profile.id
+            }
+            _ => panic!("expected profile save"),
+        },
+        _ => panic!("expected control request"),
+    };
+    match requests.try_recv().unwrap() {
+        Job::Control(request, _) => match *request {
+            Request::VncConnect {
+                password,
+                profile_id,
+                shared,
+                view_only,
+                ..
+            } => {
+                assert_eq!(password, "fixture-session-password");
+                assert_eq!(profile_id.as_deref(), Some(saved_id.as_str()));
+                assert!(shared);
+                assert!(!view_only);
+            }
+            _ => panic!("expected connection"),
+        },
+        _ => panic!("expected control request"),
+    }
+    assert!(app.vnc_sidebar.password.is_empty());
+    assert!(!app.vnc_sidebar.form_open);
+}
+
+#[test]
+fn invalid_vnc_port_keeps_the_form_open_without_sending_requests() {
+    let (mut app, _ctx, _dir) = fixture();
+    let (jobs, requests) = mpsc::channel();
+    app.jobs = jobs.into();
+    for port in ["0", "65536", "oops", ""] {
+        app.vnc_sidebar.begin_new();
+        app.vnc_sidebar.port = port.into();
+        app.save_vnc_profile_form(true);
+        assert!(app.vnc_sidebar.form_open);
+        assert!(app.vnc_sidebar.error.is_some());
+        assert!(requests.try_recv().is_err());
+    }
+}
+
+#[test]
+fn terminal_title_style_survives_preferences_reload() {
+    let (mut app, _ctx, dir) = fixture();
+    app.state
+        .sessions
+        .push(session_fixture("styled", SessionKind::Shell));
+    let style = app
+        .preferences
+        .terminal_styles
+        .entry("styled".into())
+        .or_default();
+    style.icon = Some("Database".into());
+    style.color = Some("#BB9AF7".into());
+    app.preferences.save(dir.path()).unwrap();
+    app.preferences = UiPreferences::load(dir.path()).unwrap();
+    let face = app.tab_face(Some(&Tab::Terminal("styled".into())));
+    assert_eq!(face.icon, "Database");
+    assert_eq!(
+        app.preferences.terminal_styles["styled"].color.as_deref(),
+        Some("#BB9AF7")
+    );
+    assert!(!app.preferences.terminal_styles.contains_key("other"));
+}
+
+#[test]
+fn repeated_vnc_frames_do_not_overwrite_a_new_local_clipboard() {
+    let (mut app, ctx, _dir) = fixture();
+    let mut receive = |text: &str| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_| {
+            app.apply_vnc_frame(
+                &ctx,
+                crate::vnc_ui::VncDecodedFrame {
+                    session: "clipboard-session".into(),
+                    width: 1,
+                    height: 1,
+                    revision: 1,
+                    status: VncSessionStatus::Connected,
+                    error: None,
+                    image: None,
+                    region: None,
+                    clipboard: Some(text.into()),
+                },
+            );
+        });
+        output.textures_delta.clear();
+        output
+            .platform_output
+            .commands
+            .into_iter()
+            .filter_map(|command| {
+                if let egui::OutputCommand::CopyText(text) = command {
+                    Some(text)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(receive("remote text"), ["remote text"]);
+    assert!(receive("remote text").is_empty());
+    assert_eq!(receive("new remote text"), ["new remote text"]);
+    assert_eq!(receive(""), [""]);
+    assert!(receive("").is_empty());
+}

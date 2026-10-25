@@ -169,17 +169,19 @@ pub fn stripe_button(
         16.0,
         ICON_COLOR,
     );
-    ui.painter().text(
-        egui::pos2(response.rect.center().x, response.rect.bottom() - 11.0),
-        egui::Align2::CENTER_CENTER,
-        label,
-        FontId::proportional(9.0),
-        if selected {
-            ICON_COLOR
-        } else {
-            ui.visuals().weak_text_color()
-        },
-    );
+    ui.painter()
+        .with_clip_rect(ui.clip_rect().intersect(response.rect))
+        .text(
+            egui::pos2(response.rect.center().x, response.rect.bottom() - 11.0),
+            egui::Align2::CENTER_CENTER,
+            label,
+            FontId::proportional(9.0),
+            if selected {
+                ICON_COLOR
+            } else {
+                ui.visuals().weak_text_color()
+            },
+        );
     if let Some(dot) = badge {
         ui.painter().circle_filled(
             egui::pos2(response.rect.right() - 7.0, response.rect.top() + 7.0),
