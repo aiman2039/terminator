@@ -949,7 +949,12 @@ impl App {
                         self.git_compare_root.clone_from(&data.root);
                         self.git_compare = Some(data);
                     }
-                    Err(error) => self.report_status_error(error),
+                    Err(error) => {
+                        if matches!(op, workspace_ops::Op::Perforce(_)) {
+                            self.refresh_request = None;
+                        }
+                        self.report_status_error(error);
+                    }
                 },
                 Update::Search(id, result) => {
                     if id == self.explorer_search_generation {

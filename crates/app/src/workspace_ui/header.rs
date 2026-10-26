@@ -169,7 +169,7 @@ pub(super) fn header_action_view(action: HeaderAction) -> HeaderActionView {
             target: "tool-Agents",
         },
         HeaderAction::Tool(SidebarTool::Git) => HeaderActionView {
-            label: "Git",
+            label: "Git / Perforce",
             icon: "GitBranch",
             #[cfg(feature = "test-support")]
             target: "tool-Git",

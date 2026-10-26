@@ -22,6 +22,7 @@ mod tests {
         app.context = Some(services::ContextData {
             cwd: "/a".into(),
             root: Some("/a".into()),
+            perforce: None,
             git_dirs: vec![],
             branch: "main".into(),
             changes: vec![terminator_git::Change {
@@ -122,6 +123,7 @@ mod tests {
         app.context = Some(services::ContextData {
             cwd: dir.path().into(),
             root: Some(dir.path().into()),
+            perforce: None,
             git_dirs: vec![],
             branch: "main".into(),
             changes: vec![terminator_git::Change {
@@ -185,6 +187,7 @@ mod tests {
         app.context = Some(services::ContextData {
             cwd: "/a".into(),
             root: Some("/a".into()),
+            perforce: None,
             git_dirs: vec![],
             branch: "main".into(),
             changes: vec![],

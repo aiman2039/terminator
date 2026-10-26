@@ -1,5 +1,57 @@
 # Validation evidence — 2026-09-08
 
+## Perforce source control — 2026-10-26
+
+The Git / Perforce sidebar detects configured Perforce folders when Git is
+absent. Status uses `fstat -Ro` and `reconcile -n -l`; refresh is read-only.
+The native viewer compares the synced have revision with the workspace and
+disables editing and Git hunk actions. File actions run through the bounded
+async process service. Perforce children share a serialization key. Canonical
+filesystem paths and Perforce client-root paths remain separate for macOS aliases.
+
+Validation:
+
+- App library suite: 687 passed, 5 ignored. The initial sandbox run could not
+  bind fixture sockets; the successful run had local socket access.
+- Perforce parser and headless panel tests passed, including the submit
+  confirmation interaction. A separate rendering check covers read-only diffs.
+- `scripts/test-perforce.sh` passed with official P4/P4D 2026.1 binaries and a
+  temporary server over stdin/stdout. It covers detection, opened and offline
+  changes, added/deleted files, spaces and revision characters in file names,
+  path aliases, native snapshot content, reconcile, edit, shelve, unshelve,
+  submit, sync, invalid changelist arguments, and outside-folder rejection.
+- Strict app-library Clippy passed. Test builds report existing unused imports
+  in navigation test modules.
+
+No user Perforce server, login, or workspace was used. No running GUI or daemon
+was replaced. Native desktop appearance, remote server connectivity, SSL/SSO,
+stream switching, resolve, and production workspace behavior remain unverified.
+Revert, resolve, changelist creation, stream changes, and shelf deletion use the
+terminal. Numbered changelist submission includes the entire changelist.
+
+### PR 51 merge and review — 2026-10-26
+
+Merged the current master into the Perforce branch. Resolution preserves SSH
+project isolation, remote diff labels and read-only behavior, both GUI modules,
+and both sets of validation notes.
+
+Review fixes reject failed raw Perforce reads, including errors reported on
+stderr with exit code zero. JSON failures without a structured error cannot
+be treated as successful empty queries. Only warning-level EV_EMPTY records
+are allowed for empty queries. Diffs verify the client mapping before treating
+an absent fstat record as a new file. Filesystem path resolution runs on the
+filesystem pool. Read-only diffs reject saves and hunk actions in the worker,
+as well as disabling GUI editing. The narrow sidebar shows Git or P4 and keeps
+its action identity stable; the full label is available on hover.
+
+Validation: 1,282 workspace tests passed, with five ignored. The separate
+isolated P4/P4D fixture passed, including failed raw print, excluded mapping,
+and unrelated-directory regressions. It used disposable server/account/client
+state and no user credentials. The existing headless GUI interaction checks
+passed. Strict workspace Clippy, formatting and diff whitespace checks passed.
+Native desktop appearance and a user Perforce server were not tested in this
+review. No installed GUI or live daemon was replaced.
+
 ## SSH remote projects — 2026-10-26
 
 Validation used an isolated macOS client and the Linux Docker fixture in

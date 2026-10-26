@@ -142,8 +142,21 @@ impl App {
                             } else {
                                 None
                             };
+                            // Keep the narrow caption and fixture identity stable.
+                            let caption = if tool == StripeTool::Tool(SidebarTool::Git)
+                                && self.context.as_ref().is_some_and(|c| c.perforce.is_some())
+                            {
+                                "P4"
+                            } else {
+                                label
+                            };
                             let response =
-                                appearance::stripe_button(ui, icon, label, selected, badge);
+                                appearance::stripe_button(ui, icon, caption, selected, badge);
+                            let response = if tool == StripeTool::Tool(SidebarTool::Git) {
+                                response.on_hover_text("Git / Perforce")
+                            } else {
+                                response
+                            };
                             #[cfg(feature = "test-support")]
                             diagnostics::record(
                                 ui.ctx(),

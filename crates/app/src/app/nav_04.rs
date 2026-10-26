@@ -769,6 +769,7 @@ mod tests {
         let context = services::ContextData {
             cwd: root.clone(),
             root: Some(root.clone()),
+            perforce: None,
             git_dirs: vec![],
             branch: "main".into(),
             changes: vec![],

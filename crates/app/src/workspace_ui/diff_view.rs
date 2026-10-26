@@ -152,7 +152,12 @@ impl App {
             .get(&key)
             .and_then(|doc| doc.as_ref().ok())
             .map(std::sync::Arc::clone);
-        let enabled = !review.busy
+        let read_only = read_only || doc.as_ref().is_some_and(|doc| doc.read_only);
+        if remote.is_none() && read_only {
+            ui.weak("Perforce snapshot · read-only. Use Open file to edit the workspace file.");
+        }
+        let enabled = !read_only
+            && !review.busy
             && !self.loading.contains(&key)
             && !self.diff_reviews.values().any(|state| state.busy)
             && doc.as_ref().is_some_and(|doc| doc.source.is_some());
@@ -217,7 +222,7 @@ impl App {
             let buffer_dirty = !*staged && review.unsaved_edits();
             if buffer_dirty {
                 let save = ui
-                    .add_enabled_ui(!review.busy, |ui| {
+                    .add_enabled_ui(!review.busy && !read_only, |ui| {
                         appearance::sidebar_action(ui, "Save", "Save edits to the working tree")
                     })
                     .inner;
@@ -411,6 +416,7 @@ impl App {
         if !read_only
             && !*staged
             && let Some(document) = &doc
+            && !document.read_only
             && review.buffer.as_ref().is_none_or(|buffer| {
                 !std::sync::Arc::ptr_eq(&buffer.document, document)
                     && buffer.text == buffer.document.right_text
@@ -436,7 +442,7 @@ impl App {
                 split,
                 self.diff_split_ratio,
                 &header_path,
-                !*staged && !read_only,
+                !*staged && !read_only && !doc.read_only,
                 *staged,
             );
             if doc.hunks.is_empty() && doc.unified.is_empty() {
@@ -478,8 +484,8 @@ impl App {
                     ui.set_clip_rect(full);
                     // Working tree: split right pane and unified rows are
                     // live editors beside/between the painted lines.
-                    let editable = split && !*staged && review.buffer.is_some();
-                    let outputs = if !split && !*staged && review.buffer.is_some() {
+                    let editable = !read_only && split && !*staged && review.buffer.is_some();
+                    let outputs = if !read_only && !split && !*staged && review.buffer.is_some() {
                         match &mut review.buffer {
                             Some(buffer) => vec![super::diff_edit::paint_unified_editor(
                                 ui,

@@ -78,6 +78,7 @@ pub struct GitFileAction {
 /// What the Git panel asks `App` to do after painting.
 #[derive(Default)]
 pub struct GitPanelOutcome {
+    pub perforce: Vec<crate::perforce::Op>,
     /// Row clicks mapped to concrete actions. `App` dedups rapid repeats.
     pub clicked: Vec<GitFileAction>,
     /// Context-menu picks, performed directly.
@@ -161,7 +162,10 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
     };
     let stats = &context.stats;
     if root.is_none() {
-        ui.weak("Not a Git repository");
+        ui.weak("Not a Git repository or Perforce workspace");
+        if let Some(error) = &input.context.error {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
     } else {
         git_toolbar(ui, input, &branch_name, &mut outcome);
         if !input.history

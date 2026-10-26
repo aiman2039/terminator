@@ -172,6 +172,7 @@ pub struct ExplorerRowOutcome {
     pub clicked: Option<FileAction>,
     pub menu: Option<FileAction>,
     pub local: Option<ExplorerLocal>,
+    pub perforce: Option<crate::perforce::Op>,
 }
 
 /// Case-insensitive explorer filter over a pre-lowercased query. Directories
@@ -200,6 +201,7 @@ pub fn explorer_file_row(
     open_shortcut: &str,
     split_shortcut: &str,
     selected: bool,
+    perforce: bool,
 ) -> ExplorerRowOutcome {
     let mut outcome = ExplorerRowOutcome::default();
     let color = if ignored {
@@ -249,6 +251,21 @@ pub fn explorer_file_row(
             split_shortcut,
         ) {
             outcome.menu = Some(action);
+        }
+        if perforce {
+            ui.separator();
+            if appearance::menu_item(ui, "Perforce: Open for edit", "Pencil", "").clicked() {
+                outcome.perforce = Some(crate::perforce::Op::Edit(path.into()));
+                ui.close();
+            }
+            if appearance::menu_item(ui, "Perforce: Reconcile file", "RefreshCw", "").clicked() {
+                outcome.perforce = Some(crate::perforce::Op::Reconcile(path.into()));
+                ui.close();
+            }
+            if appearance::menu_item(ui, "Perforce: Diff", "FileDiff", "").clicked() {
+                outcome.menu = Some(FileAction::NativeWorkingDiff);
+                ui.close();
+            }
         }
         ui.separator();
         if appearance::menu_item(ui, "Reveal in file manager", "FolderOpen", "").clicked() {

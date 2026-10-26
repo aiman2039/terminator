@@ -1223,11 +1223,17 @@ impl Services {
             }
             Job::Workspace(root, op) => {
                 let reply = op.clone();
-                let result = self
-                    .fs()
-                    .run(&cancel, move || workspace_ops::perform(&root, op))
-                    .await
-                    .map_err(|error| format!("{error:#}"));
+                let result = match op {
+                    workspace_ops::Op::Perforce(op) => {
+                        crate::perforce::perform(self, &root, op, &cancel).await
+                    }
+                    op => {
+                        self.fs()
+                            .run(&cancel, move || workspace_ops::perform(&root, op))
+                            .await
+                    }
+                }
+                .map_err(|error| format!("{error:#}"));
                 updates.push(Update::Workspace(reply, result));
             }
             Job::Search {

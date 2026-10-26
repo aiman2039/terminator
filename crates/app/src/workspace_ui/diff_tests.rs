@@ -828,6 +828,7 @@ pub(crate) mod tests {
         app.context = Some(services::ContextData {
             cwd: cwd.clone(),
             root: Some(cwd.clone()),
+            perforce: None,
             git_dirs: vec![],
             branch: "main".into(),
             changes: vec![],
@@ -1480,5 +1481,16 @@ pub(crate) mod tests {
         assert!(painted.iter().any(|(_, t)| t.contains("Left")));
         assert!(painted.iter().any(|(_, t)| t.contains("Right")));
         assert!(painted.iter().any(|(_, t)| t.contains("updated")));
+    }
+    #[test]
+    fn perforce_working_diff_is_read_only() {
+        let mut doc =
+            diff::build_with_context(std::path::Path::new("file.rs"), "old\n", "new\n", false, 3);
+        doc.read_only = true;
+        doc.left_label = "Have revision".into();
+        doc.right_label = "Workspace".into();
+        let painted = paint_doc(doc, false);
+        assert!(painted.iter().any(|(_, text)| text == "Read-only"));
+        assert!(!painted.iter().any(|(_, text)| text == "Editable"));
     }
 }

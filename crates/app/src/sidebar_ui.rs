@@ -6,6 +6,7 @@ mod explorer_projects;
 mod explorer_prompts;
 mod explorer_rows;
 mod git_panel;
+mod perforce_panel;
 mod problems;
 #[cfg(test)]
 mod sidebar_tests;
