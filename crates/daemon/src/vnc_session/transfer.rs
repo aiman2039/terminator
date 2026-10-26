@@ -2,10 +2,7 @@
 use super::*;
 use anyhow::{Context, Result, ensure};
 use openssh_sftp_client::{Sftp, SftpOptions, file::TokioCompatFile};
-use std::{
-    path::{Component, Path},
-    process::Stdio,
-};
+use std::process::Stdio;
 use terminator_core::vnc::{
     MAX_TRANSFER_BYTES, TransferDirection, Transport, VncTransfer, VncTransferStatus,
 };
@@ -25,14 +22,12 @@ fn validate(transfer: &VncTransfer) -> Result<()> {
         transfer.local.is_absolute(),
         "Local transfer path must be absolute"
     );
-    let remote = Path::new(&transfer.remote);
+    // SFTP paths use POSIX separators, independent of the client OS.
     ensure!(
-        remote.is_absolute()
+        transfer.remote.starts_with('/')
             && transfer.remote.len() <= 4096
             && !transfer.remote.chars().any(char::is_control)
-            && !remote
-                .components()
-                .any(|c| matches!(c, Component::ParentDir)),
+            && !transfer.remote.split('/').any(|part| part == ".."),
         "Remote transfer path must be absolute and contain no parent traversal"
     );
     Ok(())
@@ -213,15 +208,24 @@ mod tests {
         let mut transfer = VncTransfer {
             id: "fixture".into(),
             direction: TransferDirection::Upload,
-            local: "/tmp/source".into(),
+            local: std::env::temp_dir().join("source"),
             remote: "/tmp/destination".into(),
         };
         assert!(validate(&transfer).is_ok());
-        for path in ["relative", "/tmp/../escape", "/tmp/name\nother"] {
+        for path in [
+            "relative",
+            "/tmp/../escape",
+            "/tmp/name\nother",
+            "C:\\tmp\\destination",
+            "\\\\server\\share\\destination",
+        ] {
             transfer.remote = path.into();
             assert!(validate(&transfer).is_err());
         }
         transfer.remote = "/tmp/destination".into();
+        transfer.local = "relative".into();
+        assert!(validate(&transfer).is_err());
+        transfer.local = std::env::temp_dir().join("source");
         transfer.id = "../../other".into();
         assert!(validate(&transfer).is_err());
     }

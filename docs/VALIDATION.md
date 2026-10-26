@@ -1,5 +1,19 @@
 # Validation evidence — 2026-09-08
 
+## Windows SSH and SFTP checks — 2026-10-26
+
+Actions run `40303301309` failed two daemon tests on Windows. The SSH command
+test now accepts the platform executable name (`ssh.exe` on Windows), without
+case sensitivity. SFTP remote path validation uses POSIX separators on every
+client OS. Local paths still use the client OS rules. The transfer fixture uses
+the system temporary directory and checks relative local paths, remote Windows
+paths, parent traversal, controls, and unsafe transfer IDs.
+
+Validation: all 65 daemon tests passed on macOS. Strict Windows-target Clippy
+passed for all daemon targets and features with the Zig C toolchain. Formatting
+and diff whitespace checks passed. Hosted Windows execution and live SFTP
+transfers have not been repeated.
+
 ## Linux release SSH client — 2026-10-26
 
 The release log in `.artifacts/releases/run-y0TzOF/linux/run.log` failed the

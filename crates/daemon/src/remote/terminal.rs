@@ -146,11 +146,11 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(
-            cmd.get_argv()
-                .first()
-                .is_some_and(|s| Path::new(s).file_name().is_some_and(|s| s == "ssh"))
-        );
+        assert!(cmd.get_argv().first().is_some_and(|s| {
+            Path::new(s)
+                .file_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case(terminator_core::exe_name("ssh")))
+        }));
         assert_eq!(meta.cwd, p.root);
         assert!(meta.editor_socket.is_none());
         assert!(
