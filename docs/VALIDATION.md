@@ -1,5 +1,16 @@
 # Validation evidence — 2026-09-08
 
+## Linux release SSH client — 2026-10-26
+
+The release log in `.artifacts/releases/run-y0TzOF/linux/run.log` failed the
+SSH terminal command test because the release image had no OpenSSH client.
+Added `openssh-client` to `scripts/release-linux.Dockerfile`.
+
+Validation: the complete Docker image built for Linux ARM64. Both `ssh` and
+`sftp` are available. The exact failing test passed in that image, using the
+cached coverage test executable from the release run. No SSH connection was
+made. The full release pipeline, packaging, and Linux x64 were not rerun.
+
 ## Perforce source control — 2026-10-26
 
 The Git / Perforce sidebar detects configured Perforce folders when Git is

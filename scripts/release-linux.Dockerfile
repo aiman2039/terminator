@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev \
     libgl1-mesa-dev libgl1-mesa-dri libwayland-dev libxkbcommon-dev libxkbcommon-x11-0 \
     libasound2-dev libwebkit2gtk-4.1-dev xvfb xauth dbus-x11 openbox \
-    curl ca-certificates git unzip file procps lsof zsh fish \
+    curl ca-certificates git openssh-client unzip file procps lsof zsh fish \
     xdg-desktop-portal xdg-desktop-portal-gtk \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=rust-toolchain /usr/local/cargo/ /root/.cargo/
