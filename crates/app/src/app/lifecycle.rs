@@ -146,6 +146,7 @@ impl App {
             visible_browsers: Vec::new(),
             browser_urls: HashMap::new(),
             browser_submit: None,
+            remote_ui: crate::remote_ui::RemoteUi::default(),
             vnc_fullscreen: None,
             vnc_views: HashMap::new(),
             vnc_sidebar: crate::vnc_ui::VncSidebarState::default(),

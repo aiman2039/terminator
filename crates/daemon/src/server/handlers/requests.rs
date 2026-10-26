@@ -14,6 +14,7 @@ impl Shared {
         let shared_write = matches!(
             &request,
             Request::AddProject { .. }
+                | Request::AddRemoteProject { .. }
                 | Request::SaveLayout { .. }
                 | Request::SelectProject { .. }
                 | Request::Settings(_)
@@ -411,6 +412,34 @@ impl Shared {
                     Launch::Review { staged },
                 )?));
             }
+            Request::ProbeRemoteProject { project } => {
+                return Ok(Response::RemoteProject(
+                    self.probe_remote_project(&project)?,
+                ));
+            }
+            Request::RemoteProject { project, operation } => {
+                return Ok(Response::RemoteProject(
+                    self.remote_project_operation(&project, operation)?,
+                ));
+            }
+            Request::AddRemoteProject { mut project } => {
+                project.validate()?;
+                let mut state = relock(&self.state);
+                ensure!(state.remote_projects.len() < 256, "Too many SSH projects");
+                if let Some(existing) = state
+                    .remote_projects
+                    .iter()
+                    .find(|p| p.ssh == project.ssh && p.root == project.root)
+                {
+                    state.selected_project = Some(existing.id.clone());
+                } else {
+                    project.id = id();
+                    project.layout = serde_json::Value::Null;
+                    state.selected_project = Some(project.id.clone());
+                    state.remote_projects.push(project);
+                }
+                state.revision = state.revision.saturating_add(1);
+            }
             Request::AddProject { path } => {
                 let path = path.canonicalize()?;
                 ensure!(path.is_dir(), "Project must be a directory");
@@ -449,11 +478,15 @@ impl Shared {
                     "Layout too large"
                 );
                 let mut s = relock(&self.state);
-                s.projects
-                    .iter_mut()
-                    .find(|p| p.id == project)
-                    .context("Unknown project")?
-                    .layout = layout;
+                if let Some(remote) = s.remote_projects.iter_mut().find(|p| p.id == project) {
+                    remote.layout = layout;
+                } else {
+                    s.projects
+                        .iter_mut()
+                        .find(|p| p.id == project)
+                        .context("Unknown project")?
+                        .layout = layout;
+                }
                 s.revision = s.revision.saturating_add(1);
             }
             Request::SelectProject { project } => {
@@ -465,7 +498,8 @@ impl Shared {
                     "Worktree was removed"
                 );
                 ensure!(
-                    s.projects.iter().any(|p| p.id == project),
+                    s.projects.iter().any(|p| p.id == project)
+                        || s.remote_projects.iter().any(|p| p.id == project),
                     "Unknown project"
                 );
                 s.selected_project = Some(project);
@@ -480,6 +514,10 @@ impl Shared {
                     .iter_mut()
                     .find(|r| r.id == session && r.lifecycle.live())
                     .context("Unknown live session")?;
+                ensure!(
+                    rec.remote.is_none(),
+                    "Remote cwd updates require a remote session channel"
+                );
                 rec.cwd = path;
                 rec.cwd_confirmed = true;
                 s.revision = s.revision.saturating_add(1);
@@ -696,6 +734,18 @@ impl Shared {
     }
     pub(crate) fn editor_rpc(&self, sid: &str, expression: &str) -> Result<Response> {
         let state = relock(&self.state);
+        if let Some(remote) = state
+            .sessions
+            .iter()
+            .find(|s| s.id == sid)
+            .and_then(|s| s.remote.clone())
+        {
+            drop(state);
+            return Ok(Response::Text(String::from_utf8(
+                crate::remote::terminal::editor_rpc(&remote, expression)?,
+            )?));
+        }
+
         let program = if state.sessions.iter().any(|s| s.id == sid && s.review) {
             "nvim".to_owned()
         } else {

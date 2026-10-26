@@ -1,5 +1,38 @@
 # Validation evidence — 2026-09-08
 
+## SSH remote projects — 2026-10-26
+
+Validation used an isolated macOS client and the Linux Docker fixture in
+`fixtures/ssh-project`. The workspace build, formatting, strict Clippy, and
+real-PTY integration checks passed. Workspace tests passed: 1,276 tests, with
+four ignored. The installed app and live user sessions were not changed.
+
+Twenty-six fixture checks passed. They cover separate remote-project storage,
+strict host-key checks, SFTP listing and exact file bytes, Unicode and spaced
+paths, root traversal and symlink rejection, bounded preview reads, Git status
+and staged/working diffs, and Git paths for subdirectory projects. Independent
+SSH terminals started in the remote root without local Terminator tokens.
+Neovim ran on the host; dirty-state checks, save, compare and close passed.
+A missing remote root did not start a local shell.
+
+Closing and reopening the isolated GUI preserved the same SSH process IDs and
+terminal input/output. Stopping the fixture ended SSH sessions and caused
+remote reads to fail. Restarting the server did not restart historical shells.
+The Docker fixture was then left running for manual use.
+
+The app's native renderer captured the remote Explorer, SSH terminal, Markdown
+preview and native diff. The captures were inspected. Preview and diff views
+are read-only. Native accessibility inspection was blocked despite reported
+permission, so physical dialog interaction was not verified. Renderer captures
+and runtime logs are in `/tmp/terminator-ssh-project-runtime/`; these temporary
+artifacts are not part of the repository.
+
+Remote previews are limited to 2 MiB. Markdown file links and local images are
+disabled in remote snapshots. Remote Git mutations, agent hook forwarding,
+native language services and automatic shell reconnection are not provided.
+Linux and Windows clients were not tested. See `REMOTE_PROJECTS.md` for use
+and fixture commands.
+
 ## Modular VNC enhancements — 2026-10-26
 
 The VNC code is split into shared policy models, daemon connection/transport,

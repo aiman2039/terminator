@@ -1,0 +1,20 @@
+services:
+  ssh-project:
+    build: .
+    ports:
+      - "127.0.0.1:15932:22"
+    volumes:
+      - "${SSH_PROJECT_FIXTURE_KEY_DIR:?Set SSH_PROJECT_FIXTURE_KEY_DIR}/authorized_keys:/run/fixture/authorized_keys:ro"
+      - project-data:/workspace/project
+      - host-keys:/var/lib/ssh-host-keys
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "sshd", "-t", "-f", "/etc/ssh/sshd_config.fixture"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+volumes:
+  project-data:
+  host-keys:

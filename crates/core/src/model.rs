@@ -32,6 +32,8 @@ pub struct Session {
     /// App-owned, read-only Neovim Git review (independent of editor settings).
     #[serde(default)]
     pub review: bool,
+    #[serde(default)]
+    pub remote: Option<crate::remote::RemoteSession>,
     pub id: String,
     pub project_id: String,
     pub label: String,
@@ -385,6 +387,7 @@ pub struct State {
     pub revision: u64,
     pub generation: String,
     pub projects: Vec<Project>,
+    pub remote_projects: Vec<crate::remote::RemoteProject>,
     pub worktrees: Vec<worktrees::Registration>,
     pub sessions: Vec<Session>,
     #[serde(default)]

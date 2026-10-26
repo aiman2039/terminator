@@ -567,6 +567,7 @@ mod tests {
     fn hidden_agent_terminal_keeps_owner_and_directory_context() {
         let (mut app, _, _dir) = fixture();
         app.state.sessions.push(Session {
+            remote: None,
             review: false,
             id: "hidden".into(),
             project_id: "a".into(),

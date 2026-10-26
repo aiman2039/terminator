@@ -274,6 +274,10 @@ pub fn resolve_target(text: &str, cwd: &Path) -> Result<Target> {
         );
         return Ok(Target::Url(text.into()));
     }
+    ensure!(
+        !cwd.starts_with("/__terminator_remote__"),
+        "Remote paths must be opened through the SSH project explorer"
+    );
     let (path, line) = resolve_path(text, cwd)?;
     ensure!(path.is_file(), "Target is not a file");
     let mut pieces = text.rsplit(':');

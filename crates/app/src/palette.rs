@@ -1128,6 +1128,7 @@ mod tests {
         });
         app.selected = Some("a".into());
         app.state.sessions.push(Session {
+            remote: None,
             id: "shell".into(),
             project_id: "a".into(),
             label: "Agent terminal".into(),
@@ -1232,6 +1233,7 @@ mod tests {
                 }],
             );
             app.state.sessions.push(Session {
+                remote: None,
                 id: id.into(),
                 project_id: id.into(),
                 label: format!("{id} shell"),
@@ -1326,6 +1328,7 @@ mod tests {
 
     fn live_shell(id: &str, project: &str, cwd: std::path::PathBuf) -> Session {
         Session {
+            remote: None,
             id: id.into(),
             project_id: project.into(),
             label: format!("{id} shell"),

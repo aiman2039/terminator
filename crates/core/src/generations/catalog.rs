@@ -148,6 +148,9 @@ impl Catalog {
             version == CATALOG_VERSION,
             "Unsupported generation catalog version {version}"
         );
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS remote_projects(id TEXT PRIMARY KEY,json TEXT NOT NULL)",
+        )?;
         Ok(Self(conn))
     }
 
@@ -421,6 +424,19 @@ impl Catalog {
             .query_row("SELECT json FROM workspace WHERE id=1", [], |r| r.get(0))?;
         let shared: State = serde_json::from_str(&json)?;
         state.projects = shared.projects;
+        let mut remote = shared.remote_projects;
+        let mut query = self
+            .0
+            .prepare("SELECT json FROM remote_projects ORDER BY id")?;
+        for row in query.query_map([], |r| r.get::<_, String>(0))? {
+            let project: crate::remote::RemoteProject = serde_json::from_str(&row?)?;
+            if let Some(existing) = remote.iter_mut().find(|p| p.id == project.id) {
+                *existing = project;
+            } else {
+                remote.push(project);
+            }
+        }
+        state.remote_projects = remote;
         state.worktrees = shared.worktrees;
         state.vnc_profiles = shared.vnc_profiles;
         state.settings = shared.settings;
@@ -439,10 +455,61 @@ impl Catalog {
         );
         let mut shared = state.clone();
         clear_owned(&mut shared);
-        self.0.execute(
+        let tx = self.0.unchecked_transaction()?;
+        for project in &state.remote_projects {
+            project.validate()?;
+            tx.execute("INSERT INTO remote_projects(id,json) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET json=excluded.json",params![project.id,serde_json::to_string(project)?])?;
+        }
+        tx.execute(
             "UPDATE workspace SET json=?1,revision=revision+1 WHERE id=1",
             [serde_json::to_string(&shared)?],
         )?;
+        tx.commit()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod remote_project_tests {
+    use super::*;
+    #[test]
+    fn an_older_workspace_writer_does_not_erase_remote_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::at(dir.path().into());
+        paths.init().unwrap();
+        Catalog::import(&paths, &State::default()).unwrap();
+        let catalog = Catalog::open(&paths).unwrap();
+        catalog
+            .0
+            .execute("UPDATE control SET active='fixture' WHERE id=1", [])
+            .unwrap();
+        let p = crate::remote::RemoteProject {
+            id: "remote-fixture".into(),
+            name: "Remote".into(),
+            root: "/workspace/project".into(),
+            ssh: crate::ssh::SshOptions {
+                host: "fixture".into(),
+                ..crate::ssh::SshOptions::default()
+            },
+            layout: serde_json::Value::Null,
+        };
+        let state = State {
+            generation: "fixture".into(),
+            remote_projects: vec![p.clone()],
+            ..State::default()
+        };
+        catalog.save_workspace(&state).unwrap();
+        let mut legacy = serde_json::to_value(State::default()).unwrap();
+        legacy.as_object_mut().unwrap().remove("remote_projects");
+        catalog
+            .0
+            .execute(
+                "UPDATE workspace SET json=?1 WHERE id=1",
+                [serde_json::to_string(&legacy).unwrap()],
+            )
+            .unwrap();
+        let mut loaded = State::default();
+        catalog.refresh(&mut loaded).unwrap();
+        assert_eq!(loaded.remote_projects, vec![p]);
     }
 }

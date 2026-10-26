@@ -225,7 +225,7 @@ pub(super) fn diagnostics_text(
     if unread > 0 {
         lines.push(format!("Unread: {unread}"));
     }
-    lines.push(session.cwd.display().to_string());
+    lines.push(crate::remote_ui::location_label(session));
     lines.join("\n")
 }
 

@@ -211,6 +211,7 @@ mod tests {
     fn vanished_editor_is_already_gone() {
         let mut state = State::default();
         state.sessions.push(Session {
+            remote: None,
             review: false,
             id: "alive".into(),
             project_id: "p".into(),

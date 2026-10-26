@@ -369,7 +369,7 @@ impl App {
         let input = session_info::Input {
             label: session.map(|session| session.label.clone()),
             cwd: session.map(|session| crate::services::compact_path(&session.cwd)),
-            cwd_full: session.map(|session| session.cwd.display().to_string()),
+            cwd_full: session.map(crate::remote_ui::location_label),
             branch: session.and_then(|session| self.branch_at(&session.cwd)),
             started: session_info::started_label(created, now(), live),
             unconfirmed: session.is_some_and(|session| !session.cwd_confirmed),
@@ -581,7 +581,7 @@ fn attention_title(
         .on_hover_ui(|ui| {
             ui.set_max_width(360.0);
             if let Some(session) = session {
-                ui.weak(session.cwd.display().to_string());
+                ui.weak(crate::remote_ui::location_label(session));
             }
             ui.label(notice_preview(&notice.summary));
             for extra in group_extra.iter().take(8) {

@@ -91,11 +91,13 @@ fn repeated_diff_opens_focus_the_existing_leaf_and_keep_staged_views_distinct() 
     let (jobs, requests) = mpsc::channel();
     app.jobs = jobs.into();
     let working = Tab::Diff {
+        remote: None,
         cwd: "/a".into(),
         path: "/a/file.rs".into(),
         staged: false,
     };
     let staged = Tab::Diff {
+        remote: None,
         cwd: "/a".into(),
         path: "/a/file.rs".into(),
         staged: true,

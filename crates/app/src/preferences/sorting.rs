@@ -307,6 +307,7 @@ mod tests {
 
     fn session(id: &str, project: &str, created: u64) -> Session {
         Session {
+            remote: None,
             review: false,
             id: id.into(),
             project_id: project.into(),

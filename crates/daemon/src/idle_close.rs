@@ -23,6 +23,10 @@ impl Shared {
             .iter()
             .find(|r| r.id == session)
             .context("Unknown session")?;
+        ensure!(
+            record.remote.is_none(),
+            "Remote SSH activity cannot be verified locally; close the session explicitly"
+        );
         if !record.lifecycle.live() {
             return Ok(None);
         }

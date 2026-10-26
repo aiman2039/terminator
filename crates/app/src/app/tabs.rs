@@ -5,6 +5,10 @@ use terminator_core::*;
 use super::super::*;
 impl App {
     pub(crate) fn create(&mut self, split: Option<&str>) {
+        if self.selected_remote_project().is_some() && !self.remote_supported() {
+            self.error = Some("Restart the session service to create SSH terminals".into());
+            return;
+        }
         if self
             .selected
             .as_ref()

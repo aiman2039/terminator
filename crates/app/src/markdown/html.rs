@@ -17,6 +17,7 @@ fn resolve_link(path: &Path, target: &str) -> Option<Link> {
     let base = Url::from_file_path(path).ok()?;
     let url = base.join(target).ok()?;
     match url.scheme() {
+        "file" if path.starts_with("/__terminator_remote__") => None,
         "file" => url.to_file_path().ok().map(Link::File),
         "https" | "http" => Some(Link::Web(url.into())),
         _ => None,

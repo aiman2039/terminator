@@ -66,6 +66,7 @@ mod gui_services;
 #[cfg(any(test, target_os = "macos"))]
 mod menu_bar;
 mod native_jobs;
+mod remote_ui;
 mod search;
 mod services;
 pub use app::app_state::App;

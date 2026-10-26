@@ -355,7 +355,12 @@ impl App {
             return;
         };
         if native {
-            let tab = Tab::Diff { cwd, path, staged };
+            let tab = Tab::Diff {
+                remote: None,
+                cwd,
+                path,
+                staged,
+            };
             if self.focus_file_view(&project, &tab) {
                 return;
             }
@@ -398,6 +403,9 @@ impl App {
                 .any(|c| c == NVIM_REVIEW_CAPABILITY)
     }
     pub(crate) fn git_root(&self) -> Option<PathBuf> {
+        if self.selected_remote_project().is_some() {
+            return None;
+        }
         self.context.as_ref().and_then(|c| c.root.clone())
     }
     pub(crate) fn editors_only(&self, ids: &[String]) -> bool {

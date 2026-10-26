@@ -413,6 +413,7 @@ impl eframe::App for App {
                     self.center_pane(ui);
                 }
             });
+        self.remote_project_dialog(&ctx);
         self.note_rename_frame(&ctx);
         self.preview_appearance(&ctx);
         // Floating panes render after these prunes (`paint_floating` runs
@@ -556,10 +557,12 @@ impl App {
         };
         let leaf = match &pane {
             Some(Tab::NativeEditor { path } | Tab::Image { path }) => {
-                Some(path.strip_prefix(&project.path).map_or_else(
-                    |_| path.display().to_string(),
-                    |rel| rel.display().to_string(),
-                ))
+                Some(self.remote_file_label(path).unwrap_or_else(|| {
+                    path.strip_prefix(&project.path).map_or_else(
+                        |_| path.display().to_string(),
+                        |rel| rel.display().to_string(),
+                    )
+                }))
             }
             Some(Tab::Terminal(sid)) => Some(
                 self.state

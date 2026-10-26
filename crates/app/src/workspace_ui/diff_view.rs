@@ -42,10 +42,17 @@ impl App {
         if self.block_unsaved_diff(Some(&current.key())) {
             return;
         }
-        let Tab::Diff { cwd, staged, .. } = current else {
+        let Tab::Diff {
+            cwd,
+            staged,
+            remote,
+            ..
+        } = current
+        else {
             return;
         };
         let next = Tab::Diff {
+            remote: remote.clone(),
             cwd: cwd.clone(),
             path: target,
             staged: *staged,
@@ -59,10 +66,14 @@ impl App {
         if self.block_unsaved_diff(Some(&current.key())) {
             return;
         }
-        let Tab::Diff { cwd, path, .. } = current else {
+        let Tab::Diff {
+            cwd, path, remote, ..
+        } = current
+        else {
             return;
         };
         let next = Tab::Diff {
+            remote: remote.clone(),
             cwd: cwd.clone(),
             path: path.clone(),
             staged: false,
@@ -117,9 +128,23 @@ impl App {
     }
 
     pub(super) fn diff_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
-        let Tab::Diff { cwd, path, staged } = tab else {
+        let Tab::Diff {
+            cwd,
+            path,
+            staged,
+            remote,
+        } = tab
+        else {
             return;
         };
+        let read_only = remote.is_some();
+        if read_only {
+            ui.weak("Remote snapshot · read-only. Use the SSH terminal to edit Git state.");
+        }
+        let header_path = std::path::PathBuf::from(
+            self.remote_file_label(path)
+                .unwrap_or_else(|| cwd.join(path).display().to_string()),
+        );
         let key = tab.key();
         let mut review = self.diff_reviews.remove(&key).unwrap_or_default();
         let doc = self
@@ -162,7 +187,7 @@ impl App {
                     .changes
                     .iter()
                     .filter(|change| {
-                        if *staged {
+                        if *staged && !read_only {
                             change.in_group(terminator_git::GitGroup::Staged)
                         } else {
                             change.in_group(terminator_git::GitGroup::Changes)
@@ -183,7 +208,7 @@ impl App {
         let mut gap = None;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if *staged {
+            if *staged && !read_only {
                 let open = appearance::sidebar_action(ui, "Pencil", "Open working tree (editable)");
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "diff-open-working", open.rect);
@@ -383,7 +408,8 @@ impl App {
         }
         // Keep a live buffer of the working-tree side. It is re-seeded from
         // a refreshed document only while it holds no unsaved edits.
-        if !*staged
+        if !read_only
+            && !*staged
             && let Some(document) = &doc
             && review.buffer.as_ref().is_none_or(|buffer| {
                 !std::sync::Arc::ptr_eq(&buffer.document, document)
@@ -409,8 +435,8 @@ impl App {
                 doc,
                 split,
                 self.diff_split_ratio,
-                &cwd.join(path),
-                !*staged,
+                &header_path,
+                !*staged && !read_only,
                 *staged,
             );
             if doc.hunks.is_empty() && doc.unified.is_empty() {
@@ -630,7 +656,8 @@ impl App {
         } else {
             None
         };
-        if (enabled || save_edits)
+        if !read_only
+            && (enabled || save_edits)
             && let Some(request) = request
         {
             review.saving_edits = save_edits;

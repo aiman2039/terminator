@@ -1,5 +1,5 @@
 use super::submit::Services;
-use crate::{After, Job, Update, editor_close, image_preview};
+use crate::{After, Job, Tab, Update, editor_close, image_preview};
 use anyhow::Result;
 use std::path::PathBuf;
 use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
@@ -30,6 +30,20 @@ pub(super) fn editor_ids(job: &Job) -> Vec<String> {
 pub(super) fn rejection(job: &Job) -> Vec<Update> {
     let busy = || "Services are busy; the action was not accepted. Retry it.".to_string();
     match job {
+        Job::RemoteAdd {
+            project,
+            generation,
+            ..
+        } => vec![Update::RemoteAdded(
+            project.clone(),
+            *generation,
+            Err(busy()),
+        )],
+        Job::RemoteRead { project, operation } => vec![Update::RemoteReply(
+            project.clone(),
+            operation.clone(),
+            Err(busy()),
+        )],
         Job::SaveLayout(project, _, text) => vec![Update::LayoutSaved(
             project.clone(),
             text.clone(),
@@ -99,6 +113,32 @@ pub(super) fn context(job: &Job) -> OperationContext {
         Job::TestNtfy { .. } => ("platform", "ntfy-test".into(), Policy::ReplaceableRead),
         Job::Preferences(_) => ("catalog", "preferences".into(), Policy::OrderedMutation),
         Job::SaveAppearance(..) => ("catalog", "appearance".into(), Policy::OrderedMutation),
+        Job::RemoteRead { project, operation } => (
+            "remote-read",
+            format!(
+                "{project}:{}",
+                if matches!(operation, terminator_core::remote::Operation::List { .. }) {
+                    "files"
+                } else {
+                    "git"
+                }
+            ),
+            Policy::ReplaceableRead,
+        ),
+        Job::RemoteAsset { project, path, .. } => (
+            "remote-file",
+            format!("{project}:{path}"),
+            Policy::OrderedMutation,
+        ),
+        Job::RemoteAdd { probe, .. } => (
+            "remote-project",
+            if *probe { "probe".into() } else { "add".into() },
+            if *probe {
+                Policy::ReplaceableRead
+            } else {
+                Policy::OrderedMutation
+            },
+        ),
         Job::VncPickTransfer { session, .. } => {
             ("vnc-transfer", session.clone(), Policy::OrderedMutation)
         }
@@ -138,6 +178,25 @@ pub(super) fn context(job: &Job) -> OperationContext {
         }
         Job::OpenProject(_, generation) => context.generation = *generation,
         _ => {}
+    }
+    if matches!(
+        job,
+        Job::RemoteRead { .. } | Job::RemoteAdd { .. } | Job::RemoteAsset { .. }
+    ) || matches!(
+        job,
+        Job::Diff(Tab::Diff {
+            remote: Some(_),
+            ..
+        }) | Job::DiffContext(
+            Tab::Diff {
+                remote: Some(_),
+                ..
+            },
+            _
+        )
+    ) {
+        context.deadline =
+            std::time::Instant::now().checked_add(std::time::Duration::from_secs(45));
     }
     context
 }

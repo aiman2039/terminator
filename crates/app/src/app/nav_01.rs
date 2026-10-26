@@ -849,6 +849,7 @@ mod tests {
                 target: BrowserTarget::Url("https://example.com".into()),
             },
             Tab::Diff {
+                remote: None,
                 cwd: "/tmp".into(),
                 path: "/tmp/a.rs".into(),
                 staged: false,

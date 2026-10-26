@@ -369,6 +369,7 @@ mod tests {
     }
     fn session(generation: &str, lifecycle: Lifecycle) -> Session {
         Session {
+            remote: None,
             id: id(),
             project_id: id(),
             label: "fixture".into(),

@@ -675,7 +675,7 @@ impl TabViewer for Viewer<'_> {
                 } else {
                     let pane = self.pane_for(&Tab::Terminal(sid.clone()).key());
                     ui.spacing_mut().item_spacing.y = 2.0;
-                    let is_markdown = markdown::available(&session);
+                    let is_markdown = session.remote.is_none() && markdown::available(&session);
                     // A lone pane's name is already the workspace tab. Keep the
                     // drag and close row, but don't paint the title again.
                     // A lone floated pane shows the OS window title instead.

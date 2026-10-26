@@ -575,6 +575,7 @@ mod tests {
             .unwrap();
         history.flush().unwrap();
         let s = Session {
+            remote: None,
             review: false,
             id: sid,
             project_id: id(),
