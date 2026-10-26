@@ -697,4 +697,19 @@ mod tests {
         output.textures_delta.clear();
         assert!(!preview.editor_focused);
     }
+    #[test]
+    fn remote_snapshots_never_load_local_file_links_or_images() {
+        let ctx = egui::Context::default();
+        let mut previews = Previews::new(&ctx);
+        previews.begin_frame();
+        previews.snapshot("remote-md",&crate::test_path("/__terminator_remote__/readme.md"),"![local](file:///private/secret.png) [local](file:///private/secret.txt) [web](https://example.com)");
+        previews.wait_prepared();
+        let doc = previews.entries["remote-md"].document.as_ref().unwrap();
+        assert!(doc.images.is_empty());
+        assert_eq!(doc.links["file:///private/secret.txt"], None);
+        assert_eq!(
+            doc.links["https://example.com"],
+            Some(Link::Web("https://example.com/".into()))
+        );
+    }
 }

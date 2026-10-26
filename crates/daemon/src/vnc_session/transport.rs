@@ -56,36 +56,12 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send + Sync> Io for T {}
 pub(super) type Stream = Box<dyn Io>;
 
 pub(super) fn ssh_command(ssh: &SshOptions) -> Result<Command> {
-    ssh.validate()?;
     let mut command = Command::new("ssh");
     command
-        .args([
-            "-T",
-            "-oBatchMode=yes",
-            "-oStrictHostKeyChecking=yes",
-            "-oControlMaster=no",
-            "-oClearAllForwardings=yes",
-            "-oConnectTimeout=10",
-            "-oServerAliveInterval=15",
-            "-oServerAliveCountMax=3",
-            "-oLogLevel=ERROR",
-        ])
-        .arg("-p")
-        .arg(ssh.port.to_string())
+        .args(terminator_core::ssh::arguments(ssh, false)?)
         .kill_on_drop(true);
-    if !ssh.username.is_empty() {
-        command.arg("-l").arg(&ssh.username);
-    }
-    if let Some(path) = &ssh.identity_file {
-        command.arg("-i").arg(path);
-    }
-    if let Some(path) = &ssh.known_hosts_file {
-        command.arg("-o").arg(format!(
-            "UserKnownHostsFile=\"{}\"",
-            path.to_string_lossy()
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-        ));
+    for key in terminator_core::ssh::private_environment_keys() {
+        command.env_remove(key);
     }
     Ok(command)
 }

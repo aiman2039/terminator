@@ -38,11 +38,13 @@ pub(crate) mod tests {
         app.jobs = jobs.into();
         app.selected = Some("project".into());
         let staged = Tab::Diff {
+            remote: None,
             cwd: "/repo".into(),
             path: "/repo/file.rs".into(),
             staged: true,
         };
         let working = Tab::Diff {
+            remote: None,
             cwd: "/repo".into(),
             path: "/repo/file.rs".into(),
             staged: false,
@@ -216,6 +218,7 @@ pub(crate) mod tests {
         crate::appearance::install(&ctx);
         let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
         let tab = Tab::Diff {
+            remote: None,
             cwd: "/repo".into(),
             path: "/repo/file.rs".into(),
             staged: false,
@@ -260,6 +263,7 @@ pub(crate) mod tests {
         crate::appearance::install(&ctx);
         let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
         let tab = Tab::Diff {
+            remote: None,
             cwd: "/repo".into(),
             path: "/repo/file.rs".into(),
             staged: false,
@@ -449,6 +453,7 @@ pub(crate) mod tests {
         crate::appearance::install(&ctx);
         let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
         let tab = Tab::Diff {
+            remote: None,
             cwd: "/repo".into(),
             path: "/repo/file.rs".into(),
             staged: false,
@@ -487,6 +492,7 @@ pub(crate) mod tests {
         crate::appearance::install(&ctx);
         let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
         let tab = Tab::Diff {
+            remote: None,
             cwd: "/repo".into(),
             path: "/repo/file.rs".into(),
             staged: false,
@@ -528,6 +534,7 @@ pub(crate) mod tests {
         crate::appearance::install(&ctx);
         let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
         let tab = Tab::Diff {
+            remote: None,
             cwd: "/repo".into(),
             path: "/repo/file.rs".into(),
             staged: false,
@@ -645,6 +652,7 @@ pub(crate) mod tests {
             ctx.enable_accesskit();
             let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
             let tab = Tab::Diff {
+                remote: None,
                 cwd: dir.path().into(),
                 path: dir.path().join("file.txt"),
                 staged: false,
@@ -758,6 +766,7 @@ pub(crate) mod tests {
         let ctx = egui::Context::default();
         let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
         let tab = Tab::Diff {
+            remote: None,
             cwd: "/repo".into(),
             path: "/repo/file.rs".into(),
             staged,
@@ -805,11 +814,15 @@ pub(crate) mod tests {
         let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
         app.selected = Some("project".into());
         let tab = Tab::Diff {
+            remote: None,
             cwd: dir.path().into(),
             path: dir.path().join("file.md"),
             staged: false,
         };
-        let Tab::Diff { cwd, path, staged } = &tab else {
+        let Tab::Diff {
+            cwd, path, staged, ..
+        } = &tab
+        else {
             unreachable!()
         };
         app.context = Some(services::ContextData {

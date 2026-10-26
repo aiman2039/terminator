@@ -104,6 +104,40 @@ fn original() -> String {
         })
     }
 }
+
+#[tokio::test]
+async fn read_only_document_rejects_save_and_hunk_changes_even_with_a_git_source() {
+    let fixture = Fixture::new("file.txt", Some("old\n"));
+    std::fs::write(fixture.absolute(), "new\n").unwrap();
+    let mut doc = (*fixture.doc(false).await).clone();
+    assert!(doc.source.is_some());
+    doc.read_only = true;
+    let doc = Arc::new(doc);
+    assert!(
+        fixture
+            .change(Arc::clone(&doc), 0, Kind::Stage)
+            .await
+            .is_err()
+    );
+    assert!(
+        execute(
+            &fixture.service,
+            Request::Save {
+                document: doc,
+                text: "changed\n".into()
+            },
+            false,
+            &CancellationToken::new(),
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.absolute()).unwrap(),
+        "new\n"
+    );
+    assert_eq!(fixture.index(), "old\n");
+}
 fn changed() -> String {
     original()
         .replace("line 2\n", "first change\n")

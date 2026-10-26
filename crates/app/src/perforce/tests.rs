@@ -11,6 +11,9 @@ fn empty_queries_are_distinct_from_login_and_permission_errors() {
         assert!(records(error.as_bytes(), true).is_err());
     }
     assert!(records(b"not json", true).is_err());
+    assert!(records(b"[]", true).is_err());
+    assert!(records(br#"{"code":"error","data":"Failure"}"#, true).is_err());
+    assert!(records(br#"{"severity":3,"generic":17,"data":"Failure"}"#, true).is_err());
 }
 
 #[test]
@@ -217,4 +220,33 @@ async fn isolated_server() {
     perform(&service, &command_root, Op::Sync, &cancel)
         .await
         .unwrap();
+    // A failed raw print must not become an empty left-hand snapshot.
+    assert!(
+        run(
+            &service,
+            &command_root,
+            &["print".into(), "-q".into(), "//depot/missing.txt#1".into()],
+            false,
+        )
+        .await
+        .is_err()
+    );
+    // Excluded client paths are not untracked additions, even inside the root.
+    let excluded = root.join("excluded");
+    std::fs::create_dir(&excluded).unwrap();
+    let path = excluded.join("local.txt");
+    std::fs::write(&path, "not in the client view\n").unwrap();
+    assert!(
+        document(&service, command_root.clone(), path, 3, &cancel)
+            .await
+            .is_err()
+    );
+    // This cwd is outside the client; Git-to-Perforce fallback must also fail.
+    let path = state.path().join("unrelated.txt");
+    std::fs::write(&path, "unrelated\n").unwrap();
+    assert!(
+        crate::diff::document_async(&service, state.path().into(), path, false, &cancel)
+            .await
+            .is_err()
+    );
 }

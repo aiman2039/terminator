@@ -32,7 +32,9 @@ impl App {
                 Tab::Terminal(id) => Some(id.clone()),
                 _ => None,
             });
-        self.send(Request::SelectProject { project });
+        if !self.state.remote_projects.iter().any(|p| p.id == project) || self.remote_supported() {
+            self.send(Request::SelectProject { project });
+        }
     }
     pub(crate) fn touch_project_activity(&mut self, project: &str) {
         self.preferences
@@ -237,6 +239,9 @@ impl App {
             .filter(|s| self.project_available(&s.project_id))
     }
     pub(crate) fn cwd(&self) -> Option<PathBuf> {
+        if self.selected_remote_project().is_some() {
+            return None;
+        }
         self.context_session()
             .map(|s| s.cwd.clone())
             .or_else(|| self.selected_project().map(|p| p.path.clone()))
@@ -347,6 +352,9 @@ impl App {
         self.state.projects.iter().any(|p| p.id == project)
     }
     pub(crate) fn can_persist_layout(&self, project: &str) -> bool {
+        if self.state.remote_projects.iter().any(|p| p.id == project) && !self.remote_supported() {
+            return false;
+        }
         !self.layout_readonly.contains(project) && self.has_project(project)
     }
     pub(crate) fn persistable_layouts(&self) -> Vec<(String, Workspace)> {

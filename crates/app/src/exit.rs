@@ -753,6 +753,7 @@ mod tests {
             layout: serde_json::Value::Null,
         });
         let session = Session {
+            remote: None,
             review: false,
             id: "editor".into(),
             project_id: "project".into(),

@@ -888,15 +888,30 @@ impl App {
             ui.separator();
         }
 
+        let remote_source = self.remote_file_source(path);
+        let file_location = self
+            .remote_file_label(path)
+            .unwrap_or_else(|| path.display().to_string());
+        if let Some((remote, relative)) = &remote_source {
+            ui.horizontal(|ui| {
+                ui.weak("Remote snapshot · read-only");
+                if ui.button("Open in SSH editor").clicked() {
+                    self.open_remote_file(remote, relative.clone(), None, None, true);
+                }
+            });
+        }
         let project_root = self.selected_project().map(|project| project.path.clone());
-        let breadcrumb = self
-            .selected_project()
-            .and_then(|project| path.strip_prefix(&project.path).ok())
-            .unwrap_or(path)
-            .components()
-            .map(|part| part.as_os_str().to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join(" › ");
+        let breadcrumb = if remote_source.is_some() {
+            file_location.clone()
+        } else {
+            self.selected_project()
+                .and_then(|project| path.strip_prefix(&project.path).ok())
+                .unwrap_or(path)
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(" › ")
+        };
         let pinned_files = self.preferences.pinned_native_files.clone();
         let mut recent_files = self.preferences.recent_native_files.clone();
         if let Some(root) = project_root.as_ref() {
@@ -970,6 +985,7 @@ impl App {
         // before the buffer borrow below begins.
         let marks: Vec<DiagnosticMark> = self.lsp.row_marks(path);
         let problems = self.lsp.problems_for(path);
+        let remote_snapshot = crate::remote_ui::is_snapshot(&self.paths.data, path);
         let post = {
             let doc = self.native_doc(path, vim);
             let mut post = PostEdit::Keep;
@@ -996,7 +1012,7 @@ impl App {
                     [title_width, appearance::TOOLBAR_BUTTON],
                     egui::Label::new(egui::RichText::new(&breadcrumb).weak()).truncate(),
                 )
-                .on_hover_text(path.display().to_string());
+                .on_hover_text(&file_location);
                 if let Some(symbol) = current_symbol {
                     ui.weak("›");
                     ui.monospace(symbol);
@@ -1197,7 +1213,7 @@ impl App {
                     &mut doc.engine,
                     &SourceOptions {
                         vim,
-                        read_only: rename_applying,
+                        read_only: rename_applying || remote_snapshot,
                         menu_style: Some(appearance::menu_style),
                         menu_header: Some(appearance::target_header),
                         menu_item: Some(appearance::menu_item),
@@ -1438,7 +1454,13 @@ impl App {
                             )
                         },
                     );
-                    let preview = self.markdown.snapshot(&preview_key, path, &text);
+                    let remote_base = std::path::PathBuf::from("/__terminator_remote__")
+                        .join(path.file_name().unwrap_or_default());
+                    let preview = self.markdown.snapshot(
+                        &preview_key,
+                        if remote_snapshot { &remote_base } else { path },
+                        &text,
+                    );
                     let mut link = None;
                     let mut show_preview = |ui: &mut egui::Ui| {
                         let sync = if mode == Some(markdown::Mode::Split) && !preview_hovered {

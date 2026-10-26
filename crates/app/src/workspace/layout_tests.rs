@@ -159,7 +159,7 @@ mod tests {
                 .to_string()
                 .contains("focus")
         );
-        for version in [2, 3, 4, 5, 6, 7] {
+        for version in [2, 3, 4, 5, 6, 7, 8] {
             let mut saved = terminator_core::sanitize_layout(
                 serde_json::to_value(Workspace::from_layout(dock.clone())).unwrap(),
             );
@@ -254,7 +254,7 @@ mod tests {
     fn unsupported_layout_version_is_rejected() {
         let mut saved =
             terminator_core::sanitize_layout(serde_json::to_value(Workspace::empty()).unwrap());
-        saved["version"] = serde_json::json!(8);
+        saved["version"] = serde_json::json!(9);
         assert!(
             Workspace::load(saved)
                 .unwrap_err()

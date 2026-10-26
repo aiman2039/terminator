@@ -163,6 +163,7 @@ mod tests {
             path: "/a/note.md".into()
         }));
         assert!(App::floatable(&Tab::Diff {
+            remote: None,
             cwd: "/a".into(),
             path: "/a/note.md".into(),
             staged: false,
@@ -1803,6 +1804,7 @@ mod tests {
         app.select_project("b".into());
         app.remove_tab("anchor");
         let session = Session {
+            remote: None,
             review: false,
             id: "created".into(),
             project_id: "a".into(),

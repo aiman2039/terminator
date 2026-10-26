@@ -1,0 +1,18 @@
+Port 22
+ListenAddress 0.0.0.0
+HostKey /var/lib/ssh-host-keys/ssh_host_ed25519_key
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin no
+PermitEmptyPasswords no
+AllowUsers developer
+AuthorizedKeysFile .ssh/authorized_keys
+StrictModes yes
+UsePAM no
+AllowAgentForwarding no
+AllowTcpForwarding no
+X11Forwarding no
+PermitTunnel no
+Subsystem sftp internal-sftp
+LogLevel VERBOSE

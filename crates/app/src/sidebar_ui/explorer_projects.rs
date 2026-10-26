@@ -105,7 +105,7 @@ impl App {
             .show(|ui| {
                 for project in hidden {
                     let response = appearance::menu_item(ui, &project.name, "FolderOpen", "")
-                        .on_hover_text(project.path.display().to_string());
+                        .on_hover_text(self.project_location_label(&project.id));
                     #[cfg(feature = "test-support")]
                     diagnostics::record(
                         ui.ctx(),
@@ -124,6 +124,9 @@ impl App {
     }
 
     pub(super) fn op_root(&self) -> Option<std::path::PathBuf> {
+        if self.selected_remote_project().is_some() {
+            return None;
+        }
         self.git_root()
             .or_else(|| self.cwd())
             .or_else(|| self.selected_project().map(|project| project.path.clone()))
@@ -183,6 +186,9 @@ impl App {
                     if worktree.clicked() {
                         self.worktree_open = true;
                     }
+                }
+                if appearance::sidebar_action(ui, "Monitor", "New SSH project").clicked() {
+                    self.remote_ui.open_new();
                 }
                 let add = appearance::sidebar_action(ui, "Plus", "New project");
                 #[cfg(feature = "test-support")]
@@ -280,7 +286,7 @@ impl App {
                         .on_hover_text(format!(
                             "{}\n{}{}",
                             p.name,
-                            p.path.display(),
+                            self.project_location_label(&p.id),
                             self.state
                                 .worktrees
                                 .iter()

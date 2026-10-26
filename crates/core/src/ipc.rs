@@ -113,6 +113,16 @@ pub enum Request {
         path: PathBuf,
         staged: bool,
     },
+    AddRemoteProject {
+        project: crate::remote::RemoteProject,
+    },
+    RemoteProject {
+        project: String,
+        operation: crate::remote::Operation,
+    },
+    ProbeRemoteProject {
+        project: crate::remote::RemoteProject,
+    },
     AddProject {
         path: PathBuf,
     },
@@ -218,6 +228,9 @@ impl Request {
             Self::Snapshot => "Snapshot",
             Self::CreateReview { .. } => "CreateReview",
             Self::AddProject { .. } => "AddProject",
+            Self::AddRemoteProject { .. } => "AddRemoteProject",
+            Self::RemoteProject { .. } => "RemoteProject",
+            Self::ProbeRemoteProject { .. } => "ProbeRemoteProject",
             Self::SaveLayout { .. } => "SaveLayout",
             Self::SelectProject { .. } => "SelectProject",
             Self::Create { .. } => "Create",
@@ -267,6 +280,7 @@ pub enum Response {
     Unchanged,
     Ok,
     State(Box<State>),
+    RemoteProject(crate::remote::Reply),
     Created(Session),
     Text(String),
     Data(String),
@@ -318,11 +332,18 @@ fn connect_hint(
     let paths = &routed;
     let mut s = transport::Stream::connect_ipc(&paths.socket())?;
     s.set_timeouts(
-        Duration::from_secs(if matches!(&request, Request::CloseIdleSessions { .. }) {
-            30
-        } else {
-            3
-        }),
+        Duration::from_secs(
+            if matches!(
+                &request,
+                Request::RemoteProject { .. } | Request::ProbeRemoteProject { .. }
+            ) {
+                40
+            } else if matches!(&request, Request::CloseIdleSessions { .. }) {
+                30
+            } else {
+                3
+            },
+        ),
         Duration::from_secs(3),
     )?;
     write_frame(
@@ -398,6 +419,7 @@ pub(crate) fn redirect_allowed(request: &Request) -> bool {
         Request::Create { .. }
             | Request::CreateReview { .. }
             | Request::AddProject { .. }
+            | Request::AddRemoteProject { .. }
             | Request::SaveLayout { .. }
             | Request::SelectProject { .. }
             | Request::Settings(_)

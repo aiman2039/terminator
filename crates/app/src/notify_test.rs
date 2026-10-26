@@ -253,6 +253,7 @@ mod tests {
     fn hello_events_notify_through_saved_settings() {
         let mut state = terminator_core::State::default();
         state.sessions.push(terminator_core::Session {
+            remote: None,
             review: false,
             id: "session".into(),
             project_id: "project".into(),

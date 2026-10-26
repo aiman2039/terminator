@@ -4,6 +4,11 @@ use terminator_core::*;
 use super::super::*;
 impl App {
     pub(crate) fn apply_state(&mut self, mut state: State) {
+        for remote in &state.remote_projects {
+            if !state.projects.iter().any(|p| p.id == remote.id) {
+                state.projects.push(crate::remote_ui::projection(remote));
+            }
+        }
         if observation_is_stale(&self.state, &state) {
             return;
         }

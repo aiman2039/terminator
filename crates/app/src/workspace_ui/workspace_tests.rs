@@ -283,6 +283,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
         let tab = Tab::Diff {
+            remote: None,
             cwd: dir.path().into(),
             path: dir.path().join("file.rs"),
             staged: false,

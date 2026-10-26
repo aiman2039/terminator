@@ -15,6 +15,7 @@ mod tests {
 
     fn session(id: &str) -> Session {
         Session {
+            remote: None,
             review: false,
             id: id.into(),
             project_id: "p".into(),

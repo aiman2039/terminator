@@ -415,7 +415,12 @@ impl Client {
         // Static operation name for the deadline below; the envelope takes
         // ownership of the request afterwards.
         let operation = request.name();
-        let timeout = if matches!(request, Request::CloseIdleSessions { .. }) {
+        let timeout = if matches!(
+            request,
+            Request::RemoteProject { .. } | Request::ProbeRemoteProject { .. }
+        ) {
+            Duration::from_secs(40)
+        } else if matches!(request, Request::CloseIdleSessions { .. }) {
             Duration::from_secs(30)
         } else {
             Duration::from_secs(3)
@@ -554,7 +559,9 @@ pub fn read_only(request: &Request) -> bool {
     }
     matches!(
         request,
-        Request::Snapshot
+        Request::RemoteProject { .. }
+            | Request::ProbeRemoteProject { .. }
+            | Request::Snapshot
             | Request::History { .. }
             | Request::Screen { .. }
             | Request::EditorStatus { .. }
@@ -848,6 +855,7 @@ mod tests {
         let active = test_owner(&root, &catalog);
         let notice_id = crate::id();
         let stale_session = crate::Session {
+            remote: None,
             id: crate::id(),
             project_id: crate::id(),
             label: "old terminal".into(),

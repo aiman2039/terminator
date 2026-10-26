@@ -42,6 +42,22 @@ enum Control {
         #[arg(long, hide = true, requires = "stop_all")]
         confirmed_inventory: Option<String>,
     },
+    AddRemoteProject {
+        #[arg(long)]
+        host: String,
+        #[arg(long, default_value = "22")]
+        port: u16,
+        #[arg(long, default_value = "")]
+        user: String,
+        #[arg(long)]
+        root: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        identity: Option<PathBuf>,
+        #[arg(long)]
+        known_hosts: Option<PathBuf>,
+    },
     AddProject {
         path: PathBuf,
     },
@@ -142,17 +158,31 @@ fn capability(state: &State, feature: &str) -> Result<()> {
     );
     Ok(())
 }
-fn project<'a>(state: &'a State, name: &str) -> Result<&'a Project> {
-    let matches = state
+fn project(state: &State, name: &str) -> Result<Project> {
+    let mut matches = state
         .projects
         .iter()
         .filter(|p| p.id == name || p.path.to_string_lossy() == name || p.name == name)
+        .cloned()
         .collect::<Vec<_>>();
+    matches.extend(
+        state
+            .remote_projects
+            .iter()
+            .filter(|p| p.id == name || p.name == name || p.label() == name)
+            .map(|p| Project {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                path: p.identity_path(),
+                layout: p.layout.clone(),
+            }),
+    );
     match matches.as_slice() {
-        [project] => Ok(project),
-        _ => anyhow::bail!("Project must match exactly one ID, path, or name"),
+        [project] => Ok(project.clone()),
+        _ => anyhow::bail!("Project must match exactly one ID, location, or name"),
     }
 }
+
 fn session<'a>(state: &'a State, sid: &str) -> Result<&'a Session> {
     state
         .sessions
@@ -166,7 +196,11 @@ fn create(
     cwd: Option<PathBuf>,
     file: Option<PathBuf>,
 ) -> Result<Session> {
-    let file = file.map(std::path::absolute).transpose()?;
+    let file = if project.path.starts_with("/__terminator_remote__") {
+        file
+    } else {
+        file.map(std::path::absolute).transpose()?
+    };
     match rpc(
         paths,
         Request::Create {
@@ -231,7 +265,47 @@ pub fn run(args: &[String]) -> Result<()> {
             )?
         }
         Control::List => {
-            json!({"generation":state.generation,"projects":state.projects,"sessions":state.sessions,"worktrees":state.worktrees,"agents":state.agents,"terminal_notices":state.terminal_notices})
+            json!({"generation":state.generation,"projects":state.projects,"remote_projects":state.remote_projects,"sessions":state.sessions,"worktrees":state.worktrees,"agents":state.agents,"terminal_notices":state.terminal_notices})
+        }
+        Control::AddRemoteProject {
+            host,
+            port,
+            user,
+            root,
+            name,
+            identity,
+            known_hosts,
+        } => {
+            capability(&state, remote::CAPABILITY)?;
+            let project = remote::RemoteProject {
+                id: String::new(),
+                name,
+                root,
+                ssh: ssh::SshOptions {
+                    host,
+                    port,
+                    username: user,
+                    identity_file: identity,
+                    known_hosts_file: known_hosts,
+                },
+                layout: serde_json::Value::Null,
+            };
+            project.validate()?;
+            rpc(
+                &paths,
+                Request::AddRemoteProject {
+                    project: project.clone(),
+                },
+            )?
+            .checked()?;
+            let state = snapshot(&paths)?;
+            serde_json::to_value(
+                state
+                    .remote_projects
+                    .iter()
+                    .find(|p| p.ssh == project.ssh && p.root == project.root)
+                    .context("Registered SSH project missing")?,
+            )?
         }
         Control::AddProject { path } => {
             let path = std::path::absolute(path)?;
@@ -248,7 +322,7 @@ pub fn run(args: &[String]) -> Result<()> {
             if !background {
                 ui_control::rpc(&paths, ui_control::Request::Ping)?;
             }
-            let s = create(&paths, project(&state, &name)?, cwd, file)?;
+            let s = create(&paths, &project(&state, &name)?, cwd, file)?;
             if !background {
                 ui_control::rpc(
                     &paths,
@@ -273,7 +347,7 @@ pub fn run(args: &[String]) -> Result<()> {
             ensure!(origin.lifecycle.live(), "Origin session has ended");
             let s = create(
                 &paths,
-                project(&state, &origin.project_id)?,
+                &project(&state, &origin.project_id)?,
                 Some(origin.cwd.clone()),
                 None,
             )?;

@@ -16,11 +16,13 @@ fn same_file_view(left: &Tab, right: &Tab) -> bool {
                 cwd: left_root,
                 path: left,
                 staged: left_staged,
+                ..
             },
             Tab::Diff {
                 cwd: right_root,
                 path: right,
                 staged: right_staged,
+                ..
             },
         ) => {
             let left = if left.is_absolute() {
@@ -146,6 +148,23 @@ impl App {
         external: bool,
         text: bool,
     ) {
+        if let Some(remote) = self.selected_remote_project().cloned() {
+            let cache = crate::remote_ui::snapshot_root(&self.paths.data, &remote.id);
+            let relative = path
+                .strip_prefix(&cache)
+                .or_else(|_| path.strip_prefix(remote.identity_path()))
+                .or_else(|_| path.strip_prefix(&remote.root))
+                .map_or_else(
+                    |_| path.to_str().map(str::to_owned),
+                    |p| p.to_str().map(str::to_owned),
+                );
+            if let Some(relative) = relative {
+                self.open_remote_file(&remote, relative, line, split, text || external);
+            } else {
+                self.error = Some("Remote file paths must be UTF-8".into());
+            }
+            return;
+        }
         if !external && !text && image_preview::supported(&path) {
             if let Some(project) = self.selected.clone() {
                 self.open_image(&project, path, split);

@@ -651,6 +651,72 @@ pub(crate) async fn document_with_context(
         })
         .await
 }
+pub(crate) async fn remote_document(
+    service: &crate::gui_services::Services,
+    client: &terminator_core::async_client::Client,
+    tab: &crate::Tab,
+    context: usize,
+    cancel: &terminator_core::async_service::CancellationToken,
+) -> Result<DiffDocument> {
+    use base64::Engine;
+    let crate::Tab::Diff {
+        remote: Some(project),
+        cwd,
+        path,
+        staged,
+    } = tab
+    else {
+        anyhow::bail!("Not a remote diff")
+    };
+    let relative = path
+        .strip_prefix(cwd)?
+        .to_str()
+        .context("Remote diff path must be UTF-8")?
+        .to_owned();
+    terminator_core::remote::validate_relative(&relative)?;
+    let response = client
+        .rpc(terminator_core::Request::RemoteProject {
+            project: project.clone(),
+            operation: terminator_core::remote::Operation::GitDiff {
+                path: relative.clone(),
+                staged: *staged,
+            },
+        })
+        .await?;
+    let terminator_core::Response::RemoteProject(terminator_core::remote::Reply::Diff {
+        path: actual,
+        left,
+        right,
+        staged: actual_staged,
+    }) = response
+    else {
+        anyhow::bail!("Unexpected remote diff response")
+    };
+    anyhow::ensure!(
+        actual == relative && actual_staged == *staged,
+        "Remote diff identity changed"
+    );
+    let path = path.clone();
+    let staged = *staged;
+    service
+        .cpu()
+        .run(cancel, move || {
+            let left = base64::engine::general_purpose::STANDARD.decode(left)?;
+            let right = base64::engine::general_purpose::STANDARD.decode(right)?;
+            anyhow::ensure!(
+                left.len() <= terminator_core::remote::MAX_FILE_BYTES
+                    && right.len() <= terminator_core::remote::MAX_FILE_BYTES,
+                "Remote diff exceeds its snapshot limit"
+            );
+            let left = String::from_utf8(left)
+                .context("Remote binary files cannot be displayed as text diffs")?;
+            let right = String::from_utf8(right)
+                .context("Remote binary files cannot be displayed as text diffs")?;
+            Ok(build_with_context(&path, &left, &right, staged, context))
+        })
+        .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

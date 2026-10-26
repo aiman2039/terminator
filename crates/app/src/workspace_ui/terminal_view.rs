@@ -298,7 +298,7 @@ impl Viewer<'_> {
             }
         }
         appearance::context_menu(&response, |ui| {
-            let cwd = session.cwd.display().to_string();
+            let cwd = crate::remote_ui::location_label(session);
             appearance::target_header(ui, &cwd, &cwd);
             let selected = self
                 .app
@@ -403,13 +403,22 @@ impl Viewer<'_> {
             }
             if appearance::menu_item(
                 ui,
-                "Copy working directory",
+                if session.remote.is_some() {
+                    "Copy project directory"
+                } else {
+                    "Copy working directory"
+                },
                 "Folder",
                 &self.app.shortcut_label("copy_working_directory"),
             )
             .clicked()
             {
-                ui.ctx().copy_text(session.cwd.display().to_string());
+                ui.ctx().copy_text(
+                    session
+                        .remote
+                        .as_ref()
+                        .map_or_else(|| session.cwd.display().to_string(), |r| r.root.clone()),
+                );
                 ui.close();
             }
             ui.separator();

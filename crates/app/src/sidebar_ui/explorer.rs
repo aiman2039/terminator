@@ -328,7 +328,7 @@ impl App {
         )
         .on_hover_text(format!(
             "{}\nManaged Git worktree\n{} live terminal(s)",
-            project.path.display(),
+            self.project_location_label(&project.id),
             live
         ));
         #[cfg(feature = "test-support")]
@@ -582,6 +582,19 @@ impl App {
 
     /// One tool's content, hostable by either sidebar.
     pub(crate) fn sidebar_tool(&mut self, tool: SidebarTool, ui: &mut egui::Ui) {
+        if self.selected_remote_project().is_some()
+            && matches!(
+                tool,
+                SidebarTool::Explorer
+                    | SidebarTool::Git
+                    | SidebarTool::Structure
+                    | SidebarTool::Problems
+                    | SidebarTool::Info
+            )
+        {
+            self.remote_sidebar(ui, tool);
+            return;
+        }
         if tool == SidebarTool::Info {
             self.info_panel(ui);
             return;
@@ -662,7 +675,7 @@ impl App {
                         &group.sessions.len().to_string(),
                         appearance::color(&self.theme.text),
                     )
-                    .on_hover_text(group.project.path.display().to_string());
+                    .on_hover_text(self.project_location_label(&group.project.id));
                     #[cfg(feature = "test-support")]
                     diagnostics::record(
                         ui.ctx(),

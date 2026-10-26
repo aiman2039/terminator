@@ -27,6 +27,12 @@ impl Shared {
             !self.shutdown.load(Ordering::Acquire),
             "Daemon is shutting down"
         );
+        let remote_project = relock(&self.state)
+            .remote_projects
+            .iter()
+            .find(|p| p.id == project)
+            .cloned();
+        let remote_cwd = cwd.clone();
         let editor = !matches!(launch, Launch::Shell);
         let is_review = matches!(launch, Launch::Review { .. });
         let (settings, root, generation) = {
@@ -39,30 +45,39 @@ impl Shared {
             );
             (
                 s.settings.clone(),
-                s.projects
-                    .iter()
-                    .find(|p| p.id == project)
-                    .context("Unknown project")?
-                    .path
-                    .clone(),
+                if let Some(remote) = &remote_project {
+                    remote.identity_path()
+                } else {
+                    s.projects
+                        .iter()
+                        .find(|p| p.id == project)
+                        .context("Unknown project")?
+                        .path
+                        .clone()
+                },
                 s.generation.clone(),
             )
         };
-        ensure!(
-            root.is_dir(),
-            "Project directory unavailable: {}. If it was moved, restore access at this path or open the project at its new location",
-            root.display()
-        );
-        let requested_cwd = cwd.unwrap_or(root);
-        let cwd = requested_cwd.canonicalize().with_context(|| {
+        let cwd = if remote_project.is_some() {
+            root
+        } else {
+            ensure!(
+                root.is_dir(),
+                "Project directory unavailable: {}. If it was moved, restore access at this path or open the project at its new location",
+                root.display()
+            );
+            let requested_cwd = cwd.unwrap_or(root);
+            let cwd = requested_cwd.canonicalize().with_context(|| {
             format!(
                 "Working directory unavailable: {}. If it was moved, restore access at this path or open the project at its new location",
                 requested_cwd.display()
             )
         })?;
-        ensure!(cwd.is_dir(), "Working directory is not a directory");
-        let file = file.map(|file| {
-            if file.is_absolute() {
+            ensure!(cwd.is_dir(), "Working directory is not a directory");
+            cwd
+        };
+        let mut file = file.map(|file| {
+            if remote_project.is_some() || file.is_absolute() {
                 file
             } else {
                 cwd.join(file)
@@ -77,7 +92,24 @@ impl Shared {
             "Attachment helper unavailable: {}. Open Settings → Updates → Installation to repair Terminator. Existing sessions are preserved",
             helper.display()
         );
-        let mut cmd = if let Launch::Review { staged } = launch {
+        let mut remote_session = None;
+        let mut cmd = if let Some(remote) = &remote_project {
+            ensure!(
+                !is_review,
+                "Remote Git reviews use the native read-only viewer"
+            );
+            let (command, metadata, resolved) = crate::remote::terminal::prepare(
+                remote,
+                &sid,
+                remote_cwd.as_deref(),
+                file.as_deref(),
+                line,
+                column,
+            )?;
+            remote_session = Some(metadata);
+            file = resolved;
+            command
+        } else if let Launch::Review { staged } = launch {
             review::prepare(
                 &self.paths,
                 &sid,
@@ -104,14 +136,24 @@ impl Shared {
             };
             shell::prepare(&self.paths, &shell.to_string_lossy(), helper)?
         };
-        cmd.cwd(&cwd);
+        cmd.cwd(if remote_project.is_some() {
+            &self.paths.data
+        } else {
+            &cwd
+        });
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         terminal_env::restore_colors(&mut cmd);
-        cmd.env("TERMINATOR_SESSION_ID", &sid);
-        cmd.env("TERMINATOR_SESSION_TOKEN", &token);
-        cmd.env("TERMINATOR_DATA_DIR", &self.paths.data);
-        cmd.env("TERMINATOR_RUNTIME_DIR", &self.paths.runtime);
+        if remote_project.is_none() {
+            cmd.env("TERMINATOR_SESSION_ID", &sid);
+            cmd.env("TERMINATOR_SESSION_TOKEN", &token);
+            cmd.env("TERMINATOR_DATA_DIR", &self.paths.data);
+            cmd.env("TERMINATOR_RUNTIME_DIR", &self.paths.runtime);
+        } else {
+            for key in terminator_core::ssh::private_environment_keys() {
+                cmd.env_remove(key);
+            }
+        }
         let pair = native_pty_system().openpty(PtySize {
             rows: 24,
             cols: 80,
@@ -151,6 +193,7 @@ impl Shared {
             shell_executable,
         }));
         let record = Session {
+            remote: remote_session,
             review: is_review,
             id: sid.clone(),
             project_id: project.clone(),

@@ -45,9 +45,10 @@ pub fn records(raw: &[u8], allow_empty: bool) -> Result<Vec<Value>> {
         .filter(|line| !line.is_empty())
     {
         let record: Value = serde_json::from_slice(line).context("Invalid p4 JSON output")?;
+        ensure!(record.is_object(), "Invalid p4 JSON record");
         let severity = number(&record, "severity");
-        if severity >= 2 {
-            if allow_empty && number(&record, "generic") == 17 {
+        if severity >= 2 || field(&record, "code") == "error" {
+            if allow_empty && severity == 2 && number(&record, "generic") == 17 {
                 continue; // EV_EMPTY: a successful query with no matching files.
             }
             bail!("{}", field(&record, "data"));
@@ -75,7 +76,7 @@ async fn run(service: &Services, cwd: &Path, args: &[String], json: bool) -> Res
         command.args(["-ztag", "-Mj"]);
     }
     command.args(args);
-    Ok(service
+    let output = service
         .processes()
         .run(
             command,
@@ -87,13 +88,34 @@ async fn run(service: &Services, cwd: &Path, args: &[String], json: bool) -> Res
                 }),
                 stdout_limit: 4 * 1024 * 1024,
                 // Perforce reports structured errors on stdout, including empty lists.
-                accepted_exit_codes: if json { Some(vec![0, 1]) } else { None },
+                accepted_exit_codes: Some(if json { vec![0, 1] } else { vec![0] }),
                 ..Default::default()
             },
             Some("perforce".into()),
         )
-        .await?
-        .stdout)
+        .await?;
+    // Raw print can report a missing revision as a warning on stderr and
+    // still exit successfully. Never turn that failed read into an empty side.
+    ensure!(
+        json || output.stderr.iter().all(u8::is_ascii_whitespace),
+        "Perforce file read failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    // Exit 1 is accepted only for structured query errors such as EV_EMPTY.
+    // Startup/configuration errors can instead arrive solely on stderr.
+    if !output.status.success() {
+        let structured_error = output.stdout.split(|byte| *byte == b'\n').any(|line| {
+            serde_json::from_slice::<Value>(line)
+                .is_ok_and(|record| number(&record, "severity") >= 2)
+        });
+        ensure!(
+            json && structured_error,
+            "Perforce command failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(output.stdout)
 }
 
 async fn query(
@@ -265,7 +287,11 @@ pub async fn context(
             true,
         )
         .await?;
-        Ok::<_, anyhow::Error>(parse_files(&root, &opened, &offline))
+        let root = root.clone();
+        service
+            .fs()
+            .run(cancel, move || Ok(parse_files(&root, &opened, &offline)))
+            .await
     }
     .await;
     if let Some(workspace) = &mut result.perforce {
@@ -383,12 +409,33 @@ pub async fn document(
     cancel: &CancellationToken,
 ) -> Result<crate::diff::DiffDocument> {
     let root = cwd.clone();
-    let (relative, spec) = service
+    let (canonical, relative, spec) = service
         .fs()
         .run(cancel, move || {
-            let relative = terminator_git::relative_path(&root.canonicalize()?, &path)?;
+            let canonical = root.canonicalize()?;
+            let relative = terminator_git::relative_path(&canonical, &path)?;
             let spec = filespec(&root.join(&relative))?;
-            Ok((relative, spec))
+            Ok((canonical, relative, spec))
+        })
+        .await?;
+    // fstat reports EV_EMPTY for both new files and paths outside the client
+    // view. Verify the mapping before treating an empty result as an addition.
+    let mappings = query(service, &cwd, &["where", &spec], false).await?;
+    let expected = canonical.join(&relative);
+    service
+        .fs()
+        .run(cancel, move || {
+            let mapping = mappings
+                .iter()
+                .rev()
+                .find(|record| local_path(&canonical, record).is_some_and(|path| path == expected));
+            ensure!(
+                mapping.is_some_and(|record| {
+                    record.get("unmap").is_none() && !field(record, "depotFile").starts_with('-')
+                }),
+                "File is not mapped in the Perforce workspace"
+            );
+            Ok(())
         })
         .await?;
     let files = query(

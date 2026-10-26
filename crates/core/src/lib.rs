@@ -16,8 +16,10 @@ mod ipc;
 pub mod metadata;
 mod model;
 pub mod recovery;
+pub mod remote;
 pub mod signals;
 pub mod snapshot;
+pub mod ssh;
 pub mod transport;
 pub mod ui_control;
 pub mod vnc;
@@ -448,6 +450,7 @@ mod tests {
     pub(crate) fn setup() -> State {
         let mut s = State::default();
         s.sessions.push(Session {
+            remote: None,
             review: false,
             id: "s".into(),
             project_id: "p".into(),
@@ -712,6 +715,7 @@ mod tests {
 
     pub(crate) fn ended_session(id: &str, lifecycle: Lifecycle) -> Session {
         Session {
+            remote: None,
             review: false,
             id: id.into(),
             project_id: "p".into(),

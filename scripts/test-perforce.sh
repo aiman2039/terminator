@@ -28,6 +28,7 @@ Root: $fixture/workspace
 LineEnd: unix
 View:
     //depot/... //terminator-fixture/...
+    -//depot/excluded/... //terminator-fixture/excluded/...
 FORM
 for name in edit.txt delete.txt offline.txt 'special@file#1.txt'; do
     printf 'original\n' > "$fixture/workspace/$name"

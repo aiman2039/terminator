@@ -261,6 +261,61 @@ impl App {
                         after,
                     );
                 }
+                Update::RemoteAdded(project, generation, result) => {
+                    if self.remote_ui.active.as_ref() != Some(&project) {
+                        continue;
+                    }
+                    self.remote_ui.busy = false;
+                    self.remote_ui.active = None;
+                    match result {
+                        Ok(crate::remote_ui::FormResult::Probe(root)) => {
+                            if self
+                                .remote_ui
+                                .draft
+                                .as_ref()
+                                .is_some_and(|p| p.ssh == project.ssh && p.root == project.root)
+                            {
+                                if let Some(draft) = &mut self.remote_ui.draft {
+                                    draft.root = root;
+                                }
+                                self.remote_ui.error = None;
+                                self.info = Some("SSH connection verified.".into());
+                            }
+                        }
+                        Ok(crate::remote_ui::FormResult::Added(state)) => {
+                            let id = state
+                                .remote_projects
+                                .iter()
+                                .find(|p| p.ssh == project.ssh && p.root == project.root)
+                                .map(|p| p.id.clone());
+                            self.apply_state(*state);
+                            self.remote_ui.open = false;
+                            if self.selection_generation == generation
+                                && let Some(id) = id
+                            {
+                                self.reveal_project(id);
+                            }
+                        }
+                        Err(error) => self.remote_ui.error = Some(error),
+                    }
+                }
+                Update::RemoteReply(project, operation, result) => {
+                    self.apply_remote_reply(project, operation, result)
+                }
+                Update::RemoteAsset(project, path, after) => {
+                    self.images.remove(&path);
+                    let tab = if crate::image_preview::supported(&path) {
+                        Tab::Image { path }
+                    } else if crate::browser::supported_file(&path) {
+                        Tab::browser_file(path)
+                    } else if crate::player::supported(&path) {
+                        self.open_audio(&project, path, None);
+                        continue;
+                    } else {
+                        Tab::NativeEditor { path }
+                    };
+                    self.place_gui_tab(project, tab, after);
+                }
                 Update::VncTransfer(session, result) => match result {
                     Ok(Some(status)) => {
                         if let Some(view) = self.vnc_views.get_mut(&session) {
@@ -733,6 +788,7 @@ impl App {
                     if let Tab::Diff { cwd, path, .. } = tab {
                         for staged in [false, true] {
                             let tab = Tab::Diff {
+                                remote: None,
                                 cwd: cwd.clone(),
                                 path: path.clone(),
                                 staged,

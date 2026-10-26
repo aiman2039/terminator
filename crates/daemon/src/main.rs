@@ -16,6 +16,7 @@ enum Launch {
     Editor,
     Review { staged: bool },
 }
+mod remote;
 mod shell;
 mod storage;
 use anyhow::{Context, Result, ensure};
@@ -144,6 +145,7 @@ fn main() -> Result<()> {
         AGENT_PRESENCE_CAPABILITY.into(),
         VNC_CAPABILITY.into(),
         VNC_REGIONS_CAPABILITY.into(),
+        terminator_core::remote::CAPABILITY.into(),
         vnc::FEATURES_CAPABILITY.into(),
     ];
     if catalog_paths.is_some() {

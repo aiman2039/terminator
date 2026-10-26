@@ -67,6 +67,7 @@ mod gui_services;
 mod menu_bar;
 mod native_jobs;
 mod perforce;
+mod remote_ui;
 mod search;
 mod services;
 pub use app::app_state::App;

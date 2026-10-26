@@ -78,6 +78,8 @@ pub(crate) enum Tab {
         path: PathBuf,
     },
     Diff {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        remote: Option<String>,
         cwd: PathBuf,
         path: PathBuf,
         staged: bool,
@@ -131,6 +133,9 @@ impl Tab {
 
     pub(crate) fn layout_version(&self) -> u32 {
         match self {
+            Self::Diff {
+                remote: Some(_), ..
+            } => 8,
             Self::NativeEditor { .. } | Self::Vnc { .. } => 7,
             Self::Browser { .. } => 6,
             Self::Player => 5,
@@ -220,6 +225,21 @@ pub(crate) enum Job {
         query: search::Query,
         show_ignored: bool,
     },
+    RemoteAdd {
+        project: terminator_core::remote::RemoteProject,
+        probe: bool,
+        generation: u64,
+    },
+    RemoteRead {
+        project: String,
+        operation: terminator_core::remote::Operation,
+    },
+    RemoteAsset {
+        project: String,
+        path: String,
+        cache_root: PathBuf,
+        after: After,
+    },
     VncPickTransfer {
         session: String,
         direction: terminator_core::vnc::TransferDirection,
@@ -278,6 +298,17 @@ pub(crate) enum Update {
     OpenImage(String, PathBuf, After),
     OpenNativeEditor(String, PathBuf, After),
     OpenBrowser(String, BrowserTarget, After),
+    RemoteAdded(
+        terminator_core::remote::RemoteProject,
+        u64,
+        Result<crate::remote_ui::FormResult, String>,
+    ),
+    RemoteReply(
+        String,
+        terminator_core::remote::Operation,
+        Result<terminator_core::remote::Reply, String>,
+    ),
+    RemoteAsset(String, PathBuf, After),
     VncTransfer(
         String,
         Result<Option<terminator_core::vnc::VncTransferStatus>, String>,

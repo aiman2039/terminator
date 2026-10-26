@@ -29,6 +29,62 @@ stream switching, resolve, and production workspace behavior remain unverified.
 Revert, resolve, changelist creation, stream changes, and shelf deletion use the
 terminal. Numbered changelist submission includes the entire changelist.
 
+### PR 51 merge and review — 2026-10-26
+
+Merged the current master into the Perforce branch. Resolution preserves SSH
+project isolation, remote diff labels and read-only behavior, both GUI modules,
+and both sets of validation notes.
+
+Review fixes reject failed raw Perforce reads, including errors reported on
+stderr with exit code zero. JSON failures without a structured error cannot
+be treated as successful empty queries. Only warning-level EV_EMPTY records
+are allowed for empty queries. Diffs verify the client mapping before treating
+an absent fstat record as a new file. Filesystem path resolution runs on the
+filesystem pool. Read-only diffs reject saves and hunk actions in the worker,
+as well as disabling GUI editing. The narrow sidebar shows Git or P4 and keeps
+its action identity stable; the full label is available on hover.
+
+Validation: 1,282 workspace tests passed, with five ignored. The separate
+isolated P4/P4D fixture passed, including failed raw print, excluded mapping,
+and unrelated-directory regressions. It used disposable server/account/client
+state and no user credentials. The existing headless GUI interaction checks
+passed. Strict workspace Clippy, formatting and diff whitespace checks passed.
+Native desktop appearance and a user Perforce server were not tested in this
+review. No installed GUI or live daemon was replaced.
+
+## SSH remote projects — 2026-10-26
+
+Validation used an isolated macOS client and the Linux Docker fixture in
+`fixtures/ssh-project`. The workspace build, formatting, strict Clippy, and
+real-PTY integration checks passed. Workspace tests passed: 1,276 tests, with
+four ignored. The installed app and live user sessions were not changed.
+
+Twenty-six fixture checks passed. They cover separate remote-project storage,
+strict host-key checks, SFTP listing and exact file bytes, Unicode and spaced
+paths, root traversal and symlink rejection, bounded preview reads, Git status
+and staged/working diffs, and Git paths for subdirectory projects. Independent
+SSH terminals started in the remote root without local Terminator tokens.
+Neovim ran on the host; dirty-state checks, save, compare and close passed.
+A missing remote root did not start a local shell.
+
+Closing and reopening the isolated GUI preserved the same SSH process IDs and
+terminal input/output. Stopping the fixture ended SSH sessions and caused
+remote reads to fail. Restarting the server did not restart historical shells.
+The Docker fixture was then left running for manual use.
+
+The app's native renderer captured the remote Explorer, SSH terminal, Markdown
+preview and native diff. The captures were inspected. Preview and diff views
+are read-only. Native accessibility inspection was blocked despite reported
+permission, so physical dialog interaction was not verified. Renderer captures
+and runtime logs are in `/tmp/terminator-ssh-project-runtime/`; these temporary
+artifacts are not part of the repository.
+
+Remote previews are limited to 2 MiB. Markdown file links and local images are
+disabled in remote snapshots. Remote Git mutations, agent hook forwarding,
+native language services and automatic shell reconnection are not provided.
+Linux and Windows clients were not tested. See `REMOTE_PROJECTS.md` for use
+and fixture commands.
+
 ## Modular VNC enhancements — 2026-10-26
 
 The VNC code is split into shared policy models, daemon connection/transport,

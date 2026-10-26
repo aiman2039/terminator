@@ -759,6 +759,16 @@ impl Services {
                 }
             }
             Job::DiffAction(tab, request) => {
+                anyhow::ensure!(
+                    !matches!(
+                        &tab,
+                        Tab::Diff {
+                            remote: Some(_),
+                            ..
+                        }
+                    ),
+                    "Remote Git diffs are read-only; use the SSH terminal to change Git state"
+                );
                 let undo = matches!(request.as_ref(), diff::actions::Request::Undo(_));
                 let staged = matches!(&tab, Tab::Diff { staged: true, .. });
                 let result = diff::actions::execute(self, *request, staged, &cancel)
@@ -767,17 +777,30 @@ impl Services {
                 updates.push(Update::DiffAction(tab, undo, result));
             }
             Job::DiffContext(tab, context) => {
-                if let Tab::Diff { cwd, path, staged } = &tab {
-                    let result = diff::document_with_context(
-                        self,
-                        cwd.clone(),
-                        path.clone(),
-                        *staged,
-                        context,
-                        &cancel,
-                    )
-                    .await
-                    .map_err(|error| format!("{error:#}"));
+                if let Tab::Diff {
+                    cwd, path, staged, ..
+                } = &tab
+                {
+                    let result = if matches!(
+                        &tab,
+                        Tab::Diff {
+                            remote: Some(_),
+                            ..
+                        }
+                    ) {
+                        diff::remote_document(self, client, &tab, context, &cancel).await
+                    } else {
+                        diff::document_with_context(
+                            self,
+                            cwd.clone(),
+                            path.clone(),
+                            *staged,
+                            context,
+                            &cancel,
+                        )
+                        .await
+                    }
+                    .map_err(|e| format!("{e:#}"));
                     updates.push(Update::Diff(tab.key(), result));
                 }
             }
@@ -794,11 +817,23 @@ impl Services {
                 }
             }
             Job::Diff(tab) => {
-                if let Tab::Diff { cwd, path, staged } = &tab {
-                    let result =
+                if let Tab::Diff {
+                    cwd, path, staged, ..
+                } = &tab
+                {
+                    let result = if matches!(
+                        &tab,
+                        Tab::Diff {
+                            remote: Some(_),
+                            ..
+                        }
+                    ) {
+                        diff::remote_document(self, client, &tab, 6, &cancel).await
+                    } else {
                         diff::document_async(self, cwd.clone(), path.clone(), *staged, &cancel)
                             .await
-                            .map_err(|e| format!("{e:#}"));
+                    }
+                    .map_err(|e| format!("{e:#}"));
                     updates.push(Update::Diff(tab.key(), result));
                 }
             }
@@ -997,6 +1032,93 @@ impl Services {
                         .await?;
                     Ok(vec![Update::RestartFinished(message)])
                 })?;
+            }
+            Job::RemoteAdd {
+                project,
+                probe,
+                generation,
+            } => {
+                let request = if probe {
+                    Request::ProbeRemoteProject {
+                        project: project.clone(),
+                    }
+                } else {
+                    Request::AddRemoteProject {
+                        project: project.clone(),
+                    }
+                };
+                let result = match client.rpc(request).await {
+                    Ok(Response::RemoteProject(terminator_core::remote::Reply::Probe { root })) => {
+                        Ok(crate::remote_ui::FormResult::Probe(root))
+                    }
+                    Ok(Response::Ok) => match client.rpc(Request::Snapshot).await {
+                        Ok(Response::State(state)) => {
+                            Ok(crate::remote_ui::FormResult::Added(state))
+                        }
+                        Ok(_) => Err("Expected project snapshot".into()),
+                        Err(e) => Err(format!("{e:#}")),
+                    },
+                    Ok(_) => Err("Unexpected SSH project response".into()),
+                    Err(e) => Err(format!("{e:#}")),
+                };
+                updates.push(Update::RemoteAdded(project, generation, result));
+            }
+            Job::RemoteRead { project, operation } => {
+                let result = match client
+                    .rpc(Request::RemoteProject {
+                        project: project.clone(),
+                        operation: operation.clone(),
+                    })
+                    .await
+                {
+                    Ok(Response::RemoteProject(reply)) => Ok(reply),
+                    Ok(_) => Err("Unexpected SSH project response".into()),
+                    Err(e) => Err(format!("{e:#}")),
+                };
+                updates.push(Update::RemoteReply(project, operation, result));
+            }
+            Job::RemoteAsset {
+                project,
+                path,
+                cache_root,
+                after,
+            } => {
+                terminator_core::remote::validate_relative(&path)?;
+                let reply = client
+                    .rpc(Request::RemoteProject {
+                        project: project.clone(),
+                        operation: terminator_core::remote::Operation::Read { path: path.clone() },
+                    })
+                    .await?;
+                let Response::RemoteProject(terminator_core::remote::Reply::File {
+                    path: actual,
+                    base64,
+                }) = reply
+                else {
+                    anyhow::bail!("Unexpected remote file response")
+                };
+                anyhow::ensure!(actual == path, "Remote file response identity changed");
+                let target = cache_root.join(&path);
+                let saved = target.clone();
+                self.fs()
+                    .run(&cancel, move || {
+                        use base64::Engine;
+                        let bytes = base64::engine::general_purpose::STANDARD.decode(base64)?;
+                        anyhow::ensure!(
+                            bytes.len() <= terminator_core::remote::MAX_FILE_BYTES,
+                            "Remote preview exceeds 2 MiB"
+                        );
+                        if let Some(parent) = saved.parent() {
+                            fs::create_dir_all(parent)?;
+                        }
+                        terminator_core::atomic_write(&saved, &bytes)?;
+                        let mut permissions = fs::metadata(&saved)?.permissions();
+                        permissions.set_readonly(true);
+                        fs::set_permissions(&saved, permissions)?;
+                        Ok(())
+                    })
+                    .await?;
+                updates.push(Update::RemoteAsset(project, target, after));
             }
             Job::VncPickTransfer {
                 session,

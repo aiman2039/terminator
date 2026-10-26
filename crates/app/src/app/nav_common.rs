@@ -59,6 +59,7 @@ pub(super) fn fixture() -> (App, egui::Context, tempfile::TempDir) {
 
 pub(super) fn session_fixture(sid: &str, kind: SessionKind) -> Session {
     Session {
+        remote: None,
         review: false,
         id: sid.into(),
         project_id: "a".into(),

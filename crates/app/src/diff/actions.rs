@@ -417,6 +417,7 @@ pub(crate) async fn execute(
         .await;
     match request {
         Request::Save { document, text } => {
+            ensure!(!document.read_only, "This diff is read-only");
             ensure!(!staged, "Only the working tree can be edited");
             let source = document
                 .source
@@ -463,6 +464,7 @@ pub(crate) async fn execute(
             hunk,
             kind,
         } => {
+            ensure!(!document.read_only, "This diff is read-only");
             ensure!(
                 (kind == Kind::Unstage) == staged,
                 "This action does not match the diff side"

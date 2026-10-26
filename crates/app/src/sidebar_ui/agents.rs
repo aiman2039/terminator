@@ -307,7 +307,7 @@ impl App {
                 )
                 .on_hover_text(format!(
                     "{}{}{}",
-                    project.path.display(),
+                    self.project_location_label(&project.id),
                     if self.managed_worktree(&project.id).is_some() {
                         "\nManaged Git worktree"
                     } else {
