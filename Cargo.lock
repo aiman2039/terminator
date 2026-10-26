@@ -1483,9 +1483,9 @@ dependencies = [
 
 [[package]]
 name = "dugong"
-version = "0.9.0"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c23962bc60aeb7124388fdea1d86f2dea51f4289be165b57b261a4adcce0c34d"
+checksum = "d9074567a0bebc4bc2697aba4d3cfc32e82901a1a087b9f31e87f84d41cd3eb0"
 dependencies = [
  "dugong-graphlib",
  "rustc-hash 2.1.3",
@@ -1495,9 +1495,9 @@ dependencies = [
 
 [[package]]
 name = "dugong-graphlib"
-version = "0.9.0"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7432b11c597fb4545349873c8bc625b7eee69851f3f3912857bdd0989eda899"
+checksum = "a42f4ffa74c110a21c63fbecc2038715d7ffacd8722c418e65c4495e1ae32235"
 dependencies = [
  "hashbrown 0.17.1",
  "rustc-hash 2.1.3",
@@ -3469,9 +3469,9 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "libc"
-version = "0.2.190"
+version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "libloading"
@@ -3632,9 +3632,9 @@ checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
 name = "manatee"
-version = "0.9.0"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "136dcb6f50729d29dba22951097c2e440f1910a0b35e8eb48c1aa088bd6f6bf1"
+checksum = "1346b42d64eb3ad5f0a7082d782059b540f6ece63d6bcd32276ef44f4cfd2166"
 dependencies = [
  "indexmap",
  "libm",
@@ -3679,9 +3679,9 @@ dependencies = [
 
 [[package]]
 name = "merman"
-version = "0.9.0"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "965cedfb61c6975f9bdca1378b4e95cc38c7ae3795885c7226eecea6b4a76fa9"
+checksum = "14e3baf99d826e2a229215962c3fa9f12cedd7a3b116fba3b74bf5ede48f0d18"
 dependencies = [
  "merman-analysis",
  "merman-ascii",
@@ -3694,9 +3694,9 @@ dependencies = [
 
 [[package]]
 name = "merman-analysis"
-version = "0.9.0"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aea175b5b4656f7fc0dbd179cf64861def6fa64a4370a8f0314d84e1f577df05"
+checksum = "76cbb37ca1c494233f74a8f9cc40b190277b5781afa64d7e95abfaa78efdbe5a"
 dependencies = [
  "merman-core",
  "serde",
@@ -3707,9 +3707,9 @@ dependencies = [
 
 [[package]]
 name = "merman-ascii"
-version = "0.9.0"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d02673b9d521215976d2046f953f000273fff10d29324b3b97b431c372682a7b"
+checksum = "97e28d042c8439fccf568372ec021b23dd90ededc0fc25269c183663f69d203f"
 dependencies = [
  "dugong",
  "merman-core",
@@ -3723,9 +3723,9 @@ dependencies = [
 
 [[package]]
 name = "merman-core"
-version = "0.9.0"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c7ebfc455f85c3781863803f6ae8ea845612175c7a3a14c67f9d7a713b88b1f"
+checksum = "f1d2afe2084c0223b772756489a5da51ad0ecbd195aef90268f3037648738796"
 dependencies = [
  "cssparser 0.38.0",
  "euclid",
@@ -3748,9 +3748,9 @@ dependencies = [
 
 [[package]]
 name = "merman-editor-core"
-version = "0.9.0"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43be6fa18f9bdbe6e55059782f181248660fce1f9dcff7a5b93f8ec0359d0a34"
+checksum = "50d2727b3268ed98dec0c0eede75df03d09f0f40e61757fa6dcd456657470e32"
 dependencies = [
  "merman-analysis",
  "merman-core",
@@ -3759,9 +3759,9 @@ dependencies = [
 
 [[package]]
 name = "merman-render"
-version = "0.9.0"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c714e6ca6057d9132227d5d6ff9f20f85044a60dc8e4d24bce2dcd8a3b2fc60f"
+checksum = "321c4ca6f834e07b01790c1bc2591dc3a51f450c56c4c71a8111000a50efec0f"
 dependencies = [
  "base64 0.23.1",
  "cssparser 0.38.0",
@@ -3789,9 +3789,9 @@ dependencies = [
 
 [[package]]
 name = "merman-unicode-linebreak"
-version = "0.9.0"
+version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0843d97d77ab53b3ccfc9f62734783b1747063b83435bd55335e1f758b1f58c2"
+checksum = "aa1d4edece2fbc1eaec9b9567af5db80c652a878caf197cbbda0f4624fe3587d"
 
 [[package]]
 name = "microfft"
@@ -4612,9 +4612,9 @@ dependencies = [
 
 [[package]]
 name = "open"
-version = "5.4.4"
+version = "5.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa576c76302b7b808eecc68061e67336c47833ef9d22caa74dda10fa9675eebc"
+checksum = "8d8c8b8e725ad26404d6896eb2f064294a0a7b4f1d9120210d85544684c4ca95"
 dependencies = [
  "is-wsl",
  "libc",
@@ -4955,9 +4955,9 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "plist"
-version = "1.10.1"
+version = "1.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2896bade328c13f7042a297ea5ac5b0951f6cf989dea5f32c2fd98da398195cb"
+checksum = "327a4cb2ad49dc48adfdc9da89e22c64d488b508c67a044d71ba729e4521a285"
 dependencies = [
  "base64 0.23.1",
  "indexmap",
@@ -5201,9 +5201,9 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
 name = "pulldown-cmark"
-version = "0.13.4"
+version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
+checksum = "278e9268c93b9e498a2da46c34d90ba93a3255eb99009646398f34bc73ab36eb"
 dependencies = [
  "bitflags 2.13.1",
  "memchr",
