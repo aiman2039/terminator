@@ -1,6 +1,7 @@
 use super::super::harness::{
     Harness, bin, git, id, session, session_closed, session_ids, sessions,
 };
+use super::dispatch::CaptureInput;
 use super::dispatch::{Options, capture, plain, prefs, setup};
 use anyhow::{Result, anyhow, ensure};
 use serde_json::{Value, json};
@@ -8,13 +9,13 @@ use std::fs;
 pub(crate) fn inline_rename(o: &Options) -> Result<()> {
     let (h, _, s, _) = setup("inline-titles")?;
     let aux = s.get(1).ok_or_else(|| anyhow!("missing session"))?;
-    plain(
-        &h,
-        o,
-        "renamed",
-        json!([{"at_ms":1000,"target":"workspace-tab:Terminal 1","right_click":true},{"at_ms":1300,"target":"Rename terminal…"},{"at_ms":1700,"target":"rename-input","text":"Build workspace"},{"at_ms":2000,"target":"rename-input","key":"Enter"},{"at_ms":2500,"target":"terminal","right_click":true},{"at_ms":2800,"target":"Rename terminal…"},{"at_ms":3200,"target":"rename-input","text":"Worker pane"},{"at_ms":3500,"target":"rename-input","key":"Enter"},{"at_ms":4000,"target":format!("session-row:{}",id(aux)),"right_click":true},{"at_ms":4300,"target":"Rename terminal…"},{"at_ms":4700,"target":"rename-input","text":"Aux shell"},{"at_ms":5000,"target":"rename-input","key":"Enter"}]),
-        6400,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "renamed",
+        actions: json!([{"at_ms":1000,"target":"workspace-tab:Terminal 1","right_click":true},{"at_ms":1300,"target":"Rename terminal…"},{"at_ms":1700,"target":"rename-input","text":"Build workspace"},{"at_ms":2000,"target":"rename-input","key":"Enter"},{"at_ms":2500,"target":"terminal","right_click":true},{"at_ms":2800,"target":"Rename terminal…"},{"at_ms":3200,"target":"rename-input","text":"Worker pane"},{"at_ms":3500,"target":"rename-input","key":"Enter"},{"at_ms":4000,"target":format!("session-row:{}",id(aux)),"right_click":true},{"at_ms":4300,"target":"Rename terminal…"},{"at_ms":4700,"target":"rename-input","text":"Aux shell"},{"at_ms":5000,"target":"rename-input","key":"Enter"}]),
+        after: 6400,
+    })?;
     let state = h.state()?;
     for (index, label) in [(0, "Build workspace"), (5, "Worker pane"), (1, "Aux shell")] {
         let renamed = s.get(index).ok_or_else(|| anyhow!("missing session"))?;
@@ -23,13 +24,13 @@ pub(crate) fn inline_rename(o: &Options) -> Result<()> {
             "Rename targeted wrong session"
         );
     }
-    plain(
-        &h,
-        o,
-        "editing-inline",
-        json!([{"at_ms":900,"target":"workspace-tab:Build workspace","right_click":true},{"at_ms":1200,"target":"Rename terminal…"},{"at_ms":1500,"target":"rename-input","text":"Editing inline"}]),
-        2300,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "editing-inline",
+        actions: json!([{"at_ms":900,"target":"workspace-tab:Build workspace","right_click":true},{"at_ms":1200,"target":"Rename terminal…"},{"at_ms":1500,"target":"rename-input","text":"Editing inline"}]),
+        after: 2300,
+    })?;
     h.assert_pids(&s)
 }
 pub(crate) fn editor_lifecycle(o: &Options) -> Result<()> {
@@ -37,38 +38,47 @@ pub(crate) fn editor_lifecycle(o: &Options) -> Result<()> {
     fs::write(root.join("source.rs"), "fn main() {}\n")?;
     let shell = s.get(5).ok_or_else(|| anyhow!("missing session"))?;
     let actions = json!([{"at_ms":1100,"target":"explorer-file:source.rs"},{"at_ms":5000,"target":format!("session-row:{}",id(shell)),"right_click":true},{"at_ms":5400,"target":"Rename terminal…"},{"at_ms":5900,"target":"rename-input","text":"Workspace shell"},{"at_ms":6400,"target":"rename-input","key":"Enter"},{"at_ms":6900,"target":format!("session-row:{}",id(shell))}]);
-    capture(&h, o, "editor-lifecycle", actions, 8500, |_| {
-        let state = h.wait(|s| sessions(s).iter().any(|s| s["kind"] == "editor"), 5)?;
-        let editor = sessions(&state)
-            .iter()
-            .find(|s| s["kind"] == "editor")
-            .unwrap();
-        ensure!(
-            !s.iter().any(|s| s["pid"] == editor["pid"]),
-            "Editor reused shell PTY"
-        );
-        h.wait(
-            |s| {
-                s.get("projects")
-                    .and_then(|projects| projects.get(0))
-                    .and_then(|project| project.get("layout"))
-                    .is_some_and(|layout| session_ids(layout).len() == 7)
-            },
-            5,
-        )?;
-        h.write(&mut h.attach(editor)?, ":q\r")?;
-        h.wait(|s| session_closed(s, id(editor)), 5)?;
-        h.wait(
-            |s| {
-                s.get("projects")
-                    .and_then(|projects| projects.get(0))
-                    .and_then(|project| project.get("layout"))
-                    .is_some_and(|layout| session_ids(layout).len() == 6)
-            },
-            5,
-        )?;
-        Ok(())
-    })?;
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "editor-lifecycle",
+            actions,
+            after: 8500,
+        },
+        |_| {
+            let state = h.wait(|s| sessions(s).iter().any(|s| s["kind"] == "editor"), 5)?;
+            let editor = sessions(&state)
+                .iter()
+                .find(|s| s["kind"] == "editor")
+                .unwrap();
+            ensure!(
+                !s.iter().any(|s| s["pid"] == editor["pid"]),
+                "Editor reused shell PTY"
+            );
+            h.wait(
+                |s| {
+                    s.get("projects")
+                        .and_then(|projects| projects.get(0))
+                        .and_then(|project| project.get("layout"))
+                        .is_some_and(|layout| session_ids(layout).len() == 7)
+                },
+                5,
+            )?;
+            h.write(&mut h.attach(editor)?, ":q\r")?;
+            h.wait(|s| session_closed(s, id(editor)), 5)?;
+            h.wait(
+                |s| {
+                    s.get("projects")
+                        .and_then(|projects| projects.get(0))
+                        .and_then(|project| project.get("layout"))
+                        .is_some_and(|layout| session_ids(layout).len() == 6)
+                },
+                5,
+            )?;
+            Ok(())
+        },
+    )?;
     ensure!(
         session(
             &h.state()?,
@@ -87,11 +97,13 @@ pub(crate) fn file_close(o: &Options) -> Result<()> {
     // Rapid-repeat suppression has a separate unit regression; this fixture
     // checks that closing one clean editor preserves the shell layout.
     capture(
-        &h,
-        o,
-        "clean-file-open",
-        json!([{"at_ms":1100,"target":"explorer-file:source.rs"}]),
-        6000,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "clean-file-open",
+            actions: json!([{"at_ms":1100,"target":"explorer-file:source.rs"}]),
+            after: 6000,
+        },
         |_| {
             let state = h.wait(
                 |state| {
@@ -116,11 +128,13 @@ pub(crate) fn file_close(o: &Options) -> Result<()> {
         },
     )?;
     let close_log = capture(
-        &h,
-        o,
-        "clean-file-close",
-        json!([{"at_ms":1100,"target":"workspace-close:source.rs"}]),
-        2600,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "clean-file-close",
+            actions: json!([{"at_ms":1100,"target":"workspace-close:source.rs"}]),
+            after: 2600,
+        },
         |_| Ok(()),
     )?;
     let state = h.state()?;
@@ -137,11 +151,13 @@ pub(crate) fn file_close(o: &Options) -> Result<()> {
             .collect::<Vec<_>>()
     );
     capture(
-        &h,
-        o,
-        "dirty-file-close",
-        json!([{"at_ms":1100,"target":"explorer-file:source.rs"},{"at_ms":2700,"target":"workspace-close:source.rs"},{"at_ms":3400,"target":"Cancel"},{"at_ms":4100,"target":"workspace-close:source.rs"},{"at_ms":4700,"target":"Save and close"}]),
-        6500,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "dirty-file-close",
+            actions: json!([{"at_ms":1100,"target":"explorer-file:source.rs"},{"at_ms":2700,"target":"workspace-close:source.rs"},{"at_ms":3400,"target":"Cancel"},{"at_ms":4100,"target":"workspace-close:source.rs"},{"at_ms":4700,"target":"Save and close"}]),
+            after: 6500,
+        },
         |_| {
             let state = h.wait(
                 |st| {
@@ -198,15 +214,17 @@ pub(crate) fn file_close(o: &Options) -> Result<()> {
     let keep = root.join("keep.rs");
     fs::write(&keep, "fn keep() {}\n")?;
     capture(
-        &h,
-        o,
-        "dirty-file-discard",
-        json!([
-            {"at_ms":1100,"target":"explorer-file:keep.rs"},
-            {"at_ms":2700,"target":"workspace-close:keep.rs"},
-            {"at_ms":3600,"target":"Discard changes"}
-        ]),
-        5500,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "dirty-file-discard",
+            actions: json!([
+                {"at_ms":1100,"target":"explorer-file:keep.rs"},
+                {"at_ms":2700,"target":"workspace-close:keep.rs"},
+                {"at_ms":3600,"target":"Discard changes"}
+            ]),
+            after: 5500,
+        },
         |_| {
             let state = h.wait(
                 |st| {
@@ -267,14 +285,16 @@ pub(crate) fn file_close(o: &Options) -> Result<()> {
     let bar = root.join("bar.rs");
     fs::write(&bar, "fn bar() {}\n")?;
     capture(
-        &h,
-        o,
-        "unsaved-close-bar",
-        json!([
-            {"at_ms":1100,"target":"explorer-file:bar.rs"},
-            {"at_ms":2700,"target":"workspace-close:bar.rs"}
-        ]),
-        3400,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "unsaved-close-bar",
+            actions: json!([
+                {"at_ms":1100,"target":"explorer-file:bar.rs"},
+                {"at_ms":2700,"target":"workspace-close:bar.rs"}
+            ]),
+            after: 3400,
+        },
         |_| {
             let state = h.wait(
                 |st| {
@@ -325,20 +345,20 @@ pub(crate) fn focus_close(o: &Options) -> Result<()> {
     let editor = h.editor(&p, &path)?;
     all.push(editor.clone());
     h.layout(&p, &all)?;
-    plain(
-        &h,
-        o,
-        "strong-focus",
-        json!([{"at_ms":1100,"target":format!("session-row:{}",id(shells.first().ok_or_else(|| anyhow!("missing shell"))?))}]),
-        1500,
-    )?;
-    plain(
-        &h,
-        o,
-        "editor-closed",
-        json!([{"at_ms":1100,"target":format!("editor-close:{}",id(&editor))}]),
-        3500,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "strong-focus",
+        actions: json!([{"at_ms":1100,"target":format!("session-row:{}",id(shells.first().ok_or_else(|| anyhow!("missing shell"))?))}]),
+        after: 1500,
+    })?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "editor-closed",
+        actions: json!([{"at_ms":1100,"target":format!("editor-close:{}",id(&editor))}]),
+        after: 3500,
+    })?;
     h.wait(|st| session_closed(st, id(&editor)), 5)?;
     ensure!(
         !session_ids(
@@ -366,14 +386,16 @@ pub(crate) fn focus_close(o: &Options) -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
     h.rpc(json!({"SaveLayout":{"project":id(&p),"layout":{"version":2,"active":"origin-0","tabs":tabs}}}))?;
     capture(
-        &h,
-        o,
-        "leftmost-file-close",
-        json!([
-            {"at_ms":1100,"target":"explorer-file:source.rs"},
-            {"at_ms":2700,"target":"workspace-close:source.rs"}
-        ]),
-        4200,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "leftmost-file-close",
+            actions: json!([
+                {"at_ms":1100,"target":"explorer-file:source.rs"},
+                {"at_ms":2700,"target":"workspace-close:source.rs"}
+            ]),
+            after: 4200,
+        },
         |_| {
             h.wait(
                 |state| {
@@ -436,13 +458,13 @@ pub(crate) fn focus_close(o: &Options) -> Result<()> {
         },
         5,
     )?;
-    plain(
-        &h,
-        o,
-        "new-tab-after-cd",
-        json!([{"at_ms":1100,"target":"workspace-plus"}]),
-        3200,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "new-tab-after-cd",
+        actions: json!([{"at_ms":1100,"target":"workspace-plus"}]),
+        after: 3200,
+    })?;
     let state = h.state()?;
     let new_shell = sessions(&state)
         .iter()
@@ -484,7 +506,13 @@ pub(crate) fn cleanup(o: &Options) -> Result<()> {
     fs::create_dir(root.join("untracked-folder"))?;
     fs::write(root.join("untracked-folder/new file.rs"), "// new\n")?;
     fs::write(root.join("untracked.txt"), "new\n")?;
-    plain(&h, o, "explorer", json!([]), 3500)?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "explorer",
+        actions: json!([]),
+        after: 3500,
+    })?;
     ensure!(
         prefs(&h)?
             .get("attention_migrated")
@@ -495,19 +523,13 @@ pub(crate) fn cleanup(o: &Options) -> Result<()> {
                 .is_some_and(|side| side.as_bool() == Some(true)),
         "Attention migration failed"
     );
-    plain(
-        &h,
-        o,
-        "overflow",
-        Value::Array(
+    plain(CaptureInput { h: &h, opts: o, name: "overflow", actions: Value::Array(
             (0u64..7)
                 .map(|i| {
                     json!({"at_ms":1000u64.saturating_add(i.saturating_mul(450)),"target":"workspace-plus"})
                 })
                 .collect(),
-        ),
-        5300,
-    )?;
+        ), after: 5300 })?;
     let state = h.state()?;
     let workspace = state
         .get("projects")
@@ -522,13 +544,13 @@ pub(crate) fn cleanup(o: &Options) -> Result<()> {
         "Overflow + failed"
     );
     ensure!(session_ids(workspace).len() == 13, "Overflow lost panes");
-    plain(
-        &h,
-        o,
-        "editor-settings",
-        json!([{"at_ms":900,"target":"tool-Git"},{"at_ms":1200,"target":"header-overflow"},{"at_ms":1400,"target":"settings"},{"at_ms":2000,"target":"settings-section:Terminal & Editor"},{"at_ms":2300,"target":"external-program"},{"at_ms":2600,"target":"external-program","text":"/draft/editor with spaces"}]),
-        4300,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "editor-settings",
+        actions: json!([{"at_ms":900,"target":"tool-Git"},{"at_ms":1200,"target":"header-overflow"},{"at_ms":1400,"target":"settings"},{"at_ms":2000,"target":"settings-section:Terminal & Editor"},{"at_ms":2300,"target":"external-program"},{"at_ms":2600,"target":"external-program","text":"/draft/editor with spaces"}]),
+        after: 4300,
+    })?;
     ensure!(
         h.state()?
             .get("settings")
@@ -554,13 +576,13 @@ pub(crate) fn cleanup(o: &Options) -> Result<()> {
         .ok_or_else(|| anyhow!("settings is not an object"))?
         .insert("notifications_side".into(), json!(false));
     h.rpc(json!({"Settings":settings}))?;
-    plain(
-        &h,
-        o,
-        "reopen-first-tab",
-        json!([{"at_ms":1000,"target":format!("session-row:{}",id(s.first().ok_or_else(|| anyhow!("missing session"))?))}]),
-        3500,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "reopen-first-tab",
+        actions: json!([{"at_ms":1000,"target":format!("session-row:{}",id(s.first().ok_or_else(|| anyhow!("missing session"))?))}]),
+        after: 3500,
+    })?;
     ensure!(
         h.state()?
             .get("settings")

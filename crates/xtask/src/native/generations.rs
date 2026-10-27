@@ -1,4 +1,5 @@
 //! Native generation diagnostics, restart warning, cancellation and reattachment.
+use super::CaptureInput;
 use super::{
     Context, Duration, Harness, Options, Result, Value, capture, ensure, fs, id, json, output,
     session, sessions, thread, wait_child,
@@ -14,19 +15,28 @@ pub fn run(o: &Options) -> Result<()> {
     wait_child(&mut h.daemon.as_mut().unwrap().0, Duration::from_secs(5))?;
     h.daemon.take();
     // The first GUI launch performs the real idle migration and candidate check.
-    capture(&h, o, "first-migration", json!([]), 1800, |_| {
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .ok_or_else(|| anyhow::anyhow!("generation deadline overflow"))?;
-        while h.state().is_err() {
-            ensure!(
-                Instant::now() < deadline,
-                "Initial generation did not start"
-            );
-            thread::sleep(Duration::from_millis(50));
-        }
-        Ok(())
-    })?;
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "first-migration",
+            actions: json!([]),
+            after: 1800,
+        },
+        |_| {
+            let deadline = Instant::now()
+                .checked_add(Duration::from_secs(10))
+                .ok_or_else(|| anyhow::anyhow!("generation deadline overflow"))?;
+            while h.state().is_err() {
+                ensure!(
+                    Instant::now() < deadline,
+                    "Initial generation did not start"
+                );
+                thread::sleep(Duration::from_millis(50));
+            }
+            Ok(())
+        },
+    )?;
     let project = h.project("generation-workspace")?;
     let a = h.shell(&project)?;
     let file = h.root.join("generation-workspace/buffer.md");
@@ -82,14 +92,16 @@ pub fn run(o: &Options) -> Result<()> {
         .insert("TERMINATOR_TEST_NEW_GENERATION".into(), "1".into());
     let mut b = Value::Null;
     capture(
-        &h,
-        o,
-        "updated-service-ready",
-        json!([
-            {"at_ms":700,"target":"settings"},
-            {"at_ms":1100,"target":"settings-section:Updates"}
-        ]),
-        2800,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "updated-service-ready",
+            actions: json!([
+                {"at_ms":700,"target":"settings"},
+                {"at_ms":1100,"target":"settings-section:Updates"}
+            ]),
+            after: 2800,
+        },
         |_| {
             h.wait(|s| s["generation"] != original_generation, 10)?;
             b = h.shell(&project)?;
@@ -113,15 +125,17 @@ pub fn run(o: &Options) -> Result<()> {
     h.env.remove("TERMINATOR_TEST_NEW_GENERATION");
     h.assert_pids(&[a.clone(), b.clone(), editor.clone()])?;
     capture(
-        &h,
-        o,
-        "all-owners-restart-warning",
-        json!([
-            {"at_ms":700,"target":"settings"},
-            {"at_ms":1100,"target":"settings-section:Updates"},
-            {"at_ms":1600,"target":"restart-session-service"}
-        ]),
-        2400,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "all-owners-restart-warning",
+            actions: json!([
+                {"at_ms":700,"target":"settings"},
+                {"at_ms":1100,"target":"settings-section:Updates"},
+                {"at_ms":1600,"target":"restart-session-service"}
+            ]),
+            after: 2400,
+        },
         |_| {
             h.wait(
                 |_| {
@@ -143,16 +157,18 @@ pub fn run(o: &Options) -> Result<()> {
         },
     )?;
     capture(
-        &h,
-        o,
-        "restart-cancelled",
-        json!([
-            {"at_ms":700,"target":"settings"},
-            {"at_ms":1100,"target":"settings-section:Updates"},
-            {"at_ms":1600,"target":"restart-session-service"},
-            {"at_ms":2100,"target":"cancel-restart-session"}
-        ]),
-        2900,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "restart-cancelled",
+            actions: json!([
+                {"at_ms":700,"target":"settings"},
+                {"at_ms":1100,"target":"settings-section:Updates"},
+                {"at_ms":1600,"target":"restart-session-service"},
+                {"at_ms":2100,"target":"cancel-restart-session"}
+            ]),
+            after: 2900,
+        },
         |_| Ok(()),
     )?;
     h.assert_pids(&[a.clone(), b.clone(), editor.clone()])?;
@@ -201,17 +217,26 @@ pub fn run(o: &Options) -> Result<()> {
         fs::read_to_string(&file)? == "# Saved\n",
         "Recovery silently saved an unsaved buffer"
     );
-    capture(&h, o, "after-confirmed-recovery", json!([]), 2000, |_| {
-        h.wait(
-            |state| {
-                state.get("generation").unwrap_or(&Value::Null)
-                    != before_recovery.get("generation").unwrap_or(&Value::Null)
-                    && sessions(state).iter().all(|s| s["lifecycle"] == "ended")
-            },
-            10,
-        )?;
-        Ok(())
-    })?;
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "after-confirmed-recovery",
+            actions: json!([]),
+            after: 2000,
+        },
+        |_| {
+            h.wait(
+                |state| {
+                    state.get("generation").unwrap_or(&Value::Null)
+                        != before_recovery.get("generation").unwrap_or(&Value::Null)
+                        && sessions(state).iter().all(|s| s["lifecycle"] == "ended")
+                },
+                10,
+            )?;
+            Ok(())
+        },
+    )?;
     fs::write(
         o.output.join("generations.json"),
         serde_json::to_vec_pretty(&json!({
@@ -241,26 +266,35 @@ fn legacy_crash_recovery(o: &Options) -> Result<()> {
     );
     wait_child(daemon, Duration::from_secs(5))?;
     h.daemon.take();
-    capture(&h, o, "legacy-crash-recovered", json!([]), 2200, |_| {
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
-            .ok_or_else(|| anyhow::anyhow!("generation deadline overflow"))?;
-        loop {
-            if let Ok(state) = h.state() {
-                ensure!(
-                    session(&state, id(&original))["lifecycle"] == "interrupted",
-                    "Stale legacy record was not reconciled"
-                );
-                ensure!(
-                    sessions(&state).iter().all(|s| s["lifecycle"] != "running"),
-                    "Migration restarted a historical session"
-                );
-                break;
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "legacy-crash-recovered",
+            actions: json!([]),
+            after: 2200,
+        },
+        |_| {
+            let deadline = Instant::now()
+                .checked_add(Duration::from_secs(10))
+                .ok_or_else(|| anyhow::anyhow!("generation deadline overflow"))?;
+            loop {
+                if let Ok(state) = h.state() {
+                    ensure!(
+                        session(&state, id(&original))["lifecycle"] == "interrupted",
+                        "Stale legacy record was not reconciled"
+                    );
+                    ensure!(
+                        sessions(&state).iter().all(|s| s["lifecycle"] != "running"),
+                        "Migration restarted a historical session"
+                    );
+                    break;
+                }
+                ensure!(Instant::now() < deadline, "Legacy crash blocked migration");
+                thread::sleep(Duration::from_millis(50));
             }
-            ensure!(Instant::now() < deadline, "Legacy crash blocked migration");
-            thread::sleep(Duration::from_millis(50));
-        }
-        Ok(())
-    })?;
+            Ok(())
+        },
+    )?;
     Ok(())
 }

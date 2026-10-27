@@ -1,4 +1,5 @@
 use super::super::harness::{Harness, id, session, session_closed, session_ids, sessions};
+use super::dispatch::CaptureInput;
 use super::dispatch::{Options, plain, prefs, save_prefs, setup};
 use anyhow::{Context, Result, anyhow, ensure};
 use serde_json::{Value, json};
@@ -45,13 +46,13 @@ pub(crate) fn smoke(opts: &Options) -> Result<()> {
     }
     h.layout(&p, &originals)?;
     h.env.insert("TERMINATOR_TEST_INPUT".into(), "1".into());
-    plain(
-        &h,
+    plain(CaptureInput {
+        h: &h,
         opts,
-        "six-panes",
-        json!([]),
-        opts.seconds.saturating_mul(1000),
-    )?;
+        name: "six-panes",
+        actions: json!([]),
+        after: opts.seconds.saturating_mul(1000),
+    })?;
     h.env.remove("TERMINATOR_TEST_INPUT");
     ensure!(
         h.state()?
@@ -84,13 +85,13 @@ pub(crate) fn smoke(opts: &Options) -> Result<()> {
     preferences.insert("width".into(), json!(370.0));
     preferences.insert("expanded".into(), json!({id(&p):false}));
     save_prefs(&h, &pref)?;
-    plain(
-        &h,
+    plain(CaptureInput {
+        h: &h,
         opts,
-        "restart",
-        json!([]),
-        opts.seconds.saturating_mul(1000),
-    )?;
+        name: "restart",
+        actions: json!([]),
+        after: opts.seconds.saturating_mul(1000),
+    })?;
     // The fixture changes sidebar visibility, so the IDE terminal strip's
     // painted dock rects legitimately move; they are geometry, not user
     // preferences. Compare everything else.
@@ -132,13 +133,13 @@ pub(crate) fn smoke(opts: &Options) -> Result<()> {
 pub(crate) fn workspace_tabs(o: &Options) -> Result<()> {
     let (h, _p, originals, root) = setup("workspace-tabs")?;
     fs::write(root.join("source.rs"), "fn main() {}\n")?;
-    plain(
-        &h,
-        o,
-        "independent-editor",
-        json!([{"at_ms":1100,"target":"explorer-file:source.rs"},{"at_ms":2100,"target":"workspace-strip","scroll":500.0},{"at_ms":2500,"target":"workspace-tab:Terminal 1"},{"at_ms":3200,"target":"terminal","right_click":true},{"at_ms":3700,"target":"Split right"},{"at_ms":4200,"target":"workspace-strip","scroll":-500.0},{"at_ms":4600,"target":"workspace-tab:source.rs"}]),
-        6500,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "independent-editor",
+        actions: json!([{"at_ms":1100,"target":"explorer-file:source.rs"},{"at_ms":2100,"target":"workspace-strip","scroll":500.0},{"at_ms":2500,"target":"workspace-tab:Terminal 1"},{"at_ms":3200,"target":"terminal","right_click":true},{"at_ms":3700,"target":"Split right"},{"at_ms":4200,"target":"workspace-strip","scroll":-500.0},{"at_ms":4600,"target":"workspace-tab:source.rs"}]),
+        after: 6500,
+    })?;
     let state = h.state()?;
     let editor = sessions(&state)
         .iter()
@@ -177,16 +178,16 @@ pub(crate) fn workspace_tabs(o: &Options) -> Result<()> {
         layout["active"] == editor_group["id"],
         "Editor not selected"
     );
-    plain(
-        &h,
-        o,
-        "pinned-editor",
-        json!([
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "pinned-editor",
+        actions: json!([
             {"at_ms": 600, "target": "workspace-tab:source.rs", "right_click": true},
             {"at_ms": 1050, "target": "Pin tab"}
         ]),
-        2100,
-    )?;
+        after: 2100,
+    })?;
     ensure!(
         h.state()?
             .get("projects")
@@ -200,23 +201,23 @@ pub(crate) fn workspace_tabs(o: &Options) -> Result<()> {
                 .any(|tab| { tab["id"] == editor_group["id"] && tab["pinned"] == true })),
         "Editor tab pin did not persist"
     );
-    plain(
-        &h,
-        o,
-        "unpinned-editor",
-        json!([
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "unpinned-editor",
+        actions: json!([
             {"at_ms": 600, "target": "workspace-tab:source.rs", "right_click": true},
             {"at_ms": 1050, "target": "Unpin tab"}
         ]),
-        2100,
-    )?;
-    plain(
-        &h,
-        o,
-        "restored-shell-layout",
-        json!([{"at_ms":700,"target":if o.narrow {"tabs-left"} else {"workspace-tab:Terminal 1"}},{"at_ms":1100,"target":"workspace-tab:Terminal 1"}]),
-        3500,
-    )?;
+        after: 2100,
+    })?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "restored-shell-layout",
+        actions: json!([{"at_ms":700,"target":if o.narrow {"tabs-left"} else {"workspace-tab:Terminal 1"}},{"at_ms":1100,"target":"workspace-tab:Terminal 1"}]),
+        after: 3500,
+    })?;
     ensure!(
         h.state()?
             .get("projects")
@@ -226,11 +227,11 @@ pub(crate) fn workspace_tabs(o: &Options) -> Result<()> {
             .is_some_and(|active| active == &shell_group["id"]),
         "Selected tab not restored"
     );
-    plain(
-        &h,
-        o,
-        "clean-editor-close",
-        if o.narrow {
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "clean-editor-close",
+        actions: if o.narrow {
             json!([
                 {"at_ms":800,"target":"tabs-right"},
                 {"at_ms":1600,"target":"workspace-close:source.rs"}
@@ -238,8 +239,8 @@ pub(crate) fn workspace_tabs(o: &Options) -> Result<()> {
         } else {
             json!([{"at_ms":1100,"target":"workspace-close:source.rs"}])
         },
-        3500,
-    )?;
+        after: 3500,
+    })?;
     h.wait(|s| session_closed(s, id(editor)), 5)?;
     ensure!(
         session_ids(
@@ -253,13 +254,13 @@ pub(crate) fn workspace_tabs(o: &Options) -> Result<()> {
             == 7,
         "Closing editor removed shell"
     );
-    plain(
-        &h,
-        o,
-        "shell-close-dialog",
-        json!([{"at_ms":1100,"target":"workspace-close:Terminal 1"}]),
-        3000,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "shell-close-dialog",
+        actions: json!([{"at_ms":1100,"target":"workspace-close:Terminal 1"}]),
+        after: 3000,
+    })?;
     h.assert_pids(&originals)
 }
 
@@ -299,11 +300,11 @@ pub(crate) fn native_rename(o: &Options) -> Result<()> {
     h.rpc(json!({"Settings": settings}))?;
     let shell = h.shell(&p)?;
     h.layout(&p, &[shell])?;
-    plain(
-        &h,
-        o,
-        "rename-preview-only",
-        json!([
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "rename-preview-only",
+        actions: json!([
             {"at_ms": 900, "target": "explorer-file:helper.rs"},
             {"at_ms": 1600, "target": "native-file", "hover_offset": [96.0, 10.0]},
             {"at_ms": 1900, "target": "native-file", "key": "F2"},
@@ -312,18 +313,18 @@ pub(crate) fn native_rename(o: &Options) -> Result<()> {
             {"at_ms": 3000, "target": "rename-preview"},
             {"at_ms": 5000, "target": "rename-apply", "hover": true}
         ]),
-        7000,
-    )?;
+        after: 7000,
+    })?;
     ensure!(
         fs::read_to_string(&helper)?.contains("pub fn helper()")
             && fs::read_to_string(&main)?.contains("helper::helper()"),
         "Rename preview changed a file before Apply"
     );
-    plain(
-        &h,
-        o,
-        "reviewed-symbol-rename",
-        json!([
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "reviewed-symbol-rename",
+        actions: json!([
             {"at_ms": 1200, "target": "native-file", "hover_offset": [96.0, 10.0]},
             {"at_ms": 1700, "target": "native-file", "key": "F2"},
             {"at_ms": 2100, "target": "rename-name"},
@@ -333,8 +334,8 @@ pub(crate) fn native_rename(o: &Options) -> Result<()> {
             {"at_ms": 9000, "target": "explorer-reveal-current"},
             {"at_ms": 9400, "target": "explorer-reveal-active", "hover": true}
         ]),
-        12000,
-    )?;
+        after: 12000,
+    })?;
     ensure!(
         fs::read_to_string(&helper)?.contains("pub fn renamed()"),
         "Definition was not renamed"
@@ -343,44 +344,44 @@ pub(crate) fn native_rename(o: &Options) -> Result<()> {
         fs::read_to_string(&main)?.contains("helper::renamed()"),
         "Reference was not renamed"
     );
-    plain(
-        &h,
-        o,
-        "search-everywhere-symbol",
-        json!([
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "search-everywhere-symbol",
+        actions: json!([
             {"at_ms": 800, "target": "toolbar-search"},
             {"at_ms": 1250, "target": "palette-search", "text": "renamed"},
             {"at_ms": 4500, "target": "palette-item:Symbol  renamed", "hover": true}
         ]),
-        7000,
-    )?;
-    plain(
-        &h,
-        o,
-        "native-context-menu",
-        json!([{"at_ms": 1100, "target": "native-file", "hover_offset": [96.0, 10.0], "right_click": true}]),
-        2600,
-    )?;
-    plain(
-        &h,
-        o,
-        "native-hover-markdown",
-        json!([
+        after: 7000,
+    })?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "native-context-menu",
+        actions: json!([{"at_ms": 1100, "target": "native-file", "hover_offset": [96.0, 10.0], "right_click": true}]),
+        after: 2600,
+    })?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "native-hover-markdown",
+        actions: json!([
             {"at_ms": 3300, "target": "native-file", "hover_offset": [96.0, 10.0], "right_click": true},
             {"at_ms": 3900, "target": "native-hover-action"}
         ]),
-        6500,
-    )?;
-    plain(
-        &h,
-        o,
-        "native-markdown-split",
-        json!([
+        after: 6500,
+    })?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "native-markdown-split",
+        actions: json!([
             {"at_ms": 900, "target": "explorer-file:notes.md"},
             {"at_ms": 1600, "target": "native-markdown-mode:Split"}
         ]),
-        4500,
-    )?;
+        after: 4500,
+    })?;
     Ok(())
 }
 pub(crate) fn split_file_opening(o: &Options) -> Result<()> {
@@ -434,16 +435,16 @@ pub(crate) fn split_file_opening(o: &Options) -> Result<()> {
     ] {
         h.layout(&project, std::slice::from_ref(&original))?;
         let before = sessions(&h.state()?).len();
-        plain(
-            &h,
-            o,
-            &format!("split-{direction}"),
-            json!([
+        plain(CaptureInput {
+            h: &h,
+            opts: o,
+            name: &format!("split-{direction}"),
+            actions: json!([
                 {"at_ms":1000,"target":"terminal","right_click":true},
                 {"at_ms":1700,"target":format!("Split {direction}")}
             ]),
-            3000,
-        )?;
+            after: 3000,
+        })?;
         let state = h.state()?;
         ensure!(
             sessions(&state).len() == before.saturating_add(1),
@@ -511,7 +512,13 @@ pub(crate) fn split_file_opening(o: &Options) -> Result<()> {
             // A double-click must create one editor, with no duplicate swap-file prompt.
             actions.push(json!({"at_ms":1200,"target":format!("explorer-file:{name}")}));
         }
-        plain(&h, o, name, json!(actions), 3300)?;
+        plain(CaptureInput {
+            h: &h,
+            opts: o,
+            name,
+            actions: json!(actions),
+            after: 3300,
+        })?;
         let state = h.state()?;
         ensure!(
             sessions(&state).len() == before.saturating_add(1),

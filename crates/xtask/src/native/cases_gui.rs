@@ -1,4 +1,5 @@
 use super::super::harness::{Harness, git, id, output, session, session_ids, sessions};
+use super::dispatch::CaptureInput;
 use super::dispatch::{Options, capture, plain, prefs, setup};
 use anyhow::{Context, Result, anyhow, ensure};
 use serde_json::{Value, json};
@@ -34,13 +35,13 @@ pub(crate) fn external(o: &Options) -> Result<()> {
         );
     h.rpc(json!({"Settings":settings}))?;
     let s = h.shell(&p)?;
-    let logs = plain(
-        &h,
-        o,
-        "external-failure",
-        json!([{"at_ms":1100,"target":"explorer-file:space file.rs","right_click":true},{"at_ms":1600,"target":"Open externally"},{"at_ms":2100,"target":"header-overflow"},{"at_ms":2400,"target":"settings"}]),
-        4900,
-    )?;
+    let logs = plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "external-failure",
+        actions: json!([{"at_ms":1100,"target":"explorer-file:space file.rs","right_click":true},{"at_ms":1600,"target":"Open externally"},{"at_ms":2100,"target":"header-overflow"},{"at_ms":2400,"target":"settings"}]),
+        after: 4900,
+    })?;
     let error = logs
         .find("Fixture error External editor exited with")
         .context("Exit failure not displayed")?;
@@ -70,13 +71,13 @@ pub(crate) fn browser(o: &Options) -> Result<()> {
         root.join("next.html"),
         "<!doctype html><title>Navigation complete</title><h1>Second page</h1>",
     )?;
-    plain(
-        &h,
-        o,
-        "html",
-        json!([{"at_ms":1100,"target":"explorer-file:page.html"}]),
-        3500,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "html",
+        actions: json!([{"at_ms":1100,"target":"explorer-file:page.html"}]),
+        after: 3500,
+    })?;
     let state = h.state()?;
     let layout = state
         .get("projects")
@@ -108,13 +109,13 @@ pub(crate) fn browser(o: &Options) -> Result<()> {
         layout.is_some_and(|layout| layout.to_string().contains("next.html")),
         "Native page navigation did not update the saved browser target"
     );
-    plain(
-        &h,
-        o,
-        "browser-close",
-        json!([{"at_ms":1100,"target":"workspace-close:next.html"}]),
-        3000,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "browser-close",
+        actions: json!([{"at_ms":1100,"target":"workspace-close:next.html"}]),
+        after: 3000,
+    })?;
     ensure!(
         h.state()?
             .get("projects")
@@ -128,13 +129,13 @@ pub(crate) fn browser(o: &Options) -> Result<()> {
             == 1,
         "Browser close did not remove tab"
     );
-    plain(
-        &h,
-        o,
-        "explicit-text",
-        json!([{"at_ms":1100,"target":"explorer-file:page.html","right_click":true},{"at_ms":1600,"target":"Open as text"}]),
-        3500,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "explicit-text",
+        actions: json!([{"at_ms":1100,"target":"explorer-file:page.html","right_click":true},{"at_ms":1600,"target":"Open as text"}]),
+        after: 3500,
+    })?;
     ensure!(
         sessions(&h.state()?).len() == 7,
         "Open as text did not create an editor"
@@ -155,13 +156,13 @@ pub(crate) fn images(o: &Options) -> Result<()> {
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="160" height="80"><rect width="160" height="80" fill="green"/><circle cx="80" cy="40" r="30" fill="orange"/></svg>"#,
     )?;
     fs::write(root.join("broken.png"), "corrupt fixture content")?;
-    plain(
-        &h,
-        o,
-        "raster",
-        json!([{"at_ms":1100,"target":"explorer-file:picture.png"},{"at_ms":2300,"target":"image-fit"}]),
-        3500,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "raster",
+        actions: json!([{"at_ms":1100,"target":"explorer-file:picture.png"},{"at_ms":2300,"target":"image-fit"}]),
+        after: 3500,
+    })?;
     let state = h.state()?;
     ensure!(
         sessions(&state).len() == 6
@@ -173,20 +174,20 @@ pub(crate) fn images(o: &Options) -> Result<()> {
                 .is_some_and(|version| version.as_u64() == Some(3)),
         "Image allocated an editor or failed to version layout"
     );
-    plain(
-        &h,
-        o,
-        "image-restart",
-        json!([{"at_ms":1400,"target":"image-fit"}]),
-        2500,
-    )?;
-    plain(
-        &h,
-        o,
-        "image-close",
-        json!([{"at_ms":1100,"target":"workspace-close:picture.png"}]),
-        3000,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "image-restart",
+        actions: json!([{"at_ms":1400,"target":"image-fit"}]),
+        after: 2500,
+    })?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "image-close",
+        actions: json!([{"at_ms":1100,"target":"workspace-close:picture.png"}]),
+        after: 3000,
+    })?;
     ensure!(
         h.state()?
             .get("projects")
@@ -200,31 +201,31 @@ pub(crate) fn images(o: &Options) -> Result<()> {
             == 1,
         "Image close did not remove tab"
     );
-    plain(
-        &h,
-        o,
-        "svg",
-        json!([{"at_ms":1100,"target":"explorer-file:vector.svg"},{"at_ms":2400,"target":"image-fit"}]),
-        3500,
-    )?;
-    plain(
-        &h,
-        o,
-        "corrupt-image",
-        json!([{"at_ms":1100,"target":"explorer-file:broken.png"},{"at_ms":2300,"target":"image-error","hover":true}]),
-        3300,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "svg",
+        actions: json!([{"at_ms":1100,"target":"explorer-file:vector.svg"},{"at_ms":2400,"target":"image-fit"}]),
+        after: 3500,
+    })?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "corrupt-image",
+        actions: json!([{"at_ms":1100,"target":"explorer-file:broken.png"},{"at_ms":2300,"target":"image-error","hover":true}]),
+        after: 3300,
+    })?;
     ensure!(
         sessions(&h.state()?).len() == 6,
         "Corrupt image opened editor"
     );
-    plain(
-        &h,
-        o,
-        "explicit-text",
-        json!([{"at_ms":1100,"target":"explorer-file:picture.png","right_click":true},{"at_ms":1600,"target":"Open as text"}]),
-        3500,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "explicit-text",
+        actions: json!([{"at_ms":1100,"target":"explorer-file:picture.png","right_click":true},{"at_ms":1600,"target":"Open as text"}]),
+        after: 3500,
+    })?;
     ensure!(
         sessions(&h.state()?)
             .iter()
@@ -254,26 +255,26 @@ pub(crate) fn terminal_actions(o: &Options) -> Result<()> {
     }}))?;
     h.rpc(json!({"Stop":{"session":id(&ended)}}))?;
     h.wait(|st| session(st, id(&ended))["lifecycle"] == "ended", 5)?;
-    plain(
-        &h,
-        o,
-        "history",
-        json!([{"at_ms":900,"target":"header-overflow"},{"at_ms":1100,"target":"tool-History"}]),
-        2500,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "history",
+        actions: json!([{"at_ms":900,"target":"header-overflow"},{"at_ms":1100,"target":"tool-History"}]),
+        after: 2500,
+    })?;
     ensure!(
         prefs(&h)?.get("tool").is_some_and(|tool| tool == "history"),
         "Global History selection not saved"
     );
-    plain(
-        &h,
-        o,
-        "history-collapsed",
-        json!([
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "history-collapsed",
+        actions: json!([
             {"at_ms":1000,"target":format!("history-project:{}",id(&p))}
         ]),
-        2000,
-    )?;
+        after: 2000,
+    })?;
     ensure!(
         prefs(&h)?
             .get("history_expanded")
@@ -281,15 +282,15 @@ pub(crate) fn terminal_actions(o: &Options) -> Result<()> {
             .is_some_and(|open| open.as_bool() == Some(false)),
         "History collapse not saved"
     );
-    plain(
-        &h,
-        o,
-        "history-expanded",
-        json!([
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "history-expanded",
+        actions: json!([
             {"at_ms":1000,"target":format!("history-project:{}",id(&p))}
         ]),
-        2000,
-    )?;
+        after: 2000,
+    })?;
     ensure!(
         prefs(&h)?
             .get("history_expanded")
@@ -297,13 +298,13 @@ pub(crate) fn terminal_actions(o: &Options) -> Result<()> {
             .is_some_and(|open| open.as_bool() == Some(true)),
         "History expansion not saved"
     );
-    plain(
-        &h,
-        o,
-        "git-open",
-        json!([{"at_ms":1000,"target":"tool-Git"},{"at_ms":1900,"target":"git-file-README.md"}]),
-        3500,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "git-open",
+        actions: json!([{"at_ms":1000,"target":"tool-Git"},{"at_ms":1900,"target":"git-file-README.md"}]),
+        after: 3500,
+    })?;
     let git_state = h.state()?;
     let layout = git_state
         .get("projects")
@@ -329,13 +330,13 @@ pub(crate) fn terminal_actions(o: &Options) -> Result<()> {
         )?;
         thread::sleep(Duration::from_millis(50));
     }
-    plain(
-        &h,
-        o,
-        "hover-editor",
-        json!([{"at_ms":1100,"target":"terminal","hover":true},{"at_ms":1700,"target":"terminal","hover_offset":[45,10]},{"at_ms":2400,"target":"Open in editor split"}]),
-        4000,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "hover-editor",
+        actions: json!([{"at_ms":1100,"target":"terminal","hover":true},{"at_ms":1700,"target":"terminal","hover_offset":[45,10]},{"at_ms":2400,"target":"Open in editor split"}]),
+        after: 4000,
+    })?;
     ensure!(
         sessions(&h.state()?)
             .iter()
@@ -343,13 +344,13 @@ pub(crate) fn terminal_actions(o: &Options) -> Result<()> {
         "Terminal path hover did not open file"
     );
     let before = sessions(&h.state()?).len();
-    plain(
-        &h,
-        o,
-        "lower-split",
-        json!([{"at_ms":1100,"target":"terminal","right_click":true},{"at_ms":2000,"target":"Split down"}]),
-        3500,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "lower-split",
+        actions: json!([{"at_ms":1100,"target":"terminal","right_click":true},{"at_ms":2000,"target":"Split down"}]),
+        after: 3500,
+    })?;
     ensure!(
         sessions(&h.state()?).len() == before.saturating_add(1),
         "Lower pane split failed"
@@ -369,99 +370,108 @@ pub(crate) fn control(o: &Options) -> Result<()> {
     // The window must outlive the GUI round trips: a control request accepted
     // while the window closes never reaches the daemon. The delivery check at
     // the end talks to the daemon only, so it may outlive the window.
-    capture(&h, o, "control", actions, 12000, |_| {
-        let paths = Paths::at(h.root.clone());
-        h.wait(|_| ui_control::rpc(&paths, Request::Ping).is_ok(), 15)?;
-        let mut command = h.command("terminator-hook");
-        command.args([
-            "ctl",
-            "split",
-            id(originals
-                .first()
-                .ok_or_else(|| anyhow!("missing original session"))?),
-            "right",
-        ]);
-        let created: Value = serde_json::from_slice(&output(command)?)?;
-        let snapshot = ui_control::rpc(&paths, Request::Snapshot)?;
-        ensure!(
-            session_ids(
-                snapshot
-                    .get("workspaces")
-                    .and_then(|workspaces| workspaces.get(id(&p)))
-                    .ok_or_else(|| anyhow!("missing workspace snapshot"))?,
-            )
-            .len()
-                == 7,
-            "CLI split did not target original layout"
-        );
-        ensure!(
-            sessions(&h.state()?).len() == 7,
-            "CLI split created wrong number of sessions"
-        );
-        let mut open = h.command("terminator-hook");
-        open.args(["ctl", "open-file", id(&p)])
-            .arg(root.join("ctl.png"));
-        output(open)?;
-        h.wait(
-            |_| {
-                ui_control::rpc(&paths, Request::Snapshot).is_ok_and(|v| {
-                    v.get("workspaces")
-                        .and_then(|workspaces| workspaces.get(id(&p)))
-                        .and_then(|workspace| workspace.get("version"))
-                        .is_some_and(|version| version.as_u64() == Some(3))
-                })
-            },
-            15,
-        )?;
-        ensure!(
-            sessions(&h.state()?).len() == 7,
-            "CLI image preview created PTY"
-        );
-        // Delivery is a live stream write, so re-send while the proof is
-        // missing: a frame lost to a reset connection must not fail the gate.
-        // The panes are tiny, so both the echo and the output wrap; compare
-        // the history without whitespace. The send splits the marker across
-        // shell quotes, so the echoed command cannot contain it and only the
-        // command output proves delivery.
-        let mut delivered = false;
-        for _ in 0..3 {
-            let mut send = h.command("terminator-hook");
-            send.args([
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "control",
+            actions,
+            after: 12000,
+        },
+        |_| {
+            let paths = Paths::at(h.root.clone());
+            h.wait(|_| ui_control::rpc(&paths, Request::Ping).is_ok(), 15)?;
+            let mut command = h.command("terminator-hook");
+            command.args([
                 "ctl",
-                "send",
-                id(&created),
-                "printf 'GUI_'CONTROL_''PROOF\\n'",
-                "--enter",
+                "split",
+                id(originals
+                    .first()
+                    .ok_or_else(|| anyhow!("missing original session"))?),
+                "right",
             ]);
-            output(send)?;
-            if h.wait(
+            let created: Value = serde_json::from_slice(&output(command)?)?;
+            let snapshot = ui_control::rpc(&paths, Request::Snapshot)?;
+            ensure!(
+                session_ids(
+                    snapshot
+                        .get("workspaces")
+                        .and_then(|workspaces| workspaces.get(id(&p)))
+                        .ok_or_else(|| anyhow!("missing workspace snapshot"))?,
+                )
+                .len()
+                    == 7,
+                "CLI split did not target original layout"
+            );
+            ensure!(
+                sessions(&h.state()?).len() == 7,
+                "CLI split created wrong number of sessions"
+            );
+            let mut open = h.command("terminator-hook");
+            open.args(["ctl", "open-file", id(&p)])
+                .arg(root.join("ctl.png"));
+            output(open)?;
+            h.wait(
                 |_| {
-                    h.history(id(&created)).is_ok_and(|text| {
-                        text.split_whitespace()
-                            .collect::<String>()
-                            .contains("GUI_CONTROL_PROOF")
+                    ui_control::rpc(&paths, Request::Snapshot).is_ok_and(|v| {
+                        v.get("workspaces")
+                            .and_then(|workspaces| workspaces.get(id(&p)))
+                            .and_then(|workspace| workspace.get("version"))
+                            .is_some_and(|version| version.as_u64() == Some(3))
                     })
                 },
-                5,
-            )
-            .is_ok()
-            {
-                delivered = true;
-                break;
+                15,
+            )?;
+            ensure!(
+                sessions(&h.state()?).len() == 7,
+                "CLI image preview created PTY"
+            );
+            // Delivery is a live stream write, so re-send while the proof is
+            // missing: a frame lost to a reset connection must not fail the gate.
+            // The panes are tiny, so both the echo and the output wrap; compare
+            // the history without whitespace. The send splits the marker across
+            // shell quotes, so the echoed command cannot contain it and only the
+            // command output proves delivery.
+            let mut delivered = false;
+            for _ in 0..3 {
+                let mut send = h.command("terminator-hook");
+                send.args([
+                    "ctl",
+                    "send",
+                    id(&created),
+                    "printf 'GUI_'CONTROL_''PROOF\\n'",
+                    "--enter",
+                ]);
+                output(send)?;
+                if h.wait(
+                    |_| {
+                        h.history(id(&created)).is_ok_and(|text| {
+                            text.split_whitespace()
+                                .collect::<String>()
+                                .contains("GUI_CONTROL_PROOF")
+                        })
+                    },
+                    5,
+                )
+                .is_ok()
+                {
+                    delivered = true;
+                    break;
+                }
             }
-        }
-        ensure!(
-            delivered,
-            "CLI send never reached the session: record={:?} history={:?}",
-            h.state()?
-                .get("sessions")
-                .and_then(Value::as_array)
-                .and_then(|sessions| sessions
-                    .iter()
-                    .find(|session| session["id"] == id(&created))),
-            h.history(id(&created)).unwrap_or_default()
-        );
-        Ok(())
-    })?;
+            ensure!(
+                delivered,
+                "CLI send never reached the session: record={:?} history={:?}",
+                h.state()?
+                    .get("sessions")
+                    .and_then(Value::as_array)
+                    .and_then(|sessions| sessions
+                        .iter()
+                        .find(|session| session["id"] == id(&created))),
+                h.history(id(&created)).unwrap_or_default()
+            );
+            Ok(())
+        },
+    )?;
     h.assert_pids(&originals)
 }

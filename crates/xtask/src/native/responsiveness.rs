@@ -1,4 +1,5 @@
 //! Isolated stalled-radio responsiveness and rapid-switch resource fixture.
+use super::CaptureInput;
 use super::{
     Duration, Options, Path, Result, Value, capture, ensure, fs, id, json, output, setup, thread,
 };
@@ -160,185 +161,194 @@ pub fn run(options: &Options) -> Result<()> {
     let paths = Paths::at(h.root.clone());
     let mut report = Value::Null;
     let after = options.seconds.max(12).saturating_mul(1000);
-    capture(&h, options, "stalled-radio", json!([]), after, |child| {
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(8))
-            .ok_or_else(|| anyhow::anyhow!("deadline overflow"))?;
-        loop {
-            if snapshot(&paths).is_ok_and(|s| {
-                s.get("selected_project").is_some_and(Value::is_string)
-                    || s.get("selected").is_some_and(Value::is_string)
-            }) {
-                break;
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: options,
+            name: "stalled-radio",
+            actions: json!([]),
+            after,
+        },
+        |child| {
+            let deadline = Instant::now()
+                .checked_add(Duration::from_secs(8))
+                .ok_or_else(|| anyhow::anyhow!("deadline overflow"))?;
+            loop {
+                if snapshot(&paths).is_ok_and(|s| {
+                    s.get("selected_project").is_some_and(Value::is_string)
+                        || s.get("selected").is_some_and(Value::is_string)
+                }) {
+                    break;
+                }
+                ensure!(Instant::now() < deadline, "GUI did not become ready");
+                thread::sleep(Duration::from_millis(20));
             }
-            ensure!(Instant::now() < deadline, "GUI did not become ready");
-            thread::sleep(Duration::from_millis(20));
-        }
-        let initial = snapshot(&paths)?;
-        let resources_before = resources(child.id())?;
-        let mut acknowledgments = Vec::new();
-        let mut switches = Vec::new();
-        let start = Instant::now();
-        for index in 0usize..100 {
-            let at = Instant::now();
-            player(&paths, "play", Some(format!("{url}/{index}")))?;
-            switches.push(at.elapsed().as_secs_f64() * 1000.0);
-            let at = Instant::now();
-            let slot = index
-                .checked_rem(sessions.len())
-                .ok_or_else(|| anyhow::anyhow!("no responsiveness sessions"))?;
-            ui_control::rpc(
-                &paths,
-                ui_control::Request::Focus {
-                    session: id(sessions
-                        .get(slot)
-                        .ok_or_else(|| anyhow::anyhow!("missing session"))?)
-                    .into(),
-                },
-            )?;
-            acknowledgments.push(at.elapsed().as_secs_f64() * 1000.0);
-            let state = snapshot(&paths)?;
-            ensure!(
-                baseline
-                    || state
-                        .get("services")
-                        .and_then(|services| services.get("active"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(99)
-                        <= 32,
-                "Active operation limit exceeded"
-            );
-            ensure!(
-                baseline
-                    || state
-                        .get("services")
-                        .and_then(|services| services.get("queued"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(999)
-                        <= 128,
-                "Admission limit exceeded"
-            );
-            ensure!(
-                baseline
-                    || state
-                        .get("player")
-                        .and_then(|player| player.get("engine"))
-                        .and_then(|engine| engine.get("decoders"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(99)
-                        <= 1,
-                "Overlapping decoder pipelines"
-            );
-            ensure!(
-                baseline
-                    || state
-                        .get("player")
-                        .and_then(|player| player.get("engine"))
-                        .and_then(|engine| engine.get("connections"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(99)
-                        <= 1,
-                "Overlapping radio connections"
-            );
-        }
-        // --seconds 1800 is the long resource soak; short runs cover rapid switching.
-        let soak = Duration::from_secs(options.seconds.saturating_sub(5));
-        let mut samples = Vec::new();
-        let mut resource_samples = Vec::new();
-        let mut resource_at = Instant::now();
-        let mut switch_at = Instant::now();
-        let mut soak_switches = 0u64;
-        while start.elapsed() < soak {
-            if switch_at.elapsed() >= Duration::from_secs(1) {
-                soak_switches = soak_switches.saturating_add(1);
-                player(&paths, "play", Some(format!("{url}/soak/{soak_switches}")))?;
-                switch_at = Instant::now();
-            }
-            let state = snapshot(&paths)?;
-            ensure!(
-                baseline
-                    || (state
-                        .get("services")
-                        .and_then(|services| services.get("active"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(99)
-                        <= 32
-                        && state
+            let initial = snapshot(&paths)?;
+            let resources_before = resources(child.id())?;
+            let mut acknowledgments = Vec::new();
+            let mut switches = Vec::new();
+            let start = Instant::now();
+            for index in 0usize..100 {
+                let at = Instant::now();
+                player(&paths, "play", Some(format!("{url}/{index}")))?;
+                switches.push(at.elapsed().as_secs_f64() * 1000.0);
+                let at = Instant::now();
+                let slot = index
+                    .checked_rem(sessions.len())
+                    .ok_or_else(|| anyhow::anyhow!("no responsiveness sessions"))?;
+                ui_control::rpc(
+                    &paths,
+                    ui_control::Request::Focus {
+                        session: id(sessions
+                            .get(slot)
+                            .ok_or_else(|| anyhow::anyhow!("missing session"))?)
+                        .into(),
+                    },
+                )?;
+                acknowledgments.push(at.elapsed().as_secs_f64() * 1000.0);
+                let state = snapshot(&paths)?;
+                ensure!(
+                    baseline
+                        || state
+                            .get("services")
+                            .and_then(|services| services.get("active"))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(99)
+                            <= 32,
+                    "Active operation limit exceeded"
+                );
+                ensure!(
+                    baseline
+                        || state
                             .get("services")
                             .and_then(|services| services.get("queued"))
                             .and_then(Value::as_u64)
                             .unwrap_or(999)
-                            <= 128),
-                "Task budget exceeded during soak"
-            );
-            samples.push(state.get("services").cloned().unwrap_or(Value::Null));
-            if resource_at.elapsed() >= Duration::from_secs(5) {
-                let sample = resources(child.id())?;
-                println!(
-                    "{}",
-                    json!({"soak_seconds":start.elapsed().as_secs(),"resources":sample})
+                            <= 128,
+                    "Admission limit exceeded"
                 );
-                resource_samples.push(sample);
-                resource_at = Instant::now();
+                ensure!(
+                    baseline
+                        || state
+                            .get("player")
+                            .and_then(|player| player.get("engine"))
+                            .and_then(|engine| engine.get("decoders"))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(99)
+                            <= 1,
+                    "Overlapping decoder pipelines"
+                );
+                ensure!(
+                    baseline
+                        || state
+                            .get("player")
+                            .and_then(|player| player.get("engine"))
+                            .and_then(|engine| engine.get("connections"))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(99)
+                            <= 1,
+                    "Overlapping radio connections"
+                );
             }
-            thread::sleep(Duration::from_millis(250));
-        }
-        let at = Instant::now();
-        player(&paths, "stop", None)?;
-        let stop_ms = at.elapsed().as_secs_f64() * 1000.0;
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(2))
-            .ok_or_else(|| anyhow::anyhow!("deadline overflow"))?;
-        let final_state = loop {
-            let state = snapshot(&paths)?;
-            if baseline
-                || (state
-                    .get("player")
-                    .and_then(|player| player.get("engine"))
-                    .and_then(|engine| engine.get("decoders"))
-                    .is_some_and(|decoders| decoders.as_u64() == Some(0))
-                    && state
+            // --seconds 1800 is the long resource soak; short runs cover rapid switching.
+            let soak = Duration::from_secs(options.seconds.saturating_sub(5));
+            let mut samples = Vec::new();
+            let mut resource_samples = Vec::new();
+            let mut resource_at = Instant::now();
+            let mut switch_at = Instant::now();
+            let mut soak_switches = 0u64;
+            while start.elapsed() < soak {
+                if switch_at.elapsed() >= Duration::from_secs(1) {
+                    soak_switches = soak_switches.saturating_add(1);
+                    player(&paths, "play", Some(format!("{url}/soak/{soak_switches}")))?;
+                    switch_at = Instant::now();
+                }
+                let state = snapshot(&paths)?;
+                ensure!(
+                    baseline
+                        || (state
+                            .get("services")
+                            .and_then(|services| services.get("active"))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(99)
+                            <= 32
+                            && state
+                                .get("services")
+                                .and_then(|services| services.get("queued"))
+                                .and_then(Value::as_u64)
+                                .unwrap_or(999)
+                                <= 128),
+                    "Task budget exceeded during soak"
+                );
+                samples.push(state.get("services").cloned().unwrap_or(Value::Null));
+                if resource_at.elapsed() >= Duration::from_secs(5) {
+                    let sample = resources(child.id())?;
+                    println!(
+                        "{}",
+                        json!({"soak_seconds":start.elapsed().as_secs(),"resources":sample})
+                    );
+                    resource_samples.push(sample);
+                    resource_at = Instant::now();
+                }
+                thread::sleep(Duration::from_millis(250));
+            }
+            let at = Instant::now();
+            player(&paths, "stop", None)?;
+            let stop_ms = at.elapsed().as_secs_f64() * 1000.0;
+            let deadline = Instant::now()
+                .checked_add(Duration::from_secs(2))
+                .ok_or_else(|| anyhow::anyhow!("deadline overflow"))?;
+            let final_state = loop {
+                let state = snapshot(&paths)?;
+                if baseline
+                    || (state
                         .get("player")
                         .and_then(|player| player.get("engine"))
-                        .and_then(|engine| engine.get("connections"))
-                        .is_some_and(|connections| connections.as_u64() == Some(0)))
-            {
-                break state;
-            }
-            ensure!(
-                Instant::now() < deadline,
-                "Stopped radio pipeline did not clean up"
-            );
-            thread::sleep(Duration::from_millis(10));
-        };
-        acknowledgments.sort_by(f64::total_cmp);
-        switches.sort_by(f64::total_cmp);
-        let p95 = acknowledgments
-            .get(94)
-            .copied()
-            .ok_or_else(|| anyhow::anyhow!("missing acknowledgement sample"))?;
-        let switch_p95 = switches
-            .get(94)
-            .copied()
-            .ok_or_else(|| anyhow::anyhow!("missing switch sample"))?;
-        let peak = final_state
-            .get("services")
-            .and_then(|services| services.get("ui_processing_peak_ms"))
-            .and_then(Value::as_f64)
-            .unwrap_or(f64::INFINITY);
-        report = json!({"pid":child.id(),"baseline":baseline,"pipeline_cleanup_verified":!baseline,"switches":100,"soak_switches":soak_switches,"ack_p95_ms":p95,"switch_p95_ms":switch_p95,"stop_ms":stop_ms,
+                        .and_then(|engine| engine.get("decoders"))
+                        .is_some_and(|decoders| decoders.as_u64() == Some(0))
+                        && state
+                            .get("player")
+                            .and_then(|player| player.get("engine"))
+                            .and_then(|engine| engine.get("connections"))
+                            .is_some_and(|connections| connections.as_u64() == Some(0)))
+                {
+                    break state;
+                }
+                ensure!(
+                    Instant::now() < deadline,
+                    "Stopped radio pipeline did not clean up"
+                );
+                thread::sleep(Duration::from_millis(10));
+            };
+            acknowledgments.sort_by(f64::total_cmp);
+            switches.sort_by(f64::total_cmp);
+            let p95 = acknowledgments
+                .get(94)
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("missing acknowledgement sample"))?;
+            let switch_p95 = switches
+                .get(94)
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("missing switch sample"))?;
+            let peak = final_state
+                .get("services")
+                .and_then(|services| services.get("ui_processing_peak_ms"))
+                .and_then(Value::as_f64)
+                .unwrap_or(f64::INFINITY);
+            report = json!({"pid":child.id(),"baseline":baseline,"pipeline_cleanup_verified":!baseline,"switches":100,"soak_switches":soak_switches,"ack_p95_ms":p95,"switch_p95_ms":switch_p95,"stop_ms":stop_ms,
             "ui_processing_peak_ms":peak,"elapsed_seconds":start.elapsed().as_secs_f64(),"initial":initial.get("services").unwrap_or(&Value::Null),"final":final_state.get("services").unwrap_or(&Value::Null),"samples":samples,"resources_before":resources_before,"resources_after":resources(child.id())?,"resource_samples":resource_samples});
-        fs::create_dir_all(&options.output)?;
-        fs::write(
-            options.output.join("responsiveness.json"),
-            serde_json::to_vec_pretty(&report)?,
-        )?;
-        ensure!(
-            baseline || (p95 < 100.0 && switch_p95 < 100.0 && stop_ms < 100.0 && peak < 250.0),
-            "Responsiveness limit exceeded: ack p95={p95:.1}ms, switch p95={switch_p95:.1}ms, Stop={stop_ms:.1}ms, processing peak={peak:.1}ms"
-        );
-        Ok(())
-    })?;
+            fs::create_dir_all(&options.output)?;
+            fs::write(
+                options.output.join("responsiveness.json"),
+                serde_json::to_vec_pretty(&report)?,
+            )?;
+            ensure!(
+                baseline || (p95 < 100.0 && switch_p95 < 100.0 && stop_ms < 100.0 && peak < 250.0),
+                "Responsiveness limit exceeded: ack p95={p95:.1}ms, switch p95={switch_p95:.1}ms, Stop={stop_ms:.1}ms, processing peak={peak:.1}ms"
+            );
+            Ok(())
+        },
+    )?;
     h.assert_pids(&sessions)?;
     println!(
         "{}",

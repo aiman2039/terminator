@@ -60,11 +60,13 @@ pub fn command_counts(seconds: u64, destination: Option<PathBuf>) -> Result<()> 
         fs::write(h.root.join("ui-preferences.json"),json!({"version":1,"tool":"Explorer","visible":visible,"typography_migrated":true,"attention_migrated":true}).to_string())?;
         fs::write(&log, "")?;
         crate::native::capture(
-            &h,
-            &opts,
-            if visible { "visible" } else { "hidden" },
-            json!([]),
-            seconds.saturating_mul(1000),
+            crate::native::CaptureInput {
+                h: &h,
+                opts: &opts,
+                name: if visible { "visible" } else { "hidden" },
+                actions: json!([]),
+                after: seconds.saturating_mul(1000),
+            },
             |_| Ok(()),
         )?;
         let commands = fs::read_to_string(&log)?

@@ -1,4 +1,5 @@
 //! Public sample workspaces only; no provider launch, user configuration or private messages.
+use super::CaptureInput;
 use super::{Harness, Options, PathBuf, Result, fs, id, json, plain, prefs, save_prefs};
 
 pub fn run(o: &Options) -> Result<()> {
@@ -43,7 +44,13 @@ pub fn run(o: &Options) -> Result<()> {
             &format!("printf '\\033[2J\\033[H'; cat {file}\n"),
         )?;
     }
-    plain(&h, o, "projects", json!([]), 2500)?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "projects",
+        actions: json!([]),
+        after: 2500,
+    })?;
     h.assert_pids(&[left.clone(), right.clone(), other])?;
 
     h.rpc(json!({"Hook":{"protocol_version":1,"event_id":"launch-sample","terminal_session_id":id(&left),"agent_invocation_id":"launch-sample-agent","agent_kind":"sample","state":"waiting_input","request_id":"launch-sample-request","sequence":1,"summary":"Review the documentation changes","details":"Sample hook event for the launch gallery. No agent provider was launched.","resume":null}}))?;
@@ -53,7 +60,13 @@ pub fn run(o: &Options) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("preferences are not an object"))?
         .insert("left_agents".into(), json!(true));
     save_prefs(&h, &preferences)?;
-    plain(&h, o, "attention", json!([]), 2300)?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "attention",
+        actions: json!([]),
+        after: 2300,
+    })?;
 
     let editor = h.editor(&web, &root.join("README.md"))?;
     h.layout(&web, std::slice::from_ref(&editor))?;
@@ -62,20 +75,26 @@ pub fn run(o: &Options) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("preferences are not an object"))?
         .insert("left_agents".into(), json!(false));
     save_prefs(&h, &preferences)?;
-    plain(
-        &h,
-        o,
-        "editing",
-        json!([{"at_ms":900,"target":"markdown-mode:Split"}]),
-        2600,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "editing",
+        actions: json!([{"at_ms":900,"target":"markdown-mode:Split"}]),
+        after: 2600,
+    })?;
 
     h.layout(&web, &[left.clone(), right.clone()])?;
     h.write(
         &mut h.attach(&right)?,
         "printf '\\nNew output while the GUI was closed.\\n'\n",
     )?;
-    plain(&h, o, "reconnect", json!([]), 2400)?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "reconnect",
+        actions: json!([]),
+        after: 2400,
+    })?;
     h.assert_pids(&[left, right, editor])?;
     Ok(())
 }

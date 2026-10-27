@@ -1,3 +1,4 @@
+use super::CaptureInput;
 use super::{
     Context, Harness, Options, PathBuf, Result, Value, capture, ensure, fs, id, json, output,
     plain, prefs, session_closed, session_ids, sessions,
@@ -90,13 +91,15 @@ pub fn run(o: &Options) -> Result<()> {
     .save(root.join("picture space.png"))?;
 
     capture(
-        &h,
-        o,
-        "default-preview",
-        json!([
-            {"at_ms":1000,"target":"explorer-file:read me ' 日本.md"}
-        ]),
-        3200,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "default-preview",
+            actions: json!([
+                {"at_ms":1000,"target":"explorer-file:read me ' 日本.md"}
+            ]),
+            after: 3200,
+        },
         |_| {
             h.wait(
                 |state| {
@@ -131,16 +134,18 @@ pub fn run(o: &Options) -> Result<()> {
     );
 
     capture(
-        &h,
-        o,
-        "split-unsaved",
-        json!([
-            {"at_ms":800,"target":"markdown-mode:Split"},
-            {"at_ms":1900,"target":"editor-terminal","input":"gg0C# Unsaved preview\u{1b}"},
-            {"at_ms":2800,"target":"markdown-preview"},
-            {"at_ms":3100,"target":"markdown-preview","input":"x"}
-        ]),
-        4500,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "split-unsaved",
+            actions: json!([
+                {"at_ms":800,"target":"markdown-mode:Split"},
+                {"at_ms":1900,"target":"editor-terminal","input":"gg0C# Unsaved preview\u{1b}"},
+                {"at_ms":2800,"target":"markdown-preview"},
+                {"at_ms":3100,"target":"markdown-preview","input":"x"}
+            ]),
+            after: 4500,
+        },
         |_| {
             h.wait(|_| view(&h, &editor, "# Unsaved preview", true), 8)?;
             let snapshot = gui(&h)?;
@@ -183,14 +188,16 @@ pub fn run(o: &Options) -> Result<()> {
     h.assert_pids(&[shell.clone(), editor.clone()])?;
 
     capture(
-        &h,
-        o,
-        "preview",
-        json!([
-            {"at_ms":900,"target":"markdown-mode:Preview"},
-            {"at_ms":1800,"target":"markdown-preview","input":"x"}
-        ]),
-        3500,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "preview",
+            actions: json!([
+                {"at_ms":900,"target":"markdown-mode:Preview"},
+                {"at_ms":1800,"target":"markdown-preview","input":"x"}
+            ]),
+            after: 3500,
+        },
         |_| {
             h.wait(|_| view(&h, &editor, "# Unsaved preview", false), 8)?;
             Ok(())
@@ -211,41 +218,50 @@ pub fn run(o: &Options) -> Result<()> {
         "Preview selection was not persisted"
     );
 
-    capture(&h, o, "restored-preview", json!([]), 3500, |_| {
-        h.wait(|_| view(&h, &editor, "# Unsaved preview", false), 8)?;
-        // Preview follows this tab's file even if Neovim is showing another buffer.
-        let original = expression(
-            &h,
-            &editor,
-            "luaeval('(function() local original = vim.api.nvim_get_current_buf(); vim.api.nvim_buf_set_lines(original, 0, 1, false, {\"# Original buffer preview\"}); local other = vim.api.nvim_create_buf(false, true); vim.api.nvim_buf_set_lines(other, 0, -1, false, {\"# Wrong buffer\"}); vim.bo[other].modified = false; vim.api.nvim_set_current_buf(other); return original end)()')",
-        )?;
-        h.wait(|_| view(&h, &editor, "# Original buffer preview", false), 8)?;
-        expression(
-            &h,
-            &editor,
-            &format!(
-                "luaeval('vim.api.nvim_set_current_buf({})')",
-                original.parse::<u64>()?
-            ),
-        )?;
-        Ok(())
-    })?;
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "restored-preview",
+            actions: json!([]),
+            after: 3500,
+        },
+        |_| {
+            h.wait(|_| view(&h, &editor, "# Unsaved preview", false), 8)?;
+            // Preview follows this tab's file even if Neovim is showing another buffer.
+            let original = expression(
+                &h,
+                &editor,
+                "luaeval('(function() local original = vim.api.nvim_get_current_buf(); vim.api.nvim_buf_set_lines(original, 0, 1, false, {\"# Original buffer preview\"}); local other = vim.api.nvim_create_buf(false, true); vim.api.nvim_buf_set_lines(other, 0, -1, false, {\"# Wrong buffer\"}); vim.bo[other].modified = false; vim.api.nvim_set_current_buf(other); return original end)()')",
+            )?;
+            h.wait(|_| view(&h, &editor, "# Original buffer preview", false), 8)?;
+            expression(
+                &h,
+                &editor,
+                &format!(
+                    "luaeval('vim.api.nvim_set_current_buf({})')",
+                    original.parse::<u64>()?
+                ),
+            )?;
+            Ok(())
+        },
+    )?;
     h.assert_pids(&[shell.clone(), editor.clone()])?;
     ensure!(
         sessions(&h.state()?).len() == 2,
         "Mode switching or restart created another editor"
     );
 
-    plain(
-        &h,
-        o,
-        "back-to-edit",
-        json!([
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "back-to-edit",
+        actions: json!([
             {"at_ms":800,"target":"markdown-mode:Edit"},
             {"at_ms":1800,"target":"editor-terminal","input":"gg0C# Back in editor\u{1b}"}
         ]),
-        3200,
-    )?;
+        after: 3200,
+    })?;
     ensure!(
         expression(&h, &editor, "getline(1)")? == "# Back in editor",
         "Edit mode did not reattach the original editor"
@@ -255,39 +271,52 @@ pub fn run(o: &Options) -> Result<()> {
         "Mode switching changed the file on disk"
     );
 
-    capture(&h, o, "restored-edit", json!([]), 2200, |_| {
-        h.wait(
-            |_| {
-                gui(&h).is_ok_and(|snapshot| {
-                    snapshot
-                        .get("markdown_modes")
-                        .and_then(|modes| modes.get(id(&editor)))
-                        .is_some_and(|mode| mode == "Edit")
-                        && snapshot
-                            .get("visible_terminals")
-                            .and_then(Value::as_array)
-                            .is_some_and(|ids| editor.get("id").is_some_and(|id| ids.contains(id)))
-                        && snapshot
-                            .get("markdown")
-                            .and_then(|markdown| markdown.get(id(&editor)))
-                            .and_then(|markdown| markdown.get("visible"))
-                            .is_some_and(|visible| visible.as_bool() == Some(false))
-                })
-            },
-            8,
-        )?;
-        Ok(())
-    })?;
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "restored-edit",
+            actions: json!([]),
+            after: 2200,
+        },
+        |_| {
+            h.wait(
+                |_| {
+                    gui(&h).is_ok_and(|snapshot| {
+                        snapshot
+                            .get("markdown_modes")
+                            .and_then(|modes| modes.get(id(&editor)))
+                            .is_some_and(|mode| mode == "Edit")
+                            && snapshot
+                                .get("visible_terminals")
+                                .and_then(Value::as_array)
+                                .is_some_and(|ids| {
+                                    editor.get("id").is_some_and(|id| ids.contains(id))
+                                })
+                            && snapshot
+                                .get("markdown")
+                                .and_then(|markdown| markdown.get(id(&editor)))
+                                .and_then(|markdown| markdown.get("visible"))
+                                .is_some_and(|visible| visible.as_bool() == Some(false))
+                    })
+                },
+                8,
+            )?;
+            Ok(())
+        },
+    )?;
 
     capture(
-        &h,
-        o,
-        "paused-unsaved-refresh",
-        json!([
-            {"at_ms":700,"target":"markdown-mode:Preview"},
-            {"at_ms":2500,"target":"markdown-refresh"}
-        ]),
-        4000,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "paused-unsaved-refresh",
+            actions: json!([
+                {"at_ms":700,"target":"markdown-mode:Preview"},
+                {"at_ms":2500,"target":"markdown-refresh"}
+            ]),
+            after: 4000,
+        },
         |_| {
             h.wait(|_| view(&h, &editor, "# Back in editor", false), 8)?;
             h.write(
@@ -329,32 +358,32 @@ pub fn run(o: &Options) -> Result<()> {
     } else {
         "workspace-close:read me ' 日本.md".into()
     };
-    plain(
-        &h,
-        o,
-        "cancel-dirty-preview-close",
-        json!([
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "cancel-dirty-preview-close",
+        actions: json!([
             {"at_ms":800,"target":"markdown-mode:Preview"},
             {"at_ms":1700,"target":close_target},
             {"at_ms":2600,"target":"Cancel"}
         ]),
-        3500,
-    )?;
+        after: 3500,
+    })?;
     h.assert_pids(&[shell.clone(), editor.clone()])?;
     ensure!(
         fs::read_to_string(&path)? == text,
         "Cancelling preview close saved or discarded changes"
     );
-    plain(
-        &h,
-        o,
-        "save-dirty-preview-close",
-        json!([
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "save-dirty-preview-close",
+        actions: json!([
             {"at_ms":1000,"target":close_target},
             {"at_ms":1900,"target":"Save and close"}
         ]),
-        3300,
-    )?;
+        after: 3300,
+    })?;
     h.wait(|s| session_closed(s, id(&editor)), 5)?;
     ensure!(
         fs::read_to_string(&path)?.starts_with("# Back in editor\n"),
@@ -364,11 +393,13 @@ pub fn run(o: &Options) -> Result<()> {
     let discard_text = "# Keep on disk\n";
     fs::write(&discard_path, discard_text)?;
     capture(
-        &h,
-        o,
-        "discard-dirty-preview-open",
-        json!([{"at_ms":1000,"target":"explorer-file:discard.md"}]),
-        3200,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "discard-dirty-preview-open",
+            actions: json!([{"at_ms":1000,"target":"explorer-file:discard.md"}]),
+            after: 3200,
+        },
         |_| {
             let state = h.wait(
                 |st| {
@@ -417,16 +448,16 @@ pub fn run(o: &Options) -> Result<()> {
     } else {
         "workspace-close:discard.md".into()
     };
-    plain(
-        &h,
-        o,
-        "discard-dirty-preview-close",
-        json!([
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "discard-dirty-preview-close",
+        actions: json!([
             {"at_ms":800,"target":discard_close},
             {"at_ms":2000,"target":"Discard changes"}
         ]),
-        3500,
-    )?;
+        after: 3500,
+    })?;
     h.wait(|s| session_closed(s, id(&discard_editor)), 5)?;
     ensure!(
         fs::read_to_string(&discard_path)? == discard_text,
@@ -468,14 +499,16 @@ pub fn busy(o: &Options) -> Result<()> {
         "vim.api.nvim_create_autocmd('VimEnter', { callback = function() vim.api.nvim_echo({{'Fixture pager\\n' .. table.concat(vim.fn.range(1, 200), '\\n')}}, true, {}) end })\n",
     )?;
     capture(
-        &h,
-        o,
-        "waiting",
-        json!([
-            {"at_ms":800,"target":"explorer-file:README.md"},
-            {"at_ms":1500,"target":"markdown-mode:Preview"}
-        ]),
-        4000,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "waiting",
+            actions: json!([
+                {"at_ms":800,"target":"explorer-file:README.md"},
+                {"at_ms":1500,"target":"markdown-mode:Preview"}
+            ]),
+            after: 4000,
+        },
         |_| {
             h.wait(
                 |state| {
@@ -518,20 +551,29 @@ pub fn busy(o: &Options) -> Result<()> {
     );
     h.assert_pids(&[shell.clone(), editor.clone()])?;
     h.write(&mut h.attach(&editor)?, "q\r")?;
-    capture(&h, o, "resumed", json!([]), 3000, |_| {
-        h.wait(
-            |_| {
-                view(&h, &editor, "# Markdown while Neovim waits", false)
-                    && gui(&h).is_ok_and(|s| {
-                        s.get("markdown")
-                            .and_then(|markdown| markdown.get(id(&editor)))
-                            .and_then(|markdown| markdown.get("status"))
-                            .is_some_and(|status| status == "Live preview")
-                    })
-            },
-            8,
-        )?;
-        Ok(())
-    })?;
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "resumed",
+            actions: json!([]),
+            after: 3000,
+        },
+        |_| {
+            h.wait(
+                |_| {
+                    view(&h, &editor, "# Markdown while Neovim waits", false)
+                        && gui(&h).is_ok_and(|s| {
+                            s.get("markdown")
+                                .and_then(|markdown| markdown.get(id(&editor)))
+                                .and_then(|markdown| markdown.get("status"))
+                                .is_some_and(|status| status == "Live preview")
+                        })
+                },
+                8,
+            )?;
+            Ok(())
+        },
+    )?;
     h.assert_pids(&[shell, editor])
 }

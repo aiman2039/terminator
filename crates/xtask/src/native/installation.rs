@@ -1,4 +1,5 @@
 //! Exercise recovery in the native GUI, using only a disposable daemon.
+use super::CaptureInput;
 use super::{
     Duration, Harness, Options, PathBuf, Process, Result, Value, bin, capture, ensure, fs, id,
     json, reviews, save_prefs, session, sessions, thread, wait_child,
@@ -21,20 +22,29 @@ fn restart_failure_is_visible(o: &Options) -> Result<()> {
             "generation":h.state()?.get("generation").unwrap_or(&Value::Null), "error":"Fixture session did not stop"
         }))?,
     )?;
-    capture(&h, o, "restart-failure-visible", json!([]), 2300, |_| {
-        h.wait(
-            |_| {
-                gui(&h).is_ok_and(|s| {
-                    s.get("installation")
-                        .and_then(|installation| installation.get("error"))
-                        .and_then(Value::as_str)
-                        .is_some_and(|error| error.contains("Fixture session did not stop"))
-                })
-            },
-            8,
-        )?;
-        Ok(())
-    })?;
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "restart-failure-visible",
+            actions: json!([]),
+            after: 2300,
+        },
+        |_| {
+            h.wait(
+                |_| {
+                    gui(&h).is_ok_and(|s| {
+                        s.get("installation")
+                            .and_then(|installation| installation.get("error"))
+                            .and_then(Value::as_str)
+                            .is_some_and(|error| error.contains("Fixture session did not stop"))
+                    })
+                },
+                8,
+            )?;
+            Ok(())
+        },
+    )?;
     h.assert_pids(&[shell])
 }
 
@@ -75,14 +85,16 @@ pub fn run(o: &Options) -> Result<()> {
     );
     fs::remove_file(helper)?;
     capture(
-        &h,
-        o,
-        "live-sessions-preserved",
-        json!([
-            {"at_ms":700,"target":"fix-installation"},
-            {"at_ms":1100,"target":"show-stop-all-command"}
-        ]),
-        2200,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "live-sessions-preserved",
+            actions: json!([
+                {"at_ms":700,"target":"fix-installation"},
+                {"at_ms":1100,"target":"show-stop-all-command"}
+            ]),
+            after: 2200,
+        },
         |_| {
             h.wait(
                 |_| {
@@ -117,13 +129,15 @@ pub fn run(o: &Options) -> Result<()> {
         },
     )?;
     capture(
-        &h,
-        o,
-        "repaired",
-        json!([
-            {"at_ms":700,"target":"fix-installation"}
-        ]),
-        5500,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "repaired",
+            actions: json!([
+                {"at_ms":700,"target":"fix-installation"}
+            ]),
+            after: 5500,
+        },
         |_| {
             h.wait(
                 |_| {
@@ -226,14 +240,16 @@ fn restart_cancel(o: &Options) -> Result<()> {
     );
     fs::remove_file(helper)?;
     capture(
-        &h,
-        o,
-        "restart-cancel",
-        json!([
-            {"at_ms":800,"target":"restart-session-service"},
-            {"at_ms":1300,"target":"cancel-restart-session"}
-        ]),
-        2200,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "restart-cancel",
+            actions: json!([
+                {"at_ms":800,"target":"restart-session-service"},
+                {"at_ms":1300,"target":"cancel-restart-session"}
+            ]),
+            after: 2200,
+        },
         |_| {
             h.wait(
                 |_| {
@@ -551,11 +567,13 @@ fn manual_recovery(o: &Options) -> Result<()> {
     let mut paths = Paths::at(h.root.clone());
     paths.runtime = h.root.join("legacy");
     capture(
-        &h,
-        o,
-        "manual-recovery",
-        json!([{"at_ms":700,"target":"fix-installation"}]),
-        2200,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "manual-recovery",
+            actions: json!([{"at_ms":700,"target":"fix-installation"}]),
+            after: 2200,
+        },
         |_| {
             h.wait(
                 |_| {
@@ -622,26 +640,35 @@ fn connection_recovery(o: &Options) -> Result<()> {
             thread::sleep(Duration::from_millis(30));
         }
     };
-    capture(&h, o, "reconnected", json!([]), 2200, |_| {
-        wait_connection(true)?;
-        thread::sleep(Duration::from_millis(300));
-        let before = h.state()?;
-        let socket = Paths::at(h.root.clone()).socket();
-        let hidden = socket.with_extension("temporarily-unavailable");
-        fs::rename(&socket, &hidden)?;
-        let disconnected = wait_connection(false);
-        fs::rename(hidden, socket)?;
-        disconnected?;
-        wait_connection(true)?;
-        let after = h.state()?;
-        ensure!(
-            before.get("generation").unwrap_or(&Value::Null)
-                == after.get("generation").unwrap_or(&Value::Null)
-                && before.get("revision").unwrap_or(&Value::Null)
-                    == after.get("revision").unwrap_or(&Value::Null),
-            "Reconnection fixture must retain the exact daemon snapshot"
-        );
-        Ok(())
-    })?;
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "reconnected",
+            actions: json!([]),
+            after: 2200,
+        },
+        |_| {
+            wait_connection(true)?;
+            thread::sleep(Duration::from_millis(300));
+            let before = h.state()?;
+            let socket = Paths::at(h.root.clone()).socket();
+            let hidden = socket.with_extension("temporarily-unavailable");
+            fs::rename(&socket, &hidden)?;
+            let disconnected = wait_connection(false);
+            fs::rename(hidden, socket)?;
+            disconnected?;
+            wait_connection(true)?;
+            let after = h.state()?;
+            ensure!(
+                before.get("generation").unwrap_or(&Value::Null)
+                    == after.get("generation").unwrap_or(&Value::Null)
+                    && before.get("revision").unwrap_or(&Value::Null)
+                        == after.get("revision").unwrap_or(&Value::Null),
+                "Reconnection fixture must retain the exact daemon snapshot"
+            );
+            Ok(())
+        },
+    )?;
     Ok(())
 }

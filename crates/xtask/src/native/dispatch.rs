@@ -30,14 +30,25 @@ impl Default for Options {
         }
     }
 }
+/// One native GUI capture: the fixture actions to replay and when to take the screenshot.
+pub(crate) struct CaptureInput<'a> {
+    pub h: &'a Harness,
+    pub opts: &'a Options,
+    pub name: &'a str,
+    pub actions: Value,
+    pub after: u64,
+}
 pub(crate) fn capture(
-    h: &Harness,
-    opts: &Options,
-    name: &str,
-    actions: Value,
-    after: u64,
+    input: CaptureInput<'_>,
     during: impl FnOnce(&mut Child) -> Result<()>,
 ) -> Result<String> {
+    let CaptureInput {
+        h,
+        opts,
+        name,
+        actions,
+        after,
+    } = input;
     let directory = std::path::absolute(&opts.output)?;
     fs::create_dir_all(&directory)?;
     let path = directory.join(format!("{name}.png"));
@@ -84,14 +95,8 @@ pub(crate) fn capture(
     );
     Ok(logs)
 }
-pub(crate) fn plain(
-    h: &Harness,
-    o: &Options,
-    name: &str,
-    actions: Value,
-    after: u64,
-) -> Result<String> {
-    capture(h, o, name, actions, after, |_| Ok(()))
+pub(crate) fn plain(input: CaptureInput<'_>) -> Result<String> {
+    capture(input, |_| Ok(()))
 }
 pub(crate) fn prefs(h: &Harness) -> Result<Value> {
     Ok(serde_json::from_slice(&fs::read(
@@ -239,26 +244,26 @@ fn run_case(case: &str, mut opts: Options) -> Result<()> {
             let (h, _, originals, _) = setup("pane-close")?;
             let first = originals.first().ok_or_else(|| anyhow!("missing pane"))?;
             let target = format!("pane-close:{}", id(first));
-            plain(
-                &h,
-                &opts,
-                "confirmation",
-                json!([
+            plain(CaptureInput {
+                h: &h,
+                opts: &opts,
+                name: "confirmation",
+                actions: json!([
                     {"at_ms":1100,"target":target}
                 ]),
-                2500,
-            )?;
+                after: 2500,
+            })?;
             h.assert_pids(&originals)?;
-            plain(
-                &h,
-                &opts,
-                "backgrounded",
-                json!([
+            plain(CaptureInput {
+                h: &h,
+                opts: &opts,
+                name: "backgrounded",
+                actions: json!([
                     {"at_ms":1100,"target":target},
                     {"at_ms":1800,"target":"close-session-keep"}
                 ]),
-                3000,
-            )?;
+                after: 3000,
+            })?;
             let state = h.state()?;
             let remaining = session_ids(
                 state
@@ -276,15 +281,15 @@ fn run_case(case: &str, mut opts: Options) -> Result<()> {
         }
         "popup" => {
             let (h, _, originals, _) = setup("popup")?;
-            plain(
-                &h,
-                &opts,
-                "shell-close-dialog",
-                json!([
+            plain(CaptureInput {
+                h: &h,
+                opts: &opts,
+                name: "shell-close-dialog",
+                actions: json!([
                     {"at_ms":1100,"target":"workspace-close:Terminal 1"}
                 ]),
-                3000,
-            )?;
+                after: 3000,
+            })?;
             h.assert_pids(&originals)?;
         }
         "inline-rename" => inline_rename(&opts)?,

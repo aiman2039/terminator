@@ -26,8 +26,8 @@ pub(super) use super::harness::{
     wait_child,
 };
 pub(super) use anyhow::{Context, Result, ensure};
+pub(super) use dispatch::{CaptureInput, capture, plain, prefs, save_prefs, setup};
 pub use dispatch::{Options, run};
-pub(super) use dispatch::{capture, plain, prefs, save_prefs, setup};
 pub(super) use serde_json::{Value, json};
 pub(super) use std::{
     fs,

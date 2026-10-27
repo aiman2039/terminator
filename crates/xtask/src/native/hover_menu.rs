@@ -1,4 +1,5 @@
 //! Adjacent file targets must not replace an open terminal file menu.
+use super::CaptureInput;
 use super::{Options, capture};
 use crate::harness::{Harness, id, sessions};
 use anyhow::{Result, ensure};
@@ -84,7 +85,16 @@ pub fn run(opts: &Options) -> Result<()> {
     ];
     for (name, actions) in cases {
         reset()?;
-        let logs = capture(&h, opts, name, actions, 4000, |_| Ok(()))?;
+        let logs = capture(
+            CaptureInput {
+                h: &h,
+                opts,
+                name,
+                actions,
+                after: 4000,
+            },
+            |_| Ok(()),
+        )?;
         if matches!(name, "hover-only" | "held-modifier-hover") {
             ensure!(
                 !logs.contains("Terminal file menu opened:"),
@@ -115,26 +125,28 @@ pub fn run(opts: &Options) -> Result<()> {
     h.env
         .insert("TERMINATOR_TEST_CAPTURE_COPY".into(), "1".into());
     let logs = capture(
-        &h,
-        opts,
-        "copy-selection",
-        json!([
-            {"at_ms":900,"target":"terminal","hold":true,"hover_offset":[1,8]},
-            {"at_ms":1100,"target":"terminal","hover":true,"hover_offset":[300,8]},
-            {"at_ms":1300,"target":"terminal","release_button":true,"hover_offset":[300,8]},
-            {"at_ms":1500,"target":"terminal","hover":true,"hover_offset":[45,8]},
-            {"at_ms":2000,"target":"terminal","hover":true,"hover_offset":[45,8],"modifier":"ctrl"},
-            {"at_ms":2400,"target":"terminal","hover":true,"hover_offset":[45,8],"key":"C","ctrl":!cfg!(target_os = "macos"),"command":true,"shift":!cfg!(target_os = "macos")},
-            {"at_ms":2800,"target":"terminal","hover":true,"hover_offset":[45,8],"key":"C","ctrl":!cfg!(target_os = "macos"),"command":true,"shift":!cfg!(target_os = "macos")},
-            {"at_ms":3100,"target":"terminal","hover":true,"hover_offset":[45,30]},
-            {"at_ms":3500,"target":"terminal","hover":true,"hover_offset":[45,30],"key":"C","ctrl":!cfg!(target_os = "macos"),"command":true,"shift":!cfg!(target_os = "macos")},
-            {"at_ms":3900,"target":"terminal-file-menu-close"},
-            {"at_ms":4200,"target":"explorer-search"},
-            {"at_ms":4400,"target":"explorer-search","text":"FIELD COPY SAMPLE"},
-            {"at_ms":4700,"target":"explorer-search","key":"A","command":true},
-            {"at_ms":5000,"target":"explorer-search","copy":true}
-        ]),
-        5400,
+        CaptureInput {
+            h: &h,
+            opts,
+            name: "copy-selection",
+            actions: json!([
+                {"at_ms":900,"target":"terminal","hold":true,"hover_offset":[1,8]},
+                {"at_ms":1100,"target":"terminal","hover":true,"hover_offset":[300,8]},
+                {"at_ms":1300,"target":"terminal","release_button":true,"hover_offset":[300,8]},
+                {"at_ms":1500,"target":"terminal","hover":true,"hover_offset":[45,8]},
+                {"at_ms":2000,"target":"terminal","hover":true,"hover_offset":[45,8],"modifier":"ctrl"},
+                {"at_ms":2400,"target":"terminal","hover":true,"hover_offset":[45,8],"key":"C","ctrl":!cfg!(target_os = "macos"),"command":true,"shift":!cfg!(target_os = "macos")},
+                {"at_ms":2800,"target":"terminal","hover":true,"hover_offset":[45,8],"key":"C","ctrl":!cfg!(target_os = "macos"),"command":true,"shift":!cfg!(target_os = "macos")},
+                {"at_ms":3100,"target":"terminal","hover":true,"hover_offset":[45,30]},
+                {"at_ms":3500,"target":"terminal","hover":true,"hover_offset":[45,30],"key":"C","ctrl":!cfg!(target_os = "macos"),"command":true,"shift":!cfg!(target_os = "macos")},
+                {"at_ms":3900,"target":"terminal-file-menu-close"},
+                {"at_ms":4200,"target":"explorer-search"},
+                {"at_ms":4400,"target":"explorer-search","text":"FIELD COPY SAMPLE"},
+                {"at_ms":4700,"target":"explorer-search","key":"A","command":true},
+                {"at_ms":5000,"target":"explorer-search","copy":true}
+            ]),
+            after: 5400,
+        },
         |_| Ok(()),
     )?;
     ensure!(
@@ -183,23 +195,25 @@ pub fn run(opts: &Options) -> Result<()> {
     )?;
     let target = format!("terminal:{}", id(&shell));
     let logs = capture(
-        &h,
-        opts,
-        "copy-hovered-path",
-        json!([
-            {"at_ms":650,"target":format!("terminal:{}",id(&other))},
-            {"at_ms":900,"target":target,"hover":true,"hover_offset":[45,8]},
-            {"at_ms":1100,"target":target,"hover":true,"hover_offset":[45,8],"copy":true},
-            {"at_ms":1400,"target":target,"hover":true,"hover_offset":[45,8],"modifier":"ctrl"},
-            {"at_ms":1700,"target":target,"hover":true,"hover_offset":[45,8],"key":"C","ctrl":!cfg!(target_os = "macos"),"command":true,"shift":!cfg!(target_os = "macos")},
-            {"at_ms":2000,"target":target,"hover":true,"hover_offset":[45,30]},
-            {"at_ms":2400,"target":target,"hover":true,"hover_offset":[45,30],"key":"C","ctrl":!cfg!(target_os = "macos"),"command":true,"shift":!cfg!(target_os = "macos")},
-            {"at_ms":2800,"target":target,"hover":true,"hover_offset":[45,30],"key":"C","ctrl":!cfg!(target_os = "macos"),"command":true,"shift":!cfg!(target_os = "macos")},
-            {"at_ms":3100,"target":"terminal-file-menu-close"},
-            {"at_ms":3500,"target":target,"hover":true,"hover_offset":[300,8]},
-            {"at_ms":3900,"target":target,"hover":true,"hover_offset":[300,8],"key":"C","ctrl":true}
-        ]),
-        4400,
+        CaptureInput {
+            h: &h,
+            opts,
+            name: "copy-hovered-path",
+            actions: json!([
+                {"at_ms":650,"target":format!("terminal:{}",id(&other))},
+                {"at_ms":900,"target":target,"hover":true,"hover_offset":[45,8]},
+                {"at_ms":1100,"target":target,"hover":true,"hover_offset":[45,8],"copy":true},
+                {"at_ms":1400,"target":target,"hover":true,"hover_offset":[45,8],"modifier":"ctrl"},
+                {"at_ms":1700,"target":target,"hover":true,"hover_offset":[45,8],"key":"C","ctrl":!cfg!(target_os = "macos"),"command":true,"shift":!cfg!(target_os = "macos")},
+                {"at_ms":2000,"target":target,"hover":true,"hover_offset":[45,30]},
+                {"at_ms":2400,"target":target,"hover":true,"hover_offset":[45,30],"key":"C","ctrl":!cfg!(target_os = "macos"),"command":true,"shift":!cfg!(target_os = "macos")},
+                {"at_ms":2800,"target":target,"hover":true,"hover_offset":[45,30],"key":"C","ctrl":!cfg!(target_os = "macos"),"command":true,"shift":!cfg!(target_os = "macos")},
+                {"at_ms":3100,"target":"terminal-file-menu-close"},
+                {"at_ms":3500,"target":target,"hover":true,"hover_offset":[300,8]},
+                {"at_ms":3900,"target":target,"hover":true,"hover_offset":[300,8],"key":"C","ctrl":true}
+            ]),
+            after: 4400,
+        },
         |_| Ok(()),
     )?;
     let copied = format!("Fixture copied text: {:?}", first.display().to_string());
@@ -243,16 +257,18 @@ pub fn run(opts: &Options) -> Result<()> {
         "printf '\\033[2J\\033[Hhttps://example.com/docs\\n'\n",
     )?;
     let logs = capture(
-        &h,
-        opts,
-        "url-click-menu",
-        json!([
-            {"at_ms":1000,"target":"terminal","hover":true},
-            {"at_ms":1700,"target":"terminal","hover_offset":[45,10]},
-            {"at_ms":2200,"target":"terminal","hover":true,"copy":true},
-            {"at_ms":2800,"target":"terminal-file-menu-close"}
-        ]),
-        3500,
+        CaptureInput {
+            h: &h,
+            opts,
+            name: "url-click-menu",
+            actions: json!([
+                {"at_ms":1000,"target":"terminal","hover":true},
+                {"at_ms":1700,"target":"terminal","hover_offset":[45,10]},
+                {"at_ms":2200,"target":"terminal","hover":true,"copy":true},
+                {"at_ms":2800,"target":"terminal-file-menu-close"}
+            ]),
+            after: 3500,
+        },
         |_| Ok(()),
     )?;
     ensure!(

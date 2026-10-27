@@ -1,3 +1,4 @@
+use super::CaptureInput;
 use super::{
     Harness, Options, PathBuf, Result, Value, capture, ensure, fs, id, json, prefs, session_ids,
     sessions,
@@ -17,18 +18,27 @@ fn wait_sidebar(h: &Harness, ids: &Value) -> Result<()> {
 fn sort_sidebar(h: &Harness, o: &Options, first: &Value, second: &Value) -> Result<()> {
     let asc = json!([first["id"].clone(), second["id"].clone()]);
     let desc = json!([second["id"].clone(), first["id"].clone()]);
-    capture(h, o, "sorted-name-asc", json!([]), 2200, |_| {
-        wait_sidebar(h, &asc)
-    })?;
     capture(
-        h,
-        o,
-        "sorted-name-desc",
-        json!([
-            {"at_ms":800,"target":"project-sort"},
-            {"at_ms":1600,"target":"sort-name-desc"}
-        ]),
-        3200,
+        CaptureInput {
+            h,
+            opts: o,
+            name: "sorted-name-asc",
+            actions: json!([]),
+            after: 2200,
+        },
+        |_| wait_sidebar(h, &asc),
+    )?;
+    capture(
+        CaptureInput {
+            h,
+            opts: o,
+            name: "sorted-name-desc",
+            actions: json!([
+                {"at_ms":800,"target":"project-sort"},
+                {"at_ms":1600,"target":"sort-name-desc"}
+            ]),
+            after: 3200,
+        },
         |_| wait_sidebar(h, &desc),
     )?;
     ensure!(
@@ -37,19 +47,28 @@ fn sort_sidebar(h: &Harness, o: &Options, first: &Value, second: &Value) -> Resu
             .is_some_and(|sort| sort == "name_desc"),
         "Name Z → A did not persist"
     );
-    capture(h, o, "sorted-name-desc-restart", json!([]), 2200, |_| {
-        wait_sidebar(h, &desc)
-    })?;
     capture(
-        h,
-        o,
-        "sorted-latest-activity",
-        json!([
-            {"at_ms":800,"target":"project-sort"},
-            {"at_ms":1600,"target":"sort-latest-activity"},
-            {"at_ms":2400,"target":format!("project-row:{}", id(second))}
-        ]),
-        4200,
+        CaptureInput {
+            h,
+            opts: o,
+            name: "sorted-name-desc-restart",
+            actions: json!([]),
+            after: 2200,
+        },
+        |_| wait_sidebar(h, &desc),
+    )?;
+    capture(
+        CaptureInput {
+            h,
+            opts: o,
+            name: "sorted-latest-activity",
+            actions: json!([
+                {"at_ms":800,"target":"project-sort"},
+                {"at_ms":1600,"target":"sort-latest-activity"},
+                {"at_ms":2400,"target":format!("project-row:{}", id(second))}
+            ]),
+            after: 4200,
+        },
         |_| wait_sidebar(h, &asc),
     )?;
     ensure!(
@@ -58,9 +77,16 @@ fn sort_sidebar(h: &Harness, o: &Options, first: &Value, second: &Value) -> Resu
             .is_some_and(|sort| sort == "latest_activity"),
         "Latest activity did not persist"
     );
-    capture(h, o, "sorted-latest-restart", json!([]), 2200, |_| {
-        wait_sidebar(h, &asc)
-    })?;
+    capture(
+        CaptureInput {
+            h,
+            opts: o,
+            name: "sorted-latest-restart",
+            actions: json!([]),
+            after: 2200,
+        },
+        |_| wait_sidebar(h, &asc),
+    )?;
     Ok(())
 }
 pub fn run(o: &Options) -> Result<()> {
@@ -109,14 +135,16 @@ pub fn run(o: &Options) -> Result<()> {
     sort_sidebar(&h, o, &first, &second)?;
 
     capture(
-        &h,
-        o,
-        "removed-active-project",
-        json!([
-            {"at_ms":1000,"target":format!("project-row:{}",id(&first)),"right_click":true},
-            {"at_ms":1700,"target":"Remove project from sidebar"}
-        ]),
-        3200,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "removed-active-project",
+            actions: json!([
+                {"at_ms":1000,"target":format!("project-row:{}",id(&first)),"right_click":true},
+                {"at_ms":1700,"target":"Remove project from sidebar"}
+            ]),
+            after: 3200,
+        },
         |_| {
             h.wait(
                 |_| {
@@ -156,26 +184,37 @@ pub fn run(o: &Options) -> Result<()> {
         "Removing a project discarded unsaved edits"
     );
 
-    capture(&h, o, "removed-after-restart", json!([]), 2200, |_| {
-        h.wait(
-            |_| {
-                gui(&h).is_ok_and(|s| {
-                    s.get("sidebar_projects").unwrap_or(&Value::Null) == &json!([id(&second)])
-                })
-            },
-            8,
-        )?;
-        Ok(())
-    })?;
     capture(
-        &h,
-        o,
-        "all-projects-removed",
-        json!([
-            {"at_ms":900,"target":format!("project-row:{}",id(&second)),"right_click":true},
-            {"at_ms":1600,"target":"Remove project from sidebar"}
-        ]),
-        2800,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "removed-after-restart",
+            actions: json!([]),
+            after: 2200,
+        },
+        |_| {
+            h.wait(
+                |_| {
+                    gui(&h).is_ok_and(|s| {
+                        s.get("sidebar_projects").unwrap_or(&Value::Null) == &json!([id(&second)])
+                    })
+                },
+                8,
+            )?;
+            Ok(())
+        },
+    )?;
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "all-projects-removed",
+            actions: json!([
+                {"at_ms":900,"target":format!("project-row:{}",id(&second)),"right_click":true},
+                {"at_ms":1600,"target":"Remove project from sidebar"}
+            ]),
+            after: 2800,
+        },
         |_| {
             h.wait(
                 |_| {
@@ -189,28 +228,39 @@ pub fn run(o: &Options) -> Result<()> {
             Ok(())
         },
     )?;
-    capture(&h, o, "empty-after-restart", json!([]), 2200, |_| {
-        h.wait(
-            |_| {
-                gui(&h).is_ok_and(|s| {
-                    s.get("sidebar_projects").unwrap_or(&Value::Null) == &json!([])
-                        && s.get("selected_project").is_none_or(Value::is_null)
-                })
-            },
-            8,
-        )?;
-        Ok(())
-    })?;
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "empty-after-restart",
+            actions: json!([]),
+            after: 2200,
+        },
+        |_| {
+            h.wait(
+                |_| {
+                    gui(&h).is_ok_and(|s| {
+                        s.get("sidebar_projects").unwrap_or(&Value::Null) == &json!([])
+                            && s.get("selected_project").is_none_or(Value::is_null)
+                    })
+                },
+                8,
+            )?;
+            Ok(())
+        },
+    )?;
 
     capture(
-        &h,
-        o,
-        "restored-project",
-        json!([
-            {"at_ms":800,"target":"removed-projects"},
-            {"at_ms":1600,"target":format!("restore-project:{}",id(&first))}
-        ]),
-        3200,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "restored-project",
+            actions: json!([
+                {"at_ms":800,"target":"removed-projects"},
+                {"at_ms":1600,"target":format!("restore-project:{}",id(&first))}
+            ]),
+            after: 3200,
+        },
         |_| {
             h.wait(
                 |_| {

@@ -1,3 +1,4 @@
+use super::CaptureInput;
 use super::{
     Context, Duration, Harness, Options, Path, PathBuf, Result, Value, ensure, fs, git, id, json,
     output, plain, save_prefs, session_closed, session_ids, sessions, thread,
@@ -167,13 +168,13 @@ pub fn run(o: &Options) -> Result<()> {
         &h,
         &json!({"version":1,"tool":"Git","visible":true,"typography_migrated":true}),
     )?;
-    plain(
-        &h,
-        o,
-        "review",
-        json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1600,"target":"Open changes"}]),
-        3500,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "review",
+        actions: json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1600,"target":"Open changes"}]),
+        after: 3500,
+    })?;
     let state = h.state()?;
     let review = sessions(&state)
         .iter()
@@ -182,16 +183,16 @@ pub fn run(o: &Options) -> Result<()> {
         .context("Native review not created")?;
     let review_id = id(review).to_string();
     let session_count = sessions(&state).len();
-    plain(
-        &h,
-        o,
-        "review-reopen",
-        json!([
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "review-reopen",
+        actions: json!([
             {"at_ms":1200,"target":"git-file-review.rs","right_click":true},
             {"at_ms":1600,"target":"Open changes"}
         ]),
-        3200,
-    )?;
+        after: 3200,
+    })?;
     ensure!(
         sessions(&h.state()?).len() == session_count,
         "Reopening the same Neovim review created another session"
@@ -221,13 +222,13 @@ pub fn run(o: &Options) -> Result<()> {
             == 2,
         "Review not in top-level tab"
     );
-    plain(
-        &h,
-        o,
-        "review-closed",
-        json!([{"at_ms":1200,"target":"workspace-close:Diff: review.rs"}]),
-        3000,
-    )?;
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "review-closed",
+        actions: json!([{"at_ms":1200,"target":"workspace-close:Diff: review.rs"}]),
+        after: 3000,
+    })?;
     h.wait(|s| session_closed(s, id(review)), 5)?;
     ensure!(
         session_ids(
@@ -250,17 +251,17 @@ pub fn run(o: &Options) -> Result<()> {
         .insert("review_mode".into(), json!("native"));
     h.rpc(json!({"Settings":settings}))?;
     let before_native = sessions(&h.state()?).len();
-    plain(
-        &h,
-        o,
-        "native-side-by-side",
-        json!([
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "native-side-by-side",
+        actions: json!([
             {"at_ms":1200,"target":"git-file-review.rs","right_click":true},
             {"at_ms":1600,"target":"Open changes"},
             {"at_ms":2200,"target":"diff-side-by-side"}
         ]),
-        3500,
-    )?;
+        after: 3500,
+    })?;
     ensure!(
         sessions(&h.state()?).len() == before_native,
         "Native diff allocated a PTY"
@@ -316,38 +317,40 @@ pub fn hunks(o: &Options) -> Result<()> {
     )?;
     let before = sessions(&h.state()?).len();
     let log = super::capture(
-        &h,
-        o,
-        "diff-hunks",
-        json!([
-            {"at_ms":1200,"target":"git-file-hunks.txt","right_click":true},
-            {"at_ms":1600,"target":"Open changes"},
-            {"at_ms":2200,"target":"diff-next"},
-            {"at_ms":2600,"target":"diff-hunk-action-1"},
-            {"at_ms":3700,"target":"diff-previous"},
-            {"at_ms":4100,"target":"diff-hunk-discard-0"},
-            {"at_ms":4500,"target":"diff-confirm-discard"},
-            {"at_ms":5900,"target":"diff-undo"},
-            {"at_ms":6500,"target":"diff-side-by-side"},
-            {"at_ms":7100,"target":"diff-marker-1"},
-                {"at_ms":8200,"target":"diff-marker-0"},
-                {"at_ms":8600,"target":"diff-menu"},
-                {"at_ms":9000,"target":"Collapse unchanged lines"},
-                {"at_ms":9700,"target":"diff-right-editor"},
-                {"at_ms":10100,"target":"diff-right-editor","text":edited},
-                {"at_ms":10700,"target":"diff-edit-save"},
-                {"at_ms":11700,"target":"diff-undo"},
-                {"at_ms":12700,"target":"diff-unified"},
-                {"at_ms":13000,"target":"diff-unified-edit-1"},
-                {"at_ms":13300,"target":"diff-unified-edit-1","input":"unified edit"},
-                {"at_ms":13900,"target":"diff-unified-edit-1","key":"Z","command":true},
-                {"at_ms":14500,"target":"diff-unified-edit-1"},
-                {"at_ms":14800,"target":"diff-unified-edit-1","key":"A","command":true},
-                {"at_ms":15100,"target":"diff-unified-edit-1","copy":true},
-                {"at_ms":15400,"target":"diff-unified-edit-1","input":"unified edit"},
-                {"at_ms":16000,"target":"diff-edit-save"}
-        ]),
-        17100,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "diff-hunks",
+            actions: json!([
+                {"at_ms":1200,"target":"git-file-hunks.txt","right_click":true},
+                {"at_ms":1600,"target":"Open changes"},
+                {"at_ms":2200,"target":"diff-next"},
+                {"at_ms":2600,"target":"diff-hunk-action-1"},
+                {"at_ms":3700,"target":"diff-previous"},
+                {"at_ms":4100,"target":"diff-hunk-discard-0"},
+                {"at_ms":4500,"target":"diff-confirm-discard"},
+                {"at_ms":5900,"target":"diff-undo"},
+                {"at_ms":6500,"target":"diff-side-by-side"},
+                {"at_ms":7100,"target":"diff-marker-1"},
+                    {"at_ms":8200,"target":"diff-marker-0"},
+                    {"at_ms":8600,"target":"diff-menu"},
+                    {"at_ms":9000,"target":"Collapse unchanged lines"},
+                    {"at_ms":9700,"target":"diff-right-editor"},
+                    {"at_ms":10100,"target":"diff-right-editor","text":edited},
+                    {"at_ms":10700,"target":"diff-edit-save"},
+                    {"at_ms":11700,"target":"diff-undo"},
+                    {"at_ms":12700,"target":"diff-unified"},
+                    {"at_ms":13000,"target":"diff-unified-edit-1"},
+                    {"at_ms":13300,"target":"diff-unified-edit-1","input":"unified edit"},
+                    {"at_ms":13900,"target":"diff-unified-edit-1","key":"Z","command":true},
+                    {"at_ms":14500,"target":"diff-unified-edit-1"},
+                    {"at_ms":14800,"target":"diff-unified-edit-1","key":"A","command":true},
+                    {"at_ms":15100,"target":"diff-unified-edit-1","copy":true},
+                    {"at_ms":15400,"target":"diff-unified-edit-1","input":"unified edit"},
+                    {"at_ms":16000,"target":"diff-edit-save"}
+            ]),
+            after: 17100,
+        },
         |_| {
             h.wait(
                 |_| {
@@ -433,11 +436,11 @@ pub fn file_reuse(o: &Options) -> Result<()> {
         &h,
         &json!({"version":1,"tool":"Explorer","visible":true,"typography_migrated":true}),
     )?;
-    plain(
-        &h,
-        o,
-        "file-reuse",
-        json!([
+    plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "file-reuse",
+        actions: json!([
             {"at_ms":1000,"target":"explorer-file:file.txt"},
             {"at_ms":1800,"target":"explorer-file:file.txt"},
             {"at_ms":2600,"target":"explorer-file:file.txt"},
@@ -448,8 +451,8 @@ pub fn file_reuse(o: &Options) -> Result<()> {
             {"at_ms":5800,"target":"tool-Explorer"},
             {"at_ms":6400,"target":"explorer-file:file.txt"}
         ]),
-        7400,
-    )?;
+        after: 7400,
+    })?;
     let state = h.state()?;
     let layout = state
         .get("projects")
@@ -613,13 +616,13 @@ pub fn legacy(o: &Options) -> Result<()> {
         "TERMINATOR_RUNTIME_DIR".into(),
         h.root.join("legacy").to_string_lossy().into_owned(),
     );
-    let logs = plain(
-        &h,
-        o,
-        "legacy-diff",
-        json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1700,"target":"Open changes"}]),
-        3500,
-    )?;
+    let logs = plain(CaptureInput {
+        h: &h,
+        opts: o,
+        name: "legacy-diff",
+        actions: json!([{"at_ms":1200,"target":"git-file-review.rs","right_click":true},{"at_ms":1700,"target":"Open changes"}]),
+        after: 3500,
+    })?;
     ensure!(
         !logs.contains("Fixture error") && proxy.rejected.load(Ordering::Relaxed) == 0,
         "Sent unsupported request or failed legacy diff: {logs}"

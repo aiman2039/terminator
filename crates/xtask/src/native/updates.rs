@@ -1,5 +1,6 @@
 //! Local bundle-replacement continuity fixture. This does not claim to exercise
 //! Sparkle's signature/notarization/authorization paths; see docs/UPDATES.md.
+use super::CaptureInput;
 use super::{
     Harness, Options, Path, PathBuf, Result, Value, bin, capture, ensure, fs, id, json, output,
     save_prefs,
@@ -170,36 +171,45 @@ pub fn run(o: &Options) -> Result<()> {
         app.join("terminator").to_string_lossy().into(),
     );
     let mut before = None;
-    capture(&h, o, "before-replacement", json!([]), 2600, |_| {
-        h.wait(
-            |_| {
-                snapshot(&h).is_ok_and(|s| {
-                    s.get("selected_project").unwrap_or(&Value::Null)
-                        == first.get("id").unwrap_or(&Value::Null)
-                })
-            },
-            8,
-        )?;
-        let initial = snapshot(&h)?;
-        if cfg!(target_os = "macos") {
-            ensure!(
-                initial
-                    .get("update_menu")
-                    .is_some_and(|menu| menu.as_bool() == Some(true)),
-                "Check for Updates is missing from the application menu"
-            );
-        }
-        if std::env::var_os("TERMINATOR_TEST_SPARKLE_FRAMEWORK").is_some() {
-            ensure!(
-                initial
-                    .get("updater_available")
-                    .is_some_and(|available| available.as_bool() == Some(true)),
-                "Sparkle controller did not load in the isolated app bundle"
-            );
-        }
-        before = Some(identity(&initial));
-        Ok(())
-    })?;
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "before-replacement",
+            actions: json!([]),
+            after: 2600,
+        },
+        |_| {
+            h.wait(
+                |_| {
+                    snapshot(&h).is_ok_and(|s| {
+                        s.get("selected_project").unwrap_or(&Value::Null)
+                            == first.get("id").unwrap_or(&Value::Null)
+                    })
+                },
+                8,
+            )?;
+            let initial = snapshot(&h)?;
+            if cfg!(target_os = "macos") {
+                ensure!(
+                    initial
+                        .get("update_menu")
+                        .is_some_and(|menu| menu.as_bool() == Some(true)),
+                    "Check for Updates is missing from the application menu"
+                );
+            }
+            if std::env::var_os("TERMINATOR_TEST_SPARKLE_FRAMEWORK").is_some() {
+                ensure!(
+                    initial
+                        .get("updater_available")
+                        .is_some_and(|available| available.as_bool() == Some(true)),
+                    "Sparkle controller did not load in the isolated app bundle"
+                );
+            }
+            before = Some(identity(&initial));
+            Ok(())
+        },
+    )?;
     let history = h.history(id(&shell))?;
     for name in ["terminator", "terminator-daemon", "terminator-hook"] {
         let next = app.join(format!("{name}.new"));
@@ -208,23 +218,34 @@ pub fn run(o: &Options) -> Result<()> {
     }
     h.env
         .insert("TERMINATOR_TEST_NATIVE_QUIT".into(), "1".into());
-    capture(&h, o, "after-replacement", json!([]), 2800, |_| {
-        h.wait(
-            |_| snapshot(&h).is_ok_and(|s| Some(identity(&s)) == before),
-            8,
-        )?;
-        h.write(&mut h.attach(&shell)?, "echo INPUT_AFTER_GUI_REPLACEMENT\r")?;
-        Ok(())
-    })?;
     capture(
-        &h,
-        o,
-        "updates-settings",
-        json!([
-            {"at_ms":700,"target":"settings"},
-            {"at_ms":1300,"target":"settings-section:Updates"}
-        ]),
-        2500,
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "after-replacement",
+            actions: json!([]),
+            after: 2800,
+        },
+        |_| {
+            h.wait(
+                |_| snapshot(&h).is_ok_and(|s| Some(identity(&s)) == before),
+                8,
+            )?;
+            h.write(&mut h.attach(&shell)?, "echo INPUT_AFTER_GUI_REPLACEMENT\r")?;
+            Ok(())
+        },
+    )?;
+    capture(
+        CaptureInput {
+            h: &h,
+            opts: o,
+            name: "updates-settings",
+            actions: json!([
+                {"at_ms":700,"target":"settings"},
+                {"at_ms":1300,"target":"settings-section:Updates"}
+            ]),
+            after: 2500,
+        },
         |_| Ok(()),
     )?;
     h.assert_pids(&original)?;

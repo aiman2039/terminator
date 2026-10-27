@@ -1,5 +1,6 @@
 //! First-connect host-key trust against the Docker SSH fixture. Skips like
 //! `cargo xtask ssh` when Docker or the fixture is unavailable.
+use super::CaptureInput;
 use super::{Options, Result, capture, ensure, fs, json};
 use crate::ssh_fixture::{Fixture, add, remote_project, unavailable};
 
@@ -18,11 +19,13 @@ pub fn run(o: &Options) -> Result<()> {
     // UnknownHostKey and scans the key into the trust dialog.
     add(h, &remote_project("ssh-hostkey", ssh))?;
     let logs = capture(
-        h,
-        o,
-        "ssh-hostkey",
-        json!([{"at_ms":1500,"target":"ssh-hostkey-trust"}]),
-        7000,
+        CaptureInput {
+            h,
+            opts: o,
+            name: "ssh-hostkey",
+            actions: json!([{"at_ms":1500,"target":"ssh-hostkey-trust"}]),
+            after: 7000,
+        },
         |_| Ok(()),
     )?;
     let trusted = fs::read_to_string(&known_hosts)?;

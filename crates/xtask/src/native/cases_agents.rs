@@ -1,4 +1,5 @@
 use super::super::harness::{Harness, id};
+use super::dispatch::CaptureInput;
 use super::dispatch::{Options, capture};
 use anyhow::{Context, Result, ensure};
 use serde_json::json;
@@ -18,21 +19,23 @@ pub(crate) fn scrolling(opts: &Options) -> Result<()> {
     let left_target = format!("terminal:{}", id(&left));
     let right_target = format!("terminal:{}", id(&right));
     let logs = capture(
-        &h,
-        opts,
-        "hover-history",
-        json!([
-            {"at_ms":900,"target":left_target},
-            {"at_ms":1300,"target":right_target,"hover":true},
-            {"at_ms":1500,"target":right_target,"scroll":4.0,"wheel_phase":"start"},
-            {"at_ms":1600,"target":right_target,"scroll":4.0},
-            {"at_ms":1700,"target":right_target,"scroll":4.0},
-            {"at_ms":1800,"target":right_target,"scroll":100.0},
-            {"at_ms":2200,"target":right_target,"scroll":2.0,"wheel_unit":"line"},
-            {"at_ms":2400,"target":right_target,"scroll":0.0,"wheel_phase":"cancel"},
-            {"at_ms":3700,"target":right_target,"scroll":-1000.0,"wheel_unit":"line"}
-        ]),
-        4500,
+        CaptureInput {
+            h: &h,
+            opts,
+            name: "hover-history",
+            actions: json!([
+                {"at_ms":900,"target":left_target},
+                {"at_ms":1300,"target":right_target,"hover":true},
+                {"at_ms":1500,"target":right_target,"scroll":4.0,"wheel_phase":"start"},
+                {"at_ms":1600,"target":right_target,"scroll":4.0},
+                {"at_ms":1700,"target":right_target,"scroll":4.0},
+                {"at_ms":1800,"target":right_target,"scroll":100.0},
+                {"at_ms":2200,"target":right_target,"scroll":2.0,"wheel_unit":"line"},
+                {"at_ms":2400,"target":right_target,"scroll":0.0,"wheel_phase":"cancel"},
+                {"at_ms":3700,"target":right_target,"scroll":-1000.0,"wheel_unit":"line"}
+            ]),
+            after: 4500,
+        },
         |_| {
             thread::sleep(Duration::from_millis(2800));
             h.write(
@@ -111,17 +114,19 @@ pub(crate) fn scrolling_bounded(opts: &Options) -> Result<()> {
     thread::sleep(Duration::from_millis(500));
     let target = format!("terminal:{}", id(&sample));
     let logs = capture(
-        &h,
-        opts,
-        "bounded-reconnect",
-        json!([
-            {"at_ms":1000,"target":target,"scroll":8.0,"wheel_unit":"line"},
-            {"at_ms":1600,"target":"workspace-tab:Other"},
-            {"at_ms":2200,"target":"workspace-tab:Muse sample"},
-            {"at_ms":2900,"target":target,"scroll":8.0,"wheel_unit":"line"},
-            {"at_ms":3400,"target":target,"scroll":-1000.0,"wheel_unit":"line"}
-        ]),
-        4000,
+        CaptureInput {
+            h: &h,
+            opts,
+            name: "bounded-reconnect",
+            actions: json!([
+                {"at_ms":1000,"target":target,"scroll":8.0,"wheel_unit":"line"},
+                {"at_ms":1600,"target":"workspace-tab:Other"},
+                {"at_ms":2200,"target":"workspace-tab:Muse sample"},
+                {"at_ms":2900,"target":target,"scroll":8.0,"wheel_unit":"line"},
+                {"at_ms":3400,"target":target,"scroll":-1000.0,"wheel_unit":"line"}
+            ]),
+            after: 4000,
+        },
         |_| Ok(()),
     )?;
     let prefix = format!("Scroll evidence: session={} ", id(&sample));
@@ -194,18 +199,20 @@ pub(crate) fn agent_wheel_case(
     let target = format!("terminal:{sid}");
     let wheel = |at_ms: u64, delta: f64, phase: &str| serde_json::json!({"at_ms":at_ms,"target":target,"scroll":delta,"wheel_unit":"line","wheel_phase":phase});
     let logs = capture(
-        &h,
-        opts,
-        name,
-        json!([
-            {"at_ms":900,"target":target},
-            {"at_ms":1300,"target":target,"hover":true},
-            wheel(wheel_at_ms, 2.0, "start"),
-            wheel(wheel_at_ms.saturating_add(200), 2.0, "move"),
-            wheel(wheel_at_ms.saturating_add(400), -1.0, "move"),
-            wheel(wheel_at_ms.saturating_add(600), 0.0, "cancel"),
-        ]),
-        after_ms,
+        CaptureInput {
+            h: &h,
+            opts,
+            name,
+            actions: json!([
+                {"at_ms":900,"target":target},
+                {"at_ms":1300,"target":target,"hover":true},
+                wheel(wheel_at_ms, 2.0, "start"),
+                wheel(wheel_at_ms.saturating_add(200), 2.0, "move"),
+                wheel(wheel_at_ms.saturating_add(400), -1.0, "move"),
+                wheel(wheel_at_ms.saturating_add(600), 0.0, "cancel"),
+            ]),
+            after: after_ms,
+        },
         |_| {
             if !start_before_attach {
                 thread::sleep(Duration::from_millis(500));
