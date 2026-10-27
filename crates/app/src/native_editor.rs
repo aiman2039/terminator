@@ -100,6 +100,24 @@ pub struct NativeDoc {
     /// Revision of the text handed to the in-flight save. Edits typed
     /// while the write runs keep the buffer dirty when it lands.
     save_revision: u64,
+    /// Hash of the text on disk (as loaded or last saved) and of the
+    /// in-flight save's text: an edit undone back to the saved text is
+    /// clean again, like `IntelliJ`.
+    saved_hash: u64,
+    save_hash: u64,
+    /// Engines and layout caches of the other views of this buffer (split
+    /// panes), keyed by view id. `engine`/`highlight` belong to `holder`;
+    /// between frames the holder is the focused view, so LSP, find, and
+    /// navigation act on the caret the user is working with.
+    views: std::collections::HashMap<String, (VimEngine, HighlightCache)>,
+    holder: Option<String>,
+    focused_view: Option<String>,
+    /// The file uses CRLF line endings: the buffer holds `\n` only (so
+    /// carets never land on a `\r`) and saves convert back.
+    crlf: bool,
+    /// `(revision, dirty)` for the last revision checked against
+    /// `saved_hash`, so the full-text hash runs once per edit.
+    dirty_memo: std::cell::Cell<(u64, bool)>,
     loaded_mtime: Option<SystemTime>,
     read_limit: u64,
     mtime_check: Option<(Instant, Option<SystemTime>)>,
@@ -115,6 +133,38 @@ pub struct NativeDoc {
 }
 
 impl NativeDoc {
+    /// Make view `id`'s caret and layout the live ones, stashing the
+    /// previous holder's. A view seen for the first time starts as a fork
+    /// of the current caret.
+    fn enter_view(&mut self, id: &str) {
+        if self.holder.as_deref() == Some(id) {
+            return;
+        }
+        if self.focused_view.is_none() {
+            self.focused_view = Some(id.to_owned());
+        }
+        let Some(previous) = self.holder.replace(id.to_owned()) else {
+            return;
+        };
+        let (engine, highlight) = self
+            .views
+            .remove(id)
+            .unwrap_or_else(|| (self.engine.fork_view(), HighlightCache::default()));
+        let old_engine = std::mem::replace(&mut self.engine, engine);
+        let old_highlight = std::mem::replace(&mut self.highlight, highlight);
+        self.views.insert(previous, (old_engine, old_highlight));
+    }
+
+    /// Put the focused view's caret back in place after another view drew.
+    fn restore_focused_view(&mut self) {
+        if let Some(focused) = self.focused_view.clone()
+            && self.holder.as_ref() != Some(&focused)
+            && self.views.contains_key(&focused)
+        {
+            self.enter_view(&focused);
+        }
+    }
+
     /// Loaded buffer, if any (outline and caret readers).
     pub(crate) fn buffer(&self) -> Option<&Doc> {
         self.doc.as_ref()
@@ -145,6 +195,13 @@ impl NativeDoc {
             insert_first,
             saved_revision: 0,
             save_revision: 0,
+            saved_hash: 0,
+            save_hash: 0,
+            crlf: false,
+            views: std::collections::HashMap::new(),
+            holder: None,
+            focused_view: None,
+            dirty_memo: std::cell::Cell::new((0, false)),
             loaded_mtime: None,
             read_limit: MAX_NATIVE_BYTES,
             mtime_check: None,
@@ -160,9 +217,19 @@ impl NativeDoc {
     }
 
     pub fn dirty(&self) -> bool {
-        self.doc
-            .as_ref()
-            .is_some_and(|doc| doc.revision() != self.saved_revision)
+        let Some(doc) = self.doc.as_ref() else {
+            return false;
+        };
+        if doc.revision() == self.saved_revision {
+            return false;
+        }
+        let (revision, dirty) = self.dirty_memo.get();
+        if revision == doc.revision() {
+            return dirty;
+        }
+        let dirty = text_hash(&doc.text()) != self.saved_hash;
+        self.dirty_memo.set((doc.revision(), dirty));
+        dirty
     }
 
     /// Disk modification time, re-stat-ed on the file pool at most every
@@ -281,7 +348,14 @@ impl NativeDoc {
                 Ok(loaded) => {
                     self.loaded_mtime = loaded.mtime;
                     self.reset_mtime();
-                    self.doc = Some(Doc::new(loaded.text));
+                    self.crlf = loaded.text.contains("\r\n");
+                    let text = if self.crlf {
+                        loaded.text.replace("\r\n", "\n")
+                    } else {
+                        loaded.text
+                    };
+                    self.saved_hash = text_hash(&text);
+                    self.doc = Some(Doc::new(text));
                     self.saved_revision = self.doc.as_ref().map_or(0, Doc::revision);
                     self.save_revision = self.saved_revision;
                     if self.insert_first {
@@ -306,6 +380,7 @@ impl NativeDoc {
                     // The written text was the snapshot taken at save start:
                     // edits typed while the write ran keep the buffer dirty.
                     self.saved_revision = self.save_revision;
+                    self.saved_hash = self.save_hash;
                     self.loaded_mtime = mtime;
                     self.reset_mtime();
                     self.save_error = None;
@@ -332,6 +407,12 @@ impl NativeDoc {
         let path = self.path.clone();
         let text = doc.text();
         self.save_revision = doc.revision();
+        self.save_hash = text_hash(&text);
+        let text = if self.crlf {
+            text.replace('\n', "\r\n")
+        } else {
+            text
+        };
         let expected = self.loaded_mtime;
         let force = self.force_save;
         let service = services.clone();
@@ -354,7 +435,7 @@ impl NativeDoc {
                             text.len() as u64 <= MAX_NATIVE_BYTES,
                             "Native editing is limited to 1 MiB"
                         );
-                        std::fs::write(&path, &text).context("Write file")?;
+                        write_atomically(&path, text.as_bytes())?;
                         Ok(disk_mtime(&path))
                     })
                     .await;
@@ -367,6 +448,41 @@ impl NativeDoc {
             self.save_error = Some("Could not start the file write".into());
         }
     }
+}
+
+fn text_hash(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Replace a file's contents without a window where it is truncated or
+/// half-written: write a sibling temp file, give it the target's
+/// permissions, then rename it over the target. A symlink is followed so
+/// the link itself survives.
+fn write_atomically(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write as _;
+    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let dir = target.parent().context("File has no parent folder")?;
+    let name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let temp = dir.join(format!(".{name}.terminator-save-{}", std::process::id()));
+    let result = (|| {
+        let mut file = std::fs::File::create(&temp).context("Create temporary file")?;
+        file.write_all(bytes).context("Write file")?;
+        file.sync_all().context("Flush file")?;
+        if let Ok(meta) = std::fs::metadata(&target) {
+            std::fs::set_permissions(&temp, meta.permissions()).context("Copy permissions")?;
+        }
+        std::fs::rename(&temp, &target).context("Replace file")
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
 }
 
 enum PostEdit {
@@ -682,6 +798,8 @@ impl App {
         };
         let post = {
             let doc = self.native_doc(path, vim);
+            // Split views of one buffer keep their own caret and layout.
+            doc.enter_view(&source_id);
             let mut post = PostEdit::Keep;
             // Clicking a header button moves keyboard focus to it; hand focus
             // back to the file so arrows and typing keep editing text.
@@ -703,6 +821,10 @@ impl App {
                     egui::Label::new(egui::RichText::new(&breadcrumb).weak()).truncate(),
                 )
                 .on_hover_text(&file_location);
+                if doc.crlf {
+                    ui.weak("CRLF")
+                        .on_hover_text("Windows line endings; saving keeps them");
+                }
                 if let Some(symbol) = current_symbol {
                     ui.weak("›");
                     ui.monospace(symbol);
@@ -1169,6 +1291,13 @@ impl App {
                     }
                 }
             }
+            // The view the user clicked or types in owns the live caret
+            // between frames; another view only borrowed it to draw.
+            if activated_editor || ui.memory(|memory| memory.has_focus(source_focus_id(&source_id)))
+            {
+                doc.focused_view = Some(source_id.clone());
+            }
+            doc.restore_focused_view();
             post
         };
         if find.is_some() {
@@ -1676,6 +1805,102 @@ impl NativeDoc {
 #[cfg(test)]
 mod view_buffer_tests {
     use super::*;
+
+    #[test]
+    fn crlf_files_edit_as_lf_and_save_as_crlf() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("win.txt");
+        std::fs::write(&path, "a\r\nb\r\n").unwrap();
+        let ctx = egui::Context::default();
+        let app = App::with_context(&ctx, Paths::at(dir.path().join("state")));
+        let mut native = NativeDoc::new(path.clone(), false);
+        native.ensure_loading(&app.services);
+        let start = std::time::Instant::now();
+        while native.doc.is_none() {
+            assert!(start.elapsed() < Duration::from_secs(10), "load");
+            native.poll();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(native.crlf);
+        assert_eq!(native.doc.as_ref().unwrap().text(), "a\nb\n");
+        assert!(!native.dirty());
+        if let Some(buffer) = native.doc.as_mut() {
+            let end = buffer.len_chars();
+            buffer.insert(end, "c\n");
+        }
+        native.start_save(&app.services);
+        while native.saving {
+            assert!(start.elapsed() < Duration::from_secs(10), "save");
+            native.poll();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(native.save_error, None);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\r\nb\r\nc\r\n");
+        assert!(!native.dirty());
+    }
+
+    #[test]
+    fn split_views_keep_their_own_caret_and_the_focused_one_rests_live() {
+        let mut native = NativeDoc::new(PathBuf::from("/tmp/views.txt"), false);
+        let mut buffer = Doc::new("zero\none\ntwo\n");
+        native.enter_view("left");
+        let _ = native.engine.place_cursor(&mut buffer, 2, 0);
+        // A new view starts at the same caret, then moves on its own.
+        native.enter_view("right");
+        assert_eq!(native.engine.cursor().line, 2);
+        let _ = native.engine.place_cursor(&mut buffer, 0, 1);
+        native.focused_view = Some("left".into());
+        native.restore_focused_view();
+        assert_eq!(native.engine.cursor().line, 2);
+        native.enter_view("right");
+        assert_eq!(
+            native.engine.cursor(),
+            terminator_native_edit::vim::Cursor { line: 0, col: 1 }
+        );
+    }
+
+    #[test]
+    fn undoing_back_to_the_saved_text_is_clean() {
+        let mut native = NativeDoc::new(PathBuf::from("/tmp/clean.txt"), true);
+        let mut buffer = Doc::new("saved");
+        native.saved_hash = text_hash("saved");
+        native.saved_revision = buffer.revision();
+        native.engine.press_key(&mut buffer, VimKey::Char('i'));
+        native.engine.type_text(&mut buffer, "x");
+        native.engine.press_key(&mut buffer, VimKey::Escape);
+        native.doc = Some(buffer);
+        assert!(native.dirty());
+        if let Some(buffer) = native.doc.as_mut() {
+            native.engine.undo(buffer);
+        }
+        assert!(!native.dirty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_save_keeps_permissions_and_symlinks() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("run.sh");
+        std::fs::write(&target, "old").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let link = dir.path().join("link.sh");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        write_atomically(&link, b"new").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        // No temporary file is left behind.
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    }
 
     #[test]
     fn remote_markdown_loads_up_to_two_mib_and_local_limit_stays_one_mib() {

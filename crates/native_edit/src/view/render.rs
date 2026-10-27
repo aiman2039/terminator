@@ -538,7 +538,23 @@ pub fn show_source<B: Buffer>(
             .flatten();
         let occurrence_fill = ui.visuals().selection.bg_fill.gamma_multiply(0.45);
         let bracket_stroke = egui::Stroke::new(1.0, ui.visuals().weak_text_color());
-        for (visual_line, visual) in visual_rows.iter().enumerate() {
+        // Only the rows inside the clip rect: a long file's off-screen rows
+        // cost nothing per frame.
+        let clip = painter.clip_rect();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        // Row indices from UI coordinates.
+        let (first_row, last_row) = (
+            ((clip.top() - origin.y) / row_height).floor().max(0.0) as usize,
+            (((clip.bottom() - origin.y) / row_height).ceil().max(0.0) as usize)
+                .saturating_add(1)
+                .min(visual_rows.len()),
+        );
+        for (visual_line, visual) in visual_rows
+            .iter()
+            .enumerate()
+            .skip(first_row)
+            .take(last_row.saturating_sub(first_row))
+        {
             let line = visual.line;
             #[allow(clippy::cast_precision_loss)] // UI coordinate
             let y = origin.y + visual_line as f32 * row_height;

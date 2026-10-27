@@ -70,6 +70,19 @@ impl VimEngine {
         self.modeless
     }
 
+    /// A fresh engine for another view of the same buffer: same options,
+    /// mode model, and caret, with no selection or pending command.
+    #[must_use]
+    pub fn fork_view(&self) -> Self {
+        let mut engine = Self::new();
+        engine.options = self.options;
+        engine.modeless = self.modeless;
+        engine.cursor = self.cursor;
+        engine.anchor = self.cursor;
+        engine.preferred_col = self.preferred_col;
+        engine
+    }
+
     /// Selected line span, inclusive. A modeless selection ending at column
     /// 0 does not claim that last line (`IntelliJ` line operations agree).
     pub(super) fn ide_line_span(&self) -> (usize, usize) {

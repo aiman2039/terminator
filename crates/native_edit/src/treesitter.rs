@@ -9,6 +9,7 @@
 //! Parse failures, grammar mismatches, and oversized buffers fall back
 //! to syntect (the 256KB cap bounds parse work; no timeout API exists
 //! on this tree-sitter version).
+use std::collections::HashMap;
 use syntect::highlighting::Theme;
 use syntect::parsing::{MatchPower, Scope, ScopeStack};
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
@@ -245,6 +246,30 @@ fn build_query(grammar: &tree_sitter::Language, nodes: &str, keywords: &[&str]) 
     query
 }
 
+/// Compiled highlight configuration per language. Building one compiles
+/// the grammar's queries, far costlier than highlighting a typical file,
+/// so it happens once per process instead of on every edit. A query the
+/// grammar rejects is cached as `None` (syntect handles that language).
+fn config_for(language: Language) -> Option<std::sync::Arc<HighlightConfiguration>> {
+    type Configs = HashMap<&'static str, Option<std::sync::Arc<HighlightConfiguration>>>;
+    static CONFIGS: std::sync::OnceLock<std::sync::Mutex<Configs>> = std::sync::OnceLock::new();
+    let (name, grammar, nodes, keywords) = grammar(language)?;
+    let configs = CONFIGS.get_or_init(Default::default);
+    let mut configs = configs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    configs
+        .entry(name)
+        .or_insert_with(|| {
+            let query_source = build_query(&grammar, nodes, keywords);
+            let mut config =
+                HighlightConfiguration::new(grammar, name, &query_source, "", "").ok()?;
+            config.configure(CAPTURES);
+            Some(std::sync::Arc::new(config))
+        })
+        .clone()
+}
+
 /// Highlight text into per-line spans. `None` means fall back to syntect:
 /// unsupported language, oversized buffer, bad query, grammar mismatch,
 /// or highlight-iteration failure.
@@ -253,10 +278,7 @@ pub fn highlight_text(language: Language, text: &str, theme: &Theme) -> Option<V
     if text.len() > MAX_HIGHLIGHT_BYTES {
         return None;
     }
-    let (name, grammar, nodes, keywords) = grammar(language)?;
-    let query_source = build_query(&grammar, nodes, keywords);
-    let mut config = HighlightConfiguration::new(grammar, name, &query_source, "", "").ok()?;
-    config.configure(CAPTURES);
+    let config = config_for(language)?;
 
     // Colors resolve once per capture up front; unstyled gaps paint in
     // the theme default so rows partition exactly like syntect rows.
