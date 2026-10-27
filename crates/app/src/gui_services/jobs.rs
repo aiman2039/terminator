@@ -181,7 +181,10 @@ pub(super) fn context(job: &Job) -> OperationContext {
     }
     if matches!(
         job,
-        Job::RemoteRead { .. } | Job::RemoteAdd { .. } | Job::RemoteAsset { .. }
+        Job::RemoteRead { .. }
+            | Job::RemoteAdd { .. }
+            | Job::RemoteAsset { .. }
+            | Job::VncFrame { .. }
     ) || matches!(
         job,
         Job::Diff(Tab::Diff {

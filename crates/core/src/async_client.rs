@@ -420,7 +420,10 @@ impl Client {
             Request::RemoteProject { .. } | Request::ProbeRemoteProject { .. }
         ) {
             Duration::from_secs(40)
-        } else if matches!(request, Request::CloseIdleSessions { .. }) {
+        } else if matches!(
+            request,
+            Request::VncFrame { .. } | Request::CloseIdleSessions { .. }
+        ) {
             Duration::from_secs(30)
         } else {
             Duration::from_secs(3)
@@ -428,7 +431,7 @@ impl Client {
         let envelope = Envelope {
             version: PROTOCOL_VERSION,
             auth: token,
-            snapshot_chunks: matches!(request, Request::Snapshot),
+            snapshot_chunks: matches!(request, Request::Snapshot | Request::VncFrame { .. }),
             request,
             snapshot_hint: hint,
         };
@@ -512,7 +515,7 @@ impl Client {
                 bytes
                     .len()
                     .checked_add(chunk.len())
-                    .is_some_and(|total| total <= 256 * 1024 * 1024),
+                    .is_some_and(|total| total <= snapshot::MAX_RESPONSE_BYTES),
                 "Snapshot exceeds the 256 MiB client limit; saved state is intact"
             );
             bytes.extend(chunk);
@@ -525,8 +528,8 @@ impl Client {
             .run(&CancellationToken::new(), move || {
                 let response = serde_json::from_slice(&bytes)?;
                 ensure!(
-                    matches!(response, Response::State(_)),
-                    "Expected snapshot state"
+                    matches!(response, Response::State(_) | Response::VncFrame(_)),
+                    "Expected snapshot state or VNC frame"
                 );
                 Ok(response)
             })
@@ -594,6 +597,53 @@ mod tests {
         socket.read_exact(&mut bytes).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
+    #[tokio::test]
+    async fn large_vnc_frame_uses_opt_in_chunks_over_async_transport() {
+        let (_dir, client, listener) = fixture();
+        let expected = crate::vnc::VncFrame {
+            session: "fixture".into(),
+            width: 2048,
+            height: 1536,
+            revision: 7,
+            status: crate::vnc::VncSessionStatus::Connected,
+            error: None,
+            zlib_rgba: "A".repeat(MAX_FRAME),
+            region: None,
+            clipboard: None,
+            cursor: None,
+            monitors: Vec::new(),
+            resize_supported: false,
+        };
+        let frame = expected.clone();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = envelope(&mut socket).await;
+            assert!(request.snapshot_chunks);
+            assert!(matches!(request.request, Request::VncFrame { .. }));
+            let mut wire = Vec::new();
+            snapshot::write_response(
+                &mut wire,
+                &Response::VncFrame(Box::new(frame)),
+                request.snapshot_chunks,
+            )
+            .unwrap();
+            socket.write_all(&wire).await.unwrap();
+        });
+        let Response::VncFrame(actual) = client
+            .rpc(Request::VncFrame {
+                session: "fixture".into(),
+                since: 0,
+                regions: true,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("Expected VNC frame")
+        };
+        assert_eq!(*actual, expected);
+        server.await.unwrap();
+    }
+
     #[tokio::test]
     async fn fragmented_legacy_response_preserves_snapshot_hint_and_auth() {
         let (_dir, client, listener) = fixture();

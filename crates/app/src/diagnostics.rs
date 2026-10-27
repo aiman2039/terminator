@@ -15,6 +15,7 @@ pub struct Diagnostics {
     path: Option<std::path::PathBuf>,
     actions: Vec<FixtureAction>,
     action_index: usize,
+    last_action: Option<(u64, Duration)>,
     release: Option<(egui::Pos2, egui::PointerButton)>,
     held: Option<egui::PointerButton>,
     pointer: Option<egui::Pos2>,
@@ -35,6 +36,7 @@ impl Default for Diagnostics {
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default(),
             action_index: 0,
+            last_action: None,
             release: None,
             held: None,
             pointer: None,
@@ -43,6 +45,20 @@ impl Default for Diagnostics {
     }
 }
 impl Diagnostics {
+    fn action_ready(&self, action: &FixtureAction, elapsed: Duration) -> bool {
+        let scheduled = Duration::from_millis(action.at_ms);
+        if elapsed < scheduled {
+            return false;
+        }
+        // A late render must not compress the script's settling intervals.
+        // Popups and view changes still need their planned time after the
+        // previous action actually ran, even if all timestamps are overdue.
+        self.last_action.is_none_or(|(previous_ms, actual)| {
+            elapsed.saturating_sub(actual)
+                >= Duration::from_millis(action.at_ms.saturating_sub(previous_ms))
+        })
+    }
+
     pub fn input(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         if self.path.is_none() {
             return;
@@ -78,7 +94,7 @@ impl Diagnostics {
                 modifiers: egui::Modifiers::default(),
             });
         } else if let Some(action) = self.actions.get(self.action_index)
-            && self.started.elapsed().as_millis() >= u128::from(action.at_ms)
+            && self.action_ready(action, self.started.elapsed())
             && let Some(rect) = ctx.data(|d| {
                 d.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", &action.target)))
                     .filter(|_| {
@@ -205,6 +221,7 @@ impl Diagnostics {
             if action.capture {
                 self.request_fixture_capture(ctx);
             }
+            self.last_action = Some((action.at_ms, self.started.elapsed()));
             eprintln!("Fixture action: {}", action.target);
             self.action_index = self.action_index.saturating_add(1);
         }
@@ -536,6 +553,46 @@ mod tests {
         ]))
         .unwrap();
         diagnostics
+    }
+
+    #[test]
+    fn late_fixture_actions_keep_their_planned_settling_intervals() {
+        let mut diagnostics = click_save();
+        diagnostics.actions = serde_json::from_value(serde_json::json!([
+            {"at_ms":900,"target":"tool-Git"},
+            {"at_ms":1200,"target":"header-overflow"},
+            {"at_ms":1400,"target":"settings"},
+            {"at_ms":2000,"target":"settings-section:Terminal & Editor"}
+        ]))
+        .unwrap();
+        let first = &diagnostics.actions[0];
+        assert!(!diagnostics.action_ready(first, Duration::from_millis(899)));
+        assert!(diagnostics.action_ready(first, Duration::from_secs(3)));
+        diagnostics.last_action = Some((900, Duration::from_secs(3)));
+        let menu = &diagnostics.actions[1];
+        assert!(!diagnostics.action_ready(menu, Duration::from_millis(3016)));
+        assert!(diagnostics.action_ready(menu, Duration::from_millis(3300)));
+        diagnostics.last_action = Some((1200, Duration::from_secs(4)));
+        let settings = &diagnostics.actions[2];
+        assert!(!diagnostics.action_ready(settings, Duration::from_millis(4016)));
+        assert!(diagnostics.action_ready(settings, Duration::from_millis(4200)));
+        diagnostics.last_action = Some((1400, Duration::from_millis(4200)));
+        let section = &diagnostics.actions[3];
+        assert!(!diagnostics.action_ready(section, Duration::from_millis(4216)));
+        assert!(diagnostics.action_ready(section, Duration::from_millis(4800)));
+    }
+
+    #[test]
+    fn on_time_and_equal_time_fixture_actions_keep_their_schedule() {
+        let mut diagnostics = click_save();
+        diagnostics.last_action = Some((0, Duration::ZERO));
+        assert!(diagnostics.action_ready(&diagnostics.actions[0], Duration::ZERO));
+        diagnostics.actions[0].at_ms = 200;
+        assert!(!diagnostics.action_ready(&diagnostics.actions[0], Duration::from_millis(199)));
+        assert!(diagnostics.action_ready(&diagnostics.actions[0], Duration::from_millis(200)));
+        // Dynamic scripts may append an action whose timestamp is already past.
+        diagnostics.last_action = Some((500, Duration::from_millis(900)));
+        assert!(diagnostics.action_ready(&diagnostics.actions[0], Duration::from_millis(900)));
     }
 
     #[test]

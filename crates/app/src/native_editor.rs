@@ -32,17 +32,18 @@ pub struct LoadedFile {
     mtime: Option<SystemTime>,
 }
 
-fn read_native_file(path: &Path) -> anyhow::Result<LoadedFile> {
+fn read_native_file(path: &Path, limit: u64) -> anyhow::Result<LoadedFile> {
     let file = std::fs::File::open(path).context("Open file")?;
     anyhow::ensure!(file.metadata()?.is_file(), "Not a regular file");
     let mut bytes = Vec::new();
     use std::io::Read as _;
-    file.take(MAX_NATIVE_BYTES + 1)
+    file.take(limit.saturating_add(1))
         .read_to_end(&mut bytes)
         .context("Read file")?;
     anyhow::ensure!(
-        bytes.len() as u64 <= MAX_NATIVE_BYTES,
-        "Native editing is limited to 1 MiB"
+        bytes.len() as u64 <= limit,
+        "File exceeds the {} MiB viewer limit",
+        limit / (1024 * 1024)
     );
     let text = String::from_utf8(bytes).context("File is not UTF-8")?;
     let mtime = disk_mtime(path);
@@ -94,6 +95,7 @@ pub struct NativeDoc {
     /// while the write runs keep the buffer dirty when it lands.
     save_revision: u64,
     loaded_mtime: Option<SystemTime>,
+    read_limit: u64,
     mtime_check: Option<(Instant, Option<SystemTime>)>,
     load_error: Option<String>,
     save_error: Option<String>,
@@ -118,6 +120,7 @@ impl NativeDoc {
             saved_revision: 0,
             save_revision: 0,
             loaded_mtime: None,
+            read_limit: MAX_NATIVE_BYTES,
             mtime_check: None,
             load_error: None,
             save_error: None,
@@ -155,6 +158,7 @@ impl NativeDoc {
         self.load_rx = Some(rx);
         self.loading = true;
         let path = self.path.clone();
+        let limit = self.read_limit;
         let service = services.clone();
         let context = OperationContext::new(
             "native-load",
@@ -167,7 +171,7 @@ impl NativeDoc {
                 let token = CancellationToken::new();
                 let result = service
                     .fs()
-                    .run(&token, move || read_native_file(&path))
+                    .run(&token, move || read_native_file(&path, limit))
                     .await;
                 let _ = tx.send(result);
                 Ok(Vec::new())
@@ -347,9 +351,14 @@ pub(super) enum NativeSplit {
 
 impl App {
     fn native_doc(&mut self, path: &Path, vim: bool) -> &mut NativeDoc {
-        self.native_docs
-            .entry(path.to_owned())
-            .or_insert_with(|| NativeDoc::new(path.to_owned(), !vim))
+        let remote_snapshot = crate::remote_ui::is_snapshot(&self.paths.data, path);
+        self.native_docs.entry(path.to_owned()).or_insert_with(|| {
+            let mut doc = NativeDoc::new(path.to_owned(), !vim);
+            if remote_snapshot {
+                doc.read_limit = terminator_core::remote::MAX_FILE_BYTES as u64;
+            }
+            doc
+        })
     }
 
     pub(super) fn native_dirty(&self, path: &Path) -> bool {
@@ -1966,6 +1975,27 @@ impl NativeDoc {
 #[cfg(test)]
 mod view_buffer_tests {
     use super::*;
+
+    #[test]
+    fn remote_markdown_loads_up_to_two_mib_and_local_limit_stays_one_mib() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
+        let path = crate::remote_ui::snapshot_root(&app.paths.data, "fixture").join("large.md");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let bytes = vec![b'a'; terminator_core::remote::MAX_FILE_BYTES];
+        std::fs::write(&path, &bytes).unwrap();
+        let limit = app.native_doc(&path, false).read_limit;
+        assert_eq!(
+            read_native_file(&path, limit).unwrap().text.len(),
+            bytes.len()
+        );
+        let local = dir.path().join("local.md");
+        std::fs::write(&local, &bytes).unwrap();
+        assert!(read_native_file(&local, app.native_doc(&local, false).read_limit).is_err());
+        std::fs::write(&path, vec![b'a'; bytes.len() + 1]).unwrap();
+        assert!(read_native_file(&path, limit).is_err());
+    }
 
     #[test]
     fn closing_a_clean_editor_copy_keeps_the_other_views_undo_history() {

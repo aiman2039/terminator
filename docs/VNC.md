@@ -20,6 +20,12 @@ tab disconnects that view's session; closing the GUI does not stop terminals.
 
 ## Connections and passwords
 
+Enter a bare host name or IP address in Host. Port and Display are linked:
+port = 5900 + display. New forms start at port 5966 / display 66; saved hosts
+keep their ports. Ports below 5900 have no display number. Host values with
+an embedded port or URL scheme are rejected so they cannot override the fields.
+VNC views can belong to local or SSH projects.
+
 Connection options are saved per host. Direct VNC does not encrypt traffic.
 TLS uses VeNCrypt 0.2 with X509Vnc or X509Plain and verifies the certificate
 against OS trust or the explicitly selected CA file. The certificate name
@@ -39,8 +45,18 @@ startup stops before saved state is overwritten. Prepared generations do not
 write the shared catalog; migration completes under the workspace lock after
 activation. Unlock the credential store
 and retry. Changing a saved authentication endpoint requires a new password
-or explicit removal of the old credential. Unsaved passwords are prompted for
+or explicit removal of the old credential. A verified replacement removes the
+previous endpoint's keychain entry. If removal fails, the new entry is removed
+and the previous profile is retained. Entries left by older versions cannot
+be identified from the current profile alone. Unsaved passwords are prompted for
 again on a new connection. They remain in memory only for the current session.
+
+Full frames that exceed the 8 MiB IPC message limit use the existing opt-in
+chunk stream. Each message remains bounded; assembled responses are limited
+to 256 MiB. Updated clients accept chunked VNC responses. Older clients still
+receive ordinary frames or a size error; older daemons retain their size limit.
+Queued input from a lost connection is discarded during retry. Disconnect
+still cancels retry immediately.
 
 ## Input and clipboard
 

@@ -125,7 +125,12 @@ impl Shared {
                     zeroize::Zeroize::zeroize(&mut profile.password);
                     profile.credential_saved = false;
                 } else if !profile.password.is_empty() {
-                    crate::vnc_session::credentials::save(paths, &profile, &profile.password)?;
+                    crate::vnc_session::credentials::save_replacing(
+                        paths,
+                        previous.as_ref(),
+                        &profile,
+                        &profile.password,
+                    )?;
                     zeroize::Zeroize::zeroize(&mut profile.password);
                     profile.credential_saved = true;
                 } else {

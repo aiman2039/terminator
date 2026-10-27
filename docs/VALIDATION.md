@@ -5525,3 +5525,77 @@ source, diff and terminal views. Formatting and diff whitespace checks passed.
 The installed GUI was not replaced or restarted. No live user sessions were
 stopped. Screen-reader interaction and deliberate native window-focus changes
 were not tested.
+
+
+## VNC port and display fields (2026-10-26)
+
+The direct connection and saved-host forms have linked Port and Display fields.
+New forms use port 5966 and display 66. Saved profiles retain their port;
+ports below 5900 have no display number. Invalid display input clears the port
+so existing port validation prevents a connection.
+
+`cargo test -p terminator --lib vnc --locked` passed all 18 selected tests,
+including conversion bounds, defaults, and saved-port preservation.
+The compiler reported 12 warnings in unchanged files. Formatting and diff
+whitespace checks passed. Native rendering and remote connections were not
+tested. The running GUI was not rebuilt or restarted.
+
+
+## VNC and SSH review fixes (2026-10-26)
+
+Six source issues were corrected. Retry delay discards queued events and stops
+only when the input channel closes. Large VNC responses use the existing opt-in
+chunk transport, with each IPC message below 8 MiB and a 256 MiB assembled
+response limit. Both synchronous and asynchronous readers accept chunked VNC
+frames; clients that do not opt in still receive ordinary frames or a size
+error. VNC connections accept SSH project IDs. Host fields reject embedded
+ports and schemes, so the visible Port and Display fields control the endpoint.
+
+Credential replacement verifies the new store write before removing the old
+endpoint entry. Save or removal failures roll back the new entry and retain
+the previous profile. Tests use an in-memory credential store, including a
+write followed by verification failure; no user keychain entries were changed.
+Entries orphaned before this fix cannot be identified from the current profile
+alone. Remote Markdown snapshots use the shared 2 MiB preview limit. Local
+native editing retains its 1 MiB limit and remote snapshots remain read-only.
+
+`cargo test --workspace --all-features --locked` passed 1,292 tests, with five
+ignored. Regression checks cover queued retry events and disconnect, large
+VNC response delivery through synchronous and async transports, legacy size
+errors, credential replacement and rollback, host validation including IPv6,
+SSH project identity, and the exact Markdown size bounds.
+
+Strict workspace Clippy passed for all targets and features with warnings
+denied. Formatting and diff whitespace checks passed.
+
+No live VNC, SSH, Perforce, or OS credential-store checks were run for this
+change. Native desktop rendering was not checked. The installed GUI and live
+daemon were not replaced or restarted.
+
+
+## Linux release GUI action timing (2026-10-26)
+
+The archived `run-I20apM/linux/run.log` failed in `ui-cleanup`, after the
+Settings action and before the Terminal & Editor section action. The fixture
+driver used only absolute action timestamps. Late rendering could therefore
+compress already-due menu and view transitions onto consecutive frames.
+The driver now keeps the planned interval from the previous action's actual
+execution time, while retaining each action's original earliest timestamp.
+Equal-time actions and appended dynamic scripts remain supported. This change
+is restricted to test-support code; no production input handling changed.
+
+Seven focused diagnostics tests passed, including delayed action timing,
+on-time/equal-time schedules, stale targets, disabled controls, sizing passes,
+desktop input isolation, and capture after the final layout pass. Strict
+workspace Clippy passed for all targets and features with warnings denied.
+Formatting and diff whitespace checks passed.
+
+The current source was built offline in the cached release image
+`terminator-release-check:config-5eee29427d5eca419665ff9dac4ef083da377cf4cc9ac3fd9366b7a34fdd2b07`
+on Linux ARM64. All 23 native GUI cases passed with eight workers under Xvfb,
+Openbox, and Glow, matching the failed run's GUI concurrency. `ui-cleanup`
+completed all scripted Settings actions; its captured Terminal & Editor view
+was inspected. Logs and captures are in
+`/private/tmp/terminator-linux-ui-iJz4Fk/`. The archived release artifacts were
+not edited. Coverage, packaging, publication, and the complete release pipeline
+were not rerun. The installed GUI and live user sessions were not changed.

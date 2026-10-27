@@ -24,14 +24,59 @@ use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle};
 use flate2::read::ZlibDecoder;
 use terminator_core::{
     Request, VNC_CAPABILITY, id,
-    vnc::{
-        DEFAULT_PORT, VncFrame, VncInputEvent, VncProfile, VncRegion, VncSession, VncSessionStatus,
-        parse_host_port,
-    },
+    vnc::{VncFrame, VncInputEvent, VncProfile, VncRegion, VncSession, VncSessionStatus},
 };
 
 use crate::preferences::VncPasteShortcut;
 use crate::{After, App, Job, Tab, appearance, icons};
+
+// New forms start at display 66; saved profiles retain their explicit port.
+const DEFAULT_CONNECTION_PORT: u16 = 5966;
+
+fn display_for_port(port: &str) -> String {
+    port.trim()
+        .parse::<u16>()
+        .ok()
+        .and_then(|port| port.checked_sub(terminator_core::vnc::DEFAULT_PORT))
+        .map(|display| display.to_string())
+        .unwrap_or_default()
+}
+
+fn port_for_display(display: &str) -> String {
+    display
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .and_then(|display| display.checked_add(terminator_core::vnc::DEFAULT_PORT))
+        .map(|port| port.to_string())
+        .unwrap_or_default()
+}
+
+fn port_display_fields(ui: &mut egui::Ui, port: &mut String, display: &mut String) -> bool {
+    let port_response = ui
+        .vertical(|ui| {
+            ui.set_width(68.0);
+            ui.label("Port");
+            ui.add(appearance::singleline(port).desired_width(68.0))
+                .on_hover_text("TCP port: 1–65535")
+        })
+        .inner;
+    if port_response.changed() {
+        *display = display_for_port(port);
+    }
+    let display_response = ui
+        .vertical(|ui| {
+            ui.set_width(68.0);
+            ui.label("Display");
+            ui.add(appearance::singleline(display).desired_width(68.0))
+                .on_hover_text("Port = 5900 + display. Valid display: 0–59635")
+        })
+        .inner;
+    if display_response.changed() {
+        *port = port_for_display(display);
+    }
+    port_response.lost_focus() || display_response.lost_focus()
+}
 
 fn connection_endpoint(host: &str, port: &str) -> Result<(String, u16)> {
     let port = port
@@ -39,12 +84,21 @@ fn connection_endpoint(host: &str, port: &str) -> Result<(String, u16)> {
         .parse::<u16>()
         .map_err(|_| anyhow::anyhow!("Port must be between 1 and 65535"))?;
     ensure!(port > 0, "Port must be between 1 and 65535");
-    let (host, port) = parse_host_port(host, port);
+    let host = host.trim();
+    let host = host
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(host);
+    ensure!(
+        !host.contains(':') || host.parse::<std::net::Ipv6Addr>().is_ok(),
+        "Enter only the host name or IP address in Host; use Port or Display for the connection number"
+    );
+    terminator_core::vnc::validate_host(host)?;
     ensure!(
         !host.trim().is_empty() && host.len() <= 255,
         "VNC host must be 1–255 characters"
     );
-    Ok((host, port))
+    Ok((host.to_owned(), port))
 }
 
 struct PendingVncConnect {
@@ -122,7 +176,7 @@ impl App {
             session: String::new(),
             profile_id: None,
             host: String::new(),
-            port: DEFAULT_PORT,
+            port: DEFAULT_CONNECTION_PORT,
             label: "VNC Viewer".into(),
         };
         self.place_gui_tab(project, tab, after);
@@ -149,6 +203,7 @@ impl App {
             let view = self.vnc_views.entry(format!("draft:{tab_id}")).or_default();
             view.draft_host.clone_from(&profile.host);
             view.draft_port = profile.port.to_string();
+            view.draft_display = display_for_port(&view.draft_port);
             view.draft_username.clone_from(&profile.username);
             view.draft_name = profile.display_name();
             view.draft_options = profile.options.clone();
@@ -562,6 +617,7 @@ impl App {
             if !host.is_empty() && view.draft_host == "127.0.0.1" && *host != "127.0.0.1" {
                 view.draft_host.clone_from(host);
                 view.draft_port = port.to_string();
+                view.draft_display = display_for_port(&view.draft_port);
             }
             if let Some(ds) = &daemon_session {
                 view.status = ds.status;
@@ -886,15 +942,11 @@ impl App {
                     ui.label("Host:");
                     let host_resp = ui.add(
                         appearance::singleline(&mut view.draft_host)
-                            .hint_text("127.0.0.1 or host:5900")
+                            .hint_text("Host name or IP address")
                             .desired_width(200.0),
                     );
-                    ui.label("Port:");
-                    let port_resp = ui.add(
-                        appearance::singleline(&mut view.draft_port)
-                            .hint_text("5900")
-                            .desired_width(70.0),
-                    );
+                    let endpoint_lost_focus =
+                        port_display_fields(ui, &mut view.draft_port, &mut view.draft_display);
                     ui.label("Username:");
                     ui.add(
                         appearance::singleline(&mut view.draft_username)
@@ -908,10 +960,9 @@ impl App {
                             .hint_text("VNC password")
                             .desired_width(150.0),
                     );
-                    let enter = (host_resp.lost_focus()
-                        || port_resp.lost_focus()
-                        || pass_resp.lost_focus())
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let enter =
+                        (host_resp.lost_focus() || endpoint_lost_focus || pass_resp.lost_focus())
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if ui.button("Connect").clicked() || enter {
                         match connection_endpoint(&view.draft_host, &view.draft_port) {
                             Ok((parsed_host, parsed_port)) => {
@@ -1100,6 +1151,72 @@ use egui::Widget;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_ports_cannot_override_the_visible_vnc_port() {
+        for host in [
+            "server:66",
+            "server:5966",
+            "server::66",
+            "[::1]:66",
+            "vnc://server:66",
+        ] {
+            assert!(connection_endpoint(host, "5966").is_err(), "{host}");
+        }
+        for host in ["server", "127.0.0.1", "::1", "2001:db8::66"] {
+            assert_eq!(
+                connection_endpoint(host, "5966").unwrap(),
+                (host.into(), 5966)
+            );
+        }
+        assert_eq!(
+            connection_endpoint(" [::1] ", "5966").unwrap(),
+            ("::1".into(), 5966)
+        );
+    }
+
+    #[test]
+    fn vnc_display_and_port_conversion_rejects_invalid_values() {
+        for (display, port) in [("0", "5900"), ("66", "5966"), ("59635", "65535")] {
+            assert_eq!(port_for_display(display), port);
+            assert_eq!(display_for_port(port), display);
+        }
+        for display in ["", "-1", "59636", "65536", "oops"] {
+            assert!(port_for_display(display).is_empty());
+        }
+        for port in ["", "0", "66", "5899", "65536", "oops"] {
+            assert!(display_for_port(port).is_empty());
+        }
+    }
+
+    #[test]
+    fn vnc_forms_start_at_display_66_and_preserve_saved_ports() {
+        let view = VncViewState::default();
+        let mut sidebar = VncSidebarState::default();
+        assert_eq!(view.draft_port, "5966");
+        assert_eq!(view.draft_display, "66");
+        assert_eq!(sidebar.port, "5966");
+        assert_eq!(sidebar.display, "66");
+        let profile = VncProfile {
+            port: 80,
+            id: "saved".into(),
+            name: "Saved host".into(),
+            host: "localhost".into(),
+            username: String::new(),
+            password: String::new(),
+            shared: true,
+            view_only: false,
+            last_connected: 0,
+            options: terminator_core::vnc::VncOptions::default(),
+            credential_saved: false,
+        };
+        sidebar.begin_edit(&profile);
+        assert_eq!(sidebar.port, "80");
+        assert!(sidebar.display.is_empty());
+        sidebar.begin_new();
+        assert_eq!(sidebar.port, "5966");
+        assert_eq!(sidebar.display, "66");
+    }
 
     fn compressed(pixels: &[u8]) -> String {
         use flate2::{Compression, write::ZlibEncoder};

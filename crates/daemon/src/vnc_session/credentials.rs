@@ -62,6 +62,54 @@ pub(crate) fn save(paths: &Paths, profile: &VncProfile, password: &str) -> Resul
     );
     Ok(())
 }
+/// Publish a verified credential under the new identity, then remove the old
+/// identity. If removal fails, retain the old profile and undo the new entry.
+pub(crate) fn save_replacing(
+    paths: &Paths,
+    previous: Option<&VncProfile>,
+    profile: &VncProfile,
+    password: &str,
+) -> Result<()> {
+    replace_with(
+        previous,
+        profile,
+        password,
+        |p, secret| save(paths, p, secret),
+        |p| forget(paths, p),
+    )
+}
+
+fn replace_with(
+    previous: Option<&VncProfile>,
+    profile: &VncProfile,
+    password: &str,
+    mut save: impl FnMut(&VncProfile, &str) -> Result<()>,
+    mut forget: impl FnMut(&VncProfile) -> Result<()>,
+) -> Result<()> {
+    let previous = previous.filter(|p| p.credential_saved);
+    let changed = previous
+        .map(|p| Ok::<_, anyhow::Error>(credential_account(p)? != credential_account(profile)?))
+        .transpose()?
+        .unwrap_or(true);
+    if let Err(error) = save(profile, password) {
+        // A store can accept the write and then fail its verification read.
+        if changed {
+            forget(profile).context("Cannot remove the new credential after its save failed")?;
+        }
+        return Err(error);
+    }
+    if changed
+        && let Some(previous) = previous
+        && let Err(error) = forget(previous)
+    {
+        forget(profile).context(
+            "Cannot remove the new credential after the previous credential could not be removed",
+        )?;
+        return Err(error).context("Cannot replace the previous saved VNC credential");
+    }
+    Ok(())
+}
+
 pub(super) fn load(paths: &Paths, profile: &VncProfile) -> Result<String> {
     let _lock = serialized()
         .lock()
@@ -146,6 +194,84 @@ pub(crate) fn finish_activation(weak: std::sync::Weak<crate::server::Shared>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn profile() -> VncProfile {
+        VncProfile {
+            id: "fixture".into(),
+            name: "Fixture".into(),
+            host: "one.example".into(),
+            port: 5900,
+            username: String::new(),
+            password: String::new(),
+            shared: true,
+            view_only: false,
+            last_connected: 0,
+            options: terminator_core::vnc::VncOptions::default(),
+            credential_saved: true,
+        }
+    }
+
+    #[test]
+    fn replacing_endpoint_removes_only_the_old_credential_after_verified_save() {
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+        for fail_save in [false, true] {
+            for fail_remove in [false, true] {
+                let previous = profile();
+                let mut next = previous.clone();
+                next.host = "two.example".into();
+                let old = credential_account(&previous).unwrap();
+                let new = credential_account(&next).unwrap();
+                let store = RefCell::new(HashMap::from([(old.clone(), "old".to_owned())]));
+                let result = replace_with(
+                    Some(&previous),
+                    &next,
+                    "new",
+                    |p, secret| {
+                        store
+                            .borrow_mut()
+                            .insert(credential_account(p)?, secret.into());
+                        ensure!(!fail_save, "Verification failed after write");
+                        Ok(())
+                    },
+                    |p| {
+                        let account = credential_account(p)?;
+                        ensure!(!(fail_remove && account == old), "Delete failed");
+                        store.borrow_mut().remove(&account);
+                        Ok(())
+                    },
+                );
+                let store = store.into_inner();
+                if fail_save || fail_remove {
+                    assert!(result.is_err());
+                    assert_eq!(store.get(&old).map(String::as_str), Some("old"));
+                    assert!(!store.contains_key(&new));
+                } else {
+                    result.unwrap();
+                    assert!(!store.contains_key(&old));
+                    assert_eq!(store.get(&new).map(String::as_str), Some("new"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn updating_password_at_same_endpoint_does_not_delete_the_credential() {
+        let p = profile();
+        let mut saves = 0;
+        replace_with(
+            Some(&p),
+            &p,
+            "new",
+            |_, _| {
+                saves += 1;
+                Ok(())
+            },
+            |_| panic!("The current credential must not be deleted"),
+        )
+        .unwrap();
+        assert_eq!(saves, 1);
+    }
+
     #[test]
     fn credentials_are_bound_to_authentication_identity_not_display_options() {
         let mut p = VncProfile {

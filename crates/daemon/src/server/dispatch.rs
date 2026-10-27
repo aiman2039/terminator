@@ -49,6 +49,9 @@ pub(crate) fn serve(mut stream: transport::Stream, shared: Arc<Shared>) -> Resul
         }
     };
     ensure!(authenticated, "Authentication failed");
+    if matches!(env.request, Request::VncFrame { .. }) && env.snapshot_chunks {
+        stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+    }
     if matches!(env.request, Request::Snapshot) {
         let executable = std::env::current_exe().ok();
         let helper = &shared.helper.executable;

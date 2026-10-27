@@ -1,6 +1,19 @@
 use super::connection::{ConnectionSpec, Failure};
 use super::*;
 
+// Only closing the input channel cancels a retry. Keys from the old connection
+// must be discarded without restarting the delay or ending the worker.
+async fn wait_retry_tick(input_rx: &mut mpsc::Receiver<VncInputEvent>) -> bool {
+    let delay = tokio::time::sleep(Duration::from_secs(1));
+    tokio::pin!(delay);
+    loop {
+        tokio::select! {
+            () = &mut delay => return true,
+            event = input_rx.recv() => if event.is_none() { return false; },
+        }
+    }
+}
+
 pub(super) async fn run(
     shared: Arc<Shared>,
     runtime: Arc<Mutex<VncRuntime>>,
@@ -51,7 +64,10 @@ pub(super) async fn run(
                 }
                 let mut cancelled = false;
                 for remaining in (0..delay).rev() {
-                    tokio::select! {()=tokio::time::sleep(Duration::from_secs(1))=>{},_=input_rx.recv()=>{cancelled=true;break;}}
+                    if !wait_retry_tick(&mut input_rx).await {
+                        cancelled = true;
+                        break;
+                    }
                     let mut state = relock(&shared.state);
                     if let Some(session) = state.vnc_sessions.iter_mut().find(|s| s.id == sid) {
                         session.retry_in_seconds = remaining;
@@ -63,5 +79,36 @@ pub(super) async fn run(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn queued_keys_do_not_cancel_retry_but_disconnect_does() {
+        let (tx, mut rx) = mpsc::channel(4);
+        tx.send(VncInputEvent::Key {
+            keycode: 65,
+            down: true,
+        })
+        .await
+        .unwrap();
+        tx.send(VncInputEvent::Refresh { full: true })
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), wait_retry_tick(&mut rx))
+                .await
+                .unwrap()
+        );
+        assert!(rx.try_recv().is_err());
+        drop(tx);
+        assert!(
+            !tokio::time::timeout(Duration::from_millis(100), wait_retry_tick(&mut rx))
+                .await
+                .unwrap()
+        );
     }
 }

@@ -319,6 +319,16 @@ pub(crate) struct VncConnectSpec {
     pub(crate) label: Option<String>,
 }
 
+fn validate_project(state: &terminator_core::State, project: &str) -> Result<()> {
+    ensure!(
+        project.is_empty()
+            || state.projects.iter().any(|p| p.id == project)
+            || state.remote_projects.iter().any(|p| p.id == project),
+        "Unknown project"
+    );
+    Ok(())
+}
+
 impl Shared {
     pub(crate) fn vnc_connect(self: &Arc<Self>, spec: VncConnectSpec) -> Result<VncSession> {
         let VncConnectSpec {
@@ -370,12 +380,7 @@ impl Shared {
         let mut stale: Vec<String> = Vec::new();
         let record = {
             let mut state = relock(&self.state);
-            if !project.is_empty() {
-                ensure!(
-                    state.projects.iter().any(|p| p.id == project),
-                    "Unknown project"
-                );
-            }
+            validate_project(&state, &project)?;
             state.vnc_sessions.retain(|session| {
                 let duplicate = session.project_id == project
                     && session.host == host
@@ -775,6 +780,27 @@ mod tests {
     use super::*;
     use flate2::read::ZlibDecoder;
     use std::io::Read;
+
+    #[test]
+    fn vnc_accepts_ssh_project_ids_and_rejects_unknown_projects() {
+        let mut state = terminator_core::State::default();
+        state
+            .remote_projects
+            .push(terminator_core::remote::RemoteProject {
+                id: "ssh-project".into(),
+                name: "Remote".into(),
+                ssh: terminator_core::ssh::SshOptions {
+                    host: "fixture".into(),
+                    ..Default::default()
+                },
+                root: "/workspace".into(),
+                layout: serde_json::Value::Null,
+            });
+        assert!(state.projects.is_empty());
+        assert!(validate_project(&state, "ssh-project").is_ok());
+        assert!(validate_project(&state, "").is_ok());
+        assert!(validate_project(&state, "unknown").is_err());
+    }
 
     fn runtime() -> VncRuntime {
         let (input_tx, _input_rx) = mpsc::channel(256);

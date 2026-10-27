@@ -47,6 +47,7 @@ pub(crate) struct VncViewState {
     pub(crate) draft_name: String,
     pub(crate) draft_host: String,
     pub(crate) draft_port: String,
+    pub(crate) draft_display: String,
     pub(crate) draft_username: String,
     pub(crate) draft_password: String,
     pub(crate) draft_shared: bool,
@@ -92,7 +93,8 @@ impl Default for VncViewState {
             held_keys: Vec::new(),
             draft_name: String::new(),
             draft_host: "127.0.0.1".into(),
-            draft_port: DEFAULT_PORT.to_string(),
+            draft_port: DEFAULT_CONNECTION_PORT.to_string(),
+            draft_display: display_for_port(&DEFAULT_CONNECTION_PORT.to_string()),
             draft_username: String::new(),
             draft_password: String::new(),
             draft_shared: true,
@@ -111,6 +113,7 @@ pub(crate) struct VncSidebarState {
     pub(crate) name: String,
     pub(crate) host: String,
     pub(crate) port: String,
+    pub(crate) display: String,
     pub(crate) username: String,
     pub(crate) password: String,
     pub(crate) show_password: bool,
@@ -131,7 +134,8 @@ impl Default for VncSidebarState {
             form_open: false,
             name: String::new(),
             host: "127.0.0.1".into(),
-            port: DEFAULT_PORT.to_string(),
+            port: DEFAULT_CONNECTION_PORT.to_string(),
+            display: display_for_port(&DEFAULT_CONNECTION_PORT.to_string()),
             username: String::new(),
             password: String::new(),
             show_password: false,
@@ -150,7 +154,8 @@ impl VncSidebarState {
         self.form_open = true;
         self.name.clear();
         self.host = "127.0.0.1".into();
-        self.port = DEFAULT_PORT.to_string();
+        self.port = DEFAULT_CONNECTION_PORT.to_string();
+        self.display = display_for_port(&self.port);
         self.username.clear();
         self.password.clear();
         self.show_password = false;
@@ -167,6 +172,7 @@ impl VncSidebarState {
         self.name.clone_from(&profile.name);
         self.host.clone_from(&profile.host);
         self.port = profile.port.to_string();
+        self.display = display_for_port(&self.port);
         self.username.clone_from(&profile.username);
         self.password.clone_from(&profile.password);
         self.show_password = false;

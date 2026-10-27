@@ -264,7 +264,7 @@ pub struct Envelope {
     pub request: Request,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot_hint: Option<SnapshotHint>,
-    /// Client support on the existing Snapshot request; old daemons ignore it.
+    /// Client support for chunked `Snapshot` and `VncFrame` responses; old daemons ignore it.
     #[serde(default)]
     pub snapshot_chunks: bool,
 }
@@ -338,7 +338,10 @@ fn connect_hint(
                 Request::RemoteProject { .. } | Request::ProbeRemoteProject { .. }
             ) {
                 40
-            } else if matches!(&request, Request::CloseIdleSessions { .. }) {
+            } else if matches!(
+                &request,
+                Request::VncFrame { .. } | Request::CloseIdleSessions { .. }
+            ) {
                 30
             } else {
                 3
@@ -354,7 +357,7 @@ fn connect_hint(
                 Some(t) => t,
                 None => paths.token()?,
             },
-            snapshot_chunks: matches!(request, Request::Snapshot),
+            snapshot_chunks: matches!(request, Request::Snapshot | Request::VncFrame { .. }),
             request,
             snapshot_hint,
         },

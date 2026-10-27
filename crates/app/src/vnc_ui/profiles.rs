@@ -21,26 +21,18 @@ impl App {
                     .hint_text("Build Mac / Linux VM")
                     .desired_width(f32::INFINITY),
             );
+            ui.label("Host");
+            ui.add(
+                appearance::singleline(&mut self.vnc_sidebar.host)
+                    .hint_text("127.0.0.1")
+                    .desired_width(f32::INFINITY),
+            );
             ui.horizontal(|ui| {
-                let host_width =
-                    (ui.available_width() - 68.0 - ui.spacing().item_spacing.x).max(40.0);
-                ui.vertical(|ui| {
-                    ui.set_width(host_width);
-                    ui.label("Host");
-                    ui.add(
-                        appearance::singleline(&mut self.vnc_sidebar.host)
-                            .hint_text("127.0.0.1")
-                            .desired_width(host_width),
-                    );
-                });
-                ui.vertical(|ui| {
-                    ui.label("Port");
-                    ui.add(
-                        appearance::singleline(&mut self.vnc_sidebar.port)
-                            .hint_text("5900")
-                            .desired_width(68.0),
-                    );
-                });
+                port_display_fields(
+                    ui,
+                    &mut self.vnc_sidebar.port,
+                    &mut self.vnc_sidebar.display,
+                );
             });
             ui.label("Username (optional)");
             ui.add(
