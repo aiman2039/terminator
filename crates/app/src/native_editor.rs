@@ -111,6 +111,16 @@ pub struct NativeDoc {
 }
 
 impl NativeDoc {
+    /// Loaded buffer, if any (outline and caret readers).
+    pub(crate) fn buffer(&self) -> Option<&Doc> {
+        self.doc.as_ref()
+    }
+
+    /// Caret line of a loaded buffer.
+    pub(crate) fn caret_line(&self) -> Option<usize> {
+        self.doc.as_ref().map(|_| self.engine.cursor().line)
+    }
+
     pub(crate) fn new(path: PathBuf, insert_first: bool) -> Self {
         let mut engine = VimEngine::new();
         engine.apply_vimrc(vimrc_options());
@@ -586,8 +596,7 @@ impl App {
         let pinned = pinned_files.contains(path);
         // The breadcrumb needs the outline whether or not the Structure
         // panel is open; the request is revision-gated, so this is cheap.
-        self.lsp.request_symbols(path);
-        let outline = self.lsp.symbols_for(path);
+        let outline = self.document_outline(path);
         // Deferred closes run after the borrow below ends.
         let mut defer_close_after_save = false;
         // The view issuing `:wq`: the save settles frames later, when a
@@ -660,12 +669,8 @@ impl App {
             let file_focus = source_focus_id(&source_id);
             let current_symbol = doc.doc.as_ref().and_then(|_| {
                 let line = u32::try_from(doc.engine.cursor().line).ok()?;
-                outline
-                    .iter()
-                    .filter(|symbol| {
-                        symbol.range.start.line <= line && line <= symbol.range.end.line
-                    })
-                    .max_by_key(|symbol| (symbol.depth, symbol.range.start.line))
+                native_lsp::innermost_symbol(&outline, line)
+                    .and_then(|index| outline.get(index))
                     .map(|symbol| symbol.name.as_str())
             });
             let mut heading_jump = None;

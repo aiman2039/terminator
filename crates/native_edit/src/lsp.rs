@@ -91,6 +91,78 @@ pub struct Symbol {
     pub range: Range,
     pub selection: Range,
     pub depth: usize,
+    /// Server detail (a signature or type), shown dimmed beside the name.
+    pub detail: Option<String>,
+    pub deprecated: bool,
+}
+
+/// Index of the deepest symbol whose range contains `line`: the caret's
+/// enclosing item, for breadcrumbs and Structure autoscroll.
+#[must_use]
+pub fn innermost_symbol(symbols: &[Symbol], line: u32) -> Option<usize> {
+    symbols
+        .iter()
+        .enumerate()
+        .filter(|(_, symbol)| symbol.range.start.line <= line && line <= symbol.range.end.line)
+        .max_by_key(|(_, symbol)| (symbol.depth, symbol.range.start.line))
+        .map(|(index, _)| index)
+}
+
+/// Markdown outline: one symbol per heading, nested by level. A heading's
+/// range runs to the line before the next heading at its level or above,
+/// so the caret's section is its innermost symbol.
+#[must_use]
+pub fn markdown_outline<B: crate::doc::Buffer>(doc: &B) -> Vec<Symbol> {
+    use crate::blocks::{BlockKind, parse_blocks};
+    let headings: Vec<(u8, usize)> = parse_blocks(doc)
+        .into_iter()
+        .filter_map(|block| match block.kind {
+            BlockKind::Heading(level) => Some((level, block.start_line)),
+            _ => None,
+        })
+        .collect();
+    let last_line = u32::try_from(doc.line_count().saturating_sub(1)).unwrap_or(u32::MAX);
+    let mut levels: Vec<u8> = Vec::new();
+    let mut out = Vec::with_capacity(headings.len());
+    for (index, (level, line)) in headings.iter().enumerate() {
+        while levels.last().is_some_and(|open| open >= level) {
+            levels.pop();
+        }
+        let depth = levels.len();
+        levels.push(*level);
+        let end = headings
+            .iter()
+            .skip(index.saturating_add(1))
+            .find(|(next, _)| next <= level)
+            .and_then(|(_, next_line)| u32::try_from(*next_line).ok())
+            .map_or(last_line, |next| next.saturating_sub(1));
+        let text = doc.line_text(*line);
+        let name = text.trim_start_matches('#').trim().to_string();
+        let start = u32::try_from(*line).unwrap_or(u32::MAX);
+        let range = Range {
+            start: Position {
+                line: start,
+                character: 0,
+            },
+            end: Position {
+                line: end.max(start),
+                character: 0,
+            },
+        };
+        out.push(Symbol {
+            name,
+            kind: format!("H{level}"),
+            range,
+            selection: Range {
+                start: range.start,
+                end: range.start,
+            },
+            depth,
+            detail: None,
+            deprecated: false,
+        });
+    }
+    out
 }
 
 /// One workspace-wide symbol match from an LSP server.
@@ -668,6 +740,13 @@ pub fn parse_document_symbols(result: &Value) -> Vec<Symbol> {
                         range: native_range(&item.range),
                         selection: native_range(&item.selection_range),
                         depth,
+                        detail: item.detail.clone().filter(|detail| !detail.is_empty()),
+                        #[allow(deprecated)] // older servers only set the flag
+                        deprecated: item.deprecated == Some(true)
+                            || item
+                                .tags
+                                .as_ref()
+                                .is_some_and(|tags| tags.contains(&lsp_types::SymbolTag::DEPRECATED)),
                     });
                     if let Some(children) = &item.children {
                         walk(children, depth.saturating_add(1), out);
@@ -684,6 +763,13 @@ pub fn parse_document_symbols(result: &Value) -> Vec<Symbol> {
                     range: native_range(&item.location.range),
                     selection: native_range(&item.location.range),
                     depth: 0,
+                    detail: item.container_name.clone(),
+                    #[allow(deprecated)] // older servers only set the flag
+                    deprecated: item.deprecated == Some(true)
+                        || item
+                            .tags
+                            .as_ref()
+                            .is_some_and(|tags| tags.contains(&lsp_types::SymbolTag::DEPRECATED)),
                 });
             }
         }
@@ -1357,6 +1443,8 @@ mod tests {
         assert_eq!(symbols[1].name, "helper");
         assert_eq!(symbols[1].depth, 1);
         assert_eq!(symbols[1].range.start.line, 2);
+        // Jumps land on the name, not the item's first line.
+        assert_eq!(symbols[1].selection.start.character, 5);
 
         let flat = serde_json::json!([{
             "name": "Thing",
@@ -1371,6 +1459,53 @@ mod tests {
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].kind, "Class");
         assert_eq!(symbols[0].depth, 0);
+    }
+
+    #[test]
+    fn document_symbols_keep_detail_and_deprecation() {
+        let nested = serde_json::json!([{
+            "name": "old",
+            "detail": "fn() -> u8",
+            "kind": 12,
+            "tags": [1],
+            "range": {"start": {"line": 0, "character": 0},
+                      "end": {"line": 0, "character": 9}},
+            "selectionRange": {"start": {"line": 0, "character": 3},
+                               "end": {"line": 0, "character": 6}},
+        }]);
+        let symbols = parse_document_symbols(&nested);
+        assert_eq!(symbols[0].detail.as_deref(), Some("fn() -> u8"));
+        assert!(symbols[0].deprecated);
+    }
+
+    #[test]
+    fn markdown_outline_nests_headings_and_spans_sections() {
+        let doc = crate::doc::Doc::new("# A\ntext\n## B\nmore\n### C\n## D\n# E\n");
+        let outline = markdown_outline(&doc);
+        let shape: Vec<(&str, usize, u32, u32)> = outline
+            .iter()
+            .map(|s| {
+                (
+                    s.name.as_str(),
+                    s.depth,
+                    s.range.start.line,
+                    s.range.end.line,
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("A", 0, 0, 5),
+                ("B", 1, 2, 4),
+                ("C", 2, 4, 4),
+                ("D", 1, 5, 5),
+                ("E", 0, 6, 7),
+            ]
+        );
+        // The caret in B's body is inside B, not A.
+        assert_eq!(innermost_symbol(&outline, 3), Some(1));
+        assert_eq!(innermost_symbol(&outline, 4), Some(2));
     }
 
     #[test]

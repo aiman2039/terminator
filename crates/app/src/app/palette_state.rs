@@ -12,6 +12,8 @@ pub(crate) struct PaletteState {
     pub(crate) index: usize,
     pub(crate) cache: Option<palette::PaletteCache>,
     pub(crate) query_changed_at: Instant,
+    /// File Structure mode: list only this file's outline, in order.
+    pub(crate) file_scope: Option<std::path::PathBuf>,
 }
 
 impl PaletteState {
@@ -23,6 +25,7 @@ impl PaletteState {
             index: 0,
             cache: None,
             query_changed_at: Instant::now(),
+            file_scope: None,
         }
     }
 }

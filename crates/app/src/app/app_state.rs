@@ -234,6 +234,7 @@ pub struct App {
     pub(crate) shortcut_capture: Option<String>,
     pub(crate) browse_target: Option<BrowseTarget>,
     pub(crate) palette: super::palette_state::PaletteState,
+    pub(crate) structure: crate::sidebar_ui::StructureState,
     pub(crate) worktree_draft: Option<worktree_ui::WorktreeDraft>,
     pub(crate) worktree_remove: Option<String>,
     pub(crate) theme: AppearanceConfig,

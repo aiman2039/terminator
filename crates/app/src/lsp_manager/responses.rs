@@ -122,9 +122,17 @@ impl LspManager {
                 } else {
                     self.symbols_retry.remove(&path);
                 }
-                self.symbols.insert(path.clone(), parsed.into());
+                // Re-answers after unrelated edits are common; only a
+                // changed outline invalidates the palette's cached results.
+                let changed = self
+                    .symbols
+                    .get(&path)
+                    .is_none_or(|old| old.as_ref() != parsed.as_slice());
+                if changed {
+                    self.symbols.insert(path.clone(), parsed.into());
+                    self.search_revision = self.search_revision.wrapping_add(1);
+                }
                 self.symbols_rev.insert(path, revision);
-                self.search_revision = self.search_revision.wrapping_add(1);
             }
             Some(Pending::WorkspaceSymbols { generation }) => {
                 if generation == self.workspace_symbol_generation {

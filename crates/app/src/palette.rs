@@ -9,13 +9,15 @@ use terminator_native_edit::finder::{MAX_INDEX_FILES, spawn_scan};
 use terminator_native_edit::lsp as native_lsp;
 
 const MAX_RESULTS: usize = 80;
+/// File Structure lists a whole outline, not a ranked top slice.
+const MAX_FILE_STRUCTURE: usize = 2000;
 const FILE_RESULTS: usize = 40;
 /// Recent files shown before sessions when the field is empty.
 const RECENT_RESULTS: usize = 8;
 const SYMBOL_QUERY_DELAY: Duration = Duration::from_millis(180);
 
 const FILTER_FILES: u8 = 1 << 0;
-const FILTER_SYMBOLS: u8 = 1 << 1;
+pub(crate) const FILTER_SYMBOLS: u8 = 1 << 1;
 const FILTER_PROJECTS: u8 = 1 << 2;
 const FILTER_SESSIONS: u8 = 1 << 3;
 const FILTER_AGENTS: u8 = 1 << 4;
@@ -60,6 +62,7 @@ pub(crate) struct PaletteCache {
     lsp_revision: u64,
     filters: u8,
     project: Option<String>,
+    scope: Option<PathBuf>,
     items: Vec<PaletteItem>,
 }
 
@@ -105,7 +108,12 @@ const PINNED_IDE_ACTIONS: &[Action] = &[
 ];
 /// Shortcut actions the palette never lists: they open the palette or its
 /// Settings counterpart.
-const HIDDEN_ACTIONS: &[Action] = &[Action::OpenSettings, Action::OpenPalette];
+const HIDDEN_ACTIONS: &[Action] = &[
+    Action::OpenSettings,
+    Action::OpenPalette,
+    Action::GotoSymbol,
+    Action::FileStructure,
+];
 /// Shortcut actions listed only while a session is active.
 const SESSION_ACTIONS: &[Action] = &[
     Action::SelectAll,
@@ -652,7 +660,56 @@ impl App {
         out
     }
 
+    /// File Structure: the scoped file's outline in document order,
+    /// indented by depth, fuzzy-filtered on symbol names.
+    fn file_structure_items(&self, path: &Path) -> Vec<PaletteItem> {
+        let markdown = crate::markdown::supported(path)
+            .then(|| {
+                self.native_docs
+                    .get(path)
+                    .and_then(|doc| doc.buffer())
+                    .map(native_lsp::markdown_outline)
+            })
+            .flatten();
+        let symbols: Vec<native_lsp::Symbol> =
+            markdown.unwrap_or_else(|| self.lsp.symbols_for(path).to_vec());
+        let query = self.palette.query.trim();
+        let mut matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
+        let mut needle_buf = Vec::new();
+        let needle = nucleo::Utf32Str::new(query, &mut needle_buf);
+        let mut haystack_buf = Vec::new();
+        symbols
+            .into_iter()
+            .filter(|symbol| {
+                query.is_empty()
+                    || matcher
+                        .fuzzy_match(
+                            nucleo::Utf32Str::new(&symbol.name, &mut haystack_buf),
+                            needle,
+                        )
+                        .is_some()
+            })
+            .take(MAX_FILE_STRUCTURE)
+            .map(|symbol| PaletteItem::Symbol {
+                path: path.to_owned(),
+                // Filtered results flatten; the full outline shows nesting.
+                name: if query.is_empty() {
+                    format!("{}{}", "   ".repeat(symbol.depth), symbol.name)
+                } else {
+                    symbol.name
+                },
+                kind: symbol.kind,
+                line: symbol.selection.start.line,
+                column: symbol.selection.start.character,
+                container: None,
+            })
+            .collect()
+    }
+
     pub(super) fn filtered_palette(&self) -> Vec<PaletteItem> {
+        if let Some(scope) = self.palette.file_scope.as_deref() {
+            return self.file_structure_items(scope);
+        }
         let query = self.palette.query.trim();
         let items = self.palette_items();
         if query.is_empty() {
@@ -672,7 +729,17 @@ impl App {
             if !self.file_index.is_empty() && matches!(item, PaletteItem::File(_)) {
                 continue;
             }
-            let text = item.search_text(self);
+            // Symbols rank on their name (and container), never on the
+            // file path or kind: `main` must not match all of `main.rs`.
+            let text = match &item {
+                PaletteItem::Symbol {
+                    name, container, ..
+                } => match container {
+                    Some(container) => format!("{name} {container}"),
+                    None => name.clone(),
+                },
+                _ => item.search_text(self),
+            };
             let haystack = nucleo::Utf32Str::new(&text, &mut haystack_buf);
             if let Some(score) = matcher.fuzzy_match(haystack, needle) {
                 let title = item.title();
@@ -755,6 +822,8 @@ impl App {
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), &format!("palette-filter:{name}"), response.rect);
                 if response.clicked() {
+                    // A chip leaves File Structure for the full search.
+                    self.palette.file_scope = None;
                     if on {
                         self.palette.filters &= !bit;
                     } else {
@@ -764,7 +833,15 @@ impl App {
                 }
             }
         });
-        let hint = if project_name.is_empty() {
+        let scope_name = self
+            .palette
+            .file_scope
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned());
+        let hint = if let Some(name) = scope_name {
+            format!("File structure of {name}…")
+        } else if project_name.is_empty() {
             "Search…".to_string()
         } else {
             format!("Search {project_name}…")
@@ -786,7 +863,12 @@ impl App {
         if !ui.input(|input| input.pointer.primary_down()) {
             search.request_focus();
         }
-        if self.palette_wants(FILTER_SYMBOLS) {
+        if let Some(scope) = self.palette.file_scope.clone() {
+            // The outline is the file's own; no workspace query.
+            if !crate::markdown::supported(&scope) {
+                self.lsp.request_symbols(&scope);
+            }
+        } else if self.palette_wants(FILTER_SYMBOLS) {
             if self.palette.query.trim().chars().count() >= 2 {
                 if self.palette.query_changed_at.elapsed() >= SYMBOL_QUERY_DELAY {
                     let scoped_path = self.selected_project().map(|project| project.path.clone());
@@ -814,6 +896,7 @@ impl App {
                 || cache.lsp_revision != self.lsp.search_revision()
                 || cache.filters != self.palette.filters
                 || cache.project != project_id
+                || cache.scope != self.palette.file_scope
         });
         if stale {
             self.palette.cache = Some(PaletteCache {
@@ -823,6 +906,7 @@ impl App {
                 lsp_revision: self.lsp.search_revision(),
                 filters: self.palette.filters,
                 project: project_id,
+                scope: self.palette.file_scope.clone(),
                 items: self.filtered_palette(),
             });
         }
@@ -905,6 +989,7 @@ impl App {
         self.palette.query.clear();
         self.palette.index = 0;
         self.palette.filters = 0;
+        self.palette.file_scope = None;
         self.palette.cache = None;
         self.lsp.clear_workspace_symbols();
     }

@@ -488,6 +488,12 @@ impl LspManager {
         );
     }
 
+    /// Seed a cached outline, standing in for a server answer.
+    #[cfg(test)]
+    pub fn set_symbols_for_test(&mut self, path: &Path, symbols: Vec<L::Symbol>) {
+        self.symbols.insert(path.to_owned(), symbols.into());
+    }
+
     /// Cached outline for `path`, in document order (depth-tagged).
     /// Shared, so per-frame callers clone a pointer, not the outline.
     #[must_use]

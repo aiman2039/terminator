@@ -8,6 +8,8 @@ mod explorer_rows;
 mod git_panel;
 mod perforce_panel;
 mod problems;
+mod structure;
+pub(crate) use structure::StructureState;
 #[cfg(test)]
 mod sidebar_tests;
 

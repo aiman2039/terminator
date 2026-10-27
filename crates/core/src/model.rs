@@ -292,6 +292,8 @@ impl Default for Settings {
                 ("move_to_strip".into(), "command+alt+Down".into()),
                 ("open_settings".into(), "command+,".into()),
                 ("open_palette".into(), "command+P".into()),
+                ("goto_symbol".into(), "command+alt+O".into()),
+                ("file_structure".into(), "command+F12".into()),
                 ("next_attention".into(), "command+shift+J".into()),
                 ("new_browser".into(), "command+alt+B".into()),
                 ("new_vnc".into(), "command+alt+V".into()),

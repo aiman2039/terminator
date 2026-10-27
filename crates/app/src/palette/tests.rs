@@ -480,3 +480,74 @@ fn nested_project_files_stay_in_that_project() {
             .any(|item| matches!(item, PaletteItem::File(path) if path.ends_with("parent/own.rs")))
     );
 }
+
+fn outline_symbol(name: &str, depth: usize, line: u32) -> native_lsp::Symbol {
+    let at = native_lsp::Position { line, character: 4 };
+    native_lsp::Symbol {
+        name: name.into(),
+        kind: "Function".into(),
+        range: native_lsp::Range { start: at, end: at },
+        selection: native_lsp::Range { start: at, end: at },
+        depth,
+        detail: None,
+        deprecated: false,
+    }
+}
+
+fn symbol_names(items: &[PaletteItem]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(|item| match item {
+            PaletteItem::Symbol { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn symbol_search_ranks_on_names_not_file_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+    project_at(&mut app, "p", dir.path().into());
+    app.selected = Some("p".into());
+    app.lsp.set_symbols_for_test(
+        &dir.path().join("main.rs"),
+        vec![outline_symbol("helper", 0, 1)],
+    );
+    app.lsp.set_symbols_for_test(
+        &dir.path().join("other.rs"),
+        vec![outline_symbol("main_loop", 0, 3)],
+    );
+    app.palette.filters = FILTER_SYMBOLS;
+    app.palette.query = "main".into();
+    assert_eq!(symbol_names(&app.filtered_palette()), ["main_loop"]);
+}
+
+#[test]
+fn file_structure_lists_the_scoped_outline_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
+    project_at(&mut app, "p", dir.path().into());
+    app.selected = Some("p".into());
+    let file = dir.path().join("lib.rs");
+    app.lsp.set_symbols_for_test(
+        &file,
+        vec![
+            outline_symbol("Point", 0, 0),
+            outline_symbol("new", 1, 2),
+            outline_symbol("parse", 0, 9),
+        ],
+    );
+    app.lsp.set_symbols_for_test(
+        &dir.path().join("other.rs"),
+        vec![outline_symbol("elsewhere", 0, 0)],
+    );
+    app.palette.filters = FILTER_SYMBOLS;
+    app.palette.file_scope = Some(file);
+    assert_eq!(
+        symbol_names(&app.filtered_palette()),
+        ["Point", "   new", "parse"]
+    );
+    app.palette.query = "pa".into();
+    assert_eq!(symbol_names(&app.filtered_palette()), ["parse"]);
+}

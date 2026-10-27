@@ -25,6 +25,7 @@ impl App {
     pub(crate) fn shortcut_applies(&self, action: Action) -> bool {
         match action {
             Action::EditorSave | Action::CompareDisk => self.active_editor_id().is_some(),
+            Action::FileStructure => self.active_editor_path().is_some(),
             Action::MoveToMain => self.focused_strip_shell().is_some(),
             Action::MoveToStrip => self.preferences.ide_mode && self.focused_main_shell().is_some(),
             _ => true,
@@ -84,6 +85,8 @@ impl App {
             Action::SplitRight => self.create(Some("right")),
             Action::OpenSettings => self.open_settings(),
             Action::OpenPalette => self.open_command_palette(),
+            Action::GotoSymbol => self.open_goto_symbol(),
+            Action::FileStructure => self.open_file_structure(),
             Action::FindInTerminal => self.find_in_active_terminal(ctx),
             Action::NextPane => self.focus_next_pane(),
             Action::SelectAll => self.select_all_active(),
@@ -210,8 +213,25 @@ impl App {
         self.go_session(&target);
     }
 
+    /// Go to Symbol: Search Everywhere with only the Symbols chip.
+    pub(crate) fn open_goto_symbol(&mut self) {
+        self.open_command_palette();
+        self.palette.filters = crate::palette::FILTER_SYMBOLS;
+    }
+
+    /// File Structure popup: the active editor's outline, filterable.
+    pub(crate) fn open_file_structure(&mut self) {
+        let Some(path) = self.active_editor_path() else {
+            return;
+        };
+        self.open_command_palette();
+        self.palette.filters = crate::palette::FILTER_SYMBOLS;
+        self.palette.file_scope = Some(path);
+    }
+
     pub(crate) fn open_command_palette(&mut self) {
         self.palette.open = true;
+        self.palette.file_scope = None;
         self.palette.query.clear();
         self.palette.index = 0;
         self.palette.filters = 0;

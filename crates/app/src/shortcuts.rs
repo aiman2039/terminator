@@ -54,6 +54,8 @@ actions! {
     MoveToStrip => "move_to_strip", "Move terminal to lower pane";
     OpenSettings => "open_settings", "Settings";
     OpenPalette => "open_palette", "Search Everywhere";
+    GotoSymbol => "goto_symbol", "Go to symbol";
+    FileStructure => "file_structure", "File structure";
     NextAttention => "next_attention", "Next agent needing attention";
     NewBrowser => "new_browser", "New browser tab";
     NewVnc => "new_vnc", "New VNC viewer";
