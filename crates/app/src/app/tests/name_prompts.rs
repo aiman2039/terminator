@@ -171,7 +171,7 @@ fn hidden_rename_field_releases_terminal_input() {
             )),
             ..Default::default()
         },
-        |ui| app.inline_rename(ui, "named", RenameSurface::Workspace, rect),
+        |ui| app.inline_rename(crate::workspace_ui::InlineRenameInput { ui, sid: "named", surface: RenameSurface::Workspace, rect }),
     );
     output.textures_delta.clear();
     app.note_rename_frame(&ctx);
@@ -419,7 +419,7 @@ fn inline_rename_saves_with_enter_and_cancels_with_escape() {
                         events,
                         ..Default::default()
                     },
-                    |ui| app.inline_rename(ui, "named", surface, rect),
+                    |ui| app.inline_rename(crate::workspace_ui::InlineRenameInput { ui, sid: "named", surface, rect }),
                 );
                 output.textures_delta.clear();
             };

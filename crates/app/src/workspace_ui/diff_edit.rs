@@ -10,15 +10,19 @@ fn tint(color: Color32) -> Color32 {
 
 /// Layout job whose text is exactly the buffer text (a `TextEdit` requirement),
 /// colored from cached syntect spans with per-line diff tints.
-pub(super) fn highlighted_job(
-    text: &str,
-    spans: &[Vec<diff::DiffSpan>],
-    valid: &[bool],
-    tints: &[Option<Color32>],
-    font: egui::FontId,
-    fallback: Color32,
-    wrap_width: f32,
-) -> egui::text::LayoutJob {
+pub(super) struct HighlightedJobInput<'a> {
+    pub(super) text: &'a str,
+    pub(super) spans: &'a [Vec<diff::DiffSpan>],
+    pub(super) valid: &'a [bool],
+    pub(super) tints: &'a [Option<Color32>],
+    pub(super) font: egui::FontId,
+    pub(super) fallback: Color32,
+    pub(super) wrap_width: f32,
+}
+
+pub(super) fn highlighted_job(input: HighlightedJobInput<'_>) -> egui::text::LayoutJob {
+        let HighlightedJobInput { text, spans, valid, tints, font, fallback, wrap_width } = input;
+
     let mut job = egui::text::LayoutJob::default();
     job.wrap.max_width = wrap_width;
     for (index, part) in text.split_inclusive('\n').enumerate() {
@@ -220,15 +224,19 @@ const MAX_HIGHLIGHT_BYTES: usize = 256 * 1024;
 /// edited in place with syntax highlighting and diff tints. Returns a
 /// `ScrollAreaOutput<()>` shaped like the painted panes so hunk controls and
 /// connectors keep working unchanged.
-pub(super) fn paint_right_editor(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    buffer: &mut diff::review::Edit,
-    path: &std::path::Path,
-    colors: super::diff_paint::DiffColors,
-    sync: f32,
-    key: &str,
-) -> egui::scroll_area::ScrollAreaOutput<()> {
+pub(super) struct PaintRightEditorInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) rect: egui::Rect,
+    pub(super) buffer: &'a mut diff::review::Edit,
+    pub(super) path: &'a std::path::Path,
+    pub(super) colors: super::diff_paint::DiffColors,
+    pub(super) sync: f32,
+    pub(super) key: &'a str,
+}
+
+pub(super) fn paint_right_editor(input: PaintRightEditorInput<'_>) -> egui::scroll_area::ScrollAreaOutput<()> {
+        let PaintRightEditorInput { ui, rect, buffer, path, colors, sync, key } = input;
+
     let (spans, valid, tints, _rows) = ensure_cache(buffer, path, colors);
     let font = egui::TextStyle::Monospace.resolve(ui.style());
     let fallback = colors.text;
@@ -256,15 +264,7 @@ pub(super) fn paint_right_editor(
                         let mut layouter =
                             |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
                                 ui.ctx().fonts_mut(|fonts| {
-                                    fonts.layout_job(highlighted_job(
-                                        text.as_str(),
-                                        &spans,
-                                        &valid,
-                                        &tints,
-                                        font.clone(),
-                                        fallback,
-                                        wrap_width,
-                                    ))
+                                    fonts.layout_job(highlighted_job(HighlightedJobInput { text: text.as_str(), spans: &spans, valid: &valid, tints: &tints, font: font.clone(), fallback, wrap_width }))
                                 })
                             };
                         let editor = egui::TextEdit::multiline(&mut buffer.text)
@@ -469,14 +469,18 @@ pub(super) fn aligned_left(
 
 /// Red rules where the buffer dropped original lines (they have no row
 /// on the right); hovering one lists the deleted text.
-pub(super) fn paint_deleted_markers(
-    ui: &egui::Ui,
-    output: &egui::scroll_area::ScrollAreaOutput<()>,
-    deleted: &[(usize, Vec<String>)],
-    row_h: f32,
-    color: Color32,
-    key: &str,
-) {
+pub(super) struct PaintDeletedMarkersInput<'a> {
+    pub(super) ui: &'a egui::Ui,
+    pub(super) output: &'a egui::scroll_area::ScrollAreaOutput<()>,
+    pub(super) deleted: &'a [(usize, Vec<String>)],
+    pub(super) row_h: f32,
+    pub(super) color: Color32,
+    pub(super) key: &'a str,
+}
+
+pub(super) fn paint_deleted_markers(input: PaintDeletedMarkersInput<'_>) {
+        let PaintDeletedMarkersInput { ui, output, deleted, row_h, color, key } = input;
+
     let clip = output.inner_rect;
     let offset = output.state.unclamped_offset().y;
     for (index, (row, lines)) in deleted.iter().enumerate() {
@@ -599,16 +603,21 @@ pub(super) fn apply_redo(buffer: &mut diff::review::Edit) -> bool {
 /// whole file (see `live_rows`), every buffer row hosts its editor at its
 /// own row, deleted rows stay painted in place, and changed blocks carry a
 /// full-width background. No hunk windows, no double-click, no mode.
-pub(super) fn paint_unified_editor(
-    ui: &mut egui::Ui,
-    doc: &diff::DiffDocument,
-    buffer: &mut diff::review::Edit,
-    path: &std::path::Path,
-    colors: super::diff_paint::DiffColors,
-    key: &str,
-) -> egui::scroll_area::ScrollAreaOutput<()> {
+pub(super) struct PaintUnifiedEditorInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) doc: &'a diff::DiffDocument,
+    pub(super) buffer: &'a mut diff::review::Edit,
+    pub(super) path: &'a std::path::Path,
+    pub(super) colors: super::diff_paint::DiffColors,
+    pub(super) key: &'a str,
+}
+
+pub(super) fn paint_unified_editor(input: PaintUnifiedEditorInput<'_>) -> egui::scroll_area::ScrollAreaOutput<()> {
+        let PaintUnifiedEditorInput { ui, doc, buffer, path, colors, key } = input;
+
     use super::diff_paint::{
-        DiffGutter, DiffGutterPaint, DiffMetrics, DiffPaint, diff_content_width, diff_row_style,
+        DiffGutter, DiffGutterPaint, DiffMetrics, DiffPaint, DiffContentWidthInput, FillDiffRowInput, diff_content_width,
+        diff_row_style,
         fill_diff_row, gutter_cols, paint_diff_gutter, paint_diff_line,
     };
     use diff::review::LiveRow;
@@ -664,7 +673,7 @@ pub(super) fn paint_unified_editor(
     let left_lines = buffer.document.left_text.split_inclusive('\n').count();
     let digits = u32::try_from(left_lines.max(buffer_lines).to_string().len()).unwrap_or(4);
     let metrics = DiffMetrics::measure(ui, digits.max(1));
-    let content = diff_content_width(ui, doc, false, &metrics, key);
+    let content = diff_content_width(DiffContentWidthInput { ui, doc, split: false, metrics: &metrics, scroll_key: key });
     let width = content.max(ui.available_width());
     let font = egui::TextStyle::Monospace.resolve(ui.style());
     let fallback = colors.text;
@@ -738,7 +747,7 @@ pub(super) fn paint_unified_editor(
                             egui::vec2(width, metrics.row_h),
                             egui::Sense::hover(),
                         );
-                        fill_diff_row(ui, rect, cols.code, bg);
+                        fill_diff_row(FillDiffRowInput { ui, rect, gutter_w: cols.code, bg });
                         paint_diff_gutter(
                             ui,
                             DiffGutterPaint {
@@ -796,15 +805,7 @@ pub(super) fn paint_unified_editor(
                             let mut layouter =
                                 |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
                                     ui.ctx().fonts_mut(|fonts| {
-                                        fonts.layout_job(highlighted_job(
-                                            text.as_str(),
-                                            std::slice::from_ref(&line_spans),
-                                            &[line_valid],
-                                            &[bg_to_layout(bg)],
-                                            font.clone(),
-                                            fallback,
-                                            wrap_width,
-                                        ))
+                                        fonts.layout_job(highlighted_job(HighlightedJobInput { text: text.as_str(), spans: std::slice::from_ref(&line_spans), valid: &[line_valid], tints: &[bg_to_layout(bg)], font: font.clone(), fallback, wrap_width }))
                                     })
                                 };
                             let editor = egui::TextEdit::singleline(&mut local)

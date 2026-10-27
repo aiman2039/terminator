@@ -72,15 +72,18 @@ struct HoverCopy {
     frame: u64,
 }
 
+pub(crate) struct RememberHoverCopyInput<'a> {
+    pub(crate) ui: &'a egui::Ui,
+    pub(crate) sid: &'a str,
+    pub(crate) target: &'a services::Target,
+    pub(crate) rects: Vec<egui::Rect>,
+    pub(crate) strip: bool,
+}
+
 impl App {
-    pub(crate) fn remember_hover_copy(
-        &self,
-        ui: &egui::Ui,
-        sid: &str,
-        target: &services::Target,
-        rects: Vec<egui::Rect>,
-        strip: bool,
-    ) {
+    pub(crate) fn remember_hover_copy(&self, input: RememberHoverCopyInput<'_>) {
+        let RememberHoverCopyInput { ui, sid, target, rects, strip } = input;
+
         let key = egui::Id::unique(("terminal-hover-copy", ui.ctx().viewport_id()));
         let hover = HoverCopy {
             session: sid.to_owned(),

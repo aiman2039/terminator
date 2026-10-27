@@ -5,6 +5,32 @@ use anyhow::{Context, Result, ensure};
 use egui_dock::DockState;
 use std::collections::{HashMap, HashSet};
 
+pub struct AddAtFromInput<'a> {
+    pub index: usize,
+    pub id: String,
+    pub pane: Tab,
+    pub anchors: &'a [Tab],
+}
+
+pub struct MovePaneToSplitInput<'a> {
+    pub pane: &'a Tab,
+    pub dest_group: &'a str,
+    pub dest: egui_dock::NodePath,
+    pub split: egui_dock::Split,
+}
+
+pub struct ExchangeSinglePaneInput<'a> {
+    pub src: usize,
+    pub dst: usize,
+    pub pane: &'a Tab,
+    pub dest: egui_dock::NodePath,
+    pub src_path: egui_dock::TabPath,
+    pub dest_group: &'a str,
+    pub other: Option<Tab>,
+    pub src_len: usize,
+    pub dst_len: usize,
+}
+
 impl Workspace {
     pub fn from_layout(layout: DockState<Tab>) -> Self {
         let id = terminator_core::id();
@@ -121,10 +147,12 @@ impl Workspace {
     }
 
     pub fn add_from(&mut self, id: String, pane: Tab, anchors: &[Tab]) {
-        self.add_at_from(self.tabs.len(), id, pane, anchors);
+        self.add_at_from(crate::workspace::AddAtFromInput { index: self.tabs.len(), id, pane, anchors });
     }
 
-    pub fn add_at_from(&mut self, index: usize, id: String, pane: Tab, anchors: &[Tab]) {
+    pub fn add_at_from(&mut self, input: AddAtFromInput<'_>) {
+        let AddAtFromInput { index, id, pane, anchors } = input;
+
         let origin = anchors.iter().find_map(|anchor| {
             self.tabs
                 .iter()
@@ -353,35 +381,18 @@ impl Workspace {
                 dst_leaf.tabs.first().cloned(),
             )
         };
-        if src_len == 1 && dst_len == 1 {
-            // Exchange single panes across groups: no structure changes, so
-            // both terminals stay exactly where the user can see them.
-            let Some(other) = other else {
-                return false;
-            };
-            if other == *pane {
-                return true;
-            }
-            if let Some(tab) = self.tabs.get_mut(src)
-                && let Ok(leaf) = tab.layout.leaf_mut(src_path.node_path())
-                && let Some(slot) = leaf.tabs.get_mut(0)
-            {
-                *slot = other;
-            }
-            if let Some(tab) = self.tabs.get_mut(dst)
-                && let Ok(leaf) = tab.layout.leaf_mut(dest)
-                && let Some(slot) = leaf.tabs.get_mut(0)
-            {
-                *slot = pane.clone();
-            }
-            if let Some(tab) = self.tabs.get_mut(dst)
-                && let Some(path) = tab.layout.find_tab(pane)
-            {
-                let _ = tab.layout.set_active_tab(path);
-                tab.layout.set_focused_node_and_surface(path.node_path());
-            }
-            dest_group.clone_into(&mut self.active);
-            return true;
+        if let Some(result) = self.exchange_single_pane(ExchangeSinglePaneInput {
+            src,
+            dst,
+            pane,
+            dest,
+            src_path,
+            dest_group,
+            other,
+            src_len,
+            dst_len,
+        }) {
+            return result;
         }
         if let Some(tab) = self.tabs.get_mut(src) {
             let removed = tab.layout.remove_tab(src_path);
@@ -408,13 +419,44 @@ impl Workspace {
         true
     }
 
-    pub fn move_pane_to_split(
-        &mut self,
-        pane: &Tab,
-        dest_group: &str,
-        dest: egui_dock::NodePath,
-        split: egui_dock::Split,
-    ) -> bool {
+    fn exchange_single_pane(&mut self, input: ExchangeSinglePaneInput<'_>) -> Option<bool> {
+        let ExchangeSinglePaneInput { src, dst, pane, dest, src_path, dest_group, other, src_len, dst_len } = input;
+        if src_len == 1 && dst_len == 1 {
+            // Exchange single panes across groups: no structure changes, so
+            // both terminals stay exactly where the user can see them.
+            let Some(other) = other else {
+                return Some(false);
+            };
+            if other == *pane {
+                return Some(true);
+            }
+            if let Some(tab) = self.tabs.get_mut(src)
+                && let Ok(leaf) = tab.layout.leaf_mut(src_path.node_path())
+                && let Some(slot) = leaf.tabs.get_mut(0)
+            {
+                *slot = other;
+            }
+            if let Some(tab) = self.tabs.get_mut(dst)
+                && let Ok(leaf) = tab.layout.leaf_mut(dest)
+                && let Some(slot) = leaf.tabs.get_mut(0)
+            {
+                *slot = pane.clone();
+            }
+            if let Some(tab) = self.tabs.get_mut(dst)
+                && let Some(path) = tab.layout.find_tab(pane)
+            {
+                let _ = tab.layout.set_active_tab(path);
+                tab.layout.set_focused_node_and_surface(path.node_path());
+            }
+            dest_group.clone_into(&mut self.active);
+            return Some(true);
+        }
+        None
+    }
+
+    pub fn move_pane_to_split(&mut self, input: MovePaneToSplitInput<'_>) -> bool {
+        let MovePaneToSplitInput { pane, dest_group, dest, split } = input;
+
         let Some(src) = self.group_with_pane(pane) else {
             return false;
         };

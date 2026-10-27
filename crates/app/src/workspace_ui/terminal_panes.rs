@@ -1,5 +1,12 @@
 use super::super::*;
 use super::viewer::Viewer;
+pub(super) struct StripTerminalClicksInput {
+    sid: Option<String>,
+    path: egui_dock::NodePath,
+    git_clicked: bool,
+    vertical_clicked: bool,
+    horizontal_clicked: bool,
+}
 impl Viewer<'_> {
     pub(super) fn strip_terminal_actions(&mut self, ui: &mut egui::Ui, path: egui_dock::NodePath) {
         let tabs = self
@@ -78,23 +85,36 @@ impl Viewer<'_> {
                 split_horizontal.rect,
             );
         }
-        if git.clicked() {
+        self.strip_terminal_clicks(StripTerminalClicksInput {
+            sid,
+            path,
+            git_clicked: git.clicked(),
+            vertical_clicked: split_vertical.clicked(),
+            horizontal_clicked: split_horizontal.clicked(),
+        });
+    }
+
+    fn strip_terminal_clicks(&mut self, input: StripTerminalClicksInput) {
+        let StripTerminalClicksInput {
+            sid,
+            path,
+            git_clicked,
+            vertical_clicked,
+            horizontal_clicked,
+        } = input;
+        if git_clicked {
             if let Some(sid) = sid.clone() {
                 self.app.active_session = Some(sid.clone());
                 self.app.focus_strip_tab = Some(Tab::Terminal(sid));
             }
             self.app.show_git_sidebar();
         }
-        if split_vertical.clicked() || split_horizontal.clicked() {
+        if vertical_clicked || horizontal_clicked {
             if let Some(sid) = &sid {
                 self.app.active_session = Some(sid.clone());
                 self.app.focus_strip_tab = Some(Tab::Terminal(sid.clone()));
             }
-            let direction = if split_vertical.clicked() {
-                "right"
-            } else {
-                "down"
-            };
+            let direction = if vertical_clicked { "right" } else { "down" };
             self.app.add_strip_tab = Some((path, Some(direction.into())));
         }
     }
@@ -277,50 +297,11 @@ impl Viewer<'_> {
                         reveal = Some(hit.line);
                     }
                 }
-                let total = find.outcome.matches.len();
-                let label = if find.query.is_empty() {
-                    String::new()
-                } else if total == 0 {
-                    "No matches".to_string()
-                } else {
-                    let mut text = format!("{}/{}", find.current.saturating_add(1), total);
-                    if find.outcome.truncated {
-                        text.push('+');
-                    }
-                    text
-                };
-                ui.monospace(label);
-                let shift = ui.input(|i| i.modifiers.shift);
-                if ui
-                    .small_button("↑")
-                    .on_hover_text("Previous (Shift+Enter)")
-                    .clicked()
-                    || (response.has_focus()
-                        && shift
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                {
-                    find.step(-1);
-                    reveal = find.outcome.matches.get(find.current).map(|hit| hit.line);
+                let (nav_reveal, nav_close) = Self::find_bar_nav(ui, find, &response);
+                if nav_reveal.is_some() {
+                    reveal = nav_reveal;
                 }
-                if ui.small_button("↓").on_hover_text("Next (Enter)").clicked()
-                    || (response.has_focus()
-                        && !shift
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-                {
-                    find.step(1);
-                    reveal = find.outcome.matches.get(find.current).map(|hit| hit.line);
-                }
-                if appearance::sidebar_action(ui, "X", "Close (Esc)").clicked() {
-                    close = true;
-                }
-                if response.has_focus()
-                    && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-                {
-                    close = true;
-                }
-                if response.has_focus() {
-                    ui.ctx().request_repaint_after(Duration::from_millis(250));
-                }
+                close = close || nav_close;
             });
         }
         if let Some(line) = reveal
@@ -331,5 +312,58 @@ impl Viewer<'_> {
         if close {
             self.app.terminal_find.remove(sid);
         }
+    }
+
+    fn find_bar_nav(
+        ui: &mut egui::Ui,
+        find: &mut TerminalFind,
+        response: &egui::Response,
+    ) -> (Option<i32>, bool) {
+        let mut reveal = None;
+        let mut close = false;
+            let total = find.outcome.matches.len();
+            let label = if find.query.is_empty() {
+                String::new()
+            } else if total == 0 {
+                "No matches".to_string()
+            } else {
+                let mut text = format!("{}/{}", find.current.saturating_add(1), total);
+                if find.outcome.truncated {
+                    text.push('+');
+                }
+                text
+            };
+            ui.monospace(label);
+            let shift = ui.input(|i| i.modifiers.shift);
+            if ui
+                .small_button("↑")
+                .on_hover_text("Previous (Shift+Enter)")
+                .clicked()
+                || (response.has_focus()
+                    && shift
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+            {
+                find.step(-1);
+                reveal = find.outcome.matches.get(find.current).map(|hit| hit.line);
+            }
+            if ui.small_button("↓").on_hover_text("Next (Enter)").clicked()
+                || (response.has_focus()
+                    && !shift
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+            {
+                find.step(1);
+                reveal = find.outcome.matches.get(find.current).map(|hit| hit.line);
+            }
+            if appearance::sidebar_action(ui, "X", "Close (Esc)").clicked() {
+                close = true;
+            }
+            if response.has_focus()
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+            {
+                close = true;
+            }
+            if response.has_focus() {
+                ui.ctx().request_repaint_after(Duration::from_millis(250));
+            }        (reveal, close)
     }
 }

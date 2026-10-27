@@ -450,7 +450,7 @@ impl App {
         let pane = Tab::Terminal(sid.to_owned());
         let placed = match zone.split() {
             None => dock.move_pane_to_group_leaf(&pane, group, path),
-            Some(split) => dock.move_pane_to_split(&pane, group, path, split),
+            Some(split) => dock.move_pane_to_split(crate::workspace::MovePaneToSplitInput { pane: &pane, dest_group: group, dest: path, split }),
         };
         placed || dock.contains(&pane)
     }

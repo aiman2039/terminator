@@ -216,20 +216,14 @@ impl App {
                 let from_strip = self.drag.pane_from_strip;
                 let moved = if let Some(source) = self.drag.pane_source.clone() {
                     self.selected.as_ref() == Some(&source.project)
-                        && dock.move_view_to_leaf(
-                            &source,
-                            &pane,
-                            &group,
-                            path,
-                            tab_insert
+                        && dock.move_view_to_leaf(crate::workspace::MoveViewToLeafInput { source: &source, pane: &pane, group: &group, dest: path, insertion: tab_insert
                                 .map(egui_dock::TabInsert::Insert)
                                 .unwrap_or_else(|| {
                                     zone.and_then(PaneDropZone::split).map_or(
                                         egui_dock::TabInsert::Append,
                                         egui_dock::TabInsert::Split,
                                     )
-                                }),
-                        )
+                                }) })
                 } else if from_strip {
                     match &pane {
                         Tab::Terminal(sid) => self.land_strip_shell_on_leaf(
@@ -256,7 +250,7 @@ impl App {
                             // `move_pane_to_split` focuses a lone pane dropped on
                             // an edge of its own leaf instead of splitting it.
                             edge.split().is_some_and(|split| {
-                                dock.move_pane_to_split(&pane, &group, path, split)
+                                dock.move_pane_to_split(crate::workspace::MovePaneToSplitInput { pane: &pane, dest_group: &group, dest: path, split })
                             })
                         }
                     }

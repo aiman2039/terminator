@@ -2,8 +2,9 @@ use super::super::*;
 use super::{
     diff_controls,
     diff_paint::{
-        DiffColors, DiffMetrics, SplitPane, diff_content_width, diff_doc_digits, diff_row_count,
-        paint_diff_document, paint_diff_pane, paint_markdown_diff_preview, split_rects,
+        DiffColors, DiffContentWidthInput, DiffMetrics, PaintDiffDocumentInput, PaintDiffPaneInput,
+        PaintMarkdownDiffPreviewInput, SplitPane, diff_content_width, diff_doc_digits,
+        diff_row_count, paint_diff_document, paint_diff_pane, paint_markdown_diff_preview, split_rects,
     },
 };
 use diff::actions::{Kind, Request};
@@ -547,21 +548,13 @@ impl App {
         }
         if let Some(doc) = &doc {
             let split = self.diff_split.contains(&key);
-            super::diff_paint::comparison_headers(
-                ui,
-                doc,
-                split,
-                self.diff_split_ratio,
-                &header_path,
-                !*staged && !read_only && !doc.read_only,
-                *staged,
-            );
+            super::diff_paint::comparison_headers(super::diff_paint::ComparisonHeadersInput { ui, doc, split, ratio: self.diff_split_ratio, path: &header_path, editable: !*staged && !read_only && !doc.read_only, staged: *staged });
             if doc.hunks.is_empty() && doc.unified.is_empty() {
                 ui.weak("No text changes");
             }
             if is_md && self.diff_preview.contains(&key) {
                 if let Some(link) =
-                    paint_markdown_diff_preview(ui, doc, &mut self.markdown, &cwd.join(path), &key)
+                    paint_markdown_diff_preview(PaintMarkdownDiffPreviewInput { ui, doc, previews: &mut self.markdown, path: &cwd.join(path), scroll_key: &key })
                 {
                     match link {
                         markdown::Link::File(path) => self.open_file(path, None, None, false),
@@ -598,27 +591,12 @@ impl App {
                     let editable = !read_only && split && !*staged && review.buffer.is_some();
                     let outputs = if !read_only && !split && !*staged && review.buffer.is_some() {
                         match &mut review.buffer {
-                            Some(buffer) => vec![super::diff_edit::paint_unified_editor(
-                                ui,
-                                doc,
-                                buffer,
-                                &cwd.join(path),
-                                colors,
-                                &key,
-                            )],
-                            None => paint_diff_document(
-                                ui,
-                                doc,
-                                split,
-                                colors,
-                                &key,
-                                &mut self.diff_split_ratio,
-                                &mut sync,
-                            ),
+                            Some(buffer) => vec![super::diff_edit::paint_unified_editor(super::diff_edit::PaintUnifiedEditorInput { ui, doc, buffer, path: &cwd.join(path), colors, key: &key })],
+                            None => paint_diff_document(PaintDiffDocumentInput { ui, doc, split, colors, scroll_key: &key, ratio: &mut self.diff_split_ratio, sync: &mut sync }),
                         }
                     } else if editable {
                         let metrics = DiffMetrics::measure(ui, diff_doc_digits(doc, true));
-                        let content = diff_content_width(ui, doc, true, &metrics, &key);
+                        let content = diff_content_width(DiffContentWidthInput { ui, doc, split: true, metrics: &metrics, scroll_key: &key });
                         // The right pane is the whole buffer, one row per
                         // line; the left pane is laid out on those rows so
                         // both scroll in step (no collapsed or filler rows
@@ -633,50 +611,13 @@ impl App {
                         let (left_rect, gap_rect, right_rect) =
                             split_rects(body, self.diff_split_ratio);
                         let frame_sync = sync;
-                        let left = paint_diff_pane(
-                            ui,
-                            left_rect,
-                            left_doc,
-                            SplitPane::Left,
-                            colors,
-                            &metrics,
-                            content,
-                            rows,
-                            &key,
-                            frame_sync,
-                        );
+                        let left = paint_diff_pane(PaintDiffPaneInput { ui, rect: left_rect, doc: left_doc, pane: SplitPane::Left, colors, metrics: &metrics, content, rows, scroll_key: &key, sync: frame_sync });
                         if let Some(aligned) = &aligned {
-                            super::diff_edit::paint_deleted_markers(
-                                ui,
-                                &left,
-                                &aligned.deleted,
-                                metrics.row_h,
-                                colors.deleted,
-                                &key,
-                            );
+                            super::diff_edit::paint_deleted_markers(super::diff_edit::PaintDeletedMarkersInput { ui, output: &left, deleted: &aligned.deleted, row_h: metrics.row_h, color: colors.deleted, key: &key });
                         }
                         let right = match &mut review.buffer {
-                            Some(buffer) => super::diff_edit::paint_right_editor(
-                                ui,
-                                right_rect,
-                                buffer,
-                                &cwd.join(path),
-                                colors,
-                                frame_sync,
-                                &key,
-                            ),
-                            None => paint_diff_pane(
-                                ui,
-                                right_rect,
-                                doc,
-                                SplitPane::Right,
-                                colors,
-                                &metrics,
-                                content,
-                                rows,
-                                &key,
-                                frame_sync,
-                            ),
+                            Some(buffer) => super::diff_edit::paint_right_editor(super::diff_edit::PaintRightEditorInput { ui, rect: right_rect, buffer, path: &cwd.join(path), colors, sync: frame_sync, key: &key }),
+                            None => paint_diff_pane(PaintDiffPaneInput { ui, rect: right_rect, doc, pane: SplitPane::Right, colors, metrics: &metrics, content, rows, scroll_key: &key, sync: frame_sync }),
                         };
                         let handle = egui::Rect::from_center_size(
                             gap_rect.center(),
@@ -724,29 +665,9 @@ impl App {
                         };
                         vec![left, right]
                     } else {
-                        paint_diff_document(
-                            ui,
-                            doc,
-                            split,
-                            colors,
-                            &key,
-                            &mut self.diff_split_ratio,
-                            &mut sync,
-                        )
+                        paint_diff_document(PaintDiffDocumentInput { ui, doc, split, colors, scroll_key: &key, ratio: &mut self.diff_split_ratio, sync: &mut sync })
                     };
-                    let interaction = diff_controls::paint(
-                        ui,
-                        doc,
-                        split,
-                        *staged,
-                        editable || (!split && !*staged && review.buffer.is_some()),
-                        enabled,
-                        &mut review,
-                        &outputs,
-                        rail,
-                        unified_gutter,
-                        colors,
-                    );
+                    let interaction = diff_controls::paint(diff_controls::PaintInput { ui, doc, split, staged: *staged, editor_pane: editable || (!split && !*staged && review.buffer.is_some()), enabled, review: &mut review, scroll: &outputs, rail, unified_gutter, colors });
                     if interaction.action.is_some() {
                         action = interaction.action;
                     }
@@ -754,7 +675,7 @@ impl App {
                         open_line = interaction.open_line;
                     }
                     gap = interaction.gap;
-                    diff_controls::jump(ui, doc, split, editable, &mut review, &outputs, &mut sync);
+                    diff_controls::jump(diff_controls::JumpInput { ui, doc, split, aligned: editable, review: &mut review, scroll: &outputs, sync: &mut sync });
                 });
                 ui.allocate_rect(full, egui::Sense::hover());
                 self.diff_split_scroll.insert(key.clone(), sync);

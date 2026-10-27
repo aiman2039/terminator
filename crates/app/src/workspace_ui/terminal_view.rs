@@ -237,17 +237,11 @@ impl Viewer<'_> {
             && !ui.input(|i| i.pointer.any_down())
             && !mouse_reporting
         {
-            self.app.remember_hover_copy(
-                ui,
-                sid,
-                resolved,
-                target
+            self.app.remember_hover_copy(crate::workspace_ui::hover::RememberHoverCopyInput { ui, sid, target: resolved, rects: target
                     .rects
                     .iter()
                     .map(|rect| rect.translate(response.rect.min.to_vec2()))
-                    .collect(),
-                self.strip,
-            );
+                    .collect(), strip: self.strip });
             for rect in &target.rects {
                 let rect = rect.translate(response.rect.min.to_vec2());
                 ui.painter().with_clip_rect(response.rect).line_segment(
@@ -340,7 +334,7 @@ impl Viewer<'_> {
             let key = Tab::Terminal(sid.clone()).key();
             let pane = self.pane_for(&key);
             self.app
-                .new_terminal_menu(ui, pane, self.strip, self.window);
+                .new_terminal_menu(super::menus::NewTerminalMenuInput { ui, pane, strip: self.strip, window: self.window });
             ui.separator();
             let key = ui
                 .ctx()

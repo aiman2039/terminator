@@ -107,13 +107,17 @@ pub(super) struct DiffWidths {
     content: f32,
 }
 
-pub(super) fn diff_content_width(
-    ui: &egui::Ui,
-    doc: &diff::DiffDocument,
-    split: bool,
-    metrics: &DiffMetrics,
-    scroll_key: &str,
-) -> f32 {
+pub(super) struct DiffContentWidthInput<'a> {
+    pub(super) ui: &'a egui::Ui,
+    pub(super) doc: &'a diff::DiffDocument,
+    pub(super) split: bool,
+    pub(super) metrics: &'a DiffMetrics,
+    pub(super) scroll_key: &'a str,
+}
+
+pub(super) fn diff_content_width(input: DiffContentWidthInput<'_>) -> f32 {
+        let DiffContentWidthInput { ui, doc, split, metrics, scroll_key } = input;
+
     let cache_id = egui::Id::unique(("diff-width", scroll_key, split));
     let fingerprint = egui::Id::unique((
         doc.generation,
@@ -170,23 +174,25 @@ pub(super) fn diff_content_width(
     content
 }
 
-pub(super) fn paint_diff_document(
-    ui: &mut egui::Ui,
-    doc: &diff::DiffDocument,
-    split: bool,
-    colors: DiffColors,
-    scroll_key: &str,
-    ratio: &mut f32,
-    sync: &mut f32,
-) -> Vec<egui::scroll_area::ScrollAreaOutput<()>> {
+pub(super) struct PaintDiffDocumentInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) doc: &'a diff::DiffDocument,
+    pub(super) split: bool,
+    pub(super) colors: DiffColors,
+    pub(super) scroll_key: &'a str,
+    pub(super) ratio: &'a mut f32,
+    pub(super) sync: &'a mut f32,
+}
+
+pub(super) fn paint_diff_document(input: PaintDiffDocumentInput<'_>) -> Vec<egui::scroll_area::ScrollAreaOutput<()>> {
+        let PaintDiffDocumentInput { ui, doc, split, colors, scroll_key, ratio, sync } = input;
+
     let rows = diff_row_count(doc, split);
     let digits = diff_doc_digits(doc, split);
     let metrics = DiffMetrics::measure(ui, digits);
-    let content = diff_content_width(ui, doc, split, &metrics, scroll_key);
+    let content = diff_content_width(DiffContentWidthInput { ui, doc, split, metrics: &metrics, scroll_key });
     if split {
-        paint_diff_split(
-            ui, doc, colors, &metrics, content, rows, scroll_key, ratio, sync,
-        )
+        paint_diff_split(PaintDiffSplitInput { ui, doc, colors, metrics: &metrics, content, rows, scroll_key, ratio, sync })
     } else {
         let width = content.max(ui.available_width());
         let output = ui
@@ -207,7 +213,7 @@ pub(super) fn paint_diff_document(
                                     width,
                                     line,
                                     gutter: DiffGutter::Unified,
-                                    colors: row_colors(doc, index, false, colors),
+                                    colors: row_colors(RowColorsInput { doc, row: index, split: false, colors }),
                                     metrics: &metrics,
                                 },
                             );
@@ -244,18 +250,21 @@ pub(super) enum SplitPane {
 
 // Each side owns its horizontal scroll so the divider can resize them without
 // clipping long lines; the vertical offset is mirrored so both sides stay in step.
-#[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
-pub(super) fn paint_diff_split(
-    ui: &mut egui::Ui,
-    doc: &diff::DiffDocument,
-    colors: DiffColors,
-    metrics: &DiffMetrics,
-    content: f32,
-    rows: usize,
-    scroll_key: &str,
-    ratio: &mut f32,
-    sync: &mut f32,
-) -> Vec<egui::scroll_area::ScrollAreaOutput<()>> {
+pub(super) struct PaintDiffSplitInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) doc: &'a diff::DiffDocument,
+    pub(super) colors: DiffColors,
+    pub(super) metrics: &'a DiffMetrics,
+    pub(super) content: f32,
+    pub(super) rows: usize,
+    pub(super) scroll_key: &'a str,
+    pub(super) ratio: &'a mut f32,
+    pub(super) sync: &'a mut f32,
+}
+
+pub(super) fn paint_diff_split(input: PaintDiffSplitInput<'_>) -> Vec<egui::scroll_area::ScrollAreaOutput<()>> {
+        let PaintDiffSplitInput { ui, doc, colors, metrics, content, rows, scroll_key, ratio, sync } = input;
+
     let full = ui.available_rect_before_wrap();
     let usable = (full.width() - DIFF_SPLIT_GAP).max(1.0);
     let min_pane = DIFF_SPLIT_MIN_PANE.min(usable / 2.0);
@@ -264,30 +273,8 @@ pub(super) fn paint_diff_split(
     // stay aligned; whichever pane the user scrolled becomes next frame's shared
     // offset.
     let frame_sync = *sync;
-    let left = paint_diff_pane(
-        ui,
-        left_rect,
-        doc,
-        SplitPane::Left,
-        colors,
-        metrics,
-        content,
-        rows,
-        scroll_key,
-        frame_sync,
-    );
-    let right = paint_diff_pane(
-        ui,
-        right_rect,
-        doc,
-        SplitPane::Right,
-        colors,
-        metrics,
-        content,
-        rows,
-        scroll_key,
-        frame_sync,
-    );
+    let left = paint_diff_pane(PaintDiffPaneInput { ui, rect: left_rect, doc, pane: SplitPane::Left, colors, metrics, content, rows, scroll_key, sync: frame_sync });
+    let right = paint_diff_pane(PaintDiffPaneInput { ui, rect: right_rect, doc, pane: SplitPane::Right, colors, metrics, content, rows, scroll_key, sync: frame_sync });
     // Adopt the pane the pointer is over so sub-pixel input accumulates there
     // and an inactive pane's clamp cannot override the active pane. With the
     // pointer elsewhere (keyboard, divider drag), fall back to whichever pane
@@ -308,6 +295,23 @@ pub(super) fn paint_diff_split(
             }
         }
     };
+    paint_diff_divider(PaintDiffDividerInput { ui, full, gap_rect, scroll_key, ratio, colors, usable, min_pane });
+    vec![left, right]
+}
+
+pub(super) struct PaintDiffDividerInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) full: egui::Rect,
+    pub(super) gap_rect: egui::Rect,
+    pub(super) scroll_key: &'a str,
+    pub(super) ratio: &'a mut f32,
+    pub(super) colors: DiffColors,
+    pub(super) usable: f32,
+    pub(super) min_pane: f32,
+}
+
+pub(super) fn paint_diff_divider(input: PaintDiffDividerInput<'_>) {
+    let PaintDiffDividerInput { ui, full, gap_rect, scroll_key, ratio, colors, usable, min_pane } = input;
     ui.allocate_rect(full, egui::Sense::hover());
     let handle =
         egui::Rect::from_center_size(gap_rect.center(), egui::vec2(6.0, gap_rect.height()));
@@ -333,22 +337,24 @@ pub(super) fn paint_diff_split(
         .vline(gap_rect.center().x, full.y_range(), stroke);
     #[cfg(feature = "test-support")]
     diagnostics::record(ui.ctx(), "diff-split-handle", handle);
-    vec![left, right]
 }
 
-#[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
-pub(super) fn paint_diff_pane(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    doc: &diff::DiffDocument,
-    pane: SplitPane,
-    colors: DiffColors,
-    metrics: &DiffMetrics,
-    content: f32,
-    rows: usize,
-    scroll_key: &str,
-    sync: f32,
-) -> egui::scroll_area::ScrollAreaOutput<()> {
+pub(super) struct PaintDiffPaneInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) rect: egui::Rect,
+    pub(super) doc: &'a diff::DiffDocument,
+    pub(super) pane: SplitPane,
+    pub(super) colors: DiffColors,
+    pub(super) metrics: &'a DiffMetrics,
+    pub(super) content: f32,
+    pub(super) rows: usize,
+    pub(super) scroll_key: &'a str,
+    pub(super) sync: f32,
+}
+
+pub(super) fn paint_diff_pane(input: PaintDiffPaneInput<'_>) -> egui::scroll_area::ScrollAreaOutput<()> {
+        let PaintDiffPaneInput { ui, rect, doc, pane, colors, metrics, content, rows, scroll_key, sync } = input;
+
     let side = u8::from(matches!(pane, SplitPane::Left));
     ui.scope_builder(
         egui::UiBuilder::new()
@@ -375,7 +381,7 @@ pub(super) fn paint_diff_pane(
                                     SplitPane::Left => DiffGutter::Old,
                                     SplitPane::Right => DiffGutter::New,
                                 },
-                                colors: row_colors(doc, index, true, colors),
+                                colors: row_colors(RowColorsInput { doc, row: index, split: true, colors }),
                                 metrics,
                             },
                         );
@@ -385,13 +391,17 @@ pub(super) fn paint_diff_pane(
     )
     .inner
 }
-pub(super) fn paint_markdown_diff_preview(
-    ui: &mut egui::Ui,
-    doc: &diff::DiffDocument,
-    previews: &mut markdown::Previews,
-    path: &std::path::Path,
-    scroll_key: &str,
-) -> Option<markdown::Link> {
+pub(super) struct PaintMarkdownDiffPreviewInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) doc: &'a diff::DiffDocument,
+    pub(super) previews: &'a mut markdown::Previews,
+    pub(super) path: &'a std::path::Path,
+    pub(super) scroll_key: &'a str,
+}
+
+pub(super) fn paint_markdown_diff_preview(input: PaintMarkdownDiffPreviewInput<'_>) -> Option<markdown::Link> {
+        let PaintMarkdownDiffPreviewInput { ui, doc, previews, path, scroll_key } = input;
+
     let mut link = None;
     ui.columns(2, |columns| {
         for (index, (col, (text, label))) in columns
@@ -514,12 +524,16 @@ pub(super) fn diff_row_style(kind: diff::LineKind, colors: DiffColors) -> (Color
     }
 }
 
-pub(super) fn row_colors(
-    doc: &diff::DiffDocument,
-    row: usize,
-    split: bool,
-    colors: DiffColors,
-) -> DiffColors {
+pub(super) struct RowColorsInput<'a> {
+    pub(super) doc: &'a diff::DiffDocument,
+    pub(super) row: usize,
+    pub(super) split: bool,
+    pub(super) colors: DiffColors,
+}
+
+pub(super) fn row_colors(input: RowColorsInput<'_>) -> DiffColors {
+        let RowColorsInput { doc, row, split, colors } = input;
+
     if doc
         .change_at(row, split)
         .is_some_and(diff::review::Hunk::replacement)
@@ -534,15 +548,19 @@ pub(super) fn row_colors(
     }
 }
 
-pub(super) fn comparison_headers(
-    ui: &mut egui::Ui,
-    doc: &diff::DiffDocument,
-    split: bool,
-    ratio: f32,
-    path: &std::path::Path,
-    editable: bool,
-    staged: bool,
-) {
+pub(super) struct ComparisonHeadersInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) doc: &'a diff::DiffDocument,
+    pub(super) split: bool,
+    pub(super) ratio: f32,
+    pub(super) path: &'a std::path::Path,
+    pub(super) editable: bool,
+    pub(super) staged: bool,
+}
+
+pub(super) fn comparison_headers(input: ComparisonHeadersInput<'_>) {
+        let ComparisonHeadersInput { ui, doc, split, ratio, path, editable, staged } = input;
+
     let full = ui.available_rect_before_wrap();
     let header =
         egui::Rect::from_min_size(full.min, egui::vec2((full.width() - 10.0).max(1.0), 54.0));
@@ -646,7 +664,16 @@ pub(super) fn diff_code_job(
     job
 }
 
-pub(super) fn fill_diff_row(ui: &egui::Ui, rect: egui::Rect, gutter_w: f32, bg: Color32) {
+pub(super) struct FillDiffRowInput<'a> {
+    pub(super) ui: &'a egui::Ui,
+    pub(super) rect: egui::Rect,
+    pub(super) gutter_w: f32,
+    pub(super) bg: Color32,
+}
+
+pub(super) fn fill_diff_row(input: FillDiffRowInput<'_>) {
+        let FillDiffRowInput { ui, rect, gutter_w, bg } = input;
+
     if bg != Color32::TRANSPARENT {
         ui.painter().rect_filled(rect, 0.0, bg);
     }
@@ -745,7 +772,7 @@ pub(super) fn paint_diff_line(ui: &mut egui::Ui, paint: DiffPaint<'_>) {
         .painter()
         .layout_job(diff_code_job(line, &metrics.font, colors));
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, metrics.row_h), egui::Sense::hover());
-    fill_diff_row(ui, rect, cols.code, bg);
+    fill_diff_row(FillDiffRowInput { ui, rect, gutter_w: cols.code, bg });
     paint_diff_gutter(
         ui,
         DiffGutterPaint {

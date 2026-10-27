@@ -10,6 +10,7 @@ mod header;
 mod hover;
 pub(crate) use hover::link_menu_modifier_pressed;
 mod menus;
+pub(crate) use menus::InlineRenameInput;
 mod tab_menu;
 mod tabs;
 mod terminal_panes;

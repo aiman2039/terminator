@@ -355,15 +355,7 @@ impl App {
             }
         };
         let split = self.diff_split.contains(&key);
-        super::diff_paint::comparison_headers(
-            ui,
-            &doc,
-            split,
-            self.diff_split_ratio,
-            &cwd.join(path),
-            false,
-            false,
-        );
+        super::diff_paint::comparison_headers(super::diff_paint::ComparisonHeadersInput { ui, doc: &doc, split, ratio: self.diff_split_ratio, path: &cwd.join(path), editable: false, staged: false });
         if doc.hunks.is_empty() {
             ui.weak("No differences");
             return;
@@ -375,15 +367,7 @@ impl App {
             text: appearance::color(&self.theme.text),
         };
         let mut sync = self.diff_split_scroll.get(&key).copied().unwrap_or(0.0);
-        super::diff_paint::paint_diff_document(
-            ui,
-            &doc,
-            split,
-            colors,
-            &key,
-            &mut self.diff_split_ratio,
-            &mut sync,
-        );
+        super::diff_paint::paint_diff_document(super::diff_paint::PaintDiffDocumentInput { ui, doc: &doc, split, colors, scroll_key: &key, ratio: &mut self.diff_split_ratio, sync: &mut sync });
         self.diff_split_scroll.insert(key, sync);
     }
 

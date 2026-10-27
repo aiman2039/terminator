@@ -663,7 +663,7 @@ impl App {
                     self.layouts
                         .entry(project.clone())
                         .or_insert_with(Workspace::empty)
-                        .add_at_from(index, id, Tab::Terminal(session.id.clone()), &anchors);
+                        .add_at_from(crate::workspace::AddAtFromInput { index, id, pane: Tab::Terminal(session.id.clone()), anchors: &anchors });
                     if self.selected.as_ref() == Some(&project) {
                         self.active_session = Some(session.id.clone());
                     }

@@ -463,18 +463,13 @@ impl App {
                                 .is_some_and(|sid| self.renaming(sid, RenameSurface::Workspace));
                             if editing {
                                 if let Some(sid) = &face.sid {
-                                    self.inline_rename(
-                                        ui,
-                                        sid,
-                                        RenameSurface::Workspace,
-                                        egui::Rect::from_min_max(
+                                    self.inline_rename(super::menus::InlineRenameInput { ui, sid, surface: RenameSurface::Workspace, rect: egui::Rect::from_min_max(
                                             egui::pos2(rect.min.x + label_x, rect.min.y + 8.0),
                                             egui::pos2(
                                                 rect.max.x - (28.0 + badge_reserve),
                                                 rect.max.y - 7.0,
                                             ),
-                                        ),
-                                    );
+                                        ) });
                                 }
                             } else {
                                 let mut text = egui::text::LayoutJob::simple(
@@ -895,7 +890,7 @@ impl App {
                                 egui::StrokeKind::Inside,
                             );
                         }
-                        Self::paint_strip_insertion(ui, &strip_rect, &strip_rects, index, accent);
+                        Self::paint_strip_insertion(super::drag::PaintStripInsertionInput { ui, strip: &strip_rect, tabs: &strip_rects, index, accent });
                         if let Some(dragged) = self.drag.tab.clone()
                             && let Some((_, rect)) =
                                 strip_rects.iter().find(|(id, _)| id == &dragged)

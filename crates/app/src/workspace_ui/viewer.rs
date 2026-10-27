@@ -507,7 +507,7 @@ impl TabViewer for Viewer<'_> {
             ui.separator();
         }
         self.app
-            .new_terminal_menu(ui, Some(pane), self.strip, self.window);
+            .new_terminal_menu(super::menus::NewTerminalMenuInput { ui, pane: Some(pane), strip: self.strip, window: self.window });
         ui.separator();
         // Detach, dock-back, and float ops reshape main-dock top-level
         // tabs; a floating window owns a single dock with no tab layer,
@@ -673,7 +673,7 @@ impl TabViewer for Viewer<'_> {
                             egui::Sense::hover(),
                         );
                         self.app
-                            .inline_rename(ui, sid, RenameSurface::Pane, slot.rect);
+                            .inline_rename(super::menus::InlineRenameInput { ui, sid, surface: RenameSurface::Pane, rect: slot.rect });
                     }
                 } else {
                     let pane = self.pane_for(&Tab::Terminal(sid.clone()).key());
@@ -773,15 +773,10 @@ impl TabViewer for Viewer<'_> {
                                 }
                         });
                     if editing {
-                        self.app.inline_rename(
-                            ui,
-                            sid,
-                            RenameSurface::Pane,
-                            egui::Rect::from_min_max(
+                        self.app.inline_rename(super::menus::InlineRenameInput { ui, sid, surface: RenameSurface::Pane, rect: egui::Rect::from_min_max(
                                 egui::pos2(response.rect.min.x + 8.0, response.rect.min.y + 1.0),
                                 egui::pos2(controls_left, response.rect.bottom() - 1.0),
-                            ),
-                        );
+                            ) });
                     }
                     let closing = close.as_ref().is_some_and(eframe::egui::Response::clicked);
                     let git_clicked = actions.as_ref().is_some_and(|(git, _, _, _)| git.clicked());

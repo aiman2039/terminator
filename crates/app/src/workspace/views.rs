@@ -3,6 +3,29 @@ use super::model::Workspace;
 use crate::{PaneSource, Tab};
 use egui_dock::{Node, NodePath, TabInsert};
 
+pub(crate) struct MoveViewToLeafInput<'a> {
+    pub(crate) source: &'a PaneSource,
+    pub(crate) pane: &'a Tab,
+    pub(crate) group: &'a str,
+    pub(crate) dest: NodePath,
+    pub(crate) insertion: TabInsert,
+}
+
+pub(crate) struct MoveViewSameGroupInput<'a> {
+    pub(crate) src: usize,
+    pub(crate) source: &'a PaneSource,
+    pub(crate) dest: NodePath,
+    pub(crate) insertion: TabInsert,
+}
+pub(crate) struct MoveViewCrossGroupInput<'a> {
+    pub(crate) source: &'a PaneSource,
+    pub(crate) pane: &'a Tab,
+    pub(crate) dest: NodePath,
+    pub(crate) insertion: TabInsert,
+    pub(crate) src: usize,
+    pub(crate) dst: usize,
+}
+
 impl Workspace {
     pub(crate) fn view_exists(&self, source: &PaneSource, pane: &Tab) -> bool {
         self.tabs
@@ -65,18 +88,13 @@ impl Workspace {
             .filter(|path| target.layout.leaf(*path).is_ok())
             .or_else(|| target.layout.iter_leaves().next().map(|(path, _)| path));
         dest.is_some_and(|dest| {
-            self.move_view_to_leaf(source, pane, group, dest, TabInsert::Append)
+            self.move_view_to_leaf(crate::workspace::MoveViewToLeafInput { source, pane, group, dest, insertion: TabInsert::Append })
         })
     }
 
-    pub(crate) fn move_view_to_leaf(
-        &mut self,
-        source: &PaneSource,
-        pane: &Tab,
-        group: &str,
-        dest: NodePath,
-        mut insertion: TabInsert,
-    ) -> bool {
+    pub(crate) fn move_view_to_leaf(&mut self, input: MoveViewToLeafInput<'_>) -> bool {
+        let MoveViewToLeafInput { source, pane, group, dest, insertion } = input;
+
         if !self.view_exists(source, pane) {
             return false;
         }
@@ -91,8 +109,20 @@ impl Workspace {
             return false;
         };
         if src == dst {
+            self.move_view_same_group(MoveViewSameGroupInput { src, source, dest, insertion });
+        } else {
+            self.move_view_cross_group(MoveViewCrossGroupInput { source, pane, dest, insertion, src, dst });
+        }
+        self.version = self.version.max(pane.layout_version());
+        group.clone_into(&mut self.active);
+        self.drop_empty_tabs();
+        true
+    }
+
+    fn move_view_same_group(&mut self, input: MoveViewSameGroupInput<'_>) {
+        let MoveViewSameGroupInput { src, source, dest, mut insertion } = input;
             let Some(tab) = self.tabs.get_mut(src) else {
-                return false;
+                return;
             };
             if source.path.node_path() == dest
                 && let TabInsert::Insert(index) = &mut insertion
@@ -102,7 +132,10 @@ impl Workspace {
             }
             tab.layout.set_focused_node_and_surface(dest);
             tab.layout.move_tab(source.path, (dest, insertion));
-        } else {
+    }
+
+    fn move_view_cross_group(&mut self, input: MoveViewCrossGroupInput<'_>) {
+        let MoveViewCrossGroupInput { source, pane, dest, insertion, src, dst } = input;
             // Insert before pruning the source group so destination indices
             // stay valid. All target/source addresses were checked above.
             if let Some(tab) = self.tabs.get_mut(src) {
@@ -132,11 +165,6 @@ impl Workspace {
                     tab.layout.set_focused_node_and_surface(dest);
                 }
             }
-        }
-        self.version = self.version.max(pane.layout_version());
-        group.clone_into(&mut self.active);
-        self.drop_empty_tabs();
-        true
     }
 
     pub(crate) fn move_view_to_new_group(

@@ -176,13 +176,7 @@ fn exact_editor_moves_reject_stale_sources_and_keep_stack_order() {
         )
             .into(),
     };
-    assert!(dock.move_view_to_leaf(
-        &source,
-        &pane,
-        &source.group,
-        source.path.node_path(),
-        TabInsert::Insert(TabIndex(0))
-    ));
+    assert!(dock.move_view_to_leaf(crate::workspace::MoveViewToLeafInput { source: &source, pane: &pane, group: &source.group, dest: source.path.node_path(), insertion: TabInsert::Insert(TabIndex(0)) }));
     let tabs = &dock.leaf(source.path.node_path()).unwrap().tabs;
     assert_eq!(tabs, &[pane.clone(), pane, other]);
 }

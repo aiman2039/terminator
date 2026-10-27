@@ -266,15 +266,10 @@ impl App {
             response.rect,
         );
         if editing {
-            self.inline_rename(
-                ui,
-                &session.id,
-                RenameSurface::Sidebar,
-                egui::Rect::from_min_max(
+            self.inline_rename(crate::workspace_ui::InlineRenameInput { ui, sid: &session.id, surface: RenameSurface::Sidebar, rect: egui::Rect::from_min_max(
                     egui::pos2(response.rect.min.x + 36.0, response.rect.min.y + 4.0),
                     egui::pos2(response.rect.max.x - 6.0, response.rect.max.y - 3.0),
-                ),
-            );
+                ) });
         }
         if response.clicked() && !editing {
             self.go_session(&session.id);

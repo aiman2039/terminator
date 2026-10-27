@@ -1,6 +1,7 @@
 use super::super::*;
 use super::diff_paint::{
-    DiffColors, diff_gutter_digits, paint_diff_document, paint_markdown_diff_preview,
+    DiffColors, PaintDiffDocumentInput, PaintMarkdownDiffPreviewInput, diff_gutter_digits,
+    paint_diff_document, paint_markdown_diff_preview,
 };
 use super::header::{HeaderAction, header_action_view};
 use super::tabs::cached_terminal_theme;
@@ -96,15 +97,7 @@ pub(crate) mod tests {
             super::super::diff_edit::live_tints(&doc.left_text, &doc.right_text, colors);
         let spans = diff::highlight_spans(std::path::Path::new("file.rs"), &doc.right_text);
         let valid: Vec<bool> = spans.iter().map(|line| !line.is_empty()).collect();
-        let job = super::super::diff_edit::highlighted_job(
-            &doc.right_text,
-            &spans,
-            &valid,
-            &right_tints,
-            egui::FontId::monospace(12.0),
-            Color32::WHITE,
-            f32::INFINITY,
-        );
+        let job = super::super::diff_edit::highlighted_job(super::super::diff_edit::HighlightedJobInput { text: &doc.right_text, spans: &spans, valid: &valid, tints: &right_tints, font: egui::FontId::monospace(12.0), fallback: Color32::WHITE, wrap_width: f32::INFINITY });
         // A TextEdit layouter must reproduce the buffer text exactly.
         assert_eq!(job.text, doc.right_text);
         // The changed line carries a diff tint background.
@@ -169,7 +162,18 @@ pub(crate) mod tests {
     }
 
     #[cfg(feature = "test-support")]
-    fn click_and_type(app: &mut App, ctx: &egui::Context, tab: &Tab, target: &str, text: &str) {
+    struct ClickAndTypeInput<'a> {
+     app: &'a mut App,
+     ctx: &'a egui::Context,
+     tab: &'a Tab,
+     target: &'a str,
+     text: &'a str,
+}
+
+    #[cfg(feature = "test-support")]
+    fn click_and_type(input: ClickAndTypeInput<'_>) {
+        let ClickAndTypeInput { app, ctx, tab, target, text } = input;
+
         // Times keep moving forward across calls within one test.
         let base = ctx.input(|input| input.time);
         run_diff_frames(app, ctx, tab, &[(base + 0.1, vec![]), (base + 0.2, vec![])]);
@@ -233,14 +237,14 @@ pub(crate) mod tests {
         );
         app.diffs.insert(tab.key(), Ok(doc.into()));
         // Edit the already-changed line 2.
-        click_and_type(&mut app, &ctx, &tab, "diff-unified-edit-2", "X");
+        click_and_type(ClickAndTypeInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-unified-edit-2", text: "X" });
         let text = buffer_text(&app, &tab);
         assert!(
             text.contains('X'),
             "unified typing must reach the buffer, got {text:?}"
         );
         // Changing the untouched line 1 must tint it in the same session.
-        click_and_type(&mut app, &ctx, &tab, "diff-unified-edit-1", "Y");
+        click_and_type(ClickAndTypeInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-unified-edit-1", text: "Y" });
         assert!(
             buffer_text(&app, &tab).contains('Y'),
             "line 1 typing must reach the buffer, got {:?}",
@@ -278,7 +282,7 @@ pub(crate) mod tests {
             3,
         );
         app.diffs.insert(tab.key(), Ok(doc.into()));
-        click_and_type(&mut app, &ctx, &tab, "diff-right-editor", "Z");
+        click_and_type(ClickAndTypeInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-right-editor", text: "Z" });
         let text = buffer_text(&app, &tab);
         assert!(
             text.contains('Z'),
@@ -354,7 +358,18 @@ pub(crate) mod tests {
     }
 
     #[cfg(feature = "test-support")]
-    fn click_and_key(app: &mut App, ctx: &egui::Context, tab: &Tab, target: &str, key: egui::Key) {
+    struct ClickAndKeyInput<'a> {
+     app: &'a mut App,
+     ctx: &'a egui::Context,
+     tab: &'a Tab,
+     target: &'a str,
+     key: egui::Key,
+}
+
+    #[cfg(feature = "test-support")]
+    fn click_and_key(input: ClickAndKeyInput<'_>) {
+        let ClickAndKeyInput { app, ctx, tab, target, key } = input;
+
         let base = ctx.input(|input| input.time);
         run_diff_frames(app, ctx, tab, &[(base + 0.1, vec![]), (base + 0.2, vec![])]);
         let rect = fixture_target(ctx, target)
@@ -396,13 +411,18 @@ pub(crate) mod tests {
     }
 
     #[cfg(feature = "test-support")]
-    fn click_and_shortcut(
-        app: &mut App,
-        ctx: &egui::Context,
-        tab: &Tab,
-        target: &str,
-        shift: bool,
-    ) {
+    struct ClickAndShortcutInput<'a> {
+     app: &'a mut App,
+     ctx: &'a egui::Context,
+     tab: &'a Tab,
+     target: &'a str,
+     shift: bool,
+}
+
+    #[cfg(feature = "test-support")]
+    fn click_and_shortcut(input: ClickAndShortcutInput<'_>) {
+        let ClickAndShortcutInput { app, ctx, tab, target, shift } = input;
+
         let base = ctx.input(|input| input.time);
         run_diff_frames(app, ctx, tab, &[(base + 0.1, vec![]), (base + 0.2, vec![])]);
         let rect = fixture_target(ctx, target)
@@ -468,16 +488,16 @@ pub(crate) mod tests {
             3,
         );
         app.diffs.insert(tab.key(), Ok(doc.into()));
-        click_and_type(&mut app, &ctx, &tab, "diff-unified-edit-1", "X");
+        click_and_type(ClickAndTypeInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-unified-edit-1", text: "X" });
         let edited = buffer_text(&app, &tab);
         assert_ne!(edited, original, "typing must change the buffer first");
-        click_and_shortcut(&mut app, &ctx, &tab, "diff-unified-edit-1", false);
+        click_and_shortcut(ClickAndShortcutInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-unified-edit-1", shift: false });
         assert_eq!(
             buffer_text(&app, &tab),
             original,
             "Cmd+Z must restore the pre-edit buffer"
         );
-        click_and_shortcut(&mut app, &ctx, &tab, "diff-unified-edit-1", true);
+        click_and_shortcut(ClickAndShortcutInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-unified-edit-1", shift: true });
         assert_eq!(
             buffer_text(&app, &tab),
             edited,
@@ -506,13 +526,7 @@ pub(crate) mod tests {
             3,
         );
         app.diffs.insert(tab.key(), Ok(doc.into()));
-        click_and_key(
-            &mut app,
-            &ctx,
-            &tab,
-            "diff-unified-edit-2",
-            egui::Key::Enter,
-        );
+        click_and_key(ClickAndKeyInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-unified-edit-2", key: egui::Key::Enter });
         let text = buffer_text(&app, &tab);
         assert!(
             text.contains(";\n") && text.lines().count() >= 3,
@@ -552,7 +566,7 @@ pub(crate) mod tests {
         app.diffs.insert(tab.key(), Ok(doc.into()));
         // Line 1 sits in a collapsed gap in the old grouped view; it must be
         // editable here exactly like in split view.
-        click_and_type(&mut app, &ctx, &tab, "diff-unified-edit-1", "Q");
+        click_and_type(ClickAndTypeInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-unified-edit-1", text: "Q" });
         assert!(
             buffer_text(&app, &tab).lines().next() == Some("line 1Q"),
             "gap line must accept edits, got {:?}",
@@ -1187,20 +1201,12 @@ pub(crate) mod tests {
                 ..Default::default()
             },
             |ui| {
-                scroll = Some(paint_diff_document(
-                    ui,
-                    doc,
-                    split,
-                    DiffColors {
+                scroll = Some(paint_diff_document(PaintDiffDocumentInput { ui, doc, split, colors: DiffColors {
                         added: Color32::GREEN,
                         deleted: Color32::RED,
                         accent: Color32::BLUE,
                         text: Color32::WHITE,
-                    },
-                    "scroll-regression",
-                    &mut ratio,
-                    &mut sync,
-                ));
+                    }, scroll_key: "scroll-regression", ratio: &mut ratio, sync: &mut sync }));
             },
         );
         output.textures_delta.clear();
@@ -1383,7 +1389,7 @@ pub(crate) mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    paint_diff_document(ui, &doc, true, colors, "drag-test", ratio, &mut sync);
+                    paint_diff_document(PaintDiffDocumentInput { ui, doc: &doc, split: true, colors, scroll_key: "drag-test", ratio, sync: &mut sync });
                 },
             );
             output.textures_delta.clear();
@@ -1443,13 +1449,7 @@ pub(crate) mod tests {
                 ..Default::default()
             },
             |ui| {
-                paint_markdown_diff_preview(
-                    ui,
-                    &doc,
-                    &mut previews,
-                    std::path::Path::new("/repo/test.md"),
-                    "test-preview",
-                );
+                paint_markdown_diff_preview(PaintMarkdownDiffPreviewInput { ui, doc: &doc, previews: &mut previews, path: std::path::Path::new("/repo/test.md"), scroll_key: "test-preview" });
             },
         );
         output.textures_delta.clear();

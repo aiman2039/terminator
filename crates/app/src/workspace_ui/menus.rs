@@ -1,6 +1,20 @@
 use super::super::*;
 use super::header::click_enabled_menu_item;
 use super::tab_menu::{WorkspaceTabMenu, WorkspaceTabMenuSpec, click_menu_item, split_action};
+pub(super) struct NewTerminalMenuInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) pane: Option<egui_dock::NodePath>,
+    pub(super) strip: bool,
+    pub(super) window: Option<egui::ViewportId>,
+}
+
+pub(crate) struct InlineRenameInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) sid: &'a str,
+    pub(crate) surface: RenameSurface,
+    pub(crate) rect: egui::Rect,
+}
+
 impl App {
     pub(super) fn workspace_new_tab_menu(&mut self, ui: &mut egui::Ui) {
         if appearance::menu_item(
@@ -95,13 +109,45 @@ impl App {
             add_right,
         }
     }
-    pub(super) fn new_terminal_menu(
-        &mut self,
-        ui: &mut egui::Ui,
-        pane: Option<egui_dock::NodePath>,
-        strip: bool,
-        window: Option<egui::ViewportId>,
-    ) {
+    pub(super) fn new_terminal_menu(&mut self, input: NewTerminalMenuInput<'_>) {
+        let NewTerminalMenuInput { ui, pane, strip, window } = input;
+
+        self.new_terminal_split_items(NewTerminalMenuInput {
+            ui: &mut *ui,
+            pane,
+            strip,
+            window,
+        });
+        if !strip && window.is_none() {
+            ui.separator();
+            if appearance::menu_item(
+                ui,
+                "New Browser Tab",
+                "Globe",
+                &self.shortcut_label(Action::NewBrowser),
+            )
+            .clicked()
+            {
+                self.open_new_browser_tab(None);
+                ui.close();
+            }
+            if appearance::menu_item(
+                ui,
+                "New VNC Viewer",
+                "Monitor",
+                &self.shortcut_label(Action::NewVnc),
+            )
+            .clicked()
+            {
+                self.open_new_vnc_tab(None);
+                ui.close();
+            }
+        }
+        self.new_terminal_pane_tabs(NewTerminalMenuInput { ui, pane, strip, window });
+    }
+
+    fn new_terminal_split_items(&mut self, input: NewTerminalMenuInput<'_>) {
+        let NewTerminalMenuInput { ui, pane, strip, window } = input;
         for (label, split) in [
             ("New tab", None),
             ("Split up", Some("up")),
@@ -136,31 +182,10 @@ impl App {
                 ui.close();
             }
         }
-        if !strip && window.is_none() {
-            ui.separator();
-            if appearance::menu_item(
-                ui,
-                "New Browser Tab",
-                "Globe",
-                &self.shortcut_label(Action::NewBrowser),
-            )
-            .clicked()
-            {
-                self.open_new_browser_tab(None);
-                ui.close();
-            }
-            if appearance::menu_item(
-                ui,
-                "New VNC Viewer",
-                "Monitor",
-                &self.shortcut_label(Action::NewVnc),
-            )
-            .clicked()
-            {
-                self.open_new_vnc_tab(None);
-                ui.close();
-            }
-        }
+    }
+
+    fn new_terminal_pane_tabs(&mut self, input: NewTerminalMenuInput<'_>) {
+        let NewTerminalMenuInput { ui, pane, strip, window } = input;
         let tabs_in_pane = pane.and_then(|pane| {
             if strip {
                 self.strip_pane_tabs.get(&pane).cloned()
@@ -233,13 +258,9 @@ impl App {
             ui.close();
         }
     }
-    pub(crate) fn inline_rename(
-        &mut self,
-        ui: &mut egui::Ui,
-        sid: &str,
-        surface: RenameSurface,
-        rect: egui::Rect,
-    ) {
+    pub(crate) fn inline_rename(&mut self, input: InlineRenameInput<'_>) {
+        let InlineRenameInput { ui, sid, surface, rect } = input;
+
         if !self.renaming(sid, surface) {
             return;
         }
