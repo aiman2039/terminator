@@ -232,10 +232,90 @@ fn run(rx: Receiver<Option<Request>>, tx: Sender<Update>, ctx: eframe::egui::Con
     }
 }
 
-#[cfg(test)]
 const MAX_DIRTY_PATHS: usize = 1024;
 
-#[cfg(test)]
+/// Paths the watcher reported since the last finished refresh. `full`
+/// stands for "too many to track" (or a rescan request); `epoch` counts
+/// events, so a refresh can tell whether more arrived while it ran.
+#[derive(Clone, Default)]
+struct Dirty {
+    paths: Vec<PathBuf>,
+    full: bool,
+    epoch: u64,
+}
+
+impl Dirty {
+    fn record(&mut self, event: &notify::Result<notify::Event>) {
+        self.epoch = self.epoch.wrapping_add(1);
+        match event {
+            Ok(event) if event.need_rescan() => {
+                self.paths.clear();
+                self.full = true;
+            }
+            Ok(event) => accumulate_dirty(&mut self.paths, event.paths.clone(), &mut self.full),
+            Err(_) => {
+                self.paths.clear();
+                self.full = true;
+            }
+        }
+    }
+
+    /// Forget what a finished refresh (`seen`) covered. Events that arrived
+    /// meanwhile stay; when that cannot be told apart, everything stays.
+    fn settle(&mut self, seen: &Self) {
+        if self.epoch == seen.epoch {
+            *self = Self {
+                epoch: self.epoch,
+                ..Self::default()
+            };
+        } else if !seen.full && !self.full {
+            self.paths.drain(..seen.paths.len().min(self.paths.len()));
+        }
+    }
+}
+
+/// Why a refresh runs: only watch events and newly shown folders can
+/// re-list part of the tree; forced refreshes and polls re-list it all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wake {
+    Request,
+    Watch,
+    Timer,
+}
+
+/// The visible directories a refresh lists again: every one when `full`,
+/// else those not listed yet and those a changed path is in (or under a
+/// changed path, for moved folders). `dirty` holds normalized paths.
+fn directories_to_list(
+    directories: &[PathBuf],
+    listed: &dyn Fn(&std::path::Path) -> bool,
+    dirty: &[PathBuf],
+    full: bool,
+) -> Vec<PathBuf> {
+    directories
+        .iter()
+        .filter(|path| {
+            if full || !listed(path) {
+                return true;
+            }
+            let canonical = normalize(path);
+            dirty.iter().any(|changed| {
+                changed.parent() == Some(canonical.as_path()) || canonical.starts_with(changed)
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+/// A change to ignore rules or the index can flip any entry's ignored
+/// state, so it re-lists everything.
+fn ignore_rules_changed(dirty: &[PathBuf]) -> bool {
+    dirty.iter().any(|path| {
+        path.file_name()
+            .is_some_and(|name| name == ".gitignore" || name == "exclude" || name == "index")
+    })
+}
+
 fn accumulate_dirty(paths: &mut Vec<PathBuf>, incoming: Vec<PathBuf>, full: &mut bool) {
     if *full || paths.len().saturating_add(incoming.len()) > MAX_DIRTY_PATHS {
         paths.clear();
@@ -272,9 +352,16 @@ pub fn spawn_async(
     let handle = service.handle().clone();
     let _ = handle.submit(context, cancel, async move {
         let (events, mut changed) = tokio::sync::watch::channel(0_u64);
+        let dirty = std::sync::Arc::new(std::sync::Mutex::new(Dirty::default()));
+        let recorder = std::sync::Arc::clone(&dirty);
         let watcher = service.fs().run(&token, move || {
             Ok(notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
                 if !event.as_ref().is_ok_and(|e| matches!(e.kind, notify::EventKind::Access(_))) {
+                    let event = event.map(|mut event| {
+                        event.paths = event.paths.iter().map(|path| normalize(path)).collect();
+                        event
+                    });
+                    recorder.lock().unwrap_or_else(std::sync::PoisonError::into_inner).record(&event);
                     events.send_modify(|n| *n = n.wrapping_add(1));
                 }
             }).ok())
@@ -282,10 +369,17 @@ pub fn spawn_async(
         let watcher = std::sync::Arc::new(std::sync::Mutex::new(watcher));
         let mut watched = Vec::<(PathBuf, RecursiveMode)>::new();
         let mut missing_path = crate::retry_budget::RetryBudget::default();
+        // Final listings (with ignored flags) of the visible directories,
+        // for the request they were listed under: a watch event re-lists
+        // only the folders it touched and reuses the rest.
+        let mut listed: std::collections::HashMap<PathBuf, services::Listing> = std::collections::HashMap::new();
+        let mut listed_for: Option<Request> = None;
+        let mut wake = Wake::Request;
         loop {
             let request = requests.borrow_and_update().clone();
             let Some(request) = request else {
                 tokio::select! { () = token.cancelled() => break, result = requests.changed() => if result.is_err() { break } }
+                wake = Wake::Request;
                 continue;
             };
             if missing_path.exhausted(&request.cwd, request.generation) {
@@ -297,11 +391,29 @@ pub fn spawn_async(
             }
             let operation = token.child_token();
             let _guard = operation.clone().drop_guard();
+            let seen = dirty.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+            let same_scope = listed_for.as_ref().is_some_and(|last| {
+                last.cwd == request.cwd && last.include_stats == request.include_stats
+            });
+            // A new generation with the same folders is a forced refresh.
+            let forced = wake == Wake::Request
+                && listed_for.as_ref().is_some_and(|last| last.directories == request.directories);
+            let full = !same_scope
+                || forced
+                || wake == Wake::Timer
+                || seen.full
+                || ignore_rules_changed(&seen.paths);
+            let known: std::collections::HashSet<PathBuf> = if full { std::collections::HashSet::new() } else { listed.keys().cloned().collect() };
+            let wanted = request.directories.clone();
+            let changed_paths = seen.paths.clone();
+            let relist = service.fs().run(&operation, move || {
+                Ok(directories_to_list(&wanted, &|path| known.contains(path), &changed_paths, full))
+            }).await.unwrap_or_else(|_| request.directories.clone());
             let work = async {
                 // Show the bounded directory entries before repository status,
                 // line counts, ignore checks, or watcher setup can delay them.
                 let mut raw_directories = Vec::new();
-                for path in &request.directories {
+                for path in &relist {
                     let entries = services::directory_raw_async(&service, path.clone(), &operation).await;
                     service.emit_read(Update::DirectoryPreview(
                         request.generation,
@@ -329,15 +441,40 @@ pub fn spawn_async(
                 let directories = services::directories_with_ignored_async(
                     &service, &request.cwd, raw_directories, context.root.is_some() && context.perforce.is_none(),
                 ).await;
-                service.emit_read(Update::Refresh(request.generation, context, directories, fallback)).await?;
-                Ok::<_, anyhow::Error>((targets, fallback))
+                Ok::<_, anyhow::Error>((targets, fallback, context, directories))
             };
             let result = tokio::select! {
                 () = token.cancelled() => break,
-                result = requests.changed() => { if result.is_err() { break; } continue; }
+                result = requests.changed() => { if result.is_err() { break; } wake = Wake::Request; continue; }
                 result = work => result,
             };
-            let fallback = match result { Ok((targets, fallback)) => { watched = targets; fallback }, Err(error) => { service.emit(Update::Error(format!("Refresh: {error:#}"))).await?; true } };
+            let fallback = match result {
+                Ok((targets, fallback, context, fresh)) => {
+                    watched = targets;
+                    if full {
+                        listed.clear();
+                    }
+                    for listing in fresh {
+                        listed.insert(listing.0.clone(), listing);
+                    }
+                    listed.retain(|path, _| request.directories.contains(path));
+                    let directories = request
+                        .directories
+                        .iter()
+                        .filter_map(|path| listed.get(path).cloned())
+                        .collect();
+                    service.emit_read(Update::Refresh(request.generation, context, directories, fallback)).await?;
+                    listed_for = Some(request.clone());
+                    dirty.lock().unwrap_or_else(std::sync::PoisonError::into_inner).settle(&seen);
+                    fallback
+                }
+                Err(error) => {
+                    listed.clear();
+                    listed_for = None;
+                    service.emit(Update::Error(format!("Refresh: {error:#}"))).await?;
+                    true
+                }
+            };
             let cwd = request.cwd.clone();
             let generation = request.generation;
             let missing = service
@@ -347,18 +484,22 @@ pub fn spawn_async(
                 .unwrap_or(false);
             missing_path.record(&request.cwd, generation, missing);
             if missing {
+                wake = Wake::Timer;
                 continue;
             }
-            tokio::select! {
+            // A missed event cannot be told apart from none in fallback
+            // polling, so only a working watcher allows partial refreshes.
+            wake = tokio::select! {
                 () = token.cancelled() => break,
-                result = requests.changed() => if result.is_err() { break; },
+                result = requests.changed() => { if result.is_err() { break; } Wake::Request },
                 _ = changed.changed() => {
                     // Fixed coalescing window cannot be extended by a continuous writer.
                     tokio::select! { () = token.cancelled() => break, () = tokio::time::sleep(Duration::from_millis(250)) => {} }
                     changed.borrow_and_update();
+                    if fallback { Wake::Timer } else { Wake::Watch }
                 },
-                () = tokio::time::sleep(Duration::from_secs(if fallback { 3 } else { 30 })) => {},
-            }
+                () = tokio::time::sleep(Duration::from_secs(if fallback { 3 } else { 30 })) => Wake::Timer,
+            };
         }
         service.fs().run(&CancellationToken::new(), move || { drop(watcher); Ok(()) }).await?;
         Ok(Vec::new())
@@ -444,6 +585,116 @@ mod tests {
         };
         assert_eq!(path, dir.path());
         assert!(entries.iter().any(|entry| entry.path.ends_with("ready.md")));
+    }
+
+    #[test]
+    fn watch_events_relist_only_the_folders_they_touch() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let (src, docs) = (root.join("src"), root.join("docs"));
+        std::fs::create_dir_all(src.join("nested")).unwrap();
+        std::fs::create_dir_all(&docs).unwrap();
+        let visible = [root.clone(), src.clone(), src.join("nested"), docs.clone()];
+        let listed = |_: &std::path::Path| true;
+        let list = |dirty: &[PathBuf], full| directories_to_list(&visible, &listed, dirty, full);
+        // A new file re-lists its own folder only.
+        assert_eq!(
+            list(&[src.join("new.rs")], false),
+            std::slice::from_ref(&src)
+        );
+        // A moved or deleted folder re-lists its parent and itself (and
+        // everything under it).
+        assert_eq!(
+            list(std::slice::from_ref(&src), false),
+            [root.clone(), src.clone(), src.join("nested")]
+        );
+        assert!(list(&[], false).is_empty());
+        assert_eq!(list(&[], true), visible);
+        // Folders never listed are always listed.
+        let fresh = directories_to_list(&visible, &|path| path != docs, &[], false);
+        assert_eq!(fresh, std::slice::from_ref(&docs));
+        assert!(ignore_rules_changed(&[root.join(".gitignore")]));
+        assert!(!ignore_rules_changed(&[src.join("lib.rs")]));
+    }
+
+    #[test]
+    fn settling_keeps_events_that_arrived_during_a_refresh() {
+        let event = |path: &str| {
+            Ok(notify::Event::new(notify::EventKind::Any).add_path(PathBuf::from(path)))
+        };
+        let mut dirty = Dirty::default();
+        dirty.record(&event("a"));
+        let seen = dirty.clone();
+        dirty.settle(&seen);
+        assert!(dirty.paths.is_empty() && !dirty.full);
+        dirty.record(&event("b"));
+        let seen = dirty.clone();
+        dirty.record(&event("c"));
+        dirty.settle(&seen);
+        assert_eq!(dirty.paths, [PathBuf::from("c")]);
+        // A rescan request during a full refresh stays for the next one.
+        dirty.record(&Err(notify::Error::generic("overflow")));
+        let seen = dirty.clone();
+        dirty.record(&event("d"));
+        dirty.settle(&seen);
+        assert!(dirty.full);
+    }
+
+    #[tokio::test]
+    async fn a_watch_event_relists_only_the_changed_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let sub = root.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(root.join("keep.txt"), "").unwrap();
+        let (legacy, _) = mpsc::channel();
+        let paths = terminator_core::Paths::at(root.join("app-state"));
+        let (service, mut owner) =
+            crate::gui_services::Services::new(paths, eframe::egui::Context::default(), legacy)
+                .unwrap();
+        let refresh = spawn_async(service);
+        refresh
+            .send(Some(Request {
+                cwd: root.clone(),
+                generation: 1,
+                directories: vec![root.clone(), sub.clone()],
+                include_stats: false,
+            }))
+            .unwrap();
+        async fn next(events: &mut tokio::sync::mpsc::Receiver<Update>) -> Update {
+            tokio::time::timeout(Duration::from_secs(10), events.recv())
+                .await
+                .expect("refresh update")
+                .expect("channel open")
+        }
+        while !matches!(next(&mut owner.events).await, Update::Refresh(1, ..)) {}
+        // Let the watcher settle, then add a file inside `sub`.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        std::fs::write(sub.join("added.rs"), "").unwrap();
+        let mut previews = Vec::new();
+        loop {
+            match next(&mut owner.events).await {
+                Update::DirectoryPreview(_, _, path, _) => previews.push(path),
+                Update::Refresh(1, _, directories, _) => {
+                    let has = |path: &PathBuf, name: &str| {
+                        directories.iter().any(|(listed, entries)| {
+                            listed == path
+                                && entries.as_ref().is_ok_and(|entries| {
+                                    entries.iter().any(|e| e.path.ends_with(name))
+                                })
+                        })
+                    };
+                    if has(&sub, "added.rs") {
+                        // The untouched root comes from the cache, intact.
+                        assert!(has(&root, "keep.txt"));
+                        assert!(previews.contains(&sub));
+                        assert!(!previews.contains(&root), "root re-listed: {previews:?}");
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     #[test]

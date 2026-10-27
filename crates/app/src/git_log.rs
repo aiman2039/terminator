@@ -432,8 +432,67 @@ fn revision_text(root: &Path, revision: &str, relative: &str) -> Option<String> 
     terminator_git::check_text(&bytes).then(|| String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// The name `relative` (its current name) had at `revision`, following
+/// renames: `C` is the name after commit `C`, `C^` the name before it.
+/// Other revisions, and files never renamed, keep `relative`.
+fn name_at(root: &Path, relative: &str, revision: &str) -> String {
+    if revision.is_empty() || revision_text(root, revision, relative).is_some() {
+        return relative.to_owned();
+    }
+    let (commit, before) = match revision.strip_suffix('^') {
+        Some(commit) => (commit, true),
+        None => (revision, false),
+    };
+    let Ok(bytes) = terminator_core::git::run_blocking(
+        root,
+        &[
+            "log",
+            "--follow",
+            "--name-status",
+            "--format=%x1e%H",
+            "--",
+            relative,
+        ],
+        CommandOptions {
+            stdout_limit: 4 * 1024 * 1024,
+            ..Default::default()
+        },
+    ) else {
+        return relative.to_owned();
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    for record in text.split('\u{1e}') {
+        let mut lines = record.lines().filter(|line| !line.trim().is_empty());
+        let Some(hash) = lines.next() else {
+            continue;
+        };
+        if !hash.starts_with(commit) {
+            continue;
+        }
+        // `R100\told\tnew` for a rename, `M\tpath` otherwise.
+        let Some(status) = lines.next() else {
+            break;
+        };
+        let fields: Vec<&str> = status.split('\t').collect();
+        let name = match fields.as_slice() {
+            [kind, old, new] if kind.starts_with(['R', 'C']) => {
+                if before {
+                    old
+                } else {
+                    new
+                }
+            }
+            [_, path] => path,
+            _ => break,
+        };
+        return (*name).to_owned();
+    }
+    relative.to_owned()
+}
+
 /// Read-only diff of `path` between `left` and `right` (empty `right` is
-/// the working tree). A side where the file did not exist is empty.
+/// the working tree). A side where the file did not exist is empty; a
+/// side from before a rename reads the file under its name back then.
 pub fn revision_document(
     cwd: &Path,
     path: &Path,
@@ -443,11 +502,13 @@ pub fn revision_document(
     let root = git_root(cwd)?;
     let relative = terminator_git::relative_path(&root, path).map_err(|error| error.to_string())?;
     let name = relative.to_string_lossy().into_owned();
-    let old = revision_text(&root, left, &name);
+    let left_name = name_at(&root, &name, left);
+    let right_name = name_at(&root, &name, right);
+    let old = revision_text(&root, left, &left_name);
     let new = if right.is_empty() {
         std::fs::read_to_string(root.join(&relative)).ok()
     } else {
-        revision_text(&root, right, &name)
+        revision_text(&root, right, &right_name)
     };
     if old.is_none() && new.is_none() {
         return Err(format!("{name} is not a text file in either revision"));
@@ -466,12 +527,23 @@ pub fn revision_document(
             revision.to_owned()
         }
     };
-    doc.left_label = short(left);
-    doc.right_label = if right.is_empty() {
-        "Working tree".into()
-    } else {
-        short(right)
+    // A renamed side says which name it shows (`IntelliJ`: old → new).
+    let labelled = |label: String, side: &str| {
+        if side == name {
+            label
+        } else {
+            format!("{label} · {side}")
+        }
     };
+    doc.left_label = labelled(short(left), &left_name);
+    doc.right_label = labelled(
+        if right.is_empty() {
+            "Working tree".into()
+        } else {
+            short(right)
+        },
+        &right_name,
+    );
     doc.read_only = true;
     Ok(doc)
 }
@@ -676,5 +748,37 @@ mod tests {
             revision_document(root, &root.join("b.txt"), &format!("{newest}^"), newest).unwrap();
         assert_eq!(added.left_text, "");
         assert_eq!(added.right_text, "b\n");
+    }
+
+    #[test]
+    fn revision_diffs_before_a_rename_read_the_old_name() {
+        let dir = repo();
+        let root = dir.path();
+        std::fs::write(root.join("old.txt"), "one\n").unwrap();
+        git_cmd(root, &["add", "."]);
+        git_cmd(root, &["commit", "-qm", "add old"]);
+        std::fs::write(root.join("old.txt"), "one\ntwo\n").unwrap();
+        git_cmd(root, &["commit", "-qam", "grow old"]);
+        git_cmd(root, &["mv", "old.txt", "new.txt"]);
+        git_cmd(root, &["commit", "-qm", "rename"]);
+        let file = root.join("new.txt");
+        let history = file_history(root, &file).unwrap();
+        assert_eq!(history.len(), 3);
+        // The pre-rename commit's own change, read under the old name.
+        let grow = &history[1].hash;
+        let before = revision_document(root, &file, &format!("{grow}^"), grow).unwrap();
+        assert_eq!(before.left_text, "one\n");
+        assert_eq!(before.right_text, "one\ntwo\n");
+        assert!(
+            before.left_label.ends_with("old.txt"),
+            "{}",
+            before.left_label
+        );
+        // The rename commit itself: old name on the left, new on the right.
+        let rename = &history[0].hash;
+        let moved = revision_document(root, &file, &format!("{rename}^"), rename).unwrap();
+        assert_eq!(moved.left_text, moved.right_text);
+        assert!(moved.left_label.ends_with("old.txt"));
+        assert!(!moved.right_label.contains("old.txt"));
     }
 }

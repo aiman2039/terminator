@@ -3,12 +3,22 @@ use super::explorer_rows::{
 };
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
+use crate::sidebar_cache::ExplorerRow;
 use crate::{
     App, Job, appearance, file_actions::FileAction, icons, preferences::ExplorerSearchMode, search,
     workspace_ops,
 };
 use eframe::egui::{self, RichText};
 use std::path::{Path, PathBuf};
+
+/// Where an open name prompt sits in the explorer tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PromptSlot {
+    /// In place of the row being renamed.
+    Replace(usize),
+    /// As a new row before `index`, indented to `depth`.
+    Insert { index: usize, depth: usize },
+}
 
 /// A destructive Git action that waits for an explicit confirmation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -326,7 +336,7 @@ impl App {
             let _ = &exclude;
         }
         self.refresh_explorer_search(cwd);
-        self.name_prompt_bar(ui);
+        self.name_prompt_bar(ui, cwd);
     }
 
     /// Queue a Contents search when the query or filters changed. Results are
@@ -443,30 +453,179 @@ impl App {
     }
 
     pub(crate) fn open_name_prompt(&mut self, prompt: workspace_ops::NamePrompt) {
+        // A new item appears inline under its folder, so open the folder.
+        if let workspace_ops::NamePrompt::File { dir, .. }
+        | workspace_ops::NamePrompt::Folder { dir, .. } = &prompt
+        {
+            self.expanded_dirs.insert(dir.clone());
+        }
         self.name_prompt = Some(prompt);
         self.name_prompt_focus = true;
     }
 
-    fn name_prompt_bar(&mut self, ui: &mut egui::Ui) {
+    /// Where the open name prompt renders in the tree under `root`: on
+    /// the renamed row, or as a new row at the top of its folder. `None`
+    /// keeps it in the toolbar bar (Contents search, or the target row is
+    /// not in the tree).
+    pub(super) fn name_prompt_slot(&self, rows: &[ExplorerRow], root: &Path) -> Option<PromptSlot> {
+        if self.preferences.explorer_search_mode == ExplorerSearchMode::Contents {
+            return None;
+        }
+        match self.name_prompt.as_ref()? {
+            workspace_ops::NamePrompt::Rename { from, .. } => rows
+                .iter()
+                .position(|row| row.entry.is_some() && row.path == *from)
+                .map(PromptSlot::Replace),
+            workspace_ops::NamePrompt::File { dir, .. }
+            | workspace_ops::NamePrompt::Folder { dir, .. } => {
+                if dir == root {
+                    return rows
+                        .first()
+                        .is_some_and(|row| row.entry.is_some())
+                        .then_some(PromptSlot::Insert { index: 0, depth: 0 });
+                }
+                let index = rows.iter().position(|row| {
+                    row.path == *dir && row.entry.as_ref().is_some_and(|entry| entry.directory)
+                })?;
+                let row = rows.get(index)?;
+                self.expanded_dirs
+                    .contains(dir)
+                    .then(|| PromptSlot::Insert {
+                        index: index.saturating_add(1),
+                        depth: row.depth.saturating_add(1),
+                    })
+            }
+        }
+    }
+
+    /// The name field of the open prompt. Focuses it (selecting a renamed
+    /// file's stem) when the prompt just opened; returns the edited name,
+    /// the field, and whether Escape was pressed in it.
+    fn name_prompt_field(
+        &mut self,
+        ui: &mut egui::Ui,
+        prompt: &workspace_ops::NamePrompt,
+        width: f32,
+    ) -> (String, egui::Response, bool) {
+        let mut name = match prompt {
+            workspace_ops::NamePrompt::File { name, .. }
+            | workspace_ops::NamePrompt::Folder { name, .. }
+            | workspace_ops::NamePrompt::Rename { name, .. } => name.clone(),
+        };
+        let focus = std::mem::take(&mut self.name_prompt_focus);
+        let prompt_id = Self::explorer_name_prompt_id(ui);
+        self.name_prompt_widget = Some(prompt_id);
+        let field = ui.add(
+            appearance::singleline(&mut name)
+                .id(prompt_id)
+                .hint_text("Name")
+                .desired_width(width),
+        );
+        if focus {
+            field.request_focus();
+            // Rename selects the name without its extension, so typing
+            // replaces the stem (`IntelliJ`).
+            if let workspace_ops::NamePrompt::Rename { from, .. } = prompt
+                && let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), prompt_id)
+            {
+                let stem = if from.is_dir() {
+                    name.chars().count()
+                } else {
+                    from.file_stem()
+                        .map_or(0, |stem| stem.to_string_lossy().chars().count())
+                };
+                state
+                    .cursor
+                    .set_char_range(Some(egui::text::CCursorRange::two(
+                        egui::text::CCursor::new(0),
+                        egui::text::CCursor::new(stem),
+                    )));
+                state.store(ui.ctx(), prompt_id);
+            }
+        }
+        let escape = field.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Escape));
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "explorer-name-field", field.rect);
+        (name, field, escape)
+    }
+
+    /// Store the edited name, then cancel or submit the prompt.
+    fn finish_name_prompt(
+        &mut self,
+        prompt: workspace_ops::NamePrompt,
+        name: String,
+        submit: bool,
+        cancel: bool,
+    ) {
+        if cancel {
+            self.name_prompt = None;
+            return;
+        }
+        self.name_prompt = Some(match prompt {
+            workspace_ops::NamePrompt::File { dir, .. } => {
+                workspace_ops::NamePrompt::File { dir, name }
+            }
+            workspace_ops::NamePrompt::Folder { dir, .. } => {
+                workspace_ops::NamePrompt::Folder { dir, name }
+            }
+            workspace_ops::NamePrompt::Rename { from, .. } => {
+                workspace_ops::NamePrompt::Rename { from, name }
+            }
+        });
+        if submit {
+            self.submit_name_prompt();
+        }
+    }
+
+    /// The prompt as a tree row (`IntelliJ` / VS Code inline rename): an
+    /// icon and the name field at the row's depth. Enter submits; Escape
+    /// or clicking elsewhere cancels; either returns focus to the tree.
+    pub(super) fn name_prompt_row(&mut self, ui: &mut egui::Ui, tree_focus: egui::Id) {
         let Some(prompt) = self.name_prompt.clone() else {
             return;
         };
+        let icon = match &prompt {
+            workspace_ops::NamePrompt::File { .. } => "File",
+            workspace_ops::NamePrompt::Folder { .. } => "Folder",
+            workspace_ops::NamePrompt::Rename { from, .. } => {
+                if from.is_dir() {
+                    "Folder"
+                } else {
+                    icons::file_icon(from)
+                }
+            }
+        };
+        ui.add_space(4.0);
+        ui.add_sized(
+            [16.0, 16.0],
+            egui::Image::new(icons::source(icon)).tint(ui.visuals().text_color()),
+        );
+        let width = (ui.available_width() - 4.0).max(48.0);
+        let (name, field, escape) = self.name_prompt_field(ui, &prompt, width);
+        let submit = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        let cancel = escape || (field.lost_focus() && !submit);
+        if submit || cancel {
+            ui.memory_mut(|memory| memory.request_focus(tree_focus));
+        }
+        self.finish_name_prompt(prompt, name, submit, cancel);
+    }
+
+    fn name_prompt_bar(&mut self, ui: &mut egui::Ui, cwd: &Path) {
+        let Some(prompt) = self.name_prompt.clone() else {
+            return;
+        };
+        let rows = self.explorer_rows(cwd);
+        if self.name_prompt_slot(&rows, cwd).is_some() {
+            return;
+        }
         let title = match prompt {
             workspace_ops::NamePrompt::File { .. } => "New file",
             workspace_ops::NamePrompt::Folder { .. } => "New folder",
             workspace_ops::NamePrompt::Rename { .. } => "Rename",
         };
-        let mut name = match &prompt {
-            workspace_ops::NamePrompt::File { name, .. }
-            | workspace_ops::NamePrompt::Folder { name, .. }
-            | workspace_ops::NamePrompt::Rename { name, .. } => name.clone(),
-        };
         let mut cancel = false;
         let mut submit = false;
-        let focus = self.name_prompt_focus;
-        self.name_prompt_focus = false;
-        let prompt_id = Self::explorer_name_prompt_id(ui);
-        self.name_prompt_widget = Some(prompt_id);
+        let mut name = String::new();
         let save_w = prompt_button_width(ui, "Save");
         let cancel_w = prompt_button_width(ui, "Cancel");
         let gap = ui.spacing().item_spacing.x;
@@ -490,39 +649,9 @@ impl App {
             } else {
                 row_full.max(min_field)
             };
-            let field = ui.add(
-                appearance::singleline(&mut name)
-                    .id(prompt_id)
-                    .hint_text("Name")
-                    .desired_width(field_w),
-            );
-            if focus {
-                field.request_focus();
-                // Rename selects the name without its extension, so typing
-                // replaces the stem (`IntelliJ`).
-                if let workspace_ops::NamePrompt::Rename { from, .. } = &prompt
-                    && let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), prompt_id)
-                {
-                    let stem = if from.is_dir() {
-                        name.chars().count()
-                    } else {
-                        from.file_stem()
-                            .map_or(0, |stem| stem.to_string_lossy().chars().count())
-                    };
-                    state
-                        .cursor
-                        .set_char_range(Some(egui::text::CCursorRange::two(
-                            egui::text::CCursor::new(0),
-                            egui::text::CCursor::new(stem),
-                        )));
-                    state.store(ui.ctx(), prompt_id);
-                }
-            }
-            if field.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
-                cancel = true;
-            }
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "explorer-name-field", field.rect);
+            let (edited, field, escape) = self.name_prompt_field(ui, &prompt, field_w);
+            name = edited;
+            cancel = escape;
             let save = ui.button("Save");
             let cancel_button = ui.button("Cancel");
             #[cfg(feature = "test-support")]
@@ -534,24 +663,7 @@ impl App {
                 || (field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)));
             cancel |= cancel_button.clicked();
         });
-        if cancel {
-            self.name_prompt = None;
-            return;
-        }
-        self.name_prompt = Some(match prompt {
-            workspace_ops::NamePrompt::File { dir, .. } => {
-                workspace_ops::NamePrompt::File { dir, name }
-            }
-            workspace_ops::NamePrompt::Folder { dir, .. } => {
-                workspace_ops::NamePrompt::Folder { dir, name }
-            }
-            workspace_ops::NamePrompt::Rename { from, .. } => {
-                workspace_ops::NamePrompt::Rename { from, name }
-            }
-        });
-        if submit {
-            self.submit_name_prompt();
-        }
+        self.finish_name_prompt(prompt, name, submit, cancel);
     }
 
     fn submit_name_prompt(&mut self) {

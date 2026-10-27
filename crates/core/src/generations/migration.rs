@@ -22,10 +22,27 @@ pub fn migrate_after_legacy_exit(paths: &Paths) -> Result<()> {
     #[cfg(unix)]
     options.mode(0o600);
     let legacy = options.open(paths.runtime.join("daemon.lock"))?;
-    legacy.try_lock_exclusive().context(
+    lock_released_soon(&legacy).context(
         "Running daemon is unresponsive or incompatible; its sessions have been preserved",
     )?;
     migrate(paths, true)
+}
+
+/// How long a just-released legacy lock may stay held: a retiring daemon
+/// still owns it while it exits, and a child forked meanwhile shares it
+/// until that child's `exec`.
+const LEGACY_LOCK_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Take the lock, retrying briefly while it is held.
+fn lock_released_soon(lock: &fs::File) -> std::io::Result<()> {
+    let start = std::time::Instant::now();
+    loop {
+        match lock.try_lock_exclusive() {
+            Ok(()) => return Ok(()),
+            Err(error) if start.elapsed() >= LEGACY_LOCK_GRACE => return Err(error),
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(25)),
+        }
+    }
 }
 
 fn migrate(paths: &Paths, reconcile_exited: bool) -> Result<()> {

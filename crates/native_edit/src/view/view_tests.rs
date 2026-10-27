@@ -1292,4 +1292,22 @@ mod tests {
             "{shifted} vs {advance}"
         );
     }
+
+    #[test]
+    fn copy_reference_names_the_caret_line_or_selected_lines() {
+        use crate::doc::Doc;
+        let mut doc = Doc::new("a\nb\nc\n");
+        let mut engine = VimEngine::new();
+        engine.set_modeless(true);
+        let _ = engine.place_cursor(&mut doc, 1, 0);
+        assert_eq!(
+            super::super::render::caret_reference("src/lib.rs", &engine),
+            "src/lib.rs:2"
+        );
+        engine.extend_selection_to(&mut doc, 2, 1);
+        assert_eq!(
+            super::super::render::caret_reference("src/lib.rs", &engine),
+            "src/lib.rs:2-3"
+        );
+    }
 }

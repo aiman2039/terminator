@@ -118,6 +118,9 @@ pub struct SourceOptions {
     pub change_marks: std::sync::Arc<Vec<ChangeMark>>,
     /// Theme colors for added / modified / deleted markers.
     pub change_colors: [Color32; 3],
+    /// The file as "Copy reference" names it (project-relative path):
+    /// copies `reference:line` (`IntelliJ` Copy Reference).
+    pub reference: Option<String>,
     /// Inlay hints, sorted by line and column (see [`crate::inlay`]).
     pub inlay_hints: std::sync::Arc<Vec<crate::inlay::InlayHint>>,
     /// Take keyboard focus when nothing else holds it, so an opened file is
@@ -167,6 +170,7 @@ impl Default for SourceOptions {
                 Color32::from_rgb(0x8C, 0x8C, 0x8C),
             ],
             inlay_hints: std::sync::Arc::new(Vec::new()),
+            reference: None,
         }
     }
 }
@@ -488,6 +492,22 @@ pub fn show_source<B: Buffer>(
                 if !text.is_empty() {
                     ui.ctx().copy_text(text);
                 }
+                ui.close();
+            }
+            if let Some(reference) = &options.reference
+                && item(
+                    ui,
+                    "Copy reference",
+                    "Copy",
+                    if cfg!(target_os = "macos") {
+                        "⌥⇧⌘C"
+                    } else {
+                        "Ctrl+Alt+Shift+C"
+                    },
+                )
+                .clicked()
+            {
+                ui.ctx().copy_text(caret_reference(reference, engine));
                 ui.close();
             }
             if ui
@@ -1314,6 +1334,15 @@ pub fn show_source<B: Buffer>(
                         {
                             effects.push(Effect::GotoDefinition);
                             consumed.push(*key);
+                        } else if *key == egui::Key::C
+                            && modifiers.alt
+                            && modifiers.shift
+                            && modifiers.command
+                            && let Some(reference) = &options.reference
+                        {
+                            // Cmd/Ctrl+Alt+Shift+C: Copy Reference.
+                            ui.ctx().copy_text(caret_reference(reference, engine));
+                            consumed.push(*key);
                         } else if *key == egui::Key::F7
                             && modifiers.alt
                             && !modifiers.command
@@ -1756,6 +1785,20 @@ impl RowPaint<'_> {
                 self.plain.gamma_multiply(0.5),
             );
         }
+    }
+}
+
+/// `reference:line` for the caret (1-based line), or `reference:first-last`
+/// for a selection spanning several lines.
+pub(super) fn caret_reference(reference: &str, engine: &VimEngine) -> String {
+    let caret = engine.cursor().line.saturating_add(1);
+    match engine.selection() {
+        Some((start, end)) if start.line != end.line => format!(
+            "{reference}:{}-{}",
+            start.line.saturating_add(1),
+            end.line.saturating_add(1)
+        ),
+        _ => format!("{reference}:{caret}"),
     }
 }
 

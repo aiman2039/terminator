@@ -780,3 +780,67 @@ fn moving_a_folder_carries_open_buffers_selection_and_expansion() {
     assert_eq!(app.explorer_selection, [new]);
     assert!(app.expanded_dirs.contains(&root.join("lib")));
 }
+
+#[test]
+fn rename_and_new_items_edit_inline_in_the_tree() {
+    let (mut app, ctx, dir) = keyboard_tree();
+    let (jobs, received) = mpsc::channel();
+    app.jobs = jobs.into();
+    let root = dir.path().to_path_buf();
+    let rect = |app: &App, name: &str| {
+        app.fixture_rect(&ctx, name)
+            .unwrap_or_else(|| panic!("missing {name}"))
+    };
+    let center_y = |r: [f32; 4]| r[1] + r[3] / 2.0;
+    draw_tree(&mut app, &ctx, &root, vec![]);
+    let a_row = rect(&app, "explorer-file:a.rs");
+    let b_row = rect(&app, "explorer-file:b.rs");
+    // Rename edits the row itself, with the stem selected so typing
+    // replaces it; the rows below keep their place.
+    app.open_name_prompt(workspace_ops::NamePrompt::Rename {
+        from: root.join("a.rs"),
+        name: "a.rs".into(),
+    });
+    draw_tree(&mut app, &ctx, &root, vec![]);
+    draw_tree(&mut app, &ctx, &root, vec![]);
+    let field = center_y(rect(&app, "explorer-name-field"));
+    assert!(
+        (a_row[1]..a_row[1] + a_row[3]).contains(&field),
+        "{field} in {a_row:?}"
+    );
+    assert_eq!(rect(&app, "explorer-file:b.rs"), b_row);
+    draw_tree(&mut app, &ctx, &root, vec![egui::Event::Text("c".into())]);
+    draw_tree(
+        &mut app,
+        &ctx,
+        &root,
+        vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+    );
+    assert!(app.name_prompt.is_none());
+    assert!(received.try_iter().any(|job| matches!(
+        job,
+        crate::Job::Workspace(_, workspace_ops::Op::Rename { from, to })
+            if from == root.join("a.rs") && to == root.join("c.rs")
+    )));
+    // New file in a collapsed folder opens it and adds a row right under
+    // it; Escape cancels without creating anything.
+    app.open_name_prompt(workspace_ops::NamePrompt::File {
+        dir: root.join("src"),
+        name: String::new(),
+    });
+    assert!(app.expanded_dirs.contains(&root.join("src")));
+    draw_tree(&mut app, &ctx, &root, vec![]);
+    draw_tree(&mut app, &ctx, &root, vec![]);
+    let field = center_y(rect(&app, "explorer-name-field"));
+    let main = rect(&app, "explorer-file:main.rs");
+    assert!(field < main[1], "new row sits above the folder's files");
+    assert!(field > a_row[1], "and below the folder row");
+    draw_tree(
+        &mut app,
+        &ctx,
+        &root,
+        vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+    );
+    assert!(app.name_prompt.is_none());
+    assert!(received.try_iter().next().is_none());
+}

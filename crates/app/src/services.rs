@@ -482,7 +482,7 @@ pub async fn directory_raw_async(
         })
 }
 
-type Listing = (PathBuf, std::result::Result<Vec<Entry>, DirectoryError>);
+pub(crate) type Listing = (PathBuf, std::result::Result<Vec<Entry>, DirectoryError>);
 
 /// Apply Git ignore rules to every listed directory with one
 /// `check-ignore` process from `cwd`, instead of one per directory. A

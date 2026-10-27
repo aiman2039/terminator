@@ -1,4 +1,5 @@
 use super::attention::state_color;
+use super::explorer_prompts::PromptSlot;
 use super::explorer_rows::{explorer_file_row, skip_clipped_row};
 use super::explorer_select::{ExplorerDrag, tree_focus_id};
 use super::git_panel::{GitPanelInput, PreparedGit, git_color, git_panel};
@@ -17,7 +18,7 @@ use terminator_core::{
 
 /// Explorer rows are one fixed height, which lets the tree paint only the
 /// visible slice.
-const ROW_HEIGHT: f32 = 24.0;
+pub(super) const ROW_HEIGHT: f32 = 24.0;
 
 /// Per-paint inputs every tree row shares.
 struct RowContext<'a> {
@@ -407,6 +408,30 @@ impl App {
             split_shortcut: self.shortcut_label(Action::SplitRight),
         };
         let mut drop_dir: Option<PathBuf> = None;
+        // An open rename / new-item prompt paints as a tree row: in place
+        // of the renamed row, or inserted under its folder.
+        let slot = self.name_prompt_slot(&rows, path);
+        let insert = match slot {
+            Some(PromptSlot::Insert { index, depth }) => Some((index, depth)),
+            _ => None,
+        };
+        let replace = match slot {
+            Some(PromptSlot::Replace(index)) => Some(index),
+            _ => None,
+        };
+        let count = rows.len().saturating_add(usize::from(insert.is_some()));
+        // Painted position of row `index`, and the row at a painted position
+        // (`None` for the inserted prompt).
+        let shown_at = |index: usize| match insert {
+            Some((at, _)) if index >= at => index.saturating_add(1),
+            _ => index,
+        };
+        let row_at = |shown: usize| match insert {
+            Some((at, _)) if shown == at => None,
+            Some((at, _)) if shown > at => Some(shown.saturating_sub(1)),
+            _ => Some(shown),
+        };
+        let prompt_shown = insert.map(|(at, _)| at).or(replace.map(shown_at));
         let scroll_to = self.explorer_scroll_to.take();
         let reveal = self
             .explorer_reveal
@@ -425,10 +450,25 @@ impl App {
                 ((clip.top() - top) / ROW_HEIGHT).floor().max(0.0) as usize,
                 ((clip.bottom() - top) / ROW_HEIGHT).ceil().max(0.0) as usize,
             );
-            let last = last.saturating_add(1).min(rows.len());
+            let last = last.saturating_add(1).min(count);
             let first = first.min(last);
-            for target in [scroll_to.as_ref(), reveal.as_ref()].into_iter().flatten() {
-                if let Some(index) = rows.iter().position(|row| &row.path == target) {
+            // A prompt that just opened scrolls into view so its field can
+            // take focus (unpainted rows cannot).
+            let prompt_target = prompt_shown.filter(|_| self.name_prompt_focus);
+            let targets = [scroll_to.as_ref(), reveal.as_ref()]
+                .into_iter()
+                .flatten()
+                .map(|target| {
+                    (
+                        rows.iter()
+                            .position(|row| &row.path == target)
+                            .map(shown_at),
+                        Some(target) == reveal.as_ref(),
+                    )
+                })
+                .chain(std::iter::once((prompt_target, false)));
+            for (shown, center) in targets {
+                if let Some(index) = shown {
                     #[allow(clippy::cast_precision_loss)] // UI coordinate
                     let y = top + index as f32 * ROW_HEIGHT;
                     ui.scroll_to_rect(
@@ -436,11 +476,7 @@ impl App {
                             egui::pos2(clip.left(), y),
                             egui::vec2(1.0, ROW_HEIGHT),
                         ),
-                        if Some(target) == reveal.as_ref() {
-                            Some(egui::Align::Center)
-                        } else {
-                            None
-                        },
+                        center.then_some(egui::Align::Center),
                     );
                 }
             }
@@ -451,16 +487,41 @@ impl App {
             }
             #[allow(clippy::cast_precision_loss)] // UI coordinate
             ui.allocate_space(egui::vec2(ui.available_width(), first as f32 * ROW_HEIGHT));
-            for row in rows.get(first..last).unwrap_or_default() {
-                self.explorer_tree_row(ui, row, &context, &mut drop_dir);
+            for shown in first..last {
+                match row_at(shown) {
+                    None => {
+                        self.explorer_prompt_row(ui, insert.map_or(0, |(_, depth)| depth), focus)
+                    }
+                    Some(index) => {
+                        let Some(row) = rows.get(index) else {
+                            continue;
+                        };
+                        if replace == Some(index) {
+                            self.explorer_prompt_row(ui, row.depth, focus);
+                        } else {
+                            self.explorer_tree_row(ui, row, &context, &mut drop_dir);
+                        }
+                    }
+                }
             }
             #[allow(clippy::cast_precision_loss)] // UI coordinate
             ui.allocate_space(egui::vec2(
                 ui.available_width(),
-                rows.len().saturating_sub(last) as f32 * ROW_HEIGHT,
+                count.saturating_sub(last) as f32 * ROW_HEIGHT,
             ));
         } else {
-            for row in rows.iter() {
+            for shown in 0..count {
+                let Some(index) = row_at(shown) else {
+                    self.explorer_prompt_row(ui, insert.map_or(0, |(_, depth)| depth), focus);
+                    continue;
+                };
+                let Some(row) = rows.get(index) else {
+                    continue;
+                };
+                if replace == Some(index) {
+                    self.explorer_prompt_row(ui, row.depth, focus);
+                    continue;
+                }
                 let target =
                     scroll_to.as_ref() == Some(&row.path) || reveal.as_ref() == Some(&row.path);
                 if target {
@@ -522,6 +583,26 @@ impl App {
                 })
             });
         }
+    }
+
+    /// The open name prompt as a tree row at `depth`.
+    fn explorer_prompt_row(&mut self, ui: &mut egui::Ui, depth: usize, tree_focus: egui::Id) {
+        // Exactly one row tall, so virtualized row math stays exact.
+        let (mut rect, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), ROW_HEIGHT),
+            egui::Sense::hover(),
+        );
+        #[allow(clippy::cast_precision_loss)] // UI coordinate
+        let indent = depth as f32 * ui.spacing().indent;
+        rect.min.x += indent;
+        let mut row = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Center))
+                .id_salt("explorer-prompt-row"),
+        );
+        row.set_clip_rect(rect.intersect(ui.clip_rect()));
+        self.name_prompt_row(&mut row, tree_focus);
     }
 
     fn explorer_tree_row(

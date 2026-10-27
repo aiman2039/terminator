@@ -817,6 +817,13 @@ impl App {
         // before the buffer borrow below begins.
         let marks: Vec<DiagnosticMark> = self.lsp.row_marks(path);
         let problems = self.lsp.problems_for(path);
+        // "Copy reference" names the file relative to its project.
+        let reference = self
+            .selected_project()
+            .and_then(|project| path.strip_prefix(&project.path).ok())
+            .unwrap_or(path)
+            .display()
+            .to_string();
         let inlay_answer = self
             .state
             .settings
@@ -1106,15 +1113,12 @@ impl App {
             // the per-type default: Markdown wraps, code does not.
             let soft_wrap = doc.engine.wrap().unwrap_or(is_markdown);
             let squiggles = terminator_native_edit::view::squiggles(&*buffer, &problems);
-            let inlay_hints = match &inlay_answer {
-                Some((revision, hints)) => {
-                    doc.inlay.adopt(&*buffer, *revision, hints);
-                    doc.inlay.visible(&*buffer)
-                }
-                None => {
-                    doc.inlay.clear();
-                    std::sync::Arc::new(Vec::new())
-                }
+            let inlay_hints = if let Some((revision, hints)) = &inlay_answer {
+                doc.inlay.adopt(&*buffer, *revision, hints);
+                doc.inlay.visible(&*buffer)
+            } else {
+                doc.inlay.clear();
+                std::sync::Arc::new(Vec::new())
             };
             let revision_before = buffer.revision();
             // Gutter changes against HEAD, once per edit (or new base).
@@ -1210,6 +1214,7 @@ impl App {
                         change_marks,
                         change_colors,
                         inlay_hints,
+                        reference: Some(reference),
                         ..SourceOptions::default()
                     },
                     &mut doc.highlight,
