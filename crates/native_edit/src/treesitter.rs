@@ -246,6 +246,115 @@ fn build_query(grammar: &tree_sitter::Language, nodes: &str, keywords: &[&str]) 
     query
 }
 
+/// Declarations worth listing in an outline, per language: node kind to
+/// symbol kind label (labels match the LSP outline's, so badges agree).
+fn outline_kinds(language: Language) -> &'static [(&'static str, &'static str)] {
+    match language {
+        Language::Rust => &[
+            ("function_item", "Function"),
+            ("function_signature_item", "Function"),
+            ("struct_item", "Struct"),
+            ("enum_item", "Enum"),
+            ("union_item", "Struct"),
+            ("trait_item", "Interface"),
+            ("impl_item", "Object"),
+            ("mod_item", "Module"),
+            ("const_item", "Constant"),
+            ("static_item", "Constant"),
+            ("type_item", "Type parameter"),
+            ("macro_definition", "Function"),
+        ],
+        Language::Python => &[
+            ("function_definition", "Function"),
+            ("class_definition", "Class"),
+        ],
+        Language::JavaScript => &[
+            ("function_declaration", "Function"),
+            ("generator_function_declaration", "Function"),
+            ("class_declaration", "Class"),
+            ("method_definition", "Method"),
+        ],
+        _ => &[],
+    }
+}
+
+/// Outline from the syntax tree, for when no language server answers:
+/// declarations with their names and nesting. `None` for languages
+/// without a bundled grammar.
+#[must_use]
+pub fn outline(language: Language, text: &str) -> Option<Vec<crate::lsp::Symbol>> {
+    let kinds = outline_kinds(language);
+    if kinds.is_empty() || text.len() > MAX_HIGHLIGHT_BYTES {
+        return None;
+    }
+    let (_, grammar, _, _) = grammar(language)?;
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&grammar).ok()?;
+    let tree = parser.parse(text, None)?;
+    let lines: Vec<&str> = text.lines().collect();
+    let position = |point: tree_sitter::Point| {
+        let line = lines.get(point.row).copied().unwrap_or_default();
+        let col = line
+            .get(..point.column.min(line.len()))
+            .map_or(0, |head| head.chars().count());
+        crate::lsp::Position {
+            line: u32::try_from(point.row).unwrap_or(u32::MAX),
+            character: crate::lsp::char_col_to_utf16(line, col),
+        }
+    };
+    let mut out = Vec::new();
+    let mut stack: Vec<(tree_sitter::Node<'_>, usize)> = vec![(tree.root_node(), 0)];
+    while let Some((node, depth)) = stack.pop() {
+        let listed = kinds.iter().find(|(kind, _)| *kind == node.kind());
+        let mut child_depth = depth;
+        if let Some((_, label)) = listed {
+            let name_node = node
+                .child_by_field_name("name")
+                .or_else(|| node.child_by_field_name("type"));
+            let name = name_node
+                .and_then(|name| text.get(name.byte_range()))
+                .map(|name| name.split_whitespace().collect::<Vec<_>>().join(" "));
+            if let Some(name) = name {
+                let name = if node.kind() == "impl_item" {
+                    match node
+                        .child_by_field_name("trait")
+                        .and_then(|item| text.get(item.byte_range()))
+                    {
+                        Some(trait_name) => format!("impl {trait_name} for {name}"),
+                        None => format!("impl {name}"),
+                    }
+                } else {
+                    name
+                };
+                let at = name_node.unwrap_or(node);
+                out.push(crate::lsp::Symbol {
+                    name,
+                    kind: (*label).to_owned(),
+                    range: crate::lsp::Range {
+                        start: position(node.start_position()),
+                        end: position(node.end_position()),
+                    },
+                    selection: crate::lsp::Range {
+                        start: position(at.start_position()),
+                        end: position(at.end_position()),
+                    },
+                    depth,
+                    detail: None,
+                    deprecated: false,
+                });
+                child_depth = depth.saturating_add(1);
+            }
+        }
+        // Children in reverse so the stack pops them in source order.
+        let mut cursor = node.walk();
+        let children: Vec<tree_sitter::Node<'_>> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() {
+            stack.push((child, child_depth));
+        }
+    }
+    Some(out)
+}
+
 /// Compiled highlight configuration per language. Building one compiles
 /// the grammar's queries, far costlier than highlighting a typical file,
 /// so it happens once per process instead of on every edit. A query the
@@ -497,6 +606,45 @@ mod tests {
                 assert_eq!(col, width, "row {row} of {text:?}");
             }
         }
+    }
+
+    #[test]
+    fn outline_lists_nested_declarations_in_order() {
+        let text = "mod m {\n    pub struct S;\n    impl Clone for S {\n        fn clone(&self) -> S { S }\n    }\n}\nfn main() {}\n";
+        let symbols = outline(Language::Rust, text).expect("outline");
+        let shape: Vec<(&str, usize, u32)> = symbols
+            .iter()
+            .map(|symbol| {
+                (
+                    symbol.name.as_str(),
+                    symbol.depth,
+                    symbol.selection.start.line,
+                )
+            })
+            .collect();
+        assert_eq!(
+            shape,
+            [
+                ("m", 0, 0),
+                ("S", 1, 1),
+                ("impl Clone for S", 1, 2),
+                ("clone", 2, 3),
+                ("main", 0, 6),
+            ]
+        );
+        let python = outline(
+            Language::Python,
+            "class A:\n    def f(self):\n        pass\n",
+        )
+        .unwrap();
+        assert_eq!(
+            python
+                .iter()
+                .map(|s| (s.name.as_str(), s.depth))
+                .collect::<Vec<_>>(),
+            [("A", 0), ("f", 1)]
+        );
+        assert!(outline(Language::Json, "{}").is_none());
     }
 
     #[test]

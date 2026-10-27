@@ -271,6 +271,9 @@ pub fn show_source<B: Buffer>(
     // re-lay the rows next frame.
     let mut fold_actions: Vec<IdeEdit> = Vec::new();
     let mut fold_toggles: Vec<usize> = Vec::new();
+    // Direction of a vertical caret move this frame (`true` = down), so a
+    // caret landing in a folded block hops over it instead of opening it.
+    let mut vertical_move: Option<bool> = None;
     let folds = highlight.folds();
     let visual_rows = highlight.rows();
     let row_count = visual_rows.len();
@@ -1183,7 +1186,6 @@ pub fn show_source<B: Buffer>(
                 });
                 for (key, modifiers, edit) in edits {
                     match edit {
-                        IdeEdit::Move(motion, select) => engine.ide_move(doc, motion, select),
                         IdeEdit::DeleteWordBack => engine.ide_delete_word_back(doc),
                         IdeEdit::DeleteLines => engine.ide_delete_lines(doc),
                         IdeEdit::Duplicate => engine.ide_duplicate(doc),
@@ -1195,6 +1197,20 @@ pub fn show_source<B: Buffer>(
                         }
                         IdeEdit::JoinLines => engine.ide_join_lines(doc),
                         IdeEdit::Fold { .. } | IdeEdit::Unfold { .. } => fold_actions.push(edit),
+                        IdeEdit::Move(
+                            motion @ (crate::vim::IdeMotion::Up
+                            | crate::vim::IdeMotion::Down
+                            | crate::vim::IdeMotion::PageUp(_)
+                            | crate::vim::IdeMotion::PageDown(_)),
+                            select,
+                        ) => {
+                            vertical_move = Some(matches!(
+                                motion,
+                                crate::vim::IdeMotion::Down | crate::vim::IdeMotion::PageDown(_)
+                            ));
+                            engine.ide_move(doc, motion, select);
+                        }
+                        IdeEdit::Move(motion, select) => engine.ide_move(doc, motion, select),
                         IdeEdit::ExtendSelection => engine.ide_extend_selection(doc),
                         IdeEdit::ShrinkSelection => engine.ide_shrink_selection(doc),
                     }
@@ -1456,13 +1472,19 @@ pub fn show_source<B: Buffer>(
         }
     }
     if let Some(start) = folds.hiding(caret_line) {
-        if folding {
-            // Folding the caret's block parks the caret on its first line.
-            let col = engine
-                .cursor()
-                .col
-                .min(doc.line_text(start).chars().count());
+        let col = engine.cursor().col;
+        if folding || vertical_move == Some(false) {
+            // Folding the caret's block, or moving up into one, parks the
+            // caret on its first line.
+            let col = col.min(doc.line_text(start).chars().count());
             effects.extend(engine.place_cursor(doc, start, col));
+        } else if let (Some(true), Some((_, last))) = (vertical_move, folds.region_at(start)) {
+            // Moving down hops past the folded block.
+            let line = last
+                .saturating_add(1)
+                .min(doc.line_count().saturating_sub(1));
+            let col = col.min(doc.line_text(line).chars().count());
+            effects.extend(engine.place_cursor(doc, line, col));
         } else {
             folds.unfold_at(caret_line);
         }

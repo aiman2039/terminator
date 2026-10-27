@@ -179,8 +179,43 @@ pub fn fold_ranges<B: Buffer>(doc: &B, language: Language) -> Vec<(usize, usize)
         }
     } else {
         let mut stack: Vec<(char, usize)> = Vec::new();
+        // Brackets inside strings and comments do not open or close blocks.
+        let mut block_comment = false;
         for line in 0..lines {
-            for c in doc.line_text(line).chars() {
+            let text: Vec<char> = doc.line_text(line).chars().collect();
+            let mut in_string = false;
+            let mut index = 0usize;
+            while let Some(&c) = text.get(index) {
+                let next = text.get(index.saturating_add(1)).copied();
+                index = index.saturating_add(1);
+                if block_comment {
+                    if c == '*' && next == Some('/') {
+                        block_comment = false;
+                        index = index.saturating_add(1);
+                    }
+                    continue;
+                }
+                if in_string {
+                    match c {
+                        '\\' => index = index.saturating_add(1),
+                        '"' => in_string = false,
+                        _ => {}
+                    }
+                    continue;
+                }
+                match (c, next) {
+                    ('/', Some('/')) => break,
+                    ('/', Some('*')) => {
+                        block_comment = true;
+                        index = index.saturating_add(1);
+                        continue;
+                    }
+                    ('"', _) => {
+                        in_string = true;
+                        continue;
+                    }
+                    _ => {}
+                }
                 match c {
                     '{' | '[' | '(' => stack.push((c, line)),
                     '}' | ']' | ')' => {
@@ -238,6 +273,12 @@ mod tests {
         // A block's own first line is not "enclosed" by it.
         assert_eq!(folds.enclosing(1), [(0, 4)]);
         assert!(folds.enclosing(0).is_empty());
+    }
+
+    #[test]
+    fn brackets_in_strings_and_comments_do_not_make_regions() {
+        let doc = Doc::new("fn a() {\n    let s = \"{\";\n    // }\n    /* {\n    } */\n}\n");
+        assert_eq!(fold_ranges(&doc, Language::Rust), [(0, 5)]);
     }
 
     #[test]

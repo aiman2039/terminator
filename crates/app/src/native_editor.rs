@@ -174,6 +174,14 @@ impl NativeDoc {
         }
     }
 
+    /// A buffer already loaded with `text` (tests outside this module).
+    #[cfg(test)]
+    pub(crate) fn loaded(path: PathBuf, text: &str) -> Self {
+        let mut doc = Self::new(path, false);
+        doc.doc = Some(Doc::new(text));
+        doc
+    }
+
     /// Loaded buffer, if any (outline and caret readers).
     pub(crate) fn buffer(&self) -> Option<&Doc> {
         self.doc.as_ref()

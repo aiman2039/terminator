@@ -672,8 +672,25 @@ impl App {
                     .map(native_lsp::markdown_outline)
             })
             .flatten();
-        let symbols: Vec<native_lsp::Symbol> =
-            markdown.unwrap_or_else(|| self.lsp.symbols_for(path).to_vec());
+        let symbols: Vec<native_lsp::Symbol> = markdown.unwrap_or_else(|| {
+            let served = self.lsp.symbols_for(path).to_vec();
+            if !served.is_empty() {
+                return served;
+            }
+            // No server answer: the syntax tree's outline instead.
+            self.native_docs
+                .get(path)
+                .and_then(|doc| doc.buffer())
+                .and_then(|buffer| {
+                    terminator_native_edit::treesitter::outline(
+                        terminator_native_edit::highlight::language_for_path(
+                            &path.to_string_lossy(),
+                        ),
+                        &buffer.text(),
+                    )
+                })
+                .unwrap_or_default()
+        });
         let query = self.palette.query.trim();
         let mut matcher = nucleo::Matcher::new(nucleo::Config::DEFAULT);
         let mut needle_buf = Vec::new();

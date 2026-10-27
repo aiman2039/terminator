@@ -1195,4 +1195,49 @@ mod tests {
         );
         assert!(!highlight.folds().is_folded(0));
     }
+
+    #[test]
+    fn arrow_keys_hop_over_folded_blocks() {
+        use crate::doc::Doc;
+        let ctx = egui::Context::default();
+        let mut doc = Doc::new("fn a() {\n    x();\n}\nnext();\n");
+        let mut engine = VimEngine::new();
+        let options = super::SourceOptions {
+            vim: false,
+            ..super::SourceOptions::default()
+        };
+        let mut highlight = super::HighlightCache::default();
+        drive_mods(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &options,
+            super::Language::Rust,
+            &mut highlight,
+            &[(egui::Key::Minus, egui::Modifiers::COMMAND)],
+        );
+        assert!(highlight.folds().is_folded(0));
+        drive_mods(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &options,
+            super::Language::Rust,
+            &mut highlight,
+            &[(egui::Key::ArrowDown, egui::Modifiers::NONE)],
+        );
+        assert_eq!(engine.cursor().line, 3);
+        assert!(highlight.folds().is_folded(0));
+        drive_mods(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &options,
+            super::Language::Rust,
+            &mut highlight,
+            &[(egui::Key::ArrowUp, egui::Modifiers::NONE)],
+        );
+        assert_eq!(engine.cursor().line, 0);
+        assert!(highlight.folds().is_folded(0));
+    }
 }

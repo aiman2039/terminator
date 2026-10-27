@@ -26,6 +26,8 @@ pub(crate) struct StructureState {
     /// Autoscroll from source is on by default; this turns it off.
     autoscroll_off: bool,
     markdown: Option<(PathBuf, u64, Arc<[Symbol]>)>,
+    /// Syntax-tree outline (no language server answer yet), per revision.
+    syntax: Option<(PathBuf, u64, Arc<[Symbol]>)>,
     /// Last caret-selected node, so the tree scrolls only when it changes.
     followed: Option<(PathBuf, String)>,
 }
@@ -160,14 +162,40 @@ impl App {
         Some(outline)
     }
 
+    /// Outline from the syntax tree for a loaded buffer, cached per
+    /// revision; `None` for languages without a bundled grammar.
+    pub(crate) fn syntax_outline(&mut self, path: &Path) -> Option<Arc<[Symbol]>> {
+        let doc = self.native_docs.get(path)?.buffer()?;
+        let revision = doc.revision();
+        if let Some((cached, at, outline)) = &self.structure.syntax
+            && cached == path
+            && *at == revision
+        {
+            return Some(Arc::clone(outline));
+        }
+        let language =
+            terminator_native_edit::highlight::language_for_path(&path.to_string_lossy());
+        let outline: Arc<[Symbol]> =
+            terminator_native_edit::treesitter::outline(language, &doc.text())?.into();
+        self.structure.syntax = Some((path.to_owned(), revision, Arc::clone(&outline)));
+        Some(outline)
+    }
+
     /// Outline for any file: Markdown headings, else the server's symbols
-    /// (requested on demand; revision-gated, so cheap every frame).
+    /// (requested on demand; revision-gated, so cheap every frame), else
+    /// the syntax tree's while the server has nothing.
     pub(crate) fn document_outline(&mut self, path: &Path) -> Arc<[Symbol]> {
         if let Some(outline) = self.markdown_outline(path) {
             return outline;
         }
         self.lsp.request_symbols(path);
-        self.lsp.symbols_for(path)
+        let symbols = self.lsp.symbols_for(path);
+        if symbols.is_empty()
+            && let Some(outline) = self.syntax_outline(path)
+        {
+            return outline;
+        }
+        symbols
     }
 
     pub(crate) fn structure_panel(&mut self, ui: &mut egui::Ui) {
@@ -192,40 +220,57 @@ impl App {
         } else {
             let language =
                 terminator_native_edit::highlight::language_for_path(&path.to_string_lossy());
-            if native_lsp::server_language(language).is_none() {
-                ui.weak("No document outline for this file type.");
-                ui.weak(
-                    "Structure supports Markdown headings, and Rust, Python, JavaScript and \
-                     TypeScript through a language server.",
-                );
-                return;
-            }
-            if restart {
+            let served = native_lsp::server_language(language).is_some();
+            if served && restart {
                 if self.lsp.tracked(&path) {
                     self.lsp.restart(&path);
                 } else {
                     self.lsp.restart_all();
                 }
             }
-            if !self.lsp.tracked(&path) {
-                ui.weak("Waiting for the native editor to load this file.");
-                return;
-            }
-            if let Some(note) = self.lsp.server_note(&path) {
-                ui.weak(note);
-                return;
-            }
-            self.lsp.request_symbols(&path);
-            self.lsp.symbols_for(&path)
-        };
-        if symbols.is_empty() {
-            ui.weak(if crate::markdown::supported(&path) {
-                "No headings in this file."
+            // The server's outline when it has one; else the syntax tree's,
+            // with a note on why the server is not answering yet.
+            let note = if !served {
+                None
+            } else if !self.lsp.tracked(&path) {
+                Some("Waiting for the native editor to load this file.".to_owned())
+            } else if let Some(note) = self.lsp.server_note(&path) {
+                Some(note)
             } else {
-                "No symbols yet — the server may still be indexing (it retries every few seconds)."
-            });
-            return;
-        }
+                self.lsp.request_symbols(&path);
+                None
+            };
+            let served_symbols = if served && note.is_none() {
+                self.lsp.symbols_for(&path)
+            } else {
+                Arc::from(Vec::new())
+            };
+            if !served_symbols.is_empty() {
+                served_symbols
+            } else if let Some(outline) = self.syntax_outline(&path) {
+                ui.weak(match &note {
+                    Some(note) => format!("Syntax outline · {note}"),
+                    None if served => {
+                        "Syntax outline while the language server indexes.".to_owned()
+                    }
+                    None => "Syntax outline (no language server for this file type).".to_owned(),
+                });
+                outline
+            } else if !served {
+                ui.weak("No document outline for this file type.");
+                ui.weak(
+                    "Structure supports Markdown headings, and Rust, Python, JavaScript and \
+                     TypeScript through a language server.",
+                );
+                return;
+            } else {
+                if let Some(note) = note {
+                    ui.weak(note);
+                    return;
+                }
+                served_symbols
+            }
+        };
         let mut tree = OutlineTree::build(&symbols);
         self.structure_toolbar(ui, &path, &tree);
         if self.structure.alphabetical {
@@ -537,5 +582,25 @@ mod tests {
         assert!(outline_matches("handle_request", "hreq"));
         assert!(outline_matches("HttpServer", "server"));
         assert!(!outline_matches("parse", "pz"));
+    }
+
+    #[test]
+    fn outline_falls_back_to_the_syntax_tree_without_a_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, terminator_core::Paths::at(dir.path().into()));
+        let path = dir.path().join("lib.rs");
+        app.native_docs.insert(
+            path.clone(),
+            crate::native_editor::NativeDoc::loaded(path.clone(), "struct A;\nfn b() {}\n"),
+        );
+        let outline = app.document_outline(&path);
+        assert_eq!(
+            outline
+                .iter()
+                .map(|symbol| symbol.name.as_str())
+                .collect::<Vec<_>>(),
+            ["A", "b"]
+        );
     }
 }
