@@ -484,6 +484,17 @@ impl App {
         paths
     }
 
+    /// Open `path` at a language-server position: the line goes through
+    /// [`App::open_file`], the UTF-16 column through the native pending
+    /// machinery so it converts once the buffer has loaded.
+    pub(crate) fn open_file_at(&mut self, path: PathBuf, position: native_lsp::Position) {
+        let absolute = std::path::absolute(&path).unwrap_or_else(|_| path.clone());
+        self.open_file(path, position.line.checked_add(1), None, false);
+        if self.native_pending_line.contains_key(&absolute) {
+            self.native_pending_col.insert(absolute, position.character);
+        }
+    }
+
     pub(super) fn open_native(
         &mut self,
         project: &str,
@@ -573,6 +584,9 @@ impl App {
         }
         recent_files.sort_by_key(|item| !pinned_files.contains(item));
         let pinned = pinned_files.contains(path);
+        // The breadcrumb needs the outline whether or not the Structure
+        // panel is open; the request is revision-gated, so this is cheap.
+        self.lsp.request_symbols(path);
         let outline = self.lsp.symbols_for(path);
         // Deferred closes run after the borrow below ends.
         let mut defer_close_after_save = false;

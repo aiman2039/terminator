@@ -160,7 +160,7 @@ pub struct LspManager {
     goto: Option<GotoJump>,
     references: Option<ReferenceResults>,
     rename: Option<RenameResults>,
-    symbols: std::collections::HashMap<PathBuf, Vec<L::Symbol>>,
+    symbols: std::collections::HashMap<PathBuf, std::sync::Arc<[L::Symbol]>>,
     symbols_rev: std::collections::HashMap<PathBuf, u64>,
     /// Last empty outline answer per path (indexing retry gate).
     symbols_retry: HashMap<PathBuf, Instant>,
@@ -449,7 +449,10 @@ impl LspManager {
             // An empty outline usually means the server is still indexing.
             // Keep asking on a slow cadence until symbols arrive instead
             // of caching the empty answer until the next edit.
-            let empty = self.symbols.get(path).is_none_or(Vec::is_empty);
+            let empty = self
+                .symbols
+                .get(path)
+                .is_none_or(|symbols| symbols.is_empty());
             if !empty
                 || self
                     .symbols_retry
@@ -486,9 +489,13 @@ impl LspManager {
     }
 
     /// Cached outline for `path`, in document order (depth-tagged).
+    /// Shared, so per-frame callers clone a pointer, not the outline.
     #[must_use]
-    pub fn symbols_for(&self, path: &Path) -> Vec<L::Symbol> {
-        self.symbols.get(path).cloned().unwrap_or_default()
+    pub fn symbols_for(&self, path: &Path) -> std::sync::Arc<[L::Symbol]> {
+        self.symbols
+            .get(path)
+            .cloned()
+            .unwrap_or_else(|| std::sync::Arc::from(Vec::new()))
     }
 
     /// Request fresh document outlines for every open native editor. The

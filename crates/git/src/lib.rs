@@ -15,7 +15,7 @@ pub mod snapshot;
 pub mod status;
 
 pub use diffstat::{Stat, parse_numstat};
-pub use ignore::{Entry, entries, entries_known};
+pub use ignore::{DISPLAY_LIMIT, Entry, compare_entries, entries, entries_known, natural_cmp};
 pub use snapshot::{
     SNAPSHOT_LIMIT, blob, check_text, find_record, relative_path, snapshots, worktree_file,
 };

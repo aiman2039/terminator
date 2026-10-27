@@ -10,6 +10,69 @@ pub struct Entry {
     pub ignored: bool,
 }
 
+/// Most entries one directory listing shows. A larger directory reports
+/// an error instead of a partial listing that would look complete.
+pub const DISPLAY_LIMIT: usize = 5000;
+
+/// Explorer order: folders first, then names compared case-insensitively
+/// with digit runs by value, so `file2` sorts before `file10`.
+#[must_use]
+pub fn compare_entries(a: &Entry, b: &Entry) -> std::cmp::Ordering {
+    b.directory.cmp(&a.directory).then_with(|| {
+        let name = |entry: &Entry| {
+            entry
+                .path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        natural_cmp(&name(a), &name(b)).then_with(|| a.path.cmp(&b.path))
+    })
+}
+
+/// Case-insensitive natural compare: runs of ASCII digits compare by
+/// numeric value (then by length, so `01` follows `1`), everything else
+/// by lowercase char.
+#[must_use]
+pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (a.peek().copied(), b.peek().copied()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let mut left = String::new();
+                while let Some(c) = a.next_if(char::is_ascii_digit) {
+                    left.push(c);
+                }
+                let mut right = String::new();
+                while let Some(c) = b.next_if(char::is_ascii_digit) {
+                    right.push(c);
+                }
+                let (l, r) = (left.trim_start_matches('0'), right.trim_start_matches('0'));
+                let order = l
+                    .len()
+                    .cmp(&r.len())
+                    .then_with(|| l.cmp(r))
+                    .then_with(|| left.len().cmp(&right.len()));
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+            (Some(x), Some(y)) => {
+                let order = x.to_lowercase().cmp(y.to_lowercase());
+                if order != Ordering::Equal {
+                    return order;
+                }
+                a.next();
+                b.next();
+            }
+        }
+    }
+}
+
 /// `check-ignore` in batch mode: NUL-delimited paths on stdin, ignored paths
 /// back on stdout. Exit status 1 means no matches, not failure.
 pub const CHECK_IGNORE_ARGV: &[&str] = &["check-ignore", "--stdin", "-z"];
@@ -61,8 +124,8 @@ pub fn entries_known(path: &Path, in_git: bool) -> Result<Vec<Entry>> {
     for entry in std::fs::read_dir(path)? {
         let entry = entry?;
         ensure!(
-            entries.len() < 1000,
-            "Directory exceeds the 1,000-entry display limit"
+            entries.len() < DISPLAY_LIMIT,
+            "Directory exceeds the {DISPLAY_LIMIT}-entry display limit"
         );
         entries.push(Entry {
             ignored: entry.file_name() == ".git",
@@ -84,7 +147,7 @@ pub fn entries_known(path: &Path, in_git: bool) -> Result<Vec<Entry>> {
             }
         }
     }
-    entries.sort_by(|a, b| b.directory.cmp(&a.directory).then(a.path.cmp(&b.path)));
+    entries.sort_by(compare_entries);
     Ok(entries)
 }
 
@@ -92,6 +155,36 @@ pub fn entries_known(path: &Path, in_git: bool) -> Result<Vec<Entry>> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn listing_order_is_folders_first_then_natural_case_insensitive() {
+        let entry = |name: &str, directory: bool| Entry {
+            path: PathBuf::from(name),
+            directory,
+            ignored: false,
+        };
+        let mut entries = [
+            entry("file10.rs", false),
+            entry("Zeta.md", false),
+            entry("alpha.md", false),
+            entry("file2.rs", false),
+            entry("src", true),
+            entry("Docs", true),
+        ];
+        entries.sort_by(compare_entries);
+        let names: Vec<_> = entries.iter().map(|e| e.path.to_str().unwrap()).collect();
+        assert_eq!(
+            names,
+            [
+                "Docs",
+                "src",
+                "alpha.md",
+                "file2.rs",
+                "file10.rs",
+                "Zeta.md"
+            ]
+        );
+    }
 
     fn git(root: &Path, args: &[&str]) {
         git::run_blocking(root, args, status_options(None, false)).unwrap();

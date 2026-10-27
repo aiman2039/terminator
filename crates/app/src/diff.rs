@@ -3,7 +3,10 @@ use anyhow::{Context, Result, ensure};
 use similar::{ChangeTag, DiffTag, TextDiff};
 use std::{
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 use syntect::{
     easy::HighlightLines,
@@ -17,6 +20,36 @@ pub(crate) mod actions;
 pub(crate) mod review;
 
 const CONTEXT: usize = 3;
+
+/// Buffers above this size render plain, like the native editor's cap:
+/// syntect over a multi-megabyte side would stall a CPU worker.
+const MAX_HIGHLIGHT_BYTES: usize = 256 * 1024;
+
+/// Wall-clock budget for one line diff; past it `similar` falls back to a
+/// coarser (still correct) diff instead of stalling on pathological input.
+const DIFF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Theme the next diff build highlights with. The GUI mirrors its
+/// visuals here every frame; builds run on workers that have no `Ui`.
+static DARK: AtomicBool = AtomicBool::new(true);
+
+/// Record whether the GUI is in dark mode, for later diff builds.
+pub(crate) fn set_dark(dark: bool) {
+    DARK.store(dark, Ordering::Relaxed);
+}
+
+/// Identity of one built document. Views key derived caches (content
+/// width) on it instead of hashing both full texts every frame. Every
+/// value, the default included, is fresh.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DiffGeneration(u64);
+
+impl Default for DiffGeneration {
+    fn default() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
 
 #[cfg(test)]
 pub struct DiffRequest<'a> {
@@ -74,6 +107,7 @@ pub struct DiffDocument {
     pub(crate) revealed: Vec<std::ops::Range<usize>>,
     pub(crate) context: usize,
     pub(crate) source: Option<actions::Source>,
+    pub(crate) generation: DiffGeneration,
 }
 
 impl DiffDocument {
@@ -159,11 +193,15 @@ fn syntaxes() -> &'static SyntaxSet {
 
 fn theme() -> &'static Theme {
     static FALLBACK: OnceLock<Theme> = OnceLock::new();
-    terminator_native_edit::highlight::theme(true)
+    terminator_native_edit::highlight::theme(DARK.load(Ordering::Relaxed))
         .unwrap_or_else(|| FALLBACK.get_or_init(Theme::default))
 }
 
 fn highlight_file(path: &Path, text: &str) -> Vec<Vec<DiffSpan>> {
+    if text.len() > MAX_HIGHLIGHT_BYTES {
+        // Plain rows: `line_spans` falls back to the theme foreground.
+        return Vec::new();
+    }
     let set = syntaxes();
     let syntax = syntax_for(path, set);
     let mut highlighter = HighlightLines::new(syntax, theme());
@@ -285,7 +323,9 @@ fn build_with_revealed(
 ) -> DiffDocument {
     let old_hl = highlight_file(path, left);
     let new_hl = highlight_file(path, right);
-    let diff = TextDiff::from_lines(left, right);
+    let diff = TextDiff::configure()
+        .timeout(DIFF_TIMEOUT)
+        .diff_lines(left, right);
     let mut doc = DiffDocument {
         left_label: if staged { "HEAD" } else { "Index" }.into(),
         right_label: if staged { "Index" } else { "Working tree" }.into(),

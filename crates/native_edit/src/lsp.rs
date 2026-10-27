@@ -81,12 +81,15 @@ pub struct RenameFileEdit {
 }
 
 /// One document symbol, flattened from the server's tree: `depth` is the
-/// nesting level (0 for top-level items) for outline indentation.
+/// nesting level (0 for top-level items) for outline indentation. `range`
+/// spans the whole item (doc comments and attributes included) for
+/// containment; `selection` is the name, where a jump should land.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Symbol {
     pub name: String,
     pub kind: String,
     pub range: Range,
+    pub selection: Range,
     pub depth: usize,
 }
 
@@ -663,6 +666,7 @@ pub fn parse_document_symbols(result: &Value) -> Vec<Symbol> {
                         name: item.name.clone(),
                         kind: symbol_kind_label(item.kind),
                         range: native_range(&item.range),
+                        selection: native_range(&item.selection_range),
                         depth,
                     });
                     if let Some(children) = &item.children {
@@ -678,6 +682,7 @@ pub fn parse_document_symbols(result: &Value) -> Vec<Symbol> {
                     name: item.name.clone(),
                     kind: symbol_kind_label(item.kind),
                     range: native_range(&item.location.range),
+                    selection: native_range(&item.location.range),
                     depth: 0,
                 });
             }

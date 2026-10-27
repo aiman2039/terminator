@@ -235,11 +235,14 @@ fn file_and_symbol_results_open_in_their_own_project() {
             name: "helper".into(),
             kind: "Function".into(),
             line: 8,
+            column: 4,
             container: None,
         },
     );
     assert_eq!(app.selected.as_deref(), Some("b"));
     assert_eq!(app.native_pending_line.get(&file), Some(&8));
+    // The jump lands on the symbol name, not just its line.
+    assert_eq!(app.native_pending_col.get(&file), Some(&4));
 }
 
 fn project_at(app: &mut App, id: &str, path: std::path::PathBuf) {

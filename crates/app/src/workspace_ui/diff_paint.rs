@@ -117,7 +117,7 @@ pub(super) fn diff_content_width(
 ) -> f32 {
     let cache_id = egui::Id::unique(("diff-width", scroll_key, split));
     let fingerprint = egui::Id::unique((
-        doc,
+        doc.generation,
         &metrics.font,
         metrics.digit_w.to_bits(),
         metrics.row_h.to_bits(),

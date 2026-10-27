@@ -116,13 +116,13 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
         Op::Log => Ok(Report::Log(log(root)?)),
         Op::Compare { base } => Ok(Report::Compare(compare(root, base.as_deref())?)),
         Op::CreateFile(path) => {
-            let path = new_path(root, &path)?;
+            let path = new_nested_path(root, &path)?;
             ensure!(!link_exists(&path), "{} already exists", path.display());
             fs::write(&path, "").with_context(|| format!("create {}", path.display()))?;
             Ok(Report::Message(format!("Created {}", path.display())))
         }
         Op::CreateDir(path) => {
-            let path = new_path(root, &path)?;
+            let path = new_nested_path(root, &path)?;
             ensure!(!link_exists(&path), "{} already exists", path.display());
             fs::create_dir(&path).with_context(|| format!("create {}", path.display()))?;
             Ok(Report::Message(format!("Created {}", path.display())))
@@ -399,17 +399,44 @@ fn compare(root: &Path, base_override: Option<&str>) -> Result<CompareData> {
     Ok(data)
 }
 
+/// Explorer delete touches only the working tree (as in `IntelliJ`): the
+/// index is left alone, so a tracked file shows as deleted, unstaged.
 fn delete(root: &Path, path: &Path) -> Result<Report> {
     let path = contained_file(root, path)?;
-    let tracked = relative_arg(root, &path).ok();
-    if let Some(relative) = tracked.as_deref()
-        && git_text(root, &["ls-files", "--error-unmatch", "--", relative]).is_ok()
-    {
-        git_text(root, &["rm", "-f", "--", relative])?;
-    } else {
-        fs::remove_file(&path).with_context(|| format!("delete {}", path.display()))?;
-    }
-    Ok(Report::Message(format!("Deleted {}", path.display())))
+    move_to_trash(&path)?;
+    Ok(Report::Message(format!(
+        "Moved {} to Trash",
+        path.display()
+    )))
+}
+
+/// Recoverable removal: the system Trash on macOS and through `gio` on
+/// Linux. Tests remove directly so they never fill the user's Trash.
+#[cfg(all(target_os = "macos", not(test)))]
+fn move_to_trash(path: &Path) -> Result<()> {
+    use objc2_foundation::{NSFileManager, NSString, NSURL};
+    let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+    NSFileManager::defaultManager()
+        .trashItemAtURL_resultingItemURL_error(&url, None)
+        .map_err(|error| anyhow::anyhow!("{}", error.localizedDescription()))
+        .with_context(|| format!("move {} to Trash", path.display()))
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+fn move_to_trash(path: &Path) -> Result<()> {
+    let status = std::process::Command::new("gio")
+        .arg("trash")
+        .arg("--")
+        .arg(path)
+        .status()
+        .with_context(|| format!("move {} to Trash (gio)", path.display()))?;
+    ensure!(status.success(), "gio trash failed for {}", path.display());
+    Ok(())
+}
+
+#[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
+fn move_to_trash(path: &Path) -> Result<()> {
+    fs::remove_file(path).with_context(|| format!("delete {}", path.display()))
 }
 
 fn reveal(path: &Path) -> Result<()> {
@@ -529,6 +556,37 @@ fn new_path(root: &Path, path: &Path) -> Result<PathBuf> {
     Ok(parent.join(name.as_ref()))
 }
 
+/// Like [`new_path`], but a typed `a/b/c.rs` creates the missing `a/b`
+/// first (as `IntelliJ` New File does). Only plain names may follow the deepest
+/// existing ancestor, and that ancestor must resolve inside the root, so
+/// neither `..` nor a symlinked directory can escape it.
+fn new_nested_path(root: &Path, path: &Path) -> Result<PathBuf> {
+    let mut existing = path.parent().context("missing parent")?;
+    let mut missing = Vec::new();
+    while !existing.exists() {
+        let name = existing.file_name().context("missing parent")?;
+        missing.push(name.to_owned());
+        existing = existing.parent().context("missing parent")?;
+    }
+    let base = existing.canonicalize().context("parent")?;
+    let root = root.canonicalize().context("root")?;
+    ensure!(base.starts_with(&root), "path escapes the root");
+    let mut parent = base;
+    for name in missing.iter().rev() {
+        let text = name.to_string_lossy();
+        ensure!(
+            !text.is_empty() && text != "." && text != "..",
+            "folder name is not allowed"
+        );
+        parent.push(name);
+    }
+    fs::create_dir_all(&parent).with_context(|| format!("create {}", parent.display()))?;
+    new_path(
+        &root,
+        &parent.join(path.file_name().context("missing file name")?),
+    )
+}
+
 fn duplicate_destination(path: &Path) -> Result<PathBuf> {
     let parent = path.parent().context("missing parent")?;
     let stem = path
@@ -575,6 +633,33 @@ mod tests {
         git(dir.path(), &["add", "a.txt"]);
         git(dir.path(), &["commit", "-qm", "base"]);
         dir
+    }
+
+    #[test]
+    fn new_file_with_a_nested_name_creates_its_folders() {
+        let dir = repo();
+        let root = dir.path();
+        perform(root, Op::CreateFile(root.join("src/deep/mod.rs"))).unwrap();
+        assert!(root.join("src/deep/mod.rs").is_file());
+        perform(root, Op::CreateDir(root.join("docs/guide/img"))).unwrap();
+        assert!(root.join("docs/guide/img").is_dir());
+        assert!(perform(root, Op::CreateFile(root.join("x/../../escape.rs"))).is_err());
+        assert!(!root.parent().unwrap().join("escape.rs").exists());
+    }
+
+    #[test]
+    fn delete_leaves_the_index_alone() {
+        let dir = repo();
+        let root = dir.path();
+        perform(root, Op::Delete(root.join("a.txt"))).unwrap();
+        assert!(!root.join("a.txt").exists());
+        let output = run_command(
+            git::command(root, &["status", "--porcelain"]),
+            git_options(),
+        )
+        .unwrap();
+        // Unstaged deletion (` D`), not a staged `git rm` (`D `).
+        assert_eq!(String::from_utf8(output.stdout).unwrap(), " D a.txt\n");
     }
 
     #[test]

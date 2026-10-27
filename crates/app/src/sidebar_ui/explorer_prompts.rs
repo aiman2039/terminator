@@ -75,10 +75,10 @@ impl App {
         };
         ui.horizontal(|ui| {
             ui.label(format!(
-                "Delete {}?",
+                "Move {} to Trash?",
                 path.file_name().unwrap_or_default().to_string_lossy()
             ));
-            if ui.button("Delete").clicked() {
+            if ui.button("Move to Trash").clicked() {
                 self.queue_workspace(workspace_ops::Op::Delete(path));
                 self.pending_delete = None;
             }

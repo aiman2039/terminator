@@ -157,28 +157,28 @@ impl App {
             );
             return;
         }
-        let mut jump: Option<u32> = None;
+        let mut jump: Option<terminator_native_edit::lsp::Position> = None;
         ui.weak(format!("{} symbols", symbols.len()));
         appearance::sidebar_scroll("structure")
             .max_height(ui.available_height())
             .show(ui, |ui| {
-                for symbol in &symbols {
+                for symbol in symbols.iter() {
                     ui.horizontal(|ui| {
                         ui.add_space((symbol.depth as f32) * 14.0);
                         let label = RichText::new(&symbol.name);
                         let response = ui.selectable_label(false, label).on_hover_text(format!(
                             "{} — line {}",
                             symbol.kind,
-                            symbol.range.start.line.saturating_add(1)
+                            symbol.selection.start.line.saturating_add(1)
                         ));
                         if response.clicked() {
-                            jump = Some(symbol.range.start.line.saturating_add(1));
+                            jump = Some(symbol.selection.start);
                         }
                     });
                 }
             });
-        if let Some(line) = jump {
-            self.open_file(path, Some(line), None, false);
+        if let Some(position) = jump {
+            self.open_file_at(path, position);
         }
     }
 }

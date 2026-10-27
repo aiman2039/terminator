@@ -51,6 +51,8 @@ impl eframe::App for App {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Diff builds run on workers; they highlight with this theme.
+        crate::diff::set_dark(ctx.global_style().visuals.dark_mode);
         // eframe calls logic even while hidden/minimized; ui is rendering-only.
         // IPC and exit checkpoints must not depend on a visible window.
         if let Some(probe) = self.repaint_probe.as_mut() {

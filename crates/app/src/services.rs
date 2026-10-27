@@ -141,8 +141,9 @@ pub fn entries_raw(
         anyhow::ensure!(!cancel.is_cancelled(), "Directory scan cancelled");
         let entry = entry?;
         anyhow::ensure!(
-            entries.len() < 1000,
-            "Directory exceeds the 1,000-entry display limit"
+            entries.len() < terminator_git::DISPLAY_LIMIT,
+            "Directory exceeds the {}-entry display limit",
+            terminator_git::DISPLAY_LIMIT
         );
         entries.push(Entry {
             ignored: entry.file_name() == ".git",
@@ -150,7 +151,7 @@ pub fn entries_raw(
             directory: entry.file_type()?.is_dir(),
         });
     }
-    entries.sort_by(|a, b| b.directory.cmp(&a.directory).then(a.path.cmp(&b.path)));
+    entries.sort_by(terminator_git::compare_entries);
     Ok(entries)
 }
 
@@ -623,11 +624,11 @@ mod tests {
     #[test]
     fn incomplete_listing_reports_its_limit_instead_of_returning_partial_success() {
         let dir = tempfile::tempdir().unwrap();
-        for n in 0..1001 {
+        for n in 0..=terminator_git::DISPLAY_LIMIT {
             fs::write(dir.path().join(n.to_string()), "").unwrap();
         }
         let error = directory_result(dir.path(), false).unwrap_err();
-        assert!(error.message.contains("1,000-entry display limit"));
+        assert!(error.message.contains("entry display limit"));
     }
 
     #[test]

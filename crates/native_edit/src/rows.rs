@@ -103,11 +103,11 @@ pub fn visual_rows<B: Buffer>(doc: &B, wrap_columns: Option<usize>) -> Vec<Visua
                 let Some(ch) = chars.get(end).copied() else {
                     break;
                 };
-                let width = char_display_width(ch);
-                if end > start && cells.saturating_add(width) > limit {
+                let next = advance_cell(cells, ch);
+                if end > start && next > limit {
                     break;
                 }
-                cells = cells.saturating_add(width);
+                cells = next;
                 end = end.saturating_add(1);
                 if ch.is_whitespace() {
                     last_space = Some(end);
@@ -131,9 +131,12 @@ pub fn visual_rows<B: Buffer>(doc: &B, wrap_columns: Option<usize>) -> Vec<Visua
     rows
 }
 
-/// Display cells of one char: East Asian wide chars take two columns,
-/// everything else (including tabs, kept single-cell like the engine)
-/// takes one. Control chars fall back to one cell.
+/// Tab stop width in display cells.
+pub const TAB_WIDTH: usize = 4;
+
+/// Display cells of one char outside a tab: East Asian wide chars take two
+/// columns, everything else takes one. Control chars fall back to one
+/// cell. Tabs are position-dependent; see [`advance_cell`].
 #[must_use]
 pub fn char_display_width(c: char) -> usize {
     unicode_width::UnicodeWidthChar::width(c)
@@ -141,23 +144,52 @@ pub fn char_display_width(c: char) -> usize {
         .max(1)
 }
 
+/// Display cell after placing `c` at cell `at`: a tab advances to the
+/// next [`TAB_WIDTH`] stop, every other char by its own width.
+#[must_use]
+pub fn advance_cell(at: usize, c: char) -> usize {
+    if c == '\t' {
+        at.saturating_add(TAB_WIDTH.saturating_sub(at % TAB_WIDTH))
+    } else {
+        at.saturating_add(char_display_width(c))
+    }
+}
+
 /// Display-column x (in cells) of char column `col`.
 #[must_use]
 pub fn display_x(text: &str, col: usize) -> usize {
-    text.chars()
-        .take(col)
-        .map(char_display_width)
-        .fold(0usize, |acc, w| acc.saturating_add(w))
+    text.chars().take(col).fold(0usize, advance_cell)
+}
+
+/// `text` as painted when it starts at display cell `at`: tabs become the
+/// spaces that reach their stop, so glyph advances match [`display_x`].
+#[must_use]
+pub fn expand_tabs(text: &str, at: usize) -> std::borrow::Cow<'_, str> {
+    if !text.contains('\t') {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len().saturating_add(TAB_WIDTH));
+    let mut cell = at;
+    for c in text.chars() {
+        let next = advance_cell(cell, c);
+        if c == '\t' {
+            out.extend(std::iter::repeat_n(' ', next.saturating_sub(cell)));
+        } else {
+            out.push(c);
+        }
+        cell = next;
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 /// Char column at display cell `x` (floor: a click on the second cell of
-/// a wide char lands on that char).
+/// a wide char or inside a tab lands on that char).
 #[must_use]
 pub fn col_at_display_x(text: &str, x: usize) -> usize {
     let mut acc = 0usize;
     let mut col = 0usize;
     for c in text.chars() {
-        let next = acc.saturating_add(char_display_width(c));
+        let next = advance_cell(acc, c);
         if next > x {
             break;
         }
@@ -171,6 +203,17 @@ pub fn col_at_display_x(text: &str, x: usize) -> usize {
 mod tests {
     use super::*;
     use crate::doc::Doc;
+
+    #[test]
+    fn tabs_advance_to_the_next_tab_stop() {
+        assert_eq!(display_x("\tfoo", 1), TAB_WIDTH);
+        assert_eq!(display_x("ab\tc", 3), TAB_WIDTH);
+        assert_eq!(display_x("abcd\tx", 5), TAB_WIDTH * 2);
+        assert_eq!(col_at_display_x("\tfoo", 2), 0);
+        assert_eq!(col_at_display_x("\tfoo", TAB_WIDTH), 1);
+        assert_eq!(expand_tabs("a\tb", 0), "a   b");
+        assert_eq!(expand_tabs("\tb", 2), "  b");
+    }
 
     #[test]
     fn row_cache_reuses_rows_until_the_buffer_or_width_changes() {

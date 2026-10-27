@@ -122,7 +122,7 @@ impl LspManager {
                 } else {
                     self.symbols_retry.remove(&path);
                 }
-                self.symbols.insert(path.clone(), parsed);
+                self.symbols.insert(path.clone(), parsed.into());
                 self.symbols_rev.insert(path, revision);
                 self.search_revision = self.search_revision.wrapping_add(1);
             }

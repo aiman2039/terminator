@@ -74,6 +74,8 @@ pub(crate) enum PaletteItem {
         name: String,
         kind: String,
         line: u32,
+        /// UTF-16 column of the symbol name, as the server reports it.
+        column: u32,
         container: Option<String>,
     },
     Settings(SettingsSection),
@@ -364,7 +366,8 @@ impl App {
                     path,
                     name: symbol.name,
                     kind: symbol.kind,
-                    line: symbol.range.start.line,
+                    line: symbol.selection.start.line,
+                    column: symbol.selection.start.character,
                     container: None,
                 });
             }
@@ -390,6 +393,7 @@ impl App {
                     name: hit.name,
                     kind: hit.kind,
                     line: hit.range.start.line,
+                    column: hit.range.start.character,
                     container: hit.container,
                 });
             }
@@ -921,7 +925,9 @@ impl App {
                 }
                 self.open_file(path, None, None, false);
             }
-            PaletteItem::Symbol { path, line, .. } => {
+            PaletteItem::Symbol {
+                path, line, column, ..
+            } => {
                 if let Some(project) = self
                     .project_for_palette_path(&path)
                     .map(|project| project.id.clone())
@@ -929,7 +935,13 @@ impl App {
                 {
                     self.select_project(project);
                 }
-                self.open_file(path, line.checked_add(1), None, false);
+                self.open_file_at(
+                    path,
+                    native_lsp::Position {
+                        line,
+                        character: column,
+                    },
+                );
             }
             PaletteItem::Settings(section) => {
                 self.open_settings();

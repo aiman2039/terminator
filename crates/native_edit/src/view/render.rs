@@ -6,7 +6,7 @@ use super::keys::{
     ide_shortcut, mode_name, source_focus_id,
 };
 use super::{BOLD_FAMILY, ITALIC_FAMILY};
-use crate::rows::{char_display_width, col_at_display_x, display_x};
+use crate::rows::{col_at_display_x, display_x, expand_tabs};
 use egui;
 use egui::{Color32, FontId, Pos2, Rect, Sense, Vec2};
 /// Worst severity on one buffer row, for the diagnostics gutter.
@@ -547,7 +547,12 @@ pub fn show_source<B: Buffer>(
             }
             .paint();
             if let Some(cells) = cursor_cells {
-                let cell_cells = cell.map_or(1, char_display_width);
+                // A tab's block covers the cells up to its stop.
+                let cell_cells = if cell.is_some() {
+                    display_x(text, local_col.saturating_add(1)).saturating_sub(cells)
+                } else {
+                    1
+                };
                 #[allow(clippy::cast_precision_loss)] // UI coordinate
                 let x = origin.x + gutter + cells as f32 * advance;
                 if engine.mode() == Mode::Insert {
@@ -926,7 +931,7 @@ impl RowPaint<'_> {
             self.painter.text(
                 Pos2::new(self.x, self.y),
                 egui::Align2::LEFT_TOP,
-                self.text,
+                expand_tabs(self.text, 0),
                 self.font.clone(),
                 self.plain,
             );
@@ -942,12 +947,13 @@ impl RowPaint<'_> {
                 .take(span.start.saturating_sub(col))
                 .collect();
             if !gap.is_empty() {
+                let gap_cell = display_x(self.text, col);
                 #[allow(clippy::cast_precision_loss)] // UI coordinate
-                let gap_x = self.x + display_x(self.text, col) as f32 * self.advance;
+                let gap_x = self.x + gap_cell as f32 * self.advance;
                 self.painter.text(
                     Pos2::new(gap_x, self.y),
                     egui::Align2::LEFT_TOP,
-                    gap,
+                    expand_tabs(&gap, gap_cell),
                     self.font.clone(),
                     self.plain,
                 );
@@ -956,12 +962,13 @@ impl RowPaint<'_> {
             let piece: String = chars.by_ref().take(span.end.saturating_sub(col)).collect();
             if !piece.is_empty() {
                 let [red, green, blue] = span.color;
+                let piece_cell = display_x(self.text, col);
                 #[allow(clippy::cast_precision_loss)] // UI coordinate
-                let piece_x = self.x + display_x(self.text, col) as f32 * self.advance;
+                let piece_x = self.x + piece_cell as f32 * self.advance;
                 self.painter.text(
                     Pos2::new(piece_x, self.y),
                     egui::Align2::LEFT_TOP,
-                    piece,
+                    expand_tabs(&piece, piece_cell),
                     self.font_for(span.style),
                     Color32::from_rgb(red, green, blue),
                 );
@@ -970,12 +977,13 @@ impl RowPaint<'_> {
         }
         let tail: String = chars.collect();
         if !tail.is_empty() {
+            let tail_cell = display_x(self.text, col);
             #[allow(clippy::cast_precision_loss)] // UI coordinate
-            let tail_x = self.x + display_x(self.text, col) as f32 * self.advance;
+            let tail_x = self.x + tail_cell as f32 * self.advance;
             self.painter.text(
                 Pos2::new(tail_x, self.y),
                 egui::Align2::LEFT_TOP,
-                tail,
+                expand_tabs(&tail, tail_cell),
                 self.font.clone(),
                 self.plain,
             );

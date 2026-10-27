@@ -1,12 +1,20 @@
 //! Native editing core: document buffer plus undo.
 //!
-//! Sandbox note: `ropey` could not be vendored here (no crate downloads), so
-//! [`Doc`] is backed by a `String` with a cached line index. Every consumer
-//! programs against the [`Buffer`] trait, which mirrors the `ropey` surface we
-//! will adopt later (`char` indexing, cheap line access); swapping the backing
-//! store must not touch callers. Undo uses typing-run coalescing.
+//! [`Doc`] is backed by a `ropey` rope. Every consumer programs against the
+//! [`Buffer`] trait (`char` indexing, cheap line access), so the backing
+//! store stays private. Undo uses typing-run coalescing.
 
 use std::ops::Range;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Process-wide revision source. Revisions are unique across documents, so
+/// a buffer reloaded from disk never reuses a revision that a cache keyed
+/// on the previous buffer still holds.
+static NEXT_REVISION: AtomicU64 = AtomicU64::new(1);
+
+fn next_revision() -> u64 {
+    NEXT_REVISION.fetch_add(1, Ordering::Relaxed)
+}
 
 /// Char-indexed text buffer. Indices are Unicode scalar values, matching the
 /// `ropey` convention, so callers never deal in bytes.
@@ -114,7 +122,7 @@ enum UndoEntry {
 /// Rope-backed [`Buffer`]: `ropey` owns storage and line indexing, so
 /// edits stay cheap on large files. Char indices are the unit everywhere,
 /// exactly as before the migration.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Doc {
     rope: ropey::Rope,
     revision: u64,
@@ -125,11 +133,17 @@ pub struct Doc {
     group: Vec<UndoOp>,
 }
 
+impl Default for Doc {
+    fn default() -> Self {
+        Self::new("")
+    }
+}
+
 impl Doc {
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             rope: ropey::Rope::from(text.into()),
-            revision: 0,
+            revision: next_revision(),
             undo: Vec::new(),
             redo: Vec::new(),
             run: EditRun::default(),
@@ -144,7 +158,7 @@ impl Doc {
     }
 
     fn bump(&mut self) {
-        self.revision = self.revision.saturating_add(1);
+        self.revision = next_revision();
     }
 
     /// Line `line` without its terminator (a lone `\n` is stripped; a
@@ -416,12 +430,21 @@ mod tests {
     }
 
     #[test]
+    fn reloaded_document_never_reuses_a_revision() {
+        // A clean reload replaces the buffer; caches keyed on revision
+        // must see the new text even when neither buffer was edited.
+        let before = Doc::new("old");
+        let reloaded = Doc::new("new");
+        assert_ne!(before.revision(), reloaded.revision());
+    }
+
+    #[test]
     fn revision_bumps_on_every_mutation() {
         let mut doc = Doc::new("hello");
-        assert_eq!(doc.revision(), 0);
+        let initial = doc.revision();
         doc.insert(5, "!");
         let after_insert = doc.revision();
-        assert!(after_insert > 0);
+        assert!(after_insert > initial);
         doc.delete(0..1);
         assert!(doc.revision() > after_insert);
         let before_undo = doc.revision();

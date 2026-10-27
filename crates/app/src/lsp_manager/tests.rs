@@ -570,8 +570,8 @@ async fn live_typescript_server_diagnostics_and_symbols() {
     }
     let names: Vec<String> = manager
         .symbols_for(&file)
-        .into_iter()
-        .map(|symbol| symbol.name)
+        .iter()
+        .map(|symbol| symbol.name.clone())
         .collect();
     assert!(names.iter().any(|name| name == "ok"), "{names:?}");
     manager.prune(&std::collections::HashSet::new());
