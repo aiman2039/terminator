@@ -107,7 +107,7 @@ pub fn ide_shortcut(key: egui::Key, modifiers: egui::Modifiers) -> Option<IdeAct
         egui::Key::V => IdeAction::PasteKey,
         egui::Key::S => IdeAction::Save,
         egui::Key::F => IdeAction::Find,
-        egui::Key::H => IdeAction::Replace,
+        egui::Key::H | egui::Key::R => IdeAction::Replace,
         egui::Key::K => IdeAction::Hover,
         _ => return None,
     })

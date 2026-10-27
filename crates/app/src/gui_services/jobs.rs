@@ -139,6 +139,7 @@ pub(super) fn context(job: &Job) -> OperationContext {
         Job::DiffAction(tab, _) => ("diff-action", tab.key(), Policy::OrderedMutation),
         Job::ResolveTarget(key, _, _) => ("files", key.clone(), Policy::ReplaceableRead),
         Job::GitView(tab) => ("git-view", tab.key(), Policy::ReplaceableRead),
+        Job::LinePreviews(..) => ("files", "line-previews".into(), Policy::ReplaceableRead),
         Job::HookStatus => ("catalog", "hooks".into(), Policy::ReplaceableRead),
         Job::TestNtfy { .. } => ("platform", "ntfy-test".into(), Policy::ReplaceableRead),
         Job::Preferences(_) => ("catalog", "preferences".into(), Policy::OrderedMutation),

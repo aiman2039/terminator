@@ -16,7 +16,7 @@ const FILE_RESULTS: usize = 40;
 const RECENT_RESULTS: usize = 8;
 const SYMBOL_QUERY_DELAY: Duration = Duration::from_millis(180);
 
-const FILTER_FILES: u8 = 1 << 0;
+pub(crate) const FILTER_FILES: u8 = 1 << 0;
 pub(crate) const FILTER_SYMBOLS: u8 = 1 << 1;
 const FILTER_PROJECTS: u8 = 1 << 2;
 const FILTER_SESSIONS: u8 = 1 << 3;
@@ -113,6 +113,7 @@ const HIDDEN_ACTIONS: &[Action] = &[
     Action::OpenPalette,
     Action::GotoSymbol,
     Action::FileStructure,
+    Action::RecentFiles,
 ];
 /// Shortcut actions listed only while a session is active.
 const SESSION_ACTIONS: &[Action] = &[

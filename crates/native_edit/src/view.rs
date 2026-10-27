@@ -8,7 +8,9 @@ pub use keys::{
     echo_of_handled_key, egui_key, ide_edit_in_vim, ide_edit_key, ide_shortcut, mode_color,
     mode_name, source_focus_id,
 };
-pub use render::{DiagnosticMark, SourceOptions, SourceOutcome, show_source, status_line};
+pub use render::{
+    DiagnosticMark, SourceOptions, SourceOutcome, Squiggle, show_source, squiggles, status_line,
+};
 
 /// Display layout helpers, re-exported for hosts that map pointer
 /// positions onto buffer columns.

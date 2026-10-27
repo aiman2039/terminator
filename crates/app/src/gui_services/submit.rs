@@ -548,6 +548,16 @@ impl Services {
                     .await?
             }
             Job::External(path) => self.open_external(path, cancel).await?,
+            Job::LinePreviews(generation, files) => {
+                let lines = self
+                    .fs()
+                    .run(&cancel, move || {
+                        Ok(crate::native_editor::read_line_previews(files))
+                    })
+                    .await
+                    .unwrap_or_default();
+                updates.push(Update::LinePreviews(generation, lines));
+            }
             Job::TestExternal(path, program, args) => {
                 self.test_external(path, program, args, cancel).await?
             }

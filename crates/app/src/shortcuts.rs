@@ -56,6 +56,9 @@ actions! {
     OpenPalette => "open_palette", "Search Everywhere";
     GotoSymbol => "goto_symbol", "Go to symbol";
     FileStructure => "file_structure", "File structure";
+    NavigateBack => "navigate_back", "Back";
+    NavigateForward => "navigate_forward", "Forward";
+    RecentFiles => "recent_files", "Recent files";
     NextAttention => "next_attention", "Next agent needing attention";
     NewBrowser => "new_browser", "New browser tab";
     NewVnc => "new_vnc", "New VNC viewer";
@@ -277,6 +280,7 @@ pub fn editor_owns(value: &str) -> bool {
             1,
         )
         .is_some()
+            || terminator_native_edit::view::ide_shortcut(chord.key, chord.modifiers).is_some()
     })
 }
 
@@ -389,6 +393,8 @@ mod tests {
         assert!(parse("command+f1x").is_none());
         // Text navigation chords belong to a focused editor.
         assert!(editor_owns("command+shift+Left"));
+        // Find belongs to the focused editor, not the terminal search.
+        assert!(editor_owns("command+F"));
         assert!(!editor_owns("command+T"));
     }
 

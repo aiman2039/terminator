@@ -859,14 +859,14 @@ mod tests {
             &[(egui::Key::H, egui::Modifiers::COMMAND)],
         );
         assert_eq!(engine.cursor(), crate::vim::Cursor { line: 0, col: 0 });
-        // Vim off: the replace prompt.
+        // Vim off: the GUI find bar in replace mode, not a vim prompt.
         let mut doc = Doc::new("ab");
         let mut engine = VimEngine::new();
         let options = super::SourceOptions {
             vim: false,
             ..super::SourceOptions::default()
         };
-        drive_mods(
+        let effects = drive_mods(
             &ctx,
             &mut doc,
             &mut engine,
@@ -875,8 +875,8 @@ mod tests {
             &mut super::HighlightCache::default(),
             &[(egui::Key::H, egui::Modifiers::COMMAND)],
         );
-        assert_eq!(engine.mode(), Mode::Command);
-        assert_eq!(engine.command_line(), "%s/");
+        assert!(effects.contains(&Effect::FindBar { replace: true }));
+        assert_ne!(engine.mode(), Mode::Command);
     }
 
     #[test]
@@ -1037,5 +1037,113 @@ mod tests {
             ],
         );
         assert_eq!(doc.text(), "let a = 1;\n// let a = 1;\n");
+    }
+
+    #[test]
+    fn squiggles_convert_utf16_ranges_and_widen_empty_ones() {
+        use crate::lsp::{Diagnostic, Position, Range, Severity};
+        let doc = crate::doc::Doc::new("let é = bad_name;\n");
+        let at = |character| Position { line: 0, character };
+        let diagnostics = [
+            Diagnostic {
+                range: Range {
+                    start: at(8),
+                    end: at(16),
+                },
+                severity: Some(Severity::Error),
+                message: "unknown".into(),
+            },
+            Diagnostic {
+                range: Range {
+                    start: at(4),
+                    end: at(4),
+                },
+                severity: Some(Severity::Warning),
+                message: "unused".into(),
+            },
+        ];
+        let squiggles = super::super::squiggles(&doc, &diagnostics);
+        assert_eq!(
+            squiggles
+                .iter()
+                .map(|s| (s.line, s.start, s.end))
+                .collect::<Vec<_>>(),
+            [(0, 4, 5), (0, 8, 16)]
+        );
+    }
+
+    #[test]
+    fn f8_walks_problems_and_command_f_opens_the_find_bar_without_vim() {
+        use crate::doc::Doc;
+        let ctx = egui::Context::default();
+        let mut doc = Doc::new("a\nb\nc\n");
+        let mut engine = VimEngine::new();
+        let squiggle = |line| super::super::Squiggle {
+            line,
+            start: 0,
+            end: 1,
+            severity: crate::lsp::Severity::Error,
+            message: String::new(),
+        };
+        let options = super::SourceOptions {
+            vim: false,
+            squiggles: vec![squiggle(1), squiggle(2)],
+            ..super::SourceOptions::default()
+        };
+        let mut highlight = super::HighlightCache::default();
+        drive_mods(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &options,
+            super::Language::Plain,
+            &mut highlight,
+            &[(egui::Key::F8, egui::Modifiers::NONE)],
+        );
+        assert_eq!(engine.cursor().line, 1);
+        drive_mods(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &options,
+            super::Language::Plain,
+            &mut highlight,
+            &[(egui::Key::F8, egui::Modifiers::NONE)],
+        );
+        assert_eq!(engine.cursor().line, 2);
+        // Past the last problem F8 wraps to the first.
+        drive_mods(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &options,
+            super::Language::Plain,
+            &mut highlight,
+            &[(egui::Key::F8, egui::Modifiers::NONE)],
+        );
+        assert_eq!(engine.cursor().line, 1);
+        let effects = drive_mods(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &options,
+            super::Language::Plain,
+            &mut highlight,
+            &[(egui::Key::F, egui::Modifiers::COMMAND)],
+        );
+        assert!(effects.contains(&Effect::FindBar { replace: false }));
+        // Vim keeps its own `/` prompt.
+        let mut vim_engine = VimEngine::new();
+        let effects = drive_mods(
+            &ctx,
+            &mut doc,
+            &mut vim_engine,
+            &super::SourceOptions::default(),
+            super::Language::Plain,
+            &mut highlight,
+            &[(egui::Key::F, egui::Modifiers::COMMAND)],
+        );
+        assert!(!effects.contains(&Effect::FindBar { replace: false }));
+        assert_eq!(vim_engine.mode(), Mode::Command);
     }
 }

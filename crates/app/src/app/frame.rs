@@ -521,6 +521,7 @@ impl eframe::App for App {
         }
         self.modals(&ctx, frame);
         self.show_native_rename_dialog(&ctx);
+        self.show_usages_window(&ctx);
         self.apply_browser_submit();
         self.reconcile_gui_resources();
         self.sync_browsers(&ctx, frame);

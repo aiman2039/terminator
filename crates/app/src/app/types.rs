@@ -222,6 +222,8 @@ pub(crate) enum Job {
         machine: String,
     },
     External(PathBuf),
+    /// Read usage preview lines `(file, lines)` for usages generation `u64`.
+    LinePreviews(u64, Vec<(PathBuf, Vec<u32>)>),
     TestExternal(PathBuf, String, Vec<String>),
     Workspace(PathBuf, workspace_ops::Op),
     Search {
@@ -410,6 +412,7 @@ pub(crate) enum Update {
     DiffActionFailed(String, String),
     Workspace(workspace_ops::Op, Result<workspace_ops::Report, String>),
     Search(u64, Result<Vec<search::Hit>, String>),
+    LinePreviews(u64, Vec<((PathBuf, u32), String)>),
     GitView(String, GitView),
     DirectoryPreview(
         u64,

@@ -1032,6 +1032,9 @@ impl App {
                         *slot = view;
                     }
                 }
+                Update::LinePreviews(generation, lines) => {
+                    self.apply_line_previews(generation, lines);
+                }
                 Update::Search(id, result) => {
                     if id == self.explorer_search_generation {
                         self.explorer_search_pending = false;

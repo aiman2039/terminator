@@ -320,7 +320,13 @@ pub struct App {
     /// misses and drops the jump.
     pub(crate) pending_goto: Vec<lsp_manager::GotoJump>,
     /// Read-only reference list for the native editor.
-    pub(crate) native_references: Option<lsp_manager::ReferenceResults>,
+    /// Find Usages / declaration chooser window.
+    pub(crate) usages: Option<crate::native_editor::UsagesView>,
+    /// Find/replace bar of one native editor.
+    pub(crate) find_bar: Option<crate::native_editor::FindBar>,
+    /// Jump history for Back/Forward.
+    pub(crate) nav_back: Vec<crate::native_editor::NavLocation>,
+    pub(crate) nav_forward: Vec<crate::native_editor::NavLocation>,
     pub(crate) native_rename: Option<native_editor::RenameDialog>,
     pub(crate) file_index: terminator_native_edit::finder::FileIndex,
     pub(crate) file_index_rx:

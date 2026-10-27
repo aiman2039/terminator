@@ -6,8 +6,12 @@
 //! file that changed on disk unless forced, Reload is disabled while dirty,
 //! and closing a dirty tab asks first — nothing is silently discarded.
 mod close;
+mod find;
+mod navigation;
 mod rename;
 pub(super) use close::{CloseIssuer, NativeCloseChoice};
+pub(crate) use find::FindBar;
+pub(crate) use navigation::{NavLocation, UsagesView, read_line_previews};
 pub(crate) use rename::RenameDialog;
 
 use super::workspace::WorkspaceTab;
@@ -119,6 +123,14 @@ impl NativeDoc {
     /// Caret line of a loaded buffer.
     pub(crate) fn caret_line(&self) -> Option<usize> {
         self.doc.as_ref().map(|_| self.engine.cursor().line)
+    }
+
+    /// Caret as an LSP position (line, UTF-16 column).
+    pub(crate) fn caret_position(&self) -> Option<(u32, u32)> {
+        let doc = self.doc.as_ref()?;
+        let cursor = self.engine.cursor();
+        let character = native_lsp::char_col_to_utf16(&doc.line_text(cursor.line), cursor.col);
+        Some((u32::try_from(cursor.line).ok()?, character))
     }
 
     pub(crate) fn new(path: PathBuf, insert_first: bool) -> Self {
@@ -498,6 +510,7 @@ impl App {
     /// [`App::open_file`], the UTF-16 column through the native pending
     /// machinery so it converts once the buffer has loaded.
     pub(crate) fn open_file_at(&mut self, path: PathBuf, position: native_lsp::Position) {
+        self.record_jump_origin();
         let absolute = std::path::absolute(&path).unwrap_or_else(|_| path.clone());
         self.open_file(path, position.line.checked_add(1), None, false);
         if self.native_pending_line.contains_key(&absolute) {
@@ -661,6 +674,12 @@ impl App {
         let marks: Vec<DiagnosticMark> = self.lsp.row_marks(path);
         let problems = self.lsp.problems_for(path);
         let remote_snapshot = crate::remote_ui::is_snapshot(&self.paths.data, path);
+        // The find bar is checked out while this view borrows the buffer.
+        let mut find = if self.find_bar.as_ref().is_some_and(|bar| bar.path == path) {
+            self.find_bar.take()
+        } else {
+            None
+        };
         let post = {
             let doc = self.native_doc(path, vim);
             let mut post = PostEdit::Keep;
@@ -877,6 +896,33 @@ impl App {
             // `:set wrap` / `:set nowrap` (also from `~/.vimrc`) override
             // the per-type default: Markdown wraps, code does not.
             let soft_wrap = doc.engine.wrap().unwrap_or(is_markdown);
+            let squiggles = terminator_native_edit::view::squiggles(&*buffer, &problems);
+            let mut find_matches = std::sync::Arc::new(Vec::new());
+            let mut find_current = None;
+            if let Some(bar) = find.as_mut() {
+                // Split views of one file share the bar: the first view
+                // this frame draws it, the others only highlight.
+                let pass = ui.ctx().cumulative_pass_nr();
+                let (outcome, matches) = if bar.drawn == Some(pass) {
+                    (find::FindOutcome::default(), bar.matches(buffer))
+                } else {
+                    bar.drawn = Some(pass);
+                    find::find_bar(
+                        ui,
+                        bar,
+                        buffer,
+                        &mut doc.engine,
+                        rename_applying || remote_snapshot,
+                    )
+                };
+                find_matches =
+                    std::sync::Arc::new(matches.iter().map(|m| (m.line, m.start, m.end)).collect());
+                find_current = bar.current;
+                if outcome.close {
+                    find = None;
+                    ui.memory_mut(|memory| memory.request_focus(source_focus_id(&source_id)));
+                }
+            }
             let source = |ui: &mut egui::Ui| {
                 show_source(
                     ui,
@@ -896,6 +942,9 @@ impl App {
                             None
                         },
                         diagnostics: marks,
+                        squiggles,
+                        find_matches,
+                        find_current,
                         ..SourceOptions::default()
                     },
                     &mut doc.highlight,
@@ -1028,6 +1077,28 @@ impl App {
                                 character: native_lsp::char_col_to_utf16(&row, cursor.col),
                             });
                         }
+                        Effect::FindBar { replace } => {
+                            // Seed with a one-line selection, IntelliJ-style.
+                            let seed = doc
+                                .doc
+                                .as_ref()
+                                .filter(|_| doc.engine.selection().is_some())
+                                .map(|live| doc.engine.copy_text(live))
+                                .filter(|text| !text.contains('\n'))
+                                .unwrap_or_default();
+                            match find.as_mut() {
+                                Some(bar) => {
+                                    if !seed.is_empty() {
+                                        bar.query = seed;
+                                    }
+                                    bar.replacing |= replace;
+                                    bar.focus = true;
+                                }
+                                None => {
+                                    find = Some(find::FindBar::new(path.to_owned(), seed, replace));
+                                }
+                            }
+                        }
                         Effect::Bell => {}
                     }
                 }
@@ -1100,6 +1171,9 @@ impl App {
             }
             post
         };
+        if find.is_some() {
+            self.find_bar = find;
+        }
         if is_markdown {
             self.native_markdown_preview(
                 ui,
@@ -1156,14 +1230,13 @@ impl App {
             self.lsp.request_definition(path, position);
         }
         if let Some(position) = references_at {
-            self.native_references = None;
             self.lsp.request_references(path, position);
         }
         if let Some(position) = rename_at {
             self.begin_native_rename(path, project, position);
         }
         if let Some(results) = self.lsp.take_references() {
-            self.native_references = Some(results);
+            self.show_usages("Find Usages", results.targets);
         }
         // Finished jumps queue until the workspace is checked back in:
         // this view renders while it is checked out, so opening the
@@ -1172,7 +1245,6 @@ impl App {
             self.pending_goto.push(jump);
         }
         self.show_hover_popup(ui, path);
-        self.show_references_popup(ui, path);
         if defer_close_after_save {
             self.native_close_after_save = Some(path.to_owned());
             self.native_close_after_save_issuer = wq_issuer.map(CloseIssuer::deferred);
@@ -1417,9 +1489,15 @@ impl App {
     /// the UTF-16 column). Runs after the workspace is checked back in, when
     /// the originating project resolves again.
     fn apply_goto_jump(&mut self, jump: lsp_manager::GotoJump) {
+        // Several declarations: let the user pick (`IntelliJ`).
+        if jump.targets.len() > 1 {
+            self.show_usages(navigation::DECLARATION_TITLE, jump.targets);
+            return;
+        }
         let Some(target) = jump.targets.first() else {
             return;
         };
+        self.record_jump_origin();
         let Some(target_path) = native_lsp::uri_to_path(&target.uri) else {
             return;
         };
@@ -1485,59 +1563,6 @@ impl App {
             });
         if !open {
             self.lsp.close_hover();
-        }
-    }
-
-    fn show_references_popup(&mut self, ui: &mut egui::Ui, path: &Path) {
-        let Some(results) = self
-            .native_references
-            .as_ref()
-            .filter(|results| results.from == path)
-        else {
-            return;
-        };
-        let mut open = true;
-        let mut selected = None;
-        self.popups
-            .window(ui.ctx(), "References")
-            .open(&mut open)
-            .collapsible(false)
-            .show(ui.ctx(), |ui| {
-                if results.targets.is_empty() {
-                    ui.weak("No references found.");
-                }
-                egui::ScrollArea::vertical()
-                    .max_height(320.0)
-                    .show(ui, |ui| {
-                        for target in &results.targets {
-                            let label = native_lsp::uri_to_path(&target.uri).map_or_else(
-                                || target.uri.clone(),
-                                |path| path.display().to_string(),
-                            );
-                            if ui
-                                .selectable_label(
-                                    false,
-                                    format!(
-                                        "{label}:{}",
-                                        target.range.start.line.saturating_add(1)
-                                    ),
-                                )
-                                .clicked()
-                            {
-                                selected = Some(target.clone());
-                            }
-                        }
-                    });
-            });
-        if let Some(target) = selected {
-            self.pending_goto.push(lsp_manager::GotoJump {
-                from: path.to_owned(),
-                targets: vec![target],
-            });
-            open = false;
-        }
-        if !open {
-            self.native_references = None;
         }
     }
 

@@ -17,6 +17,64 @@ pub struct DiagnosticMark {
     pub severity: crate::lsp::Severity,
 }
 
+/// One diagnostic underline: a char-column span on one line, with the
+/// message shown when hovered. Multi-line ranges underline their first
+/// line to its end.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Squiggle {
+    pub line: usize,
+    pub start: usize,
+    pub end: usize,
+    pub severity: crate::lsp::Severity,
+    pub message: String,
+}
+
+/// Underlines for a buffer's diagnostics, sorted by position. Empty or
+/// zero-width ranges widen to the word (or char) they start on, so every
+/// diagnostic has something to hover.
+#[must_use]
+pub fn squiggles<B: Buffer>(doc: &B, diagnostics: &[crate::lsp::Diagnostic]) -> Vec<Squiggle> {
+    let mut out: Vec<Squiggle> = diagnostics
+        .iter()
+        .take(1000)
+        .filter_map(|diagnostic| {
+            let line = usize::try_from(diagnostic.range.start.line).ok()?;
+            if line >= doc.line_count() {
+                return None;
+            }
+            let text = doc.line_text(line);
+            let len = text.chars().count();
+            let start =
+                crate::lsp::utf16_to_char_col(&text, diagnostic.range.start.character).min(len);
+            let mut end = if diagnostic.range.end.line == diagnostic.range.start.line {
+                crate::lsp::utf16_to_char_col(&text, diagnostic.range.end.character).min(len)
+            } else {
+                len
+            };
+            if end <= start {
+                let chars: Vec<char> = text.chars().collect();
+                end = start;
+                while chars
+                    .get(end)
+                    .is_some_and(|c| c.is_alphanumeric() || *c == '_')
+                {
+                    end = end.saturating_add(1);
+                }
+                end = end.max(start.saturating_add(1));
+            }
+            Some(Squiggle {
+                line,
+                start,
+                end,
+                severity: diagnostic.severity.unwrap_or(crate::lsp::Severity::Hint),
+                message: diagnostic.message.clone(),
+            })
+        })
+        .collect();
+    out.sort_by_key(|squiggle| (squiggle.line, squiggle.start));
+    out
+}
+
 pub type MenuItemRenderer = fn(&mut egui::Ui, &str, &str, &str) -> egui::Response;
 
 pub struct SourceOptions {
@@ -26,6 +84,13 @@ pub struct SourceOptions {
     /// Gutter marks, sorted by row; binary-searched per painted row, so
     /// an empty vec costs nothing on large files.
     pub diagnostics: Vec<DiagnosticMark>,
+    /// Underlined diagnostic ranges, sorted (see [`squiggles`]); also
+    /// drive the scrollbar error stripe and F8 navigation.
+    pub squiggles: Vec<Squiggle>,
+    /// Find-bar matches `(line, start, end)` in char columns, sorted, and
+    /// the index of the selected one.
+    pub find_matches: std::sync::Arc<Vec<(usize, usize, usize)>>,
+    pub find_current: Option<usize>,
     /// Take keyboard focus when nothing else holds it, so an opened file is
     /// immediately typeable (`IntelliJ` focuses the editor on open).
     pub autofocus: bool,
@@ -62,6 +127,9 @@ impl Default for SourceOptions {
             soft_wrap: false,
             scroll_fraction: None,
             diagnostics: Vec::new(),
+            squiggles: Vec::new(),
+            find_matches: std::sync::Arc::new(Vec::new()),
+            find_current: None,
         }
     }
 }
@@ -568,6 +636,31 @@ pub fn show_source<B: Buffer>(
                     painter.rect_filled(rect, 2.0, occurrence_fill);
                 }
             }
+            // Find-bar matches: all softly, the selected one strongly.
+            let from = options
+                .find_matches
+                .partition_point(|(match_line, _, _)| *match_line < line);
+            for (index, (_, start, end)) in options
+                .find_matches
+                .iter()
+                .enumerate()
+                .skip(from)
+                .take_while(|(_, (match_line, _, _))| *match_line == line)
+            {
+                let (start, end) = ((*start).max(visual.start), (*end).min(visual.end));
+                if start < end {
+                    let alpha = if options.find_current == Some(index) {
+                        0.9
+                    } else {
+                        0.4
+                    };
+                    painter.rect_filled(
+                        cell_rect(start, end.saturating_sub(start)),
+                        2.0,
+                        ui.visuals().warn_fg_color.gamma_multiply(alpha),
+                    );
+                }
+            }
             if let Some((open, close)) = brackets {
                 for end in [open, close] {
                     if end.line == line && end.col >= visual.start && end.col < visual.end {
@@ -611,6 +704,36 @@ pub fn show_source<B: Buffer>(
                 plain: ui.visuals().text_color(),
             }
             .paint();
+            // Diagnostic underlines on this row, with their message on hover.
+            let first = options
+                .squiggles
+                .partition_point(|squiggle| squiggle.line < line);
+            for (index, squiggle) in options
+                .squiggles
+                .iter()
+                .enumerate()
+                .skip(first)
+                .take_while(|(_, squiggle)| squiggle.line == line)
+            {
+                let (start, end) = (
+                    squiggle.start.max(visual.start),
+                    squiggle
+                        .end
+                        .min(visual.end.max(visual.start.saturating_add(1))),
+                );
+                if start >= end {
+                    continue;
+                }
+                let rect = cell_rect(start, end.saturating_sub(start));
+                let color = match squiggle.severity {
+                    crate::lsp::Severity::Error => ui.visuals().error_fg_color,
+                    crate::lsp::Severity::Warning => ui.visuals().warn_fg_color,
+                    _ => ui.visuals().weak_text_color(),
+                };
+                paint_squiggle(&painter, rect, color);
+                ui.interact(rect, focus_id.with(("squiggle", index)), Sense::hover())
+                    .on_hover_text(&squiggle.message);
+            }
             if let Some(cells) = cursor_cells {
                 // A tab's block covers the cells up to its stop.
                 let cell_cells = if cell.is_some() {
@@ -724,6 +847,12 @@ pub fn show_source<B: Buffer>(
                     IdeAction::Redo => engine.redo(doc),
                     IdeAction::PasteKey => {}
                     IdeAction::Save => effects.push(Effect::Save),
+                    IdeAction::Find if !options.vim => {
+                        effects.push(Effect::FindBar { replace: false });
+                    }
+                    IdeAction::Replace if !options.vim => {
+                        effects.push(Effect::FindBar { replace: true });
+                    }
                     IdeAction::Find => engine.begin_search(),
                     IdeAction::Replace => engine.begin_ex("%s/"),
                     IdeAction::Hover => effects.push(Effect::Hover),
@@ -815,6 +944,35 @@ pub fn show_source<B: Buffer>(
                             && !modifiers.alt
                         {
                             effects.push(Effect::GotoDefinition);
+                            consumed.push(*key);
+                        } else if *key == egui::Key::F7
+                            && modifiers.alt
+                            && !modifiers.command
+                            && crate::lsp::server_language(language).is_some()
+                        {
+                            // Alt+F7: Find Usages (`IntelliJ`).
+                            effects.push(Effect::FindReferences);
+                            consumed.push(*key);
+                        } else if *key == egui::Key::F8 && !modifiers.command && !modifiers.alt {
+                            // F8 / Shift+F8: next / previous problem.
+                            let here = (engine.cursor().line, engine.cursor().col);
+                            let target = if modifiers.shift {
+                                options
+                                    .squiggles
+                                    .iter()
+                                    .rev()
+                                    .find(|s| (s.line, s.start) < here)
+                                    .or_else(|| options.squiggles.last())
+                            } else {
+                                options
+                                    .squiggles
+                                    .iter()
+                                    .find(|s| (s.line, s.start) > here)
+                                    .or_else(|| options.squiggles.first())
+                            };
+                            if let Some(target) = target {
+                                effects.extend(engine.place_cursor(doc, target.line, target.start));
+                            }
                             consumed.push(*key);
                         } else if *key == egui::Key::F2
                             && crate::lsp::server_language(language).is_some()
@@ -951,6 +1109,32 @@ pub fn show_source<B: Buffer>(
             ui.scroll_to_rect(caret.expand2(Vec2::new(advance * 2.0, 0.0)), None);
         }
     });
+    // Error stripe: every problem as a tick on the right edge, placed by
+    // its line's share of the file (`IntelliJ`'s scrollbar marks).
+    if !options.squiggles.is_empty() {
+        let rail = scroll_output.inner_rect;
+        let lines = doc.line_count().max(1);
+        let painter = ui.painter().with_clip_rect(rail);
+        let mut last_y = f32::NEG_INFINITY;
+        for squiggle in &options.squiggles {
+            #[allow(clippy::cast_precision_loss)] // UI coordinate
+            let y = rail.top() + rail.height() * squiggle.line as f32 / lines as f32;
+            if y - last_y < 2.0 {
+                continue;
+            }
+            last_y = y;
+            let color = match squiggle.severity {
+                crate::lsp::Severity::Error => ui.visuals().error_fg_color,
+                crate::lsp::Severity::Warning => ui.visuals().warn_fg_color,
+                _ => continue,
+            };
+            painter.rect_filled(
+                Rect::from_min_size(Pos2::new(rail.right() - 4.0, y), Vec2::new(4.0, 2.0)),
+                0.0,
+                color,
+            );
+        }
+    }
     let scroll_range = (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
     let scroll_fraction = if scroll_range > 0.0 {
         (scroll_output.state.unclamped_offset().y / scroll_range).clamp(0.0, 1.0)
@@ -1128,6 +1312,23 @@ fn selection_span_for_line(
         return None;
     }
     Some((start, end))
+}
+
+/// A wavy underline along the bottom of `rect`.
+fn paint_squiggle(painter: &egui::Painter, rect: Rect, color: Color32) {
+    const STEP: f32 = 2.0;
+    let base = rect.bottom() - 2.0;
+    let mut points = Vec::new();
+    let mut x = rect.left();
+    let mut up = false;
+    while x <= rect.right() {
+        points.push(Pos2::new(x, if up { base - 1.5 } else { base }));
+        up = !up;
+        x += STEP;
+    }
+    if points.len() > 1 {
+        painter.add(egui::Shape::line(points, egui::Stroke::new(1.0, color)));
+    }
 }
 
 /// Whole-word occurrences of `word` in `text`, as (char start, char len).

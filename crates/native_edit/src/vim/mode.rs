@@ -74,6 +74,11 @@ pub enum Effect {
     FindReferences,
     /// Preview and apply a language-server symbol rename after review.
     RenameSymbol,
+    /// Open the GUI find bar (modeless Cmd/Ctrl+F; `replace` for
+    /// Cmd/Ctrl+R/H). Vim keeps its own `/` and `:s` prompts.
+    FindBar {
+        replace: bool,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

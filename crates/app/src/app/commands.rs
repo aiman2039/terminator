@@ -87,6 +87,12 @@ impl App {
             Action::OpenPalette => self.open_command_palette(),
             Action::GotoSymbol => self.open_goto_symbol(),
             Action::FileStructure => self.open_file_structure(),
+            Action::NavigateBack => self.navigate_history(false),
+            Action::NavigateForward => self.navigate_history(true),
+            Action::RecentFiles => {
+                self.open_command_palette();
+                self.palette.filters = crate::palette::FILTER_FILES;
+            }
             Action::FindInTerminal => self.find_in_active_terminal(ctx),
             Action::NextPane => self.focus_next_pane(),
             Action::SelectAll => self.select_all_active(),
