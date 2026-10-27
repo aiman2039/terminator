@@ -265,6 +265,7 @@ pub struct HighlightCache {
     ready: bool,
     lines: Vec<Vec<Span>>,
     rows: RowCache,
+    folds: crate::fold::Folds,
 }
 
 impl HighlightCache {
@@ -303,7 +304,19 @@ impl HighlightCache {
     /// Lay out the painted rows for this revision and wrap width, reusing
     /// the previous frame's rows until either changes.
     pub fn ensure_rows<B: Buffer>(&mut self, doc: &B, wrap_columns: Option<usize>) {
-        self.rows.ensure(doc, wrap_columns);
+        self.folds
+            .ensure(doc, self.language.unwrap_or(Language::Plain));
+        self.rows.ensure(doc, wrap_columns, Some(&self.folds));
+    }
+
+    /// This view's code folds.
+    #[must_use]
+    pub fn folds(&self) -> &crate::fold::Folds {
+        &self.folds
+    }
+
+    pub fn folds_mut(&mut self) -> &mut crate::fold::Folds {
+        &mut self.folds
     }
 
     /// Rows laid out by the last [`HighlightCache::ensure_rows`].

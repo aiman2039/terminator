@@ -9,6 +9,7 @@ pub mod blocks;
 pub mod clipboard;
 pub mod doc;
 pub mod finder;
+pub mod fold;
 pub mod highlight;
 pub mod lsp;
 mod rows;

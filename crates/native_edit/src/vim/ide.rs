@@ -161,6 +161,11 @@ impl VimEngine {
         self.modeless
     }
 
+    /// Ask the view to bring the caret into sight (centered) next frame.
+    pub fn request_scroll(&mut self) {
+        self.scroll_request = true;
+    }
+
     /// A fresh engine for another view of the same buffer: same options,
     /// mode model, and caret, with no selection or pending command.
     #[must_use]

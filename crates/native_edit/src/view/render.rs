@@ -267,7 +267,13 @@ pub fn show_source<B: Buffer>(
         highlight.ensure(language, dark, doc.revision(), &text);
     }
     highlight.ensure_rows(doc, wrap_columns);
+    // Fold changes wait until the row layout is no longer borrowed; they
+    // re-lay the rows next frame.
+    let mut fold_actions: Vec<IdeEdit> = Vec::new();
+    let mut fold_toggles: Vec<usize> = Vec::new();
+    let folds = highlight.folds();
     let visual_rows = highlight.rows();
+    let row_count = visual_rows.len();
     #[allow(clippy::cast_precision_loss)] // UI coordinate
     let content_height = visual_rows.len().max(1) as f32 * row_height;
 
@@ -370,7 +376,22 @@ pub fn show_source<B: Buffer>(
                     })
                     .map(|index| (index, pos))
             });
-        if let Some(click) = band_click {
+        // A click on a fold arrow (the gutter's last cell) toggles it.
+        let fold_click = response
+            .clicked()
+            .then(|| response.interact_pointer_pos())
+            .flatten()
+            .filter(|pos| {
+                options.show_line_numbers
+                    && pos.x >= response.rect.left() + gutter - advance
+                    && pos.x < response.rect.left() + gutter
+            })
+            .and_then(&cursor_at)
+            .map(|(line, _)| line)
+            .filter(|line| folds.region_at(*line).is_some());
+        if let Some(line) = fold_click {
+            fold_toggles.push(line);
+        } else if let Some(click) = band_click {
             change_clicked = Some(click);
         } else if response.clicked()
             || (response.secondary_clicked() && engine.selection().is_none())
@@ -709,6 +730,37 @@ pub fn show_source<B: Buffer>(
                         color,
                     );
                 }
+                if options.show_line_numbers && folds.region_at(line).is_some() {
+                    let folded = folds.is_folded(line);
+                    let pointer_in_gutter = ui
+                        .input(|input| input.pointer.hover_pos())
+                        .is_some_and(|pos| {
+                            response.rect.contains(pos) && pos.x < origin.x + gutter
+                        });
+                    if folded || pointer_in_gutter {
+                        let center =
+                            Pos2::new(origin.x + gutter - advance * 0.5, y + row_height * 0.5);
+                        let size = (advance * 0.35).max(3.0);
+                        let points = if folded {
+                            vec![
+                                Pos2::new(center.x - size * 0.5, center.y - size),
+                                Pos2::new(center.x + size * 0.7, center.y),
+                                Pos2::new(center.x - size * 0.5, center.y + size),
+                            ]
+                        } else {
+                            vec![
+                                Pos2::new(center.x - size, center.y - size * 0.5),
+                                Pos2::new(center.x + size, center.y - size * 0.5),
+                                Pos2::new(center.x, center.y + size * 0.7),
+                            ]
+                        };
+                        painter.add(egui::Shape::convex_polygon(
+                            points,
+                            ui.visuals().weak_text_color(),
+                            egui::Stroke::NONE,
+                        ));
+                    }
+                }
                 if options.show_line_numbers {
                     let number_color = mark.map_or_else(
                         || ui.visuals().weak_text_color(),
@@ -860,6 +912,31 @@ pub fn show_source<B: Buffer>(
                 plain: ui.visuals().text_color(),
             }
             .paint();
+            if visual.folded {
+                // `⋯` placeholder after a folded region's first line.
+                let at = display_x(text, text.chars().count()).saturating_add(1);
+                #[allow(clippy::cast_precision_loss)] // UI coordinate
+                let rect = Rect::from_min_size(
+                    Pos2::new(origin.x + gutter + at as f32 * advance, y + 1.0),
+                    Vec2::new(advance * 3.0, row_height - 2.0),
+                );
+                painter.rect_filled(rect, 3.0, ui.visuals().faint_bg_color);
+                painter.text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "⋯",
+                    font.clone(),
+                    ui.visuals().weak_text_color(),
+                );
+                let hit = ui.interact(
+                    rect,
+                    focus_id.with(("fold-placeholder", line)),
+                    Sense::click(),
+                );
+                if hit.on_hover_text("Click to unfold").clicked() {
+                    fold_toggles.push(line);
+                }
+            }
             // Diagnostic underlines on this row, with their message on hover.
             let first = options
                 .squiggles
@@ -938,6 +1015,66 @@ pub fn show_source<B: Buffer>(
             }
         }
 
+        // Sticky lines: headers of the blocks enclosing the top visible
+        // row stay pinned while their first line is scrolled away.
+        if let Some(top) = visual_rows.get(first_row).filter(|_| first_row > 0) {
+            let headers = folds.enclosing(top.line);
+            let headers: Vec<(usize, usize)> =
+                headers.iter().rev().take(3).rev().copied().collect();
+            for (index, (first, _)) in headers.iter().enumerate() {
+                #[allow(clippy::cast_precision_loss)] // UI coordinate
+                let y = clip.top() + index as f32 * row_height;
+                let band = Rect::from_min_max(
+                    Pos2::new(origin.x, y),
+                    Pos2::new(clip.right(), y + row_height),
+                );
+                painter.rect_filled(band, 0.0, ui.visuals().extreme_bg_color);
+                if options.show_line_numbers {
+                    painter.text(
+                        Pos2::new(origin.x + gutter - advance, y),
+                        egui::Align2::RIGHT_TOP,
+                        format!("{}", first.saturating_add(1)),
+                        font.clone(),
+                        ui.visuals().weak_text_color(),
+                    );
+                }
+                let header = doc.line_text(*first);
+                RowPaint {
+                    painter: &painter,
+                    text: &header,
+                    spans: highlight.line(*first),
+                    x: origin.x + gutter,
+                    y,
+                    advance,
+                    font: &font,
+                    italic_font: &italic_font,
+                    bold_font: &bold_font,
+                    plain: ui.visuals().text_color(),
+                }
+                .paint();
+                let hit = ui
+                    .interact(band, focus_id.with(("sticky-line", *first)), Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if hit.clicked() {
+                    let col = doc
+                        .line_text(*first)
+                        .chars()
+                        .take_while(|c| c.is_whitespace())
+                        .count();
+                    effects.extend(engine.place_cursor(doc, *first, col));
+                    engine.request_scroll();
+                }
+            }
+            if !headers.is_empty() {
+                #[allow(clippy::cast_precision_loss)] // UI coordinate
+                let bottom = clip.top() + headers.len() as f32 * row_height;
+                painter.hline(
+                    origin.x..=clip.right(),
+                    bottom,
+                    egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+                );
+            }
+        }
         if focused && !options.read_only {
             // IDE shortcuts first: copy/cut/paste/select/undo work in
             // every mode (IntelliJ-style), then plain vim keys. Ctrl-V
@@ -1057,6 +1194,7 @@ pub fn show_source<B: Buffer>(
                             }
                         }
                         IdeEdit::JoinLines => engine.ide_join_lines(doc),
+                        IdeEdit::Fold { .. } | IdeEdit::Unfold { .. } => fold_actions.push(edit),
                         IdeEdit::ExtendSelection => engine.ide_extend_selection(doc),
                         IdeEdit::ShrinkSelection => engine.ide_shrink_selection(doc),
                     }
@@ -1301,6 +1439,34 @@ pub fn show_source<B: Buffer>(
             ui.scroll_to_rect(caret.expand2(Vec2::new(advance * 2.0, 0.0)), None);
         }
     });
+    // Fold changes, now that the row layout is free; a caret left inside a
+    // folded region opens it (`IntelliJ` unfolds where the caret goes).
+    let caret_line = engine.cursor().line;
+    let folding = !fold_toggles.is_empty() || !fold_actions.is_empty();
+    let folds = highlight.folds_mut();
+    for line in fold_toggles {
+        folds.toggle(line);
+    }
+    for action in fold_actions {
+        match action {
+            IdeEdit::Fold { all: true } => folds.fold_all(),
+            IdeEdit::Fold { all: false } => folds.fold_at(caret_line),
+            IdeEdit::Unfold { all: true } => folds.unfold_all(),
+            _ => folds.unfold_at(caret_line),
+        }
+    }
+    if let Some(start) = folds.hiding(caret_line) {
+        if folding {
+            // Folding the caret's block parks the caret on its first line.
+            let col = engine
+                .cursor()
+                .col
+                .min(doc.line_text(start).chars().count());
+            effects.extend(engine.place_cursor(doc, start, col));
+        } else {
+            folds.unfold_at(caret_line);
+        }
+    }
     // Error stripe: every problem as a tick on the right edge, placed by
     // its line's share of the file (`IntelliJ`'s scrollbar marks).
     if !options.squiggles.is_empty() {
@@ -1378,7 +1544,7 @@ pub fn show_source<B: Buffer>(
         hover_action_rect,
         footer_rect,
         scroll_fraction,
-        visual_rows: visual_rows.len(),
+        visual_rows: row_count,
         caret_rect,
         change_clicked,
     }

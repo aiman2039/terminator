@@ -18,6 +18,8 @@ pub struct VisualRow {
     pub end: usize,
     pub line_len: usize,
     pub text: String,
+    /// Last row of a folded region's first line: paint the fold marker.
+    pub folded: bool,
 }
 
 impl VisualRow {
@@ -36,6 +38,7 @@ impl VisualRow {
 pub struct RowCache {
     revision: u64,
     columns: Option<usize>,
+    folds: u64,
     ready: bool,
     rows: Vec<VisualRow>,
     max_cells: usize,
@@ -44,11 +47,22 @@ pub struct RowCache {
 impl RowCache {
     /// Recompute when the buffer revision or the wrap width changed; every
     /// other frame reuses the rows as-is.
-    pub fn ensure<B: Buffer>(&mut self, doc: &B, wrap_columns: Option<usize>) {
-        if self.ready && self.revision == doc.revision() && self.columns == wrap_columns {
+    pub fn ensure<B: Buffer>(
+        &mut self,
+        doc: &B,
+        wrap_columns: Option<usize>,
+        folds: Option<&crate::fold::Folds>,
+    ) {
+        let fold_generation = folds.map_or(0, crate::fold::Folds::generation);
+        if self.ready
+            && self.revision == doc.revision()
+            && self.columns == wrap_columns
+            && self.folds == fold_generation
+        {
             return;
         }
-        self.rows = visual_rows(doc, wrap_columns);
+        self.folds = fold_generation;
+        self.rows = visual_rows_folded(doc, wrap_columns, folds);
         self.max_cells = self.rows.iter().map(row_cells).max().unwrap_or(0);
         self.revision = doc.revision();
         self.columns = wrap_columns;
@@ -78,8 +92,22 @@ fn row_cells(row: &VisualRow) -> usize {
 /// when `wrap_columns` is set. A break prefers the last space that fits, so
 /// words stay whole when the pane is wide enough for them.
 pub fn visual_rows<B: Buffer>(doc: &B, wrap_columns: Option<usize>) -> Vec<VisualRow> {
+    visual_rows_folded(doc, wrap_columns, None)
+}
+
+/// [`visual_rows`] without the lines folded regions hide; a folded
+/// region's first line is marked for its placeholder.
+pub fn visual_rows_folded<B: Buffer>(
+    doc: &B,
+    wrap_columns: Option<usize>,
+    folds: Option<&crate::fold::Folds>,
+) -> Vec<VisualRow> {
     let mut rows = Vec::new();
     for line in 0..doc.line_count() {
+        if folds.is_some_and(|folds| folds.hidden(line)) {
+            continue;
+        }
+        let first = rows.len();
         let text = doc.line_text(line);
         let chars: Vec<char> = text.chars().collect();
         let line_len = chars.len();
@@ -90,7 +118,9 @@ pub fn visual_rows<B: Buffer>(doc: &B, wrap_columns: Option<usize>) -> Vec<Visua
                 end: line_len,
                 line_len,
                 text,
+                folded: false,
             });
+            mark_folded(&mut rows, first, line, folds);
             continue;
         }
         let limit = wrap_columns.unwrap_or(usize::MAX).max(1);
@@ -124,11 +154,28 @@ pub fn visual_rows<B: Buffer>(doc: &B, wrap_columns: Option<usize>) -> Vec<Visua
                 end,
                 line_len,
                 text: chars.get(start..end).unwrap_or(&[]).iter().collect(),
+                folded: false,
             });
             start = end;
         }
+        mark_folded(&mut rows, first, line, folds);
     }
     rows
+}
+
+/// Flag the last row of `line` when a folded region starts there.
+fn mark_folded(
+    rows: &mut [VisualRow],
+    first: usize,
+    line: usize,
+    folds: Option<&crate::fold::Folds>,
+) {
+    if folds.is_some_and(|folds| folds.is_folded(line))
+        && rows.len() > first
+        && let Some(last) = rows.last_mut()
+    {
+        last.folded = true;
+    }
 }
 
 /// Tab stop width in display cells.
@@ -219,22 +266,22 @@ mod tests {
     fn row_cache_reuses_rows_until_the_buffer_or_width_changes() {
         let mut doc = Doc::new("alpha\nbeta\n");
         let mut cache = RowCache::default();
-        cache.ensure(&doc, None);
+        cache.ensure(&doc, None, None);
         let first = cache.rows().to_vec();
         assert_eq!(first.len(), doc.line_count());
         assert_eq!(cache.max_cells(), "alpha".chars().count());
 
         // Same revision and width: the rows are reused, not rebuilt.
-        cache.ensure(&doc, None);
+        cache.ensure(&doc, None, None);
         assert_eq!(cache.rows(), first.as_slice());
 
         doc.insert(doc.char_at_line_col(1, 4), "!");
-        cache.ensure(&doc, None);
+        cache.ensure(&doc, None, None);
         assert_ne!(cache.rows(), first.as_slice());
         assert_eq!(cache.max_cells(), "beta!".chars().count());
 
         // A narrower wrap width re-lays the rows out.
-        cache.ensure(&doc, Some(2));
+        cache.ensure(&doc, Some(2), None);
         assert!(cache.rows().len() > doc.line_count());
     }
 

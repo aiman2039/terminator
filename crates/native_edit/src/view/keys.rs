@@ -121,9 +121,19 @@ pub enum IdeEdit {
     DeleteWordBack,
     DeleteLines,
     Duplicate,
-    MoveLines { up: bool },
+    MoveLines {
+        up: bool,
+    },
     ExtendSelection,
     ShrinkSelection,
+    /// Fold the region at the caret (Cmd/Ctrl+-); `all` with Shift.
+    Fold {
+        all: bool,
+    },
+    /// Unfold at the caret (Cmd/Ctrl+=); `all` with Shift.
+    Unfold {
+        all: bool,
+    },
     ToggleComment,
     JoinLines,
 }
@@ -180,6 +190,12 @@ pub fn ide_edit_key(
                 Some(IdeEdit::Duplicate)
             }
             egui::Key::Slash if modifiers.command && !modifiers.alt => Some(IdeEdit::ToggleComment),
+            egui::Key::Minus if modifiers.command && !modifiers.alt => {
+                Some(IdeEdit::Fold { all: select })
+            }
+            egui::Key::Equals | egui::Key::Plus if modifiers.command && !modifiers.alt => {
+                Some(IdeEdit::Unfold { all: select })
+            }
             egui::Key::J if modifiers.ctrl && select && !modifiers.alt => Some(IdeEdit::JoinLines),
             _ => None,
         },

@@ -1146,4 +1146,53 @@ mod tests {
         assert!(!effects.contains(&Effect::FindBar { replace: false }));
         assert_eq!(vim_engine.mode(), Mode::Command);
     }
+
+    #[test]
+    fn command_minus_folds_the_caret_block_and_hides_its_body() {
+        use crate::doc::Doc;
+        let ctx = egui::Context::default();
+        let mut doc = Doc::new("fn a() {\n    x();\n}\nfn b() {}\n");
+        let mut engine = VimEngine::new();
+        let _ = engine.place_cursor(&mut doc, 1, 4);
+        let options = super::SourceOptions {
+            vim: false,
+            ..super::SourceOptions::default()
+        };
+        let mut highlight = super::HighlightCache::default();
+        drive_mods(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &options,
+            super::Language::Rust,
+            &mut highlight,
+            &[(egui::Key::Minus, egui::Modifiers::COMMAND)],
+        );
+        assert!(highlight.folds().is_folded(0));
+        assert_eq!(engine.cursor().line, 0);
+        // The next frame lays out without the hidden lines.
+        drive_mods(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &options,
+            super::Language::Rust,
+            &mut highlight,
+            &[(egui::Key::F5, egui::Modifiers::NONE)],
+        );
+        let lines: Vec<usize> = highlight.rows().iter().map(|row| row.line).collect();
+        assert!(!lines.contains(&1) && !lines.contains(&2), "{lines:?}");
+        assert!(highlight.rows().first().is_some_and(|row| row.folded));
+        // Cmd+= opens it again.
+        drive_mods(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &options,
+            super::Language::Rust,
+            &mut highlight,
+            &[(egui::Key::Equals, egui::Modifiers::COMMAND)],
+        );
+        assert!(!highlight.folds().is_folded(0));
+    }
 }
