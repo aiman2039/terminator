@@ -166,6 +166,10 @@ pub(super) fn explorer_segmented(ui: &mut egui::Ui, mode: &mut ExplorerSearchMod
 
 /// What an explorer file row asks `App` to do after painting.
 pub enum ExplorerLocal {
+    /// Open the file's Git history.
+    History,
+    /// Diff the working file against a branch (or other revision).
+    CompareWith(String),
     Reveal,
     CopyRelative,
     CopyName,
@@ -211,6 +215,7 @@ pub fn explorer_file_row(
     split_shortcut: &str,
     selected: bool,
     perforce: bool,
+    git_branches: Option<&[String]>,
 ) -> ExplorerRowOutcome {
     let mut outcome = ExplorerRowOutcome::default();
     let color = if ignored {
@@ -276,6 +281,24 @@ pub fn explorer_file_row(
                 outcome.menu = Some(FileAction::NativeWorkingDiff);
                 ui.close();
             }
+        }
+        if let Some(branches) = git_branches {
+            ui.separator();
+            if appearance::menu_item(ui, "Show history", "History", "").clicked() {
+                outcome.local = Some(ExplorerLocal::History);
+                ui.close();
+            }
+            ui.menu_button("Compare with branch", |ui| {
+                if branches.is_empty() {
+                    ui.weak("Loading branches…");
+                }
+                for branch in branches {
+                    if ui.button(branch).clicked() {
+                        outcome.local = Some(ExplorerLocal::CompareWith(branch.clone()));
+                        ui.close();
+                    }
+                }
+            });
         }
         ui.separator();
         if appearance::menu_item(ui, "Reveal in file manager", "FolderOpen", "").clicked() {

@@ -164,9 +164,11 @@ impl App {
         true
     }
     pub(super) fn commit_log_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
-        if !matches!(tab, Tab::CommitLog { .. }) {
+        let Tab::CommitLog { cwd } = tab else {
             return;
-        }
+        };
+        let mut open: Option<Tab> = None;
+        let mut fetch: Option<String> = None;
         let key = tab.key();
         if !self.git_view_ready(ui, &key, tab) {
             return;
@@ -257,12 +259,208 @@ impl App {
                     });
                     col.separator();
                     col.label(&commit.message);
+                    col.separator();
+                    // Changed files: each opens its change in this commit.
+                    match self.commit_files.get(hash) {
+                        None => {
+                            fetch = Some(hash.clone());
+                            col.weak("Loading files…");
+                        }
+                        Some(None) => {
+                            col.weak("Loading files…");
+                        }
+                        Some(Some(Err(error))) => {
+                            col.colored_label(appearance::color(&self.theme.status_failed), error);
+                        }
+                        Some(Some(Ok(files))) => {
+                            col.weak(format!(
+                                "{} file{} changed",
+                                files.len(),
+                                if files.len() == 1 { "" } else { "s" }
+                            ));
+                            for (status, path) in files {
+                                let name =
+                                    path.strip_prefix(cwd).unwrap_or(path).display().to_string();
+                                if col
+                                    .add(
+                                        egui::Button::selectable(
+                                            false,
+                                            egui::RichText::new(format!("{status}  {name}"))
+                                                .monospace(),
+                                        )
+                                        .truncate(),
+                                    )
+                                    .on_hover_text("Show this file's change in the commit")
+                                    .clicked()
+                                {
+                                    open = Some(Tab::RevisionDiff {
+                                        cwd: cwd.clone(),
+                                        path: path.clone(),
+                                        left: format!("{hash}^"),
+                                        right: hash.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    }
                 }
             } else if let Some(first) = log.commits.first() {
                 self.selected_commit = Some(first.hash.clone());
             }
         });
+        if let Some(hash) = fetch {
+            self.commit_files.insert(hash.clone(), None);
+            let _ = self.jobs.send(Job::CommitFiles(cwd.clone(), hash));
+        }
+        if let Some(tab) = open {
+            self.open_git_tab(tab);
+        }
     }
+    /// Read-only diff of one file between two revisions.
+    pub(crate) fn revision_diff_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
+        let Tab::RevisionDiff { cwd, path, .. } = tab else {
+            return;
+        };
+        let key = tab.key();
+        let mut refresh = false;
+        let split = self.diff_split.contains(&key);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.add(egui::Label::new(egui::RichText::new(tab.git_title()).strong()).truncate())
+                .on_hover_text(cwd.join(path).display().to_string());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                refresh = appearance::sidebar_action(ui, "RefreshCw", "Reload").clicked();
+                if appearance::selectable_icon(ui, "Columns2", "Side by side", split).clicked() {
+                    self.diff_split.insert(key.clone());
+                }
+                if appearance::selectable_icon(ui, "Rows2", "Unified", !split).clicked() {
+                    self.diff_split.remove(&key);
+                }
+            });
+        });
+        if refresh {
+            self.git_views.remove(&key);
+        }
+        if !self.git_view_ready(ui, &key, tab) {
+            return;
+        }
+        let Some(crate::GitView::Revision(result)) = self.git_views.get(&key) else {
+            return;
+        };
+        let doc = match result {
+            Ok(doc) => std::sync::Arc::clone(doc),
+            Err(error) => {
+                ui.colored_label(appearance::color(&self.theme.status_failed), error);
+                return;
+            }
+        };
+        let split = self.diff_split.contains(&key);
+        super::diff_paint::comparison_headers(
+            ui,
+            &doc,
+            split,
+            self.diff_split_ratio,
+            &cwd.join(path),
+            false,
+            false,
+        );
+        if doc.hunks.is_empty() {
+            ui.weak("No differences");
+            return;
+        }
+        let colors = super::diff_paint::DiffColors {
+            added: appearance::color(&self.theme.git_added),
+            deleted: appearance::color(&self.theme.git_deleted),
+            accent: appearance::color(&self.theme.accent),
+            text: appearance::color(&self.theme.text),
+        };
+        let mut sync = self.diff_split_scroll.get(&key).copied().unwrap_or(0.0);
+        super::diff_paint::paint_diff_document(
+            ui,
+            &doc,
+            split,
+            colors,
+            &key,
+            &mut self.diff_split_ratio,
+            &mut sync,
+        );
+        self.diff_split_scroll.insert(key, sync);
+    }
+
+    /// Commits that touched a file; each opens its change, or a comparison
+    /// of that revision with the working tree.
+    pub(crate) fn file_history_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
+        let Tab::FileHistory { cwd, path } = tab else {
+            return;
+        };
+        let key = tab.key();
+        ui.horizontal(|ui| {
+            ui.strong(tab.git_title());
+            ui.weak(cwd.join(path).display().to_string());
+        });
+        ui.separator();
+        if !self.git_view_ready(ui, &key, tab) {
+            return;
+        }
+        let Some(crate::GitView::History(result)) = self.git_views.get(&key) else {
+            return;
+        };
+        let entries = match result {
+            Ok(entries) => entries.clone(),
+            Err(error) => {
+                ui.colored_label(appearance::color(&self.theme.status_failed), error);
+                return;
+            }
+        };
+        if entries.is_empty() {
+            ui.weak("No commits touch this file.");
+            return;
+        }
+        let mut open: Option<Tab> = None;
+        appearance::sidebar_scroll("file-history").show(ui, |ui| {
+            for entry in &entries {
+                ui.horizontal(|ui| {
+                    let row = ui
+                        .add(egui::Button::selectable(false, &entry.subject).truncate())
+                        .on_hover_text(format!(
+                            "{} · {} · {}\nClick to show this commit's change",
+                            entry.short_hash, entry.author, entry.date
+                        ));
+                    if row.clicked() {
+                        open = Some(Tab::RevisionDiff {
+                            cwd: cwd.clone(),
+                            path: path.clone(),
+                            left: format!("{}^", entry.hash),
+                            right: entry.hash.clone(),
+                        });
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if appearance::sidebar_action(
+                            ui,
+                            "FileDiff",
+                            "Compare with the working tree",
+                        )
+                        .clicked()
+                        {
+                            open = Some(Tab::RevisionDiff {
+                                cwd: cwd.clone(),
+                                path: path.clone(),
+                                left: entry.hash.clone(),
+                                right: String::new(),
+                            });
+                        }
+                        ui.weak(&entry.date);
+                        ui.weak(&entry.author);
+                        ui.monospace(&entry.short_hash);
+                    });
+                });
+            }
+        });
+        if let Some(tab) = open {
+            self.open_git_tab(tab);
+        }
+    }
+
     pub(crate) fn blame_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
         let Tab::Blame { path, .. } = tab else {
             return;

@@ -338,6 +338,8 @@ pub struct App {
     pub(crate) git_base_pending: std::collections::HashSet<PathBuf>,
     pub(crate) git_base_generation: u64,
     pub(crate) gutter_popup: Option<crate::native_editor::GutterPopup>,
+    /// Changed files per commit hash (`None` while loading).
+    pub(crate) commit_files: HashMap<String, Option<CommitFiles>>,
     /// Jump history for Back/Forward.
     pub(crate) nav_back: Vec<crate::native_editor::NavLocation>,
     pub(crate) nav_forward: Vec<crate::native_editor::NavLocation>,
@@ -430,3 +432,6 @@ pub(crate) fn service_failure_update(
         _ => Some(Update::Error(error.to_string())),
     }
 }
+
+/// A commit's changed files: `(status letter, path)`, or the error.
+pub(crate) type CommitFiles = Result<Vec<(char, PathBuf)>, String>;

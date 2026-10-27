@@ -1035,6 +1035,9 @@ impl App {
                         *slot = view;
                     }
                 }
+                Update::CommitFiles(hash, files) => {
+                    self.commit_files.insert(hash, Some(files));
+                }
                 Update::GitBase(path, generation, base) => {
                     self.apply_git_base(path, generation, base);
                 }

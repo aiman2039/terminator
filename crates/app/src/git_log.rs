@@ -340,6 +340,142 @@ pub fn fetch_blame(cwd: &Path, path: &Path) -> Result<BlameData, String> {
     })
 }
 
+/// One commit in a file's history.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryEntry {
+    pub hash: String,
+    pub short_hash: String,
+    pub author: String,
+    pub date: String,
+    pub subject: String,
+}
+
+/// Commits touching `path`, newest first, following renames.
+pub fn file_history(cwd: &Path, path: &Path) -> Result<Vec<HistoryEntry>, String> {
+    let root = git_root(cwd)?;
+    let relative = terminator_git::relative_path(&root, path).map_err(|error| error.to_string())?;
+    let relative = relative.to_string_lossy().into_owned();
+    let bytes = terminator_core::git::run_blocking(
+        &root,
+        &[
+            "log",
+            "--follow",
+            "--date=short",
+            "--format=%H%x1f%h%x1f%an%x1f%ad%x1f%s",
+            "-300",
+            "--",
+            &relative,
+        ],
+        CommandOptions {
+            stdout_limit: 4 * 1024 * 1024,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| format!("git log: {error}"))?;
+    Ok(String::from_utf8_lossy(&bytes)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\u{1f}');
+            Some(HistoryEntry {
+                hash: fields.next()?.to_owned(),
+                short_hash: fields.next()?.to_owned(),
+                author: fields.next()?.to_owned(),
+                date: fields.next()?.to_owned(),
+                subject: fields.next().unwrap_or_default().to_owned(),
+            })
+        })
+        .collect())
+}
+
+/// Files a commit changed: `(status letter, absolute path)`.
+pub fn commit_files(cwd: &Path, hash: &str) -> Result<Vec<(char, std::path::PathBuf)>, String> {
+    let root = git_root(cwd)?;
+    let bytes = terminator_core::git::run_blocking(
+        &root,
+        &[
+            "show",
+            "--name-status",
+            "--format=",
+            "--first-parent",
+            "-m",
+            hash,
+        ],
+        CommandOptions {
+            stdout_limit: 4 * 1024 * 1024,
+            ..Default::default()
+        },
+    )
+    .map_err(|error| format!("git show: {error}"))?;
+    Ok(String::from_utf8_lossy(&bytes)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let status = fields.next()?.chars().next()?;
+            // Renames and copies list old then new: show the new path.
+            let path = fields.next_back()?;
+            Some((status, root.join(path)))
+        })
+        .collect())
+}
+
+/// `path` at `revision`, or `None` when it did not exist there.
+fn revision_text(root: &Path, revision: &str, relative: &str) -> Option<String> {
+    let bytes = terminator_core::git::run_blocking(
+        root,
+        &["show", &format!("{revision}:{relative}")],
+        CommandOptions {
+            stdout_limit: 4 * 1024 * 1024,
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    terminator_git::check_text(&bytes).then(|| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Read-only diff of `path` between `left` and `right` (empty `right` is
+/// the working tree). A side where the file did not exist is empty.
+pub fn revision_document(
+    cwd: &Path,
+    path: &Path,
+    left: &str,
+    right: &str,
+) -> Result<crate::diff::DiffDocument, String> {
+    let root = git_root(cwd)?;
+    let relative = terminator_git::relative_path(&root, path).map_err(|error| error.to_string())?;
+    let name = relative.to_string_lossy().into_owned();
+    let old = revision_text(&root, left, &name);
+    let new = if right.is_empty() {
+        std::fs::read_to_string(root.join(&relative)).ok()
+    } else {
+        revision_text(&root, right, &name)
+    };
+    if old.is_none() && new.is_none() {
+        return Err(format!("{name} is not a text file in either revision"));
+    }
+    let mut doc = crate::diff::build_with_context(
+        &relative,
+        old.as_deref().unwrap_or_default(),
+        new.as_deref().unwrap_or_default(),
+        false,
+        3,
+    );
+    let short = |revision: &str| {
+        if revision.len() > 12 && revision.chars().all(|c| c.is_ascii_hexdigit() || c == '^') {
+            revision.chars().take(8).collect()
+        } else {
+            revision.to_owned()
+        }
+    };
+    doc.left_label = short(left);
+    doc.right_label = if right.is_empty() {
+        "Working tree".into()
+    } else {
+        short(right)
+    };
+    doc.read_only = true;
+    Ok(doc)
+}
+
 impl crate::GitView {
     /// Run the blocking git query behind a commit-log or blame tab.
     pub(crate) fn load(tab: &crate::Tab) -> Self {
@@ -351,6 +487,13 @@ impl crate::GitView {
                 }))
             }
             crate::Tab::Blame { cwd, path } => Self::Blame(fetch_blame(cwd, path)),
+            crate::Tab::FileHistory { cwd, path } => Self::History(file_history(cwd, path)),
+            crate::Tab::RevisionDiff {
+                cwd,
+                path,
+                left,
+                right,
+            } => Self::Revision(revision_document(cwd, path, left, right).map(std::sync::Arc::new)),
             _ => Self::failed(tab, "Not a Git view".into()),
         }
     }
@@ -358,6 +501,8 @@ impl crate::GitView {
     pub(crate) fn failed(tab: &crate::Tab, error: String) -> Self {
         match tab {
             crate::Tab::Blame { .. } => Self::Blame(Err(error)),
+            crate::Tab::FileHistory { .. } => Self::History(Err(error)),
+            crate::Tab::RevisionDiff { .. } => Self::Revision(Err(error)),
             _ => Self::Log(CommitLog {
                 error: Some(error),
                 ..Default::default()
@@ -481,5 +626,55 @@ mod tests {
         assert!(blame.entries.iter().all(|e| e.author == "Fixture"));
         assert!(blame.entries[0].code.contains("alpha"));
         assert!(blame.entries[1].code.contains("beta"));
+    }
+
+    #[test]
+    fn history_files_and_revision_diffs_follow_commits() {
+        let dir = repo();
+        let root = dir.path();
+        let file = root.join("a.txt");
+        std::fs::write(&file, "one\n").unwrap();
+        git_cmd(root, &["add", "a.txt"]);
+        git_cmd(root, &["commit", "-qm", "add a"]);
+        std::fs::write(&file, "one\ntwo\n").unwrap();
+        std::fs::write(root.join("b.txt"), "b\n").unwrap();
+        git_cmd(root, &["add", "."]);
+        git_cmd(root, &["commit", "-qm", "grow a, add b"]);
+        std::fs::write(&file, "one\ntwo\nlocal\n").unwrap();
+
+        let history = file_history(root, &file).unwrap();
+        assert_eq!(
+            history
+                .iter()
+                .map(|entry| entry.subject.as_str())
+                .collect::<Vec<_>>(),
+            ["grow a, add b", "add a"]
+        );
+        let newest = &history[0].hash;
+        let mut changed = commit_files(root, newest).unwrap();
+        changed.sort();
+        let root_real = root.canonicalize().unwrap();
+        assert_eq!(
+            changed,
+            [
+                ('A', root_real.join("b.txt")),
+                ('M', root_real.join("a.txt"))
+            ]
+        );
+
+        // The commit's own change: one added line.
+        let commit = revision_document(root, &file, &format!("{newest}^"), newest).unwrap();
+        assert_eq!(commit.hunks.len(), 1);
+        assert_eq!(commit.right_text, "one\ntwo\n");
+        assert!(commit.read_only);
+        // Against the working tree.
+        let local = revision_document(root, &file, newest, "").unwrap();
+        assert_eq!(local.right_label, "Working tree");
+        assert_eq!(local.right_text, "one\ntwo\nlocal\n");
+        // A file added by the commit has an empty left side.
+        let added =
+            revision_document(root, &root.join("b.txt"), &format!("{newest}^"), newest).unwrap();
+        assert_eq!(added.left_text, "");
+        assert_eq!(added.right_text, "b\n");
     }
 }

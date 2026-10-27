@@ -294,6 +294,7 @@ impl App {
             git_base_pending: std::collections::HashSet::new(),
             git_base_generation: 0,
             gutter_popup: None,
+            commit_files: HashMap::new(),
             nav_back: Vec::new(),
             nav_forward: Vec::new(),
             native_rename: None,

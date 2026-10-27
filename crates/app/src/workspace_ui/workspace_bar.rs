@@ -102,6 +102,17 @@ impl App {
                 brand: None,
                 status: None,
             },
+            Some(tab @ (Tab::RevisionDiff { .. } | Tab::FileHistory { .. })) => TabFace {
+                label: tab.git_title(),
+                icon: if matches!(tab, Tab::FileHistory { .. }) {
+                    "History"
+                } else {
+                    "FileDiff"
+                },
+                sid: None,
+                brand: None,
+                status: None,
+            },
             Some(Tab::Vnc {
                 label,
                 session,

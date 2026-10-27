@@ -55,7 +55,9 @@ impl App {
             Tab::NativeEditor { path }
             | Tab::Image { path }
             | Tab::Diff { path, .. }
-            | Tab::Blame { path, .. } => Some(path.clone()),
+            | Tab::Blame { path, .. }
+            | Tab::RevisionDiff { path, .. }
+            | Tab::FileHistory { path, .. } => Some(path.clone()),
             Tab::Browser { target, .. } => target.file().map(Path::to_path_buf),
             Tab::Terminal(sid) => self
                 .state
@@ -793,6 +795,10 @@ impl App {
                 self.context
                     .as_ref()
                     .is_some_and(|context| context.perforce.is_some()),
+                self.context
+                    .as_ref()
+                    .and_then(|context| context.root.as_ref())
+                    .map(|_| self.git.branches.as_slice()),
             );
             if let Some(response) = &outcome.response {
                 self.explorer_row_dnd(ui, response, &entry.path, false, drop_dir);
@@ -973,6 +979,12 @@ impl App {
             self.pending_delete_bar(ui);
             let host = ui.scope_id();
             self.explorer_autoreveal(host);
+            // Branches for "Compare with branch" (loaded once per repo).
+            let git_root = self
+                .context
+                .as_ref()
+                .and_then(|context| context.root.clone());
+            self.ensure_git_lists(git_root);
             let root_override = self
                 .explorer_reveal
                 .as_ref()

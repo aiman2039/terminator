@@ -91,6 +91,19 @@ pub(crate) enum Tab {
         cwd: PathBuf,
         path: PathBuf,
     },
+    /// Read-only diff of one file between two revisions; an empty `right`
+    /// is the working tree (compare with branch, file history, commits).
+    RevisionDiff {
+        cwd: PathBuf,
+        path: PathBuf,
+        left: String,
+        right: String,
+    },
+    /// Commits that touched one file (`IntelliJ` Show History).
+    FileHistory {
+        cwd: PathBuf,
+        path: PathBuf,
+    },
     Vnc {
         #[serde(default)]
         id: String,
@@ -131,8 +144,36 @@ impl Tab {
         }
     }
 
+    /// Tab title for revision diffs and file history.
+    pub(crate) fn git_title(&self) -> String {
+        let name = |path: &std::path::Path| {
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        };
+        let short = |revision: &str| -> String {
+            if revision.is_empty() {
+                "local".into()
+            } else if revision.trim_end_matches('^').len() >= 12 {
+                let suffix = if revision.ends_with('^') { "^" } else { "" };
+                format!("{}{suffix}", revision.chars().take(7).collect::<String>())
+            } else {
+                revision.to_owned()
+            }
+        };
+        match self {
+            Self::RevisionDiff {
+                path, left, right, ..
+            } => format!("{} ({} ↔ {})", name(path), short(left), short(right)),
+            Self::FileHistory { path, .. } => format!("History {}", name(path)),
+            _ => String::new(),
+        }
+    }
+
     pub(crate) fn layout_version(&self) -> u32 {
         match self {
+            Self::RevisionDiff { .. } | Self::FileHistory { .. } => 9,
             Self::Diff {
                 remote: Some(_), ..
             } => 8,
@@ -224,6 +265,8 @@ pub(crate) enum Job {
     External(PathBuf),
     /// Read usage preview lines `(file, lines)` for usages generation `u64`.
     LinePreviews(u64, Vec<(PathBuf, Vec<u32>)>),
+    /// Files a commit changed, for the commit log's details pane.
+    CommitFiles(PathBuf, String),
     /// Read a file's `HEAD` text for gutter markers (refresh generation).
     GitBase(PathBuf, u64),
     TestExternal(PathBuf, String, Vec<String>),
@@ -297,6 +340,8 @@ pub(crate) enum GitView {
     Loading,
     Log(git_log::CommitLog),
     Blame(Result<git_log::BlameData, String>),
+    History(Result<Vec<git_log::HistoryEntry>, String>),
+    Revision(Result<std::sync::Arc<crate::diff::DiffDocument>, String>),
 }
 impl Job {
     pub(crate) fn rpc(request: Request, after: After) -> Self {
@@ -416,6 +461,7 @@ pub(crate) enum Update {
     Search(u64, Result<Vec<search::Hit>, String>),
     LinePreviews(u64, Vec<((PathBuf, u32), String)>),
     GitBase(PathBuf, u64, Option<String>),
+    CommitFiles(String, Result<Vec<(char, PathBuf)>, String>),
     GitView(String, GitView),
     DirectoryPreview(
         u64,

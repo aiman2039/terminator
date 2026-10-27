@@ -401,7 +401,10 @@ impl App {
                     target.file().and_then(Path::parent).map(PathBuf::from)
                 }
                 Tab::Player | Tab::Vnc { .. } => None,
-                Tab::CommitLog { cwd } | Tab::Blame { cwd, .. } => Some(cwd.clone()),
+                Tab::CommitLog { cwd }
+                | Tab::Blame { cwd, .. }
+                | Tab::RevisionDiff { cwd, .. }
+                | Tab::FileHistory { cwd, .. } => Some(cwd.clone()),
             })
             .or_else(|| self.selected_project().map(|p| p.path.clone()));
         let _ = self.jobs.send(Job::rpc(
@@ -460,7 +463,10 @@ impl App {
                     target.file().and_then(Path::parent).map(PathBuf::from)
                 }
                 Tab::Player | Tab::Vnc { .. } => None,
-                Tab::CommitLog { cwd } | Tab::Blame { cwd, .. } => Some(cwd.clone()),
+                Tab::CommitLog { cwd }
+                | Tab::Blame { cwd, .. }
+                | Tab::RevisionDiff { cwd, .. }
+                | Tab::FileHistory { cwd, .. } => Some(cwd.clone()),
             })
             .or_else(|| {
                 self.state
@@ -651,6 +657,7 @@ impl App {
                 "Blame {}",
                 path.file_name().unwrap_or_default().to_string_lossy()
             ),
+            Tab::RevisionDiff { .. } | Tab::FileHistory { .. } => tab.git_title(),
             Tab::Vnc {
                 label, host, port, ..
             } => {

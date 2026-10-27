@@ -548,6 +548,17 @@ impl Services {
                     .await?
             }
             Job::External(path) => self.open_external(path, cancel).await?,
+            Job::CommitFiles(cwd, hash) => {
+                let query = hash.clone();
+                let files = self
+                    .fs()
+                    .run(&cancel, move || {
+                        Ok(crate::git_log::commit_files(&cwd, &query))
+                    })
+                    .await
+                    .unwrap_or_else(|error| Err(format!("{error:#}")));
+                updates.push(Update::CommitFiles(hash, files));
+            }
             Job::GitBase(path, generation) => {
                 let base = self.git_base_text(&path).await;
                 updates.push(Update::GitBase(path, generation, base));

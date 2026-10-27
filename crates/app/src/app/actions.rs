@@ -283,6 +283,21 @@ impl App {
             ui.ctx().copy_text(text);
         }
     }
+    /// Open (or focus) a Git view tab in the selected project.
+    pub(crate) fn open_git_tab(&mut self, tab: Tab) {
+        let Some(project) = self.selected.clone() else {
+            return;
+        };
+        let workspace = self
+            .layouts
+            .entry(project.clone())
+            .or_insert_with(Workspace::empty);
+        if !workspace.contains(&tab) {
+            workspace.add(terminator_core::id(), tab.clone());
+        }
+        self.insert(&project, tab, None);
+    }
+
     pub(crate) fn open_commit_log(&mut self) {
         let Some(project) = self.selected.clone() else {
             return;

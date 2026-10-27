@@ -271,6 +271,7 @@ impl TabViewer for Viewer<'_> {
                 path.file_name().unwrap_or_default().to_string_lossy()
             )
             .into(),
+            Tab::RevisionDiff { .. } | Tab::FileHistory { .. } => tab.git_title().into(),
             Tab::Vnc {
                 label, host, port, ..
             } => if !label.trim().is_empty() {
@@ -632,6 +633,8 @@ impl TabViewer for Viewer<'_> {
             ),
             Tab::CommitLog { .. } => self.app.commit_log_view(ui, tab),
             Tab::Blame { .. } => self.app.blame_view(ui, tab),
+            Tab::RevisionDiff { .. } => self.app.revision_diff_view(ui, tab),
+            Tab::FileHistory { .. } => self.app.file_history_view(ui, tab),
             Tab::Vnc {
                 id,
                 session,

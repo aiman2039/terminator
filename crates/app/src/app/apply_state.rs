@@ -248,6 +248,8 @@ impl App {
                     | Tab::NativeEditor { .. }
                     | Tab::CommitLog { .. }
                     | Tab::Blame { .. }
+                    | Tab::RevisionDiff { .. }
+                    | Tab::FileHistory { .. }
                     | Tab::Vnc { .. } => true,
                 };
                 let survives = old_group

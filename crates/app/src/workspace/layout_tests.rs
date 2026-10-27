@@ -175,6 +175,29 @@ mod tests {
     }
 
     #[test]
+    fn git_view_tabs_use_layout_version_nine_and_round_trip() {
+        let mut workspace = Workspace::empty();
+        let diff = Tab::RevisionDiff {
+            cwd: "/repo".into(),
+            path: "/repo/src/lib.rs".into(),
+            left: "main".into(),
+            right: String::new(),
+        };
+        let history = Tab::FileHistory {
+            cwd: "/repo".into(),
+            path: "/repo/src/lib.rs".into(),
+        };
+        workspace.add("diff".into(), diff.clone());
+        workspace.add("history".into(), history.clone());
+        assert_eq!(workspace.version, 9);
+        let saved = terminator_core::sanitize_layout(serde_json::to_value(&workspace).unwrap());
+        let restored = Workspace::load(saved).unwrap();
+        assert!(restored.contains(&diff));
+        assert!(restored.contains(&history));
+        assert_eq!(diff.git_title(), "lib.rs (main ↔ local)");
+    }
+
+    #[test]
     fn media_layout_version_round_trips_and_preserves_legacy_tabs() {
         let mut workspace = Workspace::empty();
         workspace.add("shell".into(), Tab::Terminal("shell".into()));
@@ -254,7 +277,7 @@ mod tests {
     fn unsupported_layout_version_is_rejected() {
         let mut saved =
             terminator_core::sanitize_layout(serde_json::to_value(Workspace::empty()).unwrap());
-        saved["version"] = serde_json::json!(9);
+        saved["version"] = serde_json::json!(10);
         assert!(
             Workspace::load(saved)
                 .unwrap_err()
