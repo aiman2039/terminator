@@ -886,6 +886,9 @@ impl App {
                         self.sidebar_cache.get_mut().clear_files();
                         self.context = Some(context);
                         self.refresh_stale_diffs(&diff_prints);
+                        // HEAD may have moved (commit, checkout): gutter
+                        // bases re-read on their next paint.
+                        self.git_base_generation = self.git_base_generation.wrapping_add(1);
                         self.watch_fallback = fallback;
                         for (path, entries) in directories {
                             match entries {
@@ -1031,6 +1034,9 @@ impl App {
                     if let Some(slot) = self.git_views.get_mut(&key) {
                         *slot = view;
                     }
+                }
+                Update::GitBase(path, generation, base) => {
+                    self.apply_git_base(path, generation, base);
                 }
                 Update::LinePreviews(generation, lines) => {
                     self.apply_line_previews(generation, lines);

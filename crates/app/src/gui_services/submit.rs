@@ -548,6 +548,10 @@ impl Services {
                     .await?
             }
             Job::External(path) => self.open_external(path, cancel).await?,
+            Job::GitBase(path, generation) => {
+                let base = self.git_base_text(&path).await;
+                updates.push(Update::GitBase(path, generation, base));
+            }
             Job::LinePreviews(generation, files) => {
                 let lines = self
                     .fs()

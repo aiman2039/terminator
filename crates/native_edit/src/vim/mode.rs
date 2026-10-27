@@ -79,6 +79,8 @@ pub enum Effect {
     FindBar {
         replace: bool,
     },
+    /// Ask the language server for completions at the caret (Ctrl+Space).
+    Complete,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

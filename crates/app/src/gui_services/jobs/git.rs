@@ -33,6 +33,29 @@ impl Services {
         Ok(())
     }
 
+    /// The `HEAD` version of a file, or `None` outside Git, for untracked
+    /// files, and for binary or non-UTF-8 content.
+    pub(in crate::gui_services) async fn git_base_text(
+        &self,
+        path: &std::path::Path,
+    ) -> Option<String> {
+        let dir = path.parent()?;
+        let name = path.file_name()?.to_string_lossy().into_owned();
+        let bytes = terminator_git::run(
+            self.processes(),
+            self.fs(),
+            dir,
+            vec!["show".into(), format!("HEAD:./{name}").into()],
+            terminator_core::CommandOptions {
+                stdout_limit: 4 * 1024 * 1024,
+                ..Default::default()
+            },
+        )
+        .await
+        .ok()?;
+        terminator_git::check_text(&bytes).then(|| String::from_utf8_lossy(&bytes).into_owned())
+    }
+
     pub(in crate::gui_services) async fn diff_context(
         &self,
         tab: Tab,
@@ -184,5 +207,49 @@ impl Services {
             .unwrap_or_else(|error| crate::GitView::failed(&tab, format!("{error:#}")));
         updates.push(Update::GitView(key, view));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn git_base_reads_head_and_skips_untracked_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        let git = |args: &[&str]| {
+            terminator_git::run_blocking(&repo, args, terminator_core::CommandOptions::default())
+                .unwrap();
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "base@example.invalid"]);
+        git(&["config", "user.name", "Base"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        std::fs::write(repo.join("src/lib.rs"), "committed\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+        std::fs::write(repo.join("src/lib.rs"), "edited\n").unwrap();
+        std::fs::write(repo.join("src/new.rs"), "fresh\n").unwrap();
+        let (updates, _) = std::sync::mpsc::channel();
+        let (service, _owner) = crate::gui_services::Services::new(
+            terminator_core::Paths::at(dir.path().join("state")),
+            eframe::egui::Context::default(),
+            updates,
+        )
+        .unwrap();
+        assert_eq!(
+            service
+                .git_base_text(&repo.join("src/lib.rs"))
+                .await
+                .as_deref(),
+            Some("committed\n")
+        );
+        assert_eq!(service.git_base_text(&repo.join("src/new.rs")).await, None);
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("x.rs"), "x").unwrap();
+        assert_eq!(
+            service.git_base_text(&outside.path().join("x.rs")).await,
+            None
+        );
     }
 }

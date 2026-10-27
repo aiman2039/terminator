@@ -398,6 +398,12 @@ pub fn initialize(id: &RequestId, process_id: u32, root: &Url) -> Vec<u8> {
                     "hover": { "contentFormat": ["markdown", "plaintext"] },
                     "definition": { "linkSupport": true },
                     "rename": {},
+                    "completion": {
+                        "completionItem": {
+                            "snippetSupport": true,
+                            "documentationFormat": ["markdown", "plaintext"],
+                        },
+                    },
                     "publishDiagnostics": { "relatedInformation": true },
                 },
             },
@@ -485,6 +491,176 @@ pub fn definition(id: &RequestId, uri: &Url, position: Position) -> Vec<u8> {
             "position": { "line": position.line, "character": position.character },
         }),
     )
+}
+
+/// `textDocument/completion` at a UTF-16 position (invoked, not triggered
+/// by a character: servers then return their full list for the prefix).
+#[must_use]
+pub fn completion(id: &RequestId, uri: &Url, position: Position) -> Vec<u8> {
+    request(
+        id,
+        "textDocument/completion",
+        serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "position": { "line": position.line, "character": position.character },
+            "context": { "triggerKind": 1 },
+        }),
+    )
+}
+
+/// One completion proposal, reduced to what the popup shows and inserts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompletionItem {
+    pub label: String,
+    pub kind: Option<String>,
+    pub detail: Option<String>,
+    /// Text to insert (snippet syntax when `snippet`).
+    pub insert: String,
+    pub snippet: bool,
+    /// Text the typed prefix is matched against.
+    pub filter: String,
+    /// Server ordering key.
+    pub sort: String,
+    /// Range the insert replaces, when the server names one.
+    pub edit: Option<Range>,
+}
+
+/// Parse a `textDocument/completion` result (item array or list).
+#[must_use]
+pub fn parse_completion(result: &Value) -> Vec<CompletionItem> {
+    let Ok(response) = serde_json::from_value::<lsp_types::CompletionResponse>(result.clone())
+    else {
+        return Vec::new();
+    };
+    let items = match response {
+        lsp_types::CompletionResponse::Array(items) => items,
+        lsp_types::CompletionResponse::List(list) => list.items,
+    };
+    items
+        .into_iter()
+        .map(|item| {
+            let (insert, edit) = match &item.text_edit {
+                Some(lsp_types::CompletionTextEdit::Edit(edit)) => {
+                    (edit.new_text.clone(), Some(native_range(&edit.range)))
+                }
+                Some(lsp_types::CompletionTextEdit::InsertAndReplace(edit)) => {
+                    (edit.new_text.clone(), Some(native_range(&edit.insert)))
+                }
+                None => (
+                    item.insert_text
+                        .clone()
+                        .unwrap_or_else(|| item.label.clone()),
+                    None,
+                ),
+            };
+            CompletionItem {
+                kind: item.kind.map(completion_kind_label),
+                detail: item.detail.clone().filter(|detail| !detail.is_empty()),
+                snippet: item.insert_text_format == Some(lsp_types::InsertTextFormat::SNIPPET),
+                filter: item
+                    .filter_text
+                    .clone()
+                    .unwrap_or_else(|| item.label.clone()),
+                sort: item.sort_text.clone().unwrap_or_else(|| item.label.clone()),
+                label: item.label,
+                insert,
+                edit,
+            }
+        })
+        .collect()
+}
+
+fn completion_kind_label(kind: lsp_types::CompletionItemKind) -> String {
+    use lsp_types::CompletionItemKind as Kind;
+    match kind {
+        Kind::METHOD => "Method",
+        Kind::FUNCTION => "Function",
+        Kind::CONSTRUCTOR => "Constructor",
+        Kind::FIELD => "Field",
+        Kind::VARIABLE => "Variable",
+        Kind::CLASS => "Class",
+        Kind::INTERFACE => "Interface",
+        Kind::MODULE => "Module",
+        Kind::PROPERTY => "Property",
+        Kind::ENUM => "Enum",
+        Kind::KEYWORD => "Keyword",
+        Kind::SNIPPET => "Snippet",
+        Kind::CONSTANT => "Constant",
+        Kind::STRUCT => "Struct",
+        Kind::ENUM_MEMBER => "Enum member",
+        Kind::TYPE_PARAMETER => "Type parameter",
+        _ => "Symbol",
+    }
+    .to_owned()
+}
+
+/// Expand LSP snippet syntax to plain text: `${1:name}` keeps `name`,
+/// `$1`/`$0` vanish, `\$` is a literal. Returns the text and the char
+/// offset where the caret goes: the first tab stop, else `$0`, else end.
+#[must_use]
+pub fn expand_snippet(snippet: &str) -> (String, usize) {
+    let mut out = String::new();
+    let mut first: Option<usize> = None;
+    let mut last: Option<usize> = None;
+    let mut chars = snippet.chars().peekable();
+    let mut depth = 0usize;
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            }
+            '$' => {
+                let at = out.chars().count();
+                if chars.peek() == Some(&'{') {
+                    chars.next();
+                    let mut number = String::new();
+                    while chars.peek().is_some_and(char::is_ascii_digit) {
+                        number.extend(chars.next());
+                    }
+                    if chars.peek() == Some(&':') {
+                        chars.next();
+                    } else if chars.peek() == Some(&'|') {
+                        // Choice: keep the first option.
+                        chars.next();
+                        for choice in chars.by_ref() {
+                            if choice == ',' || choice == '|' {
+                                break;
+                            }
+                            out.push(choice);
+                        }
+                        for skip in chars.by_ref() {
+                            if skip == '}' {
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+                    depth = depth.saturating_add(1);
+                    if number == "0" {
+                        last = Some(at);
+                    } else if first.is_none() {
+                        first = Some(at);
+                    }
+                } else {
+                    let mut number = String::new();
+                    while chars.peek().is_some_and(char::is_ascii_digit) {
+                        number.extend(chars.next());
+                    }
+                    if number == "0" {
+                        last = Some(at);
+                    } else if !number.is_empty() && first.is_none() {
+                        first = Some(at);
+                    }
+                }
+            }
+            '}' if depth > 0 => depth = depth.saturating_sub(1),
+            other => out.push(other),
+        }
+    }
+    let end = out.chars().count();
+    (out, first.or(last).unwrap_or(end))
 }
 
 /// `textDocument/references` at a UTF-16 position, including the declaration.
@@ -1459,6 +1635,50 @@ mod tests {
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].kind, "Class");
         assert_eq!(symbols[0].depth, 0);
+    }
+
+    #[test]
+    fn completion_lists_keep_edits_snippets_and_sort_keys() {
+        let list = serde_json::json!({
+            "isIncomplete": false,
+            "items": [
+                {
+                    "label": "push",
+                    "kind": 2,
+                    "detail": "fn(&mut self, T)",
+                    "insertTextFormat": 2,
+                    "sortText": "0001",
+                    "textEdit": {
+                        "range": {"start": {"line": 3, "character": 6},
+                                  "end": {"line": 3, "character": 8}},
+                        "newText": "push(${1:value})$0",
+                    },
+                },
+                { "label": "len" },
+            ],
+        });
+        let items = parse_completion(&list);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].kind.as_deref(), Some("Method"));
+        assert!(items[0].snippet);
+        assert_eq!(items[0].insert, "push(${1:value})$0");
+        assert_eq!(items[0].edit.map(|range| range.start.character), Some(6));
+        assert_eq!(items[0].sort, "0001");
+        // Bare items fall back to their label.
+        assert_eq!(items[1].insert, "len");
+        assert_eq!(items[1].filter, "len");
+        assert!(parse_completion(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn snippets_expand_to_text_with_the_caret_on_the_first_stop() {
+        assert_eq!(
+            expand_snippet("push(${1:value})$0"),
+            ("push(value)".into(), 5)
+        );
+        assert_eq!(expand_snippet("foo($0)"), ("foo()".into(), 4));
+        assert_eq!(expand_snippet("plain"), ("plain".into(), 5));
+        assert_eq!(expand_snippet("\\$x ${1|a,b|}"), ("$x a".into(), 4));
     }
 
     #[test]

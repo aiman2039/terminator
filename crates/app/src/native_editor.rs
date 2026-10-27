@@ -6,11 +6,15 @@
 //! file that changed on disk unless forced, Reload is disabled while dirty,
 //! and closing a dirty tab asks first — nothing is silently discarded.
 mod close;
+mod complete;
 mod find;
+mod gutter;
 mod navigation;
 mod rename;
 pub(super) use close::{CloseIssuer, NativeCloseChoice};
+pub(crate) use complete::CompletionPopup;
 pub(crate) use find::FindBar;
+pub(crate) use gutter::GutterPopup;
 pub(crate) use navigation::{NavLocation, UsagesView, read_line_previews};
 pub(crate) use rename::RenameDialog;
 
@@ -110,6 +114,9 @@ pub struct NativeDoc {
     /// between frames the holder is the focused view, so LSP, find, and
     /// navigation act on the caret the user is working with.
     views: std::collections::HashMap<String, (VimEngine, HighlightCache)>,
+    /// Gutter change blocks against the `HEAD` text, keyed by buffer
+    /// revision and base identity, with their marks for the view.
+    gutter: Option<GutterCache>,
     holder: Option<String>,
     focused_view: Option<String>,
     /// The file uses CRLF line endings: the buffer holds `\n` only (so
@@ -199,6 +206,7 @@ impl NativeDoc {
             save_hash: 0,
             crlf: false,
             views: std::collections::HashMap::new(),
+            gutter: None,
             holder: None,
             focused_view: None,
             dirty_memo: std::cell::Cell::new((0, false)),
@@ -449,6 +457,13 @@ impl NativeDoc {
         }
     }
 }
+
+type GutterCache = (
+    u64,
+    usize,
+    std::sync::Arc<Vec<gutter::GutterHunk>>,
+    std::sync::Arc<Vec<terminator_native_edit::view::ChangeMark>>,
+);
 
 fn text_hash(text: &str) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -796,6 +811,37 @@ impl App {
         } else {
             None
         };
+        let mut completion = if self
+            .completion
+            .as_ref()
+            .is_some_and(|popup| popup.path == path)
+        {
+            self.completion.take()
+        } else {
+            None
+        };
+        let mut complete_now = false;
+        let git_base = if crate::remote_ui::is_snapshot(&self.paths.data, path) {
+            None
+        } else {
+            self.git_base(path)
+        };
+        let mut gutter_popup = if self
+            .gutter_popup
+            .as_ref()
+            .is_some_and(|popup| popup.path == path)
+        {
+            self.gutter_popup.take()
+        } else {
+            None
+        };
+        let change_colors = [
+            appearance::color(&self.theme.git_added),
+            appearance::color(&self.theme.git_modified),
+            appearance::color(&self.theme.git_deleted),
+        ];
+        let mut completion_request = None;
+        let caret_rect;
         let post = {
             let doc = self.native_doc(path, vim);
             // Split views of one buffer keep their own caret and layout.
@@ -1019,6 +1065,45 @@ impl App {
             // the per-type default: Markdown wraps, code does not.
             let soft_wrap = doc.engine.wrap().unwrap_or(is_markdown);
             let squiggles = terminator_native_edit::view::squiggles(&*buffer, &problems);
+            let revision_before = buffer.revision();
+            // Gutter changes against HEAD, once per edit (or new base).
+            let (gutter_hunks, change_marks) = match &git_base {
+                Some(base) => {
+                    #[allow(clippy::as_conversions)] // pointer identity only
+                    let key = (
+                        buffer.revision(),
+                        std::sync::Arc::as_ptr(base).cast::<u8>() as usize,
+                    );
+                    match &doc.gutter {
+                        Some((revision, ptr, hunks, marks)) if (*revision, *ptr) == key => {
+                            (std::sync::Arc::clone(hunks), std::sync::Arc::clone(marks))
+                        }
+                        _ => {
+                            let base_text = if doc.crlf {
+                                base.replace("\r\n", "\n")
+                            } else {
+                                base.to_string()
+                            };
+                            let hunks =
+                                std::sync::Arc::new(gutter::hunks(&base_text, &buffer.text()));
+                            let marks = std::sync::Arc::new(
+                                hunks.iter().map(|hunk| hunk.mark).collect::<Vec<_>>(),
+                            );
+                            doc.gutter = Some((
+                                key.0,
+                                key.1,
+                                std::sync::Arc::clone(&hunks),
+                                std::sync::Arc::clone(&marks),
+                            ));
+                            (hunks, marks)
+                        }
+                    }
+                }
+                None => (std::sync::Arc::default(), std::sync::Arc::default()),
+            };
+            let popup_keys = completion
+                .as_ref()
+                .is_some_and(|popup| !popup.visible.is_empty());
             let mut find_matches = std::sync::Arc::new(Vec::new());
             let mut find_current = None;
             if let Some(bar) = find.as_mut() {
@@ -1067,6 +1152,9 @@ impl App {
                         squiggles,
                         find_matches,
                         find_current,
+                        popup_keys,
+                        change_marks,
+                        change_colors,
                         ..SourceOptions::default()
                     },
                     &mut doc.highlight,
@@ -1091,6 +1179,14 @@ impl App {
                 }
             };
             activated_editor = outcome.as_ref().is_some_and(|outcome| outcome.activated);
+            caret_rect = outcome.as_ref().and_then(|outcome| outcome.caret_rect);
+            if let Some((index, at)) = outcome.as_ref().and_then(|outcome| outcome.change_clicked) {
+                gutter_popup = Some(GutterPopup {
+                    path: path.to_owned(),
+                    index,
+                    at,
+                });
+            }
             source_scroll = outcome.as_ref().map(|outcome| outcome.scroll_fraction);
             if let Some(outcome) = outcome {
                 #[cfg(feature = "test-support")]
@@ -1199,6 +1295,7 @@ impl App {
                                 character: native_lsp::char_col_to_utf16(&row, cursor.col),
                             });
                         }
+                        Effect::Complete => complete_now = true,
                         Effect::FindBar { replace } => {
                             // Seed with a one-line selection, IntelliJ-style.
                             let seed = doc
@@ -1291,6 +1388,25 @@ impl App {
                     }
                 }
             }
+            let rollback_index = gutter_popup.as_ref().map(|popup| popup.index);
+            if gutter::popup_ui(ui, &mut gutter_popup, &gutter_hunks, change_colors[2])
+                && let Some(hunk) = rollback_index.and_then(|index| gutter_hunks.get(index))
+                && let Some(live) = doc.doc.as_mut()
+            {
+                gutter::rollback(live, &mut doc.engine, hunk);
+            }
+            if let Some(live) = doc.doc.as_mut() {
+                completion_request = complete::after_frame(
+                    ui,
+                    &mut completion,
+                    live,
+                    &mut doc.engine,
+                    revision_before,
+                    complete_now,
+                    caret_rect,
+                    native_lsp::server_language(language).is_some(),
+                );
+            }
             // The view the user clicked or types in owns the live caret
             // between frames; another view only borrowed it to draw.
             if activated_editor || ui.memory(|memory| memory.has_focus(source_focus_id(&source_id)))
@@ -1302,6 +1418,43 @@ impl App {
         };
         if find.is_some() {
             self.find_bar = find;
+        }
+        if completion.is_some() {
+            self.completion = completion;
+        }
+        if gutter_popup.is_some() {
+            self.gutter_popup = gutter_popup;
+        }
+        // Completion asks with the live text: push it past the sync
+        // debounce first so the server sees what was just typed.
+        if let Some((position, line, start)) = completion_request
+            && let Some((revision, text)) = self
+                .native_docs
+                .get(path)
+                .and_then(|doc| doc.buffer())
+                .map(|buffer| (buffer.revision(), buffer.text()))
+        {
+            self.lsp.submit_text(path, language, revision, &text);
+            if let Some(generation) = self.lsp.request_completion(path, position) {
+                self.completion = Some(CompletionPopup {
+                    path: path.to_owned(),
+                    generation: Some(generation),
+                    items: Vec::new(),
+                    line,
+                    start,
+                    visible: Vec::new(),
+                    selected: 0,
+                    anchor: caret_rect,
+                });
+            }
+        }
+        if let Some(results) = self.lsp.take_completion()
+            && let Some(popup) = self.completion.as_mut()
+            && popup.generation == Some(results.generation)
+            && popup.path == results.path
+        {
+            popup.items = results.items;
+            popup.generation = None;
         }
         if is_markdown {
             self.native_markdown_preview(

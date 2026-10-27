@@ -324,6 +324,14 @@ pub struct App {
     pub(crate) usages: Option<crate::native_editor::UsagesView>,
     /// Find/replace bar of one native editor.
     pub(crate) find_bar: Option<crate::native_editor::FindBar>,
+    /// Completion popup of one native editor.
+    pub(crate) completion: Option<crate::native_editor::CompletionPopup>,
+    /// `HEAD` text per open file for gutter change markers, tagged with
+    /// the Git refresh generation it was read at.
+    pub(crate) git_bases: HashMap<PathBuf, (u64, Option<std::sync::Arc<str>>)>,
+    pub(crate) git_base_pending: std::collections::HashSet<PathBuf>,
+    pub(crate) git_base_generation: u64,
+    pub(crate) gutter_popup: Option<crate::native_editor::GutterPopup>,
     /// Jump history for Back/Forward.
     pub(crate) nav_back: Vec<crate::native_editor::NavLocation>,
     pub(crate) nav_forward: Vec<crate::native_editor::NavLocation>,

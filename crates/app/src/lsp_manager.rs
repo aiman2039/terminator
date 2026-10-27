@@ -98,6 +98,17 @@ enum Pending {
     WorkspaceSymbols {
         generation: u64,
     },
+    Completion {
+        path: PathBuf,
+        generation: u64,
+    },
+}
+
+/// Completion proposals for one request (`generation` drops stale ones).
+pub struct CompletionResults {
+    pub path: PathBuf,
+    pub generation: u64,
+    pub items: Vec<L::CompletionItem>,
 }
 
 struct Server {
@@ -159,6 +170,8 @@ pub struct LspManager {
     hover: Option<HoverPopup>,
     goto: Option<GotoJump>,
     references: Option<ReferenceResults>,
+    completion: Option<CompletionResults>,
+    completion_generation: u64,
     rename: Option<RenameResults>,
     symbols: std::collections::HashMap<PathBuf, std::sync::Arc<[L::Symbol]>>,
     symbols_rev: std::collections::HashMap<PathBuf, u64>,
@@ -197,6 +210,8 @@ impl LspManager {
             hover: None,
             goto: None,
             references: None,
+            completion: None,
+            completion_generation: 0,
             rename: None,
             symbols: std::collections::HashMap::new(),
             symbols_rev: std::collections::HashMap::new(),
@@ -625,6 +640,39 @@ impl LspManager {
     /// Finished goto jump, if any.
     pub fn take_goto(&mut self) -> Option<GotoJump> {
         self.goto.take()
+    }
+
+    /// Ask for completions at `position`. Returns the request's generation
+    /// (a later request supersedes it), or `None` when no ready server
+    /// tracks the file.
+    pub fn request_completion(&mut self, path: &Path, position: L::Position) -> Option<u64> {
+        let doc = self.docs.get(path)?;
+        let (key, uri) = (doc.server.clone(), doc.uri.clone());
+        let server = self.servers.get_mut(&key)?;
+        if !server.ready {
+            return None;
+        }
+        let L::RequestId::Number(number) = server.ids.next_id() else {
+            return None;
+        };
+        self.completion_generation = self.completion_generation.wrapping_add(1);
+        let generation = self.completion_generation;
+        let _ = server
+            .inbox
+            .send(L::completion(&L::RequestId::Number(number), &uri, position));
+        server.pending.insert(
+            number,
+            Pending::Completion {
+                path: path.to_owned(),
+                generation,
+            },
+        );
+        Some(generation)
+    }
+
+    /// Latest completion answer, if one arrived for the newest request.
+    pub fn take_completion(&mut self) -> Option<CompletionResults> {
+        self.completion.take()
     }
 
     pub fn take_references(&mut self) -> Option<ReferenceResults> {

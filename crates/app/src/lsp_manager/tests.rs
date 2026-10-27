@@ -781,3 +781,56 @@ fn saved_server_path_restarts_only_that_language() {
     manager.set_server_overrides(&overrides);
     assert!(manager.servers.contains_key(&key));
 }
+
+/// Live completion round trip against rust-analyzer (self-skips without
+/// it): method completion after `v.` lists `len`.
+#[tokio::test]
+async fn live_rust_analyzer_completion() {
+    let path_env = std::env::var_os("PATH")
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if L::find_server(&["rust-analyzer"], &path_env).is_none() {
+        eprintln!("SKIP: rust-analyzer not on PATH");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("proj");
+    std::fs::create_dir_all(root.join("src")).expect("mkdir");
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"proj\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    )
+    .expect("manifest");
+    let main = "fn main() {\n    let v: Vec<i32> = Vec::new();\n    v.le\n}\n";
+    let file = root.join("src/main.rs");
+    std::fs::write(&file, main).expect("main");
+    let mut manager = LspManager::new();
+    assert!(manager.sync_doc(&file, Language::Rust, 1));
+    manager.submit_text(&file, Language::Rust, 1, main);
+    let at = L::Position {
+        line: 2,
+        character: 8,
+    };
+    let start = Instant::now();
+    let mut labels: Vec<String> = Vec::new();
+    while !labels.iter().any(|label| label.starts_with("len")) {
+        assert!(
+            start.elapsed() < Duration::from_secs(90),
+            "no completion: {labels:?}"
+        );
+        if manager.request_completion(&file, at).is_none() {
+            manager.poll();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+        for _ in 0..20 {
+            manager.poll();
+            if let Some(results) = manager.take_completion() {
+                labels = results.items.into_iter().map(|item| item.label).collect();
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+    manager.prune(&std::collections::HashSet::new());
+}

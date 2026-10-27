@@ -17,6 +17,26 @@ pub struct DiagnosticMark {
     pub severity: crate::lsp::Severity,
 }
 
+/// How a block of lines differs from the VCS base (gutter markers).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangeKind {
+    Added,
+    Modified,
+    /// Lines removed just above `start` (the block itself is empty).
+    Deleted,
+}
+
+/// One changed block in buffer lines `start..end` (empty for deletions).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChangeMark {
+    pub start: usize,
+    pub end: usize,
+    pub kind: ChangeKind,
+}
+
+/// Width of the gutter band that shows and accepts clicks on changes.
+const CHANGE_BAND: f32 = 8.0;
+
 /// One diagnostic underline: a char-column span on one line, with the
 /// message shown when hovered. Multi-line ranges underline their first
 /// line to its end.
@@ -91,6 +111,13 @@ pub struct SourceOptions {
     /// the index of the selected one.
     pub find_matches: std::sync::Arc<Vec<(usize, usize, usize)>>,
     pub find_current: Option<usize>,
+    /// A popup (completion) owns Up/Down/Enter/Tab/Escape: the editor
+    /// leaves those keys in the input for the host to read.
+    pub popup_keys: bool,
+    /// VCS change markers for the gutter, sorted by `start`.
+    pub change_marks: std::sync::Arc<Vec<ChangeMark>>,
+    /// Theme colors for added / modified / deleted markers.
+    pub change_colors: [Color32; 3],
     /// Take keyboard focus when nothing else holds it, so an opened file is
     /// immediately typeable (`IntelliJ` focuses the editor on open).
     pub autofocus: bool,
@@ -130,6 +157,13 @@ impl Default for SourceOptions {
             squiggles: Vec::new(),
             find_matches: std::sync::Arc::new(Vec::new()),
             find_current: None,
+            popup_keys: false,
+            change_marks: std::sync::Arc::new(Vec::new()),
+            change_colors: [
+                Color32::from_rgb(0x4C, 0x9A, 0x52),
+                Color32::from_rgb(0x4A, 0x7F, 0xC1),
+                Color32::from_rgb(0x8C, 0x8C, 0x8C),
+            ],
         }
     }
 }
@@ -152,6 +186,26 @@ pub struct SourceOutcome {
     pub scroll_fraction: f32,
     /// Number of painted rows after optional source wrapping.
     pub visual_rows: usize,
+    /// Screen rect of the caret cell when it was painted, for anchoring
+    /// popups (completion) at the caret.
+    pub caret_rect: Option<egui::Rect>,
+    /// A gutter change marker was clicked: its index in
+    /// `SourceOptions::change_marks` and where, for the rollback popup.
+    pub change_clicked: Option<(usize, egui::Pos2)>,
+}
+
+/// Keys a host popup owns while `SourceOptions::popup_keys` is set.
+fn popup_key(key: egui::Key) -> bool {
+    matches!(
+        key,
+        egui::Key::ArrowUp
+            | egui::Key::ArrowDown
+            | egui::Key::Enter
+            | egui::Key::Tab
+            | egui::Key::Escape
+            | egui::Key::PageUp
+            | egui::Key::PageDown
+    )
 }
 
 /// Render an editable source view. Returns engine effects (`Save`/`Quit`/…)
@@ -233,6 +287,8 @@ pub fn show_source<B: Buffer>(
     let mut context_menu_opened = false;
     let mut rename_action_rect = None;
     let mut hover_action_rect = None;
+    let mut caret_rect = None;
+    let mut change_clicked = None;
     let mut activated = false;
     let focus_id = source_focus_id(id);
     // Set while a drag selection owns the pointer: the next plain click
@@ -297,7 +353,28 @@ pub fn show_source<B: Buffer>(
         };
         let caret_before = engine.cursor();
         let click_modifiers = ui.input(|input| input.modifiers);
-        if response.clicked() || (response.secondary_clicked() && engine.selection().is_none()) {
+        // A click in the change band opens that change instead of moving
+        // the caret.
+        let band_click = response
+            .clicked()
+            .then(|| response.interact_pointer_pos())
+            .flatten()
+            .filter(|pos| options.show_line_numbers && pos.x < response.rect.left() + CHANGE_BAND)
+            .and_then(|pos| {
+                let (line, _) = cursor_at(pos)?;
+                options
+                    .change_marks
+                    .iter()
+                    .position(|mark| {
+                        (mark.start..mark.end.max(mark.start.saturating_add(1))).contains(&line)
+                    })
+                    .map(|index| (index, pos))
+            });
+        if let Some(click) = band_click {
+            change_clicked = Some(click);
+        } else if response.clicked()
+            || (response.secondary_clicked() && engine.selection().is_none())
+        {
             ui.memory_mut(|memory| memory.request_focus(focus_id));
             let extend = response.clicked() && click_modifiers.shift;
             // A plain click after a drag collapses that selection instead of
@@ -561,6 +638,45 @@ pub fn show_source<B: Buffer>(
             if y + row_height < painter.clip_rect().top() || y > painter.clip_rect().bottom() {
                 continue;
             }
+            if visual.start == 0 && options.show_line_numbers {
+                // VCS change band: a bar beside changed lines, a wedge
+                // where lines were deleted.
+                let at = options
+                    .change_marks
+                    .partition_point(|mark| mark.end.max(mark.start.saturating_add(1)) <= line);
+                if let Some(mark) = options.change_marks.get(at)
+                    && mark.start <= line
+                {
+                    let [added, modified, deleted] = options.change_colors;
+                    match mark.kind {
+                        ChangeKind::Added | ChangeKind::Modified => {
+                            painter.rect_filled(
+                                Rect::from_min_size(
+                                    Pos2::new(origin.x + 3.0, y),
+                                    Vec2::new(3.0, row_height),
+                                ),
+                                0.0,
+                                if mark.kind == ChangeKind::Added {
+                                    added
+                                } else {
+                                    modified
+                                },
+                            );
+                        }
+                        ChangeKind::Deleted => {
+                            painter.add(egui::Shape::convex_polygon(
+                                vec![
+                                    Pos2::new(origin.x + 2.0, y - 3.0),
+                                    Pos2::new(origin.x + 7.0, y),
+                                    Pos2::new(origin.x + 2.0, y + 3.0),
+                                ],
+                                deleted,
+                                egui::Stroke::NONE,
+                            ));
+                        }
+                    }
+                }
+            }
             if visual.start == 0 {
                 // Worst severity on the row, for both the line-number tint
                 // and the gutter strip: errors shout, warnings caution,
@@ -759,6 +875,10 @@ pub fn show_source<B: Buffer>(
                 };
                 #[allow(clippy::cast_precision_loss)] // UI coordinate
                 let x = origin.x + gutter + cells as f32 * advance;
+                caret_rect = Some(Rect::from_min_size(
+                    Pos2::new(x, y),
+                    Vec2::new(advance, row_height),
+                ));
                 // Modeless carets are always a bar: they sit between chars.
                 if engine.mode() == Mode::Insert || !options.vim {
                     painter.rect_filled(
@@ -891,6 +1011,7 @@ pub fn show_source<B: Buffer>(
                             modifiers,
                             ..
                         } = event
+                            && !(options.popup_keys && popup_key(*key))
                             && let Some(edit) =
                                 ide_edit_key(*key, *modifiers, cfg!(target_os = "macos"), page_rows)
                             && (!options.vim || ide_edit_in_vim(edit, *modifiers))
@@ -951,10 +1072,21 @@ pub fn show_source<B: Buffer>(
                         ..
                     } = event
                     {
+                        if options.popup_keys && popup_key(*key) {
+                            // The host popup reads this key.
+                        } else if *key == egui::Key::Space
+                            && modifiers.ctrl
+                            && !modifiers.alt
+                            && crate::lsp::server_language(language).is_some()
+                        {
+                            // Ctrl+Space: basic completion (`IntelliJ`).
+                            effects.push(Effect::Complete);
+                            consumed.push(*key);
+                        }
                         // F12 jumps to the definition under the cursor in
                         // every mode (VS convention; F-keys are never
                         // vim input and `egui_key` leaves them unmapped).
-                        if *key == egui::Key::F12
+                        else if *key == egui::Key::F12
                             && !modifiers.command
                             && !modifiers.ctrl
                             && !modifiers.alt
@@ -1203,6 +1335,8 @@ pub fn show_source<B: Buffer>(
         footer_rect,
         scroll_fraction,
         visual_rows: visual_rows.len(),
+        caret_rect,
+        change_clicked,
     }
 }
 

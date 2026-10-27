@@ -140,6 +140,11 @@ pub(super) fn context(job: &Job) -> OperationContext {
         Job::ResolveTarget(key, _, _) => ("files", key.clone(), Policy::ReplaceableRead),
         Job::GitView(tab) => ("git-view", tab.key(), Policy::ReplaceableRead),
         Job::LinePreviews(..) => ("files", "line-previews".into(), Policy::ReplaceableRead),
+        Job::GitBase(path, _) => (
+            "git",
+            format!("base:{}", path.display()),
+            Policy::ReplaceableRead,
+        ),
         Job::HookStatus => ("catalog", "hooks".into(), Policy::ReplaceableRead),
         Job::TestNtfy { .. } => ("platform", "ntfy-test".into(), Policy::ReplaceableRead),
         Job::Preferences(_) => ("catalog", "preferences".into(), Policy::OrderedMutation),

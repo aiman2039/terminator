@@ -153,6 +153,16 @@ impl LspManager {
                     });
                 }
             }
+            Some(Pending::Completion { path, generation }) => {
+                if generation == self.completion_generation {
+                    let result = result.unwrap_or(serde_json::Value::Null);
+                    self.completion = Some(CompletionResults {
+                        path,
+                        generation,
+                        items: L::parse_completion(&result),
+                    });
+                }
+            }
             Some(Pending::References { path }) => {
                 let result = result.unwrap_or(serde_json::Value::Null);
                 self.references = Some(ReferenceResults {
