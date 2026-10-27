@@ -40,7 +40,9 @@ SHA256 fingerprints for confirmation. "Trust and connect" rescans and appends
 the key to the configured known-hosts file (or `~/.ssh/known_hosts`) only if
 the host still presents exactly the keys shown. A changed host key is never
 trusted automatically: the dialog shows the new fingerprints and the
-`ssh-keygen -R` command to run after you have verified the change. This needs
+`ssh-keygen -R` command to run after you have verified the change. The daemon
+also refuses `TrustHostKey` while the known-hosts file holds a different key of
+the same type for that host, since OpenSSH would accept either line. This needs
 a daemon advertising `ssh-hostkeys-v1`.
 
 Agent/X11 forwarding, local commands, and port forwards from SSH configuration
@@ -136,6 +138,8 @@ refuses each connection.
 bash scripts/ssh-project-fixture.sh start
 bash scripts/ssh-project-fixture.sh status
 bash scripts/ssh-project-fixture.sh stop
+bash scripts/ssh-project-fixture.sh rekey [ssh-project|ssh-project-pw]
+bash scripts/ssh-project-fixture.sh down
 ```
 
 The start command prints the connection settings. Defaults:
@@ -145,9 +149,50 @@ The start command prints the connection settings. Defaults:
 - Disposable client keys: `$SSH_PROJECT_FIXTURE_KEY_DIR`, or a temporary folder.
 - Known-hosts data is copied from the controlled container, not blindly trusted
   from a network key scan.
+- A second service, `ssh-project-pw` on port `15933`, sets
+  `PasswordAuthentication yes` (user `pw`, password `pw`) and
+  `AllowTcpForwarding local`. `developer` keeps key access there, and the
+  container serves `marker.txt` on its own `127.0.0.1:8000` for forward checks.
+- `SSH_PROJECT_FIXTURE_PROJECT`, `SSH_PROJECT_FIXTURE_PORT` and
+  `SSH_PROJECT_FIXTURE_PW_PORT` select the Compose project and ports.
+
+`rekey` replaces a service's host key and restarts it, leaving the printed
+known-hosts file stale, so the next connection reports a changed host key.
+`down` removes the containers and their volumes.
 
 The container has Git, Neovim, test files, a modified tracked file and an
 untracked file. It uses an unprivileged SSH account and publishes only localhost.
 No host repository is mounted. The fixture is limited to one CPU, 512 MiB, and
 128 processes. Stop preserves fixture data and host keys; no production server,
 user SSH configuration, or installed app is modified.
+
+## Testing
+
+`cargo xtask ssh` is the opt-in live check. It needs Docker and OpenSSH; without
+them it prints why and exits successfully (`--require` makes that a failure).
+It is never part of `cargo test` or `cargo xtask integration`. Build the
+workspace first (`cargo build --workspace --locked`). It starts its own fixture
+copy on free ports under a unique Compose project and an isolated daemon, then
+checks, over the daemon's IPC:
+
+1. A probe with an empty known-hosts file fails with `UnknownHostKey`.
+2. `ScanHostKey` reports the container's fingerprint; after `TrustHostKey` the
+   probe succeeds.
+3. Twenty list/read/Git calls open no new sshd connection (counted from sshd's
+   `Connection from` log lines): they reuse one ControlMaster.
+4. On `ssh-project-pw`, `StartForward` serves `marker.txt` through the local
+   port; after `StopForward` the port no longer answers.
+5. A 50 MiB upload and download keep the SHA-256 (also checked inside the
+   container), and a repeated download never replaces the local file.
+6. After removing the project (its master exits) and `rekey`, the probe fails
+   with `ChangedHostKey` and `TrustHostKey` is refused.
+
+Masters, the daemon, the containers, their volumes and temporary keys are
+removed on success and failure.
+
+`cargo xtask gui ssh-hostkey` (after the test-support build) starts the same
+fixture, opens an SSH project with an empty known-hosts file, clicks "Trust and
+connect" in the host-key dialog (`ssh-hostkey-trust`), and captures the listed
+project to `target/validation/native/ssh-hostkey.png`. It skips the same way
+without Docker. Password sign-in in a terminal and `~/.ssh/config` aliases with
+`ProxyJump` remain manual checks.
