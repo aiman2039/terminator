@@ -48,6 +48,18 @@ pub struct BlameEntry {
     pub date: String,
     pub line: usize,
     pub code: String,
+    /// Author time (Unix seconds; 0 when unknown).
+    pub time: i64,
+    /// The commit's subject line.
+    pub summary: String,
+}
+
+impl BlameEntry {
+    /// Lines not in any commit yet (`git blame --contents`).
+    #[must_use]
+    pub fn uncommitted(&self) -> bool {
+        !self.hash.is_empty() && self.hash.bytes().all(|byte| byte == b'0')
+    }
 }
 
 /// Fetched commit log for a repository.
@@ -273,32 +285,46 @@ fn fetch_refs(root: &Path) -> Vec<RefEntry> {
 
 /// Fetch blame annotations for a file.
 pub fn fetch_blame(cwd: &Path, path: &Path) -> Result<BlameData, String> {
+    blame_with_contents(cwd, path, None)
+}
+
+/// Blame `path` as `contents` (an editor's unsaved text) when given, so
+/// every buffer line gets an entry and edited lines read as uncommitted.
+pub fn blame_with_contents(
+    cwd: &Path,
+    path: &Path,
+    contents: Option<&str>,
+) -> Result<BlameData, String> {
     let root = git_root(cwd)?;
     let options = CommandOptions {
-        stdout_limit: 4 * 1024 * 1024,
+        stdout_limit: 16 * 1024 * 1024,
+        input: contents.map(|text| text.as_bytes().to_vec()),
+        timeout: std::time::Duration::from_secs(20),
         ..Default::default()
     };
-    let bytes = terminator_core::git::run_blocking(
-        &root,
-        &[
-            "blame",
-            "--line-porcelain",
-            "--",
-            path.to_string_lossy().as_ref(),
-        ],
-        options,
-    )
-    .map_err(|e| format!("git blame: {e}"))?;
+    let path = path.to_string_lossy();
+    let mut args = vec!["blame", "--line-porcelain"];
+    if contents.is_some() {
+        args.extend(["--contents", "-"]);
+    }
+    args.extend(["--", path.as_ref()]);
+    let bytes = terminator_core::git::run_blocking(&root, &args, options)
+        .map_err(|e| format!("git blame: {e}"))?;
     let text = String::from_utf8_lossy(&bytes);
     let mut entries = Vec::new();
     let mut current_hash = String::new();
     let mut current_author = String::new();
     let mut current_date = String::new();
+    let mut current_time = 0i64;
+    let mut current_summary = String::new();
     for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("author ") {
+        if let Some(rest) = line.strip_prefix("summary ") {
+            rest.clone_into(&mut current_summary);
+        } else if let Some(rest) = line.strip_prefix("author ") {
             current_author = rest.to_string();
         } else if let Some(rest) = line.strip_prefix("author-time ") {
             let ts: i64 = rest.parse().unwrap_or(0);
+            current_time = ts;
             current_date = if ts > 0 {
                 let secs = ts;
                 let now = std::time::SystemTime::now()
@@ -323,15 +349,16 @@ pub fn fetch_blame(cwd: &Path, path: &Path) -> Result<BlameData, String> {
                 date: current_date.clone(),
                 line: entries.len(),
                 code,
+                time: current_time,
+                summary: current_summary.clone(),
             });
-        } else if !line.starts_with(' ')
-            && !line.starts_with("author")
-            && !line.starts_with("committer")
+        } else if let Some(hash) = line.split_whitespace().next()
+            && hash.len() >= 40
+            && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
-            // First tab-separated field is the hash+line
-            if let Some(hash) = line.split_whitespace().next() {
-                current_hash = hash.to_string();
-            }
+            // `<hash> <original line> <final line> [<group size>]`; header
+            // lines (`summary`, `filename`, `previous`, …) are not hashes.
+            hash.clone_into(&mut current_hash);
         }
     }
     Ok(BlameData {
@@ -698,6 +725,28 @@ mod tests {
         assert!(blame.entries.iter().all(|e| e.author == "Fixture"));
         assert!(blame.entries[0].code.contains("alpha"));
         assert!(blame.entries[1].code.contains("beta"));
+        // Every entry carries the real commit, its time, and its subject.
+        let head = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(root)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        assert!(blame.entries.iter().all(|e| e.hash == head.trim()));
+        assert!(
+            blame
+                .entries
+                .iter()
+                .all(|e| e.summary == "base" && e.time > 0)
+        );
+        // Blaming unsaved text marks the edited line as uncommitted.
+        let edited = blame_with_contents(root, Path::new("blame.txt"), Some("alpha\nBETA\nnew\n"))
+            .expect("contents blame");
+        let flags: Vec<bool> = edited.entries.iter().map(BlameEntry::uncommitted).collect();
+        assert_eq!(flags, [false, true, true]);
     }
 
     #[test]

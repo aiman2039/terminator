@@ -844,3 +844,52 @@ fn rename_and_new_items_edit_inline_in_the_tree() {
     assert!(app.name_prompt.is_none());
     assert!(received.try_iter().next().is_none());
 }
+
+#[test]
+fn single_child_folder_chains_show_as_one_compact_row() {
+    let (mut app, _ctx, dir) = fixture();
+    let root = dir.path().to_path_buf();
+    let entry = |path: &str, directory| terminator_git::Entry {
+        path: root.join(path),
+        directory,
+        ignored: false,
+    };
+    app.dirs.insert(
+        root.clone(),
+        vec![entry("java", true), entry("a.rs", false)],
+    );
+    app.dirs
+        .insert(root.join("java"), vec![entry("java/com", true)]);
+    app.dirs
+        .insert(root.join("java/com"), vec![entry("java/com/example", true)]);
+    app.dirs.insert(
+        root.join("java/com/example"),
+        vec![entry("java/com/example/App.java", false)],
+    );
+    let labels = |app: &mut App| {
+        app.explorer_rows(&root)
+            .iter()
+            .map(|row| (row.label.clone(), row.depth))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        labels(&mut app),
+        [("java/com/example".to_owned(), 0), ("a.rs".to_owned(), 0)]
+    );
+    // The row stands for the deepest folder; opening it shows that
+    // folder's files, and closing it closes the whole chain.
+    let rows = app.explorer_rows(&root);
+    let row = &rows[0];
+    assert_eq!(row.path, root.join("java/com/example"));
+    app.set_explorer_row_expanded(row, true);
+    assert_eq!(labels(&mut app)[1], ("App.java".to_owned(), 1));
+    // Expanding only the top folder (e.g. revealing a file) also opens it.
+    app.set_explorer_row_expanded(row, false);
+    app.expanded_dirs.insert(root.join("java"));
+    assert!(app.explorer_row_expanded(row));
+    app.set_explorer_row_expanded(row, false);
+    assert!(app.expanded_dirs.is_empty());
+    // "Compact folders" off: one row per folder again.
+    app.preferences.explorer_flat_folders = true;
+    assert_eq!(labels(&mut app)[0], ("java".to_owned(), 0));
+}

@@ -623,7 +623,7 @@ impl App {
                     if skip_clipped_row(ui, ROW_HEIGHT) {
                         return;
                     }
-                    self.explorer_entry(ui, entry, &row.label, context, drop_dir);
+                    self.explorer_entry(ui, entry, row, context, drop_dir);
                 } else {
                     self.explorer_directory_status(ui, &row.path);
                 }
@@ -745,13 +745,14 @@ impl App {
         &mut self,
         ui: &mut egui::Ui,
         entry: &terminator_git::Entry,
-        label: &str,
+        row: &crate::sidebar_cache::ExplorerRow,
         context: &RowContext<'_>,
         drop_dir: &mut Option<PathBuf>,
     ) {
+        let label = row.label.as_str();
         let modifiers = ui.input(|input| input.modifiers);
         if entry.directory {
-            let expanded = self.expanded_dirs.contains(&entry.path);
+            let expanded = self.explorer_row_expanded(row);
             let status = self
                 .context
                 .as_ref()
@@ -794,11 +795,7 @@ impl App {
             if folder.clicked() {
                 ui.memory_mut(|memory| memory.request_focus(context.focus));
                 if self.explorer_click(context.rows, &entry.path, modifiers) {
-                    if expanded {
-                        self.expanded_dirs.remove(&entry.path);
-                    } else {
-                        self.expanded_dirs.insert(entry.path.clone());
-                    }
+                    self.set_explorer_row_expanded(row, !expanded);
                 }
             }
             if folder.secondary_clicked() && !self.explorer_selected(&entry.path, None) {

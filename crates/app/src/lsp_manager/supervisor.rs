@@ -161,6 +161,7 @@ impl LspManager {
                 ids: L::IdGen::default(),
                 pending: HashMap::new(),
                 init_id: None,
+                capabilities: serde_json::Value::Null,
                 ready: false,
             },
         );
@@ -436,6 +437,7 @@ fn spawn_server_direct(
         ids: L::IdGen::default(),
         pending: HashMap::new(),
         init_id: None,
+        capabilities: serde_json::Value::Null,
         ready: false,
     };
     let L::RequestId::Number(init) = server.ids.next_id() else {

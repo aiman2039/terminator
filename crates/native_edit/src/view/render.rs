@@ -34,6 +34,19 @@ pub struct ChangeMark {
     pub kind: ChangeKind,
 }
 
+/// One line's gutter annotation (blame): `text` in the column, `hover`
+/// on hover. Lines of one commit share `group`, which alternates the
+/// column shading between commits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Annotation {
+    pub text: String,
+    pub hover: String,
+    pub group: u32,
+}
+
+/// Widest annotation column, in cells.
+const ANNOTATION_CELLS: usize = 28;
+
 /// Width of the gutter band that shows and accepts clicks on changes.
 const CHANGE_BAND: f32 = 8.0;
 
@@ -118,6 +131,12 @@ pub struct SourceOptions {
     pub change_marks: std::sync::Arc<Vec<ChangeMark>>,
     /// Theme colors for added / modified / deleted markers.
     pub change_colors: [Color32; 3],
+    /// Gutter annotations by buffer line (blame), or `None` for no
+    /// column. Lines past the end get a blank cell.
+    pub annotations: Option<std::sync::Arc<Vec<Annotation>>>,
+    /// Offer "Annotate with Git Blame" in the context menu: `Some(on)`
+    /// when the file is under Git, `on` when annotations are showing.
+    pub blame: Option<bool>,
     /// The file as "Copy reference" names it (project-relative path):
     /// copies `reference:line` (`IntelliJ` Copy Reference).
     pub reference: Option<String>,
@@ -171,6 +190,8 @@ impl Default for SourceOptions {
             ],
             inlay_hints: std::sync::Arc::new(Vec::new()),
             reference: None,
+            annotations: None,
+            blame: None,
         }
     }
 }
@@ -199,6 +220,10 @@ pub struct SourceOutcome {
     /// A gutter change marker was clicked: its index in
     /// `SourceOptions::change_marks` and where, for the rollback popup.
     pub change_clicked: Option<(usize, egui::Pos2)>,
+    /// A gutter annotation was clicked: its buffer line.
+    pub annotation_clicked: Option<usize>,
+    /// The context menu asked to show or hide blame annotations.
+    pub toggle_blame: bool,
 }
 
 /// Keys a host popup owns while `SourceOptions::popup_keys` is set.
@@ -243,13 +268,31 @@ pub fn show_source<B: Buffer>(
             fonts.row_height(&font).max(1.0),
         )
     });
+    // Blame column: as wide as the widest annotation (capped), between
+    // the change band and the line numbers.
+    let annotation_w = match &options.annotations {
+        Some(annotations) if options.show_line_numbers => {
+            let cells = annotations
+                .iter()
+                .map(|annotation| annotation.text.chars().count())
+                .max()
+                .unwrap_or(0)
+                .clamp(8, ANNOTATION_CELLS);
+            #[allow(clippy::cast_precision_loss)] // UI coordinate
+            let width = cells.saturating_add(1) as f32 * advance;
+            width
+        }
+        _ => 0.0,
+    };
     let gutter = if options.show_line_numbers {
         #[allow(clippy::cast_precision_loss)] // UI coordinate
         let digits = doc.line_count().max(1).to_string().len() as f32;
-        (digits + 2.0) * advance
+        (digits + 2.0) * advance + annotation_w
     } else {
         0.0
     };
+    let mut annotation_clicked = None;
+    let mut toggle_blame = false;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     // Pane geometry becomes a bounded number of monospace cells.
     let wrap_columns = options.soft_wrap.then(|| {
@@ -406,9 +449,21 @@ pub fn show_source<B: Buffer>(
         } else if let Some(click) = band_click {
             change_clicked = Some(click);
         } else if response.clicked()
+            && !options.vim
+            && click_modifiers.alt
+            && click_modifiers.shift
+            && let Some((line, col)) = response.interact_pointer_pos().and_then(&cursor_at)
+        {
+            // Alt+Shift+click: add or remove a caret (`IntelliJ`).
+            ui.memory_mut(|memory| memory.request_focus(focus_id));
+            engine.toggle_caret_at(doc, line, col);
+        } else if response.clicked()
             || (response.secondary_clicked() && engine.selection().is_none())
         {
             ui.memory_mut(|memory| memory.request_focus(focus_id));
+            if response.clicked() {
+                engine.clear_extra_carets();
+            }
             let extend = response.clicked() && click_modifiers.shift;
             // A plain click after a drag collapses that selection instead of
             // extending it the way a `v` selection does; modeless clicks
@@ -585,6 +640,18 @@ pub fn show_source<B: Buffer>(
                 effects.push(Effect::Save);
                 ui.close();
             }
+            if let Some(on) = options.blame {
+                ui.separator();
+                let label = if on {
+                    "Close annotations"
+                } else {
+                    "Annotate with Git Blame"
+                };
+                if item(ui, label, "History", "").clicked() {
+                    toggle_blame = true;
+                    ui.close();
+                }
+            }
             ui.separator();
             if item(ui, "Copy file path", "Copy", "").clicked() {
                 ui.ctx().copy_text(id.to_owned());
@@ -603,6 +670,19 @@ pub fn show_source<B: Buffer>(
                 }
                 if item(ui, "Find references", "ListTree", "").clicked() {
                     effects.push(Effect::FindReferences);
+                    ui.close();
+                }
+                let call_keys = if cfg!(target_os = "macos") {
+                    "⌃⌥H"
+                } else {
+                    "Ctrl+Alt+H"
+                };
+                if item(ui, "Call hierarchy", "ListTree", call_keys).clicked() {
+                    effects.push(Effect::Hierarchy { types: false });
+                    ui.close();
+                }
+                if item(ui, "Type hierarchy", "ListTree", "").clicked() {
+                    effects.push(Effect::Hierarchy { types: true });
                     ui.close();
                 }
                 let rename_button = ui
@@ -651,6 +731,8 @@ pub fn show_source<B: Buffer>(
             if a_idx <= b_idx { (a, b) } else { (b, a) }
         });
         let block = engine.block_span();
+        // Extra carets (multi-caret editing) paint like the primary one.
+        let extra_carets = engine.extra_carets().to_vec();
 
         let cursor = engine.cursor();
         let cursor_visible = !matches!(engine.mode(), Mode::Command);
@@ -794,6 +876,34 @@ pub fn show_source<B: Buffer>(
                         ));
                     }
                 }
+                if let Some(annotations) = options.annotations.as_ref().filter(|_| annotation_w > 0.0)
+                    && let Some(annotation) = annotations.get(line)
+                {
+                    let cell = Rect::from_min_size(
+                        Pos2::new(origin.x + CHANGE_BAND, y),
+                        Vec2::new(annotation_w - advance * 0.5, row_height),
+                    );
+                    if annotation.group % 2 == 1 {
+                        painter.rect_filled(cell, 0.0, ui.visuals().faint_bg_color);
+                    }
+                    let text: String = annotation.text.chars().take(ANNOTATION_CELLS).collect();
+                    painter.text(
+                        cell.left_top(),
+                        egui::Align2::LEFT_TOP,
+                        text,
+                        font.clone(),
+                        ui.visuals().weak_text_color(),
+                    );
+                    if !annotation.hover.is_empty() {
+                        let hit = ui
+                            .interact(cell, focus_id.with(("annotation", line)), Sense::click())
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text(&annotation.hover);
+                        if hit.clicked() {
+                            annotation_clicked = Some(line);
+                        }
+                    }
+                }
                 if options.show_line_numbers {
                     let number_color = mark.map_or_else(
                         || ui.visuals().weak_text_color(),
@@ -857,6 +967,26 @@ pub fn show_source<B: Buffer>(
                     0.0,
                     ui.visuals().selection.bg_fill,
                 );
+            }
+            for caret in &extra_carets {
+                if let Some((a, b)) = caret.selection()
+                    && let Some((start_col, end_col)) =
+                        selection_span_for_line(a, b, line, visual.line_len, false)
+                    && let (start_col, end_col) =
+                        (start_col.max(visual.start), end_col.min(visual.end))
+                    && start_col < end_col
+                {
+                    let start_cell = geometry.char_x(start_col.saturating_sub(visual.start));
+                    let cells = geometry
+                        .caret_x(end_col.saturating_sub(visual.start))
+                        .saturating_sub(start_cell);
+                    #[allow(clippy::cast_precision_loss)] // UI coordinate
+                    let rect = Rect::from_min_size(
+                        Pos2::new(origin.x + gutter + start_cell as f32 * advance, y),
+                        Vec2::new(cells as f32 * advance, row_height),
+                    );
+                    painter.rect_filled(rect, 0.0, ui.visuals().selection.bg_fill);
+                }
             }
             let cell_rect = |col: usize, cells: usize| {
                 let local = col.saturating_sub(visual.start);
@@ -1010,6 +1140,18 @@ pub fn show_source<B: Buffer>(
                 ui.interact(rect, focus_id.with(("squiggle", index)), Sense::hover())
                     .on_hover_text(&squiggle.message);
             }
+            for caret in &extra_carets {
+                if cursor_visible && visual.owns_cursor(caret.cursor.line, caret.cursor.col) {
+                    let cells = geometry.caret_x(caret.cursor.col.saturating_sub(visual.start));
+                    #[allow(clippy::cast_precision_loss)] // UI coordinate
+                    let x = origin.x + gutter + cells as f32 * advance;
+                    painter.rect_filled(
+                        Rect::from_min_size(Pos2::new(x, y), Vec2::new(2.0, row_height)),
+                        0.0,
+                        ui.visuals().text_color(),
+                    );
+                }
+            }
             if let Some(cells) = cursor_cells {
                 // A tab's block covers the cells up to its stop.
                 let cell_cells = if cell.is_some() {
@@ -1121,6 +1263,70 @@ pub fn show_source<B: Buffer>(
                 );
             }
         }
+        if focused && !options.read_only && !options.vim {
+            // Multiple carets (`IntelliJ`): Add / Unselect / Select All
+            // Occurrences (Ctrl+G, Ctrl+Shift+G, Ctrl+Cmd+G on macOS;
+            // Alt+J, Alt+Shift+J, Ctrl+Alt+Shift+J elsewhere), and Escape
+            // back to one caret.
+            let mac = cfg!(target_os = "macos");
+            let mut occurrence: Vec<(egui::Key, egui::Modifiers, u8)> = Vec::new();
+            ui.input(|input| {
+                for event in &input.events {
+                    if let egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } = event
+                    {
+                        let chord = if mac {
+                            (*key == egui::Key::G && modifiers.ctrl && !modifiers.alt)
+                                .then_some(match (modifiers.shift, modifiers.mac_cmd) {
+                                    (false, false) => Some(0),
+                                    (true, false) => Some(1),
+                                    (false, true) => Some(2),
+                                    _ => None,
+                                })
+                                .flatten()
+                        } else {
+                            (*key == egui::Key::J && modifiers.alt)
+                                .then_some(match (modifiers.shift, modifiers.ctrl) {
+                                    (false, false) => Some(0),
+                                    (true, false) => Some(1),
+                                    (true, true) => Some(2),
+                                    _ => None,
+                                })
+                                .flatten()
+                        };
+                        if let Some(kind) = chord {
+                            occurrence.push((*key, *modifiers, kind));
+                        } else if *key == egui::Key::Escape
+                            && !engine.extra_carets().is_empty()
+                            && !(options.popup_keys && popup_key(*key))
+                        {
+                            occurrence.push((*key, *modifiers, 3));
+                        }
+                    }
+                }
+            });
+            for (key, modifiers, kind) in occurrence {
+                match kind {
+                    0 => {
+                        engine.add_next_occurrence(doc);
+                    }
+                    1 => engine.remove_last_occurrence(),
+                    2 => engine.add_all_occurrences(doc),
+                    _ => engine.clear_extra_carets(),
+                }
+                ui.input_mut(|input| {
+                    input.consume_key(modifiers, key);
+                    // An Alt chord may also arrive as typed text.
+                    input.events.retain(|event| {
+                        !matches!(event, egui::Event::Text(text) if text.chars().count() == 1 && key != egui::Key::Escape && modifiers.alt)
+                    });
+                });
+            }
+        }
         if focused && !options.read_only {
             // IDE shortcuts first: copy/cut/paste/select/undo work in
             // every mode (IntelliJ-style), then plain vim keys. Ctrl-V
@@ -1174,20 +1380,42 @@ pub fn show_source<B: Buffer>(
             for (key, modifiers, action) in actions {
                 match action {
                     IdeAction::Copy => {
-                        let text = engine.copy_text(doc);
+                        let text = if engine.extra_carets().is_empty() {
+                            engine.copy_text(doc)
+                        } else {
+                            engine.caret_texts(doc).join("\n")
+                        };
                         if !text.is_empty() {
                             ui.ctx().copy_text(text);
                         }
                     }
                     IdeAction::Cut => {
-                        let text = engine.cut(doc);
+                        let text = if engine.extra_carets().is_empty() {
+                            engine.cut(doc)
+                        } else {
+                            let texts = engine.caret_texts(doc).join("\n");
+                            engine.for_each_caret(doc, |engine, doc| {
+                                engine.ide_delete_selection(doc);
+                                Vec::new()
+                            });
+                            texts
+                        };
                         if !text.is_empty() {
                             ui.ctx().copy_text(text);
                         }
                     }
-                    IdeAction::SelectAll => engine.select_all(doc),
-                    IdeAction::Undo => engine.undo(doc),
-                    IdeAction::Redo => engine.redo(doc),
+                    IdeAction::SelectAll => {
+                        engine.clear_extra_carets();
+                        engine.select_all(doc);
+                    }
+                    IdeAction::Undo => {
+                        engine.clear_extra_carets();
+                        engine.undo(doc);
+                    }
+                    IdeAction::Redo => {
+                        engine.clear_extra_carets();
+                        engine.redo(doc);
+                    }
                     IdeAction::PasteKey => {}
                     IdeAction::Save => effects.push(Effect::Save),
                     IdeAction::Find if !options.vim => {
@@ -1228,6 +1456,13 @@ pub fn show_source<B: Buffer>(
                     }
                 });
                 for (key, modifiers, edit) in edits {
+                    if matches!(edit, IdeEdit::Fold { .. } | IdeEdit::Unfold { .. }) {
+                        fold_actions.push(edit);
+                        ui.input_mut(|input| input.consume_key(modifiers, key));
+                        continue;
+                    }
+                    // Every caret runs the edit (one undo step for all).
+                    engine.for_each_caret(doc, |engine, doc| {
                     match edit {
                         IdeEdit::DeleteWordBack => engine.ide_delete_word_back(doc),
                         IdeEdit::DeleteLines => engine.ide_delete_lines(doc),
@@ -1239,7 +1474,7 @@ pub fn show_source<B: Buffer>(
                             }
                         }
                         IdeEdit::JoinLines => engine.ide_join_lines(doc),
-                        IdeEdit::Fold { .. } | IdeEdit::Unfold { .. } => fold_actions.push(edit),
+                        IdeEdit::Fold { .. } | IdeEdit::Unfold { .. } => {}
                         IdeEdit::Move(
                             motion @ (crate::vim::IdeMotion::Up
                             | crate::vim::IdeMotion::Down
@@ -1257,6 +1492,8 @@ pub fn show_source<B: Buffer>(
                         IdeEdit::ExtendSelection => engine.ide_extend_selection(doc),
                         IdeEdit::ShrinkSelection => engine.ide_shrink_selection(doc),
                     }
+                    Vec::new()
+                    });
                     ui.input_mut(|input| input.consume_key(modifiers, key));
                 }
             }
@@ -1269,11 +1506,29 @@ pub fn show_source<B: Buffer>(
             }
             if !selecting_block {
                 for text in pastes {
-                    // Modeless paste replaces the selection, IDE-style.
-                    if !options.vim {
-                        engine.ide_delete_selection(doc);
-                    }
-                    engine.paste_text(doc, &text);
+                    // With one clipboard line per caret, each caret gets
+                    // its own line (`IntelliJ`); otherwise all get it all.
+                    let carets = engine.extra_carets().len().saturating_add(1);
+                    let lines: Vec<&str> = text.lines().collect();
+                    let per_caret = carets > 1 && lines.len() == carets;
+                    let mut order = engine.caret_order(doc).into_iter();
+                    engine.for_each_caret(doc, |engine, doc| {
+                        // Modeless paste replaces the selection, IDE-style.
+                        if !options.vim {
+                            engine.ide_delete_selection(doc);
+                        }
+                        let piece = if per_caret {
+                            order
+                                .next()
+                                .and_then(|rank| lines.get(rank))
+                                .copied()
+                                .unwrap_or_default()
+                        } else {
+                            text.as_str()
+                        };
+                        engine.paste_text(doc, piece);
+                        Vec::new()
+                    });
                 }
             }
             // Paste is editor-scoped while focused; nothing downstream
@@ -1343,6 +1598,16 @@ pub fn show_source<B: Buffer>(
                             // Cmd/Ctrl+Alt+Shift+C: Copy Reference.
                             ui.ctx().copy_text(caret_reference(reference, engine));
                             consumed.push(*key);
+                        } else if *key == egui::Key::H
+                            && modifiers.ctrl
+                            && modifiers.alt
+                            && !modifiers.shift
+                            && !modifiers.mac_cmd
+                            && crate::lsp::server_language(language).is_some()
+                        {
+                            // Ctrl+Alt+H: Call Hierarchy (`IntelliJ`).
+                            effects.push(Effect::Hierarchy { types: false });
+                            consumed.push(*key);
                         } else if *key == egui::Key::F7
                             && modifiers.alt
                             && !modifiers.command
@@ -1401,7 +1666,9 @@ pub fn show_source<B: Buffer>(
                 // Selection indentation also applies with Vim disabled;
                 // keep the selected lines instead of opening Insert mode.
                 if engine.mode().is_visual() && matches!(vkey, VKey::Tab | VKey::BackTab) {
-                    effects.extend(engine.press_key(doc, vkey));
+                    effects.extend(
+                        engine.for_each_caret(doc, |engine, doc| engine.press_key(doc, vkey)),
+                    );
                     consumed.push(key);
                     continue;
                 }
@@ -1409,7 +1676,9 @@ pub fn show_source<B: Buffer>(
                 // Printable keys type (replacing a selection), editing
                 // keys edit, and arrows move the IDE caret.
                 if !options.vim && engine.mode() != Mode::Command {
-                    effects.extend(engine.modeless_key(doc, vkey));
+                    effects.extend(
+                        engine.for_each_caret(doc, |engine, doc| engine.modeless_key(doc, vkey)),
+                    );
                     consumed.push(key);
                     continue;
                 }
@@ -1438,7 +1707,9 @@ pub fn show_source<B: Buffer>(
                     });
                 });
                 if !typed.is_empty() {
-                    effects.extend(engine.type_text(doc, &typed));
+                    effects.extend(
+                        engine.for_each_caret(doc, |engine, doc| engine.type_text(doc, &typed)),
+                    );
                 }
             } else {
                 // Discard text echoes outside Insert mode so stale input
@@ -1626,6 +1897,8 @@ pub fn show_source<B: Buffer>(
         visual_rows: row_count,
         caret_rect,
         change_clicked,
+        annotation_clicked,
+        toggle_blame,
     }
 }
 

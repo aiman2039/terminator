@@ -202,9 +202,9 @@ impl App {
                 }
                 egui::Key::ArrowLeft => {
                     if let Some(row) = at.and_then(|i| visible.get(i)) {
-                        if is_dir(row) && self.expanded_dirs.contains(&row.path) {
-                            self.expanded_dirs.remove(&row.path);
-                        } else if let Some(parent) = row.path.parent()
+                        if is_dir(row) && self.explorer_row_expanded(row) {
+                            self.set_explorer_row_expanded(row, false);
+                        } else if let Some(parent) = row.chain.first().unwrap_or(&row.path).parent()
                             && visible.iter().any(|row| row.path == parent)
                         {
                             self.explorer_select_one(parent.to_owned());
@@ -216,8 +216,8 @@ impl App {
                     if let Some(row) = at.and_then(|i| visible.get(i))
                         && is_dir(row)
                     {
-                        if !self.expanded_dirs.contains(&row.path) {
-                            self.expanded_dirs.insert(row.path.clone());
+                        if !self.explorer_row_expanded(row) {
+                            self.set_explorer_row_expanded(row, true);
                         } else if let Some(child) = at
                             .and_then(|i| visible.get(i.saturating_add(1)))
                             .filter(|child| child.path.parent() == Some(row.path.as_path()))
@@ -230,9 +230,8 @@ impl App {
                 egui::Key::Enter => {
                     if let Some(row) = at.and_then(|i| visible.get(i)) {
                         if is_dir(row) {
-                            if !self.expanded_dirs.remove(&row.path) {
-                                self.expanded_dirs.insert(row.path.clone());
-                            }
+                            let open = self.explorer_row_expanded(row);
+                            self.set_explorer_row_expanded(row, !open);
                         } else {
                             let path = row.path.clone();
                             self.activate_file_action(ui, &path, FileAction::Open);
@@ -330,6 +329,28 @@ impl App {
     pub(super) fn explorer_speed_text(&self) -> Option<&str> {
         (!self.explorer_speed.is_empty() && self.explorer_speed_at.elapsed() <= SPEED_SEARCH_IDLE)
             .then_some(self.explorer_speed.as_str())
+    }
+
+    /// A folder row is open when any folder of its compact chain is.
+    pub(crate) fn explorer_row_expanded(&self, row: &ExplorerRow) -> bool {
+        self.expanded_dirs.contains(&row.path)
+            || row
+                .chain
+                .iter()
+                .any(|link| self.expanded_dirs.contains(link))
+    }
+
+    /// Open a folder row at its deepest folder, or close every folder of
+    /// its chain (closing only one would leave the chain open).
+    pub(crate) fn set_explorer_row_expanded(&mut self, row: &ExplorerRow, open: bool) {
+        if open {
+            self.expanded_dirs.insert(row.path.clone());
+        } else {
+            self.expanded_dirs.remove(&row.path);
+            for link in &row.chain {
+                self.expanded_dirs.remove(link);
+            }
+        }
     }
 
     pub(super) fn explorer_rename(&mut self, path: &Path) {

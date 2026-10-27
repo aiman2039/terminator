@@ -1310,4 +1310,76 @@ mod tests {
             "src/lib.rs:2-3"
         );
     }
+
+    #[test]
+    fn multiple_carets_type_paste_and_escape_through_view() {
+        use crate::doc::Doc;
+        let ctx = egui::Context::default();
+        let mut doc = Doc::new("a\nb\n");
+        let mut engine = VimEngine::new();
+        engine.set_modeless(true);
+        let _ = engine.place_cursor(&mut doc, 0, 1);
+        engine.toggle_caret_at(&doc, 1, 1);
+        let mut highlight = super::HighlightCache::default();
+        let options = super::SourceOptions {
+            vim: false,
+            autofocus: true,
+            ..super::SourceOptions::default()
+        };
+        let mut frame = |doc: &mut Doc, engine: &mut VimEngine, events: Vec<egui::Event>| {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    show_source(
+                        ui,
+                        doc,
+                        engine,
+                        &options,
+                        &mut highlight,
+                        Language::Plain,
+                        "carets.txt",
+                    );
+                },
+            );
+            output.textures_delta.clear();
+        };
+        frame(&mut doc, &mut engine, vec![]);
+        frame(
+            &mut doc,
+            &mut engine,
+            vec![
+                egui::Event::Key {
+                    key: egui::Key::Z,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::Text("z".into()),
+            ],
+        );
+        assert_eq!(doc.text(), "az\nbz\n");
+        // One clipboard line per caret: each caret gets its own line.
+        frame(
+            &mut doc,
+            &mut engine,
+            vec![egui::Event::Paste("1\n2".into())],
+        );
+        assert_eq!(doc.text(), "az1\nbz2\n");
+        frame(
+            &mut doc,
+            &mut engine,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(engine.extra_carets().is_empty());
+    }
 }

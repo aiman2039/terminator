@@ -6,17 +6,21 @@
 //! file that changed on disk unless forced, Reload is disabled while dirty,
 //! and closing a dirty tab asks first — nothing is silently discarded.
 mod actions;
+mod blame;
 mod close;
 mod complete;
 mod find;
 mod gutter;
+mod hierarchy;
 mod navigation;
 mod rename;
 pub(crate) use actions::ActionsPopup;
+pub(crate) use blame::EditorBlame;
 pub(super) use close::{CloseIssuer, NativeCloseChoice};
 pub(crate) use complete::{CompletionPopup, SignaturePopup};
 pub(crate) use find::FindBar;
 pub(crate) use gutter::GutterPopup;
+pub(crate) use hierarchy::HierarchyView;
 pub(crate) use navigation::{NavLocation, UsagesView, read_line_previews};
 pub(crate) use rename::RenameDialog;
 
@@ -768,6 +772,7 @@ impl App {
         let mut hover_at: Option<(native_lsp::Position, (usize, usize))> = None;
         let mut goto_at: Option<native_lsp::Position> = None;
         let mut references_at: Option<native_lsp::Position> = None;
+        let mut hierarchy_at: Option<(native_lsp::Position, native_lsp::HierarchyKind)> = None;
         let mut rename_at: Option<native_lsp::Position> = None;
         let mut open_file_picker = false;
         let mut toggle_pin = false;
@@ -824,6 +829,18 @@ impl App {
             .unwrap_or(path)
             .display()
             .to_string();
+        // Blame column for this frame (blank while a fresh blame runs).
+        let blame_revision = self
+            .native_docs
+            .get(path)
+            .and_then(|doc| doc.doc.as_ref())
+            .map(Buffer::revision);
+        let annotations =
+            blame_revision.and_then(|revision| self.editor_blame_annotations(path, revision));
+        let blame_offer = (!crate::remote_ui::is_snapshot(&self.paths.data, path))
+            .then(|| self.editor_blame.contains_key(path));
+        let mut blame_toggle = false;
+        let mut blame_click = None;
         let inlay_answer = self
             .state
             .settings
@@ -1215,6 +1232,8 @@ impl App {
                         change_colors,
                         inlay_hints,
                         reference: Some(reference),
+                        annotations,
+                        blame: blame_offer,
                         ..SourceOptions::default()
                     },
                     &mut doc.highlight,
@@ -1240,6 +1259,10 @@ impl App {
             };
             activated_editor = outcome.as_ref().is_some_and(|outcome| outcome.activated);
             caret_rect = outcome.as_ref().and_then(|outcome| outcome.caret_rect);
+            if let Some(outcome) = outcome.as_ref() {
+                blame_toggle = outcome.toggle_blame;
+                blame_click = outcome.annotation_clicked;
+            }
             if let Some((index, at)) = outcome.as_ref().and_then(|outcome| outcome.change_clicked) {
                 gutter_popup = Some(GutterPopup {
                     path: path.to_owned(),
@@ -1342,6 +1365,25 @@ impl App {
                                 line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
                                 character: native_lsp::char_col_to_utf16(&row, cursor.col),
                             });
+                        }
+                        Effect::Hierarchy { types } => {
+                            let cursor = doc.engine.cursor();
+                            let row = doc
+                                .doc
+                                .as_ref()
+                                .map(|live| live.line_text(cursor.line))
+                                .unwrap_or_default();
+                            hierarchy_at = Some((
+                                native_lsp::Position {
+                                    line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
+                                    character: native_lsp::char_col_to_utf16(&row, cursor.col),
+                                },
+                                if types {
+                                    native_lsp::HierarchyKind::Type
+                                } else {
+                                    native_lsp::HierarchyKind::Call
+                                },
+                            ));
                         }
                         Effect::RenameSymbol => {
                             let cursor = doc.engine.cursor();
@@ -1533,6 +1575,12 @@ impl App {
         }
         if gutter_popup.is_some() {
             self.gutter_popup = gutter_popup;
+            if blame_toggle {
+                self.toggle_editor_blame(path);
+            }
+            if let Some(line) = blame_click {
+                self.open_blame_commit(path, line);
+            }
         }
         if signature.is_some() {
             self.signature = signature;
@@ -1683,6 +1731,7 @@ impl App {
             });
         }
         self.native_lsp_sync(path, language);
+        self.request_editor_blame(ui.ctx(), path);
         if self.state.settings.inlay_hints
             && let Some(lines) = self
                 .native_docs
@@ -1700,6 +1749,9 @@ impl App {
         }
         if let Some(position) = references_at {
             self.lsp.request_references(path, position);
+        }
+        if let Some((position, kind)) = hierarchy_at {
+            self.start_hierarchy(path, position, kind);
         }
         if let Some(position) = rename_at {
             self.begin_native_rename(path, project, position);

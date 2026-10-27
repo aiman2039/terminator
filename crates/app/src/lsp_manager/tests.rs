@@ -269,6 +269,7 @@ fn parked_text_opens_at_handshake_completion() {
             ids: L::IdGen::default(),
             pending: HashMap::new(),
             init_id: Some(7),
+            capabilities: serde_json::Value::Null,
             ready: false,
         },
     );
@@ -354,6 +355,7 @@ fn rename_response_is_preview_only_and_rejects_stale_buffer() {
             ids: L::IdGen::default(),
             pending: HashMap::new(),
             init_id: None,
+            capabilities: serde_json::Value::Null,
             ready: true,
         },
     );
@@ -410,6 +412,7 @@ fn workspace_symbol_results_follow_the_latest_query() {
             ids: L::IdGen::default(),
             pending: HashMap::new(),
             init_id: None,
+            capabilities: serde_json::Value::Null,
             ready: true,
         },
     );
@@ -672,6 +675,7 @@ fn ready_server(
             ids: L::IdGen::default(),
             pending: HashMap::new(),
             init_id: None,
+            capabilities: serde_json::Value::Null,
             ready: true,
         },
     );
@@ -1055,5 +1059,136 @@ async fn live_rust_analyzer_inlay_hints() {
         hints.iter().any(|hint| hint.label.contains("left")),
         "{hints:?}"
     );
+    manager.prune(&std::collections::HashSet::new());
+}
+
+/// Live call hierarchy against rust-analyzer (self-skips): `add` is called
+/// by `main`, and `main` calls `add`.
+#[tokio::test]
+async fn live_rust_analyzer_call_hierarchy() {
+    let path_env = std::env::var_os("PATH")
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if L::find_server(&["rust-analyzer"], &path_env).is_none() {
+        eprintln!("SKIP: rust-analyzer not on PATH");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("proj");
+    std::fs::create_dir_all(root.join("src")).expect("mkdir");
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"proj\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    )
+    .expect("manifest");
+    let main = "fn add(left: i32, right: i32) -> i32 { left + right }\nfn main() {\n    let _ = add(1, 2);\n}\n";
+    let file = root.join("src/main.rs");
+    std::fs::write(&file, main).expect("main");
+    let mut manager = LspManager::new();
+    assert!(manager.sync_doc(&file, Language::Rust, 1));
+    manager.submit_text(&file, Language::Rust, 1, main);
+    let on_add = L::Position {
+        line: 0,
+        character: 4,
+    };
+    let start = Instant::now();
+    // Prepare until the server is ready and names the function.
+    let (generation, root_item) = loop {
+        assert!(start.elapsed() < Duration::from_secs(90), "no hierarchy");
+        manager.poll();
+        let Ok(generation) = manager.request_hierarchy(&file, on_add, L::HierarchyKind::Call)
+        else {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        };
+        let mut found = None;
+        for _ in 0..50 {
+            manager.poll();
+            if let Some(HierarchyAnswer::Roots {
+                generation: g,
+                items,
+            }) = manager.hierarchy_answers.pop()
+                && g == generation
+            {
+                found = items.into_iter().next();
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        if let Some(item) = found {
+            break (generation, item);
+        }
+    };
+    assert_eq!(root_item.name, "add");
+    for (direction, expected) in [
+        (L::HierarchyDirection::Up, "main"),
+        (L::HierarchyDirection::Down, "add"),
+    ] {
+        // Callees start from `main`: prepare it the same way.
+        let item = if direction == L::HierarchyDirection::Up {
+            root_item.clone()
+        } else {
+            let on_main = L::Position {
+                line: 1,
+                character: 4,
+            };
+            // Prepare answers empty too while indexing: ask again.
+            'prepare: loop {
+                let generation = manager
+                    .request_hierarchy(&file, on_main, L::HierarchyKind::Call)
+                    .expect("ready");
+                loop {
+                    assert!(start.elapsed() < Duration::from_secs(90), "no main root");
+                    manager.poll();
+                    if let Some(HierarchyAnswer::Roots {
+                        generation: g,
+                        items,
+                    }) = manager.hierarchy_answers.pop()
+                        && g == generation
+                    {
+                        if let Some(item) = items.into_iter().next() {
+                            break 'prepare item;
+                        }
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                        continue 'prepare;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        };
+        // An indexing server answers empty at first: ask until it knows.
+        let items = 'ask: loop {
+            assert!(manager.request_hierarchy_children(
+                &file,
+                &item.raw,
+                L::HierarchyKind::Call,
+                direction,
+                generation,
+                0,
+            ));
+            loop {
+                assert!(start.elapsed() < Duration::from_secs(90), "no children");
+                manager.poll();
+                if let Some(HierarchyAnswer::Children { items, .. }) =
+                    manager.hierarchy_answers.pop()
+                {
+                    if items.is_empty() {
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                        continue 'ask;
+                    }
+                    break 'ask items;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        };
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.name.as_str())
+                .collect::<Vec<_>>(),
+            [expected],
+            "{direction:?}"
+        );
+    }
     manager.prune(&std::collections::HashSet::new());
 }

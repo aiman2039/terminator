@@ -78,7 +78,7 @@ impl App {
         self.open_location(&target);
     }
 
-    fn open_location(&mut self, target: &NavLocation) {
+    pub(crate) fn open_location(&mut self, target: &NavLocation) {
         let position = native_lsp::Position {
             line: target.line,
             character: target.character,

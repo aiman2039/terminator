@@ -121,6 +121,25 @@ enum Pending {
     Resolve {
         path: PathBuf,
     },
+    /// Hierarchy roots (`node: None`) or one node's children.
+    Hierarchy {
+        generation: u64,
+        node: Option<usize>,
+    },
+}
+
+/// A call / type hierarchy answer, taken by the hierarchy window.
+#[derive(Debug)]
+pub enum HierarchyAnswer {
+    Roots {
+        generation: u64,
+        items: Vec<L::HierarchyItem>,
+    },
+    Children {
+        generation: u64,
+        node: usize,
+        items: Vec<L::HierarchyItem>,
+    },
 }
 
 /// Answers for formatting and code actions, taken by the editor.
@@ -154,6 +173,8 @@ struct Server {
     ids: L::IdGen,
     pending: HashMap<i64, Pending>,
     init_id: Option<i64>,
+    /// The server's `initialize` capabilities (`Null` until it answers).
+    capabilities: serde_json::Value,
     ready: bool,
 }
 
@@ -203,6 +224,9 @@ pub struct LspManager {
     completion: Option<CompletionResults>,
     completion_generation: u64,
     pub edit_answers: EditAnswers,
+    /// Hierarchy answers in arrival order (see [`HierarchyAnswer`]).
+    pub hierarchy_answers: Vec<HierarchyAnswer>,
+    hierarchy_generation: u64,
     /// Latest signature-help answer: `(path, generation, signature)`.
     signature: Option<(PathBuf, u64, Option<L::SignatureHelp>)>,
     rename: Option<RenameResults>,
@@ -251,6 +275,8 @@ impl LspManager {
             completion_generation: 0,
             signature: None,
             edit_answers: EditAnswers::default(),
+            hierarchy_answers: Vec::new(),
+            hierarchy_generation: 0,
             rename: None,
             symbols: std::collections::HashMap::new(),
             symbols_rev: std::collections::HashMap::new(),
@@ -437,6 +463,111 @@ impl LspManager {
                 },
             );
         }
+    }
+
+    /// Start a call / type hierarchy at a UTF-16 position. Returns the
+    /// request generation (answers for older ones are stale), or why the
+    /// server cannot answer.
+    pub fn request_hierarchy(
+        &mut self,
+        path: &Path,
+        position: L::Position,
+        kind: L::HierarchyKind,
+    ) -> Result<u64, String> {
+        if let Some(note) = self.server_status(path) {
+            return Err(note);
+        }
+        let doc = self
+            .docs
+            .get(path)
+            .ok_or("No language server tracks this file")?;
+        let (key, uri) = (doc.server.clone(), doc.uri.clone());
+        let server = self
+            .servers
+            .get_mut(&key)
+            .filter(|server| server.ready)
+            .ok_or("Language server is not ready")?;
+        if !L::supports_hierarchy(&server.capabilities, kind) {
+            return Err(format!(
+                "The {} language server has no {} hierarchy",
+                key.language,
+                match kind {
+                    L::HierarchyKind::Call => "call",
+                    L::HierarchyKind::Type => "type",
+                }
+            ));
+        }
+        let L::RequestId::Number(number) = server.ids.next_id() else {
+            return Err("Language server request ids exhausted".into());
+        };
+        self.hierarchy_generation = self.hierarchy_generation.wrapping_add(1);
+        let generation = self.hierarchy_generation;
+        server
+            .inbox
+            .send(L::prepare_hierarchy(
+                &L::RequestId::Number(number),
+                &uri,
+                position,
+                kind,
+            ))
+            .map_err(|_| "Language server stopped".to_owned())?;
+        server.pending.insert(
+            number,
+            Pending::Hierarchy {
+                generation,
+                node: None,
+            },
+        );
+        Ok(generation)
+    }
+
+    /// A fresh hierarchy generation (a direction switch drops answers
+    /// still in flight for the old one).
+    pub fn next_hierarchy_generation(&mut self) -> u64 {
+        self.hierarchy_generation = self.hierarchy_generation.wrapping_add(1);
+        self.hierarchy_generation
+    }
+
+    /// Ask for one hierarchy node's children (through the server that
+    /// serves `path`). False when no ready server can take it.
+    pub fn request_hierarchy_children(
+        &mut self,
+        path: &Path,
+        item: &serde_json::Value,
+        kind: L::HierarchyKind,
+        direction: L::HierarchyDirection,
+        generation: u64,
+        node: usize,
+    ) -> bool {
+        let Some(key) = self.docs.get(path).map(|doc| doc.server.clone()) else {
+            return false;
+        };
+        let Some(server) = self.servers.get_mut(&key).filter(|server| server.ready) else {
+            return false;
+        };
+        let L::RequestId::Number(number) = server.ids.next_id() else {
+            return false;
+        };
+        if server
+            .inbox
+            .send(L::hierarchy_children(
+                &L::RequestId::Number(number),
+                item,
+                kind,
+                direction,
+            ))
+            .is_err()
+        {
+            return false;
+        }
+        server.pending.insert(
+            number,
+            Pending::Hierarchy {
+                generation,
+                node: Some(node),
+            },
+        );
+        true
     }
 
     /// Request a preview of a symbol rename. No file is changed here.

@@ -72,6 +72,11 @@ pub enum Effect {
     /// List references for the symbol under the cursor. The GUI owns
     /// language servers and the results window.
     FindReferences,
+    /// Open the call hierarchy (`types: false`, Ctrl+Alt+H) or the type
+    /// hierarchy (`types: true`) of the symbol under the cursor.
+    Hierarchy {
+        types: bool,
+    },
     /// Preview and apply a language-server symbol rename after review.
     RenameSymbol,
     /// Open the GUI find bar (modeless Cmd/Ctrl+F; `replace` for

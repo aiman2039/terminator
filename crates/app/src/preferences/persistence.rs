@@ -189,6 +189,10 @@ pub struct UiPreferences {
     /// select opened file").
     #[serde(default)]
     pub explorer_autoreveal: bool,
+    /// Explorer shows every folder on its own row instead of compacting
+    /// single-child chains into one `a/b/c` row (the default).
+    #[serde(default)]
+    pub explorer_flat_folders: bool,
     /// Explorer search mode and Options kebab (`Aa`, whole word, regex) plus
     /// the Contents include/exclude globs.
     #[serde(default)]
@@ -282,6 +286,7 @@ impl Default for UiPreferences {
             agents_collapsed: HashSet::new(),
             show_ignored: false,
             explorer_autoreveal: false,
+            explorer_flat_folders: false,
             explorer_search_mode: ExplorerSearchMode::Names,
             explorer_include: String::new(),
             explorer_exclude: String::new(),

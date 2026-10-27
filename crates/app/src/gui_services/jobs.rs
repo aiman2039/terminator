@@ -150,6 +150,11 @@ pub(super) fn context(job: &Job) -> OperationContext {
             format!("base:{}", path.display()),
             Policy::ReplaceableRead,
         ),
+        Job::EditorBlame(path, ..) => (
+            "git",
+            format!("blame:{}", path.display()),
+            Policy::ReplaceableRead,
+        ),
         Job::HookStatus => ("catalog", "hooks".into(), Policy::ReplaceableRead),
         Job::TestNtfy { .. } => ("platform", "ntfy-test".into(), Policy::ReplaceableRead),
         Job::Preferences(_) => ("catalog", "preferences".into(), Policy::OrderedMutation),

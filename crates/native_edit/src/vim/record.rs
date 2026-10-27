@@ -51,6 +51,8 @@ impl VimEngine {
         }
         self.clear_pending();
         doc.end_run();
+        // A jump leaves one caret (`IntelliJ` collapses multiple carets).
+        self.extra_carets.clear();
         self.cursor = Cursor { line, col };
         if !matches!(
             self.mode,

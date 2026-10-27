@@ -71,6 +71,7 @@ pub(super) struct ExplorerCache {
     pub root: PathBuf,
     pub expanded: HashSet<PathBuf>,
     pub ignored: bool,
+    pub flat: bool,
     pub query: String,
     pub reveal_file: Option<PathBuf>,
     pub rows: Arc<Vec<ExplorerRow>>,
@@ -81,6 +82,9 @@ pub(super) struct ExplorerRow {
     pub path: PathBuf,
     pub label: String,
     pub depth: usize,
+    /// Compact folder row (`a/b/c`): every folder in the chain, top
+    /// first; `path` and `entry` are the deepest. Empty for plain rows.
+    pub chain: Vec<PathBuf>,
 }
 impl Cache {
     pub fn clear_files(&mut self) {
@@ -443,6 +447,7 @@ impl App {
             && model.root == root
             && model.expanded == self.expanded_dirs
             && model.ignored == self.preferences.show_ignored
+            && model.flat == self.preferences.explorer_flat_folders
             && model.query == self.explorer_query
             && model.reveal_file == reveal_file
         {
@@ -468,36 +473,78 @@ impl App {
                     path: path.to_owned(),
                     label: String::new(),
                     depth,
+                    chain: Vec::new(),
                 });
             }
+            let shown = |entry: &&terminator_git::Entry| {
+                !entry.ignored
+                    || app.preferences.show_ignored
+                    || reveal_file.is_some_and(|file| file.starts_with(&entry.path))
+            };
+            let name = |entry: &terminator_git::Entry| {
+                entry
+                    .path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            };
             if let Some(entries) = app.dirs.get(path) {
-                for entry in entries {
-                    if entry.ignored
-                        && !app.preferences.show_ignored
-                        && !reveal_file.is_some_and(|file| file.starts_with(&entry.path))
-                    {
-                        continue;
-                    }
-                    let label = entry
-                        .path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned();
+                for entry in entries.iter().filter(shown) {
+                    let label = name(entry);
                     if !crate::sidebar_ui::explorer_query_keeps_file(&label, entry.directory, query)
                     {
                         continue;
                     }
+                    // Compact folders: follow folders whose only shown
+                    // child is a folder, as far as listings are loaded.
+                    let mut chain = vec![entry];
+                    if entry.directory && query.is_none() && !app.preferences.explorer_flat_folders
+                    {
+                        while chain.len() < 20
+                            && let Some(last) = chain.last()
+                            && let Some(children) = app.dirs.get(&last.path)
+                            && let [only] = children.iter().filter(shown).collect::<Vec<_>>()[..]
+                            && only.directory
+                        {
+                            chain.push(only);
+                        }
+                    }
+                    let Some(&deepest) = chain.last() else {
+                        continue;
+                    };
+                    let expanded = deepest.directory
+                        && chain
+                            .iter()
+                            .any(|link| app.expanded_dirs.contains(&link.path));
+                    let compact = chain.len() > 1;
                     rows.push(ExplorerRow {
-                        entry: Some(entry.clone()),
-                        path: entry.path.clone(),
-                        label,
+                        entry: Some(deepest.clone()),
+                        path: deepest.path.clone(),
+                        label: if compact {
+                            chain
+                                .iter()
+                                .map(|link| name(link))
+                                .collect::<Vec<_>>()
+                                .join("/")
+                        } else {
+                            label
+                        },
                         depth,
+                        chain: if compact {
+                            chain.iter().map(|link| link.path.clone()).collect()
+                        } else {
+                            Vec::new()
+                        },
                     });
-                    if entry.directory && app.expanded_dirs.contains(&entry.path) {
+                    if expanded {
+                        // Keep the chain's own listings fresh: they decide
+                        // whether it stays compact.
+                        let upper = chain.len().saturating_sub(1);
+                        dirs.extend(chain.iter().take(upper).map(|link| link.path.clone()));
                         walk(
                             app,
-                            &entry.path,
+                            &deepest.path,
                             depth.saturating_add(1),
                             query,
                             reveal_file,
@@ -528,6 +575,7 @@ impl App {
             root: root.to_owned(),
             expanded: self.expanded_dirs.clone(),
             ignored: self.preferences.show_ignored,
+            flat: self.preferences.explorer_flat_folders,
             query: self.explorer_query.clone(),
             reveal_file,
             rows: Arc::clone(&rows),

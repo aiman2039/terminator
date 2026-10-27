@@ -69,6 +69,11 @@ impl LspManager {
             };
             server.init_id = None;
             server.ready = true;
+            server.capabilities = result
+                .as_ref()
+                .and_then(|result| result.get("capabilities"))
+                .cloned()
+                .unwrap_or_default();
             let _ = server.inbox.send(L::initialized());
             let inbox = server.inbox.clone();
             // Buffers submitted while starting open now, in order behind
@@ -195,6 +200,18 @@ impl LspManager {
             Some(Pending::Signature { path, generation }) => {
                 let result = result.unwrap_or(serde_json::Value::Null);
                 self.signature = Some((path, generation, L::parse_signature_help(&result)));
+            }
+            Some(Pending::Hierarchy { generation, node }) => {
+                // A failed answer reads as "nothing here" (empty node).
+                let items = L::parse_hierarchy_items(&result.unwrap_or(serde_json::Value::Null));
+                self.hierarchy_answers.push(match node {
+                    None => HierarchyAnswer::Roots { generation, items },
+                    Some(node) => HierarchyAnswer::Children {
+                        generation,
+                        node,
+                        items,
+                    },
+                });
             }
             Some(Pending::References { path }) => {
                 let result = result.unwrap_or(serde_json::Value::Null);

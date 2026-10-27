@@ -43,6 +43,9 @@ pub struct VimEngine {
     pub(crate) modeless: bool,
     /// Selections extend-selection grew from, innermost last, for shrink.
     pub(crate) extend_stack: Vec<(usize, usize)>,
+    /// Modeless multiple carets besides the primary one (`IntelliJ`
+    /// Alt+Shift+click, Add Selection for Next Occurrence).
+    pub(crate) extra_carets: Vec<super::carets::Caret>,
 }
 
 impl Default for VimEngine {
@@ -71,6 +74,7 @@ impl Default for VimEngine {
             options: VimrcOptions::default(),
             modeless: false,
             extend_stack: Vec::new(),
+            extra_carets: Vec::new(),
         }
     }
 }

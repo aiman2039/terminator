@@ -9,8 +9,8 @@ pub use keys::{
     mode_name, source_focus_id,
 };
 pub use render::{
-    ChangeKind, ChangeMark, DiagnosticMark, SourceOptions, SourceOutcome, Squiggle, show_source,
-    squiggles, status_line,
+    Annotation, ChangeKind, ChangeMark, DiagnosticMark, SourceOptions, SourceOutcome, Squiggle,
+    show_source, squiggles, status_line,
 };
 
 /// Display layout helpers, re-exported for hosts that map pointer

@@ -1038,6 +1038,9 @@ impl App {
                 Update::CommitFiles(hash, files) => {
                     self.commit_files.insert(hash, Some(files));
                 }
+                Update::EditorBlame(path, revision, entries) => {
+                    self.apply_editor_blame(&path, revision, entries);
+                }
                 Update::GitBase(path, generation, base) => {
                     self.apply_git_base(path, generation, base);
                 }

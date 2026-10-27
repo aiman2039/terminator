@@ -163,6 +163,11 @@ impl App {
                         self.explorer_followed = None;
                         ui.close();
                     }
+                    let mut compact = !self.preferences.explorer_flat_folders;
+                    if ui.checkbox(&mut compact, "Compact folders").clicked() {
+                        self.preferences.explorer_flat_folders = !compact;
+                        ui.close();
+                    }
                 })
                 .response
                 .on_hover_text("Folder actions");
@@ -488,12 +493,10 @@ impl App {
                     row.path == *dir && row.entry.as_ref().is_some_and(|entry| entry.directory)
                 })?;
                 let row = rows.get(index)?;
-                self.expanded_dirs
-                    .contains(dir)
-                    .then(|| PromptSlot::Insert {
-                        index: index.saturating_add(1),
-                        depth: row.depth.saturating_add(1),
-                    })
+                self.explorer_row_expanded(row).then(|| PromptSlot::Insert {
+                    index: index.saturating_add(1),
+                    depth: row.depth.saturating_add(1),
+                })
             }
         }
     }

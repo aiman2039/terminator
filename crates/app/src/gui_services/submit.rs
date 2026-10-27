@@ -559,6 +559,24 @@ impl Services {
                     .unwrap_or_else(|error| Err(format!("{error:#}")));
                 updates.push(Update::CommitFiles(hash, files));
             }
+            Job::EditorBlame(path, revision, text) => {
+                let file = path.clone();
+                let entries = self
+                    .fs()
+                    .run(&cancel, move || {
+                        let cwd = file
+                            .parent()
+                            .map(std::path::Path::to_path_buf)
+                            .unwrap_or_default();
+                        Ok(
+                            crate::git_log::blame_with_contents(&cwd, &file, Some(&text))
+                                .map(|blame| blame.entries),
+                        )
+                    })
+                    .await
+                    .unwrap_or_else(|error| Err(format!("{error:#}")));
+                updates.push(Update::EditorBlame(path, revision, entries));
+            }
             Job::GitBase(path, generation) => {
                 let base = self.git_base_text(&path).await;
                 updates.push(Update::GitBase(path, generation, base));
