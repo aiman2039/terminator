@@ -31,6 +31,8 @@ pub enum Op {
     Unshelve(String),
     DropShelf(String),
     Branches,
+    /// The full message of `HEAD`, for Amend.
+    HeadMessage,
     Switch(String),
     Log,
     Compare {
@@ -62,6 +64,7 @@ pub enum Op {
 pub enum Report {
     Message(String),
     Branches(Vec<String>),
+    HeadMessage(String),
     Shelves(Vec<(String, String)>),
     Log(Vec<(String, String)>),
     Compare(CompareData),
@@ -124,6 +127,10 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
             Ok(Report::Message("Shelf dropped".into()))
         }
         Op::Branches => Ok(Report::Branches(branches(root)?)),
+        Op::HeadMessage => Ok(Report::HeadMessage(git_text(
+            root,
+            &["log", "-1", "--format=%B"],
+        )?)),
         Op::Switch(name) => switch(root, &name),
         Op::Log => Ok(Report::Log(log(root)?)),
         Op::Compare { base } => Ok(Report::Compare(compare(root, base.as_deref())?)),
@@ -747,6 +754,18 @@ mod tests {
         assert!(root.join("docs/guide/img").is_dir());
         assert!(perform(root, Op::CreateFile(root.join("x/../../escape.rs"))).is_err());
         assert!(!root.parent().unwrap().join("escape.rs").exists());
+    }
+
+    #[test]
+    fn head_message_returns_the_full_last_message() {
+        let dir = repo();
+        let root = dir.path();
+        fs::write(root.join("a.txt"), "next\n").unwrap();
+        git(root, &["commit", "-qam", "subject\n\nbody line"]);
+        let Ok(Report::HeadMessage(message)) = perform(root, Op::HeadMessage) else {
+            panic!("expected the HEAD message");
+        };
+        assert_eq!(message, "subject\n\nbody line");
     }
 
     #[test]

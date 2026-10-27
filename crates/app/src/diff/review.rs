@@ -64,6 +64,9 @@ pub(crate) struct State {
     pub undo: Vec<super::actions::Undo>,
     pub context: usize,
     pub message: Option<String>,
+    /// Compare lines ignoring whitespace (a view option; staging still
+    /// applies the real hunks).
+    pub ignore_whitespace: bool,
 }
 
 /// One row of the live unified editor, recomputed from the left text vs the
@@ -113,6 +116,36 @@ pub(crate) struct Edit {
     pub live_rows: Option<(u64, std::sync::Arc<Vec<LiveRow>>)>,
     /// Syntax spans for the immutable left text, computed once.
     pub left_spans: Option<std::sync::Arc<Vec<Vec<super::DiffSpan>>>>,
+    /// The text changed since `key` was computed: only then is the whole
+    /// buffer rehashed, instead of on every frame.
+    pub stale: bool,
+    /// Cache key of the current text plus tint palette.
+    pub key: u64,
+    /// Key of the tint palette alone, so a theme change rehashes too.
+    pub palette: u64,
+    /// Left pane aligned to the buffer's lines (editable split view),
+    /// under the same key as `right_spans`.
+    pub aligned_left: Option<(u64, std::sync::Arc<super::AlignedLeft>)>,
+}
+
+impl Edit {
+    pub fn new(document: std::sync::Arc<super::DiffDocument>) -> Self {
+        Self {
+            text: document.right_text.clone(),
+            document,
+            right_spans: None,
+            live_tints: None,
+            live_rows: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            burst: 0.0,
+            left_spans: None,
+            stale: true,
+            key: 0,
+            palette: 0,
+            aligned_left: None,
+        }
+    }
 }
 
 impl State {

@@ -837,11 +837,8 @@ impl App {
                             let key = tab.key();
                             if self.diffs.contains_key(&key) {
                                 self.loading.insert(key.clone());
-                                let context = self
-                                    .diff_reviews
-                                    .get(&key)
-                                    .map_or(3, |review| review.context.max(3));
-                                let _ = self.jobs.send(Job::DiffContext(tab, context));
+                                let view = self.diff_view_for(&key, None);
+                                let _ = self.jobs.send(Job::DiffContext(tab, view));
                             }
                         }
                         self.refresh_request = None;
@@ -874,6 +871,7 @@ impl App {
                             .as_ref()
                             .is_some_and(|r| r.cwd == context.cwd)
                     {
+                        let diff_prints = self.diff_fingerprints();
                         let context = match self.context.take() {
                             Some(mut previous)
                                 if previous.cwd == context.cwd
@@ -887,6 +885,7 @@ impl App {
                         };
                         self.sidebar_cache.get_mut().clear_files();
                         self.context = Some(context);
+                        self.refresh_stale_diffs(&diff_prints);
                         self.watch_fallback = fallback;
                         for (path, entries) in directories {
                             match entries {
@@ -1004,6 +1003,13 @@ impl App {
                         }
                     }
                     Ok(workspace_ops::Report::Branches(names)) => self.git.branches = names,
+                    // Amend edits the last message; only fill a draft the
+                    // user has not started typing over.
+                    Ok(workspace_ops::Report::HeadMessage(text)) => {
+                        if self.git.amend && self.git.commit.trim().is_empty() {
+                            self.git.commit = text;
+                        }
+                    }
                     Ok(workspace_ops::Report::Shelves(list)) => self.git.shelves = list,
                     Ok(workspace_ops::Report::Log(rows)) => self.git.log = rows,
                     Ok(workspace_ops::Report::Compare(data)) => {

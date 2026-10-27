@@ -7,13 +7,14 @@ use diff::actions::Kind;
 pub(super) struct Interaction {
     pub action: Option<(usize, Kind)>,
     pub open_line: Option<u32>,
-    pub gap: Option<usize>,
+    pub gap: Option<(usize, diff::GapPart)>,
 }
 
 pub(super) fn jump(
     ui: &egui::Ui,
     doc: &diff::DiffDocument,
     split: bool,
+    aligned: bool,
     review: &mut diff::review::State,
     scroll: &[egui::scroll_area::ScrollAreaOutput<()>],
     sync: &mut f32,
@@ -26,7 +27,7 @@ pub(super) fn jump(
         return;
     };
     #[allow(clippy::cast_precision_loss)]
-    let top = hunk.row(split) as f32 * diff_row_height(ui);
+    let top = hunk_row(hunk, split, aligned) as f32 * diff_row_height(ui);
     for output in scroll {
         let mut state = output.state;
         let mut offset = state.unclamped_offset();
@@ -40,6 +41,16 @@ pub(super) fn jump(
         state.store(ui.ctx(), output.id);
     }
     ui.ctx().request_repaint();
+}
+
+/// First row of a hunk. In the aligned editable split both panes are laid
+/// out on the buffer's lines, so a hunk sits at its right-side line.
+fn hunk_row(hunk: &diff::review::Hunk, split: bool, aligned: bool) -> usize {
+    if aligned {
+        hunk.new.start
+    } else {
+        hunk.row(split)
+    }
 }
 
 pub(super) fn change_color(
@@ -112,7 +123,13 @@ pub(super) fn paint(
         return result;
     };
     let row_h = diff_row_height(ui);
-    let count = diff_row_count(doc, split).max(1);
+    // Editable split: both panes are the buffer's lines (see `align_left`).
+    let aligned = split && editor_pane;
+    let count = if aligned {
+        doc.right_text.split_inclusive('\n').count().max(1)
+    } else {
+        diff_row_count(doc, split).max(1)
+    };
     let pointer = ui.ctx().input(|input| input.pointer.hover_pos());
     // In the live editor views the rows are the full file, so document gaps
     // do not exist there; their click widgets would also cover editor rows
@@ -141,14 +158,66 @@ pub(super) fn paint(
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), &format!("diff-gap-{index}"), rect);
             if click.clicked() {
-                result.gap = Some(index);
+                result.gap = Some((index, diff::GapPart::All));
+            }
+            // Long gaps also expand a step at a time from either edge.
+            if gap.old.len() > diff::GAP_STEP.saturating_mul(2) {
+                let step = diff::GAP_STEP;
+                for (offset, part, label, tip) in [
+                    (
+                        2.0,
+                        diff::GapPart::Top,
+                        "↓",
+                        format!("Show {step} more lines below the change above"),
+                    ),
+                    (
+                        1.0,
+                        diff::GapPart::Bottom,
+                        "↑",
+                        format!("Show {step} more lines above the change below"),
+                    ),
+                ] {
+                    let button = egui::Rect::from_min_size(
+                        egui::pos2(rect.right() - offset * row_h * 1.6, rect.top()),
+                        egui::vec2(row_h * 1.5, row_h),
+                    )
+                    .intersect(rect);
+                    if !button.is_positive() {
+                        continue;
+                    }
+                    let response = ui
+                        .interact(
+                            button,
+                            ui.scope_id().with(("diff-gap-step", index, side, label)),
+                            egui::Sense::click(),
+                        )
+                        .on_hover_text(tip)
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if response.hovered() {
+                        ui.painter().rect_filled(
+                            button,
+                            2.0,
+                            ui.visuals().widgets.hovered.weak_bg_fill,
+                        );
+                    }
+                    ui.painter().text(
+                        button.center(),
+                        egui::Align2::CENTER_CENTER,
+                        format!("{label}{step}"),
+                        egui::FontId::proportional(11.0),
+                        ui.visuals().weak_text_color(),
+                    );
+                    if response.clicked() {
+                        result.gap = Some((index, part));
+                    }
+                }
             }
         }
     }
     for (index, hunk) in doc.hunks.iter().enumerate() {
         let color = change_color(hunk, colors);
         #[allow(clippy::cast_precision_loss)]
-        let fraction = hunk.row(split) as f32 / count as f32;
+        let fraction = hunk_row(hunk, split, aligned) as f32 / count as f32;
         let marker = egui::Rect::from_center_size(
             egui::pos2(
                 rail.center().x,
@@ -175,9 +244,12 @@ pub(super) fn paint(
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), &format!("diff-marker-{index}"), marker);
         #[allow(clippy::cast_precision_loss)]
-        let row_top = hunk.row(split) as f32 * row_h;
+        let row_top = hunk_row(hunk, split, aligned) as f32 * row_h;
         #[allow(clippy::cast_precision_loss)]
-        let old_height = if split {
+        let old_height = if aligned {
+            // Removed lines have no row of their own once aligned.
+            hunk.new.len() as f32 * row_h
+        } else if split {
             hunk.old.len() as f32 * row_h
         } else {
             hunk.rows(false).len() as f32 * row_h
@@ -222,8 +294,9 @@ pub(super) fn paint(
                 continue;
             }
             // The editor pane's rows are buffer lines, not diff rows: an
-            // outline there would frame the wrong lines. Rail + tints speak.
-            if selected && !(editor_pane && side == 1) {
+            // outline there would frame the wrong lines (unless the panes
+            // are aligned on those lines). Rail + tints speak.
+            if selected && (aligned || !(editor_pane && side == 1)) {
                 ui.painter().with_clip_rect(clip).rect_stroke(
                     *rect,
                     0.0,
@@ -395,7 +468,7 @@ mod tests {
                                 !visible || top + diff_row_height(ui) <= output.inner_rect.bottom()
                             );
                         }
-                        jump(ui, &doc, split, &mut review, &scroll, &mut sync);
+                        jump(ui, &doc, split, false, &mut review, &scroll, &mut sync);
                     },
                 );
                 output.textures_delta.clear();

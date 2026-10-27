@@ -35,7 +35,97 @@ pub(super) fn diff_neighbors(
     )
 }
 
+/// Per open diff key: its file's porcelain status and line counts.
+pub(crate) type DiffFingerprints = std::collections::HashMap<String, Option<(String, (u32, u32))>>;
+
 impl App {
+    /// The view a refresh of `key` should rebuild: its context size (or
+    /// `context` when the user picked a new one), the ranges already
+    /// expanded, and the whitespace mode.
+    pub(crate) fn diff_view_for(&self, key: &str, context: Option<usize>) -> diff::DiffView {
+        let review = self.diff_reviews.get(key);
+        diff::DiffView {
+            context: context.unwrap_or_else(|| review.map_or(3, |review| review.context.max(3))),
+            revealed: self
+                .diffs
+                .get(key)
+                .and_then(|doc| doc.as_ref().ok())
+                .map(|doc| doc.revealed.clone())
+                .unwrap_or_default(),
+            whitespace: review.is_some_and(|review| review.ignore_whitespace),
+        }
+    }
+
+    /// Local diff tabs open anywhere in the layouts, one per key.
+    fn open_local_diffs(&self) -> Vec<Tab> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for workspace in self.layouts.values() {
+            for group in &workspace.tabs {
+                let panes = group
+                    .layout
+                    .iter_all_tabs()
+                    .map(|(_, pane)| pane)
+                    .chain(group.primary.as_ref());
+                for pane in panes {
+                    if let Tab::Diff { remote: None, .. } = pane
+                        && seen.insert(pane.key())
+                    {
+                        out.push(pane.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// What the Git status says about each open local diff's file: its
+    /// porcelain status and line counts. A change means the diff is stale.
+    pub(crate) fn diff_fingerprints(&self) -> DiffFingerprints {
+        let context = self.context.as_ref();
+        self.open_local_diffs()
+            .into_iter()
+            .filter_map(|tab| {
+                let Tab::Diff { cwd, path, .. } = &tab else {
+                    return None;
+                };
+                let absolute = if path.is_absolute() {
+                    path.clone()
+                } else {
+                    cwd.join(path)
+                };
+                let print = context.and_then(|context| {
+                    let change = context.changes.iter().find(|c| c.path == absolute)?;
+                    let stats = context.stats.get(&absolute).copied().unwrap_or_default();
+                    Some((change.status.clone(), stats))
+                });
+                Some((tab.key(), print))
+            })
+            .collect()
+    }
+
+    /// Re-request open diffs whose file changed since `before` (an agent
+    /// edit, staging from the sidebar, a commit), keeping each one's view.
+    /// Busy, loading, and unsaved-edit diffs are left alone.
+    pub(crate) fn refresh_stale_diffs(&mut self, before: &DiffFingerprints) {
+        let after = self.diff_fingerprints();
+        for tab in self.open_local_diffs() {
+            let key = tab.key();
+            let stale = before.get(&key) != after.get(&key);
+            let idle = self.diffs.get(&key).is_some_and(Result::is_ok)
+                && !self.loading.contains(&key)
+                && self
+                    .diff_reviews
+                    .get(&key)
+                    .is_none_or(|review| !review.busy && !review.unsaved_edits());
+            if stale && idle {
+                let view = self.diff_view_for(&key, None);
+                self.loading.insert(key);
+                let _ = self.jobs.send(Job::DiffContext(tab, view));
+            }
+        }
+    }
+
     /// Replace the current diff pane in place with a sibling file's diff,
     /// keeping the same layout slot (RustRover-style file navigation).
     pub(super) fn navigate_diff(&mut self, current: &Tab, target: std::path::PathBuf) {
@@ -165,15 +255,15 @@ impl App {
         let split = self.diff_split.contains(&key);
         // Focus must belong to a real widget. A synthetic focus ID has no
         // AccessKit node and crashes its macOS consumer when window focus changes.
-        let focused = ui.ui_contains_pointer();
-        if focused && !ui.ctx().egui_wants_keyboard_input() {
-            if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F7)) {
-                review.advance(true, count);
-            }
-            if ui.input_mut(|input| input.consume_key(egui::Modifiers::SHIFT, egui::Key::F7)) {
-                review.advance(false, count);
-            }
-        }
+        // Keys follow the pointer or the active pane, so F7 works without
+        // hovering the diff once it is the focused tab.
+        let active = self
+            .selected
+            .as_ref()
+            .and_then(|project| self.layouts.get(project))
+            .and_then(|workspace| workspace.active_pane())
+            == Some(tab);
+        let focused = ui.ui_contains_pointer() || active;
         let mut action = None;
         let mut undo = false;
         let mut navigate = None;
@@ -181,6 +271,7 @@ impl App {
         let mut open_line = None;
         let mut context = None;
         let mut refresh = false;
+        let mut collapse = false;
         let mut save_edits = false;
         // Sibling files on the same side (staged or working tree), in Git's
         // reported order, for prev/next-file navigation.
@@ -209,6 +300,24 @@ impl App {
             cwd.join(path)
         };
         let (prev_file, next_file, file_pos, file_total) = diff_neighbors(&siblings, &current_abs);
+        // F7 / Shift+F7 walk changes, and past the last (or first) change
+        // of this file continue into the next (or previous) file.
+        if focused && !ui.ctx().egui_wants_keyboard_input() {
+            if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F7)) {
+                if count == 0 || review.selected == count.checked_sub(1) {
+                    navigate.clone_from(&next_file);
+                } else {
+                    review.advance(true, count);
+                }
+            }
+            if ui.input_mut(|input| input.consume_key(egui::Modifiers::SHIFT, egui::Key::F7)) {
+                if count == 0 || review.selected == Some(0) {
+                    navigate.clone_from(&prev_file);
+                } else {
+                    review.advance(false, count);
+                }
+            }
+        }
         let is_md = crate::markdown::supported(path);
         let mut gap = None;
         ui.horizontal(|ui| {
@@ -242,7 +351,7 @@ impl App {
             }
             let previous = ui
                 .add_enabled_ui(count > 0 && review.selected != Some(0), |ui| {
-                    appearance::sidebar_action(ui, "ArrowUp", "Previous change (Shift+F7)")
+                    appearance::sidebar_action(ui, "ArrowUp", "Previous change (Shift+F7; continues into the previous file)")
                 })
                 .inner;
             #[cfg(feature = "test-support")]
@@ -252,7 +361,7 @@ impl App {
             }
             let next = ui
                 .add_enabled_ui(count > 0 && review.selected != count.checked_sub(1), |ui| {
-                    appearance::sidebar_action(ui, "ArrowDown", "Next change (F7)")
+                    appearance::sidebar_action(ui, "ArrowDown", "Next change (F7; continues into the next file)")
                 })
                 .inner;
             #[cfg(feature = "test-support")]
@@ -318,6 +427,18 @@ impl App {
                         .clicked()
                     {
                         context = Some(3);
+                        collapse = true;
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui
+                        .checkbox(&mut review.ignore_whitespace, "Ignore whitespace")
+                        .on_hover_text(
+                            "Compare lines without whitespace; staging still applies the real changes",
+                        )
+                        .changed()
+                    {
+                        refresh = true;
                         ui.close();
                     }
                     if is_md
@@ -422,17 +543,7 @@ impl App {
                     && buffer.text == buffer.document.right_text
             })
         {
-            review.buffer = Some(diff::review::Edit {
-                document: std::sync::Arc::clone(document),
-                text: document.right_text.clone(),
-                right_spans: None,
-                live_tints: None,
-                live_rows: None,
-                undo: Vec::new(),
-                redo: Vec::new(),
-                burst: 0.0,
-                left_spans: None,
-            });
+            review.buffer = Some(diff::review::Edit::new(std::sync::Arc::clone(document)));
         }
         if let Some(doc) = &doc {
             let split = self.diff_split.contains(&key);
@@ -508,14 +619,24 @@ impl App {
                     } else if editable {
                         let metrics = DiffMetrics::measure(ui, diff_doc_digits(doc, true));
                         let content = diff_content_width(ui, doc, true, &metrics, &key);
-                        let rows = diff_row_count(doc, true);
+                        // The right pane is the whole buffer, one row per
+                        // line; the left pane is laid out on those rows so
+                        // both scroll in step (no collapsed or filler rows
+                        // that only one side has).
+                        let aligned = review.buffer.as_mut().map(|buffer| {
+                            super::diff_edit::aligned_left(buffer, &cwd.join(path), colors)
+                        });
+                        let (left_doc, rows) = match &aligned {
+                            Some(aligned) => (&aligned.doc, aligned.doc.split.len().max(1)),
+                            None => (doc.as_ref(), diff_row_count(doc, true)),
+                        };
                         let (left_rect, gap_rect, right_rect) =
                             split_rects(body, self.diff_split_ratio);
                         let frame_sync = sync;
                         let left = paint_diff_pane(
                             ui,
                             left_rect,
-                            doc,
+                            left_doc,
                             SplitPane::Left,
                             colors,
                             &metrics,
@@ -524,6 +645,16 @@ impl App {
                             &key,
                             frame_sync,
                         );
+                        if let Some(aligned) = &aligned {
+                            super::diff_edit::paint_deleted_markers(
+                                ui,
+                                &left,
+                                &aligned.deleted,
+                                metrics.row_h,
+                                colors.deleted,
+                                &key,
+                            );
+                        }
                         let right = match &mut review.buffer {
                             Some(buffer) => super::diff_edit::paint_right_editor(
                                 ui,
@@ -623,7 +754,7 @@ impl App {
                         open_line = interaction.open_line;
                     }
                     gap = interaction.gap;
-                    diff_controls::jump(ui, doc, split, &mut review, &outputs, &mut sync);
+                    diff_controls::jump(ui, doc, split, editable, &mut review, &outputs, &mut sync);
                 });
                 ui.allocate_rect(full, egui::Sense::hover());
                 self.diff_split_scroll.insert(key.clone(), sync);
@@ -680,18 +811,25 @@ impl App {
         {
             review.confirm_discard = None;
             self.loading.insert(key.clone());
+            let (gap, part) = gap;
             let _ = self.jobs.send(Job::DiffExpand(
                 tab.clone(),
                 std::sync::Arc::clone(doc),
                 gap,
+                part,
             ));
         }
         if !review.busy && (refresh || context.is_some()) {
-            let context = context.unwrap_or(review.context.max(3));
+            // `review` is checked out of the map while this pane renders.
+            let mut view = self.diff_view_for(&key, Some(context.unwrap_or(review.context.max(3))));
+            view.whitespace = review.ignore_whitespace;
+            if collapse {
+                view.revealed.clear();
+            }
             review.jump = true;
             review.confirm_discard = None;
             self.loading.insert(key.clone());
-            let _ = self.jobs.send(Job::DiffContext(tab.clone(), context));
+            let _ = self.jobs.send(Job::DiffContext(tab.clone(), view));
         }
         self.diff_reviews.insert(key, review);
         if let Some(line) = open_line {

@@ -106,8 +106,33 @@ pub struct DiffDocument {
     pub(crate) gaps: Vec<review::Gap>,
     pub(crate) revealed: Vec<std::ops::Range<usize>>,
     pub(crate) context: usize,
+    /// Lines were compared ignoring whitespace (display keeps originals).
+    pub(crate) whitespace: bool,
     pub(crate) source: Option<actions::Source>,
     pub(crate) generation: DiffGeneration,
+}
+
+/// Which part of a collapsed gap to reveal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GapPart {
+    All,
+    /// The first lines, continuing down from the change above.
+    Top,
+    /// The last lines, continuing up from the change below.
+    Bottom,
+}
+
+/// Lines one partial gap expansion reveals (`IntelliJ` shows 20 more).
+pub(crate) const GAP_STEP: usize = 20;
+
+/// How a refreshed diff should look: the context size, the unchanged
+/// ranges the user expanded, and the whitespace mode, so a refresh keeps
+/// the view the user built up.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DiffView {
+    pub context: usize,
+    pub revealed: Vec<std::ops::Range<usize>>,
+    pub whitespace: bool,
 }
 
 impl DiffDocument {
@@ -121,26 +146,44 @@ impl DiffDocument {
             .filter(|hunk| hunk.rows(split).contains(&row))
     }
 
-    pub(crate) fn expand_gap(&self, path: &Path, gap: usize, staged: bool) -> Result<Self> {
+    pub(crate) fn expand_gap(
+        &self,
+        path: &Path,
+        gap: usize,
+        part: GapPart,
+        staged: bool,
+    ) -> Result<Self> {
         let gap = self
             .gaps
             .get(gap)
             .context("The hidden lines changed; refresh the diff")?;
+        let range = match part {
+            GapPart::All => gap.old.clone(),
+            GapPart::Top => gap.old.start..gap.old.end.min(gap.old.start.saturating_add(GAP_STEP)),
+            GapPart::Bottom => gap.old.start.max(gap.old.end.saturating_sub(GAP_STEP))..gap.old.end,
+        };
         let mut revealed = self.revealed.clone();
-        revealed.push(gap.old.clone());
-        let mut doc = build_with_revealed(
+        revealed.push(range);
+        Ok(self.rebuild(
             path,
-            &self.left_text,
-            &self.right_text,
             staged,
-            self.context,
-            revealed,
-        );
+            &DiffView {
+                context: self.context,
+                revealed,
+                whitespace: self.whitespace,
+            },
+        ))
+    }
+
+    /// The same two texts laid out again under `view`, keeping the labels,
+    /// source, and read-only flag of this document.
+    pub(crate) fn rebuild(&self, path: &Path, staged: bool, view: &DiffView) -> Self {
+        let mut doc = build_with_options(path, &self.left_text, &self.right_text, staged, view);
         doc.read_only = self.read_only;
         doc.source.clone_from(&self.source);
         doc.left_label.clone_from(&self.left_label);
         doc.right_label.clone_from(&self.right_label);
-        Ok(doc)
+        doc
     }
 }
 
@@ -153,12 +196,8 @@ pub fn document(DiffRequest { cwd, path, staged }: DiffRequest<'_>) -> Result<Di
         ..Default::default()
     };
     let (left, right) = terminator_git::snapshots(&root, &relative, staged, &options)?;
-    Ok(build(
-        &relative,
-        &decode_side(&left)?,
-        &decode_side(&right)?,
-        staged,
-    ))
+    let (left, right) = decode_sides(&left, &right)?;
+    Ok(build(&relative, &left, &right, staged))
 }
 
 #[cfg(test)]
@@ -174,12 +213,122 @@ fn git_root(cwd: &Path) -> Result<PathBuf> {
         .context("Resolve Git root")
 }
 
-fn decode_side(bytes: &[u8]) -> Result<String> {
+/// Both sides as text, or an error naming the sizes when either side is
+/// binary (or not UTF-8): a size change is all a text diff can say there.
+fn decode_sides(left: &[u8], right: &[u8]) -> Result<(String, String)> {
     ensure!(
-        terminator_git::check_text(bytes),
-        "Binary or non-UTF-8 files cannot be reviewed natively"
+        terminator_git::check_text(left) && terminator_git::check_text(right),
+        "Binary file · {} → {}. Binary or non-UTF-8 files cannot be reviewed natively.",
+        human_size(left.len()),
+        human_size(right.len())
     );
-    Ok(String::from_utf8_lossy(bytes).into_owned())
+    Ok((
+        String::from_utf8_lossy(left).into_owned(),
+        String::from_utf8_lossy(right).into_owned(),
+    ))
+}
+
+fn human_size(bytes: usize) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    #[allow(clippy::cast_precision_loss)] // display only
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit.saturating_add(1) < UNITS.len() {
+        value /= 1024.0;
+        unit = unit.saturating_add(1);
+    }
+    let name = UNITS.get(unit).copied().unwrap_or("B");
+    if unit == 0 {
+        format!("{bytes} {name}")
+    } else {
+        format!("{value:.1} {name}")
+    }
+}
+
+/// Left pane for the editable split view: one row per line of `right`
+/// (the live buffer), so both panes share row positions. Equal and
+/// replaced lines show the original beside their buffer line, inserted
+/// lines get a blank filler, and deleted lines (which have no buffer row)
+/// are returned as markers: `(row, lines)` deleted just above `row`.
+pub(crate) struct AlignedLeft {
+    pub doc: DiffDocument,
+    pub deleted: Vec<(usize, Vec<String>)>,
+}
+
+pub(crate) fn align_left(left: &str, right: &str, left_spans: &[Vec<DiffSpan>]) -> AlignedLeft {
+    let diff = TextDiff::configure()
+        .timeout(DIFF_TIMEOUT)
+        .diff_lines(left, right);
+    let lines: Vec<&str> = left.split_inclusive('\n').collect();
+    let number = |index: usize| Some(u32::try_from(index).unwrap_or(u32::MAX).saturating_add(1));
+    let row = |kind: LineKind, old: usize, new: usize| {
+        let text = lines.get(old).copied().unwrap_or_default();
+        SplitRow {
+            left: Some(DiffLine {
+                kind,
+                old_no: number(old),
+                new_no: number(new),
+                spans: line_spans(left_spans, Some(old), text),
+            }),
+            right: None,
+        }
+    };
+    let deleted_text = |range: std::ops::Range<usize>| -> Vec<String> {
+        range
+            .filter_map(|index| lines.get(index))
+            .map(|line| line.trim_end_matches(['\n', '\r']).to_owned())
+            .collect()
+    };
+    let mut out = AlignedLeft {
+        doc: DiffDocument::default(),
+        deleted: Vec::new(),
+    };
+    for op in diff.ops() {
+        let (old, new) = (op.old_range(), op.new_range());
+        match op.tag() {
+            DiffTag::Equal => {
+                for offset in 0..old.len() {
+                    out.doc.split.push(row(
+                        LineKind::Equal,
+                        old.start.saturating_add(offset),
+                        new.start.saturating_add(offset),
+                    ));
+                }
+            }
+            DiffTag::Insert => {
+                for _ in new {
+                    out.doc.split.push(SplitRow {
+                        left: None,
+                        right: None,
+                    });
+                }
+            }
+            DiffTag::Delete => out.deleted.push((new.start, deleted_text(old))),
+            DiffTag::Replace => {
+                let paired = old.len().min(new.len());
+                for offset in 0..paired {
+                    out.doc.split.push(row(
+                        LineKind::Delete,
+                        old.start.saturating_add(offset),
+                        new.start.saturating_add(offset),
+                    ));
+                }
+                for _ in paired..new.len() {
+                    out.doc.split.push(SplitRow {
+                        left: None,
+                        right: None,
+                    });
+                }
+                if old.len() > paired {
+                    out.deleted.push((
+                        new.start.saturating_add(paired),
+                        deleted_text(old.start.saturating_add(paired)..old.end),
+                    ));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Syntax-highlighted spans per line, for the in-diff editor.
@@ -310,29 +459,77 @@ pub(crate) fn build_with_context(
     staged: bool,
     context: usize,
 ) -> DiffDocument {
-    build_with_revealed(path, left, right, staged, context, Vec::new())
+    build_with_options(
+        path,
+        left,
+        right,
+        staged,
+        &DiffView {
+            context,
+            ..DiffView::default()
+        },
+    )
 }
 
-fn build_with_revealed(
+/// `text` with every whitespace char removed from each line (line breaks
+/// kept), so the line count, and every line index, matches the original.
+fn strip_whitespace(text: &str) -> String {
+    text.split_inclusive('\n')
+        .map(|line| {
+            let body = line.trim_end_matches(['\n', '\r']);
+            let mut out: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+            if line.ends_with('\n') {
+                out.push('\n');
+            }
+            out
+        })
+        .collect()
+}
+
+/// Original lines by index, for whitespace-insensitive diffs that compare
+/// stripped text but must display what is really in the file.
+pub(crate) struct Originals<'a> {
+    old: Vec<&'a str>,
+    new: Vec<&'a str>,
+}
+
+pub(crate) fn build_with_options(
     path: &Path,
     left: &str,
     right: &str,
     staged: bool,
-    context: usize,
-    revealed: Vec<std::ops::Range<usize>>,
+    view: &DiffView,
 ) -> DiffDocument {
     let old_hl = highlight_file(path, left);
     let new_hl = highlight_file(path, right);
-    let diff = TextDiff::configure()
-        .timeout(DIFF_TIMEOUT)
-        .diff_lines(left, right);
+    let (compare_left, compare_right) = if view.whitespace {
+        (strip_whitespace(left), strip_whitespace(right))
+    } else {
+        (String::new(), String::new())
+    };
+    let originals = view.whitespace.then(|| Originals {
+        old: left.split_inclusive('\n').collect(),
+        new: right.split_inclusive('\n').collect(),
+    });
+    let originals = originals.as_ref();
+    let diff = if view.whitespace {
+        TextDiff::configure()
+            .timeout(DIFF_TIMEOUT)
+            .diff_lines(compare_left.as_str(), compare_right.as_str())
+    } else {
+        TextDiff::configure()
+            .timeout(DIFF_TIMEOUT)
+            .diff_lines(left, right)
+    };
+    let context = view.context;
     let mut doc = DiffDocument {
         left_label: if staged { "HEAD" } else { "Index" }.into(),
         right_label: if staged { "Index" } else { "Working tree" }.into(),
         left_text: left.into(),
         right_text: right.into(),
         context,
-        revealed,
+        whitespace: view.whitespace,
+        revealed: view.revealed.clone(),
         ..Default::default()
     };
     let mut old_end = 0;
@@ -346,6 +543,7 @@ fn build_with_revealed(
                 new_end..first.new_range().start,
                 &old_hl,
                 &new_hl,
+                originals,
             );
         }
         for op in &group {
@@ -364,6 +562,7 @@ fn build_with_revealed(
                 &new_hl,
                 &mut doc.unified,
                 &mut doc.split,
+                originals,
             );
             old_end = op.old_range().end;
             new_end = op.new_range().end;
@@ -377,11 +576,14 @@ fn build_with_revealed(
             new_end..right.split_inclusive('\n').count(),
             &old_hl,
             &new_hl,
+            originals,
         );
     }
     doc
 }
 
+/// Unchanged lines between changes: runs the user revealed are shown, and
+/// every remaining run collapses into its own expandable gap row.
 fn emit_gap(
     doc: &mut DiffDocument,
     diff: &TextDiff<'_, '_, str>,
@@ -389,44 +591,58 @@ fn emit_gap(
     new: std::ops::Range<usize>,
     old_hl: &[Vec<DiffSpan>],
     new_hl: &[Vec<DiffSpan>],
+    originals: Option<&Originals<'_>>,
 ) {
-    if old.is_empty() {
-        return;
+    let mut start = old.start;
+    while start < old.end {
+        let shown = |line: usize| doc.revealed.iter().any(|range| range.contains(&line));
+        let visible = shown(start);
+        let mut end = start.saturating_add(1);
+        while end < old.end && shown(end) == visible {
+            end = end.saturating_add(1);
+        }
+        let len = end.saturating_sub(start);
+        let new_start = new.start.saturating_add(start.saturating_sub(old.start));
+        if visible {
+            let op = similar::DiffOp::Equal {
+                old_index: start,
+                new_index: new_start,
+                len,
+            };
+            emit_op(
+                diff,
+                &op,
+                old_hl,
+                new_hl,
+                &mut doc.unified,
+                &mut doc.split,
+                originals,
+            );
+        } else {
+            let line = DiffLine {
+                kind: LineKind::Hunk,
+                old_no: None,
+                new_no: None,
+                spans: vec![DiffSpan {
+                    text: format!("⋯ {len} unchanged lines ⋯"),
+                    rgb: fallback_rgb(),
+                    intra: Intra::None,
+                }],
+            };
+            doc.gaps.push(review::Gap {
+                old: start..end,
+                new: new_start..new_start.saturating_add(len),
+                unified_row: doc.unified.len(),
+                split_row: doc.split.len(),
+            });
+            doc.unified.push(line.clone());
+            doc.split.push(SplitRow {
+                left: Some(line.clone()),
+                right: Some(line),
+            });
+        }
+        start = end;
     }
-    if doc
-        .revealed
-        .iter()
-        .any(|range| range.start <= old.start && range.end >= old.end)
-    {
-        let op = similar::DiffOp::Equal {
-            old_index: old.start,
-            new_index: new.start,
-            len: old.len(),
-        };
-        emit_op(diff, &op, old_hl, new_hl, &mut doc.unified, &mut doc.split);
-        return;
-    }
-    let line = DiffLine {
-        kind: LineKind::Hunk,
-        old_no: None,
-        new_no: None,
-        spans: vec![DiffSpan {
-            text: format!("⋯ {} unchanged lines ⋯", old.len()),
-            rgb: fallback_rgb(),
-            intra: Intra::None,
-        }],
-    };
-    doc.gaps.push(review::Gap {
-        old,
-        new,
-        unified_row: doc.unified.len(),
-        split_row: doc.split.len(),
-    });
-    doc.unified.push(line.clone());
-    doc.split.push(SplitRow {
-        left: Some(line.clone()),
-        right: Some(line),
-    });
 }
 
 fn emit_op(
@@ -436,21 +652,30 @@ fn emit_op(
     new_hl: &[Vec<DiffSpan>],
     unified: &mut Vec<DiffLine>,
     split: &mut Vec<SplitRow>,
+    originals: Option<&Originals<'_>>,
 ) {
     match op.tag() {
         DiffTag::Equal => {
             for change in diff.iter_changes(op) {
-                let line = equal_line(change, old_hl);
-                unified.push(line.clone());
+                let line = equal_line(change, old_hl, originals.map(|o| o.old.as_slice()), true);
+                // Whitespace-insensitive equal lines may still differ in
+                // whitespace: each side shows its own text.
+                let right = match originals {
+                    Some(originals) => {
+                        equal_line(change, new_hl, Some(originals.new.as_slice()), false)
+                    }
+                    None => line.clone(),
+                };
+                unified.push(right.clone());
                 split.push(SplitRow {
-                    left: Some(line.clone()),
-                    right: Some(line),
+                    left: Some(line),
+                    right: Some(right),
                 });
             }
         }
         DiffTag::Delete => {
             for change in diff.iter_inline_changes(op) {
-                let line = change_line(change, LineKind::Delete, old_hl, true);
+                let line = change_line(change, LineKind::Delete, old_hl, true, originals);
                 unified.push(line.clone());
                 split.push(SplitRow {
                     left: Some(line),
@@ -460,7 +685,7 @@ fn emit_op(
         }
         DiffTag::Insert => {
             for change in diff.iter_inline_changes(op) {
-                let line = change_line(change, LineKind::Insert, new_hl, false);
+                let line = change_line(change, LineKind::Insert, new_hl, false, originals);
                 unified.push(line.clone());
                 split.push(SplitRow {
                     left: None,
@@ -474,10 +699,22 @@ fn emit_op(
             for change in diff.iter_inline_changes(op) {
                 match change.tag() {
                     ChangeTag::Delete => {
-                        deletes.push(change_line(change, LineKind::Delete, old_hl, true));
+                        deletes.push(change_line(
+                            change,
+                            LineKind::Delete,
+                            old_hl,
+                            true,
+                            originals,
+                        ));
                     }
                     ChangeTag::Insert => {
-                        inserts.push(change_line(change, LineKind::Insert, new_hl, false));
+                        inserts.push(change_line(
+                            change,
+                            LineKind::Insert,
+                            new_hl,
+                            false,
+                            originals,
+                        ));
                     }
                     ChangeTag::Equal => {}
                 }
@@ -499,8 +736,21 @@ fn emit_op(
     }
 }
 
-fn equal_line(change: similar::Change<&str>, old_hl: &[Vec<DiffSpan>]) -> DiffLine {
-    let text = change.value();
+fn equal_line(
+    change: similar::Change<&str>,
+    highlighted: &[Vec<DiffSpan>],
+    originals: Option<&[&str]>,
+    old_side: bool,
+) -> DiffLine {
+    let index = if old_side {
+        change.old_index()
+    } else {
+        change.new_index()
+    };
+    let text = originals
+        .zip(index)
+        .and_then(|(lines, index)| lines.get(index).copied())
+        .unwrap_or_else(|| change.value());
     DiffLine {
         kind: LineKind::Equal,
         old_no: change
@@ -509,7 +759,7 @@ fn equal_line(change: similar::Change<&str>, old_hl: &[Vec<DiffSpan>]) -> DiffLi
         new_no: change
             .new_index()
             .map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1)),
-        spans: line_spans(old_hl, change.old_index(), text),
+        spans: line_spans(highlighted, index, text),
     }
 }
 
@@ -518,7 +768,33 @@ fn change_line(
     kind: LineKind,
     highlighted: &[Vec<DiffSpan>],
     old_side: bool,
+    originals: Option<&Originals<'_>>,
 ) -> DiffLine {
+    let side_index = if old_side {
+        change.old_index()
+    } else {
+        change.new_index()
+    };
+    // Whitespace-insensitive: show the real line, without word marks that
+    // would point into the stripped comparison text.
+    if let Some(original) = originals.zip(side_index).and_then(|(originals, index)| {
+        if old_side {
+            originals.old.get(index)
+        } else {
+            originals.new.get(index)
+        }
+    }) {
+        return DiffLine {
+            kind,
+            old_no: change
+                .old_index()
+                .map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1)),
+            new_no: change
+                .new_index()
+                .map(|n| u32::try_from(n).unwrap_or(u32::MAX).saturating_add(1)),
+            spans: line_spans(highlighted, side_index, original),
+        };
+    }
     let fragments: Vec<(bool, String)> = change
         .iter_strings_lossy()
         .map(|(changed, text)| (changed, text.trim_end_matches(['\n', '\r']).to_string()))
@@ -679,13 +955,8 @@ pub(crate) async fn document_with_context(
     service
         .cpu()
         .run(cancel, move || {
-            let mut doc = build_with_context(
-                &relative,
-                &decode_side(&left)?,
-                &decode_side(&right)?,
-                staged,
-                context,
-            );
+            let (left, right) = decode_sides(&left, &right)?;
+            let mut doc = build_with_context(&relative, &left, &right, staged, context);
             doc.source = Some(source);
             Ok(doc)
         })
@@ -786,6 +1057,113 @@ mod tests {
         );
         git_cmd(dir.path(), &["config", "user.name", "Fixture"]);
         dir
+    }
+
+    /// 100 numbered lines with lines 10 and 80 changed.
+    fn long_pair() -> (String, String) {
+        let original: String = (0..100).fold(String::new(), |mut text, n| {
+            use std::fmt::Write as _;
+            let _ = writeln!(text, "{n}");
+            text
+        });
+        let changed = original
+            .replacen("10\n", "changed\n", 1)
+            .replacen("80\n", "another\n", 1);
+        (original, changed)
+    }
+
+    #[test]
+    fn gap_steps_reveal_twenty_lines_from_either_edge() {
+        let (original, changed) = long_pair();
+        let doc = build_with_context(Path::new("f.txt"), &original, &changed, false, 3);
+        // Leading, middle, trailing gaps.
+        assert_eq!(doc.gaps.len(), 3);
+        let middle = doc.gaps[1].old.clone();
+        let top = doc
+            .expand_gap(Path::new("f.txt"), 1, GapPart::Top, false)
+            .unwrap();
+        assert_eq!(top.gaps.len(), 3);
+        assert_eq!(top.gaps[1].old, middle.start + GAP_STEP..middle.end);
+        let both = top
+            .expand_gap(Path::new("f.txt"), 1, GapPart::Bottom, false)
+            .unwrap();
+        assert_eq!(
+            both.gaps[1].old,
+            middle.start + GAP_STEP..middle.end - GAP_STEP
+        );
+        assert_eq!(both.revealed.len(), 2);
+    }
+
+    #[test]
+    fn rebuild_keeps_revealed_ranges_and_whitespace_mode() {
+        let (original, changed) = long_pair();
+        let doc = build_with_context(Path::new("f.txt"), &original, &changed, false, 3);
+        let expanded = doc
+            .expand_gap(Path::new("f.txt"), 1, GapPart::All, false)
+            .unwrap();
+        let view = DiffView {
+            context: 3,
+            revealed: expanded.revealed.clone(),
+            whitespace: false,
+        };
+        let refreshed = doc.rebuild(Path::new("f.txt"), false, &view);
+        assert_eq!(refreshed.gaps.len(), 2);
+        assert_eq!(refreshed.unified.len(), expanded.unified.len());
+    }
+
+    #[test]
+    fn ignore_whitespace_hides_indent_only_changes_and_keeps_text() {
+        let left = "fn a() {\nx();\n}\n";
+        let right = "fn a() {\n    x();\n}\nnew();\n";
+        let exact = build_with_context(Path::new("a.rs"), left, right, false, 3);
+        assert_eq!(exact.hunks.len(), 2);
+        let loose = exact.rebuild(
+            Path::new("a.rs"),
+            false,
+            &DiffView {
+                context: 3,
+                revealed: Vec::new(),
+                whitespace: true,
+            },
+        );
+        // Only the added line is a change; the re-indent is not.
+        assert_eq!(loose.hunks.len(), 1);
+        assert_eq!(loose.hunks[0].new, 3..4);
+        assert_eq!(loose.right_text, right);
+        // Display keeps the real indentation.
+        let shown: String = loose.unified[1]
+            .spans
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect();
+        assert_eq!(shown, "    x();");
+    }
+
+    #[test]
+    fn aligned_left_has_one_row_per_buffer_line() {
+        let left = "a\nb\nc\nd\n";
+        let right = "a\nB\nnew\nd\n";
+        let aligned = align_left(left, right, &[]);
+        assert_eq!(aligned.doc.split.len(), 4);
+        let left_no = |row: usize| aligned.doc.split[row].left.as_ref().and_then(|l| l.old_no);
+        assert_eq!(left_no(0), Some(1));
+        // `b`/`c` replaced by `B`/`new`: paired rows show the originals.
+        assert_eq!(left_no(1), Some(2));
+        assert_eq!(left_no(2), Some(3));
+        assert_eq!(left_no(3), Some(4));
+        assert!(aligned.deleted.is_empty());
+        let removed = align_left("a\nb\nc\n", "a\nc\n", &[]);
+        assert_eq!(removed.doc.split.len(), 2);
+        assert_eq!(removed.deleted, [(1, vec!["b".to_owned()])]);
+    }
+
+    #[test]
+    fn binary_sides_report_their_sizes() {
+        let error = decode_sides(b"text", b"\0\x01\x02")
+            .unwrap_err()
+            .to_string();
+        assert!(error.starts_with("Binary file · 4 B → 3 B"), "{error}");
+        assert_eq!(human_size(2048), "2.0 KB");
     }
 
     #[test]

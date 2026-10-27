@@ -528,12 +528,11 @@ impl Services {
             Job::DiffAction(tab, request) => {
                 self.diff_action(tab, request, cancel, &mut updates).await?
             }
-            Job::DiffContext(tab, context) => {
-                self.diff_context(tab, context, cancel, &mut updates)
-                    .await?
+            Job::DiffContext(tab, view) => {
+                self.diff_context(tab, view, cancel, &mut updates).await?
             }
-            Job::DiffExpand(tab, doc, gap) => {
-                self.diff_expand(tab, doc, gap, cancel, &mut updates)
+            Job::DiffExpand(tab, doc, gap, part) => {
+                self.diff_expand(tab, doc, (gap, part), cancel, &mut updates)
                     .await?
             }
             Job::Diff(tab) => self.diff(tab, cancel, &mut updates).await?,

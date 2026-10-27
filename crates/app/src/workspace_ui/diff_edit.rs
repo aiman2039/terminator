@@ -278,6 +278,9 @@ pub(super) fn paint_right_editor(
                             .layouter(&mut layouter)
                             .desired_width(f32::INFINITY)
                             .show(ui);
+                        if editor.response.changed() {
+                            buffer.stale = true;
+                        }
                         #[cfg(feature = "test-support")]
                         diagnostics::record(ui.ctx(), "diff-right-editor", editor.response.rect);
                         #[cfg(not(feature = "test-support"))]
@@ -374,7 +377,15 @@ fn ensure_cache(
     path: &std::path::Path,
     colors: super::diff_paint::DiffColors,
 ) -> CacheArcs {
-    let key_hash = buffer_key(&buffer.text, colors);
+    // Rehash the whole buffer only after an edit (or a palette change),
+    // not on every frame.
+    let palette = buffer_key("", colors);
+    if buffer.stale || buffer.right_spans.is_none() || buffer.palette != palette {
+        buffer.key = buffer_key(&buffer.text, colors);
+        buffer.palette = palette;
+        buffer.stale = false;
+    }
+    let key_hash = buffer.key;
     if buffer
         .right_spans
         .as_ref()
@@ -427,6 +438,82 @@ fn ensure_cache(
         .as_ref()
         .map_or_else(|| Arc::new(Vec::new()), |(_, rows)| Arc::clone(rows));
     (right_spans, valid, right_tints, rows)
+}
+
+/// The editable split view's left pane, aligned row-for-row with the
+/// buffer; rebuilt only when the buffer (or palette) changes.
+pub(super) fn aligned_left(
+    buffer: &mut diff::review::Edit,
+    path: &std::path::Path,
+    colors: super::diff_paint::DiffColors,
+) -> Arc<diff::AlignedLeft> {
+    let _ = ensure_cache(buffer, path, colors);
+    let key = buffer.key;
+    if let Some((cached, aligned)) = &buffer.aligned_left
+        && *cached == key
+    {
+        return Arc::clone(aligned);
+    }
+    let left_spans = Arc::clone(buffer.left_spans.get_or_insert_with(|| {
+        Arc::new(if buffer.document.left_text.len() > MAX_HIGHLIGHT_BYTES {
+            Vec::new()
+        } else {
+            diff::highlight_spans(path, &buffer.document.left_text)
+        })
+    }));
+    let aligned = Arc::new(diff::align_left(
+        &buffer.document.left_text,
+        &buffer.text,
+        &left_spans,
+    ));
+    buffer.aligned_left = Some((key, Arc::clone(&aligned)));
+    aligned
+}
+
+/// Red rules where the buffer dropped original lines (they have no row
+/// on the right); hovering one lists the deleted text.
+pub(super) fn paint_deleted_markers(
+    ui: &egui::Ui,
+    output: &egui::scroll_area::ScrollAreaOutput<()>,
+    deleted: &[(usize, Vec<String>)],
+    row_h: f32,
+    color: Color32,
+    key: &str,
+) {
+    let clip = output.inner_rect;
+    let offset = output.state.unclamped_offset().y;
+    for (index, (row, lines)) in deleted.iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)] // UI coordinate
+        let y = clip.top() + *row as f32 * row_h - offset;
+        if y < clip.top() - 4.0 || y > clip.bottom() + 4.0 {
+            continue;
+        }
+        ui.painter()
+            .with_clip_rect(clip)
+            .hline(clip.x_range(), y, egui::Stroke::new(2.0, color));
+        let hover = egui::Rect::from_min_max(
+            egui::pos2(clip.left(), y - 3.0),
+            egui::pos2(clip.right(), y + 3.0),
+        )
+        .intersect(clip);
+        if hover.is_positive() {
+            let mut text = format!(
+                "{} deleted line{}",
+                lines.len(),
+                if lines.len() == 1 { "" } else { "s" }
+            );
+            for line in lines.iter().take(20) {
+                text.push('\n');
+                text.push_str(line);
+            }
+            ui.interact(
+                hover,
+                egui::Id::unique((key, "deleted-marker", index)),
+                egui::Sense::hover(),
+            )
+            .on_hover_text(egui::RichText::new(text).monospace());
+        }
+    }
 }
 
 /// Structural edit requested from a unified row editor.
@@ -494,6 +581,7 @@ pub(super) fn apply_undo(buffer: &mut diff::review::Edit) -> bool {
         return false;
     };
     let current = std::mem::replace(&mut buffer.text, previous);
+    buffer.stale = true;
     buffer.redo.push(current);
     buffer.burst = 0.0;
     true
@@ -505,6 +593,7 @@ pub(super) fn apply_redo(buffer: &mut diff::review::Edit) -> bool {
         return false;
     };
     let current = std::mem::replace(&mut buffer.text, next);
+    buffer.stale = true;
     buffer.undo.push(current);
     buffer.burst = 0.0;
     true
@@ -826,6 +915,7 @@ pub(super) fn paint_unified_editor(
         if let Some(op) = &row_op {
             buffer.text = apply_row_op(&buffer.text, op);
         }
+        buffer.stale = true;
         if buffer.text != old_text {
             let now = ui.input(|input| input.time);
             record_undo(buffer, old_text, now);

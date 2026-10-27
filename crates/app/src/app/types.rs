@@ -208,8 +208,13 @@ pub(crate) enum Job {
     PasteClipboard(String),
 
     Diff(Tab),
-    DiffContext(Tab, usize),
-    DiffExpand(Tab, std::sync::Arc<diff::DiffDocument>, usize),
+    DiffContext(Tab, diff::DiffView),
+    DiffExpand(
+        Tab,
+        std::sync::Arc<diff::DiffDocument>,
+        usize,
+        diff::GapPart,
+    ),
     DiffAction(Tab, Box<diff::actions::Request>),
     Install(String, bool),
     TestNtfy {

@@ -709,17 +709,9 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
         let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
-        app.diff_reviews.entry("diff".into()).or_default().buffer = Some(diff::review::Edit {
-            document: std::sync::Arc::new(sample_doc()),
-            text: "unsaved".into(),
-            right_spans: None,
-            live_tints: None,
-            live_rows: None,
-            undo: Vec::new(),
-            redo: Vec::new(),
-            burst: 0.0,
-            left_spans: None,
-        });
+        let mut edit = diff::review::Edit::new(std::sync::Arc::new(sample_doc()));
+        edit.text = "unsaved".into();
+        app.diff_reviews.entry("diff".into()).or_default().buffer = Some(edit);
         assert!(app.block_unsaved_diff(Some("diff")));
         app.begin_exit();
         assert!(!app.exit.active());
@@ -1158,6 +1150,9 @@ pub(crate) mod tests {
                         right: None,
                     },
                 ],
+                // Painted panes: the editable split derives its left pane
+                // from the real texts, which this synthetic doc lacks.
+                read_only: true,
                 ..Default::default()
             },
             true,

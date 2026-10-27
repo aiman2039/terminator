@@ -36,11 +36,12 @@ impl Services {
     pub(in crate::gui_services) async fn diff_context(
         &self,
         tab: Tab,
-        context: usize,
+        view: diff::DiffView,
         cancel: CancellationToken,
         updates: &mut Vec<Update>,
     ) -> Result<()> {
         let client = self.client();
+        let context = view.context;
         if let Tab::Diff {
             cwd, path, staged, ..
         } = &tab
@@ -63,6 +64,16 @@ impl Services {
                     &cancel,
                 )
                 .await
+            };
+            // Expanded ranges and the whitespace mode survive a refresh.
+            let result = match result {
+                Ok(doc) if view.whitespace || !view.revealed.is_empty() => {
+                    let (path, staged) = (path.clone(), *staged);
+                    self.cpu()
+                        .run(&cancel, move || Ok(doc.rebuild(&path, staged, &view)))
+                        .await
+                }
+                other => other,
             }
             .map_err(|e| format!("{e:#}"));
             updates.push(Update::Diff(tab.key(), result));
@@ -74,7 +85,7 @@ impl Services {
         &self,
         tab: Tab,
         doc: Arc<diff::DiffDocument>,
-        gap: usize,
+        (gap, part): (usize, diff::GapPart),
         cancel: CancellationToken,
         updates: &mut Vec<Update>,
     ) -> Result<()> {
@@ -83,7 +94,7 @@ impl Services {
             let staged = *staged;
             let result = self
                 .cpu()
-                .run(&cancel, move || doc.expand_gap(&path, gap, staged))
+                .run(&cancel, move || doc.expand_gap(&path, gap, part, staged))
                 .await
                 .map_err(|error| format!("{error:#}"));
             updates.push(Update::Diff(tab.key(), result));

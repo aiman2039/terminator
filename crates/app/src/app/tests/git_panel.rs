@@ -198,6 +198,7 @@ fn git_panel_clicks_reuse_an_open_diff_instead_of_duplicating() {
                         shelves: &[],
                         branches: &[],
                         commit_draft: &mut draft,
+                        recent_messages: &[],
                         amend: &mut false,
                         signoff: &mut false,
                         collapse_generation: 0,
@@ -507,4 +508,68 @@ fn failed_commit_restores_the_draft_but_failed_push_does_not() {
     drain_updates(&mut app, &ctx);
     assert!(app.git.commit.is_empty());
     assert!(app.git.commit_inflight.is_none());
+}
+
+#[test]
+fn git_refresh_rerequests_only_diffs_whose_file_changed() {
+    let (mut app, _ctx, _dir) = fixture();
+    let cwd = PathBuf::from("/a");
+    let tab = |name: &str| Tab::Diff {
+        remote: None,
+        cwd: cwd.clone(),
+        path: cwd.join(name),
+        staged: false,
+    };
+    app.layouts.insert(
+        "a".into(),
+        Workspace::from_layout(egui_dock::DockState::new(vec![tab("x.rs"), tab("y.rs")])),
+    );
+    for name in ["x.rs", "y.rs"] {
+        app.diffs.insert(
+            tab(name).key(),
+            Ok(std::sync::Arc::new(crate::diff::DiffDocument::default())),
+        );
+    }
+    let change = |name: &str, status: &str| terminator_git::Change {
+        path: cwd.join(name),
+        status: status.into(),
+    };
+    let context = |changes: Vec<terminator_git::Change>, stats: Vec<(&str, (u32, u32))>| {
+        crate::services::ContextData {
+            cwd: cwd.clone(),
+            root: Some(cwd.clone()),
+            perforce: None,
+            git_dirs: Vec::new(),
+            branch: "main".into(),
+            changes,
+            decorations: HashMap::default(),
+            stats: stats
+                .into_iter()
+                .map(|(name, stat)| (cwd.join(name), stat))
+                .collect(),
+            error: None,
+        }
+    };
+    app.context = Some(context(
+        vec![change("x.rs", " M"), change("y.rs", " M")],
+        vec![("x.rs", (1, 0)), ("y.rs", (2, 0))],
+    ));
+    let before = app.diff_fingerprints();
+    // An agent edits x.rs; y.rs is untouched.
+    app.context = Some(context(
+        vec![change("x.rs", " M"), change("y.rs", " M")],
+        vec![("x.rs", (5, 1)), ("y.rs", (2, 0))],
+    ));
+    let (jobs, received) = mpsc::channel();
+    app.jobs = jobs.into();
+    app.refresh_stale_diffs(&before);
+    let refreshed: Vec<String> = received
+        .try_iter()
+        .filter_map(|job| match job {
+            Job::DiffContext(tab, _) => Some(tab.key()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(refreshed, [tab("x.rs").key()]);
+    assert!(app.loading.contains(&tab("x.rs").key()));
 }

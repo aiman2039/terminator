@@ -59,6 +59,8 @@ pub struct GitPanelInput<'a> {
     pub shelves: &'a [(String, String)],
     pub branches: &'a [String],
     pub commit_draft: &'a mut String,
+    /// Recent commit messages, newest first.
+    pub recent_messages: &'a [String],
     pub amend: &'a mut bool,
     pub signoff: &'a mut bool,
     pub collapse_generation: u64,
@@ -93,6 +95,8 @@ pub struct GitPanelOutcome {
     pub collapse: bool,
     pub commit: bool,
     pub commit_push: bool,
+    /// Amend was ticked with an empty draft: load the `HEAD` message.
+    pub load_head_message: bool,
     /// Shelve every staged (checked) path.
     pub shelve: bool,
     pub unshelve: Option<String>,
@@ -184,13 +188,47 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
                 egui::TextEdit::multiline(input.commit_draft)
                     .hint_text("Message")
                     .desired_width(ui.available_width())
-                    .desired_rows(2),
+                    .desired_rows(4),
             );
+            // Subject length guide: Git tools truncate long first lines.
+            let subject = input
+                .commit_draft
+                .lines()
+                .next()
+                .map_or(0, |line| line.chars().count());
+            if subject > 0 {
+                let text = RichText::new(format!("Subject {subject}/72")).small();
+                if subject > 72 {
+                    ui.colored_label(ui.visuals().warn_fg_color, text);
+                } else {
+                    ui.weak(text);
+                }
+            }
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let amend = ui
                     .checkbox(input.amend, "Amend")
-                    .on_hover_text("Amend the last commit");
+                    .on_hover_text("Amend the last commit (loads its message)");
+                if amend.changed() && *input.amend && input.commit_draft.trim().is_empty() {
+                    outcome.load_head_message = true;
+                }
+                if !input.recent_messages.is_empty() {
+                    appearance::icon_menu_button(ui, "History", |ui| {
+                        for message in input.recent_messages {
+                            let subject = message.lines().next().unwrap_or_default();
+                            if ui
+                                .add(egui::Button::new(subject).truncate())
+                                .on_hover_text(message.as_str())
+                                .clicked()
+                            {
+                                message.clone_into(input.commit_draft);
+                                ui.close();
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("Recent commit messages");
+                }
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "git-amend", amend.rect);
                 let signoff = ui

@@ -192,8 +192,18 @@ impl App {
         if let Some(name) = outcome.switch {
             self.queue_workspace(workspace_ops::Op::Switch(name));
         }
+        if outcome.load_head_message {
+            self.queue_workspace(workspace_ops::Op::HeadMessage);
+        }
         if outcome.commit || outcome.commit_push {
             let message = std::mem::take(&mut self.git.commit);
+            let kept = message.trim();
+            if !kept.is_empty() {
+                let history = &mut self.preferences.commit_messages;
+                history.retain(|old| old.trim() != kept);
+                history.insert(0, kept.to_owned());
+                history.truncate(20);
+            }
             self.git.commit_inflight = Some(message.clone());
             self.queue_workspace(workspace_ops::Op::Commit {
                 message,

@@ -403,7 +403,9 @@ fn expanding_one_gap_keeps_other_gaps_and_the_change_identity() {
         super::super::build_with_context(Path::new("file.txt"), &original, &changed, false, 3);
     assert_eq!(doc.gaps.len(), 3);
     let selected = doc.gaps[1].old.clone();
-    let expanded = doc.expand_gap(Path::new("file.txt"), 1, false).unwrap();
+    let expanded = doc
+        .expand_gap(Path::new("file.txt"), 1, super::super::GapPart::All, false)
+        .unwrap();
     assert_eq!(expanded.gaps.len(), 2);
     assert!(expanded.gaps.iter().all(|gap| gap.old != selected));
     assert_eq!(expanded.left_text, original);

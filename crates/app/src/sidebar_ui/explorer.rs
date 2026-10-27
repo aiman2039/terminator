@@ -1027,6 +1027,7 @@ impl App {
             self.ensure_git_lists(context.root.clone());
             let open_shortcut = self.shortcut_label(Action::OpenFile);
             let mut draft = std::mem::take(&mut self.git.commit);
+            let recent_messages = self.preferences.commit_messages.clone();
             let outcome = git_panel(
                 ui,
                 &mut GitPanelInput {
@@ -1045,6 +1046,7 @@ impl App {
                     shelves: &self.git.shelves,
                     branches: &self.git.branches,
                     commit_draft: &mut draft,
+                    recent_messages: &recent_messages,
                     amend: &mut self.git.amend,
                     signoff: &mut self.git.signoff,
                     collapse_generation: self.git.collapse,

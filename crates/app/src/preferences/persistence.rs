@@ -206,6 +206,9 @@ pub struct UiPreferences {
     /// Git sidebar "View as list": flat file list instead of grouped sections.
     #[serde(default)]
     pub git_view_list: bool,
+    /// Recent commit messages, newest first, for the commit box history.
+    #[serde(default)]
+    pub commit_messages: Vec<String>,
     /// Info sidebar sections and the host-resource block. Missing prefs stay open.
     #[serde(default = "default_true")]
     pub info_process_open: bool,
@@ -286,6 +289,7 @@ impl Default for UiPreferences {
             explorer_whole_word: false,
             explorer_regex: false,
             git_view_list: false,
+            commit_messages: Vec::new(),
             info_process_open: true,
             info_resources_open: true,
             info_show_system: true,
