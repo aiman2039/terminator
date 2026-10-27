@@ -377,7 +377,7 @@ jobs:
 
   upload-draft:
     # Build in parallel with validation, but never upload unvalidated assets.
-    needs: [prepare, checks, build-linux, build-windows, assemble-macos]
+    needs: [prepare, checks, security, build-linux, build-windows, assemble-macos]
     if: needs.prepare.outputs.tag != ''
     runs-on: ubuntu-24.04
     concurrency:

@@ -1,5 +1,31 @@
 # Validation evidence — 2026-09-08
 
+## OSV block-buffer finding and release gate — 2026-10-27
+
+Actions run `40454143596` failed only OSV-Scanner, on
+`GHSA-qwgh-2vcv-g2f7` for `block-buffer 0.10.4`. The advisory describes
+corruption of an inline cursor after a caught callback panic. Source review
+shows that 0.10.4 stores its cursor in a separate field; an isolated Rust
+program ran the advisory input and callback panic, checked that the cursor
+stayed at 2, then reused the buffer successfully. This is a local assessment
+of a false positive, not an upstream correction of the advisory range.
+
+Added an OSV exception for this advisory. Before cargo-audit runs, a workflow
+check inspects Cargo lockfiles, including vendor lockfiles. It permits 0.10.4
+or stable versions at least 0.12.1. Checks with temporary lockfiles accepted
+0.10.4, 0.12.1, and 0.13.0; they rejected 0.11.0, 0.12.0, and 0.12.1-rc.1.
+Other advisories remain enabled for 0.10.4.
+
+The release upload now requires the security workflow to pass. The recorded
+run published despite the OSV failure because that dependency was absent.
+
+Validation: official OSV-Scanner 2.6.0, with its downloaded checksum verified,
+completed the workflow's recursive scan and reported `No issues found`.
+Actionlint passed on temporary copies with existing `parallel` groups expanded
+into sequential steps; the installed actionlint does not support those groups.
+Diff whitespace checks passed. No commit, push, hosted rerun, or release change
+was made.
+
 ## Windows SSH and SFTP checks — 2026-10-26
 
 Actions run `40303301309` failed two daemon tests on Windows. The SSH command

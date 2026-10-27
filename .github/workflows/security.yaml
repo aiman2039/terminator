@@ -25,6 +25,26 @@ jobs:
           - uses: taiki-e/install-action@v2
             with:
               tool: cargo-audit
+      - name: Check the block-buffer advisory exception
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import tomllib
+
+          # GHSA-qwgh-2vcv-g2f7 concerns an inline cursor. Version 0.10.4
+          # uses a separate cursor; all other versions must include the fix.
+          for lockfile in pathlib.Path('.').rglob('Cargo.lock'):
+              if any(part in {'target', '.git', 'node_modules'} for part in lockfile.parts):
+                  continue
+              for package in tomllib.loads(lockfile.read_text())['package']:
+                  if package['name'] != 'block-buffer':
+                      continue
+                  version = package['version']
+                  parts = version.split('.')
+                  patched = len(parts) == 3 and all(p.isdigit() for p in parts) and tuple(map(int, parts)) >= (0, 12, 1)
+                  if version != '0.10.4' and not patched:
+                      raise SystemExit(f'{lockfile}: block-buffer {version} requires advisory review')
+          PY
       - name: Audit Cargo.lock
         run: cargo audit
 

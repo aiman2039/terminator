@@ -1,6 +1,15 @@
 # Keep in sync with deny.toml [advisories].ignore and .cargo/audit.toml.
-# Unmaintained/unsound notices only (no CVEs). Replacements blocked on
+# Unmaintained/unsound notices below (no CVEs). Replacements blocked on
 # syntect / resvg 0.45 / egui 0.36 / wry gtk3.
+
+# OSV's <0.12.1 range also matches 0.10.4, which stores pos in a separate
+# field. Its EagerBuffer has no inline cursor, and ReadBuffer is absent.
+# The security workflow checks the locked versions before allowing this
+# exception, so it cannot hide a later move to an affected implementation.
+# https://github.com/RustCrypto/utils/security/advisories/GHSA-qwgh-2vcv-g2f7
+[[IgnoredVulns]]
+id = "GHSA-qwgh-2vcv-g2f7"
+reason = "block-buffer 0.10.4 has a separate cursor; the inline cursor panic bug does not apply. Other locked versions must be patched (>=0.12.1)."
 
 [[IgnoredVulns]]
 id = "RUSTSEC-2025-0141"
