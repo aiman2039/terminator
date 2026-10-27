@@ -26,7 +26,6 @@ pub(super) fn jump(
     let Some(hunk) = review.selected.and_then(|index| doc.hunks.get(index)) else {
         return;
     };
-    #[allow(clippy::cast_precision_loss)]
     let top = hunk_row(hunk, split, aligned) as f32 * diff_row_height(ui);
     for output in scroll {
         let mut state = output.state;
@@ -105,7 +104,6 @@ pub(super) fn paint_connector(
     let mut top = Vec::new();
     let mut bottom = Vec::new();
     for step in 0_u32..=12 {
-        #[allow(clippy::cast_precision_loss)]
         let t = step as f32 / 12.0;
         let blend = t * t * (3.0 - 2.0 * t);
         let x = egui::lerp(left.right()..=right.left(), t);
@@ -128,7 +126,7 @@ pub(super) fn paint_connector(
     painter.add(egui::Shape::line(bottom, stroke));
 }
 
-#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+#[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
 pub(super) fn paint(
     ui: &mut egui::Ui,
     doc: &diff::DiffDocument,
@@ -163,7 +161,6 @@ pub(super) fn paint(
     // and steal clicks (and keyboard focus) from the text editors.
     for (index, gap) in doc.gaps.iter().enumerate().filter(|_| !editor_pane) {
         for (side, output) in scroll.iter().enumerate() {
-            #[allow(clippy::cast_precision_loss)]
             let y = output.inner_rect.top() + gap.row(split) as f32 * row_h
                 - output.state.unclamped_offset().y;
             let rect = egui::Rect::from_min_size(
@@ -243,7 +240,6 @@ pub(super) fn paint(
     }
     for (index, hunk) in doc.hunks.iter().enumerate() {
         let color = change_color(hunk, colors);
-        #[allow(clippy::cast_precision_loss)]
         let fraction = hunk_row(hunk, split, aligned) as f32 / count as f32;
         let marker = egui::Rect::from_center_size(
             egui::pos2(
@@ -270,9 +266,7 @@ pub(super) fn paint(
         }
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), &format!("diff-marker-{index}"), marker);
-        #[allow(clippy::cast_precision_loss)]
         let row_top = hunk_row(hunk, split, aligned) as f32 * row_h;
-        #[allow(clippy::cast_precision_loss)]
         let old_height = if aligned {
             // Removed lines have no row of their own once aligned.
             hunk.new.len() as f32 * row_h
@@ -281,7 +275,6 @@ pub(super) fn paint(
         } else {
             hunk.rows(false).len() as f32 * row_h
         };
-        #[allow(clippy::cast_precision_loss)]
         let new_height = if split {
             hunk.new.len() as f32 * row_h
         } else {
@@ -340,8 +333,11 @@ pub(super) fn paint(
                 // Alt+click picks single changed lines for line-level
                 // stage/unstage/discard (painted views only).
                 if ui.input(|input| input.modifiers.alt) && !editor_pane {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    // Row index from UI coordinates.
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        reason = "Row index from UI coordinates."
+                    )]
                     let row = ((pos.y - output.inner_rect.top()
                         + output.state.unclamped_offset().y)
                         / row_h)
@@ -363,7 +359,6 @@ pub(super) fn paint(
                         continue;
                     };
                     if (if old { &lines.old } else { &lines.new }).contains(&line) {
-                        #[allow(clippy::cast_precision_loss)] // UI coordinate
                         let y = output.inner_rect.top() + row as f32 * row_h
                             - output.state.unclamped_offset().y;
                         ui.painter().with_clip_rect(clip).text(
@@ -465,7 +460,6 @@ pub(super) fn paint(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]
@@ -543,7 +537,6 @@ mod tests {
                             &mut sync,
                         );
                         for output in &scroll {
-                            #[allow(clippy::cast_precision_loss)]
                             let top = output.inner_rect.top()
                                 + doc.hunks.get(1).unwrap().row(split) as f32 * diff_row_height(ui)
                                 - output.state.unclamped_offset().y;

@@ -131,7 +131,7 @@ pub(crate) fn accept(
 /// prefix grows, handle its keys, and say whether to ask the server
 /// (`(position, line, prefix start)`): Ctrl+Space, or typing an
 /// identifier char, `.`, or `::` while no popup is open.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
 pub(crate) fn after_frame(
     ui: &egui::Ui,
     popup: &mut Option<CompletionPopup>,
@@ -363,7 +363,6 @@ pub(crate) fn popup_ui(ui: &egui::Ui, popup: &mut CompletionPopup) -> PopupActio
         .show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_max_width(460.0);
-                #[allow(clippy::cast_precision_loss)] // small row count
                 let max_height = VISIBLE_ROWS as f32 * 20.0;
                 egui::ScrollArea::vertical()
                     .max_height(max_height)

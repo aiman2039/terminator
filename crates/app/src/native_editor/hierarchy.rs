@@ -240,7 +240,6 @@ impl App {
                                 continue;
                             };
                             ui.horizontal(|ui| {
-                                #[allow(clippy::cast_precision_loss)] // UI coordinate
                                 ui.add_space(node.depth as f32 * 16.0);
                                 let leaf = node.children.as_ref().is_some_and(Vec::is_empty);
                                 let arrow = if leaf {

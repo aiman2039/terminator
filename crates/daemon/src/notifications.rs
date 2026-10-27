@@ -148,7 +148,9 @@ fn queue_or_disable(spawned: std::io::Result<Sender<Queued>>) -> Option<Sender<Q
     match spawned {
         Ok(sender) => Some(sender),
         Err(error) => {
-            eprintln!("desktop notification worker failed to start: {error}");
+            crate::console::Console::err(format_args!(
+                "desktop notification worker failed to start: {error}"
+            ));
             None
         }
     }
@@ -305,7 +307,10 @@ fn process_nonce() -> u64 {
 /// the waiter so the worker can present the alert that superseded it. Returns
 /// whether a matching delivered notification was found and removed.
 #[cfg(target_os = "macos")]
-#[allow(deprecated)]
+#[expect(
+    deprecated,
+    reason = "NSUserNotificationCenter is the only API for removing delivered notifications here"
+)]
 fn remove_active_notification() -> bool {
     let generation = PRESENTING.load(Ordering::Relaxed);
     if generation == 0 {

@@ -560,18 +560,6 @@ mod tests {
                 "missing highlight: {path}"
             );
         }
-        for path in [
-            "wrangler.jsonc",
-            "view.astro",
-            "view.svelte",
-            "notes.mdx",
-            "data.json5",
-            "build.zig",
-            "main.sol",
-        ] {
-            println!("FORMAT {path}: {:?}", language_for_path(path));
-        }
-        println!("BUNDLED GRAMMARS: {}", syntax_set().syntaxes().len());
     }
 
     #[test]

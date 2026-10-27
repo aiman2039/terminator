@@ -216,7 +216,7 @@ impl App {
 
             #[cfg(feature = "test-support")]
             if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
-                eprintln!("Fixture ended {:?}", ended.kind);
+                crate::console::Console::err(format_args!("Fixture ended {:?}", ended.kind));
             }
             let was_active = self.active_session.as_ref() == Some(&ended.id);
             let old_group = self

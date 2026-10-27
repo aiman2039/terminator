@@ -44,10 +44,8 @@ pub(super) struct HeaderIconButton<'a> {
 
 pub(super) fn header_row_width(buttons: usize, menu: bool) -> f32 {
     // Header width is a UI coordinate; the button count can exceed the f32 mantissa.
-    #[allow(clippy::cast_precision_loss)]
     let mut width = buttons as f32 * HEADER_SLOT;
     if buttons > 1 {
-        #[allow(clippy::cast_precision_loss)]
         {
             width += buttons.saturating_sub(1) as f32 * HEADER_GAP;
         }

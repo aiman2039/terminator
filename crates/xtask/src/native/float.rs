@@ -239,7 +239,11 @@ fn float_window_id(pid: u32, title: &str) -> Option<u32> {
                 // Window numbers are small positive integers; the range
                 // check leaves nothing to truncate or lose the sign of.
                 // (`as` saturates, so the eager narrow is harmless.)
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "Range checked on the next line"
+                )]
                 let narrowed = id as u32;
                 (id >= 0.0 && id <= f64::from(u32::MAX)).then_some(narrowed)
             });

@@ -49,9 +49,15 @@ pub(super) fn wrapping_path_tooltip(
 }
 
 pub struct WrappingPathRow<R> {
-    #[allow(dead_code, reason = "tests inspect path and action rects")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "tests inspect path and action rects")
+    )]
     pub path: egui::Response,
-    #[allow(dead_code, reason = "tests inspect path and action rects")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "tests inspect path and action rects")
+    )]
     pub actions: R,
 }
 

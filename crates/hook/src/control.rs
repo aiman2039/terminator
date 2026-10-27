@@ -455,7 +455,7 @@ pub fn run(args: &[String]) -> Result<()> {
             };
             match rpc(&paths, request)?.checked()? {
                 Response::Text(text) => {
-                    print!("{text}");
+                    crate::output::Output::text(text);
                     return Ok(());
                 }
                 _ => anyhow::bail!("No terminal text returned"),
@@ -533,6 +533,6 @@ pub fn run(args: &[String]) -> Result<()> {
         }
         Control::Browser { .. } => unreachable!(),
     };
-    println!("{}", serde_json::to_string_pretty(&value)?);
+    crate::output::Output::line(serde_json::to_string_pretty(&value)?);
     Ok(())
 }

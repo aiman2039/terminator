@@ -1304,12 +1304,11 @@ pub fn parse_document_symbols(result: &Value) -> Vec<Symbol> {
                         selection: native_range(&item.selection_range),
                         depth,
                         detail: item.detail.clone().filter(|detail| !detail.is_empty()),
-                        #[allow(deprecated)] // older servers only set the flag
+                        #[expect(deprecated, reason = "Older servers only set the flag")]
                         deprecated: item.deprecated == Some(true)
-                            || item
-                                .tags
-                                .as_ref()
-                                .is_some_and(|tags| tags.contains(&lsp_types::SymbolTag::DEPRECATED)),
+                            || item.tags.as_ref().is_some_and(|tags| {
+                                tags.contains(&lsp_types::SymbolTag::DEPRECATED)
+                            }),
                     });
                     if let Some(children) = &item.children {
                         walk(children, depth.saturating_add(1), out);
@@ -1327,7 +1326,7 @@ pub fn parse_document_symbols(result: &Value) -> Vec<Symbol> {
                     selection: native_range(&item.location.range),
                     depth: 0,
                     detail: item.container_name.clone(),
-                    #[allow(deprecated)] // older servers only set the flag
+                    #[expect(deprecated, reason = "Older servers only set the flag")]
                     deprecated: item.deprecated == Some(true)
                         || item
                             .tags

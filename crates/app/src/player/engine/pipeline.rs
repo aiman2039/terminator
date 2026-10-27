@@ -115,7 +115,7 @@ pub(super) async fn pipeline(
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        #[allow(unreachable_code)]
+        #[expect(unreachable_code, reason = "Keeps the block's Result type")]
         Ok::<(), anyhow::Error>(())
     };
     tokio::select! {

@@ -26,9 +26,7 @@ pub(crate) fn status_icon(waiting: usize) -> StatusIcon {
         png.clear();
     }
     // Menu-bar point size; canvas pixels are UI coordinates.
-    #[allow(clippy::cast_precision_loss)]
     let width_pt = width as f32 / SCALE as f32;
-    #[allow(clippy::cast_precision_loss)]
     let height_pt = height as f32 / SCALE as f32;
     StatusIcon {
         png,
@@ -95,7 +93,6 @@ fn badge_width(label: &str, badge_h: u32) -> u32 {
 }
 
 // Pill geometry is pixel UI coordinates.
-#[allow(clippy::cast_precision_loss)]
 fn fill_pill(image: &mut image::RgbaImage, x: u32, y: u32, w: u32, h: u32, color: image::Rgba<u8>) {
     let radius = h as f32 / 2.0;
     let left = x as f32 + radius;
@@ -204,9 +201,7 @@ mod tests {
         let icon = status_icon(waiting);
         let image = image::load_from_memory(&icon.png).expect("png").to_rgba8();
         // Point size is a UI coordinate.
-        #[allow(clippy::cast_precision_loss)]
         let width_pt = image.width() as f32 / SCALE as f32;
-        #[allow(clippy::cast_precision_loss)]
         let height_pt = image.height() as f32 / SCALE as f32;
         assert_eq!(icon.width_pt, width_pt);
         assert_eq!(icon.height_pt, height_pt);

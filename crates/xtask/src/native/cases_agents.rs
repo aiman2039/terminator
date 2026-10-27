@@ -159,7 +159,7 @@ pub(crate) fn scrolling_bounded(opts: &Options) -> Result<()> {
 /// input byte it receives. `start_before_attach` covers the reattach
 /// snapshot path; otherwise the agent starts while the GUI is attached
 /// (live-bytes path). Pass the SGR (or legacy) report markers to expect.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
 pub(crate) fn agent_wheel_case(
     opts: &Options,
     name: &str,

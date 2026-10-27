@@ -517,7 +517,9 @@ fn prune_closes_docs_and_clears_state() {
 #[tokio::test]
 async fn live_typescript_server_diagnostics_and_symbols() {
     if terminator_core::find_executable("typescript-language-server").is_none() {
-        eprintln!("SKIP: typescript-language-server not installed");
+        crate::console::Console::err(format_args!(
+            "SKIP: typescript-language-server not installed"
+        ));
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");
@@ -545,7 +547,7 @@ async fn live_typescript_server_diagnostics_and_symbols() {
         if let Some(note) = manager.server_note(&file)
             && note.starts_with("Language server failed to start")
         {
-            eprintln!("SKIP: {note}");
+            crate::console::Console::err(format_args!("SKIP: {note}"));
             return;
         }
         assert!(
@@ -588,7 +590,7 @@ async fn live_rust_analyzer_diagnostics() {
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
     if L::find_server(&["rust-analyzer"], &path_env).is_none() {
-        eprintln!("SKIP: rust-analyzer not on PATH");
+        crate::console::Console::err(format_args!("SKIP: rust-analyzer not on PATH"));
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");
@@ -794,7 +796,7 @@ async fn live_rust_analyzer_completion() {
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
     if L::find_server(&["rust-analyzer"], &path_env).is_none() {
-        eprintln!("SKIP: rust-analyzer not on PATH");
+        crate::console::Console::err(format_args!("SKIP: rust-analyzer not on PATH"));
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");
@@ -846,7 +848,7 @@ async fn live_rust_analyzer_signature_help() {
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
     if L::find_server(&["rust-analyzer"], &path_env).is_none() {
-        eprintln!("SKIP: rust-analyzer not on PATH");
+        crate::console::Console::err(format_args!("SKIP: rust-analyzer not on PATH"));
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");
@@ -906,7 +908,7 @@ async fn live_rust_analyzer_format_and_code_action() {
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
     if L::find_server(&["rust-analyzer"], &path_env).is_none() {
-        eprintln!("SKIP: rust-analyzer not on PATH");
+        crate::console::Console::err(format_args!("SKIP: rust-analyzer not on PATH"));
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1013,7 +1015,7 @@ async fn live_rust_analyzer_inlay_hints() {
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
     if L::find_server(&["rust-analyzer"], &path_env).is_none() {
-        eprintln!("SKIP: rust-analyzer not on PATH");
+        crate::console::Console::err(format_args!("SKIP: rust-analyzer not on PATH"));
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1070,7 +1072,7 @@ async fn live_rust_analyzer_call_hierarchy() {
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default();
     if L::find_server(&["rust-analyzer"], &path_env).is_none() {
-        eprintln!("SKIP: rust-analyzer not on PATH");
+        crate::console::Console::err(format_args!("SKIP: rust-analyzer not on PATH"));
         return;
     }
     let dir = tempfile::tempdir().expect("tempdir");

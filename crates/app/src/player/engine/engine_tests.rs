@@ -208,10 +208,10 @@ mod tests {
             first_pcm.is_some(),
             "103FM did not produce PCM within 20 seconds"
         );
-        println!(
+        crate::console::Console::out(format_args!(
             "{}",
             serde_json::json!({"station":"103FM","pcm_ms":first_pcm.unwrap().as_secs_f64()*1000.0,"cleanup_ms":stop.elapsed().as_secs_f64()*1000.0,"output_device":true,"muted":true})
-        );
+        ));
     }
 
     #[test]

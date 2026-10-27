@@ -51,5 +51,5 @@ fn print_dock(dock: &DockState<serde_json::Value>) {
     let Ok(text) = serde_json::to_string(dock) else {
         return;
     };
-    println!("{text}");
+    terminator::console::Console::out(format_args!("{text}"));
 }

@@ -40,11 +40,11 @@ vt100 = { path = "vendor/vt100" }
 # function splits, or boilerplate comments, and they are not the safety lints.
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
-indexing_slicing = "warn"
-string_slice = "warn"
-unwrap_used = "warn"
-expect_used = "warn"
-arithmetic_side_effects = "warn"
+indexing_slicing = "deny"
+string_slice = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+arithmetic_side_effects = "deny"
 undocumented_unsafe_blocks = "warn"
 clone_on_ref_ptr = "warn"
 missing_errors_doc = "allow"
@@ -79,3 +79,31 @@ no_effect_underscore_binding = "allow"
 large_types_passed_by_value = "allow"
 large_futures = "allow"
 if_not_else = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+module_name_repetitions = "allow"
+fn_params_excessive_bools = "allow"
+return_self_not_must_use = "allow"
+cast_precision_loss = "allow"
+default_trait_access = "allow"
+unused_async = "allow"
+ref_option_ref = "allow"
+case_sensitive_file_extension_comparisons = "allow"
+trivially_copy_pass_by_ref = "allow"
+result_large_err = "allow"
+
+# Panic safety lints above are deny. cast_possible_truncation, cast_sign_loss and
+# cast_possible_wrap stay at pedantic's warn (denied by -D warnings); use T::try_from(x)?
+panic = "deny"
+# Suppressions use #[expect(lint, reason = "...")], which errors once the lint stops firing.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+uninlined_format_args = "deny"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+# User-facing output goes through one module per binary marked #[expect(clippy::print_stdout, ...)].
+print_stdout = "deny"
+print_stderr = "deny"
+# Module roots are topic/mod.rs, never topic.rs + topic/.
+self_named_module_files = "deny"

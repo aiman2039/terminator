@@ -10,7 +10,6 @@ pub fn bars_from_samples(samples: &[f32; FFT_N], rate: u32) -> [f32; BARS] {
     let mut bars = [0.0; BARS];
     let hann = hann_window(samples);
     // Spectrum frequency coordinate; rates above 2^24 do not fit in an f32 mantissa.
-    #[allow(clippy::cast_precision_loss)]
     let nyquist = rate as f32 / 2.0;
     let max_hz = MAX_HZ.min(nyquist);
     let limit = if max_hz > MIN_HZ {

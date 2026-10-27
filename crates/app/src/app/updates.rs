@@ -551,7 +551,10 @@ impl App {
                 Update::PickedProject(path, generation) => {
                     #[cfg(feature = "test-support")]
                     if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
-                        eprintln!("Fixture native project picker selected={}", path.is_some());
+                        crate::console::Console::err(format_args!(
+                            "Fixture native project picker selected={}",
+                            path.is_some()
+                        ));
                     }
                     self.picker_active = false;
                     if let Some(path) = path
@@ -596,7 +599,10 @@ impl App {
                 Update::PickedFile { path, project, cwd } => {
                     #[cfg(feature = "test-support")]
                     if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
-                        eprintln!("Fixture native file picker selected={}", path.is_some());
+                        crate::console::Console::err(format_args!(
+                            "Fixture native file picker selected={}",
+                            path.is_some()
+                        ));
                     }
                     self.picker_active = false;
                     if let Some(path) = path {
@@ -673,7 +679,10 @@ impl App {
                         .map(|workspace| workspace.active.clone());
                     #[cfg(feature = "test-support")]
                     if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
-                        eprintln!("Fixture created {:?}, split {:?}", session.kind, split);
+                        crate::console::Console::err(format_args!(
+                            "Fixture created {:?}, split {:?}",
+                            session.kind, split
+                        ));
                     }
                     if session.kind == SessionKind::Editor {
                         let anchors = target.clone().unwrap_or_default();
@@ -895,10 +904,10 @@ impl App {
                                 Ok(entries) => {
                                     #[cfg(feature = "test-support")]
                                     if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
-                                        eprintln!(
+                                        crate::console::Console::err(format_args!(
                                             "Directory refresh succeeded: entries={}",
                                             entries.len()
-                                        );
+                                        ));
                                     }
                                     self.directory_errors.remove(&path);
                                     self.dirs.insert(path, entries);
@@ -906,11 +915,11 @@ impl App {
                                 Err(error) => {
                                     #[cfg(feature = "test-support")]
                                     if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
-                                        eprintln!(
+                                        crate::console::Console::err(format_args!(
                                             "Directory refresh failed: kind={:?} cached_entries={}",
                                             error.kind,
                                             self.dirs.get(&path).map_or(0, Vec::len)
-                                        );
+                                        ));
                                     }
                                     self.directory_errors.insert(path, error);
                                 }
@@ -962,7 +971,7 @@ impl App {
                     }
                     #[cfg(feature = "test-support")]
                     if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
-                        eprintln!("Fixture error {e}");
+                        crate::console::Console::err(format_args!("Fixture error {e}"));
                     }
                     if daemon_connection::is_connection_error(&e) {
                         self.connected = false;

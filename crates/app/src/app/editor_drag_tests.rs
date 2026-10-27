@@ -49,7 +49,10 @@ fn begin_drag(app: &mut App, ctx: &egui::Context, source: &PaneSource) -> egui::
     let start = frame_center(app, ctx, &name);
     combined_frame(app, ctx, vec![egui::Event::PointerMoved(start)]);
     combined_frame(app, ctx, vec![frame_press(start, true)]);
-    #[allow(clippy::arithmetic_side_effects)] // Bounded fixture coordinates.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "Bounded fixture coordinates."
+    )]
     let moved = start + egui::vec2(18.0, 12.0);
     frame_glide(app, ctx, start, moved, 3);
     assert_eq!(app.drag.pane_source.as_ref(), Some(source));

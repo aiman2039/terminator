@@ -34,7 +34,9 @@ pub(crate) fn is_fatal(error: &io::Error) -> bool {
 
 /// Log a transient accept failure and pause briefly before retrying.
 pub(crate) fn back_off(error: &io::Error) {
-    eprintln!("daemon accept failed transiently: {error}; retrying");
+    crate::console::Console::err(format_args!(
+        "daemon accept failed transiently: {error}; retrying"
+    ));
     thread::sleep(BACKOFF);
 }
 
@@ -62,7 +64,9 @@ pub(crate) fn raise_fd_limit() {
             maximum: current.maximum,
         },
     ) {
-        eprintln!("daemon could not raise descriptor limit to {target}: {error}");
+        crate::console::Console::err(format_args!(
+            "daemon could not raise descriptor limit to {target}: {error}"
+        ));
     }
 }
 

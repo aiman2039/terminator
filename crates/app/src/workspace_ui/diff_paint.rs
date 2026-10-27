@@ -49,7 +49,6 @@ impl DiffMetrics {
 
     pub(super) fn number_w(&self) -> f32 {
         // Gutter digit column is a UI coordinate.
-        #[allow(clippy::cast_precision_loss)]
         let digits = self.digits as f32;
         self.digit_w * digits
     }
@@ -245,7 +244,7 @@ pub(super) enum SplitPane {
 
 // Each side owns its horizontal scroll so the divider can resize them without
 // clipping long lines; the vertical offset is mirrored so both sides stay in step.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
 pub(super) fn paint_diff_split(
     ui: &mut egui::Ui,
     doc: &diff::DiffDocument,
@@ -337,7 +336,7 @@ pub(super) fn paint_diff_split(
     vec![left, right]
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
 pub(super) fn paint_diff_pane(
     ui: &mut egui::Ui,
     rect: egui::Rect,

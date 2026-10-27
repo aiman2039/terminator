@@ -88,7 +88,7 @@ impl App {
         if self.add_project && !self.picker_active {
             #[cfg(feature = "test-support")]
             if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
-                eprintln!("Fixture native project picker opened");
+                crate::console::Console::err(format_args!("Fixture native project picker opened"));
             }
             self.add_project = false;
             self.picker_active = true;
@@ -359,7 +359,7 @@ impl App {
         if self.open_path && !self.picker_active {
             #[cfg(feature = "test-support")]
             if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some() {
-                eprintln!("Fixture native file picker opened");
+                crate::console::Console::err(format_args!("Fixture native file picker opened"));
             }
             self.open_path = false;
             self.picker_active = true;

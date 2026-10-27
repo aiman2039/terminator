@@ -203,7 +203,7 @@ pub(crate) fn explorer_query_keeps_file(
     needle.is_none_or(|needle| label.to_lowercase().contains(needle))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
 pub fn explorer_file_row(
     ui: &mut egui::Ui,
     path: &Path,

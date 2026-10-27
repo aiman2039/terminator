@@ -110,7 +110,6 @@ fn compressor_percent(compressor_pages: u64, page_size: u64, total_bytes: u64) -
     }
     let bytes = compressor_pages.saturating_mul(page_size);
     // 0–100 display bar; u64 does not fit in an f32 mantissa.
-    #[allow(clippy::cast_precision_loss)]
     Some((bytes as f32 / total_bytes as f32 * 100.0).clamp(0.0, 100.0))
 }
 
@@ -147,7 +146,10 @@ fn read_level() -> Option<PressureLevel> {
 }
 
 #[cfg(target_os = "macos")]
-#[allow(deprecated)] // libc::mach_host_self; mach2 is not a workspace dependency.
+#[expect(
+    deprecated,
+    reason = "libc::mach_host_self; mach2 is not a workspace dependency."
+)]
 fn read_compressor_percent() -> Option<f32> {
     // SAFETY: `_SC_PAGESIZE` is a valid `sysconf` name. A negative result fails `try_from`.
     let page = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).ok()?;
@@ -202,7 +204,10 @@ struct HostPort(libc::mach_port_t);
 
 #[cfg(target_os = "macos")]
 impl Drop for HostPort {
-    #[allow(deprecated)] // libc::mach_task_self; mach2 is not a workspace dependency.
+    #[expect(
+        deprecated,
+        reason = "libc::mach_task_self; mach2 is not a workspace dependency."
+    )]
     fn drop(&mut self) {
         if self.0 != 0 {
             // SAFETY: `self.0` is the send right from `mach_host_self`. This runs once, from `Drop`.

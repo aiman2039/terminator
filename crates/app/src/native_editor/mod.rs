@@ -1141,7 +1141,6 @@ impl App {
             // Gutter changes against HEAD, once per edit (or new base).
             let (gutter_hunks, change_marks) = match &git_base {
                 Some(base) => {
-                    #[allow(clippy::as_conversions)] // pointer identity only
                     let key = (
                         buffer.revision(),
                         std::sync::Arc::as_ptr(base).cast::<u8>() as usize,

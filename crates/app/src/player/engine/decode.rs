@@ -296,7 +296,6 @@ pub(super) fn decode_audio(
                     healthy.store(true, Ordering::Release);
                 }
                 // Playback position. Sample counts above 2^53 do not fit in an f64 mantissa.
-                #[allow(clippy::cast_precision_loss)]
                 let seconds = played as f64 / f64::from(rate.get()) / f64::from(channels.get());
                 let Ok(elapsed) = Duration::try_from_secs_f64(seconds) else {
                     continue;

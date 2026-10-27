@@ -1,7 +1,17 @@
 //! Repository automation in Rust. No Python interpreter or downloaded test runner.
 #![forbid(unsafe_code)]
 // The harness fails the process on a broken fixture. That is an assertion, not a library error.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "Dev tool: a failed step aborts the task"
+)]
+// xtask is a developer CLI; its stdout/stderr is the task report.
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "xtask is a developer CLI; its output is the task report"
+)]
 mod async_boundary;
 mod browser_fixture;
 mod harness;

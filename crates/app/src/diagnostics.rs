@@ -68,7 +68,10 @@ impl Diagnostics {
             && let Ok(actions) = serde_json::from_slice::<Vec<FixtureAction>>(&bytes)
         {
             if self.actions.len() != actions.len() {
-                eprintln!("Fixture loaded {} dynamic actions", actions.len());
+                crate::console::Console::err(format_args!(
+                    "Fixture loaded {} dynamic actions",
+                    actions.len()
+                ));
             }
             self.actions = actions;
         }
@@ -222,7 +225,7 @@ impl Diagnostics {
                 self.request_fixture_capture(ctx);
             }
             self.last_action = Some((action.at_ms, self.started.elapsed()));
-            eprintln!("Fixture action: {}", action.target);
+            crate::console::Console::err(format_args!("Fixture action: {}", action.target));
             self.action_index = self.action_index.saturating_add(1);
         }
     }
@@ -236,11 +239,11 @@ impl Diagnostics {
         };
         let callback_ctx = ctx.clone();
         ctx.request_screenshot(move |image| {
-            eprintln!(
+            crate::console::Console::err(format_args!(
                 "Native fixture captured {}x{}",
                 image.width(),
                 image.height()
-            );
+            ));
             let bytes = image
                 .pixels
                 .iter()
@@ -256,7 +259,7 @@ impl Diagnostics {
                 u32::try_from(image.height()).unwrap_or(u32::MAX),
                 image::ColorType::Rgba8,
             ) {
-                eprintln!("Capture failed: {e}");
+                crate::console::Console::err(format_args!("Capture failed: {e}"));
             }
             if std::env::var_os("TERMINATOR_TEST_KEEP_OPEN").is_none() {
                 if cfg!(target_os = "macos")
@@ -309,7 +312,9 @@ impl Diagnostics {
             if std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_none() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
-            eprintln!("Native fixture initialized at scale {scale}");
+            crate::console::Console::err(format_args!(
+                "Native fixture initialized at scale {scale}"
+            ));
         }
         if self.scale_configured && !self.sized {
             let scale = std::env::var("TERMINATOR_TEST_SCALE")
@@ -391,7 +396,7 @@ impl Diagnostics {
             ctx.output_mut(|output| {
                 output.commands.retain(|command| {
                     if let egui::OutputCommand::CopyText(text) = command {
-                        eprintln!("Fixture copied text: {text:?}");
+                        crate::console::Console::err(format_args!("Fixture copied text: {text:?}"));
                         false
                     } else {
                         true
@@ -426,7 +431,7 @@ impl Diagnostics {
         {
             self.request_fixture_capture(ctx);
             self.requested = true;
-            eprintln!("Native fixture requested capture");
+            crate::console::Console::err(format_args!("Native fixture requested capture"));
         } else if self.requested
             && !self.force_closed
             // Native-input drivers own their lifetime and enforce their own
@@ -442,7 +447,9 @@ impl Diagnostics {
             // visible already wrote the artifact.
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             self.force_closed = true;
-            eprintln!("Native fixture forced close without capture");
+            crate::console::Console::err(format_args!(
+                "Native fixture forced close without capture"
+            ));
         }
     }
 }

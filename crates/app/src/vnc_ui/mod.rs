@@ -424,7 +424,7 @@ impl App {
         self.place_gui_tab(project, tab, After::Workspace(id(), Vec::new()));
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
     pub(crate) fn vnc_view(
         &mut self,
         ui: &mut egui::Ui,

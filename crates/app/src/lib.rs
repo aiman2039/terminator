@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+pub mod console;
 pub mod daemon_connection;
 mod daemon_upgrade;
 use daemon_connection::{can_restart_service, can_retire_daemon};

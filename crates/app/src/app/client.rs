@@ -42,7 +42,6 @@ impl App {
                 );
             }
             Ui::Snapshot => {
-                #[allow(unused_mut)]
                 let mut snapshot = serde_json::json!({"selected_project":self.selected,"active_session":self.active_session,"workspaces":self.layouts,
                     "controls":{
                         "header-drag":self.fixture_rect(ctx,"header-drag"),

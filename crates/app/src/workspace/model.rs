@@ -4,7 +4,6 @@ use egui_dock::DockState;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde skip_serializing_if requires a reference
 fn is_false(value: &bool) -> bool {
     !*value
 }

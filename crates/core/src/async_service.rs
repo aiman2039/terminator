@@ -646,7 +646,7 @@ mod tests {
                 CancellationToken::new(),
                 async {
                     panic!("fixture panic");
-                    #[allow(unreachable_code)]
+                    #[expect(unreachable_code, reason = "Keeps the block's Result type")]
                     Ok(0)
                 },
             )

@@ -87,9 +87,17 @@ pub(super) fn vnc_screen(
             }
             let rel_x = ((pos.x - image_rect.left()) / image_rect.width()).clamp(0.0, 1.0);
             let rel_y = ((pos.y - image_rect.top()) / image_rect.height()).clamp(0.0, 1.0);
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "Clamped to the framebuffer size"
+            )]
             let x = (origin.x + rel_x * (tex_size.x - 1.0).max(0.0)) as u16;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "Clamped to the framebuffer size"
+            )]
             let y = (origin.y + rel_y * (tex_size.y - 1.0).max(0.0)) as u16;
             Some((x, y))
         };
@@ -242,7 +250,11 @@ pub(super) fn vnc_screen(
 
     if !view_only && view.draft_options.remote_resize && view.resize_supported && monitor.is_none()
     {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "Clamped to 64..=8192"
+        )]
         let target = (
             available.x.round().clamp(64.0, 8192.0) as u16,
             available.y.round().clamp(64.0, 8192.0) as u16,

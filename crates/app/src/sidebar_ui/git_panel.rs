@@ -831,7 +831,6 @@ pub(super) const GIT_TREE_ROW_HEIGHT: f32 = 20.0;
 
 /// Orca-style section header with per-section stage/unstage all. The body is a
 /// directory tree (JetBrains-style), collapsible per folder.
-#[allow(clippy::too_many_arguments)]
 fn git_group_section(
     ui: &mut egui::Ui,
     ctx: &GitRowCtx<'_>,

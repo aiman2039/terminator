@@ -404,7 +404,6 @@ impl Controller {
 
     pub fn seek_fraction(&mut self, fraction: f32, duration: Duration) {
         // Seek position. Durations above 2^24 ms do not fit in an f32 mantissa.
-        #[allow(clippy::cast_precision_loss)]
         let millis = duration.as_millis() as f32 * fraction.clamp(0.0, 1.0);
         self.engine
             .seek(Duration::from_millis(u64_from_f32(millis)));

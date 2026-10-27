@@ -296,10 +296,10 @@ fn focused_vnc_clipboard_commands_send_remote_shortcuts() {
         true,
     );
     assert!(blocked.is_empty());
-    println!(
+    crate::console::Console::out(format_args!(
         "GUI_CLIPBOARD_EVENTS={}",
         serde_json::json!({"paste":paste,"copy":copy})
-    );
+    ));
 }
 
 #[test]

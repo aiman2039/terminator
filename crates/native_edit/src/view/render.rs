@@ -278,14 +278,11 @@ pub fn show_source<B: Buffer>(
                 .max()
                 .unwrap_or(0)
                 .clamp(8, ANNOTATION_CELLS);
-            #[allow(clippy::cast_precision_loss)] // UI coordinate
-            let width = cells.saturating_add(1) as f32 * advance;
-            width
+            cells.saturating_add(1) as f32 * advance
         }
         _ => 0.0,
     };
     let gutter = if options.show_line_numbers {
-        #[allow(clippy::cast_precision_loss)] // UI coordinate
         let digits = doc.line_count().max(1).to_string().len() as f32;
         (digits + 2.0) * advance + annotation_w
     } else {
@@ -293,8 +290,11 @@ pub fn show_source<B: Buffer>(
     };
     let mut annotation_clicked = None;
     let mut toggle_blame = false;
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    // Pane geometry becomes a bounded number of monospace cells.
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "Pane geometry becomes a bounded number of monospace cells."
+    )]
     let wrap_columns = options.soft_wrap.then(|| {
         ((ui.available_width() - gutter - 16.0).max(advance) / advance)
             .floor()
@@ -327,7 +327,6 @@ pub fn show_source<B: Buffer>(
     let folds = highlight.folds();
     let visual_rows = highlight.rows();
     let row_count = visual_rows.len();
-    #[allow(clippy::cast_precision_loss)] // UI coordinate
     let content_height = visual_rows.len().max(1) as f32 * row_height;
 
     // Keep one footer row outside the source viewport. The viewport must
@@ -339,7 +338,6 @@ pub fn show_source<B: Buffer>(
     // Long lines pan instead of clipping: without soft wrap the content
     // keeps its full width and the scroll area owns both axes.
     let h_scroll = !options.soft_wrap;
-    #[allow(clippy::cast_precision_loss)] // UI coordinate
     let content_width =
         (gutter + highlight.max_cells() as f32 * advance + advance).max(ui.available_width());
     let mut content_rect = egui::Rect::NOTHING;
@@ -396,11 +394,9 @@ pub fn show_source<B: Buffer>(
         // that leaves the pane keeps selecting.
         let cursor_at = |pos: egui::Pos2| -> Option<(usize, usize)> {
             let origin = response.rect.min;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            // UI coordinate
+            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "UI coordinate")]
             let row_index = ((pos.y - origin.y) / row_height).floor().max(0.0) as usize;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            // UI coordinate
+            #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "UI coordinate")]
             let cells = ((pos.x - origin.x - gutter) / advance).round().max(0.0) as usize;
             // Wide chars occupy two cells: resolve the display cell back to
             // a char column on the hit row.
@@ -749,8 +745,7 @@ pub fn show_source<B: Buffer>(
         // Only the rows inside the clip rect: a long file's off-screen rows
         // cost nothing per frame.
         let clip = painter.clip_rect();
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        // Row indices from UI coordinates.
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "Row indices from UI coordinates.")]
         let (first_row, last_row) = (
             ((clip.top() - origin.y) / row_height).floor().max(0.0) as usize,
             (((clip.bottom() - origin.y) / row_height).ceil().max(0.0) as usize)
@@ -778,7 +773,6 @@ pub fn show_source<B: Buffer>(
                 text: &visual.text,
                 hints: &hints,
             };
-            #[allow(clippy::cast_precision_loss)] // UI coordinate
             let y = origin.y + visual_line as f32 * row_height;
             if y + row_height < painter.clip_rect().top() || y > painter.clip_rect().bottom() {
                 continue;
@@ -933,7 +927,6 @@ pub fn show_source<B: Buffer>(
                 }
                 // One guide per indent level the line sits inside.
                 for cell in (0..guide_cells).step_by(crate::rows::TAB_WIDTH) {
-                    #[allow(clippy::cast_precision_loss)] // UI coordinate
                     let x = origin.x + gutter + cell as f32 * advance + 1.0;
                     painter.vline(x, y..=y + row_height, egui::Stroke::new(1.0, guide_color));
                 }
@@ -958,9 +951,7 @@ pub fn show_source<B: Buffer>(
                 let cells = geometry
                     .caret_x(end_col.saturating_sub(visual.start))
                     .saturating_sub(start_cell);
-                #[allow(clippy::cast_precision_loss)] // UI coordinate
                 let start_x = origin.x + gutter + start_cell as f32 * advance;
-                #[allow(clippy::cast_precision_loss)] // UI coordinate
                 let span_w = cells as f32 * advance;
                 painter.rect_filled(
                     Rect::from_min_size(Pos2::new(start_x, y), Vec2::new(span_w, row_height)),
@@ -980,7 +971,6 @@ pub fn show_source<B: Buffer>(
                     let cells = geometry
                         .caret_x(end_col.saturating_sub(visual.start))
                         .saturating_sub(start_cell);
-                    #[allow(clippy::cast_precision_loss)] // UI coordinate
                     let rect = Rect::from_min_size(
                         Pos2::new(origin.x + gutter + start_cell as f32 * advance, y),
                         Vec2::new(cells as f32 * advance, row_height),
@@ -992,15 +982,13 @@ pub fn show_source<B: Buffer>(
                 let local = col.saturating_sub(visual.start);
                 let start = geometry.char_x(local);
                 let end = geometry.caret_x(local.saturating_add(cells));
-                #[allow(clippy::cast_precision_loss)] // UI coordinate
-                let rect = Rect::from_min_size(
+                Rect::from_min_size(
                     Pos2::new(origin.x + gutter + start as f32 * advance, y),
                     Vec2::new(
                         end.saturating_sub(start).max(1) as f32 * advance,
                         row_height,
                     ),
-                );
-                rect
+                )
             };
             if let Some(word) = caret_word.as_deref() {
                 for (start, len) in word_occurrences(text, word) {
@@ -1088,7 +1076,6 @@ pub fn show_source<B: Buffer>(
             if visual.folded {
                 // `⋯` placeholder after a folded region's first line.
                 let at = geometry.char_x(text.chars().count()).saturating_add(1);
-                #[allow(clippy::cast_precision_loss)] // UI coordinate
                 let rect = Rect::from_min_size(
                     Pos2::new(origin.x + gutter + at as f32 * advance, y + 1.0),
                     Vec2::new(advance * 3.0, row_height - 2.0),
@@ -1143,7 +1130,6 @@ pub fn show_source<B: Buffer>(
             for caret in &extra_carets {
                 if cursor_visible && visual.owns_cursor(caret.cursor.line, caret.cursor.col) {
                     let cells = geometry.caret_x(caret.cursor.col.saturating_sub(visual.start));
-                    #[allow(clippy::cast_precision_loss)] // UI coordinate
                     let x = origin.x + gutter + cells as f32 * advance;
                     painter.rect_filled(
                         Rect::from_min_size(Pos2::new(x, y), Vec2::new(2.0, row_height)),
@@ -1161,7 +1147,6 @@ pub fn show_source<B: Buffer>(
                 } else {
                     1
                 };
-                #[allow(clippy::cast_precision_loss)] // UI coordinate
                 let x = origin.x + gutter + cells as f32 * advance;
                 caret_rect = Some(Rect::from_min_size(
                     Pos2::new(x, y),
@@ -1175,7 +1160,6 @@ pub fn show_source<B: Buffer>(
                         ui.visuals().text_color(),
                     );
                 } else {
-                    #[allow(clippy::cast_precision_loss)] // UI coordinate
                     let cursor_w = cell_cells as f32 * advance;
                     // Opaque caret in the text color (IntelliJ's block
                     // caret), not the muted selection blue: a #214283
@@ -1209,7 +1193,6 @@ pub fn show_source<B: Buffer>(
             let headers: Vec<(usize, usize)> =
                 headers.iter().rev().take(3).rev().copied().collect();
             for (index, (first, _)) in headers.iter().enumerate() {
-                #[allow(clippy::cast_precision_loss)] // UI coordinate
                 let y = clip.top() + index as f32 * row_height;
                 let band = Rect::from_min_max(
                     Pos2::new(origin.x, y),
@@ -1254,7 +1237,6 @@ pub fn show_source<B: Buffer>(
                 }
             }
             if !headers.is_empty() {
-                #[allow(clippy::cast_precision_loss)] // UI coordinate
                 let bottom = clip.top() + headers.len() as f32 * row_height;
                 painter.hline(
                     origin.x..=clip.right(),
@@ -1434,8 +1416,7 @@ pub fn show_source<B: Buffer>(
             // selects, word/line/document motions, duplicate, move,
             // comment. Vim keeps its own plain and word keys.
             if engine.mode() != Mode::Command {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                // Viewport height in rows.
+                #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "Viewport height in rows.")]
                 let page_rows = (ui.clip_rect().height() / row_height).floor().max(1.0) as usize;
                 let mut edits: Vec<(egui::Key, egui::Modifiers, IdeEdit)> = Vec::new();
                 ui.input(|input| {
@@ -1746,7 +1727,6 @@ pub fn show_source<B: Buffer>(
                 .iter()
                 .position(|row| row.owns_cursor(landed.line, landed.col))
                 .unwrap_or(landed.line);
-            #[allow(clippy::cast_precision_loss)] // UI coordinate
             let row_y = origin.y + visual_line as f32 * row_height;
             ui.scroll_to_rect(
                 Rect::from_min_size(Pos2::new(origin.x, row_y), Vec2::new(width, row_height)),
@@ -1772,7 +1752,6 @@ pub fn show_source<B: Buffer>(
                         geometry.caret_x(landed.col.saturating_sub(row.start)),
                     )
                 });
-            #[allow(clippy::cast_precision_loss)] // UI coordinate
             let caret = Rect::from_min_size(
                 Pos2::new(
                     origin.x + gutter + cells as f32 * advance,
@@ -1825,7 +1804,6 @@ pub fn show_source<B: Buffer>(
         let painter = ui.painter().with_clip_rect(rail);
         let mut last_y = f32::NEG_INFINITY;
         for squiggle in &options.squiggles {
-            #[allow(clippy::cast_precision_loss)] // UI coordinate
             let y = rail.top() + rail.height() * squiggle.line as f32 / lines as f32;
             if y - last_y < 2.0 {
                 continue;
@@ -1959,7 +1937,6 @@ impl RowPaint<'_> {
         for to in breaks {
             let part: String = chars.by_ref().take(to.saturating_sub(from)).collect();
             if !part.is_empty() {
-                #[allow(clippy::cast_precision_loss)] // UI coordinate
                 let x = self.x + geometry.char_x(from) as f32 * self.advance;
                 self.painter.text(
                     Pos2::new(x, self.y),
@@ -2026,7 +2003,6 @@ impl RowPaint<'_> {
             };
             seen_at = Some((hint.col, offset.saturating_add(hint.cells)));
             let cell = geometry.caret_x(hint.col).saturating_add(offset);
-            #[allow(clippy::cast_precision_loss)] // UI coordinate
             let rect = Rect::from_min_size(
                 Pos2::new(self.x + cell as f32 * self.advance, self.y + 1.0),
                 Vec2::new(hint.cells as f32 * self.advance, self.font.size + 2.0),
@@ -2036,7 +2012,6 @@ impl RowPaint<'_> {
                 .label
                 .len()
                 .saturating_sub(hint.label.trim_start().len());
-            #[allow(clippy::cast_precision_loss)] // UI coordinate
             let box_rect = Rect::from_min_size(
                 Pos2::new(rect.left() + lead as f32 * self.advance, rect.top()),
                 Vec2::new(

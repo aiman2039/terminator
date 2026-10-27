@@ -240,10 +240,10 @@ fn finish_cleanup(paths: &Paths, state: State, stop_all: bool, timeout: Duration
         "A session started while the GUI was closing. It was preserved; save your work and retry with --stop-all"
     );
     if !targets.is_empty() {
-        eprintln!(
+        crate::output::Output::warn(format_args!(
             "Stopping {} sessions; unsaved editor buffers will be discarded.",
             targets.len()
-        );
+        ));
     }
     let retiring = if generations::exists(paths) {
         generations::Catalog::open(paths)?

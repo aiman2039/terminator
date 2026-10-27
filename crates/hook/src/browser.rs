@@ -199,7 +199,7 @@ pub fn run(command: BrowserCommand) -> Result<()> {
         BrowserCommand::Fill {endpoint,selector,text}=>Client::connect(&endpoint)?.evaluate(selector_expression(&selector,Some(&text))?)?,
         BrowserCommand::Evaluate {endpoint,expression}=>Client::connect(&endpoint)?.evaluate(expression)?,
     };
-    println!("{}", serde_json::to_string_pretty(&value)?);
+    crate::output::Output::line(serde_json::to_string_pretty(&value)?);
     Ok(())
 }
 #[cfg(test)]

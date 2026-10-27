@@ -165,7 +165,6 @@ pub fn format_bytes(bytes: u64) -> String {
         return "0 MB".into();
     }
     // Display size. Counts above 2^53 do not fit in an f64 mantissa.
-    #[allow(clippy::cast_precision_loss)]
     let value = bytes as f64;
     if value >= GB {
         format!("{:.1} GB", value / GB)
@@ -214,9 +213,7 @@ pub fn model(input: &Input) -> Model {
             } else {
                 {
                     // Memory meter. Byte counts can exceed the f32 mantissa.
-                    #[allow(clippy::cast_precision_loss)]
                     let used = system.memory_used as f32;
-                    #[allow(clippy::cast_precision_loss)]
                     let total = system.memory_total as f32;
                     (used / total).clamp(0.0, 1.0)
                 }

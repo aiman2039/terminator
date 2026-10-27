@@ -359,7 +359,6 @@ impl App {
                         response.scroll_to_me(None);
                     }
                     if response.clicked() {
-                        #[allow(clippy::cast_precision_loss)] // outline depth is small
                         let chevron_end = response.rect.left() + *depth as f32 * INDENT + CHEVRON;
                         let on_chevron = response
                             .interact_pointer_pos()
@@ -459,7 +458,6 @@ fn outline_row(
     } else if response.hovered() {
         painter.rect_filled(rect, 3.0, visuals.widgets.hovered.weak_bg_fill);
     }
-    #[allow(clippy::cast_precision_loss)] // outline depth is small
     let mut x = rect.left() + depth as f32 * INDENT;
     if parent {
         let chevron =

@@ -62,7 +62,7 @@ impl eframe::App for App {
                 .map(ToString::to_string)
                 .collect();
             if let Some(line) = probe.sample(Instant::now(), &causes) {
-                eprintln!("{line}");
+                crate::console::Console::err(format_args!("{line}"));
             }
         }
         self.process_updates(ctx);

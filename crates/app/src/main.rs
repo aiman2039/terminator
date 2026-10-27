@@ -68,10 +68,10 @@ fn main() -> Result<()> {
         .write(true)
         .open(paths.runtime.join("ui.lock"))?;
     if lock.try_lock_exclusive().is_err() {
-        eprintln!(
+        terminator::console::Console::err(format_args!(
             "Terminator is already open (lock {}).",
             paths.runtime.join("ui.lock").display()
-        );
+        ));
         return Ok(());
     }
     daemon_connection::ensure_running(&paths, &std::env::current_exe()?)?;
@@ -161,21 +161,26 @@ fn main() -> Result<()> {
         let count = std::sync::atomic::AtomicU32::new(0);
         options.wgpu_options.on_surface_status = std::sync::Arc::new(move |status| {
             if count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 8 {
-                eprintln!("Native Wgpu surface status: {status:?}");
+                terminator::console::Console::err(format_args!(
+                    "Native Wgpu surface status: {status:?}"
+                ));
             }
             handler(status)
         });
         options
     };
     #[cfg(feature = "test-support")]
-    eprintln!("Native renderer: {:?}", options.renderer);
+    terminator::console::Console::err(format_args!("Native renderer: {:?}", options.renderer));
     eframe::run_native(
         "Terminator",
         options,
         Box::new(move |cc| {
             #[cfg(all(feature = "test-support", feature = "wgpu"))]
             if let Some(state) = &cc.wgpu_render_state {
-                eprintln!("Native Wgpu adapter: {:?}", state.adapter.get_info());
+                terminator::console::Console::err(format_args!(
+                    "Native Wgpu adapter: {:?}",
+                    state.adapter.get_info()
+                ));
             }
             Ok(Box::new(App::new(cc, paths)))
         }),

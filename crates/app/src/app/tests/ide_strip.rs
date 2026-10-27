@@ -1011,7 +1011,7 @@ fn ide_strip_trailing_controls_share_one_row() {
             .unwrap_or_else(|| panic!("missing {name}"));
         centers.push((name, rect[1] + rect[3] / 2.0, rect[2], rect[3]));
     }
-    eprintln!("{centers:#?}");
+    crate::console::Console::err(format_args!("{centers:#?}"));
     let (_, base, _, _) = centers[0];
     for (name, center, _, _) in &centers {
         assert!(

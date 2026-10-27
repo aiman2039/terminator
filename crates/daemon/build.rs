@@ -21,6 +21,10 @@ fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
     }
 }
 
+#[expect(
+    clippy::print_stderr,
+    reason = "Build scripts report failures on stderr"
+)]
 fn fail(error: impl std::fmt::Display) -> ! {
     eprintln!("daemon build failed: {error}");
     std::process::exit(1);

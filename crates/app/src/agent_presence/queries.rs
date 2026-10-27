@@ -143,7 +143,7 @@ pub(crate) fn notice_preview(markdown: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
 pub(super) fn diagnostics_text(
     session: &Session,
     presence: Option<&terminator_core::agents::TerminalPresence>,

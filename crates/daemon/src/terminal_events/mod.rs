@@ -356,7 +356,7 @@ impl vt100::Callbacks for Events {
 }
 
 #[cfg(test)]
-#[path = "terminal_events/scrollback_tests.rs"]
+#[path = "scrollback_tests.rs"]
 mod scrollback_tests;
 
 #[cfg(test)]

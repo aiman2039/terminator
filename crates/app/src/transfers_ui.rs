@@ -99,7 +99,6 @@ impl Transfers {
                     ));
                 } else if let Some(total) = status.total.filter(|t| *t > 0) {
                     // Display ratio only.
-                    #[allow(clippy::cast_precision_loss)]
                     let fraction = status.bytes as f32 / total as f32;
                     ui.add(
                         egui::ProgressBar::new(fraction.clamp(0.0, 1.0))

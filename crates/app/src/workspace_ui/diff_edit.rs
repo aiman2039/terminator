@@ -220,7 +220,6 @@ const MAX_HIGHLIGHT_BYTES: usize = 256 * 1024;
 /// edited in place with syntax highlighting and diff tints. Returns a
 /// `ScrollAreaOutput<()>` shaped like the painted panes so hunk controls and
 /// connectors keep working unchanged.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn paint_right_editor(
     ui: &mut egui::Ui,
     rect: egui::Rect,
@@ -235,12 +234,10 @@ pub(super) fn paint_right_editor(
     let fallback = colors.text;
     // Reserve a number gutter inside the pane, painted after the editor.
     let line_count = buffer.text.split_inclusive('\n').count().max(1);
-    #[allow(clippy::cast_precision_loss)]
     let digits = line_count.to_string().len().max(1) as f32;
     let (digit_w, row_h) = ui
         .ctx()
         .fonts_mut(|fonts| (fonts.glyph_width(&font, '0'), fonts.row_height(&font)));
-    #[allow(clippy::cast_precision_loss)]
     let gutter_w = digit_w * digits + 10.0;
     let editor_rect =
         egui::Rect::from_min_max(egui::pos2(rect.left() + gutter_w, rect.top()), rect.max);
@@ -297,21 +294,21 @@ pub(super) fn paint_right_editor(
             .ctx()
             .layer_painter(egui::LayerId::background())
             .with_clip_rect(rect);
-        #[allow(
+        #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
-            clippy::arithmetic_side_effects
+            reason = "Row index from a non-negative scroll offset"
         )]
         let first = (output.state.unclamped_offset().y / row_h).floor().max(0.0) as usize;
-        #[allow(
+        #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
-            clippy::arithmetic_side_effects
+            clippy::arithmetic_side_effects,
+            reason = "Visible row count from the viewport height"
         )]
         let visible = (output.inner_rect.height() / row_h).ceil() as usize + 1;
         for (index, tint) in tints.iter().enumerate().skip(first).take(visible) {
             let Some(tint) = tint else { continue };
-            #[allow(clippy::cast_precision_loss)]
             let top =
                 output.inner_rect.top() + index as f32 * row_h - output.state.unclamped_offset().y;
             let block = egui::Rect::from_min_max(
@@ -328,20 +325,20 @@ pub(super) fn paint_right_editor(
     // Paint buffer line numbers in the reserved gutter.
     if row_h > 0.0 {
         let painter = ui.painter().with_clip_rect(rect);
-        #[allow(
+        #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
-            clippy::arithmetic_side_effects
+            reason = "Row index from a non-negative scroll offset"
         )]
         let first = (output.state.unclamped_offset().y / row_h).floor().max(0.0) as usize;
-        #[allow(
+        #[expect(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
-            clippy::arithmetic_side_effects
+            clippy::arithmetic_side_effects,
+            reason = "Visible row count from the viewport height"
         )]
         let visible = (output.inner_rect.height() / row_h).ceil() as usize + 1;
         for index in first..line_count.min(first.saturating_add(visible)) {
-            #[allow(clippy::cast_precision_loss)]
             let center_y = output.inner_rect.top() + index as f32 * row_h
                 - output.state.unclamped_offset().y
                 + row_h / 2.0;
@@ -483,7 +480,6 @@ pub(super) fn paint_deleted_markers(
     let clip = output.inner_rect;
     let offset = output.state.unclamped_offset().y;
     for (index, (row, lines)) in deleted.iter().enumerate() {
-        #[allow(clippy::cast_precision_loss)] // UI coordinate
         let y = clip.top() + *row as f32 * row_h - offset;
         if y < clip.top() - 4.0 || y > clip.bottom() + 4.0 {
             continue;

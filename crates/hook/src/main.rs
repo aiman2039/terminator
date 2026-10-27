@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 mod browser;
 mod control;
+mod output;
+use output::Output;
 mod shutdown;
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
@@ -24,7 +26,10 @@ fn main() -> Result<()> {
     }
     match args.first().map(String::as_str) {
         Some("--health-check") => {
-            println!("{}:{}", env!("CARGO_PKG_VERSION"), PROTOCOL_VERSION);
+            Output::line(format_args!(
+                "{}:{PROTOCOL_VERSION}",
+                env!("CARGO_PKG_VERSION")
+            ));
             Ok(())
         }
         Some("ctl") => control::run(args.get(1..).unwrap_or_default()),
@@ -40,7 +45,7 @@ fn main() -> Result<()> {
         Some("rpc") => {
             let req: Request = serde_json::from_str(args.get(1).context("Expected JSON request")?)?;
             let response = rpc(&generations::workspace_paths(&Paths::discover()?)?, req)?;
-            println!("{}", serde_json::to_string(&response)?);
+            Output::line(serde_json::to_string(&response)?);
             Ok(())
         }
         Some("install" | "remove" | "inspect") => {
@@ -49,10 +54,10 @@ fn main() -> Result<()> {
                 .context("No user directory")?;
             let kind = args.get(1).context("Expected agent kind")?;
             if args.first().is_some_and(|arg| arg == "inspect") {
-                println!(
-                    "{}",
-                    terminator_integrations::installed(std::path::Path::new(&home), kind)
-                );
+                Output::line(terminator_integrations::installed(
+                    std::path::Path::new(&home),
+                    kind,
+                ));
             } else {
                 let path = terminator_integrations::install(
                     std::path::Path::new(&home),
@@ -60,13 +65,13 @@ fn main() -> Result<()> {
                     &std::env::current_exe()?,
                     args.first().is_some_and(|arg| arg == "remove"),
                 )?;
-                println!("{}", path.display());
+                Output::line(path.display());
             }
             Ok(())
         }
         _ => {
-            println!(
-                "terminator-hook ctl --help\nterminator-hook attach SESSION\nterminator-hook event AGENT < payload.json\nterminator-hook emit < normalized-event.json\nterminator-hook cwd PATH\nterminator-hook install|remove|inspect AGENT\nterminator-hook rpc JSON\n\nHooks are inert outside app-created terminals. They never approve or deny agent actions."
+            Output::line(
+                "terminator-hook ctl --help\nterminator-hook attach SESSION\nterminator-hook event AGENT < payload.json\nterminator-hook emit < normalized-event.json\nterminator-hook cwd PATH\nterminator-hook install|remove|inspect AGENT\nterminator-hook rpc JSON\n\nHooks are inert outside app-created terminals. They never approve or deny agent actions.",
             );
             Ok(())
         }
@@ -183,7 +188,7 @@ fn hook(args: &[String]) -> Result<()> {
     if command == "prompt"
         && let Response::Text(generation) = response
     {
-        println!("{generation}");
+        Output::line(generation);
     }
     Ok(())
 }

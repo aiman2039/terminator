@@ -324,11 +324,11 @@ mod tests {
             };
             for owner in owners {
                 if std::thread::panicking() {
-                    eprintln!(
+                    crate::console::Console::err(format_args!(
                         "generation {} log: {}",
                         owner.id,
                         fs::read_to_string(owner.data.join("daemon.log")).unwrap_or_default()
-                    );
+                    ));
                 }
                 if let Ok(Response::State(state)) = rpc(&owner.paths(), Request::Snapshot) {
                     for session in state.sessions.iter().filter(|s| s.lifecycle.live()) {

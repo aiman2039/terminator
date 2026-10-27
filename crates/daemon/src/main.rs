@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 mod accept;
+mod console;
 mod editor;
 mod helper;
 mod idle_close;
@@ -458,9 +459,9 @@ fn main() -> Result<()> {
                                     ))
                                     .is_err()
                                     {
-                                        eprintln!(
+                                        crate::console::Console::err(format_args!(
                                             "daemon connection handler panicked; connection dropped"
-                                        );
+                                        ));
                                     }
                                     count.fetch_sub(1, Ordering::Relaxed);
                                 });
@@ -498,7 +499,9 @@ fn main() -> Result<()> {
                         }))
                         .is_err()
                         {
-                            eprintln!("daemon connection handler panicked; connection dropped");
+                            crate::console::Console::err(format_args!(
+                                "daemon connection handler panicked; connection dropped"
+                            ));
                         }
                         count.fetch_sub(1, Ordering::Relaxed);
                     });

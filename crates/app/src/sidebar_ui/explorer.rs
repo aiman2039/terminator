@@ -444,8 +444,11 @@ impl App {
         if rows.iter().all(|row| row.entry.is_some()) {
             let top = ui.next_widget_position().y;
             let clip = ui.clip_rect();
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            // Row indices from UI coordinates.
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "Row indices from UI coordinates."
+            )]
             let (first, last) = (
                 ((clip.top() - top) / ROW_HEIGHT).floor().max(0.0) as usize,
                 ((clip.bottom() - top) / ROW_HEIGHT).ceil().max(0.0) as usize,
@@ -469,7 +472,6 @@ impl App {
                 .chain(std::iter::once((prompt_target, false)));
             for (shown, center) in targets {
                 if let Some(index) = shown {
-                    #[allow(clippy::cast_precision_loss)] // UI coordinate
                     let y = top + index as f32 * ROW_HEIGHT;
                     ui.scroll_to_rect(
                         egui::Rect::from_min_size(
@@ -485,7 +487,6 @@ impl App {
             {
                 active.pending_scroll = false;
             }
-            #[allow(clippy::cast_precision_loss)] // UI coordinate
             ui.allocate_space(egui::vec2(ui.available_width(), first as f32 * ROW_HEIGHT));
             for shown in first..last {
                 match row_at(shown) {
@@ -504,7 +505,6 @@ impl App {
                     }
                 }
             }
-            #[allow(clippy::cast_precision_loss)] // UI coordinate
             ui.allocate_space(egui::vec2(
                 ui.available_width(),
                 count.saturating_sub(last) as f32 * ROW_HEIGHT,
@@ -592,7 +592,6 @@ impl App {
             egui::vec2(ui.available_width(), ROW_HEIGHT),
             egui::Sense::hover(),
         );
-        #[allow(clippy::cast_precision_loss)] // UI coordinate
         let indent = depth as f32 * ui.spacing().indent;
         rect.min.x += indent;
         let mut row = ui.new_child(
@@ -614,7 +613,6 @@ impl App {
     ) {
         let mut rect = ui.available_rect_before_wrap();
         // Explorer indent is a UI coordinate; depth can exceed the f32 mantissa.
-        #[allow(clippy::cast_precision_loss)]
         let indent = row.depth as f32 * ui.spacing().indent;
         rect.min.x += indent;
         ui.push_id(&row.path, |ui| {

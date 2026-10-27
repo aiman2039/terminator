@@ -1,8 +1,3 @@
-#![allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    clippy::arithmetic_side_effects
-)]
 use super::*;
 use crate::gui_services::Owner;
 

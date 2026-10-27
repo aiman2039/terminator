@@ -148,7 +148,10 @@ impl App {
     pub(crate) fn dismiss_hover_popup(&mut self, ctx: &egui::Context) {
         if let Some(_popup) = self.hover_popup.take() {
             #[cfg(feature = "test-support")]
-            eprintln!("Terminal file menu dismissed: {}", _popup.target.display());
+            crate::console::Console::err(format_args!(
+                "Terminal file menu dismissed: {}",
+                _popup.target.display()
+            ));
         }
         ctx.request_repaint();
     }

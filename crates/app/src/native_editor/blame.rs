@@ -27,7 +27,10 @@ pub(crate) struct EditorBlame {
 }
 
 /// `YYYY-MM-DD` for Unix seconds (UTC; proleptic Gregorian).
-#[allow(clippy::arithmetic_side_effects)] // `doe` < 146097 bounds every step.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "`doe` < 146097 bounds every step."
+)]
 fn ymd(seconds: i64) -> String {
     let days = seconds.div_euclid(86_400);
     // Howard Hinnant's civil_from_days.

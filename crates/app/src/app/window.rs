@@ -97,11 +97,11 @@ pub(crate) fn window_resize_edges(ui: &mut egui::Ui) {
                         && response.hovered()
                         && ui.input(|i| i.pointer.any_down())
                     {
-                        eprintln!(
+                        crate::console::Console::err(format_args!(
                             "Fixture resize input {index}: started={} dragged={}",
                             response.drag_started(),
                             response.dragged()
-                        );
+                        ));
                     }
                 }
                 if response.drag_started() {

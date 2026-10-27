@@ -318,7 +318,10 @@ fn show_message(title: &str, description: &str, open_applications: bool) -> bool
     };
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
-    #[allow(deprecated)]
+    #[expect(
+        deprecated,
+        reason = "activateIgnoringOtherApps is the only way to steal focus on older macOS"
+    )]
     app.activateIgnoringOtherApps(true);
     // An app-owned alert remains visible and associated with Terminator even
     // before winit has created its main window.

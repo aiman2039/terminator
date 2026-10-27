@@ -300,7 +300,6 @@ pub(crate) fn cross_glide(
 ) {
     for step in 1..=steps {
         // Glide step is a UI coordinate blend; the count can exceed the f32 mantissa.
-        #[allow(clippy::cast_precision_loss)]
         let k = step as f32 / steps as f32;
         cross_dock_frame(
             app,
@@ -365,7 +364,6 @@ pub(crate) fn frame_glide(
 ) {
     for step in 1..=steps {
         // Glide step is a UI coordinate blend; the count can exceed the f32 mantissa.
-        #[allow(clippy::cast_precision_loss)]
         let k = step as f32 / steps as f32;
         combined_frame(
             app,

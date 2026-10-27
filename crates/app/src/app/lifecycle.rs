@@ -46,7 +46,7 @@ impl App {
         let (services, service_owner) =
             gui_services::Services::new(paths.clone(), ctx.clone(), tx.clone()).unwrap_or_else(
                 |error| {
-                    eprintln!("start GUI services: {error:#}");
+                    crate::console::Console::err(format_args!("start GUI services: {error:#}"));
                     std::process::exit(1);
                 },
             );

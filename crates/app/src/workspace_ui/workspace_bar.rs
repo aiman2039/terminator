@@ -269,7 +269,6 @@ impl App {
                 })
                 .collect();
             // Gap between tabs is a UI coordinate; the count can exceed the f32 mantissa.
-            #[allow(clippy::cast_precision_loss)]
             let gaps = tab_layout.len().saturating_sub(1) as f32;
             let content_width = tab_layout.iter().map(|(width, _)| *width).sum::<f32>() + gaps;
             // Reserve exactly the trailing `+` and menu buttons, and the two

@@ -559,7 +559,6 @@ impl Shared {
 /// Build the per-session runtime and drive it to completion. Split out so
 /// the spawning thread can catch a panic from anywhere inside, including
 /// the runtime build.
-#[allow(clippy::too_many_arguments)]
 fn run_vnc_thread(
     shared: &Arc<Shared>,
     runtime: &Arc<Mutex<VncRuntime>>,

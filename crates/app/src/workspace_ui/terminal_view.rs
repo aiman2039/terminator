@@ -200,10 +200,10 @@ impl Viewer<'_> {
                 );
                 let key = egui::Id::unique(("scroll-evidence", sid));
                 if ui.ctx().data(|d| d.get_temp::<(bool, usize, u32)>(key)) != Some(snapshot) {
-                    eprintln!(
+                    crate::console::Console::err(format_args!(
                         "Scroll evidence: session={sid} focused={} offset={} modes={}",
                         snapshot.0, snapshot.1, snapshot.2
-                    );
+                    ));
                     ui.ctx().data_mut(|d| d.insert_temp(key, snapshot));
                 }
             }
@@ -273,7 +273,10 @@ impl Viewer<'_> {
                     rect,
                 });
                 #[cfg(feature = "test-support")]
-                eprintln!("Terminal file menu opened: {}", resolved.display());
+                crate::console::Console::err(format_args!(
+                    "Terminal file menu opened: {}",
+                    resolved.display()
+                ));
             }
         }
         let menu_key = egui::Id::unique(("terminal-menu-target", sid.as_str()));

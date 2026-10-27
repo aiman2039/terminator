@@ -230,7 +230,6 @@ fn decode_sides(left: &[u8], right: &[u8]) -> Result<(String, String)> {
 
 fn human_size(bytes: usize) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
-    #[allow(clippy::cast_precision_loss)] // display only
     let mut value = bytes as f64;
     let mut unit = 0usize;
     while value >= 1024.0 && unit.saturating_add(1) < UNITS.len() {

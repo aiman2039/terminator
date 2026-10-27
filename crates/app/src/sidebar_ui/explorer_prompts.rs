@@ -253,7 +253,10 @@ impl App {
                     .tint(appearance::color(&self.theme.secondary)),
             );
             let toggles = if contents { 78.0 } else { 0.0 };
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "Button padding is a few points"
+            )]
             let pad = ui.spacing().button_padding.x.round() as i8;
             let find = ui
                 .scope(|ui| {
