@@ -892,3 +892,110 @@ async fn live_rust_analyzer_signature_help() {
     assert_eq!(active, "right: i32", "{help:?}");
     manager.prune(&std::collections::HashSet::new());
 }
+
+/// Live formatting and code actions against rust-analyzer (self-skips):
+/// formatting proposes edits, and "Insert explicit type" resolves to an
+/// edit adding `: i32`.
+#[tokio::test]
+async fn live_rust_analyzer_format_and_code_action() {
+    let path_env = std::env::var_os("PATH")
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if L::find_server(&["rust-analyzer"], &path_env).is_none() {
+        eprintln!("SKIP: rust-analyzer not on PATH");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("proj");
+    std::fs::create_dir_all(root.join("src")).expect("mkdir");
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"proj\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    )
+    .expect("manifest");
+    let main = "fn main() {\n    let x = 1;\n    let _ = x;\n}\n";
+    let file = root.join("src/main.rs");
+    std::fs::write(&file, main).expect("main");
+    let mut manager = LspManager::new();
+    assert!(manager.sync_doc(&file, Language::Rust, 1));
+    manager.submit_text(
+        &file,
+        Language::Rust,
+        1,
+        "fn main(){\n    let x=1;\n    let _ = x;\n}\n",
+    );
+    let start = Instant::now();
+    // Formatting the cramped text proposes edits.
+    let mut formatted = None;
+    while formatted.is_none() {
+        assert!(start.elapsed() < Duration::from_secs(90), "no formatting");
+        if !manager.request_format(&file, 1) {
+            manager.poll();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+        for _ in 0..30 {
+            manager.poll();
+            if let Some((_, _, edits)) = manager.edit_answers.format.take() {
+                formatted = Some(edits);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+    assert!(!formatted.unwrap_or_default().is_empty(), "format edits");
+    manager.submit_text(&file, Language::Rust, 2, main);
+    let at = L::Position {
+        line: 1,
+        character: 8,
+    };
+    let range = L::Range { start: at, end: at };
+    let mut action = None;
+    while action.is_none() {
+        assert!(start.elapsed() < Duration::from_secs(90), "no code action");
+        let Some(_) = manager.request_code_actions(&file, range) else {
+            manager.poll();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        };
+        for _ in 0..30 {
+            manager.poll();
+            if let Some((_, _, items)) = manager.edit_answers.actions.take() {
+                action = items
+                    .into_iter()
+                    .find(|item| item.title.to_lowercase().contains("explicit type"));
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+    let action = action.expect("explicit type action");
+    let edits = if let Ok(edits) = L::code_action_edits(&action.raw) {
+        edits
+    } else {
+        {
+            // Resolution can answer without the edit while analysis is
+            // still settling; the editor re-asks, and so does this test.
+            let mut edits = None;
+            while edits.is_none() {
+                assert!(start.elapsed() < Duration::from_secs(90), "no resolve");
+                assert!(manager.request_resolve(&file, &action.raw));
+                let mut resolved = None;
+                while resolved.is_none() {
+                    assert!(start.elapsed() < Duration::from_secs(90), "no resolve");
+                    manager.poll();
+                    resolved = manager.edit_answers.resolved.take();
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                edits = resolved.and_then(|(_, action)| L::code_action_edits(&action).ok());
+            }
+            edits.unwrap_or_default()
+        }
+    };
+    let inserted: String = edits
+        .iter()
+        .flat_map(|file| file.edits.iter().map(|edit| edit.new_text.clone()))
+        .collect();
+    assert!(inserted.contains("i32"), "{inserted:?}");
+    manager.prune(&std::collections::HashSet::new());
+}

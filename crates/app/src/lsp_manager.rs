@@ -106,6 +106,28 @@ enum Pending {
         path: PathBuf,
         generation: u64,
     },
+    Format {
+        path: PathBuf,
+        revision: u64,
+    },
+    CodeActions {
+        path: PathBuf,
+        generation: u64,
+    },
+    Resolve {
+        path: PathBuf,
+    },
+}
+
+/// Answers for formatting and code actions, taken by the editor.
+#[derive(Default)]
+pub struct EditAnswers {
+    /// `(path, buffer revision formatted, edits)`.
+    pub format: Option<(PathBuf, u64, Vec<L::RenameTextEdit>)>,
+    /// `(path, generation, actions)`.
+    pub actions: Option<(PathBuf, u64, Vec<L::CodeActionItem>)>,
+    /// `(path, resolved action)` for an action picked without an edit.
+    pub resolved: Option<(PathBuf, serde_json::Value)>,
 }
 
 /// Completion proposals for one request (`generation` drops stale ones).
@@ -176,6 +198,7 @@ pub struct LspManager {
     references: Option<ReferenceResults>,
     completion: Option<CompletionResults>,
     completion_generation: u64,
+    pub edit_answers: EditAnswers,
     /// Latest signature-help answer: `(path, generation, signature)`.
     signature: Option<(PathBuf, u64, Option<L::SignatureHelp>)>,
     rename: Option<RenameResults>,
@@ -219,6 +242,7 @@ impl LspManager {
             completion: None,
             completion_generation: 0,
             signature: None,
+            edit_answers: EditAnswers::default(),
             rename: None,
             symbols: std::collections::HashMap::new(),
             symbols_rev: std::collections::HashMap::new(),
@@ -704,6 +728,79 @@ impl LspManager {
             },
         );
         Some(generation)
+    }
+
+    /// Send one request for `path` built from its URI, recording what the
+    /// answer is for. False when no ready server tracks the file.
+    fn send_for(
+        &mut self,
+        path: &Path,
+        build: impl FnOnce(&L::RequestId, &url::Url) -> Vec<u8>,
+        pending: Pending,
+    ) -> bool {
+        let Some(doc) = self.docs.get(path) else {
+            return false;
+        };
+        let (key, uri) = (doc.server.clone(), doc.uri.clone());
+        let Some(server) = self.servers.get_mut(&key) else {
+            return false;
+        };
+        if !server.ready {
+            return false;
+        }
+        let L::RequestId::Number(number) = server.ids.next_id() else {
+            return false;
+        };
+        let _ = server
+            .inbox
+            .send(build(&L::RequestId::Number(number), &uri));
+        server.pending.insert(number, pending);
+        true
+    }
+
+    /// Format the whole document as of buffer `revision`.
+    pub fn request_format(&mut self, path: &Path, revision: u64) -> bool {
+        self.send_for(
+            path,
+            L::formatting,
+            Pending::Format {
+                path: path.to_owned(),
+                revision,
+            },
+        )
+    }
+
+    /// Code actions for `range` with the diagnostics on it.
+    pub fn request_code_actions(&mut self, path: &Path, range: L::Range) -> Option<u64> {
+        let diagnostics: Vec<L::Diagnostic> = self
+            .problems_for(path)
+            .into_iter()
+            .filter(|item| {
+                item.range.start.line <= range.end.line && range.start.line <= item.range.end.line
+            })
+            .collect();
+        self.completion_generation = self.completion_generation.wrapping_add(1);
+        let generation = self.completion_generation;
+        self.send_for(
+            path,
+            |id, uri| L::code_action(id, uri, range, &diagnostics),
+            Pending::CodeActions {
+                path: path.to_owned(),
+                generation,
+            },
+        )
+        .then_some(generation)
+    }
+
+    /// Resolve an action that arrived without its edit.
+    pub fn request_resolve(&mut self, path: &Path, action: &serde_json::Value) -> bool {
+        self.send_for(
+            path,
+            |id, _| L::code_action_resolve(id, action),
+            Pending::Resolve {
+                path: path.to_owned(),
+            },
+        )
     }
 
     /// Latest signature-help answer, if one arrived.

@@ -81,6 +81,10 @@ pub enum Effect {
     },
     /// Ask the language server for completions at the caret (Ctrl+Space).
     Complete,
+    /// Reformat the document through the language server (Cmd/Ctrl+Alt+L).
+    Format,
+    /// Show code actions / quick fixes at the caret or selection (Alt+Enter).
+    CodeActions,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

@@ -265,6 +265,21 @@ pub fn consume(ctx: &egui::Context, value: &str) -> bool {
     let Some(chord) = parse(value) else {
         return false;
     };
+    // egui matches ignoring extra Alt; an Alt chord is its own shortcut
+    // (`Cmd+Alt+L` reformats, it does not toggle the sidebar on `Cmd+L`).
+    let alt_variant = !chord.modifiers.alt
+        && ctx.input(|input| {
+            input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key { key, pressed: true, modifiers, .. }
+                        if *key == chord.key && modifiers.alt
+                )
+            })
+        });
+    if alt_variant {
+        return false;
+    }
     ctx.input_mut(|input| input.consume_key(chord.modifiers, chord.key))
 }
 
@@ -416,6 +431,34 @@ mod tests {
         assert!(invalid(&map).unwrap().contains("Unknown shortcut"));
         map.insert("open_file".into(), "command+O".into());
         assert_eq!(invalid(&map), None);
+    }
+
+    #[test]
+    fn alt_variants_do_not_trigger_the_plain_shortcut() {
+        let ctx = egui::Context::default();
+        let press = |modifiers: Modifiers| egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: Key::L,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }],
+            ..Default::default()
+        };
+        let plain = parse("command+L").unwrap().modifiers;
+        let alt = Modifiers { alt: true, ..plain };
+        let mut fired = None;
+        let mut output = ctx.run_ui(press(alt), |ui| {
+            fired = Some(consume(ui.ctx(), "command+L"));
+        });
+        output.textures_delta.clear();
+        assert_eq!(fired, Some(false));
+        let mut output = ctx.run_ui(press(plain), |ui| {
+            fired = Some(consume(ui.ctx(), "command+L"));
+        });
+        output.textures_delta.clear();
+        assert_eq!(fired, Some(true));
     }
 
     #[test]

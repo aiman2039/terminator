@@ -328,6 +328,10 @@ pub struct App {
     pub(crate) completion: Option<crate::native_editor::CompletionPopup>,
     /// Parameter info of one native editor.
     pub(crate) signature: Option<crate::native_editor::SignaturePopup>,
+    /// Alt+Enter code actions of one native editor.
+    pub(crate) code_actions: Option<crate::native_editor::ActionsPopup>,
+    /// Re-sent `codeAction/resolve` requests for the picked action.
+    pub(crate) resolve_attempts: u8,
     /// `HEAD` text per open file for gutter change markers, tagged with
     /// the Git refresh generation it was read at.
     pub(crate) git_bases: HashMap<PathBuf, (u64, Option<std::sync::Arc<str>>)>,

@@ -162,6 +162,20 @@ impl LspManager {
                     items: L::parse_completion(&result),
                 });
             }
+            Some(Pending::Format { path, revision }) => {
+                let result = result.unwrap_or(serde_json::Value::Null);
+                self.edit_answers.format = Some((path, revision, L::parse_text_edits(&result)));
+            }
+            Some(Pending::CodeActions { path, generation }) => {
+                let result = result.unwrap_or(serde_json::Value::Null);
+                self.edit_answers.actions =
+                    Some((path, generation, L::parse_code_actions(&result)));
+            }
+            Some(Pending::Resolve { path }) => {
+                if let Some(action) = result {
+                    self.edit_answers.resolved = Some((path, action));
+                }
+            }
             Some(Pending::Signature { path, generation }) => {
                 let result = result.unwrap_or(serde_json::Value::Null);
                 self.signature = Some((path, generation, L::parse_signature_help(&result)));

@@ -1098,8 +1098,26 @@ pub fn show_source<B: Buffer>(
                         ..
                     } = event
                     {
+                        let server = crate::lsp::server_language(language).is_some();
                         if options.popup_keys && popup_key(*key) {
                             // The host popup reads this key.
+                        } else if *key == egui::Key::Enter
+                            && modifiers.alt
+                            && !modifiers.command
+                            && server
+                        {
+                            // Alt+Enter: show intention actions (`IntelliJ`).
+                            effects.push(Effect::CodeActions);
+                            consumed.push(*key);
+                        } else if *key == egui::Key::L
+                            && modifiers.alt
+                            && modifiers.command
+                            && server
+                            && !options.read_only
+                        {
+                            // Cmd/Ctrl+Alt+L: reformat code.
+                            effects.push(Effect::Format);
+                            consumed.push(*key);
                         } else if *key == egui::Key::Space
                             && modifiers.ctrl
                             && !modifiers.alt

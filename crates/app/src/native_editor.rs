@@ -5,12 +5,14 @@
 //! the same 1 MiB bound as Markdown previews. Saves refuse to overwrite a
 //! file that changed on disk unless forced, Reload is disabled while dirty,
 //! and closing a dirty tab asks first — nothing is silently discarded.
+mod actions;
 mod close;
 mod complete;
 mod find;
 mod gutter;
 mod navigation;
 mod rename;
+pub(crate) use actions::ActionsPopup;
 pub(super) use close::{CloseIssuer, NativeCloseChoice};
 pub(crate) use complete::{CompletionPopup, SignaturePopup};
 pub(crate) use find::FindBar;
@@ -831,6 +833,18 @@ impl App {
             None
         };
         let mut signature_request = None;
+        let mut actions_popup = if self
+            .code_actions
+            .as_ref()
+            .is_some_and(|popup| popup.path == path)
+        {
+            self.code_actions.take()
+        } else {
+            None
+        };
+        let mut format_now = false;
+        let mut actions_at: Option<native_lsp::Range> = None;
+        let mut picked_action: Option<native_lsp::CodeActionItem> = None;
         let git_base = if crate::remote_ui::is_snapshot(&self.paths.data, path) {
             None
         } else {
@@ -1113,7 +1127,10 @@ impl App {
             };
             let popup_keys = completion
                 .as_ref()
-                .is_some_and(|popup| !popup.visible.is_empty());
+                .is_some_and(|popup| !popup.visible.is_empty())
+                || actions_popup
+                    .as_ref()
+                    .is_some_and(|popup| !popup.items.is_empty());
             let mut find_matches = std::sync::Arc::new(Vec::new());
             let mut find_current = None;
             if let Some(bar) = find.as_mut() {
@@ -1306,6 +1323,27 @@ impl App {
                             });
                         }
                         Effect::Complete => complete_now = true,
+                        Effect::Format => format_now = true,
+                        Effect::CodeActions => {
+                            // The selection, else the caret, as an LSP range.
+                            if let Some(live) = doc.doc.as_ref() {
+                                let caret = doc.engine.cursor();
+                                let (from, to) = doc.engine.selection().unwrap_or((caret, caret));
+                                let position = |cursor: terminator_native_edit::vim::Cursor| {
+                                    native_lsp::Position {
+                                        line: u32::try_from(cursor.line).unwrap_or(u32::MAX),
+                                        character: native_lsp::char_col_to_utf16(
+                                            &live.line_text(cursor.line),
+                                            cursor.col,
+                                        ),
+                                    }
+                                };
+                                actions_at = Some(native_lsp::Range {
+                                    start: position(from),
+                                    end: position(to),
+                                });
+                            }
+                        }
                         Effect::FindBar { replace } => {
                             // Seed with a one-line selection, IntelliJ-style.
                             let seed = doc
@@ -1398,6 +1436,19 @@ impl App {
                     }
                 }
             }
+            if let Some(popup) = actions_popup.as_mut() {
+                if caret_rect.is_some() {
+                    popup.anchor = caret_rect;
+                }
+                match actions::actions_ui(ui, popup) {
+                    actions::ActionPick::Pick(index) => {
+                        picked_action = popup.items.get(index).cloned();
+                        actions_popup = None;
+                    }
+                    actions::ActionPick::Close => actions_popup = None,
+                    actions::ActionPick::None => {}
+                }
+            }
             let rollback_index = gutter_popup.as_ref().map(|popup| popup.index);
             if gutter::popup_ui(ui, &mut gutter_popup, &gutter_hunks, change_colors[2])
                 && let Some(hunk) = rollback_index.and_then(|index| gutter_hunks.get(index))
@@ -1453,6 +1504,40 @@ impl App {
         if signature.is_some() {
             self.signature = signature;
         }
+        if actions_popup.is_some() {
+            self.code_actions = actions_popup;
+        }
+        if let Some(item) = picked_action {
+            self.run_code_action(path, &item);
+        }
+        if (format_now || actions_at.is_some())
+            && let Some((revision, text)) = self
+                .native_docs
+                .get(path)
+                .and_then(|doc| doc.buffer())
+                .map(|buffer| (buffer.revision(), buffer.text()))
+        {
+            // Both act on the text as typed: send it past the debounce.
+            self.lsp.submit_text(path, language, revision, &text);
+            if format_now && !self.lsp.request_format(path, revision) {
+                self.info = Some("The language server is not ready to format".into());
+            }
+            if let Some(range) = actions_at {
+                match self.lsp.request_code_actions(path, range) {
+                    Some(generation) => {
+                        self.code_actions = Some(ActionsPopup {
+                            path: path.to_owned(),
+                            generation: Some(generation),
+                            items: Vec::new(),
+                            selected: 0,
+                            anchor: caret_rect,
+                        });
+                    }
+                    None => self.info = Some("The language server is not ready".into()),
+                }
+            }
+        }
+        self.drain_edit_answers();
         if let Some((position, line, open)) = signature_request
             && let Some((revision, text)) = self
                 .native_docs
