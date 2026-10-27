@@ -168,6 +168,7 @@ pub(super) fn explorer_segmented(ui: &mut egui::Ui, mode: &mut ExplorerSearchMod
 pub enum ExplorerLocal {
     Reveal,
     CopyRelative,
+    CopyName,
     Rename,
     Duplicate,
     Delete,
@@ -179,6 +180,8 @@ pub struct ExplorerRowOutcome {
     pub menu: Option<FileAction>,
     pub local: Option<ExplorerLocal>,
     pub perforce: Option<crate::perforce::Op>,
+    /// The row itself, for selection, drag, and drop handling.
+    pub response: Option<egui::Response>,
 }
 
 /// Case-insensitive explorer filter over a pre-lowercased query. Directories
@@ -223,7 +226,8 @@ pub fn explorer_file_row(
         24.0,
         &status.to_string(),
         color,
-    );
+    )
+    .interact(egui::Sense::drag());
     // Tooltip text is only needed for the hovered row; formatting it for
     // every row on every scroll frame allocates heavily.
     let r = if r.hovered() {
@@ -282,6 +286,10 @@ pub fn explorer_file_row(
             outcome.local = Some(ExplorerLocal::CopyRelative);
             ui.close();
         }
+        if appearance::menu_item(ui, "Copy file name", "Copy", "").clicked() {
+            outcome.local = Some(ExplorerLocal::CopyName);
+            ui.close();
+        }
         ui.separator();
         if appearance::menu_item(ui, "Rename", "Pencil", "").clicked() {
             outcome.local = Some(ExplorerLocal::Rename);
@@ -297,6 +305,7 @@ pub fn explorer_file_row(
             ui.close();
         }
     });
+    outcome.response = Some(r);
     outcome
 }
 

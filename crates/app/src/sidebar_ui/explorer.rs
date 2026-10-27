@@ -1,5 +1,6 @@
 use super::attention::state_color;
 use super::explorer_rows::{explorer_file_row, skip_clipped_row};
+use super::explorer_select::{ExplorerDrag, tree_focus_id};
 use super::git_panel::{GitPanelInput, PreparedGit, git_color, git_panel};
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
@@ -13,6 +14,19 @@ use std::path::{Path, PathBuf};
 use terminator_core::{
     AgentState, NVIM_REVIEW_CAPABILITY, Project, Request, Session, SessionKind, now,
 };
+
+/// Explorer rows are one fixed height, which lets the tree paint only the
+/// visible slice.
+const ROW_HEIGHT: f32 = 24.0;
+
+/// Per-paint inputs every tree row shares.
+struct RowContext<'a> {
+    rows: &'a [crate::sidebar_cache::ExplorerRow],
+    focus: egui::Id,
+    focused_file: Option<PathBuf>,
+    open_shortcut: String,
+    split_shortcut: String,
+}
 
 pub(crate) struct ExplorerReveal {
     pub project: String,
@@ -371,52 +385,242 @@ impl App {
     }
 
     fn tree_with_host(&mut self, ui: &mut egui::Ui, path: &Path, host: egui::Id) {
-        ui.spacing_mut().interact_size.y = 24.0;
+        ui.spacing_mut().interact_size.y = ROW_HEIGHT;
         ui.spacing_mut().item_spacing.y = 0.0;
         let rows = self.explorer_rows(path);
-        let focused_file = self.focused_local_file();
-        let open_shortcut = self.shortcut_label(Action::OpenFile);
-        let split_shortcut = self.shortcut_label(Action::SplitRight);
-        for row in rows.iter() {
-            let mut rect = ui.available_rect_before_wrap();
-            if self.explorer_reveal.as_ref().is_some_and(|reveal| {
-                reveal.host == host
-                    && reveal.root == path
-                    && reveal.file == row.path
-                    && reveal.pending_scroll
-            }) {
-                ui.scroll_to_rect(
-                    egui::Rect::from_min_size(rect.min, egui::vec2(1.0, 24.0)),
-                    Some(egui::Align::Center),
-                );
-                if let Some(reveal) = self.explorer_reveal.as_mut() {
-                    reveal.pending_scroll = false;
+        // The tree is a keyboard target of its own: register it every frame
+        // (egui forgets unpainted focus targets), then let it read keys.
+        let focus = tree_focus_id(host);
+        ui.interact(
+            ui.available_rect_before_wrap(),
+            focus,
+            egui::Sense::focusable_noninteractive(),
+        );
+        self.explorer_keys(ui, &rows, host, path);
+        let context = RowContext {
+            rows: &rows,
+            focus,
+            focused_file: self.focused_local_file(),
+            open_shortcut: self.shortcut_label(Action::OpenFile),
+            split_shortcut: self.shortcut_label(Action::SplitRight),
+        };
+        let mut drop_dir: Option<PathBuf> = None;
+        let scroll_to = self.explorer_scroll_to.take();
+        let reveal = self
+            .explorer_reveal
+            .as_ref()
+            .filter(|reveal| reveal.host == host && reveal.root == path && reveal.pending_scroll)
+            .map(|reveal| reveal.file.clone());
+        // Fixed-height rows (every listing loaded) paint only the visible
+        // slice; status rows ("Loading…", errors) vary in height, so a tree
+        // with any of them paints every row as before.
+        if rows.iter().all(|row| row.entry.is_some()) {
+            let top = ui.next_widget_position().y;
+            let clip = ui.clip_rect();
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            // Row indices from UI coordinates.
+            let (first, last) = (
+                ((clip.top() - top) / ROW_HEIGHT).floor().max(0.0) as usize,
+                ((clip.bottom() - top) / ROW_HEIGHT).ceil().max(0.0) as usize,
+            );
+            let last = last.saturating_add(1).min(rows.len());
+            let first = first.min(last);
+            for target in [scroll_to.as_ref(), reveal.as_ref()].into_iter().flatten() {
+                if let Some(index) = rows.iter().position(|row| &row.path == target) {
+                    #[allow(clippy::cast_precision_loss)] // UI coordinate
+                    let y = top + index as f32 * ROW_HEIGHT;
+                    ui.scroll_to_rect(
+                        egui::Rect::from_min_size(
+                            egui::pos2(clip.left(), y),
+                            egui::vec2(1.0, ROW_HEIGHT),
+                        ),
+                        if Some(target) == reveal.as_ref() {
+                            Some(egui::Align::Center)
+                        } else {
+                            None
+                        },
+                    );
                 }
             }
-            // Explorer indent is a UI coordinate; depth can exceed the f32 mantissa.
-            #[allow(clippy::cast_precision_loss)]
-            let indent = row.depth as f32 * ui.spacing().indent;
-            rect.min.x += indent;
-            ui.push_id(&row.path, |ui| {
-                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                    if let Some(entry) = &row.entry {
-                        let height = 24.0;
-                        if skip_clipped_row(ui, height) {
-                            return;
-                        }
-                        self.explorer_entry(
-                            ui,
-                            entry,
-                            &row.label,
-                            &open_shortcut,
-                            &split_shortcut,
-                            focused_file.as_deref(),
-                        );
-                    } else {
-                        self.explorer_directory_status(ui, &row.path);
+            if reveal.is_some()
+                && let Some(active) = self.explorer_reveal.as_mut()
+            {
+                active.pending_scroll = false;
+            }
+            #[allow(clippy::cast_precision_loss)] // UI coordinate
+            ui.allocate_space(egui::vec2(ui.available_width(), first as f32 * ROW_HEIGHT));
+            for row in rows.get(first..last).unwrap_or_default() {
+                self.explorer_tree_row(ui, row, &context, &mut drop_dir);
+            }
+            #[allow(clippy::cast_precision_loss)] // UI coordinate
+            ui.allocate_space(egui::vec2(
+                ui.available_width(),
+                rows.len().saturating_sub(last) as f32 * ROW_HEIGHT,
+            ));
+        } else {
+            for row in rows.iter() {
+                let target =
+                    scroll_to.as_ref() == Some(&row.path) || reveal.as_ref() == Some(&row.path);
+                if target {
+                    let rect = ui.available_rect_before_wrap();
+                    ui.scroll_to_rect(
+                        egui::Rect::from_min_size(rect.min, egui::vec2(1.0, ROW_HEIGHT)),
+                        Some(egui::Align::Center),
+                    );
+                    if reveal.as_ref() == Some(&row.path)
+                        && let Some(active) = self.explorer_reveal.as_mut()
+                    {
+                        active.pending_scroll = false;
                     }
-                });
+                }
+                self.explorer_tree_row(ui, row, &context, &mut drop_dir);
+            }
+        }
+        self.explorer_external_drop(ui, path, drop_dir);
+        if let Some(text) = self.explorer_speed_text() {
+            let clip = ui.clip_rect();
+            let galley = ui.painter().layout_no_wrap(
+                format!("Search: {text}"),
+                egui::FontId::proportional(12.0),
+                ui.visuals().strong_text_color(),
+            );
+            let size = galley.size();
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(clip.right() - size.x - 12.0, clip.top() + 2.0),
+                egui::vec2(size.x + 8.0, size.y + 4.0),
+            );
+            ui.painter().rect_filled(
+                rect,
+                appearance::WIDGET_RADIUS,
+                ui.visuals().extreme_bg_color,
+            );
+            ui.painter().galley(
+                egui::pos2(rect.min.x + 4.0, rect.min.y + 2.0),
+                galley,
+                ui.visuals().text_color(),
+            );
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(1600));
+        }
+        if let Some(count) =
+            egui::DragAndDrop::payload::<ExplorerDrag>(ui.ctx()).map(|payload| payload.0.len())
+            && let Some(pointer) = ui.ctx().pointer_latest_pos()
+        {
+            egui::Tooltip::always_open(
+                ui.ctx().clone(),
+                ui.layer_id(),
+                focus.with("drag-label"),
+                egui::PopupAnchor::Position(egui::pos2(pointer.x + 12.0, pointer.y + 12.0)),
+            )
+            .show(|ui| {
+                ui.label(if count == 1 {
+                    "Move 1 item".to_owned()
+                } else {
+                    format!("Move {count} items")
+                })
             });
+        }
+    }
+
+    fn explorer_tree_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        row: &crate::sidebar_cache::ExplorerRow,
+        context: &RowContext<'_>,
+        drop_dir: &mut Option<PathBuf>,
+    ) {
+        let mut rect = ui.available_rect_before_wrap();
+        // Explorer indent is a UI coordinate; depth can exceed the f32 mantissa.
+        #[allow(clippy::cast_precision_loss)]
+        let indent = row.depth as f32 * ui.spacing().indent;
+        rect.min.x += indent;
+        ui.push_id(&row.path, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                if let Some(entry) = &row.entry {
+                    if skip_clipped_row(ui, ROW_HEIGHT) {
+                        return;
+                    }
+                    self.explorer_entry(ui, entry, &row.label, context, drop_dir);
+                } else {
+                    self.explorer_directory_status(ui, &row.path);
+                }
+            });
+        });
+    }
+
+    /// Files dropped from the OS file manager onto the tree copy into the
+    /// folder under the pointer (or the tree root).
+    fn explorer_external_drop(&mut self, ui: &egui::Ui, root: &Path, drop_dir: Option<PathBuf>) {
+        let clip = ui.clip_rect();
+        let pointer_inside = ui
+            .ctx()
+            .pointer_latest_pos()
+            .is_none_or(|pointer| clip.contains(pointer));
+        if !pointer_inside {
+            return;
+        }
+        if ui.ctx().input(|input| !input.raw.hovered_files.is_empty()) {
+            ui.painter().rect_stroke(
+                clip,
+                4.0,
+                egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+                egui::StrokeKind::Inside,
+            );
+            ui.ctx().request_repaint();
+        }
+        let dropped: Vec<PathBuf> = ui.ctx().input_mut(|input| {
+            std::mem::take(&mut input.raw.dropped_files)
+                .into_iter()
+                .map(|file| file.path().to_path_buf())
+                .filter(|path| !path.as_os_str().is_empty())
+                .collect()
+        });
+        if !dropped.is_empty() {
+            self.queue_workspace(workspace_ops::Op::Copy {
+                from: dropped,
+                to_dir: drop_dir.unwrap_or_else(|| root.to_owned()),
+            });
+        }
+    }
+
+    /// Drag source and drop target wiring shared by file and folder rows.
+    /// Dropping on a folder moves into it; on a file, into its folder.
+    fn explorer_row_dnd(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        path: &Path,
+        directory: bool,
+        drop_dir: &mut Option<PathBuf>,
+    ) {
+        let target = if directory {
+            Some(path.to_owned())
+        } else {
+            path.parent().map(Path::to_path_buf)
+        };
+        if response.contains_pointer() {
+            drop_dir.clone_from(&target);
+        }
+        if response.dragged() {
+            let paths = if self.explorer_selection.iter().any(|p| p == path) {
+                self.explorer_selection.clone()
+            } else {
+                vec![path.to_owned()]
+            };
+            response.dnd_set_drag_payload(ExplorerDrag(paths));
+        }
+        if directory && response.dnd_hover_payload::<ExplorerDrag>().is_some() {
+            ui.painter().rect_stroke(
+                response.rect,
+                appearance::WIDGET_RADIUS,
+                egui::Stroke::new(1.5, ui.visuals().selection.stroke.color),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if let Some(payload) = response.dnd_release_payload::<ExplorerDrag>()
+            && let Some(target) = target
+        {
+            self.explorer_drop(payload.0.clone(), target);
         }
     }
 
@@ -459,10 +663,10 @@ impl App {
         ui: &mut egui::Ui,
         entry: &terminator_git::Entry,
         label: &str,
-        open_shortcut: &str,
-        split_shortcut: &str,
-        focused_file: Option<&Path>,
+        context: &RowContext<'_>,
+        drop_dir: &mut Option<PathBuf>,
     ) {
+        let modifiers = ui.input(|input| input.modifiers);
         if entry.directory {
             let expanded = self.expanded_dirs.contains(&entry.path);
             let status = self
@@ -480,11 +684,13 @@ impl App {
                 ui,
                 label,
                 if expanded { "FolderOpen" } else { "Folder" },
-                false,
+                self.explorer_selected(&entry.path, None),
                 22.0,
                 &status.to_string(),
                 color,
-            );
+            )
+            .interact(egui::Sense::drag());
+            self.explorer_row_dnd(ui, &folder, &entry.path, true, drop_dir);
             // Build the tooltip lazily: `format!` per visible row per
             // frame showed up as scroll-time allocations.
             let folder = if folder.hovered() {
@@ -503,11 +709,18 @@ impl App {
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), &format!("explorer-folder:{label}"), folder.rect);
             if folder.clicked() {
-                if expanded {
-                    self.expanded_dirs.remove(&entry.path);
-                } else {
-                    self.expanded_dirs.insert(entry.path.clone());
+                ui.memory_mut(|memory| memory.request_focus(context.focus));
+                if self.explorer_click(context.rows, &entry.path, modifiers) {
+                    if expanded {
+                        self.expanded_dirs.remove(&entry.path);
+                    } else {
+                        self.expanded_dirs.insert(entry.path.clone());
+                    }
                 }
+            }
+            if folder.secondary_clicked() && !self.explorer_selected(&entry.path, None) {
+                self.explorer_selection = vec![entry.path.clone()];
+                self.explorer_anchor = Some(entry.path.clone());
             }
             let folder_path = entry.path.clone();
             appearance::context_menu(&folder, |ui| {
@@ -533,6 +746,27 @@ impl App {
                     ui.ctx().copy_text(folder_path.display().to_string());
                     ui.close();
                 }
+                if self.explorer_clipboard.is_some()
+                    && appearance::menu_item(ui, "Paste", "ClipboardPaste", "").clicked()
+                {
+                    self.explorer_selection = vec![folder_path.clone()];
+                    let root = folder_path.clone();
+                    self.explorer_paste(&root);
+                    ui.close();
+                }
+                ui.separator();
+                if appearance::menu_item(ui, "Rename", "Pencil", "").clicked() {
+                    self.explorer_rename(&folder_path);
+                    ui.close();
+                }
+                if appearance::menu_item(ui, "Duplicate", "Copy", "").clicked() {
+                    self.queue_workspace(workspace_ops::Op::Duplicate(folder_path.clone()));
+                    ui.close();
+                }
+                if appearance::menu_item(ui, "Delete", "X", "").clicked() {
+                    self.explorer_confirm_delete();
+                    ui.close();
+                }
                 ui.separator();
                 if appearance::menu_item(ui, "Collapse all", "ChevronDown", "").clicked() {
                     self.expanded_dirs.clear();
@@ -553,15 +787,25 @@ impl App {
                 status,
                 entry.ignored,
                 &self.theme,
-                open_shortcut,
-                split_shortcut,
-                focused_file == Some(entry.path.as_path()),
+                &context.open_shortcut,
+                &context.split_shortcut,
+                self.explorer_selected(&entry.path, context.focused_file.as_deref()),
                 self.context
                     .as_ref()
                     .is_some_and(|context| context.perforce.is_some()),
             );
+            if let Some(response) = &outcome.response {
+                self.explorer_row_dnd(ui, response, &entry.path, false, drop_dir);
+                if response.secondary_clicked() && !self.explorer_selected(&entry.path, None) {
+                    self.explorer_selection = vec![entry.path.clone()];
+                    self.explorer_anchor = Some(entry.path.clone());
+                }
+            }
             if let Some(action) = outcome.clicked {
-                self.activate_file_action(ui, &entry.path, action);
+                ui.memory_mut(|memory| memory.request_focus(context.focus));
+                if self.explorer_click(context.rows, &entry.path, modifiers) {
+                    self.activate_file_action(ui, &entry.path, action);
+                }
             }
             if let Some(action) = outcome.menu {
                 self.file_action(ui, action, &entry.path, None);
@@ -728,6 +972,7 @@ impl App {
             }
             self.pending_delete_bar(ui);
             let host = ui.scope_id();
+            self.explorer_autoreveal(host);
             let root_override = self
                 .explorer_reveal
                 .as_ref()

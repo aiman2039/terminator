@@ -482,6 +482,68 @@ pub async fn directory_raw_async(
         })
 }
 
+type Listing = (PathBuf, std::result::Result<Vec<Entry>, DirectoryError>);
+
+/// Apply Git ignore rules to every listed directory with one
+/// `check-ignore` process from `cwd`, instead of one per directory. A
+/// batch Git rejects (a nested repository, say) falls back to the
+/// per-directory check, which runs Git from each directory itself.
+pub async fn directories_with_ignored_async(
+    service: &crate::gui_services::Services,
+    cwd: &Path,
+    listings: Vec<Listing>,
+    in_git: bool,
+) -> Vec<Listing> {
+    let all: Vec<Entry> = listings
+        .iter()
+        .filter_map(|(_, entries)| entries.as_ref().ok())
+        .flatten()
+        .cloned()
+        .collect();
+    if in_git && listings.len() > 1 && !all.is_empty() {
+        let output = terminator_git::run(
+            service.processes(),
+            service.fs(),
+            cwd,
+            terminator_git::ignore::CHECK_IGNORE_ARGV
+                .iter()
+                .map(std::ffi::OsString::from)
+                .collect(),
+            CommandOptions {
+                input: Some(terminator_git::ignore::stdin_batch(&all)),
+                stdout_limit: 4 * 1024 * 1024,
+                accepted_exit_codes: Some(vec![0, 1]),
+                ..Default::default()
+            },
+        )
+        .await;
+        if let Ok(output) = output {
+            let ignored: std::collections::HashSet<&[u8]> =
+                output.split(|byte| *byte == 0).collect();
+            return listings
+                .into_iter()
+                .map(|(path, entries)| {
+                    let entries = entries.map(|mut entries| {
+                        for entry in &mut entries {
+                            entry.ignored |= ignored.contains(
+                                terminator_core::os_bytes(entry.path.as_os_str()).as_ref(),
+                            );
+                        }
+                        entries
+                    });
+                    (path, entries)
+                })
+                .collect();
+        }
+    }
+    let mut out = Vec::with_capacity(listings.len());
+    for (path, entries) in listings {
+        let entries = directory_with_ignored_async(service, path.clone(), entries, in_git).await;
+        out.push((path, entries));
+    }
+    out
+}
+
 pub async fn directory_with_ignored_async(
     service: &crate::gui_services::Services,
     path: PathBuf,
@@ -526,6 +588,55 @@ pub async fn directory_with_ignored_async(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn batched_ignore_check_marks_entries_across_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("repo");
+        fs::create_dir_all(root.join("src")).unwrap();
+        let git = |args: &[&str]| {
+            terminator_git::run_blocking(&root, args, CommandOptions::default()).unwrap();
+        };
+        git(&["init", "-q"]);
+        fs::write(root.join(".gitignore"), "*.log\nbuild/\n").unwrap();
+        for file in ["a.log", "keep.rs", "src/b.log", "src/c.rs"] {
+            fs::write(root.join(file), "").unwrap();
+        }
+        fs::create_dir(root.join("build")).unwrap();
+        let (updates, _) = std::sync::mpsc::channel();
+        let (service, _owner) = crate::gui_services::Services::new(
+            terminator_core::Paths::at(dir.path().join("state")),
+            eframe::egui::Context::default(),
+            updates,
+        )
+        .unwrap();
+        let cancel = terminator_core::async_service::CancellationToken::new();
+        let listings = vec![
+            (
+                root.clone(),
+                entries_raw(&root, &cancel).map_err(|_| unreachable!()),
+            ),
+            (
+                root.join("src"),
+                entries_raw(&root.join("src"), &cancel).map_err(|_| unreachable!()),
+            ),
+        ];
+        let listings = directories_with_ignored_async(&service, &root, listings, true).await;
+        let ignored: Vec<String> = listings
+            .iter()
+            .flat_map(|(_, entries)| entries.as_ref().unwrap())
+            .filter(|entry| entry.ignored && !entry.path.ends_with(".git"))
+            .map(|entry| {
+                entry
+                    .path
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .display()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(ignored, ["build", "a.log", "src/b.log"]);
+    }
+
     #[test]
     fn merge_stats_adds_index_worktree_and_untracked_lines() {
         let dir = tempfile::tempdir().unwrap();

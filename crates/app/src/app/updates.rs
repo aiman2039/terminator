@@ -970,6 +970,21 @@ impl App {
                 Update::Info(i) => self.info = Some(i),
                 Update::Workspace(op, result) => match result {
                     Ok(workspace_ops::Report::Message(text)) => {
+                        // Open tabs and buffers follow a renamed or moved
+                        // file instead of editing a path that is gone.
+                        match &op {
+                            workspace_ops::Op::Rename { from, to } => {
+                                self.remap_moved_path(from, to);
+                            }
+                            workspace_ops::Op::Move { from, to_dir } => {
+                                for source in from {
+                                    if let Some(name) = source.file_name() {
+                                        self.remap_moved_path(source, &to_dir.join(name));
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
                         if matches!(op, workspace_ops::Op::Commit { .. }) {
                             self.git.commit_inflight = None;
                         }

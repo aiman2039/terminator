@@ -614,3 +614,169 @@ fn stale_refresh_is_ignored_even_for_same_directory() {
     drain_updates(&mut app, &ctx);
     assert!(app.context.is_none());
 }
+
+/// A tree with a folder (`src` holding `main.rs`) and two files, drawn
+/// headless; returns the frame driver.
+fn keyboard_tree() -> (App, egui::Context, tempfile::TempDir) {
+    let (mut app, ctx, dir) = fixture();
+    let root = dir.path();
+    fs::create_dir(root.join("src")).unwrap();
+    for file in ["src/main.rs", "a.rs", "b.rs"] {
+        fs::write(root.join(file), "").unwrap();
+    }
+    let entry = |path: &str, directory| terminator_git::Entry {
+        path: root.join(path),
+        directory,
+        ignored: false,
+    };
+    app.dirs.insert(
+        root.into(),
+        vec![
+            entry("src", true),
+            entry("a.rs", false),
+            entry("b.rs", false),
+        ],
+    );
+    app.dirs
+        .insert(root.join("src"), vec![entry("src/main.rs", false)]);
+    let (jobs, _received) = mpsc::channel();
+    app.jobs = jobs.into();
+    (app, ctx, dir)
+}
+
+fn draw_tree(app: &mut App, ctx: &egui::Context, root: &std::path::Path, events: Vec<egui::Event>) {
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(260.0, 200.0),
+            )),
+            events,
+            ..Default::default()
+        },
+        |ui| app.tree(ui, root, 0),
+    );
+    output.textures_delta.clear();
+}
+
+fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    }
+}
+
+fn click_row(app: &mut App, ctx: &egui::Context, root: &std::path::Path, y: f32) {
+    let pos = egui::pos2(60.0, y);
+    draw_tree(app, ctx, root, vec![egui::Event::PointerMoved(pos)]);
+    for pressed in [true, false] {
+        draw_tree(
+            app,
+            ctx,
+            root,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            }],
+        );
+    }
+}
+
+#[test]
+fn explorer_keyboard_walks_selects_and_acts_on_the_tree() {
+    let (mut app, ctx, dir) = keyboard_tree();
+    let root = dir.path().to_path_buf();
+    draw_tree(&mut app, &ctx, &root, vec![]);
+    // Clicking the folder selects it, expands it, and focuses the tree.
+    click_row(&mut app, &ctx, &root, 12.0);
+    assert_eq!(app.explorer_selection, [root.join("src")]);
+    assert!(app.expanded_dirs.contains(&root.join("src")));
+    let none = egui::Modifiers::NONE;
+    let press = |app: &mut App, event| draw_tree(app, &ctx, &root, vec![event]);
+    press(&mut app, key(egui::Key::ArrowDown, none));
+    assert_eq!(app.explorer_selection, [root.join("src/main.rs")]);
+    // Left on a file selects its folder; Left again collapses it.
+    press(&mut app, key(egui::Key::ArrowLeft, none));
+    assert_eq!(app.explorer_selection, [root.join("src")]);
+    press(&mut app, key(egui::Key::ArrowLeft, none));
+    assert!(!app.expanded_dirs.contains(&root.join("src")));
+    press(&mut app, key(egui::Key::ArrowDown, none));
+    press(&mut app, key(egui::Key::ArrowDown, egui::Modifiers::SHIFT));
+    assert_eq!(
+        app.explorer_selection,
+        [root.join("a.rs"), root.join("b.rs")]
+    );
+    // Delete asks once for the whole selection.
+    press(&mut app, key(egui::Key::Delete, none));
+    assert_eq!(app.pending_delete, Some(root.join("a.rs")));
+    assert_eq!(app.pending_delete_more, [root.join("b.rs")]);
+    // F2 renames the cursor row.
+    press(&mut app, key(egui::Key::F2, none));
+    assert!(matches!(
+        &app.name_prompt,
+        Some(workspace_ops::NamePrompt::Rename { from, .. }) if *from == root.join("b.rs")
+    ));
+}
+
+#[test]
+fn explorer_type_to_search_selects_the_next_match() {
+    let (mut app, ctx, dir) = keyboard_tree();
+    let root = dir.path().to_path_buf();
+    draw_tree(&mut app, &ctx, &root, vec![]);
+    click_row(&mut app, &ctx, &root, 12.0);
+    draw_tree(&mut app, &ctx, &root, vec![egui::Event::Text("b".into())]);
+    assert_eq!(app.explorer_selection, [root.join("b.rs")]);
+    draw_tree(
+        &mut app,
+        &ctx,
+        &root,
+        vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+    );
+    assert!(app.explorer_speed.is_empty());
+}
+
+#[test]
+fn command_click_toggles_and_shift_click_extends_without_opening() {
+    let (mut app, _ctx, dir) = keyboard_tree();
+    let root = dir.path();
+    let rows = app.explorer_rows(root);
+    assert!(app.explorer_click(&rows, &root.join("src"), egui::Modifiers::NONE));
+    assert!(!app.explorer_click(&rows, &root.join("b.rs"), egui::Modifiers::SHIFT));
+    assert_eq!(
+        app.explorer_selection,
+        [root.join("src"), root.join("a.rs"), root.join("b.rs")]
+    );
+    assert!(!app.explorer_click(&rows, &root.join("a.rs"), egui::Modifiers::COMMAND));
+    assert_eq!(
+        app.explorer_selection,
+        [root.join("src"), root.join("b.rs")]
+    );
+}
+
+#[test]
+fn moving_a_folder_carries_open_buffers_selection_and_expansion() {
+    let (mut app, _ctx, dir) = keyboard_tree();
+    let root = dir.path();
+    let old = root.join("src/main.rs");
+    app.native_docs.insert(
+        old.clone(),
+        crate::native_editor::NativeDoc::new(old.clone(), false),
+    );
+    app.expanded_dirs.insert(root.join("src"));
+    app.explorer_selection = vec![old.clone()];
+    app.remap_moved_path(&root.join("src"), &root.join("lib"));
+    let new = root.join("lib/main.rs");
+    assert!(app.native_docs.contains_key(&new));
+    assert_eq!(
+        app.native_docs.get(&new).map(|doc| doc.path.clone()),
+        Some(new.clone())
+    );
+    assert!(!app.native_docs.contains_key(&old));
+    assert_eq!(app.explorer_selection, [new]);
+    assert!(app.expanded_dirs.contains(&root.join("lib")));
+}

@@ -153,19 +153,24 @@ impl App {
                 ui.ctx()
                     .copy_text(workspace_ops::relative_display(&root, path));
             }
-            ExplorerLocal::Rename => {
-                self.open_name_prompt(workspace_ops::NamePrompt::Rename {
-                    from: path.into(),
-                    name: path
-                        .file_name()
+            ExplorerLocal::CopyName => {
+                ui.ctx().copy_text(
+                    path.file_name()
                         .map(|name| name.to_string_lossy().into_owned())
                         .unwrap_or_default(),
-                });
+                );
             }
+            ExplorerLocal::Rename => self.explorer_rename(path),
             ExplorerLocal::Duplicate => {
                 self.queue_workspace(workspace_ops::Op::Duplicate(path.into()));
             }
-            ExplorerLocal::Delete => self.pending_delete = Some(path.into()),
+            ExplorerLocal::Delete => {
+                // Deleting a row inside a multi-selection trashes them all.
+                if !self.explorer_selection.iter().any(|p| p == path) {
+                    self.explorer_selection = vec![path.into()];
+                }
+                self.explorer_confirm_delete();
+            }
         }
     }
 

@@ -43,6 +43,18 @@ pub enum Op {
         from: PathBuf,
         to: PathBuf,
     },
+    /// Move files or folders inside the root into `to_dir` (Explorer cut
+    /// and paste, drag and drop). An existing name is an error.
+    Move {
+        from: Vec<PathBuf>,
+        to_dir: PathBuf,
+    },
+    /// Copy files or folders into `to_dir` inside the root. Sources may
+    /// live anywhere (a Finder drop); clashing names get a `copy` suffix.
+    Copy {
+        from: Vec<PathBuf>,
+        to_dir: PathBuf,
+    },
     Reveal(PathBuf),
 }
 
@@ -128,17 +140,61 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
             Ok(Report::Message(format!("Created {}", path.display())))
         }
         Op::Duplicate(path) => {
-            let path = contained_file(root, &path)?;
+            let path = contained_entry(root, &path)?;
             let dest = duplicate_destination(&path)?;
-            if fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink()) {
-                replicate_symlink(&path, &dest)?;
-            } else {
-                fs::copy(&path, &dest).with_context(|| format!("copy {}", path.display()))?;
-            }
+            copy_entry(&path, &dest)?;
             Ok(Report::Message(format!("Copied to {}", dest.display())))
         }
+        Op::Move { from, to_dir } => {
+            let dir = contained_dir(root, &to_dir)?;
+            for source in &from {
+                let source = contained_entry(root, source)?;
+                ensure!(
+                    !dir.starts_with(&source),
+                    "cannot move {} into itself",
+                    source.display()
+                );
+                let dest = dir.join(source.file_name().context("missing file name")?);
+                if dest == source {
+                    continue;
+                }
+                ensure!(!link_exists(&dest), "{} already exists", dest.display());
+                fs::rename(&source, &dest).with_context(|| format!("move {}", source.display()))?;
+            }
+            Ok(Report::Message(format!(
+                "Moved {} item{} to {}",
+                from.len(),
+                if from.len() == 1 { "" } else { "s" },
+                dir.display()
+            )))
+        }
+        Op::Copy { from, to_dir } => {
+            let dir = contained_dir(root, &to_dir)?;
+            for source in &from {
+                let meta = fs::symlink_metadata(source)
+                    .with_context(|| format!("stat {}", source.display()))?;
+                ensure!(
+                    !meta.is_dir() || !dir.starts_with(source),
+                    "cannot copy {} into itself",
+                    source.display()
+                );
+                let name = source.file_name().context("missing file name")?;
+                let dest = if link_exists(&dir.join(name)) {
+                    duplicate_destination(&dir.join(name))?
+                } else {
+                    dir.join(name)
+                };
+                copy_entry(source, &dest)?;
+            }
+            Ok(Report::Message(format!(
+                "Copied {} item{} to {}",
+                from.len(),
+                if from.len() == 1 { "" } else { "s" },
+                dir.display()
+            )))
+        }
         Op::Rename { from, to } => {
-            let from = contained_file(root, &from)?;
+            let from = contained_entry(root, &from)?;
             let to = new_path(root, &to)?;
             ensure!(!link_exists(&to), "{} already exists", to.display());
             fs::rename(&from, &to).with_context(|| format!("rename {}", from.display()))?;
@@ -402,7 +458,7 @@ fn compare(root: &Path, base_override: Option<&str>) -> Result<CompareData> {
 /// Explorer delete touches only the working tree (as in `IntelliJ`): the
 /// index is left alone, so a tracked file shows as deleted, unstaged.
 fn delete(root: &Path, path: &Path) -> Result<Report> {
-    let path = contained_file(root, path)?;
+    let path = contained_entry(root, path)?;
     move_to_trash(&path)?;
     Ok(Report::Message(format!(
         "Moved {} to Trash",
@@ -436,7 +492,13 @@ fn move_to_trash(path: &Path) -> Result<()> {
 
 #[cfg(any(test, not(any(target_os = "macos", target_os = "linux"))))]
 fn move_to_trash(path: &Path) -> Result<()> {
-    fs::remove_file(path).with_context(|| format!("delete {}", path.display()))
+    let meta = fs::symlink_metadata(path).with_context(|| format!("stat {}", path.display()))?;
+    if meta.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    }
+    .with_context(|| format!("delete {}", path.display()))
 }
 
 fn reveal(path: &Path) -> Result<()> {
@@ -491,6 +553,40 @@ fn contained_join(root: &Path, path: &Path, allow_root: bool) -> Result<PathBuf>
 
 fn contained_link(root: &Path, path: &Path) -> Result<PathBuf> {
     contained_join(root, path, false)
+}
+
+/// A file, folder, or link inside the root (never the root itself).
+fn contained_entry(root: &Path, path: &Path) -> Result<PathBuf> {
+    let path = contained_link(root, path)?;
+    fs::symlink_metadata(&path).with_context(|| format!("stat {}", path.display()))?;
+    Ok(path)
+}
+
+/// An existing directory inside the root (the root itself allowed).
+fn contained_dir(root: &Path, path: &Path) -> Result<PathBuf> {
+    let path = contained_join(root, path, true)?;
+    ensure!(path.is_dir(), "{} is not a folder", path.display());
+    Ok(path)
+}
+
+/// Copy a file, link, or folder tree. Links are recreated, never followed,
+/// so a copy cannot pull in files from outside the source.
+fn copy_entry(source: &Path, dest: &Path) -> Result<()> {
+    let meta =
+        fs::symlink_metadata(source).with_context(|| format!("stat {}", source.display()))?;
+    if meta.file_type().is_symlink() {
+        return replicate_symlink(source, dest);
+    }
+    if meta.is_dir() {
+        fs::create_dir(dest).with_context(|| format!("create {}", dest.display()))?;
+        for entry in fs::read_dir(source).with_context(|| format!("read {}", source.display()))? {
+            let entry = entry?;
+            copy_entry(&entry.path(), &dest.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+    fs::copy(source, dest).with_context(|| format!("copy {}", source.display()))?;
+    Ok(())
 }
 
 fn contained_file(root: &Path, path: &Path) -> Result<PathBuf> {
@@ -589,13 +685,19 @@ fn new_nested_path(root: &Path, path: &Path) -> Result<PathBuf> {
 
 fn duplicate_destination(path: &Path) -> Result<PathBuf> {
     let parent = path.parent().context("missing parent")?;
-    let stem = path
-        .file_stem()
-        .context("missing name")?
-        .to_string_lossy()
-        .into_owned();
+    // Folders keep their whole name: `v1.2 copy`, not `v1 copy.2`.
+    let folder = path.is_dir();
+    let stem = if folder {
+        path.file_name()
+    } else {
+        path.file_stem()
+    }
+    .context("missing name")?
+    .to_string_lossy()
+    .into_owned();
     let ext = path
         .extension()
+        .filter(|_| !folder)
         .map(|ext| ext.to_string_lossy().into_owned());
     for n in 1..100 {
         let name = if n == 1 {
@@ -645,6 +747,88 @@ mod tests {
         assert!(root.join("docs/guide/img").is_dir());
         assert!(perform(root, Op::CreateFile(root.join("x/../../escape.rs"))).is_err());
         assert!(!root.parent().unwrap().join("escape.rs").exists());
+    }
+
+    #[test]
+    fn folders_rename_duplicate_and_delete() {
+        let dir = repo();
+        let root = dir.path();
+        fs::create_dir_all(root.join("pkg/sub")).unwrap();
+        fs::write(root.join("pkg/sub/x.rs"), "x").unwrap();
+        perform(root, Op::Duplicate(root.join("pkg"))).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("pkg copy/sub/x.rs")).unwrap(),
+            "x"
+        );
+        perform(
+            root,
+            Op::Rename {
+                from: root.join("pkg copy"),
+                to: root.join("lib"),
+            },
+        )
+        .unwrap();
+        assert!(root.join("lib/sub/x.rs").is_file());
+        perform(root, Op::Delete(root.join("lib"))).unwrap();
+        assert!(!root.join("lib").exists());
+        // The root itself is never a delete target.
+        assert!(perform(root, Op::Delete(root.to_path_buf())).is_err());
+    }
+
+    #[test]
+    fn move_and_copy_into_folders() {
+        let dir = repo();
+        let root = dir.path();
+        fs::create_dir(root.join("dest")).unwrap();
+        fs::write(root.join("b.txt"), "b").unwrap();
+        perform(
+            root,
+            Op::Move {
+                from: vec![root.join("b.txt")],
+                to_dir: root.join("dest"),
+            },
+        )
+        .unwrap();
+        assert!(root.join("dest/b.txt").is_file());
+        assert!(!root.join("b.txt").exists());
+        // A folder cannot move into its own subtree.
+        assert!(
+            perform(
+                root,
+                Op::Move {
+                    from: vec![root.join("dest")],
+                    to_dir: root.join("dest"),
+                },
+            )
+            .is_err()
+        );
+        // Copies from outside the root (a Finder drop) get a free name.
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("b.txt"), "outside").unwrap();
+        perform(
+            root,
+            Op::Copy {
+                from: vec![outside.path().join("b.txt")],
+                to_dir: root.join("dest"),
+            },
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(root.join("dest/b.txt")).unwrap(), "b");
+        assert_eq!(
+            fs::read_to_string(root.join("dest/b copy.txt")).unwrap(),
+            "outside"
+        );
+        // Destinations stay inside the root.
+        assert!(
+            perform(
+                root,
+                Op::Copy {
+                    from: vec![root.join("a.txt")],
+                    to_dir: outside.path().to_path_buf(),
+                },
+            )
+            .is_err()
+        );
     }
 
     #[test]

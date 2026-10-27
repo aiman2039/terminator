@@ -5,6 +5,7 @@ mod explorer;
 mod explorer_projects;
 mod explorer_prompts;
 mod explorer_rows;
+mod explorer_select;
 mod git_panel;
 mod perforce_panel;
 mod problems;

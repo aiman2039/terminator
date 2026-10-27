@@ -74,16 +74,28 @@ impl App {
             return;
         };
         ui.horizontal(|ui| {
-            ui.label(format!(
-                "Move {} to Trash?",
-                path.file_name().unwrap_or_default().to_string_lossy()
-            ));
+            ui.label(if self.pending_delete_more.is_empty() {
+                format!(
+                    "Move {} to Trash?",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                )
+            } else {
+                format!(
+                    "Move {} items to Trash?",
+                    self.pending_delete_more.len().saturating_add(1)
+                )
+            });
             if ui.button("Move to Trash").clicked() {
                 self.queue_workspace(workspace_ops::Op::Delete(path));
+                for more in std::mem::take(&mut self.pending_delete_more) {
+                    self.queue_workspace(workspace_ops::Op::Delete(more));
+                }
                 self.pending_delete = None;
+                self.explorer_selection.clear();
             }
             if ui.button("Cancel").clicked() {
                 self.pending_delete = None;
+                self.pending_delete_more.clear();
             }
         });
     }
@@ -129,6 +141,16 @@ impl App {
                     }
                     if appearance::menu_item(ui, "Collapse all", "ChevronsDownUp", "").clicked() {
                         self.expanded_dirs.clear();
+                        ui.close();
+                    }
+                    ui.separator();
+                    let mut follow = self.preferences.explorer_autoreveal;
+                    if ui
+                        .checkbox(&mut follow, "Always select opened file")
+                        .clicked()
+                    {
+                        self.preferences.explorer_autoreveal = follow;
+                        self.explorer_followed = None;
                         ui.close();
                     }
                 })
@@ -185,15 +207,16 @@ impl App {
                 if reveal.clicked() && self.reveal_current_file_in_explorer(host) {
                     ui.ctx().request_repaint();
                 }
+                // New items land in the selected folder, like `IntelliJ`.
                 if new_file.clicked() {
                     self.open_name_prompt(workspace_ops::NamePrompt::File {
-                        dir: cwd.clone(),
+                        dir: self.explorer_target_dir(&cwd),
                         name: String::new(),
                     });
                 }
                 if new_folder.clicked() {
                     self.open_name_prompt(workspace_ops::NamePrompt::Folder {
-                        dir: cwd.clone(),
+                        dir: self.explorer_target_dir(&cwd),
                         name: String::new(),
                     });
                 }
@@ -475,6 +498,28 @@ impl App {
             );
             if focus {
                 field.request_focus();
+                // Rename selects the name without its extension, so typing
+                // replaces the stem (`IntelliJ`).
+                if let workspace_ops::NamePrompt::Rename { from, .. } = &prompt
+                    && let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), prompt_id)
+                {
+                    let stem = if from.is_dir() {
+                        name.chars().count()
+                    } else {
+                        from.file_stem()
+                            .map_or(0, |stem| stem.to_string_lossy().chars().count())
+                    };
+                    state
+                        .cursor
+                        .set_char_range(Some(egui::text::CCursorRange::two(
+                            egui::text::CCursor::new(0),
+                            egui::text::CCursor::new(stem),
+                        )));
+                    state.store(ui.ctx(), prompt_id);
+                }
+            }
+            if field.has_focus() && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                cancel = true;
             }
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "explorer-name-field", field.rect);
@@ -487,7 +532,7 @@ impl App {
             }
             submit = save.clicked()
                 || (field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)));
-            cancel = cancel_button.clicked();
+            cancel |= cancel_button.clicked();
         });
         if cancel {
             self.name_prompt = None;

@@ -326,13 +326,9 @@ pub fn spawn_async(
                     }
                     Ok((targets, fallback))
                 }).await?;
-                let mut directories = Vec::new();
-                for (path, entries) in raw_directories {
-                    let entries = services::directory_with_ignored_async(
-                        &service, path.clone(), entries, context.root.is_some() && context.perforce.is_none(),
-                    ).await;
-                    directories.push((path, entries));
-                }
+                let directories = services::directories_with_ignored_async(
+                    &service, &request.cwd, raw_directories, context.root.is_some() && context.perforce.is_none(),
+                ).await;
                 service.emit_read(Update::Refresh(request.generation, context, directories, fallback)).await?;
                 Ok::<_, anyhow::Error>((targets, fallback))
             };

@@ -28,6 +28,20 @@ pub struct App {
     /// to the hosting sidebar, so focus handling must use the painted one.
     pub(crate) name_prompt_widget: Option<egui::Id>,
     pub(crate) pending_delete: Option<PathBuf>,
+    /// Explorer tree selection, in click order, plus its range anchor.
+    pub(crate) explorer_selection: Vec<PathBuf>,
+    pub(crate) explorer_anchor: Option<PathBuf>,
+    /// Explorer file clipboard: paths and whether paste moves them.
+    pub(crate) explorer_clipboard: Option<(Vec<PathBuf>, bool)>,
+    /// Type-to-search text in the focused tree and when it was last typed.
+    pub(crate) explorer_speed: String,
+    pub(crate) explorer_speed_at: std::time::Instant,
+    /// Row the tree should scroll into view on its next paint.
+    pub(crate) explorer_scroll_to: Option<PathBuf>,
+    /// Last file auto-reveal followed, so it reveals once per focus change.
+    pub(crate) explorer_followed: Option<PathBuf>,
+    /// Further paths a multi-selection delete removes after `pending_delete`.
+    pub(crate) pending_delete_more: Vec<PathBuf>,
     pub(crate) services: gui_services::Services,
     pub(crate) service_owner: gui_services::Owner,
     pub(crate) service_completion: Option<async_service::Completion<Vec<Update>>>,

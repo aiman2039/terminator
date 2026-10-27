@@ -185,6 +185,10 @@ pub struct UiPreferences {
     #[serde(default)]
     pub agents_collapsed: HashSet<String>,
     pub show_ignored: bool,
+    /// Explorer follows the focused editor file (`IntelliJ` "Always
+    /// select opened file").
+    #[serde(default)]
+    pub explorer_autoreveal: bool,
     /// Explorer search mode and Options kebab (`Aa`, whole word, regex) plus
     /// the Contents include/exclude globs.
     #[serde(default)]
@@ -274,6 +278,7 @@ impl Default for UiPreferences {
             agents_filter: String::new(),
             agents_collapsed: HashSet::new(),
             show_ignored: false,
+            explorer_autoreveal: false,
             explorer_search_mode: ExplorerSearchMode::Names,
             explorer_include: String::new(),
             explorer_exclude: String::new(),
