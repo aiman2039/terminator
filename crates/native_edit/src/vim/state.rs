@@ -39,6 +39,8 @@ pub struct VimEngine {
     /// Options from `~/.vimrc` and later `:set` commands. View-only
     /// switches (`wrap`) stay here so every pane of one buffer agrees.
     pub(crate) options: VimrcOptions,
+    /// Vim off: IDE caret and selection semantics (see `vim/ide.rs`).
+    pub(crate) modeless: bool,
 }
 
 impl Default for VimEngine {
@@ -65,6 +67,7 @@ impl Default for VimEngine {
             typed_start: 0,
             typed_end: 0,
             options: VimrcOptions::default(),
+            modeless: false,
         }
     }
 }

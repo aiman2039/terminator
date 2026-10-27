@@ -6,6 +6,24 @@ use super::state::VimEngine;
 use super::words::line_len;
 impl VimEngine {
     pub(super) fn insert_key<B: Buffer>(&mut self, doc: &mut B, key: Key) -> Vec<Effect> {
+        if self.modeless {
+            self.typed_exact = false;
+            match key {
+                Key::Enter => {
+                    self.ide_enter(doc);
+                    return Vec::new();
+                }
+                Key::Tab => {
+                    self.ide_tab(doc);
+                    return Vec::new();
+                }
+                Key::Backspace if self.ide_backspace(doc) => return Vec::new(),
+                Key::Left | Key::Right | Key::Up | Key::Down | Key::Home | Key::End => {
+                    return self.modeless_key(doc, key);
+                }
+                _ => {}
+            }
+        }
         match key {
             Key::Escape => {
                 self.enter_normal(doc);
@@ -251,8 +269,7 @@ impl VimEngine {
     /// Shift whole selected lines by one Markdown-compatible indent level.
     /// Keep the selection active so repeated Tab/Shift-Tab can adjust it.
     fn indent_selection<B: Buffer>(&mut self, doc: &mut B, remove: bool) {
-        let top = self.anchor.line.min(self.cursor.line);
-        let bottom = self.anchor.line.max(self.cursor.line);
+        let (top, bottom) = self.ide_line_span();
         doc.begin_undo_group();
         for line in (top..=bottom).rev() {
             let at = doc.char_at_line_col(line, 0);
@@ -309,7 +326,10 @@ impl VimEngine {
             };
             return (from, b);
         }
-        // Charwise selections include the cursor cell.
+        // Modeless selections end at the caret; vim's include its cell.
+        if self.modeless {
+            return (a, b);
+        }
         b = b
             .checked_add(1)
             .map_or(doc.len_chars(), |next| next.min(doc.len_chars()));

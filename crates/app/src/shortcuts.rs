@@ -263,6 +263,21 @@ pub fn consume(ctx: &egui::Context, value: &str) -> bool {
     ctx.input_mut(|input| input.consume_key(chord.modifiers, chord.key))
 }
 
+/// True when a focused native editor owns this chord as an IDE caret
+/// motion or line edit (Cmd+Shift+Left selects to line start there, it
+/// does not split the pane). The editor wins, as in `IntelliJ`.
+pub fn editor_owns(value: &str) -> bool {
+    parse(value).is_some_and(|chord| {
+        terminator_native_edit::view::ide_edit_key(
+            chord.key,
+            chord.modifiers,
+            cfg!(target_os = "macos"),
+            1,
+        )
+        .is_some()
+    })
+}
+
 pub fn binding(map: &BTreeMap<String, String>, action: &str) -> String {
     map.get(action)
         .cloned()
@@ -370,6 +385,9 @@ mod tests {
         assert!(parse("command+P").is_some());
         assert!(parse("not-a-key").is_none());
         assert!(parse("command+f1x").is_none());
+        // Text navigation chords belong to a focused editor.
+        assert!(editor_owns("command+shift+Left"));
+        assert!(!editor_owns("command+T"));
     }
 
     #[test]

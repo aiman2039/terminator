@@ -186,6 +186,10 @@ impl eframe::App for App {
                 continue;
             }
             let key = shortcuts::binding(&self.state.settings.keybindings, action.id());
+            if terminator_native_edit::view::source_has_focus(&ctx) && shortcuts::editor_owns(&key)
+            {
+                continue;
+            }
             if key.is_empty() || !shortcuts::consume(&ctx, &key) {
                 continue;
             }

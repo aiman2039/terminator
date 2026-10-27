@@ -12,6 +12,8 @@ impl ModalEngine for VimEngine {
 
     fn selection(&self) -> Option<(Cursor, Cursor)> {
         match self.mode {
+            // An empty modeless selection is just a caret.
+            Mode::Visual if self.modeless && self.anchor == self.cursor => None,
             Mode::Visual | Mode::VisualLine | Mode::VisualBlock => {
                 let a = self.anchor;
                 let b = self.cursor;
@@ -40,6 +42,14 @@ impl ModalEngine for VimEngine {
 
     fn type_text<B: Buffer>(&mut self, doc: &mut B, text: &str) -> Vec<Effect> {
         if self.mode != Mode::Insert || text.is_empty() {
+            return Vec::new();
+        }
+        let mut chars = text.chars();
+        if self.modeless
+            && let (Some(c), None) = (chars.next(), chars.next())
+        {
+            self.typed_exact = false;
+            self.ide_type_char(doc, c);
             return Vec::new();
         }
         let at = self.char_idx(doc, self.cursor);

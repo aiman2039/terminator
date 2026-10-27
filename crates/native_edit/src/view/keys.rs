@@ -1,4 +1,5 @@
-use super::super::vim::{Key as VKey, ModalEngine, Mode};
+use super::super::highlight::Language;
+use super::super::vim::{IdeMotion, Key as VKey, ModalEngine, Mode};
 use egui;
 use egui::Color32;
 pub fn egui_key(key: egui::Key, modifiers: egui::Modifiers) -> Option<VKey> {
@@ -109,6 +110,113 @@ pub fn ide_shortcut(key: egui::Key, modifiers: egui::Modifiers) -> Option<IdeAct
         egui::Key::H => IdeAction::Replace,
         egui::Key::K => IdeAction::Hover,
         _ => return None,
+    })
+}
+
+/// IDE caret motion or line edit (`IntelliJ` keymap). `Move` carries the
+/// motion and whether Shift extends the selection.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IdeEdit {
+    Move(IdeMotion, bool),
+    DeleteWordBack,
+    DeleteLines,
+    Duplicate,
+    MoveLines { up: bool },
+    ToggleComment,
+    JoinLines,
+}
+
+/// Resolve an IDE navigation or line-edit chord. `mac` picks the macOS
+/// keymap (Option for words, Command for line and document edges); the
+/// others use Ctrl for words and Home/End with Ctrl for document edges.
+/// `page_rows` is the visible row count for Page Up/Down.
+#[must_use]
+pub fn ide_edit_key(
+    key: egui::Key,
+    modifiers: egui::Modifiers,
+    mac: bool,
+    page_rows: usize,
+) -> Option<IdeEdit> {
+    let select = modifiers.shift;
+    let word = if mac {
+        modifiers.alt && !modifiers.command && !modifiers.ctrl
+    } else {
+        modifiers.command && !modifiers.alt
+    };
+    let line_edge = mac && modifiers.command && !modifiers.alt;
+    let mv = |motion| Some(IdeEdit::Move(motion, select));
+    match key {
+        egui::Key::ArrowUp | egui::Key::ArrowDown
+            if modifiers.alt && modifiers.shift && !modifiers.command =>
+        {
+            Some(IdeEdit::MoveLines {
+                up: key == egui::Key::ArrowUp,
+            })
+        }
+        egui::Key::ArrowLeft if word => mv(IdeMotion::WordLeft),
+        egui::Key::ArrowRight if word => mv(IdeMotion::WordRight),
+        egui::Key::ArrowLeft if line_edge => mv(IdeMotion::LineStart),
+        egui::Key::ArrowRight if line_edge => mv(IdeMotion::LineEnd),
+        egui::Key::ArrowUp if line_edge => mv(IdeMotion::DocStart),
+        egui::Key::ArrowDown if line_edge => mv(IdeMotion::DocEnd),
+        egui::Key::Home if modifiers.command => mv(IdeMotion::DocStart),
+        egui::Key::End if modifiers.command => mv(IdeMotion::DocEnd),
+        _ if modifiers.command || modifiers.alt || modifiers.ctrl => match key {
+            egui::Key::Backspace if word => Some(IdeEdit::DeleteWordBack),
+            egui::Key::Backspace if line_edge => Some(IdeEdit::DeleteLines),
+            egui::Key::Y if !mac && modifiers.command && !select => Some(IdeEdit::DeleteLines),
+            egui::Key::D if modifiers.command && !select && !modifiers.alt => {
+                Some(IdeEdit::Duplicate)
+            }
+            egui::Key::Slash if modifiers.command && !modifiers.alt => Some(IdeEdit::ToggleComment),
+            egui::Key::J if modifiers.ctrl && select && !modifiers.alt => Some(IdeEdit::JoinLines),
+            _ => None,
+        },
+        egui::Key::ArrowLeft => mv(IdeMotion::Left),
+        egui::Key::ArrowRight => mv(IdeMotion::Right),
+        egui::Key::ArrowUp => mv(IdeMotion::Up),
+        egui::Key::ArrowDown => mv(IdeMotion::Down),
+        egui::Key::Home => mv(IdeMotion::LineStart),
+        egui::Key::End => mv(IdeMotion::LineEnd),
+        egui::Key::PageUp => mv(IdeMotion::PageUp(page_rows)),
+        egui::Key::PageDown => mv(IdeMotion::PageDown(page_rows)),
+        _ => None,
+    }
+}
+
+/// Whether an IDE chord applies with vim on. Vim keeps plain, Shift, and
+/// word-modifier navigation; chords no vim key uses (Command or Ctrl
+/// edits, line moves, paging) work in every mode.
+#[must_use]
+pub fn ide_edit_in_vim(edit: IdeEdit, modifiers: egui::Modifiers) -> bool {
+    match edit {
+        IdeEdit::Move(IdeMotion::PageUp(_) | IdeMotion::PageDown(_), _) => true,
+        IdeEdit::Move(..) | IdeEdit::DeleteWordBack => modifiers.command,
+        _ => true,
+    }
+}
+
+/// Line-comment token for a language, when it has one.
+#[must_use]
+pub fn comment_token(language: Language) -> Option<&'static str> {
+    Some(match language {
+        Language::Rust
+        | Language::JavaScript
+        | Language::TypeScript
+        | Language::Go
+        | Language::C
+        | Language::Cpp
+        | Language::Java => "//",
+        Language::Python | Language::Shell | Language::Toml | Language::Yaml => "#",
+        Language::Syntax(name) => match name {
+            "Ruby" | "Perl" | "R" | "Makefile" | "Dockerfile" | "Elixir" | "Nix" | "CMake" => "#",
+            "Lua" | "SQL" | "Haskell" => "--",
+            "Swift" | "Kotlin" | "Scala" | "C#" | "Dart" | "Zig" | "PHP" | "Protocol Buffer"
+            | "Objective-C" | "Groovy" => "//",
+            "Lisp" | "Clojure" => ";",
+            _ => return None,
+        },
+        Language::Json | Language::Markdown | Language::Plain => return None,
     })
 }
 

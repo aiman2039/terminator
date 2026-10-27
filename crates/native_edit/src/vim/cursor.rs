@@ -17,7 +17,7 @@ impl VimEngine {
     }
 
     pub(super) fn clamp<B: Buffer>(&mut self, doc: &B) {
-        let last = if self.mode == Mode::Insert {
+        let last = if self.mode == Mode::Insert || self.modeless {
             // Insert may sit just past a trailing newline (the cursor stays
             // where editing left it), so backspace can delete that newline
             // and keep going into the previous line.
@@ -27,7 +27,7 @@ impl VimEngine {
         };
         self.cursor.line = self.cursor.line.min(last);
         let len = line_len(doc, self.cursor.line);
-        let max_col = if self.mode == Mode::Insert || len == 0 {
+        let max_col = if self.mode == Mode::Insert || self.modeless || len == 0 {
             len
         } else {
             len.saturating_sub(1)
@@ -42,7 +42,7 @@ impl VimEngine {
     /// insert mode holds. Other modes land at the end of the last real line
     /// (vim has no cursor past the final newline) instead of line start.
     pub(super) fn settle_cursor<B: Buffer>(&mut self, doc: &B) {
-        if self.mode == Mode::Insert {
+        if self.mode == Mode::Insert || self.modeless {
             return;
         }
         let last = Self::last_addressable(doc);
@@ -103,7 +103,9 @@ impl VimEngine {
     /// first so delete-plus-insert undoes as one change). Re-entering
     /// while a unit is open (operator delete, then typing) joins it.
     pub(super) fn begin_insert_session<B: Buffer>(&mut self, doc: &mut B) {
-        if !self.insert_group {
+        // Modeless editing has no Escape to close a session, so typing
+        // stays on the buffer's own run coalescing: undo steps by run.
+        if !self.insert_group && !self.modeless {
             doc.begin_undo_group();
             self.insert_group = true;
         }

@@ -63,9 +63,14 @@ impl VimEngine {
         self.begin_mouse_selection(doc, line, start);
         // The selection ends on the last char of the run (end-exclusive
         // `end`), which is what the visual range paints.
+        // Modeless selections end-exclusive, so the caret sits past it.
         self.cursor = Cursor {
             line,
-            col: end.saturating_sub(1).max(start),
+            col: if self.modeless {
+                end
+            } else {
+                end.saturating_sub(1).max(start)
+            },
         };
         self.preferred_col = self.cursor.col;
     }

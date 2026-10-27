@@ -2,8 +2,8 @@ use super::super::doc::Buffer;
 use super::super::highlight::{HighlightCache, Language};
 use super::super::vim::{Effect, Key as VKey, ModalEngine, Mode, VimEngine};
 use super::keys::{
-    IdeAction, command_prompt, ctrl_h_is_motion, ctrl_v_is_block, echo_of_handled_key, egui_key,
-    ide_shortcut, mode_name, source_focus_id,
+    IdeAction, IdeEdit, command_prompt, ctrl_h_is_motion, ctrl_v_is_block, echo_of_handled_key,
+    egui_key, ide_edit_key, ide_shortcut, mode_name, source_focus_id,
 };
 use super::render::{SourceOptions, show_source};
 use super::{char_display_width, col_at_display_x, display_x};
@@ -580,9 +580,17 @@ mod tests {
                 let ctx = egui::Context::default();
                 let mut doc = crate::doc::Doc::new("- one\n- two\nlast\n");
                 let mut engine = VimEngine::new();
-                engine.press_key(&mut doc, VKey::Down);
-                engine.press_key(&mut doc, selection);
-                engine.press_key(&mut doc, VKey::Up);
+                if !vim && selection == VKey::Char('v') {
+                    // Modeless charwise selections end at the caret, so the
+                    // selection must reach into the second line to cover it.
+                    engine.press_key(&mut doc, selection);
+                    engine.press_key(&mut doc, VKey::Down);
+                    engine.press_key(&mut doc, VKey::Right);
+                } else {
+                    engine.press_key(&mut doc, VKey::Down);
+                    engine.press_key(&mut doc, selection);
+                    engine.press_key(&mut doc, VKey::Up);
+                }
                 let mode = engine.mode();
                 let ends = engine.selection();
                 let options = SourceOptions {
@@ -914,5 +922,120 @@ mod tests {
             &[(egui::Key::Enter, egui::Modifiers::NONE)],
         );
         assert_eq!(doc.text(), "\nhi");
+    }
+
+    #[test]
+    fn ide_keymap_follows_platform_conventions() {
+        use crate::vim::IdeMotion;
+        let alt_shift = egui::Modifiers {
+            alt: true,
+            shift: true,
+            ..egui::Modifiers::NONE
+        };
+        let mac_cmd = egui::Modifiers {
+            mac_cmd: true,
+            command: true,
+            ..egui::Modifiers::NONE
+        };
+        let ctrl = egui::Modifiers::CTRL;
+        // macOS: Option moves by word, Command by line edge.
+        assert_eq!(
+            ide_edit_key(egui::Key::ArrowLeft, egui::Modifiers::ALT, true, 30),
+            Some(IdeEdit::Move(IdeMotion::WordLeft, false))
+        );
+        assert_eq!(
+            ide_edit_key(egui::Key::ArrowRight, mac_cmd, true, 30),
+            Some(IdeEdit::Move(IdeMotion::LineEnd, false))
+        );
+        assert_eq!(
+            ide_edit_key(egui::Key::D, mac_cmd, true, 30),
+            Some(IdeEdit::Duplicate)
+        );
+        assert_eq!(
+            ide_edit_key(egui::Key::Backspace, mac_cmd, true, 30),
+            Some(IdeEdit::DeleteLines)
+        );
+        // Linux/Windows: Ctrl moves by word, Ctrl+Y deletes the line.
+        let linux_ctrl = egui::Modifiers {
+            command: true,
+            ..ctrl
+        };
+        assert_eq!(
+            ide_edit_key(egui::Key::ArrowLeft, linux_ctrl, false, 30),
+            Some(IdeEdit::Move(IdeMotion::WordLeft, false))
+        );
+        assert_eq!(
+            ide_edit_key(egui::Key::Y, linux_ctrl, false, 30),
+            Some(IdeEdit::DeleteLines)
+        );
+        // Shared: Shift selects, Alt+Shift moves lines, paging uses rows.
+        assert_eq!(
+            ide_edit_key(egui::Key::End, egui::Modifiers::SHIFT, false, 30),
+            Some(IdeEdit::Move(IdeMotion::LineEnd, true))
+        );
+        assert_eq!(
+            ide_edit_key(egui::Key::ArrowUp, alt_shift, true, 30),
+            Some(IdeEdit::MoveLines { up: true })
+        );
+        assert_eq!(
+            ide_edit_key(egui::Key::PageDown, egui::Modifiers::NONE, true, 30),
+            Some(IdeEdit::Move(IdeMotion::PageDown(30), false))
+        );
+        assert_eq!(
+            ide_edit_key(egui::Key::A, egui::Modifiers::NONE, true, 30),
+            None
+        );
+    }
+
+    #[test]
+    fn modeless_shift_arrows_select_and_typing_replaces_through_view() {
+        use crate::doc::Doc;
+        let ctx = egui::Context::default();
+        let mut doc = Doc::new("hello world");
+        let mut engine = VimEngine::new();
+        let options = super::SourceOptions {
+            vim: false,
+            ..super::SourceOptions::default()
+        };
+        let shift = egui::Modifiers::SHIFT;
+        drive_mods(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &options,
+            super::Language::Plain,
+            &mut super::HighlightCache::default(),
+            &[
+                (egui::Key::ArrowRight, shift),
+                (egui::Key::ArrowRight, shift),
+                (egui::Key::ArrowRight, shift),
+                (egui::Key::ArrowRight, shift),
+                (egui::Key::ArrowRight, shift),
+                (egui::Key::X, egui::Modifiers::NONE),
+            ],
+        );
+        assert_eq!(doc.text(), "x world");
+        assert_eq!(engine.mode(), Mode::Insert);
+    }
+
+    #[test]
+    fn command_d_and_slash_edit_lines_through_view_in_vim_mode() {
+        use crate::doc::Doc;
+        let ctx = egui::Context::default();
+        let mut doc = Doc::new("let a = 1;\n");
+        let mut engine = VimEngine::new();
+        drive_mods(
+            &ctx,
+            &mut doc,
+            &mut engine,
+            &super::SourceOptions::default(),
+            super::Language::Rust,
+            &mut super::HighlightCache::default(),
+            &[
+                (egui::Key::D, egui::Modifiers::COMMAND),
+                (egui::Key::Slash, egui::Modifiers::COMMAND),
+            ],
+        );
+        assert_eq!(doc.text(), "let a = 1;\n// let a = 1;\n");
     }
 }

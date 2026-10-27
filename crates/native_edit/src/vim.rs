@@ -1,6 +1,7 @@
 //! Minimal vim-modal engine over [`crate::doc::Buffer`].
 mod cursor;
 mod helpers;
+mod ide;
 mod insert;
 mod modal;
 mod mode;
@@ -14,5 +15,6 @@ mod state;
 #[cfg(test)]
 mod vim_tests;
 mod words;
+pub use ide::IdeMotion;
 pub use mode::{Cursor, Effect, Key, ModalEngine, Mode};
 pub use state::{VimEngine, VimrcOptions, parse_vimrc};

@@ -2,8 +2,9 @@ use super::super::doc::Buffer;
 use super::super::highlight::{HighlightCache, Language, Span, SpanStyle};
 use super::super::vim::{Cursor, Effect, Key as VKey, ModalEngine, Mode, VimEngine};
 use super::keys::{
-    IdeAction, command_prompt, ctrl_h_is_motion, ctrl_v_is_block, echo_of_handled_key, egui_key,
-    ide_shortcut, mode_name, source_focus_id,
+    IdeAction, IdeEdit, command_prompt, comment_token, ctrl_h_is_motion, ctrl_v_is_block,
+    echo_of_handled_key, egui_key, ide_edit_in_vim, ide_edit_key, ide_shortcut, mode_name,
+    source_focus_id,
 };
 use super::{BOLD_FAMILY, ITALIC_FAMILY};
 use crate::rows::{col_at_display_x, display_x, expand_tabs};
@@ -128,6 +129,8 @@ pub fn show_source<B: Buffer>(
             .max(1.0) as usize
     });
     let mut effects = Vec::new();
+    // Vim off is modeless: IDE caret and selection semantics.
+    engine.set_modeless(!options.vim);
 
     // Highlight derive, once per buffer revision: unchanged frames repaint
     // straight from the cache without rebuilding the text. The row layout
@@ -224,20 +227,33 @@ pub fn show_source<B: Buffer>(
                 row.start.saturating_add(col_at_display_x(&row.text, cells)),
             ))
         };
+        let caret_before = engine.cursor();
+        let click_modifiers = ui.input(|input| input.modifiers);
         if response.clicked() || (response.secondary_clicked() && engine.selection().is_none()) {
             ui.memory_mut(|memory| memory.request_focus(focus_id));
+            let extend = response.clicked() && click_modifiers.shift;
             // A plain click after a drag collapses that selection instead of
-            // extending it the way a `v` selection does.
+            // extending it the way a `v` selection does; modeless clicks
+            // always collapse (IDE carets never extend without Shift).
             let dragged = ui
                 .ctx()
                 .data_mut(|data| data.remove_temp::<bool>(mouse_drag_key).unwrap_or(false));
-            if dragged {
+            if !extend && (dragged || !options.vim) {
                 engine.clear_mouse_selection(doc);
             }
             if let Some(pos) = response.interact_pointer_pos()
                 && let Some((line, col)) = cursor_at(pos)
             {
-                effects.extend(engine.place_cursor(doc, line, col));
+                if extend {
+                    engine.extend_selection_to(doc, line, col);
+                } else {
+                    effects.extend(engine.place_cursor(doc, line, col));
+                    // Cmd/Ctrl+click: go to the declaration under the
+                    // pointer (`IntelliJ`), now that the caret sits on it.
+                    if response.clicked() && click_modifiers.command {
+                        effects.push(Effect::GotoDefinition);
+                    }
+                }
             }
         }
         if response.double_clicked()
@@ -246,6 +262,12 @@ pub fn show_source<B: Buffer>(
         {
             engine.select_word_at(doc, line, col);
             ui.memory_mut(|memory| memory.request_focus(focus_id));
+        }
+        if response.triple_clicked()
+            && let Some(pos) = response.interact_pointer_pos()
+            && let Some((line, _)) = cursor_at(pos)
+        {
+            engine.select_line_at(doc, line);
         }
         if response.drag_started() {
             // The press point, not the position where egui decided this was
@@ -438,6 +460,16 @@ pub fn show_source<B: Buffer>(
 
         let cursor = engine.cursor();
         let cursor_visible = !matches!(engine.mode(), Mode::Command);
+        // Occurrences of the identifier at the caret, and the bracket pair
+        // around it: both paint as quiet backgrounds/outlines.
+        let caret_word = (cursor_visible && selection.is_none())
+            .then(|| engine.word_at_caret(doc))
+            .flatten();
+        let brackets = cursor_visible
+            .then(|| engine.matching_bracket(doc))
+            .flatten();
+        let occurrence_fill = ui.visuals().selection.bg_fill.gamma_multiply(0.45);
+        let bracket_stroke = egui::Stroke::new(1.0, ui.visuals().weak_text_color());
         for (visual_line, visual) in visual_rows.iter().enumerate() {
             let line = visual.line;
             #[allow(clippy::cast_precision_loss)] // UI coordinate
@@ -493,8 +525,9 @@ pub fn show_source<B: Buffer>(
                     let len = visual.line_len;
                     (left < right.min(len)).then(|| (left, right.min(len)))
                 }
-                _ => selection
-                    .and_then(|(a, b)| selection_span_for_line(a, b, line, visual.line_len)),
+                _ => selection.and_then(|(a, b)| {
+                    selection_span_for_line(a, b, line, visual.line_len, options.vim)
+                }),
             };
             if let Some((start_col, end_col)) = span
                 && let (start_col, end_col) = (start_col.max(visual.start), end_col.min(visual.end))
@@ -514,6 +547,38 @@ pub fn show_source<B: Buffer>(
                     0.0,
                     ui.visuals().selection.bg_fill,
                 );
+            }
+            let cell_rect = |col: usize, cells: usize| {
+                let local = col.saturating_sub(visual.start);
+                let start = display_x(text, local);
+                let end = display_x(text, local.saturating_add(cells));
+                #[allow(clippy::cast_precision_loss)] // UI coordinate
+                let rect = Rect::from_min_size(
+                    Pos2::new(origin.x + gutter + start as f32 * advance, y),
+                    Vec2::new(
+                        end.saturating_sub(start).max(1) as f32 * advance,
+                        row_height,
+                    ),
+                );
+                rect
+            };
+            if let Some(word) = caret_word.as_deref() {
+                for (start, len) in word_occurrences(text, word) {
+                    let rect = cell_rect(visual.start.saturating_add(start), len);
+                    painter.rect_filled(rect, 2.0, occurrence_fill);
+                }
+            }
+            if let Some((open, close)) = brackets {
+                for end in [open, close] {
+                    if end.line == line && end.col >= visual.start && end.col < visual.end {
+                        painter.rect_stroke(
+                            cell_rect(end.col, 1),
+                            2.0,
+                            bracket_stroke,
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                }
             }
             let cursor_here = cursor_visible && visual.owns_cursor(cursor.line, cursor.col);
             let local_col = cursor.col.saturating_sub(visual.start);
@@ -555,7 +620,8 @@ pub fn show_source<B: Buffer>(
                 };
                 #[allow(clippy::cast_precision_loss)] // UI coordinate
                 let x = origin.x + gutter + cells as f32 * advance;
-                if engine.mode() == Mode::Insert {
+                // Modeless carets are always a bar: they sit between chars.
+                if engine.mode() == Mode::Insert || !options.vim {
                     painter.rect_filled(
                         Rect::from_min_size(Pos2::new(x, y), Vec2::new(2.0, row_height)),
                         0.0,
@@ -664,6 +730,47 @@ pub fn show_source<B: Buffer>(
                 }
                 ui.input_mut(|input| input.consume_key(modifiers, key));
             }
+            // IDE navigation and line edits (`IntelliJ` keymap): Shift
+            // selects, word/line/document motions, duplicate, move,
+            // comment. Vim keeps its own plain and word keys.
+            if engine.mode() != Mode::Command {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                // Viewport height in rows.
+                let page_rows = (ui.clip_rect().height() / row_height).floor().max(1.0) as usize;
+                let mut edits: Vec<(egui::Key, egui::Modifiers, IdeEdit)> = Vec::new();
+                ui.input(|input| {
+                    for event in &input.events {
+                        if let egui::Event::Key {
+                            key,
+                            pressed: true,
+                            modifiers,
+                            ..
+                        } = event
+                            && let Some(edit) =
+                                ide_edit_key(*key, *modifiers, cfg!(target_os = "macos"), page_rows)
+                            && (!options.vim || ide_edit_in_vim(edit, *modifiers))
+                        {
+                            edits.push((*key, *modifiers, edit));
+                        }
+                    }
+                });
+                for (key, modifiers, edit) in edits {
+                    match edit {
+                        IdeEdit::Move(motion, select) => engine.ide_move(doc, motion, select),
+                        IdeEdit::DeleteWordBack => engine.ide_delete_word_back(doc),
+                        IdeEdit::DeleteLines => engine.ide_delete_lines(doc),
+                        IdeEdit::Duplicate => engine.ide_duplicate(doc),
+                        IdeEdit::MoveLines { up } => engine.ide_move_lines(doc, up),
+                        IdeEdit::ToggleComment => {
+                            if let Some(token) = comment_token(language) {
+                                engine.ide_toggle_comment(doc, token);
+                            }
+                        }
+                        IdeEdit::JoinLines => engine.ide_join_lines(doc),
+                    }
+                    ui.input_mut(|input| input.consume_key(modifiers, key));
+                }
+            }
             // Some backends send both the key and a clipboard event.
             // A block-selection chord must not also insert clipboard text.
             let selecting_block = vim_ctrls.iter().any(|(_, _, key)| *key == VKey::CtrlV);
@@ -673,6 +780,10 @@ pub fn show_source<B: Buffer>(
             }
             if !selecting_block {
                 for text in pastes {
+                    // Modeless paste replaces the selection, IDE-style.
+                    if !options.vim {
+                        engine.ide_delete_selection(doc);
+                    }
                     engine.paste_text(doc, &text);
                 }
             }
@@ -738,37 +849,13 @@ pub fn show_source<B: Buffer>(
                     consumed.push(key);
                     continue;
                 }
-                // Modeless: with vim off, Normal mode never holds keys
-                // for commands. Printable keys open an insert session
-                // and type; editing keys (Enter/Backspace/…) open one
-                // and apply there; typing over a selection replaces it.
-                if !options.vim {
-                    let mode = engine.mode();
-                    if mode == Mode::Normal || mode.is_visual() {
-                        match vkey {
-                            VKey::Char(c) if c == ' ' || c.is_ascii_graphic() => {
-                                if mode.is_visual() {
-                                    let _ = engine.cut(doc);
-                                }
-                                effects.extend(engine.press_key(doc, VKey::Char('i')));
-                                effects.extend(engine.type_text(doc, &c.to_string()));
-                                consumed.push(key);
-                                continue;
-                            }
-                            VKey::Enter
-                            | VKey::Backspace
-                            | VKey::Delete
-                            | VKey::Tab
-                            | VKey::Home
-                            | VKey::End => {
-                                effects.extend(engine.press_key(doc, VKey::Char('i')));
-                                effects.extend(engine.press_key(doc, vkey));
-                                consumed.push(key);
-                                continue;
-                            }
-                            _ => {}
-                        }
-                    }
+                // Modeless: with vim off, no key is ever a vim command.
+                // Printable keys type (replacing a selection), editing
+                // keys edit, and arrows move the IDE caret.
+                if !options.vim && engine.mode() != Mode::Command {
+                    effects.extend(engine.modeless_key(doc, vkey));
+                    consumed.push(key);
+                    continue;
                 }
                 effects.extend(engine.press_key(doc, vkey));
                 consumed.push(key);
@@ -826,6 +913,7 @@ pub fn show_source<B: Buffer>(
         // Search and long jumps ask for the cursor row to be revealed;
         // user scrolling never triggers this, so it cannot fight input.
         let landed = engine.cursor();
+        let caret_moved = landed != caret_before;
         if engine.take_scroll_request() {
             let visual_line = visual_rows
                 .iter()
@@ -837,6 +925,30 @@ pub fn show_source<B: Buffer>(
                 Rect::from_min_size(Pos2::new(origin.x, row_y), Vec2::new(width, row_height)),
                 Some(egui::Align::Center),
             );
+        } else if caret_moved {
+            // Keyboard and drag moves keep the caret in sight with the
+            // least scrolling (`IntelliJ`); a visible caret does not move
+            // the viewport. Rows are this frame's layout, so an edit that
+            // added lines lands on its logical line instead.
+            let (visual_line, cells) = visual_rows
+                .iter()
+                .enumerate()
+                .find(|(_, row)| row.owns_cursor(landed.line, landed.col))
+                .map_or((landed.line, 0), |(index, row)| {
+                    (
+                        index,
+                        display_x(&row.text, landed.col.saturating_sub(row.start)),
+                    )
+                });
+            #[allow(clippy::cast_precision_loss)] // UI coordinate
+            let caret = Rect::from_min_size(
+                Pos2::new(
+                    origin.x + gutter + cells as f32 * advance,
+                    origin.y + visual_line as f32 * row_height,
+                ),
+                Vec2::new(advance, row_height),
+            );
+            ui.scroll_to_rect(caret.expand2(Vec2::new(advance * 2.0, 0.0)), None);
         }
     });
     let scroll_range = (scroll_output.content_size.y - scroll_output.inner_rect.height()).max(0.0);
@@ -997,12 +1109,15 @@ fn selection_span_for_line(
     b: Cursor,
     line: usize,
     line_len: usize,
+    inclusive: bool,
 ) -> Option<(usize, usize)> {
     if line < a.line || line > b.line {
         return None;
     }
     let start = if line == a.line { a.col } else { 0 };
-    let end = if line == b.line {
+    let end = if line == b.line && !inclusive {
+        b.col.min(line_len)
+    } else if line == b.line {
         b.col
             .checked_add(1)
             .map_or(line_len, |end| end.min(line_len))
@@ -1013,6 +1128,31 @@ fn selection_span_for_line(
         return None;
     }
     Some((start, end))
+}
+
+/// Whole-word occurrences of `word` in `text`, as (char start, char len).
+fn word_occurrences(text: &str, word: &str) -> Vec<(usize, usize)> {
+    let chars: Vec<char> = text.chars().collect();
+    let needle: Vec<char> = word.chars().collect();
+    let is_word = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '_');
+    let mut out = Vec::new();
+    if needle.is_empty() || needle.len() > chars.len() {
+        return out;
+    }
+    let mut i = 0usize;
+    while i.saturating_add(needle.len()) <= chars.len() {
+        let end = i.saturating_add(needle.len());
+        if chars.get(i..end) == Some(needle.as_slice())
+            && !is_word(i.checked_sub(1).and_then(|p| chars.get(p)))
+            && !is_word(chars.get(end))
+        {
+            out.push((i, needle.len()));
+            i = end;
+        } else {
+            i = i.saturating_add(1);
+        }
+    }
+    out
 }
 
 /// `-- NORMAL --` style status plus 1-based cursor position.
