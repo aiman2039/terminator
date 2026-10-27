@@ -224,134 +224,7 @@ pub struct Settings {
     pub inlay_hints: bool,
     pub keybindings: std::collections::BTreeMap<String, String>,
 }
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            events: [
-                AgentState::WaitingInput,
-                AgentState::WaitingPermission,
-                AgentState::Completed,
-                AgentState::Failed,
-            ]
-            .into(),
-            os_events: [
-                AgentState::WaitingInput,
-                AgentState::WaitingPermission,
-                AgentState::Failed,
-            ]
-            .into(),
-            dismissal: Dismissal::OnFocus,
-            notifications_side: true,
-            terminal_notifications: true,
-            terminal_notifications_os: false,
-            notification_sound: true,
-            automatic_update_checks: true,
-            ntfy_enabled: false,
-            ntfy_channel: String::new(),
-            ntfy_machine: String::new(),
-            pr_metadata: false,
-            editor_mode: EditorMode::Embedded,
-            review_mode: ReviewMode::Native,
-            editor_program: "nvim".into(),
-            external_editor: if cfg!(target_os = "macos") {
-                "open"
-            } else {
-                "xdg-open"
-            }
-            .into(),
-            external_args: vec![],
-            lsp_servers: std::collections::BTreeMap::new(),
-            shell: String::new(),
-            history_days: 30,
-            session_mib: 50,
-            total_mib: 2048,
-            scrollback_lines: 10_000,
-            font_size: 13.0,
-            editor_close_timeout_secs: 1,
-            diff_split_default: false,
-            native_vim: true,
-            inlay_hints: true,
-            keybindings: [
-                ("new_terminal".into(), "command+T".into()),
-                ("open_file".into(), "command+O".into()),
-                ("split_up".into(), "command+alt+Up".into()),
-                ("split_down".into(), "command+alt+D".into()),
-                ("split_left".into(), "command+shift+Left".into()),
-                ("split_right".into(), "command+shift+D".into()),
-                ("next_pane".into(), "command+]".into()),
-                ("select_all".into(), "command+A".into()),
-                ("find_in_terminal".into(), "command+F".into()),
-                ("search_scrollback".into(), "command+alt+F".into()),
-                ("copy_working_directory".into(), "command+alt+C".into()),
-                ("rename_terminal".into(), "command+shift+R".into()),
-                ("close_session".into(), "command+W".into()),
-                ("clear_scrollback".into(), "command+shift+K".into()),
-                ("editor_save".into(), "command+S".into()),
-                ("compare_disk".into(), "command+shift+Y".into()),
-                ("toggle_left_sidebar".into(), "command+B".into()),
-                ("toggle_right_sidebar".into(), "command+L".into()),
-                ("toggle_ide_mode".into(), "command+E".into()),
-                ("move_to_main".into(), "command+alt+M".into()),
-                ("move_to_strip".into(), "command+alt+Down".into()),
-                ("open_settings".into(), "command+,".into()),
-                ("open_palette".into(), "command+P".into()),
-                ("goto_symbol".into(), "command+alt+O".into()),
-                ("file_structure".into(), "command+F12".into()),
-                ("navigate_back".into(), "command+alt+Left".into()),
-                ("navigate_forward".into(), "command+alt+Right".into()),
-                ("recent_files".into(), "command+alt+E".into()),
-                ("next_attention".into(), "command+shift+J".into()),
-                ("new_browser".into(), "command+alt+B".into()),
-                ("new_vnc".into(), "command+alt+V".into()),
-            ]
-            .into(),
-        }
-    }
-}
-impl Settings {
-    pub fn validate(&self) -> Result<()> {
-        // Disabled ntfy accepts any channel/machine contents (including
-        // leftovers) so turning the toggle off always saves. Enabling
-        // requires a usable channel again, and delivery still re-validates.
-        if self.ntfy_enabled {
-            ensure!(
-                (1..=128).contains(&self.ntfy_channel.len())
-                    && self
-                        .ntfy_channel
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
-                "ntfy channel must contain 1–128 letters, digits, underscores or hyphens when enabled"
-            );
-            ensure!(
-                self.ntfy_machine.len() <= 128 && !self.ntfy_machine.chars().any(char::is_control),
-                "ntfy machine name must be at most 128 bytes without control characters"
-            );
-        }
-        ensure!(
-            (1..=3650).contains(&self.history_days),
-            "History age must be 1–3650 days"
-        );
-        ensure!(
-            (1..=4096).contains(&self.session_mib)
-                && self.total_mib >= self.session_mib
-                && self.total_mib <= 65536,
-            "Invalid disk limits"
-        );
-        ensure!(
-            (100..=20_000).contains(&self.scrollback_lines),
-            "History lines must be 100–20000"
-        );
-        ensure!(
-            (9.0..=32.0).contains(&self.font_size),
-            "Font size must be 9–32"
-        );
-        ensure!(
-            (1..=30).contains(&self.editor_close_timeout_secs),
-            "Editor close timeout must be 1–30 seconds"
-        );
-        Ok(())
-    }
-}
+mod settings;
 
 pub const METADATA_SETTINGS_CAPABILITY: &str = "metadata-settings-v1";
 pub const WORKTREES_CAPABILITY: &str = "worktrees-v1";
@@ -568,6 +441,35 @@ impl State {
         self.revision = self.revision.saturating_add(1);
     }
     pub fn apply_hook(&mut self, e: HookEvent) -> Result<Option<String>> {
+        self.validate_hook_event(&e)?;
+        let existing = self.hook_existing(&e);
+        if self.hook_should_skip(&e, existing) {
+            return Ok(None);
+        }
+        self.record_hook_event(&e);
+        let repeated_state = existing
+            .is_some_and(|i| self.agents.get(i).is_some_and(|a| a.state == e.state))
+            && e.request_id.is_none();
+        self.upsert_hook_agent(&e, existing);
+        self.resolve_hook_notifications(&e);
+        self.revision = self.revision.saturating_add(1);
+        if repeated_state || !e.state.actionable() || !self.settings.events.contains(&e.state) {
+            return Ok(None);
+        }
+        if let Some(request) = &e.request_id
+            && self.notifications.iter().any(|n| {
+                n.session_id == e.terminal_session_id
+                    && n.invocation_id == e.agent_invocation_id
+                    && n.request_id.as_ref() == Some(request)
+                    && n.state == e.state
+            })
+        {
+            return Ok(None);
+        }
+        Ok(self.push_hook_notification(e))
+    }
+
+    fn validate_hook_event(&self, e: &HookEvent) -> Result<()> {
         ensure!(
             e.protocol_version == PROTOCOL_VERSION,
             "Unsupported hook version"
@@ -589,25 +491,36 @@ impl State {
                 && e.agent_invocation_id.len() <= 512,
             "Hook too large"
         );
-        if self.recent_events.contains(&e.event_id) {
-            return Ok(None);
-        }
-        let existing = self.agents.iter().position(|a| {
+        Ok(())
+    }
+
+    fn hook_existing(&self, e: &HookEvent) -> Option<usize> {
+        self.agents.iter().position(|a| {
             a.invocation_id == e.agent_invocation_id && a.session_id == e.terminal_session_id
-        });
+        })
+    }
+
+    fn hook_should_skip(&self, e: &HookEvent, existing: Option<usize>) -> bool {
+        if self.recent_events.contains(&e.event_id) {
+            return true;
+        }
         if let Some(i) = existing {
             let Some(a) = self.agents.get(i) else {
-                return Ok(None);
+                return true;
             };
             if a.state == AgentState::Stopped {
-                return Ok(None);
+                return true;
             }
             if let (Some(old), Some(new)) = (a.sequence, e.sequence)
                 && new <= old
             {
-                return Ok(None);
+                return true;
             }
         }
+        false
+    }
+
+    fn record_hook_event(&mut self, e: &HookEvent) {
         self.recent_events.push(e.event_id.clone());
         if self.recent_events.len() > MAX_RECENT_EVENTS {
             self.recent_events.drain(
@@ -617,9 +530,9 @@ impl State {
                     .saturating_sub(MAX_RECENT_EVENTS / 2),
             );
         }
-        let repeated_state = existing
-            .is_some_and(|i| self.agents.get(i).is_some_and(|a| a.state == e.state))
-            && e.request_id.is_none();
+    }
+
+    fn upsert_hook_agent(&mut self, e: &HookEvent, existing: Option<usize>) {
         let mut agent = existing
             .and_then(|i| self.agents.get(i).cloned())
             .unwrap_or(Agent {
@@ -666,6 +579,9 @@ impl State {
         } else {
             self.agents.push(agent);
         }
+    }
+
+    fn resolve_hook_notifications(&mut self, e: &HookEvent) {
         if matches!(
             e.state,
             AgentState::Running | AgentState::Completed | AgentState::Failed | AgentState::Stopped
@@ -682,20 +598,9 @@ impl State {
                 }
             }
         }
-        self.revision = self.revision.saturating_add(1);
-        if repeated_state || !e.state.actionable() || !self.settings.events.contains(&e.state) {
-            return Ok(None);
-        }
-        if let Some(request) = &e.request_id
-            && self.notifications.iter().any(|n| {
-                n.session_id == e.terminal_session_id
-                    && n.invocation_id == e.agent_invocation_id
-                    && n.request_id.as_ref() == Some(request)
-                    && n.state == e.state
-            })
-        {
-            return Ok(None);
-        }
+    }
+
+    fn push_hook_notification(&mut self, e: HookEvent) -> Option<String> {
         let nid = id();
         self.notifications.push(Notification {
             id: nid.clone(),
@@ -720,8 +625,9 @@ impl State {
         {
             self.notifications.remove(i);
         }
-        Ok(Some(nid))
+        Some(nid)
     }
+
     pub fn focus(&mut self, session: &str) {
         if self.settings.dismissal == Dismissal::OnFocus {
             for n in &mut self.notifications {
@@ -736,94 +642,4 @@ impl State {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn new_settings_defaults_include_editor_close_timeout() {
-        let s = Settings::default();
-        assert_eq!(s.editor_close_timeout_secs, 1);
-    }
-
-    #[test]
-    fn new_settings_defaults_include_diff_split_default() {
-        let s = Settings::default();
-        assert!(!s.diff_split_default);
-    }
-
-    #[test]
-    fn settings_serialization_round_trips_new_fields() {
-        let s = Settings {
-            editor_close_timeout_secs: 5,
-            diff_split_default: true,
-            ..Settings::default()
-        };
-        let json = serde_json::to_string(&s).unwrap();
-        let restored: Settings = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.editor_close_timeout_secs, 5);
-        assert!(restored.diff_split_default);
-    }
-    #[test]
-    fn ntfy_settings_default_off_validate_and_round_trip() {
-        let mut settings: Settings = serde_json::from_str("{}").unwrap();
-        assert!(!settings.ntfy_enabled);
-        settings.ntfy_enabled = true;
-        assert!(settings.validate().is_err());
-        settings.ntfy_channel = "phone_123-test".into();
-        settings.ntfy_machine = "My laptop".into();
-        settings.validate().unwrap();
-        let restored: Settings =
-            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
-        assert_eq!(restored, settings);
-        for channel in ["https://ntfy.sh/topic", "a/b", "a?b", "a\nB", "has space"] {
-            settings.ntfy_channel = channel.into();
-            assert!(settings.validate().is_err());
-        }
-        settings.ntfy_channel = "valid".into();
-        settings.ntfy_machine = "bad\nheader".into();
-        assert!(settings.validate().is_err());
-    }
-
-    #[test]
-    fn disabled_ntfy_accepts_any_channel_and_machine_contents() {
-        // Turning the toggle off must always save, even with leftover or
-        // cleared field contents. Re-enabling still requires valid values.
-        let mut settings = Settings::default();
-        settings.validate().unwrap();
-        settings.ntfy_channel = "has space!".into();
-        settings.ntfy_machine = "bad\nheader".into();
-        settings.validate().unwrap();
-        settings.ntfy_channel.clear();
-        settings.ntfy_machine.clear();
-        settings.validate().unwrap();
-        settings.ntfy_enabled = true;
-        assert!(settings.validate().is_err());
-        settings.ntfy_channel = "ok-channel_1".into();
-        settings.ntfy_machine = "My laptop".into();
-        settings.validate().unwrap();
-    }
-
-    #[test]
-    fn automatic_update_checks_default_on_and_round_trip() {
-        assert!(Settings::default().automatic_update_checks);
-        let parsed: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
-        assert!(parsed.automatic_update_checks);
-        let off: Settings =
-            serde_json::from_value(serde_json::json!({"automatic_update_checks": false})).unwrap();
-        assert!(!off.automatic_update_checks);
-        let encoded = serde_json::to_value(&off).unwrap();
-        assert_eq!(encoded["automatic_update_checks"], false);
-    }
-
-    #[test]
-    fn notification_sound_defaults_on_and_round_trips() {
-        assert!(Settings::default().notification_sound);
-        let parsed: Settings = serde_json::from_value(serde_json::json!({})).unwrap();
-        assert!(parsed.notification_sound);
-        let off: Settings =
-            serde_json::from_value(serde_json::json!({"notification_sound": false})).unwrap();
-        assert!(!off.notification_sound);
-        let encoded = serde_json::to_value(&off).unwrap();
-        assert_eq!(encoded["notification_sound"], false);
-    }
-}
+mod tests;
