@@ -1,8 +1,9 @@
 services:
   ssh-project:
     build: .
+    image: terminator-ssh-project-fixture
     ports:
-      - "127.0.0.1:15932:22"
+      - "127.0.0.1:${SSH_PROJECT_FIXTURE_PORT:-15932}:22"
     volumes:
       - "${SSH_PROJECT_FIXTURE_KEY_DIR:?Set SSH_PROJECT_FIXTURE_KEY_DIR}/authorized_keys:/run/fixture/authorized_keys:ro"
       - project-data:/workspace/project
@@ -15,6 +16,30 @@ services:
       interval: 2s
       timeout: 2s
       retries: 15
+  # Password sign-in (user `pw`, password `pw`) and `AllowTcpForwarding local`.
+  # `developer` keeps key access so batch forward masters can authenticate.
+  ssh-project-pw:
+    build: .
+    image: terminator-ssh-project-fixture
+    environment:
+      SSHD_CONFIG: /etc/ssh/sshd_config.pw
+      FIXTURE_HTTP_PORT: "8000"
+    ports:
+      - "127.0.0.1:${SSH_PROJECT_FIXTURE_PW_PORT:-15933}:22"
+    volumes:
+      - "${SSH_PROJECT_FIXTURE_KEY_DIR:?Set SSH_PROJECT_FIXTURE_KEY_DIR}/authorized_keys:/run/fixture/authorized_keys:ro"
+      - pw-project-data:/workspace/project
+      - pw-host-keys:/var/lib/ssh-host-keys
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "sshd", "-t", "-f", "/etc/ssh/sshd_config.pw"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
 volumes:
   project-data:
   host-keys:
+  pw-project-data:
+  pw-host-keys:

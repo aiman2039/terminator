@@ -188,7 +188,8 @@ impl App {
                     }
                 }
                 if appearance::sidebar_action(ui, "Monitor", "New SSH project").clicked() {
-                    self.remote_ui.open_new();
+                    let generation = self.remote_ui.open_new();
+                    let _ = self.jobs.send(Job::SshConfigHosts(generation));
                 }
                 let add = appearance::sidebar_action(ui, "Plus", "New project");
                 #[cfg(feature = "test-support")]

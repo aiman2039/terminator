@@ -45,12 +45,29 @@ pub(super) fn rejection(job: &Job) -> Vec<Update> {
         } => vec![Update::RemoteAdded(
             project.clone(),
             *generation,
-            Err(busy()),
+            Err(busy().into()),
         )],
         Job::RemoteRead { project, operation } => vec![Update::RemoteReply(
             project.clone(),
             operation.clone(),
-            Err(busy()),
+            Err(busy().into()),
+        )],
+        Job::RemoteTransfer { project, .. } => vec![Update::RemoteTransfer(
+            project.clone(),
+            None,
+            Err(busy().into()),
+        )],
+        Job::HostKey { ssh, keys: None } => {
+            vec![Update::HostKeyScanned(ssh.clone(), Err(busy()))]
+        }
+        Job::HostKey { ssh, keys: Some(_) } => {
+            vec![Update::HostKeyTrusted(ssh.clone(), Err(busy()))]
+        }
+        Job::SshConfigHosts(generation) => vec![Update::SshConfigHosts(*generation, Vec::new())],
+        Job::SshControlStatus(_) => vec![Update::SshControlStatus(Vec::new())],
+        Job::Forwards(request) => vec![Update::Forwards(
+            crate::forwards_ui::forward_key(request),
+            Err(busy().into()),
         )],
         Job::SaveLayout(project, _, text) => vec![Update::LayoutSaved(
             project.clone(),
@@ -152,6 +169,33 @@ pub(super) fn context(job: &Job) -> OperationContext {
                 Policy::OrderedMutation
             },
         ),
+        Job::HostKey { ssh, keys } => (
+            "remote-host-key",
+            ssh.host.clone(),
+            if keys.is_some() {
+                Policy::OrderedMutation
+            } else {
+                Policy::ReplaceableRead
+            },
+        ),
+        Job::SshConfigHosts(_) => ("ssh-config", "hosts".into(), Policy::ReplaceableRead),
+        Job::SshControlStatus(_) => ("ssh-control", "status".into(), Policy::ReplaceableRead),
+        Job::Forwards(request) => match crate::forwards_ui::forward_key(request) {
+            Some((project, port)) => (
+                "ssh-forward",
+                format!("{project}:{port}"),
+                Policy::OrderedMutation,
+            ),
+            None => ("ssh-forward", "status".into(), Policy::ReplaceableRead),
+        },
+        Job::RemoteTransfer { project, .. } => {
+            ("remote-transfer", project.clone(), Policy::OrderedMutation)
+        }
+        Job::RemoteTransferPoll { project, id } => (
+            "remote-transfer-status",
+            format!("{project}:{id}"),
+            Policy::ReplaceableRead,
+        ),
         Job::VncPickTransfer { session, .. } => {
             ("vnc-transfer", session.clone(), Policy::OrderedMutation)
         }
@@ -195,7 +239,10 @@ pub(super) fn context(job: &Job) -> OperationContext {
     if matches!(
         job,
         Job::RemoteRead { .. }
+            | Job::RemoteTransferPoll { .. }
             | Job::RemoteAdd { .. }
+            | Job::HostKey { .. }
+            | Job::Forwards(_)
             | Job::RemoteAsset { .. }
             | Job::VncFrame { .. }
     ) || matches!(

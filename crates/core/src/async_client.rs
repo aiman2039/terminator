@@ -420,6 +420,7 @@ impl Client {
             version: PROTOCOL_VERSION,
             auth: token,
             snapshot_chunks: matches!(request, Request::Snapshot | Request::VncFrame { .. }),
+            ssh_errors: true,
             request,
             snapshot_hint: hint,
         };
@@ -548,10 +549,14 @@ pub fn read_only(request: &Request) -> bool {
         // [`archived_mutation`].
         return read_only(request);
     }
+    if let Request::RemoteProject { operation, .. } = request {
+        return !operation.starts_transfer();
+    }
     matches!(
         request,
-        Request::RemoteProject { .. }
-            | Request::ProbeRemoteProject { .. }
+        Request::ProbeRemoteProject { .. }
+            | Request::ScanHostKey { .. }
+            | Request::ForwardStatus
             | Request::Snapshot
             | Request::History { .. }
             | Request::Screen { .. }
@@ -789,6 +794,28 @@ mod tests {
             Response::Unchanged
         ));
         server.abort();
+    }
+
+    #[test]
+    fn starting_an_ssh_transfer_is_a_mutation_but_polling_it_is_not() {
+        let request = |operation| Request::RemoteProject {
+            project: "p".into(),
+            operation,
+        };
+        assert!(!read_only(&request(crate::remote::Operation::Upload {
+            local: "/tmp/a".into(),
+            remote_dir: String::new(),
+        })));
+        assert!(!read_only(&request(crate::remote::Operation::Download {
+            path: "a".into(),
+            local: "/tmp/a".into(),
+        })));
+        assert!(read_only(&request(
+            crate::remote::Operation::TransferStatus { id: "x".into() }
+        )));
+        assert!(read_only(&request(crate::remote::Operation::List {
+            path: String::new()
+        })));
     }
 
     #[test]

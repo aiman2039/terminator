@@ -39,6 +39,7 @@ impl App {
         self.first_project_dialog(ctx);
         self.native_close_modal(ctx);
         self.layout_save_dialog(ctx);
+        self.host_key_dialog(ctx);
         if self.restart_confirm {
             let live = self
                 .state

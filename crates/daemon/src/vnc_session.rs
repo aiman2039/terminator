@@ -795,6 +795,8 @@ mod tests {
                 },
                 root: "/workspace".into(),
                 layout: serde_json::Value::Null,
+                group: None,
+                forwards: Vec::new(),
             });
         assert!(state.projects.is_empty());
         assert!(validate_project(&state, "ssh-project").is_ok());

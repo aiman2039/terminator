@@ -262,6 +262,10 @@ impl App {
                     );
                 }
                 Update::RemoteAdded(project, generation, result) => {
+                    if self.remote_ui.hosts.quick.as_ref() == Some(&project) {
+                        self.apply_quick_connect(&project, generation, result);
+                        continue;
+                    }
                     if self.remote_ui.active.as_ref() != Some(&project) {
                         continue;
                     }
@@ -296,12 +300,46 @@ impl App {
                                 self.reveal_project(id);
                             }
                         }
-                        Err(error) => self.remote_ui.error = Some(error),
+                        Err(failure) => {
+                            if matches!(
+                                failure.ssh,
+                                Some(
+                                    terminator_core::ssh::SshFailure::UnknownHostKey
+                                        | terminator_core::ssh::SshFailure::ChangedHostKey
+                                )
+                            ) {
+                                let changed = failure.ssh
+                                    == Some(terminator_core::ssh::SshFailure::ChangedHostKey);
+                                // Only the probe connects; adding never does.
+                                self.prompt_host_key(
+                                    project.ssh.clone(),
+                                    crate::remote_ui::Retry::Form {
+                                        project: Box::new(project),
+                                        probe: true,
+                                        generation,
+                                    },
+                                    changed,
+                                );
+                            }
+                            self.remote_ui.error = Some(failure.text);
+                        }
                     }
                 }
                 Update::RemoteReply(project, operation, result) => {
                     self.apply_remote_reply(project, operation, result)
                 }
+                Update::HostKeyScanned(ssh, result) => self.apply_host_key_scan(&ssh, result),
+                Update::HostKeyTrusted(ssh, result) => self.apply_host_key_trust(&ssh, result),
+                Update::SshConfigHosts(generation, hosts) => {
+                    if generation == self.remote_ui.hosts.config_generation {
+                        self.remote_ui.hosts.config_hosts = Some(hosts.clone());
+                    }
+                    if generation == self.remote_ui.config_generation {
+                        self.remote_ui.config_hosts = Some(hosts);
+                    }
+                }
+                Update::SshControlStatus(results) => self.apply_host_status(results),
+                Update::Forwards(key, result) => self.apply_forwards(key, result),
                 Update::RemoteAsset(project, path, after) => {
                     self.images.remove(&path);
                     let tab = if crate::image_preview::supported(&path) {
@@ -315,6 +353,9 @@ impl App {
                         Tab::NativeEditor { path }
                     };
                     self.place_gui_tab(project, tab, after);
+                }
+                Update::RemoteTransfer(project, id, result) => {
+                    self.apply_remote_transfer(project, id, result);
                 }
                 Update::VncTransfer(session, result) => match result {
                     Ok(Some(status)) => {

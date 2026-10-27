@@ -20,13 +20,34 @@ The separate table preserves remote records if older code saves local settings.
 
 ## Authentication and commands
 
-OpenSSH config aliases, explicit users/ports, identity files, and an SSH agent
-are supported. Noninteractive key/agent authentication is required. Host keys
-must already be trusted in the configured known-hosts file. Agent/X11 forwarding,
-local commands, and configured port forwards are disabled. Local Terminator
-session tokens and routing variables are removed from SSH child environments.
-They are not forwarded or installed on the host. Remote agent lifecycle hooks
-are not provided by this feature.
+OpenSSH config aliases (with their `User`, `Port`, `ProxyJump` and
+`IdentityFile`), explicit users/ports, identity files, and an SSH agent are
+supported. A blank port uses the SSH config. Every OpenSSH call for a host
+shares one multiplexing master through a control socket in the runtime
+directory (`ControlMaster=auto`, `ControlPersist=10m`), so Explorer, Git,
+editor control and transfers ride an existing connection.
+
+SSH terminals are interactive: OpenSSH prompts in the terminal for passwords,
+key passphrases and 2FA codes, and asks about an unknown host key there. The
+signed-in terminal becomes the shared master, so files and Git then work
+without a second login. Other calls stay noninteractive (`BatchMode=yes`).
+When one fails authentication with no live master, the view says so and offers
+"Open SSH terminal" to sign in there.
+
+When a project probe, Explorer, Git or transfer call meets an unknown host key,
+the daemon scans the host (`ssh -G`, `ssh-keyscan`) and the GUI shows the
+SHA256 fingerprints for confirmation. "Trust and connect" rescans and appends
+the key to the configured known-hosts file (or `~/.ssh/known_hosts`) only if
+the host still presents exactly the keys shown. A changed host key is never
+trusted automatically: the dialog shows the new fingerprints and the
+`ssh-keygen -R` command to run after you have verified the change. This needs
+a daemon advertising `ssh-hostkeys-v1`.
+
+Agent/X11 forwarding, local commands, and port forwards from SSH configuration
+are disabled; only the project's own forwards (below) are set up. Local
+Terminator session tokens and routing variables are removed from SSH child
+environments. They are not forwarded or installed on the host. Remote agent
+lifecycle hooks are not provided by this feature.
 
 Remote text editing runs Neovim on the SSH host, with that host's configuration.
 Save/close checks use a private per-session remote Neovim socket over SSH. An
@@ -50,6 +71,64 @@ Git status and diffs run on the host. Diffs compare HEAD/index/worktree snapshot
 in the existing native viewer. Remote diffs cannot stage, discard, or write
 files. Use the SSH terminal for Git mutations. Remote filesystem operations,
 Git reads, and editor control have bounded process/output deadlines.
+
+## Uploads and downloads
+
+With a daemon advertising `ssh-transfer-v1`, Explorer's toolbar upload button
+(and "Upload into this folder…" on a folder) picks a local file and uploads it
+into the current folder under its own name. "Download…" on a file saves it to a
+new local file. Files dropped on the window while a project's Explorer is shown
+upload into its current folder. Native pickers run off the GUI thread.
+
+Transfers run in the daemon as background jobs over SFTP through the project's
+OpenSSH master; the request that starts one returns at once, and the GUI polls
+progress every 500 ms while it runs (at most two per project, one hour each,
+files up to 1 GiB). Remote paths are canonicalized and must remain inside the
+project root. Uploads write a create-new temporary file beside the destination,
+fsync it and publish it with a hard link, so an existing remote file is never
+replaced (the server must support the hard-link and fsync extensions).
+Downloads refuse an existing local destination before connecting and publish
+with a no-clobber rename. Choosing "Replace" in the save dialog does not
+overwrite: the transfer fails instead. SSH failures are classified like other
+calls (sign-in, host-key trust). Progress lives in daemon memory; transfers
+started by an earlier daemon generation are not shown. A project cannot be
+removed while a transfer runs. VNC SFTP transfers share the same code.
+
+## Hosts sidebar
+
+The Hosts tool lists SSH projects grouped by their optional group, then by host, with a search filter. The dot is green while `ssh -O check` finds a live OpenSSH master on the project's control socket; the check runs off the GUI thread every 10 seconds, only while the sidebar is visible. "Open terminal" selects the project and opens a terminal tab. Quick connect takes a `~/.ssh/config` alias with no saved project, probes its login directory with `pwd -P`, adds a project rooted there and opens a terminal. Grouping, removal and quick connect need a daemon advertising `ssh-hosts-v1`. Removal is refused while the project has live terminals, VNC sessions or running transfers, and it stops the project's OpenSSH master unless another project or live session uses the same socket.
+
+## Port forwarding
+
+An SSH project can save up to 32 local forwards (`local port → remote host:remote
+port`, the remote host as seen from the SSH host). Listeners bind `127.0.0.1`
+only; wildcard or other bind addresses cannot be configured. Forwards are edited
+and switched on or off per forward in the Hosts sidebar (globe icon) and in the
+project's Info view. This needs a daemon advertising `ssh-forwarding-v1`.
+
+Starting a forward sends `ssh -O forward -L 127.0.0.1:lp:host:rp` to the
+project's OpenSSH master (`-O cancel` stops it). With no live master, the daemon
+starts a batch master (`ssh -fN -oControlMaster=yes`), which needs key or agent
+authentication; otherwise sign in through an SSH terminal first and retry. Such a
+dedicated master has no idle timeout and is exited when its last forward stops,
+unless a live terminal or VNC session joined it. A master started by a terminal
+keeps its 10-minute `ControlPersist`; idle forward listeners do not keep it
+alive. Forwards end with their master, and status (rechecked with `ssh -O check`
+every 10 seconds while forwards are shown) reflects that. A local port already
+in use is reported before the forward is requested.
+
+`ClearAllForwardings=yes` stays on every connecting client, masters included:
+OpenSSH applies it once to forwards from configuration and the command line,
+and later `-O forward` requests are handled by the master regardless. Only the
+`-O forward` client omits it (and reads no configuration), since there it would
+drop the `-L` before sending.
+
+Forwards marked "Start when a terminal opens" are started after a terminal for
+the project signs in (waiting up to two minutes); failures show under the
+forward. Active-forward tracking is in memory: a forward started by an earlier
+daemon generation still listens but shows as stopped until it is started again,
+which adopts it. A server with `AllowTcpForwarding no` accepts the listener but
+refuses each connection.
 
 ## Local fixture
 

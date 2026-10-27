@@ -14,6 +14,7 @@ mod notification_perf;
 mod package;
 mod regressions;
 mod release;
+mod ssh_fixture;
 mod zip_writer;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -114,6 +115,13 @@ enum Task {
     },
     /// Real-PTY, auth, hooks, reconnect, and daemon-recovery checks.
     Integration,
+    /// Opt-in live SSH checks against the Docker fixture (host keys,
+    /// `ControlMaster` reuse, forwards, transfers). Skips without Docker.
+    Ssh {
+        /// Fail instead of skipping when Docker or the fixture is unavailable.
+        #[arg(long)]
+        require: bool,
+    },
     /// Quiet Glow GUI fixtures. Requires a desktop and test-support build.
     Gui {
         #[arg(default_value = "all")]
@@ -291,6 +299,7 @@ fn main() -> Result<()> {
             );
             Ok(())
         }),
+        Task::Ssh { require } => ssh_fixture::run(require),
         Task::Gui {
             case,
             scale,

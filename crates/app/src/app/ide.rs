@@ -128,6 +128,7 @@ impl App {
                                 "Structure",
                             ),
                             (StripeTool::Tool(SidebarTool::Vnc), "Monitor", "VNC"),
+                            (StripeTool::Tool(SidebarTool::Hosts), "Globe", "Hosts"),
                         ] {
                             let selected = self.stripe_selected(right, tool);
                             let badge = if tool == StripeTool::Tool(SidebarTool::Agents) {

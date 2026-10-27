@@ -62,8 +62,10 @@ mod clipboard;
 #[cfg(feature = "test-support")]
 mod diagnostics;
 pub(crate) mod diff;
+mod forwards_ui;
 pub(crate) mod git_log;
 mod gui_services;
+mod hosts_ui;
 #[cfg(any(test, target_os = "macos"))]
 mod menu_bar;
 mod native_jobs;
@@ -71,6 +73,7 @@ mod perforce;
 mod remote_ui;
 mod search;
 mod services;
+mod transfers_ui;
 pub use app::app_state::App;
 pub(crate) use app::app_state::{
     inventory_is_stale, is_missing_path_error, is_session_auth_error, observation_is_stale,

@@ -6,20 +6,28 @@ use std::process::Stdio;
 use terminator_core::remote::{Entry, MAX_ENTRIES, MAX_FILE_BYTES};
 use tokio::io::AsyncReadExt;
 
-async fn contained(fs: &mut Fs, project: &RemoteProject, path: &str) -> Result<std::path::PathBuf> {
+/// Resolves the project path `path` on the server, following symlinks, and
+/// refuses it unless it stays inside the resolved project root.
+pub(super) async fn contained(
+    fs: &mut Fs,
+    project: &RemoteProject,
+    path: &str,
+) -> Result<std::path::PathBuf> {
     let root = fs.canonicalize(&project.root).await?;
     let absolute = project.absolute(path)?;
     let actual = fs.canonicalize(absolute).await?;
-    let root_text = root
-        .to_str()
-        .context("Remote root must be UTF-8")?
-        .trim_end_matches('/');
+    let root_text = root.to_str().context("Remote root must be UTF-8")?;
     let actual_text = actual.to_str().context("Remote path must be UTF-8")?;
     ensure!(
-        actual_text == root_text || actual_text.starts_with(&format!("{root_text}/")),
+        within(root_text, actual_text),
         "Remote path resolves outside the project root"
     );
     Ok(actual)
+}
+/// Whether the resolved remote path `actual` is `root` or below it.
+fn within(root: &str, actual: &str) -> bool {
+    let root = root.trim_end_matches('/');
+    actual == root || actual.starts_with(&format!("{root}/"))
 }
 pub(super) async fn read(
     sftp: &Sftp,
@@ -48,7 +56,11 @@ pub(super) async fn read(
     );
     Ok(bytes)
 }
-pub(super) fn operation(project: &RemoteProject, operation: Operation) -> Result<Reply> {
+pub(super) fn operation(
+    project: &RemoteProject,
+    control: Option<&Path>,
+    operation: Operation,
+) -> Result<Reply> {
     project.validate()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -57,25 +69,34 @@ pub(super) fn operation(project: &RemoteProject, operation: Operation) -> Result
         tokio::time::timeout(Duration::from_secs(15), async {
             let mut command = tokio::process::Command::new("ssh");
             command
-                .args(terminator_core::ssh::arguments(&project.ssh, false)?)
+                .args(terminator_core::ssh::arguments(
+                    &project.ssh,
+                    false,
+                    control,
+                )?)
                 .arg("-s")
                 .arg("--")
                 .arg(&project.ssh.host)
                 .arg("sftp")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::null())
+                .stderr(Stdio::piped())
                 .kill_on_drop(true);
             for key in terminator_core::ssh::private_environment_keys() {
                 command.env_remove(key);
             }
             let mut child = command.spawn().context("Cannot start SSH SFTP service")?;
-            let sftp = Sftp::new(
-                child.stdin.take().context("SFTP stdin unavailable")?,
-                child.stdout.take().context("SFTP stdout unavailable")?,
-                SftpOptions::default(),
-            )
-            .await?;
+            let stderr = super::capture_stderr(&mut child);
+            let stdin = child.stdin.take().context("SFTP stdin unavailable")?;
+            let stdout = child.stdout.take().context("SFTP stdout unavailable")?;
+            let sftp = match Sftp::new(stdin, stdout, SftpOptions::default()).await {
+                Ok(sftp) => sftp,
+                Err(error) => {
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                    return Err(super::sftp_failure(error.into(), stderr).await);
+                }
+            };
             let mut fs = sftp.fs();
             let result = async {
                 match operation {
@@ -136,11 +157,27 @@ pub(super) fn operation(project: &RemoteProject, operation: Operation) -> Result
             let close = sftp.close().await;
             let _ = child.start_kill();
             let _ = child.wait().await;
-            let result = result?;
-            close?;
-            Ok::<_, anyhow::Error>(result)
+            match (result, close) {
+                (Ok(result), Ok(())) => Ok::<_, anyhow::Error>(result),
+                (Err(error), _) => Err(super::sftp_failure(error, stderr).await),
+                (Ok(_), Err(error)) => Err(super::sftp_failure(error.into(), stderr).await),
+            }
         })
         .await
         .context("SSH file operation timed out")?
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::within;
+    #[test]
+    fn resolved_paths_must_stay_under_the_project_root() {
+        assert!(within("/srv/app", "/srv/app"));
+        assert!(within("/srv/app/", "/srv/app/src/main.rs"));
+        assert!(!within("/srv/app", "/srv/application/secret"));
+        assert!(!within("/srv/app", "/srv"));
+        assert!(!within("/srv/app", "/etc/passwd"));
+        assert!(within("/", "/etc/passwd"));
+    }
 }

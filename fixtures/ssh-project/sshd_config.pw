@@ -1,0 +1,19 @@
+# Variant: password sign-in (user `pw`) and local (-L) forwarding.
+Port 22
+ListenAddress 0.0.0.0
+HostKey /var/lib/ssh-host-keys/ssh_host_ed25519_key
+PasswordAuthentication yes
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin no
+PermitEmptyPasswords no
+AllowUsers developer pw
+AuthorizedKeysFile .ssh/authorized_keys
+StrictModes yes
+UsePAM no
+AllowAgentForwarding no
+AllowTcpForwarding local
+X11Forwarding no
+PermitTunnel no
+Subsystem sftp internal-sftp
+LogLevel VERBOSE

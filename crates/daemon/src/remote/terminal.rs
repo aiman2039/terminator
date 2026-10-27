@@ -5,6 +5,7 @@ use terminator_core::remote::RemoteSession;
 
 pub(crate) fn prepare(
     project: &RemoteProject,
+    control: Option<&Path>,
     sid: &str,
     cwd: Option<&Path>,
     file: Option<&Path>,
@@ -71,7 +72,11 @@ pub(crate) fn prepare(
     }
     let ssh = terminator_core::find_executable("ssh").context("OpenSSH client is not installed")?;
     let mut command = CommandBuilder::new(ssh);
-    command.args(terminator_core::ssh::arguments(&project.ssh, true)?);
+    command.args(terminator_core::ssh::arguments(
+        &project.ssh,
+        true,
+        control,
+    )?);
     command.arg("--");
     command.arg(&project.ssh.host);
     command.arg(format!("exec sh -c {}", terminator_core::quote(&script)));
@@ -89,7 +94,11 @@ pub(crate) fn prepare(
         file.map(PathBuf::from),
     ))
 }
-pub(crate) fn editor_rpc(session: &RemoteSession, expression: &str) -> Result<Vec<u8>> {
+pub(crate) fn editor_rpc(
+    session: &RemoteSession,
+    control: Option<&Path>,
+    expression: &str,
+) -> Result<Vec<u8>> {
     let socket = session
         .editor_socket
         .as_deref()
@@ -102,7 +111,7 @@ pub(crate) fn editor_rpc(session: &RemoteSession, expression: &str) -> Result<Ve
         identity.len() == 32 && identity.chars().all(|c| c.is_ascii_hexdigit()),
         "Invalid remote editor identity"
     );
-    let mut command = super::command(&session.ssh)?;
+    let mut command = super::command(&session.ssh, control)?;
     command.arg(format!(
         "exec sh -c {}",
         terminator_core::quote(&format!(
@@ -136,9 +145,12 @@ mod tests {
                 ..terminator_core::ssh::SshOptions::default()
             },
             layout: serde_json::Value::Null,
+            group: None,
+            forwards: Vec::new(),
         };
         let (cmd, meta, _) = prepare(
             &p,
+            None,
             "00000000-0000-0000-0000-000000000000",
             None,
             None,
@@ -156,6 +168,7 @@ mod tests {
         assert!(
             prepare(
                 &p,
+                None,
                 "fixture",
                 Some(Path::new("/tmp/local")),
                 None,

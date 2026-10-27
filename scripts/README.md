@@ -223,9 +223,7 @@ osv-scanner --config osv-scanner.toml -r .
 Keep `.cargo/audit.toml`, `deny.toml`, and `osv-scanner.toml` advisory ignores
 in sync.
 
-Dependabot owns Cargo version PRs (`.github/dependabot.yml`). Renovate owns
-GitHub Actions PRs (`renovate.json`); install the
-[Mend Renovate GitHub App](https://github.com/apps/renovate). Enable Dependabot
+Dependabot owns Cargo version PRs (`.github/dependabot.yml`). Enable Dependabot
 alerts and security updates in the repository Code security settings.
 
 Optional secrets: `SNYK_TOKEN`, `SOCKET_SECURITY_API_KEY`, `NVD_API_KEY`.
@@ -445,3 +443,16 @@ The script creates and removes its own workspace, server, account, tickets,
 and configuration. It uses a local stdin/stdout connection, clears inherited
 Perforce routing, and runs the ignored `perforce::tests::isolated_server` test.
 It does not use your configured server or workspace.
+
+## SSH fixture checks
+
+| Task | Command |
+| --- | --- |
+| Start/stop/remove the Docker SSH fixture | `bash scripts/ssh-project-fixture.sh start\|status\|stop\|down` |
+| Rotate a fixture host key (`ChangedHostKey`) | `bash scripts/ssh-project-fixture.sh rekey [ssh-project\|ssh-project-pw]` |
+| Live SSH checks: host keys, master reuse, forwards, 50 MiB transfers | `cargo xtask ssh` (`--require` fails instead of skipping without Docker) |
+| Host-key trust dialog capture | `cargo xtask gui ssh-hostkey` (after the test-support build) |
+
+Both xtask targets start an isolated fixture copy on free ports and remove its
+containers, volumes, masters and temporary keys afterwards. They skip with a
+message when Docker is unavailable. See `docs/REMOTE_PROJECTS.md`.

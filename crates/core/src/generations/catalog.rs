@@ -448,6 +448,13 @@ impl Catalog {
         )?)?;
         Ok(())
     }
+    /// `save_workspace` only upserts project rows, so older writers can't
+    /// erase them; a deliberate removal deletes the row here.
+    pub fn remove_remote_project(&self, id: &str) -> Result<()> {
+        self.0
+            .execute("DELETE FROM remote_projects WHERE id=?1", [id])?;
+        Ok(())
+    }
     pub fn save_workspace(&self, state: &State) -> Result<()> {
         ensure!(
             self.active()?.as_deref() == Some(&state.generation),
@@ -492,6 +499,13 @@ mod remote_project_tests {
                 ..crate::ssh::SshOptions::default()
             },
             layout: serde_json::Value::Null,
+            group: Some("Prod".into()),
+            forwards: vec![crate::remote::Forward {
+                local_port: 5432,
+                remote_host: "db.internal".into(),
+                remote_port: 5432,
+                auto_start: true,
+            }],
         };
         let state = State {
             generation: "fixture".into(),
@@ -510,6 +524,10 @@ mod remote_project_tests {
             .unwrap();
         let mut loaded = State::default();
         catalog.refresh(&mut loaded).unwrap();
-        assert_eq!(loaded.remote_projects, vec![p]);
+        assert_eq!(loaded.remote_projects, vec![p.clone()]);
+        catalog.remove_remote_project(&p.id).unwrap();
+        let mut removed = State::default();
+        catalog.refresh(&mut removed).unwrap();
+        assert!(removed.remote_projects.is_empty());
     }
 }

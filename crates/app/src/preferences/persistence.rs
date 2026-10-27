@@ -49,6 +49,22 @@ pub enum SidebarTool {
     Structure,
     #[serde(alias = "Vnc")]
     Vnc,
+    Hosts,
+}
+
+/// A tool this build does not know (written by a newer build) falls back to
+/// the default instead of discarding every other preference.
+fn lenient_tool<'de, D: serde::Deserializer<'de>>(d: D) -> Result<SidebarTool, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+/// Like [`lenient_tool`]: an unknown side tool keeps the native views.
+fn lenient_side_tool<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<SidebarTool>, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(serde_json::from_value(value).unwrap_or(None))
 }
 
 /// Explorer search behavior: filter the visible tree by name, or search file
@@ -102,10 +118,11 @@ pub struct LayoutPreset {
     pub ide_sidebars_full_height: bool,
     pub visible: bool,
     pub left_visible: bool,
+    #[serde(deserialize_with = "lenient_tool")]
     pub tool: SidebarTool,
     pub left_agents: bool,
     /// Tool hosted by the left sidebar instead of Projects/Agents.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_side_tool")]
     pub left_tool: Option<SidebarTool>,
     /// Projects list hosted by the right sidebar.
     #[serde(default)]
@@ -124,6 +141,7 @@ pub struct UiPreferences {
     /// Terminal title colors and icons, keyed by persistent session ID.
     pub terminal_styles: HashMap<String, TerminalStyle>,
     pub vnc_paste_shortcut: VncPasteShortcut,
+    #[serde(deserialize_with = "lenient_tool")]
     pub tool: SidebarTool,
     pub visible: bool,
     /// IDE layout: tool stripes, editor center, terminal strip. Default on
@@ -148,7 +166,7 @@ pub struct UiPreferences {
     pub left_agents: bool,
     /// Tool hosted by the left sidebar instead of its native Projects/Agents
     /// views. `None` keeps the native views; stripes set this per side.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_side_tool")]
     pub left_tool: Option<SidebarTool>,
     /// Projects list hosted by the right sidebar instead of `tool`.
     #[serde(default)]
@@ -202,6 +220,9 @@ pub struct UiPreferences {
     pub history_sort: HistorySort,
     #[serde(default)]
     pub history_filter: String,
+    /// Hosts sidebar search text.
+    #[serde(default)]
+    pub hosts_filter: String,
     /// Most recently opened native editor files, newest first.
     #[serde(default)]
     pub recent_native_files: Vec<PathBuf>,
@@ -272,6 +293,7 @@ impl Default for UiPreferences {
             project_activity: HashMap::new(),
             history_sort: HistorySort::LatestActivity,
             history_filter: String::new(),
+            hosts_filter: String::new(),
             recent_native_files: Vec::new(),
             pinned_native_files: HashSet::new(),
             playlists: Vec::new(),
@@ -581,6 +603,43 @@ mod tests {
         let loaded = UiPreferences::load(dir.path()).unwrap();
         assert_eq!(loaded.left_tool, Some(SidebarTool::Problems));
         assert_eq!(loaded.tool, SidebarTool::Structure);
+    }
+
+    #[test]
+    fn hosts_tool_round_trips_and_unknown_tools_fall_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut prefs = UiPreferences::load(dir.path()).unwrap();
+        prefs.tool = SidebarTool::Hosts;
+        prefs.left_tool = Some(SidebarTool::Hosts);
+        prefs.hosts_filter = "prod".into();
+        prefs.save(dir.path()).unwrap();
+        let raw = fs::read_to_string(dir.path().join("ui-preferences.json")).unwrap();
+        assert!(raw.contains(r#""tool":"hosts""#) || raw.contains(r#""tool": "hosts""#));
+        let loaded = UiPreferences::load(dir.path()).unwrap();
+        assert_eq!(loaded.tool, SidebarTool::Hosts);
+        assert_eq!(loaded.left_tool, Some(SidebarTool::Hosts));
+        assert_eq!(loaded.hosts_filter, "prod");
+        // A tool from a newer build keeps the rest of the preferences.
+        fs::write(
+            dir.path().join("ui-preferences.json"),
+            r#"{"version":2,"tool":"future","left_tool":"future","history_filter":"kept","named_layouts":{"x":{"ide_mode":true,"ide_terminal_collapsed":false,"visible":true,"left_visible":true,"tool":"future","left_agents":false,"left_tool":"Vnc","sidebar_width":300.0,"left_width":200.0}}}"#,
+        )
+        .unwrap();
+        let future = UiPreferences::load(dir.path()).unwrap();
+        assert_eq!(future.tool, SidebarTool::Explorer);
+        assert_eq!(future.left_tool, None);
+        assert_eq!(future.history_filter, "kept");
+        assert_eq!(future.named_layouts["x"].tool, SidebarTool::Explorer);
+        assert_eq!(future.named_layouts["x"].left_tool, Some(SidebarTool::Vnc));
+        // Older files without the Hosts fields load unchanged.
+        fs::write(
+            dir.path().join("ui-preferences.json"),
+            r#"{"version":2,"tool":"Vnc"}"#,
+        )
+        .unwrap();
+        let old = UiPreferences::load(dir.path()).unwrap();
+        assert_eq!(old.tool, SidebarTool::Vnc);
+        assert!(old.hosts_filter.is_empty());
     }
 
     #[test]

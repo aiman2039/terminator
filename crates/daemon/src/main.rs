@@ -148,6 +148,10 @@ fn main() -> Result<()> {
         VNC_CAPABILITY.into(),
         VNC_REGIONS_CAPABILITY.into(),
         terminator_core::remote::CAPABILITY.into(),
+        terminator_core::ssh::HOST_KEYS_CAPABILITY.into(),
+        terminator_core::remote::HOSTS_CAPABILITY.into(),
+        terminator_core::remote::FORWARDING_CAPABILITY.into(),
+        terminator_core::remote::TRANSFER_CAPABILITY.into(),
         vnc::FEATURES_CAPABILITY.into(),
     ];
     if catalog_paths.is_some() {
@@ -191,6 +195,8 @@ fn main() -> Result<()> {
         alerts,
         ntfy: ntfy::start(),
         ntfy_cooldown: Mutex::new(ntfy::Cooldown::default()),
+        forwards: Mutex::new(crate::remote::Forwards::default()),
+        remote_transfers: Mutex::new(crate::remote::Transfers::default()),
     });
     vnc_session::credentials::finish_activation(Arc::downgrade(&shared));
     let weak = Arc::downgrade(&shared);
@@ -534,5 +540,6 @@ fn main() -> Result<()> {
             generations::Catalog::open(root)?.retire(&relock(&shared.state).generation)?;
         }
     }
+    shared.exit_ssh_controls();
     Ok(())
 }

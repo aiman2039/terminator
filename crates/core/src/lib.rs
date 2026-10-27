@@ -50,6 +50,8 @@ use std::{
 };
 
 pub const PROTOCOL_VERSION: u32 = 1;
+/// Unix socket paths must stay below `sun_path` (104 bytes on macOS).
+const SOCKET_PATH_LIMIT: usize = 100;
 pub const NVIM_REVIEW_CAPABILITY: &str = "nvim-review-v1";
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 /// Retained agent/notification records are aggregated into every snapshot, so
@@ -303,7 +305,7 @@ impl Paths {
         }
         #[cfg(unix)]
         ensure!(
-            self.socket().as_os_str().len() < 100,
+            self.socket().as_os_str().len() < SOCKET_PATH_LIMIT,
             "Runtime path too long for Unix socket; use a shorter data directory"
         );
         Ok(())
@@ -311,6 +313,29 @@ impl Paths {
     #[must_use]
     pub fn socket(&self) -> PathBuf {
         self.runtime.join("daemon.sock")
+    }
+    /// OpenSSH multiplexing socket shared by every connection with the same
+    /// endpoint and trust settings. `None` when the runtime directory is too
+    /// long for a Unix socket, or on Windows where OpenSSH cannot multiplex;
+    /// callers then connect without reuse.
+    #[must_use]
+    pub fn ssh_control(&self, ssh: &ssh::SshOptions) -> Option<PathBuf> {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (
+            &ssh.host,
+            ssh.port,
+            &ssh.username,
+            &ssh.identity_file,
+            &ssh.known_hosts_file,
+        )
+            .hash(&mut h);
+        let path = self
+            .runtime
+            .join(format!("ssh-{:08x}", h.finish() & 0xffff_ffff));
+        // OpenSSH binds a temporary `<path>.<16 random chars>` before renaming.
+        (cfg!(unix) && path.as_os_str().len().saturating_add(17) < SOCKET_PATH_LIMIT)
+            .then_some(path)
     }
     #[must_use]
     pub fn auth(&self) -> PathBuf {

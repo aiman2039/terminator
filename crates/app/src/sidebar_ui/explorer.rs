@@ -711,6 +711,10 @@ impl App {
             self.vnc_sidebar(ui);
             return;
         }
+        if tool == SidebarTool::Hosts {
+            self.hosts_sidebar(ui);
+            return;
+        }
         if tool == SidebarTool::Agents {
             self.agents_view(ui);
             return;

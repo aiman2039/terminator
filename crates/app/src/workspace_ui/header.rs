@@ -204,6 +204,12 @@ pub(super) fn header_action_view(action: HeaderAction) -> HeaderActionView {
             #[cfg(feature = "test-support")]
             target: "tool-Vnc",
         },
+        HeaderAction::Tool(SidebarTool::Hosts) => HeaderActionView {
+            label: "Hosts",
+            icon: "Globe",
+            #[cfg(feature = "test-support")]
+            target: "tool-Hosts",
+        },
         HeaderAction::IdeMode => HeaderActionView {
             label: "IDE mode",
             icon: "LayoutDashboard",

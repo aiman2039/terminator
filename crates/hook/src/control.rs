@@ -45,8 +45,9 @@ enum Control {
     AddRemoteProject {
         #[arg(long)]
         host: String,
-        #[arg(long, default_value = "22")]
-        port: u16,
+        /// Omit to use `~/.ssh/config` (or 22).
+        #[arg(long)]
+        port: Option<u16>,
         #[arg(long, default_value = "")]
         user: String,
         #[arg(long)]
@@ -289,6 +290,8 @@ pub fn run(args: &[String]) -> Result<()> {
                     known_hosts_file: known_hosts,
                 },
                 layout: serde_json::Value::Null,
+                group: None,
+                forwards: Vec::new(),
             };
             project.validate()?;
             rpc(
@@ -416,6 +419,7 @@ pub fn run(args: &[String]) -> Result<()> {
                     },
                     snapshot_hint: None,
                     snapshot_chunks: false,
+                    ssh_errors: false,
                 },
             )?;
             read_frame::<Response>(&mut stream)?.checked()?;

@@ -30,13 +30,28 @@ impl Services {
             }
             Ok(Response::Ok) => match client.rpc(Request::Snapshot).await {
                 Ok(Response::State(state)) => Ok(crate::remote_ui::FormResult::Added(state)),
-                Ok(_) => Err("Expected project snapshot".into()),
-                Err(e) => Err(format!("{e:#}")),
+                Ok(_) => Err(String::from("Expected project snapshot").into()),
+                Err(e) => Err(crate::remote_ui::Failure::from_error(&e)),
             },
-            Ok(_) => Err("Unexpected SSH project response".into()),
-            Err(e) => Err(format!("{e:#}")),
+            Ok(_) => Err(String::from("Unexpected SSH project response").into()),
+            Err(e) => Err(crate::remote_ui::Failure::from_error(&e)),
         };
         updates.push(Update::RemoteAdded(project, generation, result));
+        Ok(())
+    }
+
+    pub(in crate::gui_services) async fn forwards(
+        &self,
+        request: Request,
+        updates: &mut Vec<Update>,
+    ) -> Result<()> {
+        let key = crate::forwards_ui::forward_key(&request);
+        let result = match self.client().rpc(request).await {
+            Ok(Response::Forwards(status)) => Ok(status),
+            Ok(_) => Err(String::from("Unexpected port forward response").into()),
+            Err(e) => Err(crate::remote_ui::Failure::from_error(&e)),
+        };
+        updates.push(Update::Forwards(key, result));
         Ok(())
     }
 
@@ -55,10 +70,106 @@ impl Services {
             .await
         {
             Ok(Response::RemoteProject(reply)) => Ok(reply),
-            Ok(_) => Err("Unexpected SSH project response".into()),
-            Err(e) => Err(format!("{e:#}")),
+            Ok(_) => Err(String::from("Unexpected SSH project response").into()),
+            Err(e) => Err(crate::remote_ui::Failure::from_error(&e)),
         };
         updates.push(Update::RemoteReply(project, operation, result));
+        Ok(())
+    }
+
+    pub(in crate::gui_services) async fn remote_transfer(
+        &self,
+        project: String,
+        pick: crate::transfers_ui::Pick,
+        cancel: CancellationToken,
+        updates: &mut Vec<Update>,
+    ) -> Result<()> {
+        let picked = self.fs().run(&cancel, move || Ok(pick.resolve())).await;
+        let result = match picked {
+            Ok(Some(operation)) => self.remote_transfer_rpc(&project, operation).await,
+            Ok(None) => Ok(None),
+            Err(e) => Err(format!("{e:#}").into()),
+        };
+        updates.push(Update::RemoteTransfer(project, None, result));
+        Ok(())
+    }
+
+    pub(in crate::gui_services) async fn remote_transfer_poll(
+        &self,
+        project: String,
+        id: String,
+        updates: &mut Vec<Update>,
+    ) -> Result<()> {
+        let operation = terminator_core::remote::Operation::TransferStatus { id: id.clone() };
+        let result = self.remote_transfer_rpc(&project, operation).await;
+        updates.push(Update::RemoteTransfer(project, Some(id), result));
+        Ok(())
+    }
+
+    async fn remote_transfer_rpc(
+        &self,
+        project: &str,
+        operation: terminator_core::remote::Operation,
+    ) -> Result<Option<terminator_core::remote::TransferStatus>, crate::remote_ui::Failure> {
+        match self
+            .client()
+            .rpc(Request::RemoteProject {
+                project: project.to_owned(),
+                operation,
+            })
+            .await
+        {
+            Ok(Response::RemoteProject(terminator_core::remote::Reply::Transfer(status))) => {
+                Ok(Some(status))
+            }
+            Ok(_) => Err(String::from("Unexpected SSH transfer response").into()),
+            Err(e) => Err(crate::remote_ui::Failure::from_error(&e)),
+        }
+    }
+
+    pub(in crate::gui_services) async fn host_key(
+        &self,
+        ssh: terminator_core::ssh::SshOptions,
+        keys: Option<Vec<terminator_core::ssh::HostKey>>,
+        updates: &mut Vec<Update>,
+    ) -> Result<()> {
+        let client = self.client();
+        if let Some(keys) = keys {
+            let result = match client
+                .rpc(Request::TrustHostKey {
+                    ssh: ssh.clone(),
+                    keys,
+                })
+                .await
+            {
+                Ok(Response::Ok) => Ok(()),
+                Ok(_) => Err("Unexpected host key response".into()),
+                Err(e) => Err(format!("{e:#}")),
+            };
+            updates.push(Update::HostKeyTrusted(ssh, result));
+        } else {
+            let result = match client.rpc(Request::ScanHostKey { ssh: ssh.clone() }).await {
+                Ok(Response::HostKeys(scan)) => Ok(scan),
+                Ok(_) => Err("Unexpected host key response".into()),
+                Err(e) => Err(format!("{e:#}")),
+            };
+            updates.push(Update::HostKeyScanned(ssh, result));
+        }
+        Ok(())
+    }
+
+    /// `ssh -G` runs once per alias, so this stays off the GUI thread.
+    pub(in crate::gui_services) async fn ssh_config_hosts(
+        &self,
+        generation: u64,
+        cancel: CancellationToken,
+        updates: &mut Vec<Update>,
+    ) -> Result<()> {
+        let hosts = self
+            .cpu()
+            .run(&cancel, || Ok(terminator_core::ssh::config_hosts()))
+            .await?;
+        updates.push(Update::SshConfigHosts(generation, hosts));
         Ok(())
     }
 

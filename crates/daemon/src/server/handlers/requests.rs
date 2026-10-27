@@ -15,6 +15,9 @@ impl Shared {
             &request,
             Request::AddProject { .. }
                 | Request::AddRemoteProject { .. }
+                | Request::RemoveRemoteProject { .. }
+                | Request::SetRemoteProjectGroup { .. }
+                | Request::SetRemoteProjectForwards { .. }
                 | Request::SaveLayout { .. }
                 | Request::SelectProject { .. }
                 | Request::Settings(_)
@@ -422,6 +425,13 @@ impl Shared {
                     self.probe_remote_project(&project)?,
                 ));
             }
+            Request::ScanHostKey { ssh } => {
+                return Ok(Response::HostKeys(self.scan_host_key(&ssh)?));
+            }
+            Request::TrustHostKey { ssh, keys } => {
+                self.trust_host_key(&ssh, &keys)?;
+                return Ok(Response::Ok);
+            }
             Request::RemoteProject { project, operation } => {
                 return Ok(Response::RemoteProject(
                     self.remote_project_operation(&project, operation)?,
@@ -445,6 +455,43 @@ impl Shared {
                 }
                 state.revision = state.revision.saturating_add(1);
             }
+            Request::RemoveRemoteProject { project } => self.remove_remote_project(&project)?,
+            Request::SetRemoteProjectGroup { project, group } => {
+                let group = terminator_core::remote::normalize_group(group.as_deref())?;
+                let mut state = relock(&self.state);
+                state
+                    .remote_projects
+                    .iter_mut()
+                    .find(|p| p.id == project)
+                    .context("Unknown SSH project")?
+                    .group = group;
+                state.revision = state.revision.saturating_add(1);
+            }
+            Request::SetRemoteProjectForwards { project, forwards } => {
+                terminator_core::remote::validate_forwards(&forwards)?;
+                let mut state = relock(&self.state);
+                let target = state
+                    .remote_projects
+                    .iter_mut()
+                    .find(|p| p.id == project)
+                    .context("Unknown SSH project")?;
+                relock(&self.forwards).redefine(&project, &forwards)?;
+                target.forwards = forwards;
+                state.revision = state.revision.saturating_add(1);
+            }
+            Request::StartForward {
+                project,
+                local_port,
+            } => {
+                return Ok(Response::Forwards(
+                    self.start_forward(&project, local_port)?,
+                ));
+            }
+            Request::StopForward {
+                project,
+                local_port,
+            } => return Ok(Response::Forwards(self.stop_forward(&project, local_port)?)),
+            Request::ForwardStatus => return Ok(Response::Forwards(self.forward_status())),
             Request::AddProject { path } => {
                 let path = path.canonicalize()?;
                 ensure!(path.is_dir(), "Project must be a directory");
@@ -747,7 +794,11 @@ impl Shared {
         {
             drop(state);
             return Ok(Response::Text(String::from_utf8(
-                crate::remote::terminal::editor_rpc(&remote, expression)?,
+                crate::remote::terminal::editor_rpc(
+                    &remote,
+                    self.ssh_control(&remote.ssh).as_deref(),
+                    expression,
+                )?,
             )?));
         }
 

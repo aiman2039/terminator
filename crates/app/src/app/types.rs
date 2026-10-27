@@ -234,11 +234,33 @@ pub(crate) enum Job {
         project: String,
         operation: terminator_core::remote::Operation,
     },
+    /// Scans `ssh`'s host keys, or trusts `keys` after a matching rescan.
+    HostKey {
+        ssh: terminator_core::ssh::SshOptions,
+        keys: Option<Vec<terminator_core::ssh::HostKey>>,
+    },
+    /// Lists `~/.ssh/config` aliases for the SSH project dialog opened as
+    /// this generation.
+    SshConfigHosts(u64),
+    /// `ssh -O check` per (project id, control socket) for the Hosts sidebar.
+    SshControlStatus(Vec<(String, PathBuf)>),
+    /// `StartForward`, `StopForward` or `ForwardStatus`.
+    Forwards(Request),
     RemoteAsset {
         project: String,
         path: String,
         cache_root: PathBuf,
         after: After,
+    },
+    /// Picks the local file off the GUI thread, then starts an SSH project
+    /// transfer in the daemon.
+    RemoteTransfer {
+        project: String,
+        pick: crate::transfers_ui::Pick,
+    },
+    RemoteTransferPoll {
+        project: String,
+        id: String,
     },
     VncPickTransfer {
         session: String,
@@ -309,14 +331,35 @@ pub(crate) enum Update {
     RemoteAdded(
         terminator_core::remote::RemoteProject,
         u64,
-        Result<crate::remote_ui::FormResult, String>,
+        Result<crate::remote_ui::FormResult, crate::remote_ui::Failure>,
     ),
     RemoteReply(
         String,
         terminator_core::remote::Operation,
-        Result<terminator_core::remote::Reply, String>,
+        Result<terminator_core::remote::Reply, crate::remote_ui::Failure>,
+    ),
+    HostKeyScanned(
+        terminator_core::ssh::SshOptions,
+        Result<terminator_core::ssh::HostKeyScan, String>,
+    ),
+    HostKeyTrusted(terminator_core::ssh::SshOptions, Result<(), String>),
+    SshConfigHosts(u64, Vec<terminator_core::ssh::ConfigHost>),
+    /// Empty when the check was not run.
+    SshControlStatus(Vec<(String, bool)>),
+    /// The (project, local port) the request toggled, if any, and the
+    /// daemon's forward status after it.
+    Forwards(
+        Option<(String, u16)>,
+        Result<terminator_core::remote::ForwardStatus, crate::remote_ui::Failure>,
     ),
     RemoteAsset(String, PathBuf, After),
+    /// Project, the polled transfer ID, and its status (`None` when the
+    /// picker was cancelled).
+    RemoteTransfer(
+        String,
+        Option<String>,
+        Result<Option<terminator_core::remote::TransferStatus>, crate::remote_ui::Failure>,
+    ),
     VncTransfer(
         String,
         Result<Option<terminator_core::vnc::VncTransferStatus>, String>,

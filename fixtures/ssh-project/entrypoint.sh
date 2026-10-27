@@ -24,4 +24,10 @@ if [ ! -d /workspace/project/.git ]; then
         printf "untracked file\n" > untracked.txt
     '
 fi
-exec /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config.fixture
+# A loopback-only HTTP service for port-forward checks; never published.
+if [ -n "${FIXTURE_HTTP_PORT:-}" ]; then
+    mkdir -p /srv/fixture-http
+    printf 'terminator-forward-ok\n' > /srv/fixture-http/marker.txt
+    runuser -u developer -- python3 -m http.server "$FIXTURE_HTTP_PORT" --bind 127.0.0.1 --directory /srv/fixture-http >/dev/null 2>&1 &
+fi
+exec /usr/sbin/sshd -D -e -f "${SSHD_CONFIG:-/etc/ssh/sshd_config.fixture}"

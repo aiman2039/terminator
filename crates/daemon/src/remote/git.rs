@@ -1,7 +1,12 @@
 use super::*;
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use terminator_core::remote::{Change, MAX_FILE_BYTES};
-fn git(project: &RemoteProject, args: &[String], limit: usize) -> Result<Vec<u8>> {
+fn git(
+    project: &RemoteProject,
+    control: Option<&Path>,
+    args: &[String],
+    limit: usize,
+) -> Result<Vec<u8>> {
     let mut parts = vec![
         "git".into(),
         "--no-pager".into(),
@@ -18,6 +23,7 @@ fn git(project: &RemoteProject, args: &[String], limit: usize) -> Result<Vec<u8>
     parts.extend_from_slice(args);
     execute(
         project,
+        control,
         &format!(
             "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES; exec {}",
             parts
@@ -29,13 +35,19 @@ fn git(project: &RemoteProject, args: &[String], limit: usize) -> Result<Vec<u8>
         limit,
     )
 }
-fn changes(project: &RemoteProject) -> Result<Vec<Change>> {
-    let prefix = git(project, &["rev-parse".into(), "--show-prefix".into()], 8192)?;
+fn changes(project: &RemoteProject, control: Option<&Path>) -> Result<Vec<Change>> {
+    let prefix = git(
+        project,
+        control,
+        &["rev-parse".into(), "--show-prefix".into()],
+        8192,
+    )?;
     let prefix = std::str::from_utf8(&prefix)?
         .trim_end_matches('\n')
         .to_owned();
     let output = git(
         project,
+        control,
         &[
             "status".into(),
             "--porcelain=v1".into(),
@@ -71,8 +83,13 @@ fn changes(project: &RemoteProject) -> Result<Vec<Change>> {
         })
         .collect()
 }
-pub(super) fn status(project: &RemoteProject) -> Result<Reply> {
-    let branch = git(project, &["branch".into(), "--show-current".into()], 8192)?;
+pub(super) fn status(project: &RemoteProject, control: Option<&Path>) -> Result<Reply> {
+    let branch = git(
+        project,
+        control,
+        &["branch".into(), "--show-current".into()],
+        8192,
+    )?;
     Ok(Reply::Git {
         branch: {
             let name = std::str::from_utf8(&branch)?.trim();
@@ -82,22 +99,33 @@ pub(super) fn status(project: &RemoteProject) -> Result<Reply> {
                 name.into()
             }
         },
-        changes: changes(project)?,
+        changes: changes(project, control)?,
     })
 }
-pub(super) fn diff(project: &RemoteProject, path: &str, staged: bool) -> Result<Reply> {
+pub(super) fn diff(
+    project: &RemoteProject,
+    control: Option<&Path>,
+    path: &str,
+    staged: bool,
+) -> Result<Reply> {
     terminator_core::remote::validate_relative(path)?;
-    let status = changes(project)?
+    let status = changes(project, control)?
         .into_iter()
         .find(|c| c.path == path)
         .context("Remote file is no longer modified; refresh Git status")?;
     let x = status.status.as_bytes().first().copied().unwrap_or(b' ');
     let y = status.status.as_bytes().get(1).copied().unwrap_or(b' ');
-    let prefix = git(project, &["rev-parse".into(), "--show-prefix".into()], 8192)?;
+    let prefix = git(
+        project,
+        control,
+        &["rev-parse".into(), "--show-prefix".into()],
+        8192,
+    )?;
     let prefix = std::str::from_utf8(&prefix)?.trim_end_matches('\n');
     let blob = |revision: &str| {
         git(
             project,
+            control,
             &[
                 "show".into(),
                 "--no-ext-diff".into(),
@@ -122,7 +150,8 @@ pub(super) fn diff(project: &RemoteProject, path: &str, staged: bool) -> Result<
         let right = if y == b'D' {
             Vec::new()
         } else {
-            match super::files::operation(project, Operation::Read { path: path.into() })? {
+            match super::files::operation(project, control, Operation::Read { path: path.into() })?
+            {
                 Reply::File { base64, .. } => B64.decode(base64)?,
                 _ => anyhow::bail!("Unexpected remote file response"),
             }

@@ -104,6 +104,7 @@ impl Shared {
             );
             let (command, metadata, resolved) = crate::remote::terminal::prepare(
                 remote,
+                self.ssh_control(&remote.ssh).as_deref(),
                 &sid,
                 remote_cwd.as_deref(),
                 file.as_deref(),
@@ -361,6 +362,9 @@ impl Shared {
             relock(&shared.sessions).remove(&sid);
             drop(review_files);
         });
+        if record.remote.is_some() && record.kind == SessionKind::Shell {
+            self.auto_start_forwards(&project);
+        }
         Ok(record)
     }
 }

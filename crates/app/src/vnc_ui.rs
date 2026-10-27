@@ -760,7 +760,7 @@ impl App {
             let security = match record.options.transport {
                 terminator_core::vnc::Transport::Direct => "Direct VNC · unencrypted transport",
                 terminator_core::vnc::Transport::Tls => "TLS · certificate verification required",
-                terminator_core::vnc::Transport::Ssh => "SSH · known host key required",
+                terminator_core::vnc::Transport::Ssh => "SSH · trusted host key required",
             };
             ui.weak(security);
             if record.retry_attempt > 0 {

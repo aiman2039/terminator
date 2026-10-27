@@ -66,6 +66,11 @@ pub(crate) struct Shared {
     pub(crate) alerts: SyncSender<String>,
     pub(crate) ntfy: SyncSender<ntfy::Ping>,
     pub(crate) ntfy_cooldown: Mutex<ntfy::Cooldown>,
+    /// Active SSH port forwards. Lock after `state`, never before.
+    pub(crate) forwards: Mutex<crate::remote::Forwards>,
+    /// Background SSH project file transfers. Lock after `state`, never
+    /// before.
+    pub(crate) remote_transfers: Mutex<crate::remote::Transfers>,
 }
 
 #[cfg(test)]

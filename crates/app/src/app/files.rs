@@ -257,14 +257,17 @@ impl App {
     }
 
     pub(crate) fn sync_browsers(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
-        // Menus, context menus, and combo boxes paint on the foreground
-        // layer, which the native view would otherwise draw over.
+        // Floating windows and dialogs (middle layer) and menus, context
+        // menus, and combo boxes (foreground layer) would otherwise be drawn
+        // over by the native view.
         let covers: Vec<egui::Rect> = ctx.memory(|memory| {
             memory
                 .areas()
                 .visible_layer_ids()
                 .into_iter()
-                .filter(|layer| layer.order == egui::Order::Foreground)
+                .filter(|layer| {
+                    matches!(layer.order, egui::Order::Middle | egui::Order::Foreground)
+                })
                 .filter_map(|layer| memory.area_rect(layer.id))
                 .collect()
         });

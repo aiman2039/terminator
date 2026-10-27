@@ -20,11 +20,11 @@ pub(super) fn options(ui: &mut egui::Ui, value: &mut VncOptions, supported: bool
                 }
                 Transport::Ssh=>{
                     ui.label("SSH host");ui.add(appearance::singleline(&mut value.ssh.host).hint_text("Host name or SSH config alias").desired_width(f32::INFINITY));
-                    ui.label("SSH port");ui.add(egui::DragValue::new(&mut value.ssh.port).range(1..=65535));
+                    ui.label("SSH port (blank uses SSH config)");appearance::optional_port(ui,&mut value.ssh.port,"22 or config");
                     ui.label("SSH user");ui.add(appearance::singleline(&mut value.ssh.username).desired_width(f32::INFINITY));
                     optional_path(ui,"SSH identity file (optional)",&mut value.ssh.identity_file);
                     optional_path(ui,"Known hosts file (optional)",&mut value.ssh.known_hosts_file);
-                    ui.weak("Uses OpenSSH config and agent. The host key must already be trusted. SFTP uses the same host.");
+                    ui.weak("Uses OpenSSH config, an agent, or a signed-in SSH terminal's connection. The host key must be trusted first; an SSH terminal asks on first connect. SFTP uses the same host.");
                 }
             }
             ui.checkbox(&mut value.allow_no_auth,"Allow a VNC server without authentication");

@@ -4,6 +4,7 @@ use rustls::pki_types::pem::PemObject;
 use rustls_platform_verifier::BuilderVerifierExt;
 use std::{
     io,
+    path::Path,
     pin::Pin,
     process::Stdio,
     sync::Arc,
@@ -55,17 +56,22 @@ pub(super) trait Io: AsyncRead + AsyncWrite + Unpin + Send + Sync {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send + Sync> Io for T {}
 pub(super) type Stream = Box<dyn Io>;
 
-pub(super) fn ssh_command(ssh: &SshOptions) -> Result<Command> {
+pub(super) fn ssh_command(ssh: &SshOptions, control: Option<&Path>) -> Result<Command> {
     let mut command = Command::new("ssh");
     command
-        .args(terminator_core::ssh::arguments(ssh, false)?)
+        .args(terminator_core::ssh::arguments(ssh, false, control)?)
         .kill_on_drop(true);
     for key in terminator_core::ssh::private_environment_keys() {
         command.env_remove(key);
     }
     Ok(command)
 }
-pub(super) async fn connect(host: &str, port: u16, options: &VncOptions) -> Result<Stream> {
+pub(super) async fn connect(
+    host: &str,
+    port: u16,
+    options: &VncOptions,
+    control: Option<&Path>,
+) -> Result<Stream> {
     validate_host(host)?;
     options.validate()?;
     if options.transport == Transport::Ssh {
@@ -74,7 +80,7 @@ pub(super) async fn connect(host: &str, port: u16, options: &VncOptions) -> Resu
         } else {
             format!("{host}:{port}")
         };
-        let mut command = ssh_command(&options.ssh)?;
+        let mut command = ssh_command(&options.ssh, control)?;
         command
             .arg("-W")
             .arg(target)

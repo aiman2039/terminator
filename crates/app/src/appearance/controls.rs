@@ -66,6 +66,22 @@ pub fn singleline(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(text).align(egui::Align2::LEFT_CENTER)
 }
 
+/// TCP port field where empty means "not set" (`None`). Input that is not a
+/// port in 1–65535 is rejected and the previous value stays.
+pub fn optional_port(ui: &mut egui::Ui, port: &mut Option<u16>, hint: &str) -> egui::Response {
+    let mut text = port.map_or_else(String::new, |p| p.to_string());
+    let response = ui.add(singleline(&mut text).hint_text(hint).desired_width(80.0));
+    if response.changed() {
+        let text = text.trim();
+        if text.is_empty() {
+            *port = None;
+        } else if let Some(value) = text.parse::<u16>().ok().filter(|p| *p > 0) {
+            *port = Some(value);
+        }
+    }
+    response
+}
+
 /// Sidebar toolbar glyph size. Every frameless icon control shares it so the
 /// icons sit on one row regardless of the ambient [`egui::Style`] spacing.
 pub const TOOLBAR_BUTTON: f32 = 22.0;
@@ -254,6 +270,7 @@ pub fn tool_button(
         SidebarTool::Problems => "CircleAlert",
         SidebarTool::Structure => "ListTree",
         SidebarTool::Vnc => "Monitor",
+        SidebarTool::Hosts => "Globe",
     };
     egui::Image::new(crate::icons::source(icon))
         .tint(tint)

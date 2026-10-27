@@ -120,8 +120,55 @@ pub enum Request {
         project: String,
         operation: crate::remote::Operation,
     },
+    /// With root [`HOME_ROOT`](crate::remote::HOME_ROOT) the reply is the
+    /// login directory (`ssh-hosts-v1`).
     ProbeRemoteProject {
         project: crate::remote::RemoteProject,
+    },
+    /// Forgets an SSH project. Refused while its sessions are live; stops
+    /// its OpenSSH master unless another project or session shares it.
+    /// Requires `ssh-hosts-v1`.
+    RemoveRemoteProject {
+        project: String,
+    },
+    /// `None` or blank moves the project out of any group. Requires
+    /// `ssh-hosts-v1`.
+    SetRemoteProjectGroup {
+        project: String,
+        group: Option<String>,
+    },
+    /// Replaces the project's saved port forwards. Refused while it would
+    /// drop or change the endpoints of an active forward. Requires
+    /// `ssh-forwarding-v1`.
+    SetRemoteProjectForwards {
+        project: String,
+        forwards: Vec<crate::remote::Forward>,
+    },
+    /// Starts the saved forward on `local_port` through the project's
+    /// OpenSSH master, starting a batch master when none is alive. Replies
+    /// `Response::Forwards`. Requires `ssh-forwarding-v1`.
+    StartForward {
+        project: String,
+        local_port: u16,
+    },
+    /// Cancels a forward. Replies `Response::Forwards`. Requires
+    /// `ssh-forwarding-v1`.
+    StopForward {
+        project: String,
+        local_port: u16,
+    },
+    /// Active forwards whose master still answers, plus background start
+    /// failures. Replies `Response::Forwards`. Requires `ssh-forwarding-v1`.
+    ForwardStatus,
+    /// Reports the keys `ssh.host` presents. Requires `ssh-hostkeys-v1`.
+    ScanHostKey {
+        ssh: crate::ssh::SshOptions,
+    },
+    /// Appends `keys` to `known_hosts` after a fresh scan still presents
+    /// exactly them. Requires `ssh-hostkeys-v1`.
+    TrustHostKey {
+        ssh: crate::ssh::SshOptions,
+        keys: Vec<crate::ssh::HostKey>,
     },
     AddProject {
         path: PathBuf,
@@ -208,6 +255,11 @@ impl Request {
         Duration::from_secs(match self {
             Self::RemoteProject { .. }
             | Self::ProbeRemoteProject { .. }
+            | Self::ScanHostKey { .. }
+            | Self::TrustHostKey { .. }
+            | Self::StartForward { .. }
+            | Self::StopForward { .. }
+            | Self::ForwardStatus
             | Self::WorktreeAdd { .. }
             | Self::WorktreeRemove { .. } => 40,
             Self::VncFrame { .. } | Self::CloseIdleSessions { .. } => 30,
@@ -245,6 +297,14 @@ impl Request {
             Self::AddRemoteProject { .. } => "AddRemoteProject",
             Self::RemoteProject { .. } => "RemoteProject",
             Self::ProbeRemoteProject { .. } => "ProbeRemoteProject",
+            Self::RemoveRemoteProject { .. } => "RemoveRemoteProject",
+            Self::SetRemoteProjectGroup { .. } => "SetRemoteProjectGroup",
+            Self::SetRemoteProjectForwards { .. } => "SetRemoteProjectForwards",
+            Self::StartForward { .. } => "StartForward",
+            Self::StopForward { .. } => "StopForward",
+            Self::ForwardStatus => "ForwardStatus",
+            Self::ScanHostKey { .. } => "ScanHostKey",
+            Self::TrustHostKey { .. } => "TrustHostKey",
             Self::SaveLayout { .. } => "SaveLayout",
             Self::SelectProject { .. } => "SelectProject",
             Self::Create { .. } => "Create",
@@ -281,12 +341,21 @@ pub struct Envelope {
     /// Client support for chunked `Snapshot` and `VncFrame` responses; old daemons ignore it.
     #[serde(default)]
     pub snapshot_chunks: bool,
+    /// Client understands `Response::SshError`; old daemons ignore it and
+    /// old clients receive `Response::Error`.
+    #[serde(default)]
+    pub ssh_errors: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Response {
-    Redirect { generation: String },
+    Redirect {
+        generation: String,
+    },
     IdleSessionsClosed(Vec<idle_close::Outcome>),
-    SnapshotChunk { data: String, last: bool },
+    SnapshotChunk {
+        data: String,
+        last: bool,
+    },
     Worktrees(Vec<worktrees::GitWorktree>),
     VncCreated(vnc::VncSession),
     VncTransferStatus(vnc::VncTransferStatus),
@@ -295,6 +364,10 @@ pub enum Response {
     Ok,
     State(Box<State>),
     RemoteProject(crate::remote::Reply),
+    /// Sent only to clients whose envelope sets `ssh_errors`.
+    SshError(crate::ssh::SshError),
+    HostKeys(crate::ssh::HostKeyScan),
+    Forwards(crate::remote::ForwardStatus),
     Created(Session),
     Text(String),
     Data(String),
@@ -307,6 +380,8 @@ impl Response {
             bail!("Request rejected before execution; use active generation {generation}")
         } else if let Self::Error(e) = self {
             bail!("{e}")
+        } else if let Self::SshError(e) = self {
+            return Err(e.into());
         }
         Ok(self)
     }
@@ -355,6 +430,7 @@ fn connect_hint(
                 None => paths.token()?,
             },
             snapshot_chunks: matches!(request, Request::Snapshot | Request::VncFrame { .. }),
+            ssh_errors: true,
             request,
             snapshot_hint,
         },
@@ -420,6 +496,9 @@ pub(crate) fn redirect_allowed(request: &Request) -> bool {
             | Request::CreateReview { .. }
             | Request::AddProject { .. }
             | Request::AddRemoteProject { .. }
+            | Request::RemoveRemoteProject { .. }
+            | Request::SetRemoteProjectGroup { .. }
+            | Request::SetRemoteProjectForwards { .. }
             | Request::SaveLayout { .. }
             | Request::SelectProject { .. }
             | Request::Settings(_)
@@ -573,6 +652,22 @@ mod tests {
     }
 
     #[test]
+    fn ssh_errors_survive_the_wire_as_typed_errors() {
+        let error = crate::ssh::SshError {
+            failure: crate::ssh::SshFailure::UnknownHostKey,
+            message: "The SSH host key is not trusted yet".into(),
+        };
+        let wire = serde_json::to_vec(&Response::SshError(error.clone())).unwrap();
+        let response: Response = serde_json::from_slice(&wire).unwrap();
+        let checked = response.checked().unwrap_err();
+        assert_eq!(checked.downcast_ref::<crate::ssh::SshError>(), Some(&error));
+        assert_eq!(
+            format!("{:#}", checked.context("outer")),
+            "outer: The SSH host key is not trusted yet"
+        );
+    }
+
+    #[test]
     fn oversized_frame_rejected_before_allocation() {
         let mut b = u32::try_from(MAX_FRAME)
             .unwrap_or(u32::MAX)
@@ -599,6 +694,7 @@ mod tests {
             request: Request::Snapshot,
             snapshot_hint: Some(hint),
             snapshot_chunks: true,
+            ssh_errors: true,
         };
         let legacy: LegacyEnvelope =
             serde_json::from_value(serde_json::to_value(&new).unwrap()).unwrap();
@@ -611,5 +707,6 @@ mod tests {
         .unwrap();
         assert!(new.snapshot_hint.is_none());
         assert!(!new.snapshot_chunks);
+        assert!(!new.ssh_errors);
     }
 }

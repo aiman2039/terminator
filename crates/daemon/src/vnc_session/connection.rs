@@ -24,8 +24,9 @@ pub(super) async fn run(
     spec: &ConnectionSpec,
     input_rx: &mut mpsc::Receiver<VncInputEvent>,
 ) -> Result<(), Failure> {
+    let control = shared.ssh_control(&spec.options.ssh);
     let connected = tokio::select! {
-        result=transport::connect(&spec.host,spec.port,&spec.options)=>result,
+        result=transport::connect(&spec.host,spec.port,&spec.options,control.as_deref())=>result,
         _=input_rx.recv()=>return Err(Failure::Cancelled),
     };
     let stream = connected.map_err(|e| {

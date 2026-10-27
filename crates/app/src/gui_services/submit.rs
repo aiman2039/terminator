@@ -570,6 +570,15 @@ impl Services {
             Job::RemoteRead { project, operation } => {
                 self.remote_read(project, operation, &mut updates).await?
             }
+            Job::HostKey { ssh, keys } => self.host_key(ssh, keys, &mut updates).await?,
+            Job::SshConfigHosts(generation) => {
+                self.ssh_config_hosts(generation, cancel, &mut updates)
+                    .await?
+            }
+            Job::Forwards(request) => self.forwards(request, &mut updates).await?,
+            Job::SshControlStatus(targets) => updates.push(Update::SshControlStatus(
+                crate::hosts_ui::check_controls(targets).await,
+            )),
             Job::RemoteAsset {
                 project,
                 path,
@@ -578,6 +587,13 @@ impl Services {
             } => {
                 self.remote_asset(project, path, cache_root, after, cancel, &mut updates)
                     .await?
+            }
+            Job::RemoteTransfer { project, pick } => {
+                self.remote_transfer(project, pick, cancel, &mut updates)
+                    .await?
+            }
+            Job::RemoteTransferPoll { project, id } => {
+                self.remote_transfer_poll(project, id, &mut updates).await?
             }
             Job::VncPickTransfer {
                 session,
