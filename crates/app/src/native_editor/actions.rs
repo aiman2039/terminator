@@ -119,30 +119,52 @@ impl App {
     /// editors; edits to files that are not open are reported, not lost
     /// silently.
     pub(crate) fn apply_workspace_edit(&mut self, files: Vec<native_lsp::RenameFileEdit>) {
-        let mut skipped = 0usize;
+        let mut closed = Vec::new();
         for file in files {
-            let Some(path) = native_lsp::uri_to_path(&file.uri) else {
-                skipped = skipped.saturating_add(1);
-                continue;
-            };
-            match self
-                .native_docs
-                .get_mut(&path)
-                .and_then(|doc| doc.doc.as_mut())
-            {
+            let open = native_lsp::uri_to_path(&file.uri)
+                .and_then(|path| self.native_docs.get_mut(&path))
+                .and_then(|doc| doc.doc.as_mut());
+            match open {
                 Some(buffer) => {
                     apply_text_edits(buffer, &file.edits);
                 }
-                None => skipped = skipped.saturating_add(1),
+                None => closed.push(file),
             }
         }
-        if skipped > 0 {
-            self.error = Some(format!(
-                "The action also edits {skipped} file{} that {} not open; open {} and retry.",
-                if skipped == 1 { "" } else { "s" },
-                if skipped == 1 { "is" } else { "are" },
-                if skipped == 1 { "it" } else { "them" },
-            ));
+        if closed.is_empty() {
+            return;
+        }
+        // Files that are not open are edited on disk, with the same
+        // checks and rollback as a rename (inside the project only).
+        let Some(root) = self.selected_project().map(|project| project.path.clone()) else {
+            self.error = Some("The action edits files outside an open project".into());
+            return;
+        };
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = self.services.clone();
+        let submitted = self.services.handle().submit(
+            OperationContext::new(
+                "code-action-apply",
+                root.display().to_string(),
+                Policy::OrderedMutation,
+            ),
+            CancellationToken::new(),
+            async move {
+                let token = CancellationToken::new();
+                let result = service
+                    .fs()
+                    .run(&token, move || {
+                        let prepared = super::rename::prepare_rename(&root, closed)?;
+                        super::rename::apply_rename(prepared)
+                    })
+                    .await;
+                let _ = tx.send(result.map_err(|error| format!("{error:#}")));
+                Ok(Vec::new())
+            },
+        );
+        match submitted {
+            Ok(_) => self.action_apply = Some(rx),
+            Err(error) => self.error = Some(format!("Could not apply the action: {error}")),
         }
     }
 
@@ -162,6 +184,21 @@ impl App {
 
     /// Formatting, action lists, and resolved actions that arrived.
     pub(crate) fn drain_edit_answers(&mut self) {
+        if let Some(rx) = self.action_apply.as_mut()
+            && let Ok(result) = rx.try_recv()
+        {
+            self.action_apply = None;
+            match result {
+                Ok(paths) => {
+                    self.info = Some(format!(
+                        "The action also updated {} file{} on disk",
+                        paths.len(),
+                        if paths.len() == 1 { "" } else { "s" }
+                    ));
+                }
+                Err(error) => self.error = Some(format!("Code action not applied: {error}")),
+            }
+        }
         if let Some((path, revision, edits)) = self.lsp.edit_answers.format.take()
             && let Some(buffer) = self
                 .native_docs

@@ -53,6 +53,33 @@ fn hunk_row(hunk: &diff::review::Hunk, split: bool, aligned: bool) -> usize {
     }
 }
 
+/// The changed line a diff row shows on one side: `(old side, line)` for
+/// removed lines (left / unified deletions) and added lines (right /
+/// unified insertions); `None` for context, gaps, and fillers.
+fn changed_line(
+    doc: &diff::DiffDocument,
+    split: bool,
+    side: usize,
+    row: usize,
+) -> Option<(bool, usize)> {
+    let line = if split {
+        let row = doc.split.get(row)?;
+        if side == 0 {
+            row.left.as_ref()
+        } else {
+            row.right.as_ref()
+        }
+    } else {
+        doc.unified.get(row)
+    }?;
+    let index = |number: Option<u32>| usize::try_from(number?).ok()?.checked_sub(1);
+    match line.kind {
+        diff::LineKind::Delete => Some((true, index(line.old_no)?)),
+        diff::LineKind::Insert => Some((false, index(line.new_no)?)),
+        _ => None,
+    }
+}
+
 pub(super) fn change_color(
     hunk: &diff::review::Hunk,
     colors: super::diff_paint::DiffColors,
@@ -305,11 +332,49 @@ pub(super) fn paint(
                 );
             }
             // Observe clicks without covering the text's selection widget.
-            if pointer.is_some_and(|pos| visible.contains(pos))
+            if let Some(pos) = pointer.filter(|pos| visible.contains(*pos))
                 && ui.input(|input| input.pointer.primary_clicked())
             {
                 review.selected = Some(index);
                 review.confirm_discard = None;
+                // Alt+click picks single changed lines for line-level
+                // stage/unstage/discard (painted views only).
+                if ui.input(|input| input.modifiers.alt) && !editor_pane {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    // Row index from UI coordinates.
+                    let row = ((pos.y - output.inner_rect.top()
+                        + output.state.unclamped_offset().y)
+                        / row_h)
+                        .floor()
+                        .max(0.0) as usize;
+                    if let Some((old, line)) = changed_line(doc, split, side, row)
+                        && (if old { &hunk.old } else { &hunk.new }).contains(&line)
+                    {
+                        review.toggle_line(index, old, line);
+                    }
+                }
+            }
+            // Mark picked lines in this hunk.
+            if let Some((picked_hunk, lines)) = &review.picked
+                && *picked_hunk == index
+            {
+                for row in hunk.rows(split) {
+                    let Some((old, line)) = changed_line(doc, split, side, row) else {
+                        continue;
+                    };
+                    if (if old { &lines.old } else { &lines.new }).contains(&line) {
+                        #[allow(clippy::cast_precision_loss)] // UI coordinate
+                        let y = output.inner_rect.top() + row as f32 * row_h
+                            - output.state.unclamped_offset().y;
+                        ui.painter().with_clip_rect(clip).text(
+                            egui::pos2(output.inner_rect.left() + 2.0, y + row_h / 2.0),
+                            egui::Align2::LEFT_CENTER,
+                            "✓",
+                            egui::FontId::proportional(row_h * 0.8),
+                            color,
+                        );
+                    }
+                }
             }
         }
         let band = left.union(right);
@@ -344,10 +409,23 @@ pub(super) fn paint(
                 ui.add_space(((width - 47.0) / 2.0).max(0.0));
                 ui.add_enabled_ui(enabled, |ui| {
                     let kind = if staged { Kind::Unstage } else { Kind::Stage };
+                    let picked = review
+                        .picked
+                        .as_ref()
+                        .filter(|(picked_hunk, _)| *picked_hunk == index)
+                        .map_or(0, |(_, lines)| lines.len());
+                    let target = if picked > 0 {
+                        format!(
+                            "{picked} selected line{}",
+                            if picked == 1 { "" } else { "s" }
+                        )
+                    } else {
+                        "this hunk (Alt+click lines to pick some)".to_owned()
+                    };
                     let action = appearance::sidebar_action(
                         ui,
                         if staged { "ArrowLeft" } else { "Plus" },
-                        &format!("{} this hunk", kind.label()),
+                        &format!("{} {target}", kind.label()),
                     );
                     #[cfg(feature = "test-support")]
                     diagnostics::record(
@@ -359,8 +437,15 @@ pub(super) fn paint(
                         result.action = Some((index, kind));
                     }
                     if !staged {
-                        let discard =
-                            appearance::sidebar_action(ui, "Eraser", "Discard this hunk…");
+                        let discard = appearance::sidebar_action(
+                            ui,
+                            "Eraser",
+                            &if picked > 0 {
+                                format!("Discard {target}…")
+                            } else {
+                                "Discard this hunk…".to_owned()
+                            },
+                        );
                         #[cfg(feature = "test-support")]
                         diagnostics::record(
                             ui.ctx(),

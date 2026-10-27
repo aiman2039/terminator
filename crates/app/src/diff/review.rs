@@ -67,6 +67,8 @@ pub(crate) struct State {
     /// Compare lines ignoring whitespace (a view option; staging still
     /// applies the real hunks).
     pub ignore_whitespace: bool,
+    /// Lines picked inside one hunk for line-level stage/unstage/discard.
+    pub picked: Option<(usize, super::actions::LineSelection)>,
 }
 
 /// One row of the live unified editor, recomputed from the left text vs the
@@ -157,6 +159,33 @@ impl State {
 }
 
 impl State {
+    /// Take the picked lines when they belong to `hunk`.
+    pub fn picked_lines(&mut self, hunk: usize) -> Option<super::actions::LineSelection> {
+        match self.picked.take() {
+            Some((picked_hunk, lines)) if picked_hunk == hunk && !lines.is_empty() => Some(lines),
+            other => {
+                self.picked = other;
+                None
+            }
+        }
+    }
+
+    /// Toggle one changed line (`old` side or new side) of `hunk`; picks
+    /// in another hunk start over.
+    pub fn toggle_line(&mut self, hunk: usize, old: bool, line: usize) {
+        let (picked_hunk, lines) = self
+            .picked
+            .get_or_insert_with(|| (hunk, super::actions::LineSelection::default()));
+        if *picked_hunk != hunk {
+            *picked_hunk = hunk;
+            *lines = super::actions::LineSelection::default();
+        }
+        let set = if old { &mut lines.old } else { &mut lines.new };
+        if !set.remove(&line) {
+            set.insert(line);
+        }
+    }
+
     pub fn select(&mut self, index: usize) {
         self.selected = Some(index);
         self.jump = true;

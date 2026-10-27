@@ -332,12 +332,17 @@ pub struct App {
     pub(crate) code_actions: Option<crate::native_editor::ActionsPopup>,
     /// Re-sent `codeAction/resolve` requests for the picked action.
     pub(crate) resolve_attempts: u8,
+    /// On-disk part of a code action touching files that are not open.
+    pub(crate) action_apply:
+        Option<tokio::sync::mpsc::UnboundedReceiver<Result<Vec<PathBuf>, String>>>,
     /// `HEAD` text per open file for gutter change markers, tagged with
     /// the Git refresh generation it was read at.
     pub(crate) git_bases: HashMap<PathBuf, (u64, Option<std::sync::Arc<str>>)>,
     pub(crate) git_base_pending: std::collections::HashSet<PathBuf>,
     pub(crate) git_base_generation: u64,
     pub(crate) gutter_popup: Option<crate::native_editor::GutterPopup>,
+    /// Merge conflict resolver window.
+    pub(crate) merge: Option<crate::merge::MergeWindow>,
     /// Changed files per commit hash (`None` while loading).
     pub(crate) commit_files: HashMap<String, Option<CommitFiles>>,
     /// Jump history for Back/Forward.

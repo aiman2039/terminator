@@ -771,10 +771,12 @@ impl App {
                 text: edit.text.clone(),
             })
         } else if let Some(index) = confirmed {
+            let lines = review.picked_lines(index);
             doc.as_ref().map(|document| Request::Hunk {
                 document: std::sync::Arc::clone(document),
                 hunk: index,
                 kind: Kind::Discard,
+                lines,
             })
         } else if undo {
             review.undo.last().cloned().map(Request::Undo)
@@ -784,10 +786,12 @@ impl App {
                 review.confirm_discard = Some(index);
                 None
             } else {
+                let lines = review.picked_lines(index);
                 doc.as_ref().map(|document| Request::Hunk {
                     document: std::sync::Arc::clone(document),
                     hunk: index,
                     kind,
+                    lines,
                 })
             }
         } else {

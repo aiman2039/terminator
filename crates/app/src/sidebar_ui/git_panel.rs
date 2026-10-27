@@ -115,6 +115,8 @@ pub struct GitPanelOutcome {
     pub set_base: Option<String>,
     pub clear_base: bool,
     pub refresh_compare: bool,
+    /// Open the conflict resolver for this file.
+    pub resolve: Option<PathBuf>,
 }
 
 /// Map a Git row click to the concrete action `App` performs. Conflicts open
@@ -773,6 +775,12 @@ fn git_change_row(
                 action: FileAction::Open,
                 path: change.path.clone(),
             });
+            ui.close();
+        }
+        if group == terminator_git::GitGroup::Conflicts
+            && appearance::menu_item(ui, "Resolve conflicts…", "GitCompareArrows", "").clicked()
+        {
+            outcome.resolve = Some(change.path.clone());
             ui.close();
         }
         ui.separator();

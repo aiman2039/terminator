@@ -66,8 +66,9 @@ mod forwards_ui;
 pub(crate) mod git_log;
 mod gui_services;
 mod hosts_ui;
-#[cfg(any(test, target_os = "macos"))]
 mod menu_bar;
+#[cfg(any(test, target_os = "macos"))]
+mod merge;
 mod native_jobs;
 mod perforce;
 mod remote_ui;

@@ -183,6 +183,9 @@ impl App {
         for picked in outcome.menu {
             self.file_action(ui, picked.action, &picked.path, None);
         }
+        if let Some(path) = outcome.resolve.clone() {
+            self.open_merge(path);
+        }
         if let Some(history) = outcome.history {
             self.git.history = history;
         }

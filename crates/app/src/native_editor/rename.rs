@@ -31,7 +31,7 @@ enum RenameStage {
     Error(String),
 }
 
-struct PreparedRename {
+pub(super) struct PreparedRename {
     root: PathBuf,
     files: Vec<PreparedFile>,
     edit_count: usize,
@@ -480,7 +480,7 @@ fn edited_text(text: &str, edits: &[native_lsp::RenameTextEdit]) -> anyhow::Resu
     Ok(changed)
 }
 
-fn prepare_rename(
+pub(super) fn prepare_rename(
     root: &Path,
     edits: Vec<native_lsp::RenameFileEdit>,
 ) -> anyhow::Result<PreparedRename> {
@@ -555,7 +555,7 @@ fn staged_file(
     Ok(file)
 }
 
-fn apply_rename(prepared: PreparedRename) -> anyhow::Result<Vec<PathBuf>> {
+pub(super) fn apply_rename(prepared: PreparedRename) -> anyhow::Result<Vec<PathBuf>> {
     let canonical_root = std::fs::canonicalize(&prepared.root)?;
     let mut stages = Vec::new();
     for file in &prepared.files {

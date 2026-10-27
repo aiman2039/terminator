@@ -77,6 +77,7 @@ impl Fixture {
                 document: doc,
                 hunk,
                 kind,
+                lines: None,
             },
             kind == Kind::Unstage,
             &CancellationToken::new(),
@@ -427,5 +428,58 @@ fn expanding_one_gap_keeps_other_gaps_and_the_change_identity() {
             .unified
             .iter()
             .all(|line| !line.spans.iter().any(|span| span.text.starts_with("@@")))
+    );
+}
+
+async fn change_lines(
+    fixture: &Fixture,
+    doc: Arc<DiffDocument>,
+    kind: Kind,
+    old: &[usize],
+    new: &[usize],
+) -> Result<Outcome> {
+    execute(
+        &fixture.service,
+        Request::Hunk {
+            document: doc,
+            hunk: 0,
+            kind,
+            lines: Some(LineSelection {
+                old: old.iter().copied().collect(),
+                new: new.iter().copied().collect(),
+            }),
+        },
+        kind == Kind::Unstage,
+        &CancellationToken::new(),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn picked_lines_stage_unstage_and_discard_only_themselves() {
+    let fixture = Fixture::new("file.txt", Some("a\nold\nz\n"));
+    std::fs::write(fixture.absolute(), "a\nnew one\nnew two\nz\n").unwrap();
+    let doc = fixture.doc(false).await;
+    assert_eq!(doc.hunks.len(), 1);
+    // Stage only the first added line; the removal stays unstaged.
+    let outcome = change_lines(&fixture, doc, Kind::Stage, &[], &[1])
+        .await
+        .unwrap();
+    assert!(outcome.message.contains("1 line"), "{}", outcome.message);
+    assert_eq!(fixture.index(), "a\nold\nnew one\nz\n");
+    // Unstage it again by picking that line on the staged side.
+    let staged = fixture.doc(true).await;
+    change_lines(&fixture, staged, Kind::Unstage, &[], &[2])
+        .await
+        .unwrap();
+    assert_eq!(fixture.index(), "a\nold\nz\n");
+    // Discard only the second added line from the working tree.
+    let working = fixture.doc(false).await;
+    change_lines(&fixture, working, Kind::Discard, &[], &[2])
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fixture.absolute()).unwrap(),
+        "a\nnew one\nz\n"
     );
 }

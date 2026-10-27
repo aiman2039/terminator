@@ -167,8 +167,67 @@ pub(crate) enum Request {
         document: Arc<DiffDocument>,
         hunk: usize,
         kind: Kind,
+        /// Only these lines of the hunk (line-level staging); `None` is
+        /// the whole hunk.
+        lines: Option<LineSelection>,
     },
     Undo(Undo),
+}
+
+/// Lines picked inside one hunk: left-side (removed) and right-side
+/// (added) line indices.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LineSelection {
+    pub old: std::collections::BTreeSet<usize>,
+    pub new: std::collections::BTreeSet<usize>,
+}
+
+impl LineSelection {
+    pub fn is_empty(&self) -> bool {
+        self.old.is_empty() && self.new.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.old.len().saturating_add(self.new.len())
+    }
+}
+
+/// The hunk region rewritten with only the picked lines applied. Staging
+/// drops picked removals and adds picked additions to the left text;
+/// unstaging or discarding restores picked removals and drops picked
+/// additions from the right text. Unpicked lines stay as they were.
+fn partial_lines(doc: &DiffDocument, hunk: &Hunk, kind: Kind, picked: &LineSelection) -> String {
+    let left: Vec<&str> = doc.left_text.split_inclusive('\n').collect();
+    let right: Vec<&str> = doc.right_text.split_inclusive('\n').collect();
+    let old = hunk
+        .old
+        .clone()
+        .filter_map(|index| Some((index, *left.get(index)?)));
+    let new = hunk
+        .new
+        .clone()
+        .filter_map(|index| Some((index, *right.get(index)?)));
+    let mut region = String::new();
+    if kind == Kind::Stage {
+        region.extend(
+            old.filter(|(index, _)| !picked.old.contains(index))
+                .map(|(_, line)| line),
+        );
+        region.extend(
+            new.filter(|(index, _)| picked.new.contains(index))
+                .map(|(_, line)| line),
+        );
+    } else {
+        region.extend(
+            old.filter(|(index, _)| picked.old.contains(index))
+                .map(|(_, line)| line),
+        );
+        region.extend(
+            new.filter(|(index, _)| !picked.new.contains(index))
+                .map(|(_, line)| line),
+        );
+    }
+    region
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -211,7 +270,13 @@ fn replace_lines(
         .collect()
 }
 
-fn edit(source: &Source, doc: &DiffDocument, hunk: &Hunk, kind: Kind) -> Undo {
+fn edit(
+    source: &Source,
+    doc: &DiffDocument,
+    hunk: &Hunk,
+    kind: Kind,
+    lines: Option<&LineSelection>,
+) -> Undo {
     let index = kind != Kind::Discard;
     let before = match kind {
         Kind::Stage => Version {
@@ -230,10 +295,21 @@ fn edit(source: &Source, doc: &DiffDocument, hunk: &Hunk, kind: Kind) -> Undo {
             mode: source.mode,
         },
     };
-    let text = if kind == Kind::Stage {
-        replace_lines(&doc.left_text, &hunk.old, &doc.right_text, &hunk.new)
-    } else {
-        replace_lines(&doc.right_text, &hunk.new, &doc.left_text, &hunk.old)
+    let text = match lines.filter(|picked| !picked.is_empty()) {
+        Some(picked) => {
+            let region = partial_lines(doc, hunk, kind, picked);
+            let (base, range) = if kind == Kind::Stage {
+                (&doc.left_text, &hunk.old)
+            } else {
+                (&doc.right_text, &hunk.new)
+            };
+            let count = region.split_inclusive('\n').count();
+            replace_lines(base, range, &region, &(0..count))
+        }
+        None if kind == Kind::Stage => {
+            replace_lines(&doc.left_text, &hunk.old, &doc.right_text, &hunk.new)
+        }
+        None => replace_lines(&doc.right_text, &hunk.new, &doc.left_text, &hunk.old),
     };
     let (base_exists, base_mode) = match kind {
         Kind::Stage => (source.exists, source.mode),
@@ -463,6 +539,7 @@ pub(crate) async fn execute(
             document,
             hunk,
             kind,
+            lines,
         } => {
             ensure!(!document.read_only, "This diff is read-only");
             ensure!(
@@ -491,11 +568,19 @@ pub(crate) async fn execute(
                 .hunks
                 .get(hunk)
                 .context("This hunk is no longer available; refresh the diff")?;
-            let change = edit(source, &document, hunk, kind);
+            let change = edit(source, &document, hunk, kind, lines.as_ref());
             apply(service, &change, cancel).await?;
             Ok(Outcome {
                 undo: Some(change),
-                message: format!("{} complete", kind.label()),
+                message: match &lines {
+                    Some(picked) if !picked.is_empty() => format!(
+                        "{} complete for {} line{}",
+                        kind.label(),
+                        picked.len(),
+                        if picked.len() == 1 { "" } else { "s" }
+                    ),
+                    _ => format!("{} complete", kind.label()),
+                },
             })
         }
         Request::Undo(change) => {
