@@ -517,7 +517,7 @@ impl eframe::App for App {
         self.show_native_rename_dialog(&ctx);
         self.apply_browser_submit();
         self.reconcile_gui_resources();
-        self.sync_browsers(frame);
+        self.sync_browsers(&ctx, frame);
         // Floating panes render in their own OS windows after every dock
         // is checked back in, so a closed window can dock straight back.
         self.paint_floating(&ctx);

@@ -7398,7 +7398,6 @@ dependencies = [
  "terminator-sys",
  "terminator-updater",
  "tokio",
- "tokio-util",
  "url",
  "uuid",
  "wry",
@@ -7459,7 +7458,6 @@ dependencies = [
  "tempfile",
  "terminator-core",
  "terminator-git",
- "terminator-integrations",
  "tokio",
  "uuid",
  "vnc-rs",
@@ -7529,7 +7527,6 @@ dependencies = [
  "two-face",
  "unicode-width",
  "url",
- "walkdir",
 ]
 
 [[package]]

@@ -41,6 +41,9 @@ pub(crate) struct SyncInput<'a> {
     pub frame: &'a eframe::Frame,
     pub visible: &'a [VisibleBrowser],
     pub occluded: bool,
+    /// Screen rects of open egui popups and menus. Native views draw above
+    /// egui, so a pane under one of these hides until the popup closes.
+    pub covers: &'a [egui::Rect],
     pub data_dir: &'a Path,
 }
 
@@ -154,6 +157,7 @@ impl BrowserHost {
             frame,
             visible,
             occluded,
+            covers,
             data_dir,
         } = input;
         if occluded {
@@ -174,7 +178,7 @@ impl BrowserHost {
             }
             return;
         }
-        self.mount_visible(frame, visible, data_dir);
+        self.mount_visible(frame, visible, covers, data_dir);
         self.hide_unlisted(visible);
         self.evict(visible);
         self.pump_linux();
@@ -184,10 +188,11 @@ impl BrowserHost {
         &mut self,
         frame: &eframe::Frame,
         visible: &[VisibleBrowser],
+        covers: &[egui::Rect],
         data_dir: &Path,
     ) {
         for pane in visible {
-            if pane.rect.width() < 32.0 || pane.rect.height() < 32.0 {
+            if pane.rect.width() < 32.0 || pane.rect.height() < 32.0 || covered(pane.rect, covers) {
                 if let Some(hosted) = self.views.get(&pane.key) {
                     let _ = hosted.view.set_visible(false);
                 }
@@ -349,6 +354,12 @@ impl BrowserHost {
     }
 }
 
+/// Whether any popup rect overlaps the pane. Hidden panes stay listed, so
+/// they keep their page and are not evicted.
+fn covered(pane: egui::Rect, covers: &[egui::Rect]) -> bool {
+    covers.iter().any(|cover| cover.intersects(pane))
+}
+
 fn eviction_victim<'a>(
     mounted: impl Iterator<Item = (&'a str, Instant)>,
     listed: &[&str],
@@ -402,8 +413,18 @@ fn apply_store<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::eviction_victim;
+    use super::{covered, egui, eviction_victim};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn popups_hide_only_the_panes_they_overlap() {
+        let pane = egui::Rect::from_min_size(egui::pos2(0.0, 100.0), egui::vec2(400.0, 300.0));
+        let menu = egui::Rect::from_min_size(egui::pos2(300.0, 40.0), egui::vec2(200.0, 120.0));
+        let elsewhere = egui::Rect::from_min_size(egui::pos2(600.0, 0.0), egui::vec2(100.0, 80.0));
+        assert!(covered(pane, &[menu]));
+        assert!(!covered(pane, &[elsewhere]));
+        assert!(!covered(pane, &[]));
+    }
 
     #[test]
     fn eviction_only_removes_hidden_views() {

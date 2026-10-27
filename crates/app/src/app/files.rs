@@ -256,11 +256,23 @@ impl App {
             || self.rename_blocks_input()
     }
 
-    pub(crate) fn sync_browsers(&mut self, frame: &eframe::Frame) {
+    pub(crate) fn sync_browsers(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+        // Menus, context menus, and combo boxes paint on the foreground
+        // layer, which the native view would otherwise draw over.
+        let covers: Vec<egui::Rect> = ctx.memory(|memory| {
+            memory
+                .areas()
+                .visible_layer_ids()
+                .into_iter()
+                .filter(|layer| layer.order == egui::Order::Foreground)
+                .filter_map(|layer| memory.area_rect(layer.id))
+                .collect()
+        });
         self.browser_host.sync(browser_host::SyncInput {
             frame,
             visible: &self.visible_browsers,
             occluded: self.browser_covered(),
+            covers: &covers,
             data_dir: &self.paths.data,
         });
         for (key, url) in self.browser_host.take_opens() {
