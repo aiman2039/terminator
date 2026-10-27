@@ -399,6 +399,7 @@ pub fn initialize(id: &RequestId, process_id: u32, root: &Url) -> Vec<u8> {
                     "definition": { "linkSupport": true },
                     "rename": {},
                     "formatting": {},
+                    "inlayHint": {},
                     "codeAction": {
                         "codeActionLiteralSupport": {
                             "codeActionKind": {
@@ -538,6 +539,74 @@ pub fn formatting(id: &RequestId, uri: &Url) -> Vec<u8> {
             "options": { "tabSize": 4, "insertSpaces": true },
         }),
     )
+}
+
+/// One inlay hint: `label` is painted before the char at `position`
+/// (UTF-16, like every protocol position). Padding is folded into the
+/// label as spaces.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InlayHint {
+    pub position: Position,
+    pub label: String,
+}
+
+/// `textDocument/inlayHint` for lines `0..lines` (the whole document).
+#[must_use]
+pub fn inlay_hint(id: &RequestId, uri: &Url, lines: u32) -> Vec<u8> {
+    request(
+        id,
+        "textDocument/inlayHint",
+        serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "range": {
+                "start": { "line": 0, "character": 0 },
+                "end": { "line": lines, "character": 0 },
+            },
+        }),
+    )
+}
+
+/// Parse an `InlayHint[]` result, sorted by position. Labels may be a
+/// string or label parts; null or unrecognized shapes yield no hints.
+#[must_use]
+pub fn parse_inlay_hints(result: &Value) -> Vec<InlayHint> {
+    let Some(items) = result.as_array() else {
+        return Vec::new();
+    };
+    let mut hints: Vec<InlayHint> = items
+        .iter()
+        .filter_map(|item| {
+            let position = item.get("position")?;
+            let position = Position {
+                line: u32::try_from(position.get("line")?.as_u64()?).ok()?,
+                character: u32::try_from(position.get("character")?.as_u64()?).ok()?,
+            };
+            let text = match item.get("label")? {
+                Value::String(text) => text.clone(),
+                Value::Array(parts) => parts
+                    .iter()
+                    .filter_map(|part| part.get("value").and_then(Value::as_str))
+                    .collect(),
+                _ => return None,
+            };
+            let text = text.trim();
+            if text.is_empty() {
+                return None;
+            }
+            let pad = |key: &str| item.get(key).and_then(Value::as_bool) == Some(true);
+            let mut label = String::with_capacity(text.len().saturating_add(2));
+            if pad("paddingLeft") {
+                label.push(' ');
+            }
+            label.push_str(text);
+            if pad("paddingRight") {
+                label.push(' ');
+            }
+            Some(InlayHint { position, label })
+        })
+        .collect();
+    hints.sort_by_key(|hint| (hint.position.line, hint.position.character));
+    hints
 }
 
 /// Parse a `TextEdit[]` result (formatting); null means no changes.
@@ -1863,6 +1932,47 @@ mod tests {
         ]));
         assert_eq!(formatted.len(), 1);
         assert!(parse_text_edits(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn inlay_hints_parse_string_and_part_labels_in_position_order() {
+        let request = body_of(&inlay_hint(
+            &RequestId::Number(4),
+            &Url::parse("file:///tmp/a.rs").unwrap(),
+            12,
+        ));
+        assert_eq!(text(&request, "method"), "textDocument/inlayHint");
+        assert_eq!(request["params"]["range"]["end"]["line"], 12);
+        let result = serde_json::json!([
+            {
+                "position": { "line": 3, "character": 9 },
+                "label": [{ "value": "a" }, { "value": ":" }],
+                "paddingRight": true,
+            },
+            { "position": { "line": 1, "character": 5 }, "label": ": i32", "kind": 1 },
+            { "position": { "line": 2, "character": 0 }, "label": "  " },
+            { "position": { "line": 2 }, "label": "broken" },
+        ]);
+        assert_eq!(
+            parse_inlay_hints(&result),
+            [
+                InlayHint {
+                    position: Position {
+                        line: 1,
+                        character: 5
+                    },
+                    label: ": i32".into(),
+                },
+                InlayHint {
+                    position: Position {
+                        line: 3,
+                        character: 9
+                    },
+                    label: "a: ".into(),
+                },
+            ]
+        );
+        assert!(parse_inlay_hints(&Value::Null).is_empty());
     }
 
     #[test]

@@ -95,6 +95,10 @@ enum Pending {
         path: PathBuf,
         revision: u64,
     },
+    InlayHints {
+        path: PathBuf,
+        revision: u64,
+    },
     WorkspaceSymbols {
         generation: u64,
     },
@@ -206,6 +210,10 @@ pub struct LspManager {
     symbols_rev: std::collections::HashMap<PathBuf, u64>,
     /// Last empty outline answer per path (indexing retry gate).
     symbols_retry: HashMap<PathBuf, Instant>,
+    /// Inlay hints per path, with the buffer revision they describe.
+    inlay: HashMap<PathBuf, (u64, std::sync::Arc<[L::InlayHint]>)>,
+    /// Last empty or failed hints answer per path (indexing retry gate).
+    inlay_retry: HashMap<PathBuf, Instant>,
     workspace_symbol_query: String,
     /// `Some` limits `workspace/symbol` to servers for that project.
     /// `None` asks every ready server.
@@ -247,6 +255,8 @@ impl LspManager {
             symbols: std::collections::HashMap::new(),
             symbols_rev: std::collections::HashMap::new(),
             symbols_retry: HashMap::new(),
+            inlay: HashMap::new(),
+            inlay_retry: HashMap::new(),
             workspace_symbol_query: String::new(),
             workspace_symbol_root: None,
             workspace_symbol_generation: 0,
@@ -301,6 +311,8 @@ impl LspManager {
             self.symbols.clear();
             self.symbols_rev.clear();
             self.symbols_retry.clear();
+            self.inlay.clear();
+            self.inlay_retry.clear();
             self.search_revision = self.search_revision.wrapping_add(1);
         }
     }
@@ -532,6 +544,58 @@ impl LspManager {
                 revision,
             },
         );
+    }
+
+    /// Ask for inlay hints over a tracked buffer's `lines` lines, once per
+    /// submitted revision (like [`Self::request_symbols`]); empty or failed
+    /// answers are retried on a slow cadence while the server indexes.
+    pub fn request_inlay_hints(&mut self, path: &Path, lines: usize) {
+        let Some(doc) = self.docs.get(path) else {
+            return;
+        };
+        let (key, uri, revision) = (doc.server.clone(), doc.uri.clone(), doc.submitted);
+        if self
+            .inlay_retry
+            .get(path)
+            .is_some_and(|at| at.elapsed() < SYMBOLS_RETRY)
+            || self
+                .inlay
+                .get(path)
+                .is_some_and(|(answered, hints)| *answered == revision && !hints.is_empty())
+        {
+            return;
+        }
+        let Some(server) = self.servers.get_mut(&key) else {
+            return;
+        };
+        if !server.ready
+            || server
+                .pending
+                .values()
+                .any(|pending| matches!(pending, Pending::InlayHints { path: p, .. } if p == path))
+        {
+            return;
+        }
+        let L::RequestId::Number(number) = server.ids.next_id() else {
+            return;
+        };
+        let lines = u32::try_from(lines).unwrap_or(u32::MAX);
+        let _ = server
+            .inbox
+            .send(L::inlay_hint(&L::RequestId::Number(number), &uri, lines));
+        server.pending.insert(
+            number,
+            Pending::InlayHints {
+                path: path.to_owned(),
+                revision,
+            },
+        );
+    }
+
+    /// Latest inlay hints for `path` and the buffer revision they describe.
+    #[must_use]
+    pub fn inlay_hints(&self, path: &Path) -> Option<(u64, std::sync::Arc<[L::InlayHint]>)> {
+        self.inlay.get(path).cloned()
     }
 
     /// Seed a cached outline, standing in for a server answer.

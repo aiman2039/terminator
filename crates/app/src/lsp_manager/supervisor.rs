@@ -50,6 +50,8 @@ impl LspManager {
         self.symbols.clear();
         self.symbols_rev.clear();
         self.symbols_retry.clear();
+        self.inlay.clear();
+        self.inlay_retry.clear();
         self.search_revision = self.search_revision.wrapping_add(1);
     }
 

@@ -367,6 +367,18 @@ impl App {
                 },
             );
         }
+        if self.field_visible("Inlay hints", "inlay hints types parameters native lsp")
+            && self.settings_draft.editor_mode == EditorMode::Native
+        {
+            settings_controls::settings_row(
+                ui,
+                "Inlay hints",
+                "Show inferred types and parameter names inline (from the language server).",
+                |ui| {
+                    ui.checkbox(&mut self.settings_draft.inlay_hints, "Show inlay hints");
+                },
+            );
+        }
         for (language, label) in [
             ("rust", "Rust language server"),
             ("python", "Python language server"),

@@ -117,6 +117,8 @@ impl LspManager {
         let had_symbols = self.symbols.remove(path).is_some();
         self.symbols_rev.remove(path);
         self.symbols_retry.remove(path);
+        self.inlay.remove(path);
+        self.inlay_retry.remove(path);
         if had_symbols {
             self.search_revision = self.search_revision.wrapping_add(1);
         }

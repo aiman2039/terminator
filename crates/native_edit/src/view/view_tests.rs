@@ -1240,4 +1240,56 @@ mod tests {
         assert_eq!(engine.cursor().line, 0);
         assert!(highlight.folds().is_folded(0));
     }
+
+    #[test]
+    fn inlay_hints_push_later_text_right_but_not_the_caret_before_them() {
+        use crate::doc::Doc;
+        let caret_x = |col: usize, hints: Vec<crate::inlay::InlayHint>| {
+            let ctx = egui::Context::default();
+            let mut doc = Doc::new("let x = 1;\n");
+            let mut engine = VimEngine::new();
+            engine.set_modeless(true);
+            let _ = engine.place_cursor(&mut doc, 0, col);
+            let mut highlight = super::HighlightCache::default();
+            let options = super::SourceOptions {
+                vim: false,
+                autofocus: true,
+                inlay_hints: std::sync::Arc::new(hints),
+                ..super::SourceOptions::default()
+            };
+            let mut caret = None;
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    caret = show_source(
+                        ui,
+                        &mut doc,
+                        &mut engine,
+                        &options,
+                        &mut highlight,
+                        Language::Rust,
+                        "hints.rs",
+                    )
+                    .caret_rect;
+                });
+                output.textures_delta.clear();
+            }
+            caret.expect("caret painted").min.x
+        };
+        let hint = || {
+            vec![crate::inlay::InlayHint {
+                line: 0,
+                col: 5,
+                label: ": i32".into(),
+            }]
+        };
+        let advance = caret_x(1, Vec::new()) - caret_x(0, Vec::new());
+        // Before the hinted char the caret stays put; after it, the caret
+        // moves right by the hint's five cells.
+        assert!((caret_x(5, hint()) - caret_x(5, Vec::new())).abs() < 0.01);
+        let shifted = caret_x(6, hint()) - caret_x(6, Vec::new());
+        assert!(
+            (shifted - 5.0 * advance).abs() < 0.01,
+            "{shifted} vs {advance}"
+        );
+    }
 }

@@ -7,7 +7,7 @@ use super::keys::{
     source_focus_id,
 };
 use super::{BOLD_FAMILY, ITALIC_FAMILY};
-use crate::rows::{col_at_display_x, display_x, expand_tabs};
+use crate::rows::{RowCells, RowHint, display_x, expand_tabs, row_hints};
 use egui;
 use egui::{Color32, FontId, Pos2, Rect, Sense, Vec2};
 /// Worst severity on one buffer row, for the diagnostics gutter.
@@ -118,6 +118,8 @@ pub struct SourceOptions {
     pub change_marks: std::sync::Arc<Vec<ChangeMark>>,
     /// Theme colors for added / modified / deleted markers.
     pub change_colors: [Color32; 3],
+    /// Inlay hints, sorted by line and column (see [`crate::inlay`]).
+    pub inlay_hints: std::sync::Arc<Vec<crate::inlay::InlayHint>>,
     /// Take keyboard focus when nothing else holds it, so an opened file is
     /// immediately typeable (`IntelliJ` focuses the editor on open).
     pub autofocus: bool,
@@ -164,6 +166,7 @@ impl Default for SourceOptions {
                 Color32::from_rgb(0x4A, 0x7F, 0xC1),
                 Color32::from_rgb(0x8C, 0x8C, 0x8C),
             ],
+            inlay_hints: std::sync::Arc::new(Vec::new()),
         }
     }
 }
@@ -355,10 +358,12 @@ pub fn show_source<B: Buffer>(
             // Wide chars occupy two cells: resolve the display cell back to
             // a char column on the hit row.
             let row = visual_rows.get(row_index).or_else(|| visual_rows.last())?;
-            Some((
-                row.line,
-                row.start.saturating_add(col_at_display_x(&row.text, cells)),
-            ))
+            let hints = row_hints(&options.inlay_hints, row);
+            let geometry = RowCells {
+                text: &row.text,
+                hints: &hints,
+            };
+            Some((row.line, row.start.saturating_add(geometry.col_at(cells))))
         };
         let caret_before = engine.cursor();
         let click_modifiers = ui.input(|input| input.modifiers);
@@ -666,6 +671,11 @@ pub fn show_source<B: Buffer>(
             .take(last_row.saturating_sub(first_row))
         {
             let line = visual.line;
+            let hints = row_hints(&options.inlay_hints, visual);
+            let geometry = RowCells {
+                text: &visual.text,
+                hints: &hints,
+            };
             #[allow(clippy::cast_precision_loss)] // UI coordinate
             let y = origin.y + visual_line as f32 * row_height;
             if y + row_height < painter.clip_rect().top() || y > painter.clip_rect().bottom() {
@@ -814,8 +824,9 @@ pub fn show_source<B: Buffer>(
             {
                 // Char columns to display cells: wide chars shift every
                 // cell after them.
-                let start_cell = display_x(text, start_col.saturating_sub(visual.start));
-                let cells = display_x(text, end_col.saturating_sub(visual.start))
+                let start_cell = geometry.char_x(start_col.saturating_sub(visual.start));
+                let cells = geometry
+                    .caret_x(end_col.saturating_sub(visual.start))
                     .saturating_sub(start_cell);
                 #[allow(clippy::cast_precision_loss)] // UI coordinate
                 let start_x = origin.x + gutter + start_cell as f32 * advance;
@@ -829,8 +840,8 @@ pub fn show_source<B: Buffer>(
             }
             let cell_rect = |col: usize, cells: usize| {
                 let local = col.saturating_sub(visual.start);
-                let start = display_x(text, local);
-                let end = display_x(text, local.saturating_add(cells));
+                let start = geometry.char_x(local);
+                let end = geometry.caret_x(local.saturating_add(cells));
                 #[allow(clippy::cast_precision_loss)] // UI coordinate
                 let rect = Rect::from_min_size(
                     Pos2::new(origin.x + gutter + start as f32 * advance, y),
@@ -887,7 +898,15 @@ pub fn show_source<B: Buffer>(
             let cursor_here = cursor_visible && visual.owns_cursor(cursor.line, cursor.col);
             let local_col = cursor.col.saturating_sub(visual.start);
             let cell = cursor_here.then(|| text.chars().nth(local_col)).flatten();
-            let cursor_cells = cursor_here.then(|| display_x(text, local_col));
+            // A bar caret sits before a hint; a block covers the char after it.
+            let bar = engine.mode() == Mode::Insert || !options.vim;
+            let cursor_cells = cursor_here.then(|| {
+                if bar {
+                    geometry.caret_x(local_col)
+                } else {
+                    geometry.char_x(local_col)
+                }
+            });
             let spans: Vec<Span> = highlight
                 .line(line)
                 .iter()
@@ -905,6 +924,7 @@ pub fn show_source<B: Buffer>(
             RowPaint {
                 painter: &painter,
                 text,
+                hints: &hints,
                 spans: &spans,
                 x: origin.x + gutter,
                 y,
@@ -917,7 +937,7 @@ pub fn show_source<B: Buffer>(
             .paint();
             if visual.folded {
                 // `⋯` placeholder after a folded region's first line.
-                let at = display_x(text, text.chars().count()).saturating_add(1);
+                let at = geometry.char_x(text.chars().count()).saturating_add(1);
                 #[allow(clippy::cast_precision_loss)] // UI coordinate
                 let rect = Rect::from_min_size(
                     Pos2::new(origin.x + gutter + at as f32 * advance, y + 1.0),
@@ -973,7 +993,9 @@ pub fn show_source<B: Buffer>(
             if let Some(cells) = cursor_cells {
                 // A tab's block covers the cells up to its stop.
                 let cell_cells = if cell.is_some() {
-                    display_x(text, local_col.saturating_add(1)).saturating_sub(cells)
+                    geometry
+                        .caret_x(local_col.saturating_add(1))
+                        .saturating_sub(cells)
                 } else {
                     1
                 };
@@ -984,7 +1006,7 @@ pub fn show_source<B: Buffer>(
                     Vec2::new(advance, row_height),
                 ));
                 // Modeless carets are always a bar: they sit between chars.
-                if engine.mode() == Mode::Insert || !options.vim {
+                if bar {
                     painter.rect_filled(
                         Rect::from_min_size(Pos2::new(x, y), Vec2::new(2.0, row_height)),
                         0.0,
@@ -1045,6 +1067,7 @@ pub fn show_source<B: Buffer>(
                 RowPaint {
                     painter: &painter,
                     text: &header,
+                    hints: &[],
                     spans: highlight.line(*first),
                     x: origin.x + gutter,
                     y,
@@ -1439,9 +1462,14 @@ pub fn show_source<B: Buffer>(
                 .enumerate()
                 .find(|(_, row)| row.owns_cursor(landed.line, landed.col))
                 .map_or((landed.line, 0), |(index, row)| {
+                    let hints = row_hints(&options.inlay_hints, row);
+                    let geometry = RowCells {
+                        text: &row.text,
+                        hints: &hints,
+                    };
                     (
                         index,
-                        display_x(&row.text, landed.col.saturating_sub(row.start)),
+                        geometry.caret_x(landed.col.saturating_sub(row.start)),
                     )
                 });
             #[allow(clippy::cast_precision_loss)] // UI coordinate
@@ -1582,6 +1610,9 @@ fn line_col_ord(c: Cursor) -> (usize, usize) {
 struct RowPaint<'a> {
     painter: &'a egui::Painter,
     text: &'a str,
+    /// Inlay hints: painted as weak boxed text, pushing the chars after
+    /// them right (see [`RowCells`]).
+    hints: &'a [RowHint<'a>],
     spans: &'a [Span],
     x: f32,
     y: f32,
@@ -1604,15 +1635,46 @@ impl RowPaint<'_> {
         }
     }
 
+    /// Paint `piece` (row text from char `col`) in one style, split at
+    /// every hint inside it so the hint gaps open between chars.
+    fn piece(&self, col: usize, piece: &str, font: &FontId, color: Color32) {
+        let geometry = RowCells {
+            text: self.text,
+            hints: self.hints,
+        };
+        let len = piece.chars().count();
+        let end = col.saturating_add(len);
+        let mut breaks: Vec<usize> = self
+            .hints
+            .iter()
+            .map(|hint| hint.col)
+            .filter(|at| *at > col && *at < end)
+            .collect();
+        breaks.dedup();
+        breaks.push(end);
+        let mut chars = piece.chars();
+        let mut from = col;
+        for to in breaks {
+            let part: String = chars.by_ref().take(to.saturating_sub(from)).collect();
+            if !part.is_empty() {
+                #[allow(clippy::cast_precision_loss)] // UI coordinate
+                let x = self.x + geometry.char_x(from) as f32 * self.advance;
+                self.painter.text(
+                    Pos2::new(x, self.y),
+                    egui::Align2::LEFT_TOP,
+                    expand_tabs(&part, display_x(self.text, from)),
+                    font.clone(),
+                    color,
+                );
+            }
+            from = to;
+        }
+    }
+
     fn paint(&self) {
+        self.paint_hints();
         if self.spans.is_empty() {
-            self.painter.text(
-                Pos2::new(self.x, self.y),
-                egui::Align2::LEFT_TOP,
-                expand_tabs(self.text, 0),
-                self.font.clone(),
-                self.plain,
-            );
+            self.piece(0, self.text, self.font, self.plain);
             return;
         }
         let mut chars = self.text.chars();
@@ -1625,29 +1687,16 @@ impl RowPaint<'_> {
                 .take(span.start.saturating_sub(col))
                 .collect();
             if !gap.is_empty() {
-                let gap_cell = display_x(self.text, col);
-                #[allow(clippy::cast_precision_loss)] // UI coordinate
-                let gap_x = self.x + gap_cell as f32 * self.advance;
-                self.painter.text(
-                    Pos2::new(gap_x, self.y),
-                    egui::Align2::LEFT_TOP,
-                    expand_tabs(&gap, gap_cell),
-                    self.font.clone(),
-                    self.plain,
-                );
+                self.piece(col, &gap, self.font, self.plain);
                 col = span.start;
             }
             let piece: String = chars.by_ref().take(span.end.saturating_sub(col)).collect();
             if !piece.is_empty() {
                 let [red, green, blue] = span.color;
-                let piece_cell = display_x(self.text, col);
-                #[allow(clippy::cast_precision_loss)] // UI coordinate
-                let piece_x = self.x + piece_cell as f32 * self.advance;
-                self.painter.text(
-                    Pos2::new(piece_x, self.y),
-                    egui::Align2::LEFT_TOP,
-                    expand_tabs(&piece, piece_cell),
-                    self.font_for(span.style),
+                self.piece(
+                    col,
+                    &piece,
+                    &self.font_for(span.style),
                     Color32::from_rgb(red, green, blue),
                 );
             }
@@ -1655,15 +1704,56 @@ impl RowPaint<'_> {
         }
         let tail: String = chars.collect();
         if !tail.is_empty() {
-            let tail_cell = display_x(self.text, col);
+            self.piece(col, &tail, self.font, self.plain);
+        }
+    }
+
+    /// Hint labels in weak text on a faint box, in the gap before their
+    /// char.
+    fn paint_hints(&self) {
+        let geometry = RowCells {
+            text: self.text,
+            hints: self.hints,
+        };
+        let mut seen_at: Option<(usize, usize)> = None;
+        for hint in self.hints {
+            // Several hints at one column sit side by side.
+            let offset = match seen_at {
+                Some((at, cells)) if at == hint.col => cells,
+                _ => 0,
+            };
+            seen_at = Some((hint.col, offset.saturating_add(hint.cells)));
+            let cell = geometry.caret_x(hint.col).saturating_add(offset);
             #[allow(clippy::cast_precision_loss)] // UI coordinate
-            let tail_x = self.x + tail_cell as f32 * self.advance;
+            let rect = Rect::from_min_size(
+                Pos2::new(self.x + cell as f32 * self.advance, self.y + 1.0),
+                Vec2::new(hint.cells as f32 * self.advance, self.font.size + 2.0),
+            );
+            let label = hint.label.trim();
+            let lead = hint
+                .label
+                .len()
+                .saturating_sub(hint.label.trim_start().len());
+            #[allow(clippy::cast_precision_loss)] // UI coordinate
+            let box_rect = Rect::from_min_size(
+                Pos2::new(rect.left() + lead as f32 * self.advance, rect.top()),
+                Vec2::new(
+                    label
+                        .chars()
+                        .map(crate::rows::char_display_width)
+                        .sum::<usize>() as f32
+                        * self.advance,
+                    rect.height(),
+                ),
+            );
+            self.painter
+                .rect_filled(box_rect, 3.0, self.plain.gamma_multiply(0.08));
             self.painter.text(
-                Pos2::new(tail_x, self.y),
+                box_rect.left_top(),
                 egui::Align2::LEFT_TOP,
-                expand_tabs(&tail, tail_cell),
+                label,
                 self.font.clone(),
-                self.plain,
+                self.plain.gamma_multiply(0.5),
             );
         }
     }

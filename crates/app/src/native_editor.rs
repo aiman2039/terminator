@@ -119,6 +119,8 @@ pub struct NativeDoc {
     /// Gutter change blocks against the `HEAD` text, keyed by buffer
     /// revision and base identity, with their marks for the view.
     gutter: Option<GutterCache>,
+    /// Language-server inlay hints adopted for this buffer.
+    inlay: terminator_native_edit::inlay::InlayCache,
     holder: Option<String>,
     focused_view: Option<String>,
     /// The file uses CRLF line endings: the buffer holds `\n` only (so
@@ -217,6 +219,7 @@ impl NativeDoc {
             crlf: false,
             views: std::collections::HashMap::new(),
             gutter: None,
+            inlay: terminator_native_edit::inlay::InlayCache::default(),
             holder: None,
             focused_view: None,
             dirty_memo: std::cell::Cell::new((0, false)),
@@ -814,6 +817,12 @@ impl App {
         // before the buffer borrow below begins.
         let marks: Vec<DiagnosticMark> = self.lsp.row_marks(path);
         let problems = self.lsp.problems_for(path);
+        let inlay_answer = self
+            .state
+            .settings
+            .inlay_hints
+            .then(|| self.lsp.inlay_hints(path))
+            .flatten();
         let remote_snapshot = crate::remote_ui::is_snapshot(&self.paths.data, path);
         // The find bar is checked out while this view borrows the buffer.
         let mut find = if self.find_bar.as_ref().is_some_and(|bar| bar.path == path) {
@@ -1097,6 +1106,16 @@ impl App {
             // the per-type default: Markdown wraps, code does not.
             let soft_wrap = doc.engine.wrap().unwrap_or(is_markdown);
             let squiggles = terminator_native_edit::view::squiggles(&*buffer, &problems);
+            let inlay_hints = match &inlay_answer {
+                Some((revision, hints)) => {
+                    doc.inlay.adopt(&*buffer, *revision, hints);
+                    doc.inlay.visible(&*buffer)
+                }
+                None => {
+                    doc.inlay.clear();
+                    std::sync::Arc::new(Vec::new())
+                }
+            };
             let revision_before = buffer.revision();
             // Gutter changes against HEAD, once per edit (or new base).
             let (gutter_hunks, change_marks) = match &git_base {
@@ -1190,6 +1209,7 @@ impl App {
                         popup_keys,
                         change_marks,
                         change_colors,
+                        inlay_hints,
                         ..SourceOptions::default()
                     },
                     &mut doc.highlight,
@@ -1658,6 +1678,15 @@ impl App {
             });
         }
         self.native_lsp_sync(path, language);
+        if self.state.settings.inlay_hints
+            && let Some(lines) = self
+                .native_docs
+                .get(path)
+                .and_then(|doc| doc.doc.as_ref())
+                .map(|buffer| buffer.line_count())
+        {
+            self.lsp.request_inlay_hints(path, lines);
+        }
         if let Some((position, cursor)) = hover_at {
             self.lsp.request_hover(path, position, cursor);
         }

@@ -246,10 +246,126 @@ pub fn col_at_display_x(text: &str, x: usize) -> usize {
     col
 }
 
+/// An inline hint on one row: `label` is painted before the char at
+/// row-local column `col` and takes `cells` display cells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowHint<'a> {
+    pub col: usize,
+    pub cells: usize,
+    pub label: &'a str,
+}
+
+/// The hints of `hints` (sorted by line and column) that fall on `row`,
+/// in row-local columns. A hint at a wrap break belongs to the next row;
+/// one at the end of the line to its last row.
+#[must_use]
+pub fn row_hints<'a>(hints: &'a [crate::inlay::InlayHint], row: &VisualRow) -> Vec<RowHint<'a>> {
+    let first = hints.partition_point(|hint| (hint.line, hint.col) < (row.line, row.start));
+    hints
+        .get(first..)
+        .unwrap_or_default()
+        .iter()
+        .take_while(|hint| hint.line == row.line)
+        .filter(|hint| hint.col < row.end || (hint.col == row.end && row.end == row.line_len))
+        .map(|hint| RowHint {
+            col: hint.col.saturating_sub(row.start),
+            cells: hint.label.chars().map(char_display_width).sum(),
+            label: &hint.label,
+        })
+        .collect()
+}
+
+/// Display geometry of one row with its inline hints: a hint pushes the
+/// char after it, and everything further right, by its width. Tab stops
+/// still count text cells only, so a hint never changes a tab's width.
+pub struct RowCells<'a> {
+    pub text: &'a str,
+    pub hints: &'a [RowHint<'a>],
+}
+
+impl RowCells<'_> {
+    fn shift(&self, col: usize, inclusive: bool) -> usize {
+        self.hints
+            .iter()
+            .filter(|hint| hint.col < col || (inclusive && hint.col == col))
+            .map(|hint| hint.cells)
+            .sum()
+    }
+
+    /// Cell where the char at `col` is painted (after any hint before it).
+    #[must_use]
+    pub fn char_x(&self, col: usize) -> usize {
+        display_x(self.text, col).saturating_add(self.shift(col, true))
+    }
+
+    /// Cell of a caret before `col`, which is also where a span ending at
+    /// `col` ends: a hint before the char stays right of the caret.
+    #[must_use]
+    pub fn caret_x(&self, col: usize) -> usize {
+        display_x(self.text, col).saturating_add(self.shift(col, false))
+    }
+
+    /// Char column at display cell `x`; a click on a hint lands before the
+    /// char it annotates.
+    #[must_use]
+    pub fn col_at(&self, x: usize) -> usize {
+        let (mut base, mut shift) = (0usize, 0usize);
+        let mut col = 0usize;
+        for c in self.text.chars() {
+            for hint in self.hints.iter().filter(|hint| hint.col == col) {
+                shift = shift.saturating_add(hint.cells);
+                if base.saturating_add(shift) > x {
+                    return col;
+                }
+            }
+            let next = advance_cell(base, c);
+            if next.saturating_add(shift) > x {
+                return col;
+            }
+            base = next;
+            col = col.saturating_add(1);
+        }
+        col
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::doc::Doc;
+
+    #[test]
+    fn hints_shift_the_chars_after_them_but_not_the_caret_before() {
+        let hints = [RowHint {
+            col: 1,
+            cells: 5,
+            label: ": i32",
+        }];
+        let row = RowCells {
+            text: "x = 1",
+            hints: &hints,
+        };
+        assert_eq!(row.caret_x(1), 1);
+        assert_eq!(row.char_x(1), 6);
+        assert_eq!(row.char_x(0), 0);
+        assert_eq!(row.caret_x(2), 7);
+        // Clicks on the hint land before the char it annotates.
+        assert_eq!(row.col_at(3), 1);
+        assert_eq!(row.col_at(6), 1);
+        assert_eq!(row.col_at(7), 2);
+        assert_eq!(row.col_at(0), 0);
+        assert_eq!(row.col_at(99), 5);
+        // Tab stops ignore hint cells.
+        let tabbed = RowCells {
+            text: "a\tb",
+            hints: &[RowHint {
+                col: 1,
+                cells: 2,
+                label: "  ",
+            }],
+        };
+        assert_eq!(tabbed.char_x(2), TAB_WIDTH + 2);
+    }
 
     #[test]
     fn tabs_advance_to_the_next_tab_stop() {

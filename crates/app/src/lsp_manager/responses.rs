@@ -134,6 +134,22 @@ impl LspManager {
                 }
                 self.symbols_rev.insert(path, revision);
             }
+            Some(Pending::InlayHints { path, revision }) => {
+                // A failed answer ("content modified" while indexing) keeps
+                // the previous hints; it and an empty answer are asked
+                // again after a pause.
+                let hints = error
+                    .is_none()
+                    .then(|| L::parse_inlay_hints(&result.unwrap_or(serde_json::Value::Null)));
+                if hints.as_ref().is_none_or(Vec::is_empty) {
+                    self.inlay_retry.insert(path.clone(), Instant::now());
+                } else {
+                    self.inlay_retry.remove(&path);
+                }
+                if let Some(hints) = hints {
+                    self.inlay.insert(path, (revision, hints.into()));
+                }
+            }
             Some(Pending::WorkspaceSymbols { generation }) => {
                 if generation == self.workspace_symbol_generation {
                     let hits =

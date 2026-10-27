@@ -999,3 +999,61 @@ async fn live_rust_analyzer_format_and_code_action() {
     assert!(inserted.contains("i32"), "{inserted:?}");
     manager.prune(&std::collections::HashSet::new());
 }
+
+/// Live inlay hints against rust-analyzer (self-skips): an inferred
+/// `let` gets a `: i32` type hint right after its name, and a call gets
+/// parameter-name hints.
+#[tokio::test]
+async fn live_rust_analyzer_inlay_hints() {
+    let path_env = std::env::var_os("PATH")
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if L::find_server(&["rust-analyzer"], &path_env).is_none() {
+        eprintln!("SKIP: rust-analyzer not on PATH");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("proj");
+    std::fs::create_dir_all(root.join("src")).expect("mkdir");
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"proj\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    )
+    .expect("manifest");
+    let main = "fn add(left: i32, right: i32) -> i32 { left + right }\nfn main() {\n    let total = add(1, 2);\n    let _ = total;\n}\n";
+    let file = root.join("src/main.rs");
+    std::fs::write(&file, main).expect("main");
+    let mut manager = LspManager::new();
+    assert!(manager.sync_doc(&file, Language::Rust, 1));
+    manager.submit_text(&file, Language::Rust, 1, main);
+    let start = Instant::now();
+    let hints = loop {
+        assert!(start.elapsed() < Duration::from_secs(90), "no inlay hints");
+        manager.request_inlay_hints(&file, 5);
+        manager.poll();
+        if let Some((revision, hints)) = manager.inlay_hints(&file)
+            && hints.iter().any(|hint| hint.label.contains("i32"))
+        {
+            assert_eq!(revision, 1);
+            break hints;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let typed = hints
+        .iter()
+        .find(|hint| hint.label.contains("i32"))
+        .expect("type hint");
+    assert_eq!(
+        typed.position,
+        L::Position {
+            line: 2,
+            character: 13
+        },
+        "{hints:?}"
+    );
+    assert!(
+        hints.iter().any(|hint| hint.label.contains("left")),
+        "{hints:?}"
+    );
+    manager.prune(&std::collections::HashSet::new());
+}

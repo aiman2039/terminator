@@ -220,6 +220,8 @@ pub struct Settings {
     pub editor_close_timeout_secs: u64,
     pub diff_split_default: bool,
     pub native_vim: bool,
+    /// Inline type and parameter-name hints from the language server.
+    pub inlay_hints: bool,
     pub keybindings: std::collections::BTreeMap<String, String>,
 }
 impl Default for Settings {
@@ -268,6 +270,7 @@ impl Default for Settings {
             editor_close_timeout_secs: 1,
             diff_split_default: false,
             native_vim: true,
+            inlay_hints: true,
             keybindings: [
                 ("new_terminal".into(), "command+T".into()),
                 ("open_file".into(), "command+O".into()),
