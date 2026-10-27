@@ -393,15 +393,17 @@ impl Shared {
                 editor,
             } => {
                 return Ok(Response::Created(self.create(
-                    project,
-                    cwd,
-                    file,
-                    line,
-                    column,
-                    if editor {
-                        Launch::Editor
-                    } else {
-                        Launch::Shell
+                    super::sessions::CreateInput {
+                        project,
+                        cwd,
+                        file,
+                        line,
+                        column,
+                        launch: if editor {
+                            Launch::Editor
+                        } else {
+                            Launch::Shell
+                        },
                     },
                 )?));
             }
@@ -412,12 +414,14 @@ impl Shared {
                 staged,
             } => {
                 return Ok(Response::Created(self.create(
-                    project,
-                    Some(cwd),
-                    Some(path),
-                    None,
-                    None,
-                    Launch::Review { staged },
+                    super::sessions::CreateInput {
+                        project,
+                        cwd: Some(cwd),
+                        file: Some(path),
+                        line: None,
+                        column: None,
+                        launch: Launch::Review { staged },
+                    },
                 )?));
             }
             Request::ProbeRemoteProject { project } => {

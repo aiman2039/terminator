@@ -110,13 +110,21 @@ pub(crate) async fn with_sftp<T>(
 
 /// Uploads the regular file `local` to the absolute remote path `remote`.
 /// Fails, without replacing anything, when `remote` already exists.
-pub(crate) async fn upload(
-    sftp: &Sftp,
-    local: &Path,
-    remote: &str,
-    id: &str,
-    progress: &dyn Progress,
-) -> Result<u64> {
+pub(crate) struct UploadInput<'a> {
+    pub sftp: &'a Sftp,
+    pub local: &'a Path,
+    pub remote: &'a str,
+    pub id: &'a str,
+    pub progress: &'a dyn Progress,
+}
+pub(crate) async fn upload(input: UploadInput<'_>) -> Result<u64> {
+    let UploadInput {
+        sftp,
+        local,
+        remote,
+        id,
+        progress,
+    } = input;
     ensure!(
         sftp.support_hardlink() && sftp.support_fsync(),
         "Server must support hard-link publication and fsync for strict SFTP uploads"

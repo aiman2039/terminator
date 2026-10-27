@@ -85,13 +85,21 @@ fn check_local_download(local: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn run(
-    project: &RemoteProject,
-    control: Option<&Path>,
-    id: &str,
-    operation: &Operation,
-    progress: &dyn super::transfer::Progress,
-) -> Result<()> {
+struct RunInput<'a> {
+    project: &'a RemoteProject,
+    control: Option<&'a Path>,
+    id: &'a str,
+    operation: &'a Operation,
+    progress: &'a dyn super::transfer::Progress,
+}
+async fn run(input: RunInput<'_>) -> Result<()> {
+    let RunInput {
+        project,
+        control,
+        id,
+        operation,
+        progress,
+    } = input;
     super::transfer::with_sftp(&project.ssh, control, async |sftp| {
         let mut fs = sftp.fs();
         match operation {
@@ -110,7 +118,14 @@ async fn run(
                     .context("Remote path must be UTF-8")?
                     .to_owned();
                 let remote = destination(&directory, local)?;
-                super::transfer::upload(sftp, local, &remote, id, progress).await?;
+                super::transfer::upload(super::transfer::UploadInput {
+                    sftp,
+                    local,
+                    remote: &remote,
+                    id,
+                    progress,
+                })
+                .await?;
             }
             Operation::Download { path, local } => {
                 let actual = super::files::contained(&mut fs, project, path).await?;
@@ -133,26 +148,7 @@ impl Shared {
         operation: Operation,
     ) -> Result<Reply> {
         project.validate()?;
-        let (upload, name, remote_dir) = match &operation {
-            Operation::Upload { local, remote_dir } => {
-                ensure!(local.is_absolute(), "Local upload path must be absolute");
-                terminator_core::remote::validate_relative(remote_dir)?;
-                let name = local
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .context("Upload source needs a UTF-8 file name")?;
-                terminator_core::remote::validate_file_name(name)?;
-                (true, name.to_owned(), remote_dir.clone())
-            }
-            Operation::Download { path, local } => {
-                terminator_core::remote::validate_relative(path)?;
-                ensure!(!path.is_empty(), "Choose a remote file to download");
-                check_local_download(local)?;
-                let name = path.rsplit('/').next().unwrap_or(path).to_owned();
-                (false, name, String::new())
-            }
-            _ => anyhow::bail!("Not a transfer operation"),
-        };
+        let (upload, name, remote_dir) = Self::validate_transfer_operation(&operation)?;
         let status = TransferStatus {
             id: terminator_core::id(),
             upload,
@@ -179,16 +175,16 @@ impl Shared {
                     runtime.block_on(async {
                         tokio::time::timeout(
                             TIMEOUT,
-                            run(
-                                &project,
-                                control.as_deref(),
-                                &id,
-                                &operation,
-                                &Recorder {
+                            run(RunInput {
+                                project: &project,
+                                control: control.as_deref(),
+                                id: &id,
+                                operation: &operation,
+                                progress: &Recorder {
                                     shared: &shared,
                                     id: &id,
                                 },
-                            ),
+                            }),
                         )
                         .await
                         .context("SFTP transfer timed out; publication state is unknown; check the destination before retrying")?
@@ -212,6 +208,31 @@ impl Shared {
             return Err(error).context("Cannot start the transfer");
         }
         Ok(Reply::Transfer(status))
+    }
+    fn validate_transfer_operation(
+        operation: &Operation,
+    ) -> Result<(bool, String, String)> {
+        let (upload, name, remote_dir) = match operation {
+            Operation::Upload { local, remote_dir } => {
+                ensure!(local.is_absolute(), "Local upload path must be absolute");
+                terminator_core::remote::validate_relative(remote_dir)?;
+                let name = local
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .context("Upload source needs a UTF-8 file name")?;
+                terminator_core::remote::validate_file_name(name)?;
+                (true, name.to_owned(), remote_dir.clone())
+            }
+            Operation::Download { path, local } => {
+                terminator_core::remote::validate_relative(path)?;
+                ensure!(!path.is_empty(), "Choose a remote file to download");
+                check_local_download(local)?;
+                let name = path.rsplit('/').next().unwrap_or(path).to_owned();
+                (false, name, String::new())
+            }
+            _ => anyhow::bail!("Not a transfer operation"),
+        };
+        Ok((upload, name, remote_dir))
     }
     pub(crate) fn remote_transfer_status(&self, project: &str, id: &str) -> Result<Reply> {
         Ok(Reply::Transfer(

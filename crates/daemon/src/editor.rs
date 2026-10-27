@@ -3,14 +3,23 @@ use portable_pty::CommandBuilder;
 use std::{ffi::OsString, path::Path};
 use terminator_core::*;
 
-pub fn prepare(
-    paths: &Paths,
-    sid: &str,
-    settings: &Settings,
-    file: &Path,
-    line: Option<u32>,
-    column: Option<u32>,
-) -> Result<CommandBuilder> {
+pub struct PrepareInput<'a> {
+    pub paths: &'a Paths,
+    pub sid: &'a str,
+    pub settings: &'a Settings,
+    pub file: &'a Path,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+pub fn prepare(input: PrepareInput<'_>) -> Result<CommandBuilder> {
+    let PrepareInput {
+        paths,
+        sid,
+        settings,
+        file,
+        line,
+        column,
+    } = input;
     let editor = find_executable(&settings.editor_program).context(
         "Editor executable not found; install Neovim or select another editor in Settings",
     )?;

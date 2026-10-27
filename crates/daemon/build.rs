@@ -66,11 +66,7 @@ fn write_if_changed(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     fs::write(path, contents)
 }
 
-fn run() -> Result<(), Box<dyn Error>> {
-    let root = without_verbatim_prefix(Path::new("../../vendor/codediff.nvim").canonicalize()?);
-    let out = std::path::PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?);
-    let source = root.join("libvscode-diff");
-    // Watch runtime directories so added and removed assets update the manifest.
+fn watch_inputs(root: &Path, source: &Path) -> Result<(), Box<dyn Error>> {
     for path in [
         root.join("VERSION"),
         root.join("lua"),
@@ -79,10 +75,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     ] {
         println!("cargo:rerun-if-changed={}", path.display());
     }
-    // Include utf8proc_data.c and headers, but exclude documentation and tests.
     let mut native_inputs = Vec::new();
     for directory in ["src", "include", "vendor"] {
-        collect(&source, &source.join(directory), &mut native_inputs)?;
+        collect(source, &source.join(directory), &mut native_inputs)?;
     }
     for (_, path) in native_inputs {
         if matches!(
@@ -92,17 +87,60 @@ fn run() -> Result<(), Box<dyn Error>> {
             println!("cargo:rerun-if-changed={path}");
         }
     }
+    Ok(())
+}
+fn library_extension(target_os: &str) -> &'static str {
+    match target_os {
+        "macos" => "dylib",
+        "windows" => "dll",
+        _ => "so",
+    }
+}
+fn verify_macos_arch(library: &Path, ext: &str) -> Result<(), Box<dyn Error>> {
+    if ext != "dylib" {
+        return Ok(());
+    }
+    let arch = match env::var("CARGO_CFG_TARGET_ARCH")?.as_str() {
+        "aarch64" => "arm64",
+        "x86_64" => "x86_64",
+        arch => return Err(format!("Unsupported macOS architecture: {arch}").into()),
+    };
+    let status = Command::new("lipo")
+        .arg(library)
+        .args(["-verify_arch", arch])
+        .status()
+        .map_err(|error| format!("lipo is required: {error}"))?;
+    if !status.success() {
+        return Err("Embedded CodeDiff must match the daemon architecture".into());
+    }
+    Ok(())
+}
+fn write_assets(root: &Path, out: &Path, ext: &str, library: &Path) -> Result<(), Box<dyn Error>> {
+    let mut entries = vec![];
+    collect(root, &root.join("lua"), &mut entries)?;
+    collect(root, &root.join("plugin"), &mut entries)?;
+    entries.push(("VERSION".into(), utf8_path(&root.join("VERSION"))?));
+    entries.push((format!("libvscode_diff.{ext}"), utf8_path(library)?));
+    let mut generated = String::from("const ASSETS: &[(&str, &[u8])] = &[\n");
+    for (name, path) in entries {
+        generated.push_str(&format!("({name:?}, include_bytes!({path:?})),\n"));
+    }
+    generated.push_str("];\n");
+    write_if_changed(&out.join("review_assets.rs"), generated.as_bytes())?;
+    Ok(())
+}
+fn run() -> Result<(), Box<dyn Error>> {
+    let root = without_verbatim_prefix(Path::new("../../vendor/codediff.nvim").canonicalize()?);
+    let out = std::path::PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?);
+    let source = root.join("libvscode-diff");
+    watch_inputs(&root, &source)?;
     let version = fs::read_to_string(root.join("VERSION"))?;
     write_if_changed(
         &out.join("version.h"),
         format!("#define VSCODE_DIFF_VERSION {:?}\n", version.trim()).as_bytes(),
     )?;
     let target_os = env::var("CARGO_CFG_TARGET_OS")?;
-    let ext = match target_os.as_str() {
-        "macos" => "dylib",
-        "windows" => "dll",
-        _ => "so",
-    };
+    let ext = library_extension(&target_os);
     let library = out.join(format!("libvscode_diff.{ext}"));
     let compiler = cc::Build::new().get_compiler();
     let mut cmd = compiler.to_command();
@@ -169,33 +207,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     if !status.success() {
         return Err("CodeDiff native build failed".into());
     }
-    if ext == "dylib" {
-        let arch = match env::var("CARGO_CFG_TARGET_ARCH")?.as_str() {
-            "aarch64" => "arm64",
-            "x86_64" => "x86_64",
-            arch => return Err(format!("Unsupported macOS architecture: {arch}").into()),
-        };
-        let status = Command::new("lipo")
-            .arg(&library)
-            .args(["-verify_arch", arch])
-            .status()
-            .map_err(|error| format!("lipo is required: {error}"))?;
-        if !status.success() {
-            return Err("Embedded CodeDiff must match the daemon architecture".into());
-        }
-    }
-    let mut entries = vec![];
-    collect(&root, &root.join("lua"), &mut entries)?;
-    collect(&root, &root.join("plugin"), &mut entries)?;
-    entries.push(("VERSION".into(), utf8_path(&root.join("VERSION"))?));
-    entries.push((format!("libvscode_diff.{ext}"), utf8_path(&library)?));
-    let mut generated = String::from("const ASSETS: &[(&str, &[u8])] = &[\n");
-    for (name, path) in entries {
-        generated.push_str(&format!("({name:?}, include_bytes!({path:?})),\n"));
-    }
-    generated.push_str("];\n");
-    write_if_changed(&out.join("review_assets.rs"), generated.as_bytes())?;
-    Ok(())
+    verify_macos_arch(&library, ext)?;
+    write_assets(&root, &out, ext, &library)
 }
 
 fn main() {

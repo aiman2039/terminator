@@ -76,6 +76,129 @@ fn snapshot_frames(snapshot: &[u8]) -> Vec<Response> {
         .collect()
 }
 
+fn authenticated(env: &Envelope, shared: &Shared) -> bool {
+    if env.auth == shared.auth {
+        return true;
+    }
+    match &env.request {
+        Request::Hook(e) => shared
+            .runtime(&e.terminal_session_id)
+            .is_ok_and(|r| relock(&r).token == env.auth),
+        Request::ShellCommand { session }
+        | Request::ShellPrompt { session, .. }
+        | Request::Cwd { session, .. }
+        | Request::TerminalNotify { session, .. } => shared
+            .runtime(session)
+            .is_ok_and(|r| relock(&r).token == env.auth),
+        _ => false,
+    }
+}
+fn prepare_snapshot(env: &Envelope, shared: &Shared, stream: &mut transport::Stream) -> Result<bool> {
+    if !matches!(env.request, Request::Snapshot) {
+        return Ok(false);
+    }
+    let executable = std::env::current_exe().ok();
+    let helper = &shared.helper.executable;
+    let available = executable_available(helper);
+    let mut state = relock(&shared.state);
+    if state.daemon_executable != executable
+        || state.attachment_helper_executable.as_ref() != Some(helper)
+        || state.attachment_helper_available != Some(available)
+    {
+        state.daemon_executable = executable;
+        state.attachment_helper_executable = Some(helper.clone());
+        state.attachment_helper_available = Some(available);
+        state.revision = state.revision.saturating_add(1);
+    }
+    presence::expire_observations(&mut state, now());
+    if let Some(hint) = &env.snapshot_hint
+        && hint == &state.snapshot_hint()
+    {
+        write_frame(stream, &Response::Unchanged)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+struct ServeAttachInput {
+    session: String,
+    rows: u16,
+    cols: u16,
+}
+fn serve_attach(stream: &mut transport::Stream, shared: &Arc<Shared>, input: ServeAttachInput) -> Result<()> {
+    let ServeAttachInput { session, rows, cols } = input;
+    let _disconnect = Disconnect(stream.try_clone()?);
+    let (rt, rx, snapshot) = match attach_setup(shared, &session, rows, cols) {
+        Ok(setup) => setup,
+        Err(error) => return Err(reject(stream, error)),
+    };
+    for frame in snapshot_frames(&snapshot) {
+        write_frame(stream, &frame)?;
+    }
+    stream.set_read_timeout(None)?;
+    let mut input_stream = stream.try_clone()?;
+    let input_disconnect = Disconnect(input_stream.try_clone()?);
+    let input_rt = Arc::clone(&rt);
+    let input_shared = Arc::clone(shared);
+    let session_id = session.clone();
+    thread::spawn(move || {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _disconnect = input_disconnect;
+            while let Ok(req) = read_frame::<Request>(&mut input_stream) {
+                match req {
+                    Request::Input { data } => {
+                        if let Ok(bytes) = B64.decode(data)
+                            && input_shared.forward_input(&input_rt, &bytes).is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Request::Resize { rows, cols }
+                        if rows > 0 && cols > 0 && rows <= 500 && cols <= 1000 =>
+                    {
+                        let mut r = relock(&input_rt);
+                        let _ = r.master.resize(PtySize {
+                            rows,
+                            cols,
+                            pixel_width: 0,
+                            pixel_height: 0,
+                        });
+                        r.parser.screen_mut().set_size(rows, cols);
+                        drop(r);
+                        let mut s = relock(&input_shared.state);
+                        if let Some(rec) = s.sessions.iter_mut().find(|s| s.id == session_id) {
+                            rec.rows = rows;
+                            rec.cols = cols;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+        }));
+    });
+    while let Ok(frame) = rx.recv_timeout(Duration::from_secs(2)) {
+        write_frame(stream, &frame)?;
+        if matches!(frame, Response::End) {
+            return Ok(());
+        }
+    }
+    if !relock(&rt).ended {
+        loop {
+            match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(frame) => {
+                    write_frame(stream, &frame)?;
+                    if matches!(frame, Response::End) {
+                        break;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    write_frame(stream, &Response::Ok)?;
+                }
+                Err(_) => break,
+            }
+        }
+    }
+    Ok(())
+}
 pub(crate) fn serve(mut stream: transport::Stream, shared: Arc<Shared>) -> Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
@@ -90,146 +213,29 @@ pub(crate) fn serve(mut stream: transport::Stream, shared: Arc<Shared>) -> Resul
             ),
         ));
     }
-    let authenticated = if env.auth == shared.auth {
-        true
-    } else {
-        match &env.request {
-            Request::Hook(e) => shared
-                .runtime(&e.terminal_session_id)
-                .is_ok_and(|r| relock(&r).token == env.auth),
-            Request::ShellCommand { session }
-            | Request::ShellPrompt { session, .. }
-            | Request::Cwd { session, .. }
-            | Request::TerminalNotify { session, .. } => shared
-                .runtime(session)
-                .is_ok_and(|r| relock(&r).token == env.auth),
-            _ => false,
-        }
-    };
-    if !authenticated {
+    if !authenticated(&env, &shared) {
         return Err(reject(&mut stream, anyhow!("Authentication failed")));
     }
     if matches!(env.request, Request::VncFrame { .. }) && env.snapshot_chunks {
         stream.set_write_timeout(Some(Duration::from_secs(30)))?;
     }
-    if matches!(env.request, Request::Snapshot) {
-        let executable = std::env::current_exe().ok();
-        let helper = &shared.helper.executable;
-        let available = executable_available(helper);
-        let mut state = relock(&shared.state);
-        if state.daemon_executable != executable
-            || state.attachment_helper_executable.as_ref() != Some(helper)
-            || state.attachment_helper_available != Some(available)
-        {
-            state.daemon_executable = executable;
-            state.attachment_helper_executable = Some(helper.clone());
-            state.attachment_helper_available = Some(available);
-            state.revision = state.revision.saturating_add(1);
-        }
-        presence::expire_observations(&mut state, now());
-        if let Some(hint) = &env.snapshot_hint
-            && hint == &state.snapshot_hint()
-        {
-            write_frame(&mut stream, &Response::Unchanged)?;
-            return Ok(());
-        }
+    if prepare_snapshot(&env, &shared, &mut stream)? {
+        return Ok(());
     }
-    if let Request::Attach {
-        session,
-        rows,
-        cols,
-    } = env.request
-    {
-        let _disconnect = Disconnect(stream.try_clone()?);
-        let (rt, rx, snapshot) = match attach_setup(&shared, &session, rows, cols) {
-            Ok(setup) => setup,
-            Err(error) => return Err(reject(&mut stream, error)),
-        };
-        // A slow client must not hold the runtime lock: that would stall the
-        // PTY reader and every request that locks state before the runtime.
-        for frame in snapshot_frames(&snapshot) {
-            write_frame(&mut stream, &frame)?;
-        }
-        stream.set_read_timeout(None)?;
-        let mut input = stream.try_clone()?;
-        let input_disconnect = Disconnect(input.try_clone()?);
-        let input_rt = Arc::clone(&rt);
-        let input_shared = Arc::clone(&shared);
-        let session_id = session.clone();
-        thread::spawn(move || {
-            // Same containment as the connection thread: input handling
-            // must never take the daemon down with a misbehaving client.
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _disconnect = input_disconnect;
-                while let Ok(req) = read_frame::<Request>(&mut input) {
-                    match req {
-                        Request::Input { data } => {
-                            if let Ok(bytes) = B64.decode(data)
-                                && input_shared.forward_input(&input_rt, &bytes).is_err()
-                            {
-                                break;
-                            }
-                        }
-                        Request::Resize { rows, cols }
-                            if rows > 0 && cols > 0 && rows <= 500 && cols <= 1000 =>
-                        {
-                            let mut r = relock(&input_rt);
-                            let _ = r.master.resize(PtySize {
-                                rows,
-                                cols,
-                                pixel_width: 0,
-                                pixel_height: 0,
-                            });
-                            r.parser.screen_mut().set_size(rows, cols);
-                            drop(r);
-                            let mut s = relock(&input_shared.state);
-                            if let Some(rec) = s.sessions.iter_mut().find(|s| s.id == session_id) {
-                                rec.rows = rows;
-                                rec.cols = cols;
-                            }
-                        }
-                        _ => break,
-                    }
-                }
-            }));
-        });
-        while let Ok(frame) = rx.recv_timeout(Duration::from_secs(2)) {
-            write_frame(&mut stream, &frame)?;
-            if matches!(frame, Response::End) {
-                break;
-            }
-        }
-        // A quiet terminal must not time out: keep the stream alive until it disconnects or ends.
-        if !relock(&rt).ended {
-            loop {
-                match rx.recv_timeout(Duration::from_secs(2)) {
-                    Ok(frame) => {
-                        write_frame(&mut stream, &frame)?;
-                        if matches!(frame, Response::End) {
-                            break;
-                        }
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        write_frame(&mut stream, &Response::Ok)?;
-                    }
-                    Err(_) => break,
-                }
-            }
-        }
-        Ok(())
-    } else {
-        let ssh_errors = env.ssh_errors;
-        let response = shared.handle(env.request).unwrap_or_else(|e| {
-            match e.downcast_ref::<terminator_core::ssh::SshError>() {
-                Some(ssh) if ssh_errors => Response::SshError(terminator_core::ssh::SshError {
-                    failure: ssh.failure.clone(),
-                    message: format!("{e:#}"),
-                }),
-                _ => Response::Error(format!("{e:#}")),
-            }
-        });
-        snapshot::write_response(&mut stream, &response, env.snapshot_chunks)
+    if let Request::Attach { session, rows, cols } = env.request {
+        return serve_attach(&mut stream, &shared, ServeAttachInput { session, rows, cols });
     }
+    let ssh_errors = env.ssh_errors;
+    let response = shared.handle(env.request).unwrap_or_else(|e| {
+        match e.downcast_ref::<terminator_core::ssh::SshError>() {
+            Some(ssh) if ssh_errors => Response::SshError(terminator_core::ssh::SshError {
+                failure: ssh.failure.clone(),
+                message: format!("{e:#}"),
+            }),
+            _ => Response::Error(format!("{e:#}")),
+        }
+    });
+    snapshot::write_response(&mut stream, &response, env.snapshot_chunks)
 }
 
 #[cfg(test)]

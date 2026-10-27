@@ -14,19 +14,34 @@ async fn wait_retry_tick(input_rx: &mut mpsc::Receiver<VncInputEvent>) -> bool {
     }
 }
 
-pub(super) async fn run(
-    shared: Arc<Shared>,
-    runtime: Arc<Mutex<VncRuntime>>,
-    sid: String,
-    spec: ConnectionSpec,
-    mut input_rx: mpsc::Receiver<VncInputEvent>,
-) {
+pub(super) struct RunInput {
+    pub shared: Arc<Shared>,
+    pub runtime: Arc<Mutex<VncRuntime>>,
+    pub sid: String,
+    pub spec: ConnectionSpec,
+    pub input_rx: mpsc::Receiver<VncInputEvent>,
+}
+pub(super) async fn run(input: RunInput) {
+    let RunInput {
+        shared,
+        runtime,
+        sid,
+        spec,
+        mut input_rx,
+    } = input;
     let mut attempt = 0u8;
     loop {
         // Never replay keys queued for a previous connection.
         while input_rx.try_recv().is_ok() {}
         let started = Instant::now();
-        let result = super::connection::run(&shared, &runtime, &sid, &spec, &mut input_rx).await;
+        let result = super::connection::run(super::connection::RunInput {
+            shared: &shared,
+            runtime: &runtime,
+            sid: &sid,
+            spec: &spec,
+            input_rx: &mut input_rx,
+        })
+        .await;
         match result {
             Err(Failure::Cancelled) | Ok(()) => {
                 break;

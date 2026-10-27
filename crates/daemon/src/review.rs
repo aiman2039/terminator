@@ -66,13 +66,21 @@ fn runtime(paths: &Paths) -> Result<PathBuf> {
     }
     Ok(root)
 }
-pub fn prepare(
-    paths: &Paths,
-    sid: &str,
-    cwd: &Path,
-    file: &Path,
-    staged: bool,
-) -> Result<portable_pty::CommandBuilder> {
+pub struct PrepareInput<'a> {
+    pub paths: &'a Paths,
+    pub sid: &'a str,
+    pub cwd: &'a Path,
+    pub file: &'a Path,
+    pub staged: bool,
+}
+pub fn prepare(input: PrepareInput<'_>) -> Result<portable_pty::CommandBuilder> {
+    let PrepareInput {
+        paths,
+        sid,
+        cwd,
+        file,
+        staged,
+    } = input;
     let nvim = find_executable("nvim").context(
         "Git review requires Neovim 0.10 or newer on PATH; the CodeDiff plugin is bundled",
     )?;

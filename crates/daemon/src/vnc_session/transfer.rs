@@ -126,13 +126,13 @@ async fn run(
     transfer::with_sftp(ssh, control, async |sftp| {
         match transfer.direction {
             TransferDirection::Upload => {
-                transfer::upload(
+                transfer::upload(transfer::UploadInput {
                     sftp,
-                    &transfer.local,
-                    &transfer.remote,
-                    &transfer.id,
-                    &progress,
-                )
+                    local: &transfer.local,
+                    remote: &transfer.remote,
+                    id: &transfer.id,
+                    progress: &progress,
+                })
                 .await?;
             }
             TransferDirection::Download => {

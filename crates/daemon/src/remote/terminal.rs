@@ -3,44 +3,61 @@ use portable_pty::CommandBuilder;
 use std::path::{Path, PathBuf};
 use terminator_core::remote::RemoteSession;
 
-pub(crate) fn prepare(
-    project: &RemoteProject,
-    control: Option<&Path>,
-    sid: &str,
-    cwd: Option<&Path>,
-    file: Option<&Path>,
-    line: Option<u32>,
-    column: Option<u32>,
-) -> Result<(CommandBuilder, RemoteSession, Option<PathBuf>)> {
-    project.validate()?;
-    let cwd = if let Some(cwd) = cwd.filter(|p| *p != project.identity_path()) {
+fn resolve_cwd(project: &RemoteProject, cwd: Option<&Path>) -> Result<String> {
+    if let Some(cwd) = cwd.filter(|p| *p != project.identity_path()) {
         let value = cwd.to_str().context("Remote cwd must be UTF-8")?;
         if value.starts_with('/') {
             let relative = value
                 .strip_prefix(project.root.trim_end_matches('/'))
                 .filter(|tail| tail.is_empty() || tail.starts_with('/'))
                 .context("Remote cwd is outside the project root")?;
-            project.absolute(relative.trim_start_matches('/'))?
+            project.absolute(relative.trim_start_matches('/'))
         } else {
-            project.absolute(value)?
+            project.absolute(value)
         }
     } else {
-        project.root.clone()
-    };
-    let file = file
-        .map(|path| -> Result<String> {
-            let value = path.to_str().context("Remote file path must be UTF-8")?;
-            if value.starts_with('/') {
-                let relative = value
-                    .strip_prefix(project.root.trim_end_matches('/'))
-                    .filter(|tail| tail.starts_with('/'))
-                    .context("Remote file is outside the project root")?;
-                project.absolute(relative.trim_start_matches('/'))
-            } else {
-                project.absolute(value)
-            }
-        })
-        .transpose()?;
+        Ok(project.root.clone())
+    }
+}
+fn resolve_file(project: &RemoteProject, file: Option<&Path>) -> Result<Option<String>> {
+    file.map(|path| -> Result<String> {
+        let value = path.to_str().context("Remote file path must be UTF-8")?;
+        if value.starts_with('/') {
+            let relative = value
+                .strip_prefix(project.root.trim_end_matches('/'))
+                .filter(|tail| tail.starts_with('/'))
+                .context("Remote file is outside the project root")?;
+            project.absolute(relative.trim_start_matches('/'))
+        } else {
+            project.absolute(value)
+        }
+    })
+    .transpose()
+}
+pub(crate) struct PrepareInput<'a> {
+    pub project: &'a RemoteProject,
+    pub control: Option<&'a Path>,
+    pub sid: &'a str,
+    pub cwd: Option<&'a Path>,
+    pub file: Option<&'a Path>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+pub(crate) fn prepare(
+    input: PrepareInput<'_>,
+) -> Result<(CommandBuilder, RemoteSession, Option<PathBuf>)> {
+    let PrepareInput {
+        project,
+        control,
+        sid,
+        cwd,
+        file,
+        line,
+        column,
+    } = input;
+    project.validate()?;
+    let cwd = resolve_cwd(project, cwd)?;
+    let file = resolve_file(project, file)?;
     let socket = file
         .as_ref()
         .map(|_| format!(".cache/terminator/e/{}.sock", sid.replace('-', "")));
@@ -148,15 +165,15 @@ mod tests {
             group: None,
             forwards: Vec::new(),
         };
-        let (cmd, meta, _) = prepare(
-            &p,
-            None,
-            "00000000-0000-0000-0000-000000000000",
-            None,
-            None,
-            None,
-            None,
-        )
+        let (cmd, meta, _) = prepare(PrepareInput {
+            project: &p,
+            control: None,
+            sid: "00000000-0000-0000-0000-000000000000",
+            cwd: None,
+            file: None,
+            line: None,
+            column: None,
+        })
         .unwrap();
         assert!(cmd.get_argv().first().is_some_and(|s| {
             Path::new(s)
@@ -166,15 +183,15 @@ mod tests {
         assert_eq!(meta.cwd, p.root);
         assert!(meta.editor_socket.is_none());
         assert!(
-            prepare(
-                &p,
-                None,
-                "fixture",
-                Some(Path::new("/tmp/local")),
-                None,
-                None,
-                None
-            )
+            prepare(PrepareInput {
+                project: &p,
+                control: None,
+                sid: "fixture",
+                cwd: Some(Path::new("/tmp/local")),
+                file: None,
+                line: None,
+                column: None,
+            })
             .is_err()
         );
     }

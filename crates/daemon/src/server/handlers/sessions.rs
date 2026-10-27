@@ -16,16 +16,24 @@ use crate::{editor, review, shell, terminal_env, terminal_events};
 /// Upper bound on waiting for a PTY reader to drain after its child exits.
 const READER_DRAIN: Duration = Duration::from_millis(500);
 
+pub(crate) struct CreateInput {
+    pub project: String,
+    pub cwd: Option<std::path::PathBuf>,
+    pub file: Option<std::path::PathBuf>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+    pub launch: Launch,
+}
 impl Shared {
-    pub(crate) fn create(
-        self: &Arc<Self>,
-        project: String,
-        cwd: Option<std::path::PathBuf>,
-        file: Option<std::path::PathBuf>,
-        line: Option<u32>,
-        column: Option<u32>,
-        launch: Launch,
-    ) -> Result<Session> {
+    pub(crate) fn create(self: &Arc<Self>, input: CreateInput) -> Result<Session> {
+        let CreateInput {
+            project,
+            cwd,
+            file,
+            line,
+            column,
+            launch,
+        } = input;
         let _worktree_guard = relock(&self.worktree_operations);
         ensure!(
             !self.shutdown.load(Ordering::Acquire),
@@ -102,35 +110,36 @@ impl Shared {
                 !is_review,
                 "Remote Git reviews use the native read-only viewer"
             );
-            let (command, metadata, resolved) = crate::remote::terminal::prepare(
-                remote,
-                self.ssh_control(&remote.ssh).as_deref(),
-                &sid,
-                remote_cwd.as_deref(),
-                file.as_deref(),
-                line,
-                column,
-            )?;
+            let (command, metadata, resolved) =
+                crate::remote::terminal::prepare(crate::remote::terminal::PrepareInput {
+                    project: remote,
+                    control: self.ssh_control(&remote.ssh).as_deref(),
+                    sid: &sid,
+                    cwd: remote_cwd.as_deref(),
+                    file: file.as_deref(),
+                    line,
+                    column,
+                })?;
             remote_session = Some(metadata);
             file = resolved;
             command
         } else if let Launch::Review { staged } = launch {
-            review::prepare(
-                &self.paths,
-                &sid,
-                &cwd,
-                file.as_ref().context("Review requires a file")?,
+            review::prepare(review::PrepareInput {
+                paths: &self.paths,
+                sid: &sid,
+                cwd: &cwd,
+                file: file.as_ref().context("Review requires a file")?,
                 staged,
-            )?
+            })?
         } else if editor {
-            editor::prepare(
-                &self.paths,
-                &sid,
-                &settings,
-                file.as_ref().context("Editor requires a file")?,
+            editor::prepare(editor::PrepareInput {
+                paths: &self.paths,
+                sid: &sid,
+                settings: &settings,
+                file: file.as_ref().context("Editor requires a file")?,
                 line,
                 column,
-            )?
+            })?
         } else {
             let shell = if settings.shell.trim().is_empty() {
                 default_shell()?

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use std::{
     collections::HashMap,
+    path::Path,
     fs,
     io::Write,
     sync::{Arc, Mutex, mpsc},
@@ -154,11 +155,28 @@ impl Shared {
             !state.sessions.iter().any(|s| s.lifecycle.live()),
             "Retired owner still has live records"
         );
-        match *request {
+        if let Some(response) = self.apply_archived_request(&paths, root, &mut state, *request)? {
+            return Ok(response);
+        }
+        state.revision = state.revision.saturating_add(1);
+        store.save(&state)?;
+        Ok(Response::Ok)
+    }
+
+    fn apply_archived_request(
+        &self,
+        paths: &Paths,
+        root: &Paths,
+        state: &mut State,
+        request: Request,
+    ) -> Result<Option<Response>> {
+        let paths_owned = paths.clone();
+        let _ = &paths_owned;
+        match request {
             Request::PruneHistory { budget } => {
-                generations::Catalog::open(root)?.refresh(&mut state)?;
+                generations::Catalog::open(root)?.refresh(state)?;
                 let ids =
-                    storage::History::new(paths)?.prune_with_budget(&state.settings, budget)?;
+                    storage::History::new(paths.clone())?.prune_with_budget(&state.settings, budget)?;
                 for session in &mut state.sessions {
                     if ids.contains(&session.id) {
                         session.truncated = true;
@@ -171,7 +189,7 @@ impl Shared {
                     .iter()
                     .find(|s| s.id == session)
                     .context("Unknown historical session")?;
-                return Ok(Response::Text(storage::text(&paths, record)?));
+                return Ok(Some(Response::Text(storage::text(paths, record)?)));
             }
             Request::Rename { session, label } => {
                 ensure!(label.len() <= 256, "Label too long");
@@ -205,14 +223,14 @@ impl Shared {
                     .dismissed = true;
             }
             Request::Remove { session } => {
-                storage::History::new(paths)?.clear(Some(&session), true)?;
+                storage::History::new(paths.clone())?.clear(Some(&session), true)?;
                 state.sessions.retain(|s| s.id != session);
                 state.agents.retain(|a| a.session_id != session);
                 state.notifications.retain(|n| n.session_id != session);
                 state.terminal_notices.retain(|n| n.session_id != session);
             }
             Request::ClearHistory { session } => {
-                storage::History::new(paths)?.clear(session.as_deref(), false)?;
+                storage::History::new(paths.clone())?.clear(session.as_deref(), false)?;
                 for s in &mut state.sessions {
                     if session.as_ref().is_none_or(|id| id == &s.id) {
                         s.truncated = true;
@@ -221,9 +239,7 @@ impl Shared {
             }
             _ => bail!("Operation requires a live session owner"),
         }
-        state.revision = state.revision.saturating_add(1);
-        store.save(&state)?;
-        Ok(Response::Ok)
+        Ok(None)
     }
 
     pub(crate) fn history_clear(&self, session: Option<String>, remove: bool) -> Result<()> {

@@ -80,110 +80,71 @@ impl Shared {
         Ok(Some(pid))
     }
 
-    pub(super) fn close_idle(
-        &self,
-        generation: String,
-        mut sessions: Vec<String>,
-    ) -> Result<Response> {
-        ensure!(
-            !sessions.is_empty() && sessions.len() <= 256,
-            "Expected 1–256 target sessions"
-        );
-        sessions.sort();
-        sessions.dedup();
-        let mut outcomes = Vec::new();
-        {
-            // All input forwarding and close decisions share this lock.
-            let _operation = relock(&self.terminal_operations);
-            if relock(&self.state).generation != generation {
-                return Ok(Response::IdleSessionsClosed(
-                    sessions
-                        .into_iter()
-                        .map(|session| Outcome {
-                            session,
-                            status: Status::StaleGeneration,
-                            reason: "Daemon generation changed".into(),
-                        })
-                        .collect(),
-                ));
-            }
-            let checks: Vec<_> = sessions.iter().map(|s| self.idle_preflight(s)).collect();
-            if checks.iter().any(Result::is_err) {
-                return Ok(Response::IdleSessionsClosed(
-                    sessions
-                        .into_iter()
-                        .zip(checks)
-                        .map(|(session, result)| {
-                            let (status, reason) = match result {
-                                Ok(None) => (Status::AlreadyEnded, "Session already ended".into()),
-                                Ok(Some(_)) => (
-                                    Status::Busy,
-                                    "Another target failed preflight; no sessions were signalled"
-                                        .into(),
-                                ),
-                                Err(error) => (Status::Unknown, error.to_string()),
-                            };
-                            Outcome {
-                                session,
-                                status,
-                                reason,
-                            }
-                        })
-                        .collect(),
-                ));
-            }
-            let mut partial_failure = false;
-            for session in sessions {
-                if partial_failure {
-                    outcomes.push(Outcome { session, status: Status::Failed, reason: "Not signalled after another target failed; no rollback of previous signals".into() });
-                    continue;
-                }
-                // Reinspect immediately before each signal; a partial failure cannot roll back signals.
-                let result = self.idle_preflight(&session);
+    fn stale_generation_outcomes(sessions: Vec<String>) -> Vec<Outcome> {
+        sessions
+            .into_iter()
+            .map(|session| Outcome {
+                session,
+                status: Status::StaleGeneration,
+                reason: "Daemon generation changed".into(),
+            })
+            .collect()
+    }
+    fn preflight_failed_outcomes(
+        sessions: Vec<String>,
+        checks: Vec<Result<Option<u32>>>,
+    ) -> Vec<Outcome> {
+        sessions
+            .into_iter()
+            .zip(checks)
+            .map(|(session, result)| {
                 let (status, reason) = match result {
                     Ok(None) => (Status::AlreadyEnded, "Session already ended".into()),
-                    Ok(Some(pid)) => {
-                        if terminator_core::signals::signal_group(
-                            pid,
-                            terminator_core::signals::ProcSignal::Hangup,
-                        )
-                        .is_ok()
-                        {
-                            if let Ok(runtime) = self.runtime(&session) {
-                                relock(&runtime).closing = true;
-                            }
-                            let mut state = relock(&self.state);
-                            if let Some(record) = state
-                                .sessions
-                                .iter_mut()
-                                .find(|s| s.id == session && s.lifecycle.live())
-                            {
-                                record.lifecycle = Lifecycle::Stopping;
-                            }
-                            state.revision = state.revision.saturating_add(1);
-                            (
-                                Status::Closed,
-                                "Idle shell signalled; waiting for exit".into(),
-                            )
-                        } else {
-                            (Status::Failed, std::io::Error::last_os_error().to_string())
-                        }
-                    }
-                    Err(error) => (Status::Failed, error.to_string()),
+                    Ok(Some(_)) => (
+                        Status::Busy,
+                        "Another target failed preflight; no sessions were signalled".into(),
+                    ),
+                    Err(error) => (Status::Unknown, error.to_string()),
                 };
-                let failed = status == Status::Failed;
-                outcomes.push(Outcome {
-                    session,
-                    status,
-                    reason,
-                });
-                partial_failure = failed;
+                Outcome { session, status, reason }
+            })
+            .collect()
+    }
+    fn signal_one(&self, session: &str) -> (Status, String) {
+        match self.idle_preflight(session) {
+            Ok(None) => (Status::AlreadyEnded, "Session already ended".into()),
+            Ok(Some(pid)) => {
+                if terminator_core::signals::signal_group(
+                    pid,
+                    terminator_core::signals::ProcSignal::Hangup,
+                )
+                .is_ok()
+                {
+                    if let Ok(runtime) = self.runtime(session) {
+                        relock(&runtime).closing = true;
+                    }
+                    let mut state = relock(&self.state);
+                    if let Some(record) = state
+                        .sessions
+                        .iter_mut()
+                        .find(|s| s.id == session && s.lifecycle.live())
+                    {
+                        record.lifecycle = Lifecycle::Stopping;
+                    }
+                    state.revision = state.revision.saturating_add(1);
+                    (Status::Closed, "Idle shell signalled; waiting for exit".into())
+                } else {
+                    (Status::Failed, std::io::Error::last_os_error().to_string())
+                }
             }
+            Err(error) => (Status::Failed, error.to_string()),
         }
+    }
+    fn confirm_outcomes(&self, outcomes: &mut [Outcome]) {
         let deadline = Instant::now()
             .checked_add(Duration::from_secs(2))
             .unwrap_or_else(Instant::now);
-        for outcome in &mut outcomes {
+        for outcome in outcomes.iter_mut() {
             if outcome.status != Status::Closed {
                 continue;
             }
@@ -200,8 +161,6 @@ impl Shared {
                 .iter()
                 .any(|s| s.id == outcome.session && s.lifecycle.live())
             {
-                // The view is preserved, so it must stay usable: a shell that
-                // ignores SIGHUP would otherwise reject all input forever.
                 if let Ok(runtime) = self.runtime(&outcome.session) {
                     relock(&runtime).closing = false;
                 }
@@ -218,8 +177,45 @@ impl Shared {
                 outcome.reason = "Idle shell exited".into();
             }
         }
+    }
+
+    pub(super) fn close_idle(
+        &self,
+        generation: String,
+        mut sessions: Vec<String>,
+    ) -> Result<Response> {
+        ensure!(
+            !sessions.is_empty() && sessions.len() <= 256,
+            "Expected 1–256 target sessions"
+        );
+        sessions.sort();
+        sessions.dedup();
+        let mut outcomes = Vec::new();
+        {
+            let _operation = relock(&self.terminal_operations);
+            if relock(&self.state).generation != generation {
+                return Ok(Response::IdleSessionsClosed(Self::stale_generation_outcomes(sessions)));
+            }
+            let checks: Vec<_> = sessions.iter().map(|s| self.idle_preflight(s)).collect();
+            if checks.iter().any(Result::is_err) {
+                return Ok(Response::IdleSessionsClosed(Self::preflight_failed_outcomes(sessions, checks)));
+            }
+            let mut partial_failure = false;
+            for session in sessions {
+                if partial_failure {
+                    outcomes.push(Outcome { session, status: Status::Failed, reason: "Not signalled after another target failed; no rollback of previous signals".into() });
+                    continue;
+                }
+                let (status, reason) = self.signal_one(&session);
+                let failed = status == Status::Failed;
+                outcomes.push(Outcome { session, status, reason });
+                partial_failure = failed;
+            }
+        }
+        self.confirm_outcomes(&mut outcomes);
         Ok(Response::IdleSessionsClosed(outcomes))
     }
+
 }
 
 #[cfg(test)]
