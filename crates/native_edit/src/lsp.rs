@@ -398,6 +398,11 @@ pub fn initialize(id: &RequestId, process_id: u32, root: &Url) -> Vec<u8> {
                     "hover": { "contentFormat": ["markdown", "plaintext"] },
                     "definition": { "linkSupport": true },
                     "rename": {},
+                    "signatureHelp": {
+                        "signatureInformation": {
+                            "parameterInformation": { "labelOffsetSupport": true },
+                        },
+                    },
                     "completion": {
                         "completionItem": {
                             "snippetSupport": true,
@@ -506,6 +511,71 @@ pub fn completion(id: &RequestId, uri: &Url, position: Position) -> Vec<u8> {
             "context": { "triggerKind": 1 },
         }),
     )
+}
+
+/// `textDocument/signatureHelp` at a UTF-16 position.
+#[must_use]
+pub fn signature_help(id: &RequestId, uri: &Url, position: Position) -> Vec<u8> {
+    request(
+        id,
+        "textDocument/signatureHelp",
+        serde_json::json!({
+            "textDocument": { "uri": uri.as_str() },
+            "position": { "line": position.line, "character": position.character },
+        }),
+    )
+}
+
+/// The active signature, with the active parameter's char range inside
+/// `label` for highlighting.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignatureHelp {
+    pub label: String,
+    pub active: Option<std::ops::Range<usize>>,
+    pub documentation: Option<String>,
+}
+
+/// Parse a `textDocument/signatureHelp` result; `None` when there is no
+/// signature to show.
+#[must_use]
+pub fn parse_signature_help(result: &Value) -> Option<SignatureHelp> {
+    let help: lsp_types::SignatureHelp = serde_json::from_value(result.clone()).ok()?;
+    let index = help
+        .active_signature
+        .and_then(|index| usize::try_from(index).ok())
+        .unwrap_or(0);
+    let signature = help
+        .signatures
+        .get(index)
+        .or_else(|| help.signatures.first())?;
+    let parameter = signature
+        .active_parameter
+        .or(help.active_parameter)
+        .and_then(|index| usize::try_from(index).ok());
+    let active = parameter
+        .and_then(|index| signature.parameters.as_ref()?.get(index))
+        .and_then(|parameter| match &parameter.label {
+            lsp_types::ParameterLabel::Simple(text) => {
+                let start = signature.label.find(text.as_str())?;
+                let head = signature.label.get(..start)?.chars().count();
+                Some(head..head.saturating_add(text.chars().count()))
+            }
+            lsp_types::ParameterLabel::LabelOffsets([start, end]) => {
+                // UTF-16 offsets into the label.
+                let start = utf16_to_char_col(&signature.label, *start);
+                let end = utf16_to_char_col(&signature.label, *end);
+                Some(start..end)
+            }
+        });
+    let documentation = signature.documentation.as_ref().map(|doc| match doc {
+        lsp_types::Documentation::String(text) => text.clone(),
+        lsp_types::Documentation::MarkupContent(markup) => markup.value.clone(),
+    });
+    Some(SignatureHelp {
+        label: signature.label.clone(),
+        active,
+        documentation: documentation.filter(|text| !text.trim().is_empty()),
+    })
 }
 
 /// One completion proposal, reduced to what the popup shows and inserts.
@@ -1635,6 +1705,27 @@ mod tests {
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].kind, "Class");
         assert_eq!(symbols[0].depth, 0);
+    }
+
+    #[test]
+    fn signature_help_marks_the_active_parameter() {
+        let help = serde_json::json!({
+            "signatures": [{
+                "label": "fn push(&mut self, value: T)",
+                "parameters": [{"label": "&mut self"}, {"label": [19, 27]}],
+            }],
+            "activeSignature": 0,
+            "activeParameter": 1,
+        });
+        let parsed = parse_signature_help(&help).expect("signature");
+        assert_eq!(parsed.label.get(19..27), Some("value: T"));
+        assert_eq!(parsed.active, Some(19..27));
+        let simple = serde_json::json!({
+            "signatures": [{"label": "f(a, b)", "parameters": [{"label": "a"}, {"label": "b"}]}],
+            "activeParameter": 1,
+        });
+        assert_eq!(parse_signature_help(&simple).unwrap().active, Some(5..6));
+        assert!(parse_signature_help(&serde_json::json!({"signatures": []})).is_none());
     }
 
     #[test]

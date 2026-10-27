@@ -153,15 +153,18 @@ impl LspManager {
                     });
                 }
             }
+            // The editor matches answers to its popup by generation.
             Some(Pending::Completion { path, generation }) => {
-                if generation == self.completion_generation {
-                    let result = result.unwrap_or(serde_json::Value::Null);
-                    self.completion = Some(CompletionResults {
-                        path,
-                        generation,
-                        items: L::parse_completion(&result),
-                    });
-                }
+                let result = result.unwrap_or(serde_json::Value::Null);
+                self.completion = Some(CompletionResults {
+                    path,
+                    generation,
+                    items: L::parse_completion(&result),
+                });
+            }
+            Some(Pending::Signature { path, generation }) => {
+                let result = result.unwrap_or(serde_json::Value::Null);
+                self.signature = Some((path, generation, L::parse_signature_help(&result)));
             }
             Some(Pending::References { path }) => {
                 let result = result.unwrap_or(serde_json::Value::Null);

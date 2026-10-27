@@ -102,6 +102,10 @@ enum Pending {
         path: PathBuf,
         generation: u64,
     },
+    Signature {
+        path: PathBuf,
+        generation: u64,
+    },
 }
 
 /// Completion proposals for one request (`generation` drops stale ones).
@@ -172,6 +176,8 @@ pub struct LspManager {
     references: Option<ReferenceResults>,
     completion: Option<CompletionResults>,
     completion_generation: u64,
+    /// Latest signature-help answer: `(path, generation, signature)`.
+    signature: Option<(PathBuf, u64, Option<L::SignatureHelp>)>,
     rename: Option<RenameResults>,
     symbols: std::collections::HashMap<PathBuf, std::sync::Arc<[L::Symbol]>>,
     symbols_rev: std::collections::HashMap<PathBuf, u64>,
@@ -212,6 +218,7 @@ impl LspManager {
             references: None,
             completion: None,
             completion_generation: 0,
+            signature: None,
             rename: None,
             symbols: std::collections::HashMap::new(),
             symbols_rev: std::collections::HashMap::new(),
@@ -668,6 +675,40 @@ impl LspManager {
             },
         );
         Some(generation)
+    }
+
+    /// Ask for signature help at `position`; generations share the
+    /// completion counter, so the newest request of either kind wins.
+    pub fn request_signature_help(&mut self, path: &Path, position: L::Position) -> Option<u64> {
+        let doc = self.docs.get(path)?;
+        let (key, uri) = (doc.server.clone(), doc.uri.clone());
+        let server = self.servers.get_mut(&key)?;
+        if !server.ready {
+            return None;
+        }
+        let L::RequestId::Number(number) = server.ids.next_id() else {
+            return None;
+        };
+        self.completion_generation = self.completion_generation.wrapping_add(1);
+        let generation = self.completion_generation;
+        let _ = server.inbox.send(L::signature_help(
+            &L::RequestId::Number(number),
+            &uri,
+            position,
+        ));
+        server.pending.insert(
+            number,
+            Pending::Signature {
+                path: path.to_owned(),
+                generation,
+            },
+        );
+        Some(generation)
+    }
+
+    /// Latest signature-help answer, if one arrived.
+    pub fn take_signature(&mut self) -> Option<(PathBuf, u64, Option<L::SignatureHelp>)> {
+        self.signature.take()
     }
 
     /// Latest completion answer, if one arrived for the newest request.

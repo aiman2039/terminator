@@ -626,6 +626,15 @@ pub fn show_source<B: Buffer>(
                 .saturating_add(1)
                 .min(visual_rows.len()),
         );
+        // Indent guides: blank lines keep the guides of the line above.
+        let guide_color = ui
+            .visuals()
+            .widgets
+            .noninteractive
+            .bg_stroke
+            .color
+            .gamma_multiply(0.6);
+        let mut guide_cells = 0usize;
         for (visual_line, visual) in visual_rows
             .iter()
             .enumerate()
@@ -719,6 +728,21 @@ pub fn show_source<B: Buffer>(
                 }
             }
             let text = &visual.text;
+            if visual.start == 0 {
+                let lead: String = text
+                    .chars()
+                    .take_while(|c| *c == ' ' || *c == '\t')
+                    .collect();
+                if lead.chars().count() < text.chars().count() {
+                    guide_cells = display_x(&lead, lead.chars().count());
+                }
+                // One guide per indent level the line sits inside.
+                for cell in (0..guide_cells).step_by(crate::rows::TAB_WIDTH) {
+                    #[allow(clippy::cast_precision_loss)] // UI coordinate
+                    let x = origin.x + gutter + cell as f32 * advance + 1.0;
+                    painter.vline(x, y..=y + row_height, egui::Stroke::new(1.0, guide_color));
+                }
+            }
             // Selection background for this row.
             let span = match block {
                 Some((top, bottom, left, right)) if line >= top && line <= bottom => {
@@ -1033,6 +1057,8 @@ pub fn show_source<B: Buffer>(
                             }
                         }
                         IdeEdit::JoinLines => engine.ide_join_lines(doc),
+                        IdeEdit::ExtendSelection => engine.ide_extend_selection(doc),
+                        IdeEdit::ShrinkSelection => engine.ide_shrink_selection(doc),
                     }
                     ui.input_mut(|input| input.consume_key(modifiers, key));
                 }

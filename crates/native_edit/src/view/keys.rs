@@ -122,6 +122,8 @@ pub enum IdeEdit {
     DeleteLines,
     Duplicate,
     MoveLines { up: bool },
+    ExtendSelection,
+    ShrinkSelection,
     ToggleComment,
     JoinLines,
 }
@@ -151,6 +153,15 @@ pub fn ide_edit_key(
         {
             Some(IdeEdit::MoveLines {
                 up: key == egui::Key::ArrowUp,
+            })
+        }
+        egui::Key::ArrowUp | egui::Key::ArrowDown
+            if modifiers.alt && !modifiers.shift && !modifiers.command && !modifiers.ctrl =>
+        {
+            Some(if key == egui::Key::ArrowUp {
+                IdeEdit::ExtendSelection
+            } else {
+                IdeEdit::ShrinkSelection
             })
         }
         egui::Key::ArrowLeft if word => mv(IdeMotion::WordLeft),

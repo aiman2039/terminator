@@ -834,3 +834,61 @@ async fn live_rust_analyzer_completion() {
     }
     manager.prune(&std::collections::HashSet::new());
 }
+
+/// Live signature help against rust-analyzer (self-skips without it).
+#[tokio::test]
+async fn live_rust_analyzer_signature_help() {
+    let path_env = std::env::var_os("PATH")
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if L::find_server(&["rust-analyzer"], &path_env).is_none() {
+        eprintln!("SKIP: rust-analyzer not on PATH");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("proj");
+    std::fs::create_dir_all(root.join("src")).expect("mkdir");
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"proj\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+    )
+    .expect("manifest");
+    let main =
+        "fn add(left: i32, right: i32) -> i32 { left + right }\nfn main() {\n    add(1, \n}\n";
+    let file = root.join("src/main.rs");
+    std::fs::write(&file, main).expect("main");
+    let mut manager = LspManager::new();
+    assert!(manager.sync_doc(&file, Language::Rust, 1));
+    manager.submit_text(&file, Language::Rust, 1, main);
+    let at = L::Position {
+        line: 2,
+        character: 11,
+    };
+    let start = Instant::now();
+    let mut found = None;
+    while found.is_none() {
+        assert!(start.elapsed() < Duration::from_secs(90), "no signature");
+        if manager.request_signature_help(&file, at).is_none() {
+            manager.poll();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+        for _ in 0..20 {
+            manager.poll();
+            if let Some((_, _, help)) = manager.take_signature() {
+                found = help;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+    let help = found.expect("signature");
+    let active: String = help
+        .label
+        .chars()
+        .skip(help.active.as_ref().map_or(0, |range| range.start))
+        .take(help.active.as_ref().map_or(0, |range| range.len()))
+        .collect();
+    assert_eq!(active, "right: i32", "{help:?}");
+    manager.prune(&std::collections::HashSet::new());
+}

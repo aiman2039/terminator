@@ -326,6 +326,8 @@ pub struct App {
     pub(crate) find_bar: Option<crate::native_editor::FindBar>,
     /// Completion popup of one native editor.
     pub(crate) completion: Option<crate::native_editor::CompletionPopup>,
+    /// Parameter info of one native editor.
+    pub(crate) signature: Option<crate::native_editor::SignaturePopup>,
     /// `HEAD` text per open file for gutter change markers, tagged with
     /// the Git refresh generation it was read at.
     pub(crate) git_bases: HashMap<PathBuf, (u64, Option<std::sync::Arc<str>>)>,

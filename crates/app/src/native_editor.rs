@@ -12,7 +12,7 @@ mod gutter;
 mod navigation;
 mod rename;
 pub(super) use close::{CloseIssuer, NativeCloseChoice};
-pub(crate) use complete::CompletionPopup;
+pub(crate) use complete::{CompletionPopup, SignaturePopup};
 pub(crate) use find::FindBar;
 pub(crate) use gutter::GutterPopup;
 pub(crate) use navigation::{NavLocation, UsagesView, read_line_previews};
@@ -821,6 +821,16 @@ impl App {
             None
         };
         let mut complete_now = false;
+        let mut signature = if self
+            .signature
+            .as_ref()
+            .is_some_and(|popup| popup.path == path)
+        {
+            self.signature.take()
+        } else {
+            None
+        };
+        let mut signature_request = None;
         let git_base = if crate::remote_ui::is_snapshot(&self.paths.data, path) {
             None
         } else {
@@ -1395,6 +1405,21 @@ impl App {
             {
                 gutter::rollback(live, &mut doc.engine, hunk);
             }
+            if let Some(live) = doc.doc.as_ref() {
+                signature_request = complete::signature_after_frame(
+                    &mut signature,
+                    live,
+                    &doc.engine,
+                    revision_before,
+                    native_lsp::server_language(language).is_some(),
+                );
+                if let Some(shown) = signature.as_mut() {
+                    if caret_rect.is_some() {
+                        shown.anchor = caret_rect;
+                    }
+                    complete::signature_ui(ui, shown);
+                }
+            }
             if let Some(live) = doc.doc.as_mut() {
                 completion_request = complete::after_frame(
                     ui,
@@ -1424,6 +1449,41 @@ impl App {
         }
         if gutter_popup.is_some() {
             self.gutter_popup = gutter_popup;
+        }
+        if signature.is_some() {
+            self.signature = signature;
+        }
+        if let Some((position, line, open)) = signature_request
+            && let Some((revision, text)) = self
+                .native_docs
+                .get(path)
+                .and_then(|doc| doc.buffer())
+                .map(|buffer| (buffer.revision(), buffer.text()))
+        {
+            self.lsp.submit_text(path, language, revision, &text);
+            if let Some(generation) = self.lsp.request_signature_help(path, position) {
+                // Keep showing the previous signature until the update lands.
+                let help = self
+                    .signature
+                    .take()
+                    .filter(|shown| shown.path == path && shown.open == open)
+                    .and_then(|shown| shown.help);
+                self.signature = Some(SignaturePopup {
+                    path: path.to_owned(),
+                    generation,
+                    help,
+                    line,
+                    open,
+                    anchor: caret_rect,
+                });
+            }
+        }
+        if let Some((answer_path, generation, help)) = self.lsp.take_signature()
+            && let Some(shown) = self.signature.as_mut()
+            && shown.generation == generation
+            && shown.path == answer_path
+        {
+            shown.help = help;
         }
         // Completion asks with the live text: push it past the sync
         // debounce first so the server sees what was just typed.

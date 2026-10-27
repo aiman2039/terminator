@@ -11,6 +11,97 @@ use super::mode::{Cursor, Effect, Key, Mode};
 use super::state::VimEngine;
 use super::words::{WordClass, line_len, word_class};
 
+/// The smallest unit strictly containing `(from, to)` in `text`.
+fn extend_candidate(text: &[char], (from, to): (usize, usize)) -> Option<(usize, usize)> {
+    let len = text.len();
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut candidates: Vec<(usize, usize)> = Vec::new();
+    // Word around the selection.
+    let (mut start, mut end) = (from, to);
+    while start > 0 && text.get(start.saturating_sub(1)).copied().is_some_and(word) {
+        start = start.saturating_sub(1);
+    }
+    while text.get(end).copied().is_some_and(word) {
+        end = end.saturating_add(1);
+    }
+    candidates.push((start, end));
+    // Enclosing brackets, innermost first: contents, then with brackets.
+    let mut open_from = from;
+    for _ in 0..32 {
+        let Some((open, close)) = enclosing_pair(text, open_from, to) else {
+            break;
+        };
+        candidates.push((open.saturating_add(1), close));
+        candidates.push((open, close.saturating_add(1)));
+        open_from = open;
+    }
+    // String contents on the line.
+    let line_start = text
+        .get(..from)
+        .and_then(|head| head.iter().rposition(|c| *c == '\n'))
+        .map_or(0, |index| index.saturating_add(1));
+    let line_end = text
+        .get(to..)
+        .and_then(|tail| tail.iter().position(|c| *c == '\n'))
+        .map_or(len, |index| to.saturating_add(index));
+    let quotes: Vec<usize> = (line_start..line_end)
+        .filter(|index| text.get(*index) == Some(&'"'))
+        .collect();
+    for pair in quotes.chunks(2) {
+        if let [open, close] = pair
+            && *open < from
+            && to <= *close
+        {
+            candidates.push((open.saturating_add(1), *close));
+            candidates.push((*open, close.saturating_add(1)));
+        }
+    }
+    // The lines without their indentation, the whole lines, the buffer.
+    let indent = text.get(line_start..line_end).map_or(0, |line| {
+        line.iter().take_while(|c| c.is_whitespace()).count()
+    });
+    candidates.push((line_start.saturating_add(indent), line_end));
+    candidates.push((line_start, line_end));
+    candidates.push((0, len));
+    candidates
+        .into_iter()
+        .filter(|(a, b)| *a <= from && to <= *b && (*a, *b) != (from, to) && a < b)
+        .min_by_key(|(a, b)| b.saturating_sub(*a))
+}
+
+/// The innermost bracket pair around `from..to`: an unmatched opener
+/// before `from` and its matching closer at or after `to`.
+fn enclosing_pair(text: &[char], from: usize, to: usize) -> Option<(usize, usize)> {
+    let mut depth: Vec<char> = Vec::new();
+    let mut index = from;
+    while index > 0 {
+        index = index.saturating_sub(1);
+        let c = *text.get(index)?;
+        match c {
+            ')' | ']' | '}' => depth.push(c),
+            '(' | '[' | '{' if depth.pop().is_none() => {
+                let close = closer_for(c)?;
+                let mut nested = 0usize;
+                let mut at = index.saturating_add(1);
+                while let Some(next) = text.get(at) {
+                    if *next == c {
+                        nested = nested.saturating_add(1);
+                    } else if *next == close {
+                        if nested == 0 {
+                            return (at >= to).then_some((index, at));
+                        }
+                        nested = nested.saturating_sub(1);
+                    }
+                    at = at.saturating_add(1);
+                }
+                return None;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Width of one indent level when a file does not indent with tabs.
 const INDENT_WIDTH: usize = 4;
 
@@ -823,6 +914,71 @@ impl VimEngine {
         None
     }
 
+    /// Current selection (or caret) as a flat char range, end-exclusive.
+    fn selection_chars<B: Buffer>(&self, doc: &B) -> (usize, usize) {
+        use super::mode::ModalEngine;
+        if self.selection().is_some() {
+            self.selection_range(doc, self.mode == Mode::VisualLine)
+        } else {
+            let at = self.char_idx(doc, self.cursor);
+            (at, at)
+        }
+    }
+
+    fn select_chars<B: Buffer>(&mut self, doc: &mut B, from: usize, to: usize) {
+        self.clear_pending();
+        doc.end_run();
+        if self.mode == Mode::Insert {
+            self.enter_normal(doc);
+        }
+        let (line, col) = doc.line_col_at(from);
+        self.anchor = Cursor { line, col };
+        // Vim selections include the cursor cell; modeless ones end at it.
+        let end = if self.modeless {
+            to
+        } else {
+            to.saturating_sub(1).max(from)
+        };
+        let (line, col) = doc.line_col_at(end);
+        self.cursor = Cursor { line, col };
+        self.mode = Mode::Visual;
+        self.preferred_col = col;
+        self.scroll_request = true;
+    }
+
+    /// Extend selection (`IntelliJ` Ctrl+W / Alt+Up): grow to the smallest
+    /// enclosing unit: word, string contents, bracket contents, brackets,
+    /// whole lines, … up to the whole buffer.
+    pub fn ide_extend_selection<B: Buffer>(&mut self, doc: &mut B) {
+        let text = super::words::flat_text(doc);
+        let current = self.selection_chars(doc);
+        if let Some((from, to)) = extend_candidate(&text, current) {
+            if self.extend_stack.last() != Some(&current) {
+                self.extend_stack.push(current);
+            }
+            self.select_chars(doc, from, to);
+        }
+    }
+
+    /// Shrink selection: back to what extend grew from.
+    pub fn ide_shrink_selection<B: Buffer>(&mut self, doc: &mut B) {
+        let current = self.selection_chars(doc);
+        while let Some((from, to)) = self.extend_stack.pop() {
+            if from >= current.0 && to <= current.1 && (from, to) != current {
+                if from == to {
+                    let (line, col) = doc.line_col_at(from);
+                    self.mode = Mode::Normal;
+                    self.cursor = Cursor { line, col };
+                    self.anchor = self.cursor;
+                    self.clamp(doc);
+                } else {
+                    self.select_chars(doc, from, to);
+                }
+                return;
+            }
+        }
+    }
+
     /// Identifier under (or just before) the caret, for occurrence
     /// highlighting. Punctuation and blanks yield nothing.
     #[must_use]
@@ -1108,6 +1264,35 @@ mod tests {
         engine.ide_move(&mut doc, IdeMotion::Down, true);
         engine.modeless_key(&mut doc, Key::Tab);
         assert_eq!(doc.text(), "    a\nb\nc");
+    }
+
+    #[test]
+    fn extend_selection_grows_word_contents_brackets_line_and_shrinks_back() {
+        let (mut engine, mut doc) = modeless("    call(one, two_x);\nnext\n");
+        at(&mut engine, &mut doc, 0, 15);
+        let mut grown = Vec::new();
+        for _ in 0..6 {
+            engine.ide_extend_selection(&mut doc);
+            grown.push(engine.copy_text(&doc));
+        }
+        // The call expression (callee included) comes before the statement.
+        assert_eq!(
+            grown,
+            [
+                "two_x",
+                "one, two_x",
+                "(one, two_x)",
+                "call(one, two_x)",
+                "call(one, two_x);",
+                "    call(one, two_x);",
+            ]
+        );
+        engine.ide_shrink_selection(&mut doc);
+        assert_eq!(engine.copy_text(&doc), "call(one, two_x);");
+        for _ in 0..4 {
+            engine.ide_shrink_selection(&mut doc);
+        }
+        assert_eq!(engine.copy_text(&doc), "two_x");
     }
 
     #[test]

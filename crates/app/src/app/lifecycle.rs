@@ -287,6 +287,7 @@ impl App {
             usages: None,
             find_bar: None,
             completion: None,
+            signature: None,
             git_bases: HashMap::new(),
             git_base_pending: std::collections::HashSet::new(),
             git_base_generation: 0,

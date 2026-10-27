@@ -194,6 +194,125 @@ pub(crate) fn after_frame(
     None
 }
 
+/// Parameter info for the call around the caret.
+pub(crate) struct SignaturePopup {
+    pub path: PathBuf,
+    pub generation: u64,
+    pub help: Option<native_lsp::SignatureHelp>,
+    pub line: usize,
+    /// Column just after the `(` that opened the call.
+    pub open: usize,
+    pub anchor: Option<egui::Rect>,
+}
+
+/// Column after the innermost unclosed `(` before `col` on this line.
+pub(crate) fn open_paren(line: &str, col: usize) -> Option<usize> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut depth = 0usize;
+    for index in (0..col.min(chars.len())).rev() {
+        match chars.get(index) {
+            Some(')') => depth = depth.saturating_add(1),
+            Some('(') if depth == 0 => return Some(index.saturating_add(1)),
+            Some('(') => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Signature upkeep after the view drew: close when the caret leaves the
+/// call, and say when to ask (typing `(` or `,` inside a call).
+pub(crate) fn signature_after_frame(
+    popup: &mut Option<SignaturePopup>,
+    buffer: &Doc,
+    engine: &VimEngine,
+    revision_before: u64,
+    server: bool,
+) -> Option<(native_lsp::Position, usize, usize)> {
+    use terminator_native_edit::vim::{ModalEngine as _, Mode};
+    let caret = engine.cursor();
+    let text = buffer.line_text(caret.line);
+    let open = open_paren(&text, caret.col);
+    if let Some(shown) = popup.as_ref()
+        && (shown.line != caret.line || open != Some(shown.open) || engine.mode() != Mode::Insert)
+    {
+        *popup = None;
+    }
+    let typed = buffer.revision() != revision_before
+        && engine.mode() == Mode::Insert
+        && caret
+            .col
+            .checked_sub(1)
+            .and_then(|index| text.chars().nth(index))
+            .is_some_and(|c| c == '(' || c == ',');
+    let open = open?;
+    if !(server && typed) {
+        return None;
+    }
+    let position = native_lsp::Position {
+        line: u32::try_from(caret.line).ok()?,
+        character: native_lsp::char_col_to_utf16(&text, caret.col),
+    };
+    Some((position, caret.line, open))
+}
+
+/// Paint parameter info above the caret, the active parameter in bold.
+pub(crate) fn signature_ui(ui: &egui::Ui, popup: &SignaturePopup) {
+    let (Some(help), Some(anchor)) = (&popup.help, popup.anchor) else {
+        return;
+    };
+    let font = egui::FontId::monospace(12.0);
+    let mut job = egui::text::LayoutJob::default();
+    let chars: Vec<char> = help.label.chars().collect();
+    let (start, end) = help.active.as_ref().map_or((0, 0), |range| {
+        (range.start.min(chars.len()), range.end.min(chars.len()))
+    });
+    let plain = ui.visuals().text_color();
+    let strong = ui.visuals().strong_text_color();
+    for (range, color, underline) in [
+        (0..start, plain, false),
+        (start..end, strong, true),
+        (end..chars.len(), plain, false),
+    ] {
+        let text: String = chars.get(range).unwrap_or_default().iter().collect();
+        if text.is_empty() {
+            continue;
+        }
+        job.append(
+            &text,
+            0.0,
+            egui::TextFormat {
+                font_id: font.clone(),
+                color,
+                underline: if underline {
+                    egui::Stroke::new(1.0, strong)
+                } else {
+                    egui::Stroke::NONE
+                },
+                ..Default::default()
+            },
+        );
+    }
+    egui::Area::new(egui::Id::unique(("native-signature", &popup.path)))
+        .order(egui::Order::Foreground)
+        .pivot(egui::Align2::LEFT_BOTTOM)
+        .fixed_pos(anchor.left_top())
+        .interactable(false)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_max_width(640.0);
+                ui.label(job);
+                if let Some(doc) = &help.documentation {
+                    let first = doc
+                        .lines()
+                        .find(|line| !line.trim().is_empty())
+                        .unwrap_or_default();
+                    ui.weak(first);
+                }
+            });
+        });
+}
+
 /// What the popup asked for this frame.
 pub(crate) enum PopupAction {
     None,
@@ -305,6 +424,35 @@ mod tests {
             sort: sort.into(),
             edit: None,
         }
+    }
+
+    #[test]
+    fn signature_opens_inside_calls_and_closes_outside() {
+        assert_eq!(open_paren("f(a, g(b), ", 11), Some(2));
+        assert_eq!(open_paren("f(a)", 4), None);
+        let mut buffer = Doc::new("f(\n");
+        let mut engine = VimEngine::new();
+        engine.set_modeless(true);
+        let _ = engine.place_cursor(&mut buffer, 0, 2);
+        engine.modeless_key(&mut buffer, terminator_native_edit::vim::Key::Char('x'));
+        let before = buffer.revision();
+        engine.type_text(&mut buffer, ",");
+        let mut popup = None;
+        let asked = signature_after_frame(&mut popup, &buffer, &engine, before, true);
+        assert_eq!(asked.map(|(_, line, open)| (line, open)), Some((0, 2)));
+        popup = Some(SignaturePopup {
+            path: PathBuf::from("/f.rs"),
+            generation: 1,
+            help: None,
+            line: 0,
+            open: 2,
+            anchor: None,
+        });
+        // Leaving the call (past its `)`) closes the popup.
+        let _ = engine.place_cursor(&mut buffer, 0, 0);
+        let rev = buffer.revision();
+        assert!(signature_after_frame(&mut popup, &buffer, &engine, rev, true).is_none());
+        assert!(popup.is_none());
     }
 
     #[test]

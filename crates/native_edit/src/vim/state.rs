@@ -41,6 +41,8 @@ pub struct VimEngine {
     pub(crate) options: VimrcOptions,
     /// Vim off: IDE caret and selection semantics (see `vim/ide.rs`).
     pub(crate) modeless: bool,
+    /// Selections extend-selection grew from, innermost last, for shrink.
+    pub(crate) extend_stack: Vec<(usize, usize)>,
 }
 
 impl Default for VimEngine {
@@ -68,6 +70,7 @@ impl Default for VimEngine {
             typed_end: 0,
             options: VimrcOptions::default(),
             modeless: false,
+            extend_stack: Vec::new(),
         }
     }
 }
