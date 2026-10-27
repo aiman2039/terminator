@@ -15,7 +15,7 @@ impl App {
             self.player_center(ui);
             return;
         }
-        if self.palette_open {
+        if self.palette.open {
             self.palette_center(ui);
             return;
         }
@@ -185,7 +185,7 @@ impl App {
                             ui,
                             "New terminal",
                             "Terminal",
-                            &app.shortcut_label("new_terminal"),
+                            &app.shortcut_label(Action::NewTerminal),
                         )
                         .clicked()
                         {
@@ -264,9 +264,9 @@ impl App {
             self.workspace_blank(ui);
             // No leaf to drop on. A strip shell released here still becomes
             // the main pane's first tab.
-            if self.pane_drag_from_strip
+            if self.drag.pane_from_strip
                 && ui.input(|input| input.pointer.any_released())
-                && let Some(Tab::Terminal(sid)) = self.pane_drag.clone()
+                && let Some(Tab::Terminal(sid)) = self.drag.pane.clone()
             {
                 self.pull_strip_shell_into(&mut dock, &sid);
             }
@@ -290,8 +290,8 @@ impl App {
         self.paint_drag_ghost(ui);
         self.paint_tab_ghost(ui);
         // A release the docks did not accept cancels so the payload cannot stick.
-        if self.pane_drag.is_some() && ui.input(|i| i.pointer.any_released()) {
-            self.drop_preview_origin = None;
+        if self.drag.pane.is_some() && ui.input(|i| i.pointer.any_released()) {
+            self.drag.preview_origin = None;
             self.end_pane_drag();
         }
         // Pane "Close tab" is queued while this workspace is checked out.
@@ -418,7 +418,7 @@ impl App {
     }
 
     pub(crate) fn paint_dock(&mut self, ui: &mut egui::Ui, project: &str, dock: &mut Workspace) {
-        self.pane_drop_tabs.clear();
+        self.drag.drop_tabs.clear();
         let style = self.dock_style(ui);
         self.refresh_pane_maps(project, dock);
         // Issuing tab for close requests: the rendered tab (mirroring

@@ -1,18 +1,19 @@
 use eframe::egui::{self};
+use egui_dock::DockState;
 use std::{
     path::PathBuf,
     sync::mpsc::{self, Receiver},
 };
 use terminator_core::*;
 
-use super::super::*;
+use crate::*;
 #[cfg(feature = "test-support")]
-pub(super) fn header_target(ctx: &egui::Context) -> impl Fn(&str) -> Option<egui::Rect> + '_ {
+pub(crate) fn header_target(ctx: &egui::Context) -> impl Fn(&str) -> Option<egui::Rect> + '_ {
     |name| ctx.data(|data| data.get_temp(egui::Id::unique(("fixture-target", name))))
 }
 
 #[cfg(feature = "test-support")]
-pub(super) fn paint_header(app: &mut App, ctx: &egui::Context, events: &[egui::Event]) {
+pub(crate) fn paint_header(app: &mut App, ctx: &egui::Context, events: &[egui::Event]) {
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -33,7 +34,7 @@ pub(super) fn paint_header(app: &mut App, ctx: &egui::Context, events: &[egui::E
     output.textures_delta.clear();
 }
 
-pub(super) fn fixture() -> (App, egui::Context, tempfile::TempDir) {
+pub(crate) fn fixture() -> (App, egui::Context, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let ctx = egui::Context::default();
     let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
@@ -57,7 +58,7 @@ pub(super) fn fixture() -> (App, egui::Context, tempfile::TempDir) {
     (app, ctx, dir)
 }
 
-pub(super) fn session_fixture(sid: &str, kind: SessionKind) -> Session {
+pub(crate) fn session_fixture(sid: &str, kind: SessionKind) -> Session {
     Session {
         remote: None,
         review: false,
@@ -79,7 +80,7 @@ pub(super) fn session_fixture(sid: &str, kind: SessionKind) -> Session {
     }
 }
 
-pub(super) fn poll_workspace_close_in_frame(app: &mut App, ctx: &egui::Context) {
+pub(crate) fn poll_workspace_close_in_frame(app: &mut App, ctx: &egui::Context) {
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -93,7 +94,7 @@ pub(super) fn poll_workspace_close_in_frame(app: &mut App, ctx: &egui::Context) 
     output.textures_delta.clear();
 }
 
-pub(super) fn prompt_name(app: &App) -> Option<&str> {
+pub(crate) fn prompt_name(app: &App) -> Option<&str> {
     match &app.name_prompt {
         Some(
             workspace_ops::NamePrompt::File { name, .. }
@@ -104,9 +105,8 @@ pub(super) fn prompt_name(app: &App) -> Option<&str> {
     }
 }
 
-// Kept for upcoming native-rendering assertions; no test calls it yet.
-#[allow(dead_code)]
-pub(super) fn placeholder_center(
+#[cfg(feature = "test-support")]
+pub(crate) fn placeholder_center(
     shapes: &[egui::epaint::ClippedShape],
     needle: &str,
 ) -> Option<f32> {
@@ -132,7 +132,7 @@ pub(super) fn placeholder_center(
         .find_map(|clipped| walk(&clipped.shape, needle))
 }
 
-pub(super) fn paint_explorer(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+pub(crate) fn paint_explorer(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
     let cwd = PathBuf::from("/a");
     let mut output = ctx.run_ui(
         egui::RawInput {
@@ -148,7 +148,7 @@ pub(super) fn paint_explorer(app: &mut App, ctx: &egui::Context, events: Vec<egu
     output.textures_delta.clear();
 }
 
-pub(super) fn key_press(key: egui::Key) -> egui::Event {
+pub(crate) fn key_press(key: egui::Key) -> egui::Event {
     egui::Event::Key {
         key,
         physical_key: None,
@@ -158,7 +158,7 @@ pub(super) fn key_press(key: egui::Key) -> egui::Event {
     }
 }
 
-pub(super) fn assert_no_workspace_job(requests: &Receiver<Job>) {
+pub(crate) fn assert_no_workspace_job(requests: &Receiver<Job>) {
     while let Ok(job) = requests.try_recv() {
         assert!(
             !matches!(job, Job::Workspace(..)),
@@ -167,26 +167,26 @@ pub(super) fn assert_no_workspace_job(requests: &Receiver<Job>) {
     }
 }
 
-pub(super) fn assert_rename_blocks(app: &App) {
+pub(crate) fn assert_rename_blocks(app: &App) {
     assert!(app.rename_session.is_some());
     assert!(!app.terminal_input_enabled("named"));
     assert!(!app.strip_terminal_input_enabled("named"));
-    assert!(!app.shortcut_allowed("new_terminal"));
+    assert!(!app.shortcut_allowed(Action::NewTerminal));
     assert!(app.browser_covered());
 }
 
-pub(super) fn assert_rename_draft_stays_live(app: &App) {
+pub(crate) fn assert_rename_draft_stays_live(app: &App) {
     assert_eq!(
         app.rename_session.as_ref().map(|(_, title)| title.as_str()),
         Some("Draft")
     );
     assert!(app.terminal_input_enabled("named"));
     assert!(app.strip_terminal_input_enabled("named"));
-    assert!(app.shortcut_allowed("new_terminal"));
+    assert!(app.shortcut_allowed(Action::NewTerminal));
     assert!(!app.browser_covered());
 }
 
-pub(super) fn visible_ids(app: &App) -> Vec<String> {
+pub(crate) fn visible_ids(app: &App) -> Vec<String> {
     app.visible_projects()
         .into_iter()
         .map(|project| project.id.clone())
@@ -198,7 +198,7 @@ pub(super) fn visible_ids(app: &App) -> Vec<String> {
 /// (`ResultBudget`), so on a loaded machine a single pass may service
 /// background completions first and leave the test's own update queued.
 /// Production pumps every frame; tests must do the same.
-pub(super) fn drain_until_project_activity(
+pub(crate) fn drain_until_project_activity(
     app: &mut App,
     ctx: &egui::Context,
     project: &str,
@@ -221,7 +221,7 @@ pub(super) fn drain_until_project_activity(
 /// One pass drains at most 64 updates or 2 ms, and startup completions
 /// sit ahead of the test's own update. A loaded runner can defer that
 /// update past a single call, so pump the way production pumps each frame.
-pub(super) fn pump_until(app: &mut App, ctx: &egui::Context, mut ready: impl FnMut(&App) -> bool) {
+pub(crate) fn pump_until(app: &mut App, ctx: &egui::Context, mut ready: impl FnMut(&App) -> bool) {
     for _ in 0..100 {
         app.process_updates(ctx);
         if ready(app) {
@@ -262,7 +262,7 @@ fn update_barrier_waits_across_frame_budget_boundaries() {
 /// Drive one headless frame with the IDE strip painted before the main
 /// dock, matching `App::ui`, so a release is seen by both drop targets.
 #[cfg(feature = "test-support")]
-pub(super) fn cross_dock_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+pub(crate) fn cross_dock_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -291,7 +291,7 @@ pub(super) fn cross_dock_frame(app: &mut App, ctx: &egui::Context, events: Vec<e
 }
 
 #[cfg(feature = "test-support")]
-pub(super) fn cross_glide(
+pub(crate) fn cross_glide(
     app: &mut App,
     ctx: &egui::Context,
     from: egui::Pos2,
@@ -317,7 +317,7 @@ pub(super) fn cross_glide(
 /// order (strip first, dock after) with synthetic pointer events.
 /// Needs test-support for the geometry records.
 #[cfg(feature = "test-support")]
-pub(super) fn combined_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+pub(crate) fn combined_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -338,7 +338,7 @@ pub(super) fn combined_frame(app: &mut App, ctx: &egui::Context, events: Vec<egu
 }
 
 #[cfg(feature = "test-support")]
-pub(super) fn frame_center(app: &App, ctx: &egui::Context, name: &str) -> egui::Pos2 {
+pub(crate) fn frame_center(app: &App, ctx: &egui::Context, name: &str) -> egui::Pos2 {
     let rect = app
         .fixture_rect(ctx, name)
         .unwrap_or_else(|| panic!("missing geometry for {name}"));
@@ -346,7 +346,7 @@ pub(super) fn frame_center(app: &App, ctx: &egui::Context, name: &str) -> egui::
 }
 
 #[cfg(feature = "test-support")]
-pub(super) fn frame_press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+pub(crate) fn frame_press(pos: egui::Pos2, pressed: bool) -> egui::Event {
     egui::Event::PointerButton {
         pos,
         button: egui::PointerButton::Primary,
@@ -356,7 +356,7 @@ pub(super) fn frame_press(pos: egui::Pos2, pressed: bool) -> egui::Event {
 }
 
 #[cfg(feature = "test-support")]
-pub(super) fn frame_glide(
+pub(crate) fn frame_glide(
     app: &mut App,
     ctx: &egui::Context,
     from: egui::Pos2,
@@ -378,7 +378,7 @@ pub(super) fn frame_glide(
     }
 }
 
-pub(super) fn notice_fixture(
+pub(crate) fn notice_fixture(
     id: &str,
     session: &str,
     state: AgentState,
@@ -401,12 +401,12 @@ pub(super) fn notice_fixture(
 }
 
 #[cfg(feature = "test-support")]
-pub(super) fn agent_target(ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
+pub(crate) fn agent_target(ctx: &egui::Context, name: &str) -> Option<egui::Rect> {
     ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
 }
 
 #[cfg(feature = "test-support")]
-pub(super) fn render_agents(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+pub(crate) fn render_agents(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -421,7 +421,7 @@ pub(super) fn render_agents(app: &mut App, ctx: &egui::Context, events: Vec<egui
     output.textures_delta.clear();
 }
 
-pub(super) fn generation_health(
+pub(crate) fn generation_health(
     id: &str,
     directory: &std::path::Path,
     revision: u64,
@@ -448,7 +448,7 @@ pub(super) fn generation_health(
 }
 
 #[cfg(feature = "test-support")]
-pub(super) fn click_agent_target(app: &mut App, ctx: &egui::Context, name: &str) {
+pub(crate) fn click_agent_target(app: &mut App, ctx: &egui::Context, name: &str) {
     render_agents(app, ctx, vec![]);
     let pos = agent_target(ctx, name).unwrap().center();
     render_agents(app, ctx, vec![egui::Event::PointerMoved(pos)]);
@@ -475,7 +475,7 @@ pub(super) fn click_agent_target(app: &mut App, ctx: &egui::Context, name: &str)
 }
 
 #[cfg(feature = "test-support")]
-pub(super) fn waiting_inbox() -> (App, egui::Context, tempfile::TempDir, mpsc::Receiver<Job>) {
+pub(crate) fn waiting_inbox() -> (App, egui::Context, tempfile::TempDir, mpsc::Receiver<Job>) {
     let (mut app, ctx, dir) = fixture();
     app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
     app.state.notifications = vec![notice_fixture(
@@ -490,7 +490,7 @@ pub(super) fn waiting_inbox() -> (App, egui::Context, tempfile::TempDir, mpsc::R
 }
 
 #[cfg(feature = "test-support")]
-pub(super) fn control_actions(received: &mpsc::Receiver<Job>) -> Vec<String> {
+pub(crate) fn control_actions(received: &mpsc::Receiver<Job>) -> Vec<String> {
     let mut actions = Vec::new();
     while let Ok(job) = received.try_recv() {
         if let Job::Control(request, _) = job {
@@ -502,4 +502,59 @@ pub(super) fn control_actions(received: &mpsc::Receiver<Job>) -> Vec<String> {
         }
     }
     actions
+}
+
+pub(crate) fn float_window(
+    name: &str,
+    project: &str,
+    home: &str,
+    tabs: Vec<Tab>,
+) -> FloatingWindow {
+    FloatingWindow {
+        viewport: egui::ViewportId::from_hash_of(name),
+        dock: Some(DockState::new(tabs)),
+        home: (project.into(), home.into()),
+    }
+}
+
+pub(crate) fn docked_issuer(
+    project: &str,
+    tab: &str,
+    node: Option<egui_dock::NodePath>,
+    delayed: bool,
+) -> Option<crate::native_editor::CloseIssuer> {
+    Some(crate::native_editor::CloseIssuer::Docked {
+        project: project.into(),
+        tab: tab.into(),
+        node,
+        delayed,
+    })
+}
+
+/// Every text run painted into `shapes`, in paint order, with its position.
+pub(crate) fn painted_text(shapes: &[egui::epaint::ClippedShape]) -> Vec<(egui::Pos2, String)> {
+    fn walk(out: &mut Vec<(egui::Pos2, String)>, shape: &egui::Shape) {
+        match shape {
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    walk(out, shape);
+                }
+            }
+            egui::Shape::Text(text) => out.push((text.pos, text.galley.text().to_owned())),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in shapes {
+        walk(&mut out, &clipped.shape);
+    }
+    out
+}
+
+/// The strings of [`painted_text`], without positions.
+pub(crate) fn painted_strings(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+    painted_text(shapes)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect()
 }

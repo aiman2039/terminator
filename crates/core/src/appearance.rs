@@ -177,6 +177,39 @@ impl AppearanceConfig {
             ..Default::default()
         }
     }
+    /// `JetBrains` New UI light palette.
+    #[must_use]
+    pub fn intellij_light() -> Self {
+        Self {
+            window: "#F7F8FA".into(),
+            surface: "#FFFFFF".into(),
+            hover: "#EBECF0".into(),
+            border: "#D3D5DB".into(),
+            text: "#1E1F22".into(),
+            secondary: "#6C707E".into(),
+            accent: "#3574F0".into(),
+            selection: "#D4E2FF".into(),
+            terminal_background: "#FFFFFF".into(),
+            terminal_foreground: "#1E1F22".into(),
+            git_added: "#2F7D3B".into(),
+            git_modified: "#9A6700".into(),
+            git_deleted: "#C7222D".into(),
+            git_untracked: "#2C8A5A".into(),
+            git_ignored: "#8C8C8C".into(),
+            status_running: "#1F7F69".into(),
+            status_waiting: "#9A6700".into(),
+            status_failed: "#C7222D".into(),
+            ..Default::default()
+        }
+    }
+    /// Whether the window color is light, so chrome should use dark glyphs.
+    #[must_use]
+    pub fn is_light(&self) -> bool {
+        rgb(&self.window).is_ok_and(|[r, g, b]| {
+            // Rec. 601 luma on 0..=255 channels.
+            0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b) > 128.0
+        })
+    }
     #[must_use]
     pub fn colors_match(&self, other: &Self) -> bool {
         self.window == other.window
@@ -366,6 +399,19 @@ mod tests {
         assert_eq!(legacy.window, "#26282C");
         assert!(!default.colors_match(&legacy));
         assert!(default.colors_match(&AppearanceConfig::intellij_dark()));
+    }
+    #[test]
+    fn light_preset_validates_and_reads_as_light() {
+        let light = AppearanceConfig::intellij_light();
+        light.validate().unwrap();
+        assert!(light.is_light());
+        for dark in [
+            AppearanceConfig::intellij_dark(),
+            AppearanceConfig::terminator_dark(),
+            AppearanceConfig::high_contrast(),
+        ] {
+            assert!(!dark.is_light());
+        }
     }
     #[test]
     fn high_contrast_and_density_round_trip() {

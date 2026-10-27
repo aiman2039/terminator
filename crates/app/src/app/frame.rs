@@ -173,17 +173,17 @@ impl eframe::App for App {
             });
         }
         let capture_vnc = self.vnc_captures_shortcuts(&ctx);
-        for action in shortcuts::ACTIONS.iter().map(|(action, _)| *action) {
+        for &action in Action::ALL {
             if capture_vnc {
                 continue;
             }
             if !self.shortcut_allowed(action) || !self.shortcut_applies(action) {
                 continue;
             }
-            if action == "select_all" && self.text_input_focused(&ctx) {
+            if action == Action::SelectAll && self.text_input_focused(&ctx) {
                 continue;
             }
-            let key = shortcuts::binding(&self.state.settings.keybindings, action);
+            let key = shortcuts::binding(&self.state.settings.keybindings, action.id());
             if key.is_empty() || !shortcuts::consume(&ctx, &key) {
                 continue;
             }
@@ -313,7 +313,7 @@ impl eframe::App for App {
                     ui.weak("App and session service use different installations.");
                 } else if let Some(info) = self.info.clone() {
                     ui.horizontal(|ui| {
-                        if ui.small_button("×").clicked() {
+                        if appearance::sidebar_action(ui, "X", "Dismiss").clicked() {
                             self.info = None;
                         }
                         ui.label(info);

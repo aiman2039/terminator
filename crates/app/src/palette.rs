@@ -77,36 +77,96 @@ pub(crate) enum PaletteItem {
         container: Option<String>,
     },
     Settings(SettingsSection),
-    Action(&'static str, &'static str),
+    Action(Action),
     AddProject,
-    NewTerminal,
-    NewBrowserTab,
-    NewVncViewer,
     VncProfile(String, String),
     NewWorktree,
     OpenPlayer,
-    ToggleIdeMode,
-    MoveToMain,
-    MoveToStrip,
     ToggleIdeSidebarHeight,
-    NextAttention,
     SaveLayout,
     ApplyLayout(String),
 }
 
-impl PaletteItem {
-    fn category(&self) -> &'static str {
+/// Shortcut actions the palette always lists, with a bare title and no
+/// shortcut detail, in display order.
+const PINNED_ACTIONS: &[Action] = &[
+    Action::NewTerminal,
+    Action::NewBrowser,
+    Action::NewVnc,
+    Action::NextAttention,
+];
+/// Pinned like [`PINNED_ACTIONS`], listed after "Open player".
+const PINNED_IDE_ACTIONS: &[Action] = &[
+    Action::ToggleIdeMode,
+    Action::MoveToMain,
+    Action::MoveToStrip,
+];
+/// Shortcut actions the palette never lists: they open the palette or its
+/// Settings counterpart.
+const HIDDEN_ACTIONS: &[Action] = &[Action::OpenSettings, Action::OpenPalette];
+/// Shortcut actions listed only while a session is active.
+const SESSION_ACTIONS: &[Action] = &[
+    Action::SelectAll,
+    Action::FindInTerminal,
+    Action::SearchScrollback,
+    Action::CopyWorkingDirectory,
+    Action::RenameTerminal,
+    Action::CloseSession,
+    Action::ClearScrollback,
+];
+
+fn pinned_action(action: Action) -> bool {
+    PINNED_ACTIONS.contains(&action) || PINNED_IDE_ACTIONS.contains(&action)
+}
+
+/// Palette item kind: one row of category, rank, and filter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Agent,
+    Symbol,
+    File,
+    Project,
+    Session,
+    Settings,
+    Layout,
+    Vnc,
+    Action,
+}
+
+impl Kind {
+    /// (category, kind rank, filter bit).
+    const fn info(self) -> (&'static str, u8, u8) {
         match self {
-            Self::Project(..) => "Project",
-            Self::Session(..) => "Session",
-            Self::Agent(..) => "Agent",
-            Self::File(..) => "File",
-            Self::Symbol { .. } => "Symbol",
-            Self::Settings(..) => "Settings",
-            Self::ApplyLayout(..) => "Layout",
-            Self::VncProfile(..) => "VNC",
-            _ => "Action",
+            Self::Agent => ("Agent", 0, FILTER_AGENTS),
+            Self::Symbol => ("Symbol", 1, FILTER_SYMBOLS),
+            Self::File => ("File", 2, FILTER_FILES),
+            Self::Project => ("Project", 3, FILTER_PROJECTS),
+            Self::Session => ("Session", 4, FILTER_SESSIONS),
+            Self::Settings => ("Settings", 5, FILTER_SETTINGS),
+            Self::Layout => ("Layout", 6, FILTER_ACTIONS),
+            Self::Vnc => ("VNC", 6, FILTER_ACTIONS),
+            Self::Action => ("Action", 6, FILTER_ACTIONS),
         }
+    }
+}
+
+impl PaletteItem {
+    fn kind(&self) -> Kind {
+        match self {
+            Self::Project(..) => Kind::Project,
+            Self::Session(..) => Kind::Session,
+            Self::Agent(..) => Kind::Agent,
+            Self::File(..) => Kind::File,
+            Self::Symbol { .. } => Kind::Symbol,
+            Self::Settings(..) => Kind::Settings,
+            Self::ApplyLayout(..) => Kind::Layout,
+            Self::VncProfile(..) => Kind::Vnc,
+            _ => Kind::Action,
+        }
+    }
+
+    fn category(&self) -> &'static str {
+        self.kind().info().0
     }
 
     fn title(&self) -> String {
@@ -120,19 +180,12 @@ impl PaletteItem {
                 .into_owned(),
             Self::Symbol { name, .. } => name.clone(),
             Self::Settings(section) => section.title().into(),
-            Self::Action(_, name) => (*name).into(),
+            Self::Action(action) => action.label().into(),
             Self::AddProject => "Add project".into(),
-            Self::NewTerminal => "New terminal".into(),
-            Self::NewBrowserTab => "New browser tab".into(),
-            Self::NewVncViewer => "New VNC viewer".into(),
             Self::VncProfile(_, name) => name.clone(),
             Self::NewWorktree => "New task worktree".into(),
             Self::OpenPlayer => "Open player".into(),
-            Self::ToggleIdeMode => "Toggle IDE mode".into(),
-            Self::MoveToMain => "Move terminal to main pane".into(),
-            Self::MoveToStrip => "Move terminal to lower pane".into(),
             Self::ToggleIdeSidebarHeight => "Toggle IDE sidebar height".into(),
-            Self::NextAttention => "Next agent needing attention".into(),
             Self::SaveLayout => "Save layout".into(),
             Self::ApplyLayout(name) => name.clone(),
         }
@@ -141,17 +194,11 @@ impl PaletteItem {
     fn label(&self) -> String {
         match self {
             Self::AddProject
-            | Self::NewTerminal
-            | Self::NewBrowserTab
-            | Self::NewVncViewer
             | Self::NewWorktree
             | Self::OpenPlayer
-            | Self::ToggleIdeMode
-            | Self::MoveToMain
-            | Self::MoveToStrip
             | Self::ToggleIdeSidebarHeight
-            | Self::NextAttention
             | Self::SaveLayout => self.title(),
+            Self::Action(action) if pinned_action(*action) => self.title(),
             _ => format!("{}  {}", self.category(), self.title()),
         }
     }
@@ -215,7 +262,7 @@ impl PaletteItem {
                 .find(|project| &project.id == id)
                 .map_or_else(String::new, |project| project.path.display().to_string()),
             Self::Settings(section) => section.keywords().into(),
-            Self::Action(key, _) => app.shortcut_label(key),
+            Self::Action(action) if !pinned_action(*action) => app.shortcut_label(*action),
             Self::VncProfile(id, _) => app
                 .state
                 .vnc_profiles
@@ -242,27 +289,11 @@ impl PaletteItem {
     }
 
     fn kind_rank(&self) -> u8 {
-        match self {
-            Self::Agent(..) => 0,
-            Self::Symbol { .. } => 1,
-            Self::File(..) => 2,
-            Self::Project(..) => 3,
-            Self::Session(..) => 4,
-            Self::Settings(..) => 5,
-            _ => 6,
-        }
+        self.kind().info().1
     }
 
     fn filter_bit(&self) -> u8 {
-        match self {
-            Self::File(_) => FILTER_FILES,
-            Self::Symbol { .. } => FILTER_SYMBOLS,
-            Self::Project(..) => FILTER_PROJECTS,
-            Self::Session(..) => FILTER_SESSIONS,
-            Self::Agent(..) => FILTER_AGENTS,
-            Self::Settings(_) => FILTER_SETTINGS,
-            _ => FILTER_ACTIONS,
-        }
+        self.kind().info().2
     }
 }
 
@@ -366,51 +397,24 @@ impl App {
         for section in SettingsSection::ALL {
             items.push(PaletteItem::Settings(section));
         }
-        items.extend([
-            PaletteItem::AddProject,
-            PaletteItem::NewTerminal,
-            PaletteItem::NewBrowserTab,
-            PaletteItem::NewVncViewer,
-            PaletteItem::NextAttention,
-            PaletteItem::OpenPlayer,
-            PaletteItem::ToggleIdeMode,
-            PaletteItem::MoveToMain,
-            PaletteItem::MoveToStrip,
-            PaletteItem::ToggleIdeSidebarHeight,
-            PaletteItem::SaveLayout,
-        ]);
+        items.push(PaletteItem::AddProject);
+        items.extend(PINNED_ACTIONS.iter().copied().map(PaletteItem::Action));
+        items.push(PaletteItem::OpenPlayer);
+        items.extend(PINNED_IDE_ACTIONS.iter().copied().map(PaletteItem::Action));
+        items.extend([PaletteItem::ToggleIdeSidebarHeight, PaletteItem::SaveLayout]);
         for profile in &self.state.vnc_profiles {
             items.push(PaletteItem::VncProfile(
                 profile.id.clone(),
                 profile.display_name(),
             ));
         }
-        const EXPLICIT: &[&str] = &[
-            "new_terminal",
-            "new_browser",
-            "new_vnc",
-            "next_attention",
-            "toggle_ide_mode",
-            "move_to_main",
-            "move_to_strip",
-            "open_settings",
-            "open_palette",
-        ];
-        const SESSION_ACTIONS: &[&str] = &[
-            "select_all",
-            "find_in_terminal",
-            "search_scrollback",
-            "copy_working_directory",
-            "rename_terminal",
-            "close_session",
-            "clear_scrollback",
-        ];
-        for &(key, name) in shortcuts::ACTIONS {
-            if !EXPLICIT.contains(&key)
-                && self.shortcut_applies(key)
-                && (!SESSION_ACTIONS.contains(&key) || self.active_session.is_some())
+        for &action in Action::ALL {
+            if !pinned_action(action)
+                && !HIDDEN_ACTIONS.contains(&action)
+                && self.shortcut_applies(action)
+                && (!SESSION_ACTIONS.contains(&action) || self.active_session.is_some())
             {
-                items.push(PaletteItem::Action(key, name));
+                items.push(PaletteItem::Action(action));
             }
         }
         for name in self.preferences.named_layouts.keys() {
@@ -529,10 +533,10 @@ impl App {
     /// No chip: every kind in the current project, except the project list.
     /// The Projects chip is the way to open another project.
     fn palette_wants(&self, kind: u8) -> bool {
-        if self.palette_filters == 0 {
+        if self.palette.filters == 0 {
             kind != FILTER_PROJECTS
         } else {
-            self.palette_filters & kind != 0
+            self.palette.filters & kind != 0
         }
     }
 
@@ -554,8 +558,8 @@ impl App {
         // An empty field shows files, sessions, and agents. Actions,
         // settings, and symbols appear after the user types, or when
         // that filter is on.
-        if self.palette_query.trim().is_empty()
-            && self.palette_filters == 0
+        if self.palette.query.trim().is_empty()
+            && self.palette.filters == 0
             && matches!(kind, FILTER_ACTIONS | FILTER_SETTINGS | FILTER_SYMBOLS)
         {
             return false;
@@ -598,7 +602,7 @@ impl App {
                 })
                 .cloned(),
         );
-        if self.palette_filters != 0 {
+        if self.palette.filters != 0 {
             out.extend(
                 items
                     .iter()
@@ -645,7 +649,7 @@ impl App {
     }
 
     pub(super) fn filtered_palette(&self) -> Vec<PaletteItem> {
-        let query = self.palette_query.trim();
+        let query = self.palette.query.trim();
         let items = self.palette_items();
         if query.is_empty() {
             return self.idle_palette(items);
@@ -734,7 +738,7 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             for (name, bit) in PALETTE_FILTERS {
-                let on = self.palette_filters & bit != 0;
+                let on = self.palette.filters & bit != 0;
                 let response = ui
                     .add(
                         egui::Button::new(*name)
@@ -748,11 +752,11 @@ impl App {
                 diagnostics::record(ui.ctx(), &format!("palette-filter:{name}"), response.rect);
                 if response.clicked() {
                     if on {
-                        self.palette_filters &= !bit;
+                        self.palette.filters &= !bit;
                     } else {
-                        self.palette_filters |= bit;
+                        self.palette.filters |= bit;
                     }
-                    self.palette_index = 0;
+                    self.palette.index = 0;
                 }
             }
         });
@@ -762,15 +766,15 @@ impl App {
             format!("Search {project_name}…")
         };
         let search = ui.add(
-            appearance::singleline(&mut self.palette_query)
+            appearance::singleline(&mut self.palette.query)
                 .hint_text(hint)
                 .desired_width(f32::INFINITY),
         );
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "palette-search", search.rect);
         if search.changed() {
-            self.palette_index = 0;
-            self.palette_query_changed_at = Instant::now();
+            self.palette.index = 0;
+            self.palette.query_changed_at = Instant::now();
             self.lsp.clear_workspace_symbols();
         }
         // A pressed pointer is choosing a filter. Focus returns on release
@@ -779,12 +783,12 @@ impl App {
             search.request_focus();
         }
         if self.palette_wants(FILTER_SYMBOLS) {
-            if self.palette_query.trim().chars().count() >= 2 {
-                if self.palette_query_changed_at.elapsed() >= SYMBOL_QUERY_DELAY {
+            if self.palette.query.trim().chars().count() >= 2 {
+                if self.palette.query_changed_at.elapsed() >= SYMBOL_QUERY_DELAY {
                     let scoped_path = self.selected_project().map(|project| project.path.clone());
                     if let Some(path) = scoped_path.as_deref() {
                         self.lsp
-                            .request_scoped_symbols(&self.palette_query, Some(path));
+                            .request_scoped_symbols(&self.palette.query, Some(path));
                     } else {
                         self.lsp.clear_workspace_symbols();
                     }
@@ -799,27 +803,28 @@ impl App {
             ui.ctx().request_repaint_after(Duration::from_millis(50));
         }
         let project_id = self.selected_project().map(|project| project.id.clone());
-        let stale = self.palette_cache.as_ref().is_none_or(|cache| {
-            cache.query != self.palette_query
+        let stale = self.palette.cache.as_ref().is_none_or(|cache| {
+            cache.query != self.palette.query
                 || cache.state_revision != self.state.revision
                 || cache.file_index_at != self.file_index_at
                 || cache.lsp_revision != self.lsp.search_revision()
-                || cache.filters != self.palette_filters
+                || cache.filters != self.palette.filters
                 || cache.project != project_id
         });
         if stale {
-            self.palette_cache = Some(PaletteCache {
-                query: self.palette_query.clone(),
+            self.palette.cache = Some(PaletteCache {
+                query: self.palette.query.clone(),
                 state_revision: self.state.revision,
                 file_index_at: self.file_index_at,
                 lsp_revision: self.lsp.search_revision(),
-                filters: self.palette_filters,
+                filters: self.palette.filters,
                 project: project_id,
                 items: self.filtered_palette(),
             });
         }
         let items = self
-            .palette_cache
+            .palette
+            .cache
             .as_ref()
             .map_or_else(Vec::new, |cache| cache.items.clone());
         if items.is_empty() {
@@ -831,20 +836,22 @@ impl App {
             return;
         }
         let len = items.len();
-        self.palette_index = self.palette_index.min(len.saturating_sub(1));
+        self.palette.index = self.palette.index.min(len.saturating_sub(1));
         let mut keyboard_moved = false;
         if ui.input(|input| input.key_pressed(egui::Key::ArrowDown))
             && let Some(next) = self
-                .palette_index
+                .palette
+                .index
                 .checked_add(1)
                 .and_then(|index| index.checked_rem(len))
         {
-            self.palette_index = next;
+            self.palette.index = next;
             keyboard_moved = true;
         }
         if ui.input(|input| input.key_pressed(egui::Key::ArrowUp)) {
-            self.palette_index = self
-                .palette_index
+            self.palette.index = self
+                .palette
+                .index
                 .checked_sub(1)
                 .unwrap_or_else(|| len.saturating_sub(1));
             keyboard_moved = true;
@@ -854,7 +861,7 @@ impl App {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for (index, item) in items.iter().enumerate() {
-                    let selected = index == self.palette_index;
+                    let selected = index == self.palette.index;
                     let response = ui
                         .horizontal(|ui| {
                             let response = ui.selectable_label(selected, item.label());
@@ -880,7 +887,7 @@ impl App {
                 }
             });
         if ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-            chosen = Some(self.palette_index);
+            chosen = Some(self.palette.index);
         }
         if let Some(index) = chosen
             && let Some(item) = items.get(index).cloned()
@@ -890,11 +897,11 @@ impl App {
     }
 
     fn close_palette(&mut self) {
-        self.palette_open = false;
-        self.palette_query.clear();
-        self.palette_index = 0;
-        self.palette_filters = 0;
-        self.palette_cache = None;
+        self.palette.open = false;
+        self.palette.query.clear();
+        self.palette.index = 0;
+        self.palette.filters = 0;
+        self.palette.cache = None;
         self.lsp.clear_workspace_symbols();
     }
 
@@ -929,32 +936,15 @@ impl App {
                 self.request_settings_section(section);
             }
             PaletteItem::AddProject => self.add_project = true,
-            PaletteItem::Action(key, _) => self.run_shortcut(ctx, key),
-            PaletteItem::NewTerminal => self.create(None),
-            PaletteItem::NewBrowserTab => self.open_new_browser_tab(None),
-            PaletteItem::NewVncViewer => self.open_new_vnc_tab(None),
+            PaletteItem::Action(action) => self.run_shortcut(ctx, action),
             PaletteItem::VncProfile(id, _) => {
                 if let Some(profile) = self.state.vnc_profiles.iter().find(|p| p.id == id).cloned()
                 {
                     self.connect_vnc_profile(&profile, None);
                 }
             }
-            PaletteItem::NextAttention => self.next_attention(),
             PaletteItem::NewWorktree => self.open_worktree_wizard(),
             PaletteItem::OpenPlayer => self.open_player(),
-            PaletteItem::ToggleIdeMode => self.toggle_ide_mode(),
-            PaletteItem::MoveToMain => {
-                if let Some(sid) = self.focused_strip_shell() {
-                    self.move_strip_session_to_main(&sid);
-                }
-            }
-            PaletteItem::MoveToStrip => {
-                if self.preferences.ide_mode
-                    && let Some(sid) = self.focused_main_shell()
-                {
-                    self.move_main_session_to_strip(&sid);
-                }
-            }
             PaletteItem::ToggleIdeSidebarHeight => self.toggle_ide_sidebar_height(),
             PaletteItem::SaveLayout => self.save_layout_dialog(),
             PaletteItem::ApplyLayout(name) => {
@@ -965,477 +955,4 @@ impl App {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn file_search_reaches_entries_after_the_empty_result_limit() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
-        app.state.projects.push(Project {
-            id: "p".into(),
-            name: "p".into(),
-            path: dir.path().into(),
-            layout: serde_json::Value::Null,
-        });
-        app.selected = Some("p".into());
-        app.dirs.insert(
-            dir.path().into(),
-            (0..50)
-                .map(|index| terminator_git::Entry {
-                    path: dir.path().join(format!("file-{index:02}.rs")),
-                    directory: false,
-                    ignored: false,
-                })
-                .collect(),
-        );
-        assert_eq!(
-            app.filtered_palette()
-                .iter()
-                .filter(|item| matches!(item, PaletteItem::File(_)))
-                .count(),
-            40
-        );
-        app.palette_query = "file-49.rs".into();
-        let matches = app.filtered_palette();
-        assert!(
-            matches.iter().any(
-                |item| matches!(item, PaletteItem::File(path) if path.ends_with("file-49.rs"))
-            )
-        );
-    }
-
-    #[test]
-    fn fuzzy_index_ranks_go_to_file() {
-        use terminator_native_edit::finder::FileIndex;
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("proj");
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::write(root.join("src/main.rs"), "").unwrap();
-        std::fs::write(root.join("src/lib.rs"), "").unwrap();
-        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
-        app.state.projects.push(Project {
-            id: "p".into(),
-            name: "p".into(),
-            path: root.clone(),
-            layout: serde_json::Value::Null,
-        });
-        app.selected = Some("p".into());
-        app.file_index = FileIndex::scan(&[root], MAX_INDEX_FILES);
-        app.palette_query = "main".into();
-        let files: Vec<PathBuf> = app
-            .filtered_palette()
-            .into_iter()
-            .filter_map(|item| match item {
-                PaletteItem::File(path) => Some(path),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(files.len(), 1);
-        assert!(files[0].ends_with("src/main.rs"));
-    }
-
-    #[test]
-    fn background_refresh_delivers_an_index() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("a.rs"), "").unwrap();
-        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
-        app.dirs.insert(
-            dir.path().into(),
-            vec![terminator_git::Entry {
-                path: dir.path().join("a.rs"),
-                directory: false,
-                ignored: false,
-            }],
-        );
-        app.refresh_file_index();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while app.file_index_rx.is_some() && std::time::Instant::now() < deadline {
-            app.poll_file_index();
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(!app.file_index.is_empty());
-        // A second refresh with unchanged roots and a fresh index is a no-op.
-        app.refresh_file_index();
-        assert!(app.file_index_rx.is_none());
-    }
-
-    #[test]
-    fn palette_labels_are_stable() {
-        assert_eq!(PaletteItem::AddProject.label(), "Add project");
-        assert_eq!(PaletteItem::ToggleIdeMode.label(), "Toggle IDE mode");
-        assert_eq!(
-            PaletteItem::MoveToMain.label(),
-            "Move terminal to main pane"
-        );
-        assert_eq!(
-            PaletteItem::MoveToStrip.label(),
-            "Move terminal to lower pane"
-        );
-        assert_eq!(
-            PaletteItem::ToggleIdeSidebarHeight.label(),
-            "Toggle IDE sidebar height"
-        );
-        assert_eq!(
-            PaletteItem::NextAttention.label(),
-            "Next agent needing attention"
-        );
-        assert_eq!(
-            PaletteItem::Settings(SettingsSection::Terminal).label(),
-            "Settings  Terminal & Editor"
-        );
-    }
-
-    #[test]
-    fn palette_toggles_ide_sidebar_height() {
-        let dir = tempfile::tempdir().unwrap();
-        let ctx = egui::Context::default();
-        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
-        assert!(app.preferences.ide_sidebars_full_height);
-        app.run_palette(&ctx, PaletteItem::ToggleIdeSidebarHeight);
-        assert!(!app.preferences.ide_sidebars_full_height);
-        app.run_palette(&ctx, PaletteItem::ToggleIdeSidebarHeight);
-        assert!(app.preferences.ide_sidebars_full_height);
-    }
-
-    #[test]
-    fn fuzzy_list_finds_settings_keywords_and_shortcut_actions() {
-        let dir = tempfile::tempdir().unwrap();
-        let ctx = egui::Context::default();
-        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
-        app.palette_query = "font".into();
-        assert!(app.filtered_palette().iter().any(|item| matches!(
-            item,
-            PaletteItem::Settings(SettingsSection::Appearance | SettingsSection::Terminal)
-        )));
-        app.palette_query = "open file".into();
-        assert!(
-            app.filtered_palette()
-                .iter()
-                .any(|item| matches!(item, PaletteItem::Action("open_file", _)))
-        );
-    }
-
-    #[test]
-    fn waiting_agent_is_a_direct_result_and_resolved_notice_disappears() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
-        app.state.projects.push(Project {
-            id: "a".into(),
-            name: "Alpha".into(),
-            path: "/a".into(),
-            layout: serde_json::Value::Null,
-        });
-        app.selected = Some("a".into());
-        app.state.sessions.push(Session {
-            remote: None,
-            id: "shell".into(),
-            project_id: "a".into(),
-            label: "Agent terminal".into(),
-            cwd: "/a".into(),
-            kind: SessionKind::Shell,
-            file: None,
-            lifecycle: Lifecycle::Running,
-            review: false,
-            created: 1,
-            exit_code: None,
-            rows: 24,
-            cols: 80,
-            generation: "test".into(),
-            pid: Some(1),
-            truncated: false,
-            cwd_confirmed: true,
-        });
-        app.state.notifications.push(Notification {
-            id: "notice".into(),
-            session_id: "shell".into(),
-            invocation_id: "inv".into(),
-            request_id: Some("request".into()),
-            state: AgentState::WaitingPermission,
-            summary: "Permission needed".into(),
-            details: String::new(),
-            created: 2,
-            read: false,
-            dismissed: false,
-            resolved: false,
-            snoozed_until: 0,
-        });
-        app.palette_query = "permission".into();
-        assert!(
-            app.filtered_palette()
-                .iter()
-                .any(|item| matches!(item, PaletteItem::Agent(id, _, _) if id == "shell"))
-        );
-        app.state.notifications[0].resolved = true;
-        assert!(
-            !app.filtered_palette()
-                .iter()
-                .any(|item| matches!(item, PaletteItem::Agent(..)))
-        );
-    }
-
-    #[test]
-    fn file_and_symbol_results_open_in_their_own_project() {
-        let dir = tempfile::tempdir().unwrap();
-        let ctx = egui::Context::default();
-        let mut app = App::with_context(&ctx, Paths::at(dir.path().into()));
-        for id in ["a", "b"] {
-            app.state.projects.push(Project {
-                id: id.into(),
-                name: id.into(),
-                path: dir.path().join(id),
-                layout: serde_json::Value::Null,
-            });
-        }
-        app.selected = Some("a".into());
-        let file = dir.path().join("b/src/main.rs");
-        app.run_palette(&ctx, PaletteItem::File(file.clone()));
-        assert_eq!(app.selected.as_deref(), Some("b"));
-        app.selected = Some("a".into());
-        app.state.settings.editor_mode = EditorMode::Native;
-        app.run_palette(
-            &ctx,
-            PaletteItem::Symbol {
-                path: file.clone(),
-                name: "helper".into(),
-                kind: "Function".into(),
-                line: 8,
-                container: None,
-            },
-        );
-        assert_eq!(app.selected.as_deref(), Some("b"));
-        assert_eq!(app.native_pending_line.get(&file), Some(&8));
-    }
-
-    fn project_at(app: &mut App, id: &str, path: std::path::PathBuf) {
-        app.state.projects.push(Project {
-            id: id.into(),
-            name: id.into(),
-            path,
-            layout: serde_json::Value::Null,
-        });
-    }
-
-    #[test]
-    fn search_stays_inside_the_selected_project() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
-        for id in ["a", "b"] {
-            let path = dir.path().join(id);
-            std::fs::create_dir_all(&path).unwrap();
-            project_at(&mut app, id, path.clone());
-            app.dirs.insert(
-                path.clone(),
-                vec![terminator_git::Entry {
-                    path: path.join("main.rs"),
-                    directory: false,
-                    ignored: false,
-                }],
-            );
-            app.state.sessions.push(Session {
-                remote: None,
-                id: id.into(),
-                project_id: id.into(),
-                label: format!("{id} shell"),
-                cwd: path,
-                kind: SessionKind::Shell,
-                file: None,
-                lifecycle: Lifecycle::Running,
-                review: false,
-                created: 1,
-                exit_code: None,
-                rows: 24,
-                cols: 80,
-                generation: "test".into(),
-                pid: Some(1),
-                truncated: false,
-                cwd_confirmed: true,
-            });
-        }
-        app.selected = Some("a".into());
-        app.palette_query = "main".into();
-        let files = app.filtered_palette();
-        assert!(
-            files
-                .iter()
-                .any(|item| matches!(item, PaletteItem::File(path) if path.ends_with("a/main.rs")))
-        );
-        assert!(
-            !files
-                .iter()
-                .any(|item| matches!(item, PaletteItem::File(path) if path.ends_with("b/main.rs")))
-        );
-        app.palette_query = "shell".into();
-        let sessions = app.filtered_palette();
-        assert!(
-            sessions
-                .iter()
-                .any(|item| matches!(item, PaletteItem::Session(id, _) if id == "a"))
-        );
-        assert!(
-            !sessions
-                .iter()
-                .any(|item| matches!(item, PaletteItem::Session(id, _) if id == "b"))
-        );
-        app.palette_query.clear();
-        assert!(
-            !app.filtered_palette()
-                .iter()
-                .any(|item| matches!(item, PaletteItem::Project(..)))
-        );
-        app.palette_filters = super::FILTER_PROJECTS;
-        let projects = app.filtered_palette();
-        assert!(
-            projects
-                .iter()
-                .any(|item| matches!(item, PaletteItem::Project(id, _) if id == "b"))
-        );
-        assert!(
-            projects
-                .iter()
-                .all(|item| matches!(item, PaletteItem::Project(..)))
-        );
-    }
-
-    #[test]
-    fn file_filter_drops_settings() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
-        project_at(&mut app, "p", dir.path().into());
-        app.selected = Some("p".into());
-        app.dirs.insert(
-            dir.path().into(),
-            vec![terminator_git::Entry {
-                path: dir.path().join("font.rs"),
-                directory: false,
-                ignored: false,
-            }],
-        );
-        app.palette_filters = super::FILTER_FILES;
-        app.palette_query = "font".into();
-        let items = app.filtered_palette();
-        assert!(
-            items
-                .iter()
-                .any(|item| matches!(item, PaletteItem::File(path) if path.ends_with("font.rs")))
-        );
-        assert!(
-            items
-                .iter()
-                .all(|item| matches!(item, PaletteItem::File(_)))
-        );
-    }
-
-    fn live_shell(id: &str, project: &str, cwd: std::path::PathBuf) -> Session {
-        Session {
-            remote: None,
-            id: id.into(),
-            project_id: project.into(),
-            label: format!("{id} shell"),
-            cwd,
-            kind: SessionKind::Shell,
-            file: None,
-            lifecycle: Lifecycle::Running,
-            review: false,
-            created: 1,
-            exit_code: None,
-            rows: 24,
-            cols: 80,
-            generation: "test".into(),
-            pid: Some(1),
-            truncated: false,
-            cwd_confirmed: true,
-        }
-    }
-
-    #[test]
-    fn empty_search_leads_with_recent_files_then_sessions() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("proj");
-        std::fs::create_dir_all(&root).unwrap();
-        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
-        project_at(&mut app, "p", root.clone());
-        app.selected = Some("p".into());
-        let recent = root.join("recent.rs");
-        let other = root.join("other.rs");
-        app.dirs.insert(
-            root.clone(),
-            vec![
-                terminator_git::Entry {
-                    path: other.clone(),
-                    directory: false,
-                    ignored: false,
-                },
-                terminator_git::Entry {
-                    path: recent.clone(),
-                    directory: false,
-                    ignored: false,
-                },
-            ],
-        );
-        app.preferences.recent_native_files = vec![recent.clone()];
-        app.state.sessions.push(live_shell("shell", "p", root));
-        let items = app.filtered_palette();
-        let recent_at = items
-            .iter()
-            .position(|item| matches!(item, PaletteItem::File(path) if path == &recent));
-        let session_at = items
-            .iter()
-            .position(|item| matches!(item, PaletteItem::Session(id, _) if id == "shell"));
-        let other_at = items
-            .iter()
-            .position(|item| matches!(item, PaletteItem::File(path) if path == &other));
-        assert_eq!(
-            (recent_at, session_at, other_at),
-            (Some(0), Some(1), Some(2))
-        );
-        assert!(items.iter().all(|item| {
-            matches!(
-                item,
-                PaletteItem::File(_) | PaletteItem::Session(..) | PaletteItem::Agent(..)
-            )
-        }));
-        app.palette_filters = super::FILTER_ACTIONS;
-        assert!(
-            app.filtered_palette()
-                .iter()
-                .any(|item| item.filter_bit() == super::FILTER_ACTIONS)
-        );
-    }
-
-    #[test]
-    fn nested_project_files_stay_in_that_project() {
-        use terminator_native_edit::finder::FileIndex;
-        let dir = tempfile::tempdir().unwrap();
-        let parent = dir.path().join("parent");
-        let child = parent.join("child");
-        std::fs::create_dir_all(&child).unwrap();
-        std::fs::write(parent.join("own.rs"), "").unwrap();
-        std::fs::write(child.join("own.rs"), "").unwrap();
-        let mut app = App::with_context(&egui::Context::default(), Paths::at(dir.path().into()));
-        project_at(&mut app, "parent", parent.clone());
-        project_at(&mut app, "child", child.clone());
-        app.file_index = FileIndex::scan(&[parent], MAX_INDEX_FILES);
-        app.selected = Some("parent".into());
-        app.palette_query = "own".into();
-        let parent_hits = app.filtered_palette();
-        assert!(parent_hits.iter().any(
-            |item| matches!(item, PaletteItem::File(path) if path.ends_with("parent/own.rs"))
-        ));
-        assert!(
-            !parent_hits.iter().any(
-                |item| matches!(item, PaletteItem::File(path) if path.ends_with("child/own.rs"))
-            )
-        );
-        app.selected = Some("child".into());
-        let child_hits = app.filtered_palette();
-        assert!(
-            child_hits.iter().any(
-                |item| matches!(item, PaletteItem::File(path) if path.ends_with("child/own.rs"))
-            )
-        );
-        assert!(!child_hits.iter().any(
-            |item| matches!(item, PaletteItem::File(path) if path.ends_with("parent/own.rs"))
-        ));
-    }
-}
+mod tests;

@@ -19,6 +19,10 @@ use tokio::{
 pub use tokio_util::sync::CancellationToken;
 
 pub const ACTIVE_LIMIT: usize = 32;
+/// Concurrent `ServiceLifetime` actors. App-wide services take about eight,
+/// and every language server for a (language, root) pair is another one, so
+/// a monorepo with many package roots needs far more than a handful.
+pub const ACTOR_LIMIT: usize = 64;
 pub const QUEUE_LIMIT: usize = 128;
 pub const NATIVE_QUEUE_LIMIT: usize = 8;
 
@@ -368,7 +372,7 @@ async fn supervise<T: Send + 'static>(
             });
             if busy
                 || (!actor && shared.counters.active.load(Ordering::Acquire) >= ACTIVE_LIMIT)
-                || (actor && shared.counters.actors.load(Ordering::Acquire) >= 16)
+                || (actor && shared.counters.actors.load(Ordering::Acquire) >= ACTOR_LIMIT)
             {
                 index = index.saturating_add(1);
                 continue;
@@ -696,6 +700,38 @@ mod tests {
             Some(Ok(3))
         ));
         assert_eq!(supervisor.handle.diagnostics().outstanding, 0);
+    }
+    #[tokio::test]
+    async fn many_service_actors_run_at_once() {
+        let mut supervisor = Supervisor::<usize>::new(|| {}).unwrap();
+        let release = CancellationToken::new();
+        let count = 24;
+        for n in 0..count {
+            let gate = release.clone();
+            supervisor
+                .handle
+                .submit(
+                    context(&format!("actor-{n}"), Policy::ServiceLifetime),
+                    CancellationToken::new(),
+                    async move {
+                        gate.cancelled().await;
+                        Ok(n)
+                    },
+                )
+                .unwrap();
+        }
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(3))
+            .unwrap_or_else(Instant::now);
+        while supervisor.handle.diagnostics().actors < count {
+            assert!(Instant::now() < deadline, "actors were not all admitted");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        release.cancel();
+        for _ in 0..count {
+            drop(completion(&mut supervisor).await);
+        }
+        assert_eq!(supervisor.handle.diagnostics().actors, 0);
     }
     #[tokio::test]
     async fn admission_overflow_is_explicit_and_cancelled_actions_never_start() {

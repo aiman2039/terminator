@@ -320,7 +320,7 @@ impl Viewer<'_> {
                 ui,
                 "Select all",
                 "TextSelect",
-                &self.app.shortcut_label("select_all"),
+                &self.app.shortcut_label(Action::SelectAll),
             )
             .clicked()
             {
@@ -353,7 +353,7 @@ impl Viewer<'_> {
                 ui,
                 "Open file path…",
                 "File",
-                &self.app.shortcut_label("open_file"),
+                &self.app.shortcut_label(Action::OpenFile),
             )
             .clicked()
             {
@@ -366,7 +366,7 @@ impl Viewer<'_> {
                 ui,
                 "Search scrollback",
                 "Search",
-                &self.app.shortcut_label("search_scrollback"),
+                &self.app.shortcut_label(Action::SearchScrollback),
             )
             .clicked()
             {
@@ -378,7 +378,7 @@ impl Viewer<'_> {
                     ui,
                     "Save all",
                     "Save",
-                    &self.app.shortcut_label("editor_save"),
+                    &self.app.shortcut_label(Action::EditorSave),
                 )
                 .clicked()
                 {
@@ -391,7 +391,7 @@ impl Viewer<'_> {
                     ui,
                     "Compare disk",
                     "FileDiff",
-                    &self.app.shortcut_label("compare_disk"),
+                    &self.app.shortcut_label(Action::CompareDisk),
                 )
                 .clicked()
                 {
@@ -409,7 +409,7 @@ impl Viewer<'_> {
                     "Copy working directory"
                 },
                 "Folder",
-                &self.app.shortcut_label("copy_working_directory"),
+                &self.app.shortcut_label(Action::CopyWorkingDirectory),
             )
             .clicked()
             {
@@ -427,7 +427,7 @@ impl Viewer<'_> {
                 ui,
                 "Close session…",
                 "X",
-                &self.app.shortcut_label("close_session"),
+                &self.app.shortcut_label(Action::CloseSession),
             )
             .clicked()
             {

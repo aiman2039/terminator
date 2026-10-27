@@ -15,6 +15,14 @@ fn shell_has_live_children(pid: u32) -> bool {
     })
 }
 
+/// Return a session signalled for idle close to service when its exit was
+/// not confirmed. Only the `Stopping` mark set by idle close is undone.
+fn reopen_unconfirmed(lifecycle: &mut Lifecycle) {
+    if *lifecycle == Lifecycle::Stopping {
+        *lifecycle = Lifecycle::Running;
+    }
+}
+
 impl Shared {
     fn idle_preflight(&self, session: &str) -> Result<Option<u32>> {
         let state = relock(&self.state);
@@ -192,6 +200,17 @@ impl Shared {
                 .iter()
                 .any(|s| s.id == outcome.session && s.lifecycle.live())
             {
+                // The view is preserved, so it must stay usable: a shell that
+                // ignores SIGHUP would otherwise reject all input forever.
+                if let Ok(runtime) = self.runtime(&outcome.session) {
+                    relock(&runtime).closing = false;
+                }
+                let mut state = relock(&self.state);
+                if let Some(record) = state.sessions.iter_mut().find(|s| s.id == outcome.session) {
+                    reopen_unconfirmed(&mut record.lifecycle);
+                }
+                state.revision = state.revision.saturating_add(1);
+                drop(state);
                 outcome.status = Status::Failed;
                 outcome.reason =
                     "Signal delivered, but exit was not confirmed; view preserved".into();
@@ -200,5 +219,22 @@ impl Shared {
             }
         }
         Ok(Response::IdleSessionsClosed(outcomes))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unconfirmed_idle_close_returns_the_session_to_service() {
+        let mut lifecycle = Lifecycle::Stopping;
+        reopen_unconfirmed(&mut lifecycle);
+        assert_eq!(lifecycle, Lifecycle::Running);
+        for ended in [Lifecycle::Ended, Lifecycle::Interrupted] {
+            let mut lifecycle = ended.clone();
+            reopen_unconfirmed(&mut lifecycle);
+            assert_eq!(lifecycle, ended);
+        }
     }
 }

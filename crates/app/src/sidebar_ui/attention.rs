@@ -548,6 +548,7 @@ fn attention_title(
             egui::vec2(18.0, ATTENTION_ACTION_SIZE),
             egui::Sense::hover(),
         );
+        // Brand glyphs carry their own colors; a white tint leaves them as-is.
         appearance::paint_centered_icon(ui, rect, icon, 14.0, Color32::WHITE);
         response.on_hover_text(label)
     });

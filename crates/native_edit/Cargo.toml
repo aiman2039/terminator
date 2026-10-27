@@ -22,7 +22,6 @@ tree-sitter-rust = "0.24"
 two-face = "0.5"
 unicode-width = "0.2"
 url = "2"
-walkdir = "2"
 
 [lints]
 workspace = true

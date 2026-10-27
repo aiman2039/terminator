@@ -929,6 +929,9 @@ impl App {
                 Update::Info(i) => self.info = Some(i),
                 Update::Workspace(op, result) => match result {
                     Ok(workspace_ops::Report::Message(text)) => {
+                        if matches!(op, workspace_ops::Op::Commit { .. }) {
+                            self.git.commit_inflight = None;
+                        }
                         self.info = Some(text);
                         self.refresh_request = None;
                         if matches!(
@@ -939,23 +942,34 @@ impl App {
                                 | workspace_ops::Op::Unshelve(_)
                                 | workspace_ops::Op::DropShelf(_)
                         ) {
-                            self.git_list_root = None;
+                            self.git.list_root = None;
+                            // History and blame changed; open views reload.
+                            self.git_views.clear();
                         }
                     }
-                    Ok(workspace_ops::Report::Branches(names)) => self.git_branches = names,
-                    Ok(workspace_ops::Report::Shelves(list)) => self.git_shelves = list,
-                    Ok(workspace_ops::Report::Log(rows)) => self.git_log = rows,
+                    Ok(workspace_ops::Report::Branches(names)) => self.git.branches = names,
+                    Ok(workspace_ops::Report::Shelves(list)) => self.git.shelves = list,
+                    Ok(workspace_ops::Report::Log(rows)) => self.git.log = rows,
                     Ok(workspace_ops::Report::Compare(data)) => {
-                        self.git_compare_root.clone_from(&data.root);
-                        self.git_compare = Some(data);
+                        self.git.compare_root.clone_from(&data.root);
+                        self.git.compare = Some(data);
                     }
                     Err(error) => {
                         if matches!(op, workspace_ops::Op::Perforce(_)) {
                             self.refresh_request = None;
                         }
+                        if matches!(op, workspace_ops::Op::Commit { .. }) {
+                            self.restore_failed_commit(&error);
+                        }
                         self.report_status_error(error);
                     }
                 },
+                Update::GitView(key, view) => {
+                    // A view closed while loading leaves no entry to fill.
+                    if let Some(slot) = self.git_views.get_mut(&key) {
+                        *slot = view;
+                    }
+                }
                 Update::Search(id, result) => {
                     if id == self.explorer_search_generation {
                         self.explorer_search_pending = false;

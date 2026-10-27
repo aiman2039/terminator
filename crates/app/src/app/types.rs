@@ -258,6 +258,14 @@ pub(crate) enum Job {
         since: u64,
         regions: bool,
     },
+    /// Load a commit-log or blame tab off the GUI thread.
+    GitView(Tab),
+}
+/// Loaded contents of a commit-log or blame tab.
+pub(crate) enum GitView {
+    Loading,
+    Log(git_log::CommitLog),
+    Blame(Result<git_log::BlameData, String>),
 }
 impl Job {
     pub(crate) fn rpc(request: Request, after: After) -> Self {
@@ -354,6 +362,7 @@ pub(crate) enum Update {
     DiffActionFailed(String, String),
     Workspace(workspace_ops::Op, Result<workspace_ops::Report, String>),
     Search(u64, Result<Vec<search::Hit>, String>),
+    GitView(String, GitView),
     DirectoryPreview(
         u64,
         PathBuf,

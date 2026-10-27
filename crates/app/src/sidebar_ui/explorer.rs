@@ -4,7 +4,7 @@ use super::git_panel::{GitPanelInput, PreparedGit, git_color, git_panel};
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
 use crate::{
-    App, RenameSurface, Tab, appearance,
+    Action, App, RenameSurface, Tab, appearance,
     preferences::{ExplorerSearchMode, SidebarTool},
     workspace_ops,
 };
@@ -283,7 +283,7 @@ impl App {
                     ui,
                     "Close session…",
                     "X",
-                    &self.shortcut_label("close_session"),
+                    &self.shortcut_label(Action::CloseSession),
                 )
                 .clicked()
                 {
@@ -349,7 +349,7 @@ impl App {
                 ui,
                 "New terminal",
                 "Terminal",
-                &self.shortcut_label("new_terminal"),
+                &self.shortcut_label(Action::NewTerminal),
             )
             .clicked()
             {
@@ -375,8 +375,8 @@ impl App {
         ui.spacing_mut().item_spacing.y = 0.0;
         let rows = self.explorer_rows(path);
         let focused_file = self.focused_local_file();
-        let open_shortcut = self.shortcut_label("open_file");
-        let split_shortcut = self.shortcut_label("split_right");
+        let open_shortcut = self.shortcut_label(Action::OpenFile);
+        let split_shortcut = self.shortcut_label(Action::SplitRight);
         for row in rows.iter() {
             let mut rect = ui.available_rect_before_wrap();
             if self.explorer_reveal.as_ref().is_some_and(|reveal| {
@@ -616,7 +616,7 @@ impl App {
                 #[cfg(not(feature = "test-support"))]
                 let _ = &response;
                 if !self.preferences.history_filter.is_empty()
-                    && ui.small_button("✕").on_hover_text("Clear filter").clicked()
+                    && appearance::sidebar_action(ui, "X", "Clear filter").clicked()
                 {
                     self.preferences.history_filter.clear();
                 }
@@ -758,9 +758,12 @@ impl App {
             ui.weak("Filesystem watch unavailable; refreshing every 3 seconds");
         }
         self.pending_delete_bar(ui);
+        self.pending_git_confirm_bar(ui);
         if let Some(context) = self.context.take() {
             if context.perforce.is_some() {
-                let outcome = super::perforce_panel::panel(ui, &context, &self.theme);
+                let open_shortcut = self.shortcut_label(Action::OpenFile);
+                let outcome =
+                    super::perforce_panel::panel(ui, &context, &self.theme, &open_shortcut);
                 self.context = Some(context);
                 self.perform_git_outcome(ui, outcome);
                 return;
@@ -773,8 +776,8 @@ impl App {
                 std::sync::Arc::clone(git)
             };
             self.ensure_git_lists(context.root.clone());
-            let open_shortcut = self.shortcut_label("open_file");
-            let mut draft = std::mem::take(&mut self.git_commit);
+            let open_shortcut = self.shortcut_label(Action::OpenFile);
+            let mut draft = std::mem::take(&mut self.git.commit);
             let outcome = git_panel(
                 ui,
                 &mut GitPanelInput {
@@ -787,24 +790,26 @@ impl App {
                         .iter()
                         .any(|c| c == NVIM_REVIEW_CAPABILITY),
                     theme: &self.theme,
-                    history: self.git_history,
+                    history: self.git.history,
                     view_list: self.preferences.git_view_list,
-                    commits: &self.git_log,
-                    shelves: &self.git_shelves,
-                    branches: &self.git_branches,
+                    commits: &self.git.log,
+                    shelves: &self.git.shelves,
+                    branches: &self.git.branches,
                     commit_draft: &mut draft,
-                    amend: &mut self.git_amend,
-                    signoff: &mut self.git_signoff,
-                    collapse_generation: self.git_collapse,
+                    amend: &mut self.git.amend,
+                    signoff: &mut self.git.signoff,
+                    collapse_generation: self.git.collapse,
                     open_shortcut: &open_shortcut,
                     compare: self
-                        .git_compare
+                        .git
+                        .compare
                         .as_ref()
-                        .filter(|_| self.git_compare_root == context.root),
-                    base_ref: self.git_base_ref.as_deref(),
+                        .filter(|_| self.git.compare_root == context.root),
+                    base_ref: self.git.base_ref.as_deref(),
+                    committing: self.git.commit_inflight.is_some(),
                 },
             );
-            self.git_commit = draft;
+            self.git.commit = draft;
             self.context = Some(context);
             self.perform_git_outcome(ui, outcome);
         } else {

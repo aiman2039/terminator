@@ -1,5 +1,5 @@
 use super::super::*;
-use super::nav_common::*;
+use super::tests::support::*;
 use crate::vnc_ui::VncViewState;
 use std::sync::mpsc;
 use terminator_core::vnc::{VncSession, VncSessionStatus};

@@ -167,7 +167,7 @@ impl App {
         let tint = if active {
             ui.visuals().selection.stroke.color
         } else {
-            appearance::ICON_COLOR
+            appearance::icon_color()
         };
         let response = appearance::framed_icon_button(
             ui,
@@ -370,7 +370,7 @@ impl App {
         let tint = if lit {
             ui.visuals().selection.stroke.color
         } else {
-            appearance::ICON_COLOR
+            appearance::icon_color()
         };
         egui::Image::new(icons::source(name)).tint(tint).paint_at(
             ui,

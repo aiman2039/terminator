@@ -94,6 +94,7 @@ impl App {
         self.settings_search.clear();
         self.custom_shell = false;
         self.custom_editor = false;
+        self.settings_probes.get_mut().clear();
         self.shortcut_capture = None;
         let _ = self.jobs.send(Job::HookStatus);
         self.settings_session = true;
@@ -243,12 +244,16 @@ impl App {
             .validate()
             .map_err(|error| error.to_string())?;
         if !self.settings_draft.shell.is_empty()
-            && terminator_core::find_executable(&self.settings_draft.shell).is_none()
+            && self
+                .settings_executable(&self.settings_draft.shell)
+                .is_none()
         {
             return Err(format!("Shell not found: {}", self.settings_draft.shell));
         }
         if self.editor_preset == external_editor::CUSTOM
-            && terminator_core::find_executable(&self.settings_draft.external_editor).is_none()
+            && self
+                .settings_executable(&self.settings_draft.external_editor)
+                .is_none()
         {
             return Err(format!(
                 "External editor not found: {}",
@@ -273,5 +278,52 @@ impl App {
             self.theme = next;
             appearance::apply(ctx, &self.theme);
         }
+    }
+}
+
+/// PATH probe results cached for one Settings session.
+#[derive(Default)]
+pub(crate) struct Probes {
+    executables: std::collections::HashMap<String, Option<std::path::PathBuf>>,
+    options: Option<(
+        Vec<settings_controls::BinaryOption>,
+        Vec<settings_controls::BinaryOption>,
+    )>,
+}
+
+impl Probes {
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
+impl App {
+    /// `find_executable`, probed once per value for the Settings session.
+    pub(super) fn settings_executable(&self, name: &str) -> Option<std::path::PathBuf> {
+        self.settings_probes
+            .borrow_mut()
+            .executables
+            .entry(name.to_owned())
+            .or_insert_with(|| terminator_core::find_executable(name))
+            .clone()
+    }
+
+    /// Detected shell and editor choices, probed once per Settings session.
+    pub(super) fn settings_binary_options(
+        &self,
+    ) -> (
+        Vec<settings_controls::BinaryOption>,
+        Vec<settings_controls::BinaryOption>,
+    ) {
+        self.settings_probes
+            .borrow_mut()
+            .options
+            .get_or_insert_with(|| {
+                (
+                    settings_controls::shell_options(),
+                    settings_controls::editor_options(),
+                )
+            })
+            .clone()
     }
 }

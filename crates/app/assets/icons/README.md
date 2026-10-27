@@ -15,6 +15,12 @@ Right/down splits, rename, select-all, left/up extend the same pane icon family.
 `refresh-cw.svg` also comes from Lucide 0.577.0, with the same license and
 white-stroke adaptation, for the native Markdown refresh control.
 
+`chevron-left.svg` is the Lucide `chevron-left` icon with the same license and
+white-stroke adaptation, for scrolling the workspace tab strip.
+
+`trash-2.svg` comes from Lucide 0.577.0 with the same license and white-stroke
+adaptation, for removing saved entries such as VNC hosts.
+
 `moon.svg` comes from Lucide 0.577.0 with the same license and white-stroke
 adaptation, for the notification snooze action.
 

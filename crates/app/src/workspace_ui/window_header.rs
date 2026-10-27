@@ -14,7 +14,7 @@ impl App {
         self.preferences.tool = SidebarTool::Git;
     }
 
-    pub(super) fn action_tip(&self, label: &str, action: &str) -> String {
+    pub(super) fn action_tip(&self, label: &str, action: Action) -> String {
         let keys = self.shortcut_label(action);
         if keys.is_empty() {
             label.to_string()
@@ -36,16 +36,15 @@ impl App {
 
     pub(super) fn sidebar_toggle(&mut self, ui: &mut egui::Ui, right: bool) {
         let (action, icon, label) = if right {
-            ("toggle_right_sidebar", "PanelRight", "Toggle right sidebar")
+            (
+                Action::ToggleRightSidebar,
+                "PanelRight",
+                "Toggle right sidebar",
+            )
         } else {
-            ("toggle_left_sidebar", "PanelLeft", "Toggle sidebar")
+            (Action::ToggleLeftSidebar, "PanelLeft", "Toggle sidebar")
         };
-        let keys = self.shortcut_label(action);
-        let tip = if keys.is_empty() {
-            label.to_string()
-        } else {
-            format!("{label} ({keys})")
-        };
+        let tip = appearance::shortcut_tip(label, &self.shortcut_label(action));
         let response = appearance::framed_icon(ui, icon, &tip);
         #[cfg(feature = "test-support")]
         diagnostics::record(
@@ -174,7 +173,7 @@ impl App {
         } else {
             "Show sidebar"
         };
-        let shortcut = self.shortcut_label("toggle_left_sidebar");
+        let shortcut = self.shortcut_label(Action::ToggleLeftSidebar);
         let clicked = appearance::menu_item(ui, label, "PanelLeft", &shortcut).clicked();
         if clicked {
             self.toggle_left_sidebar();
@@ -292,7 +291,7 @@ impl App {
             let branch_button = ui.add(
                 egui::Button::image_and_text(
                     egui::Image::new(crate::icons::source("GitBranch"))
-                        .tint(appearance::ICON_COLOR)
+                        .tint(appearance::icon_color())
                         .fit_to_exact_size(egui::vec2(13.0, 13.0)),
                     label,
                 )
@@ -310,7 +309,7 @@ impl App {
         let search = appearance::framed_icon(
             ui,
             "Search",
-            &self.action_tip("Search everywhere", "open_palette"),
+            &self.action_tip("Search everywhere", Action::OpenPalette),
         );
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "toolbar-search", search.rect);
@@ -425,22 +424,19 @@ impl App {
     }
 
     pub(super) fn header_tip(&self, action: HeaderAction) -> String {
-        let label = header_action_view(action).label;
-        let keys = self.header_menu_mark(action);
-        if keys.is_empty() {
-            label.to_string()
-        } else {
-            format!("{label} ({keys})")
-        }
+        appearance::shortcut_tip(
+            header_action_view(action).label,
+            &self.header_menu_mark(action),
+        )
     }
 
     pub(super) fn header_menu_mark(&self, action: HeaderAction) -> String {
         match action {
             HeaderAction::Tool(tool) if self.header_tool_selected(tool) => "✓".into(),
             HeaderAction::IdeMode if self.preferences.ide_mode => "✓".into(),
-            HeaderAction::Settings => self.shortcut_label("open_settings"),
-            HeaderAction::Palette => self.shortcut_label("open_palette"),
-            HeaderAction::IdeMode => self.shortcut_label("toggle_ide_mode"),
+            HeaderAction::Settings => self.shortcut_label(Action::OpenSettings),
+            HeaderAction::Palette => self.shortcut_label(Action::OpenPalette),
+            HeaderAction::IdeMode => self.shortcut_label(Action::ToggleIdeMode),
             HeaderAction::Tool(_) => String::new(),
         }
     }

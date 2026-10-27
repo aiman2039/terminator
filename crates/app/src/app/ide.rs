@@ -630,7 +630,7 @@ impl App {
                     if ui
                         .add(egui::Button::image_and_text(
                             egui::Image::new(crate::icons::source("Terminal"))
-                                .tint(appearance::ICON_COLOR)
+                                .tint(appearance::icon_color())
                                 .fit_to_exact_size(egui::vec2(13.0, 13.0)),
                             "Open terminal",
                         ))
@@ -687,7 +687,7 @@ mod stripe_layout_tests {
 
     #[test]
     fn short_tool_stripes_clip_tools_above_the_search_button() {
-        let (mut app, ctx, _dir) = super::super::nav_common::fixture();
+        let (mut app, ctx, _dir) = super::super::tests::support::fixture();
         for height in [650.0, 220.0, 90.0, 400.0, 70.0, 650.0] {
             let mut output = ctx.run_ui(
                 egui::RawInput {

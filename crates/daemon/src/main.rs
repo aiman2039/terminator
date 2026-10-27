@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+mod accept;
 mod editor;
 mod helper;
 mod idle_close;
@@ -43,6 +44,7 @@ mod server;
 use server::{HistoryJob, Shared, drain_wake, relock, serve};
 
 fn main() -> Result<()> {
+    accept::raise_fd_limit();
     notifications::initialize();
     let mut paths = Paths::discover()?;
     if let Some(p) = std::env::var_os("TERMINATOR_RUNTIME_DIR") {
@@ -459,6 +461,7 @@ fn main() -> Result<()> {
                             }
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(e) if !accept::is_fatal(&e) => accept::back_off(&e),
                         Err(e) => return Err(e.into()),
                     }
                 }
@@ -467,6 +470,7 @@ fn main() -> Result<()> {
                 }
             }
             Err(Errno::INTR) => notifications::pump(),
+            Err(e @ (Errno::AGAIN | Errno::NOMEM)) => accept::back_off(&e.into()),
             Err(e) => return Err(e.into()),
         }
     }
@@ -495,6 +499,7 @@ fn main() -> Result<()> {
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) if !accept::is_fatal(&e) => accept::back_off(&e),
             Err(e) => return Err(e.into()),
         }
         std::thread::sleep(Duration::from_millis(10));

@@ -1,4 +1,4 @@
-use super::theme::ICON_COLOR;
+use super::theme::icon_color;
 use eframe::egui::{self, Color32, FontId, TextStyle};
 use std::time::Duration;
 
@@ -415,7 +415,7 @@ fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
                 egui::vec2(14.0, 14.0),
             ),
             brand,
-            ICON_COLOR,
+            icon_color(),
             false,
         );
     }
@@ -427,7 +427,7 @@ fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
         ),
         egui::vec2(size, size),
     );
-    paint_status_icon(ui, icon_rect, icon, icon_tint.unwrap_or(ICON_COLOR), spin);
+    paint_status_icon(ui, icon_rect, icon, icon_tint.unwrap_or(icon_color()), spin);
     let painter = ui.painter().with_clip_rect(rect);
     let sub_top = top + galley.size().y + GAP;
     painter.galley(
@@ -489,7 +489,7 @@ pub fn markdown_header(
     let scale = ((rect.width() - fixed - 32.0) / 162.0).clamp(0.0, 1.0);
     let title_width = (ui
         .painter()
-        .layout_no_wrap(title.into(), FontId::proportional(12.0), ICON_COLOR)
+        .layout_no_wrap(title.into(), FontId::proportional(12.0), icon_color())
         .size()
         .x
         + 16.0)
@@ -626,7 +626,7 @@ fn header_icon(
             .rect_filled(rect, 0, ui.visuals().widgets.hovered.bg_fill);
     }
     egui::Image::new(crate::icons::source(icon))
-        .tint(ICON_COLOR)
+        .tint(icon_color())
         .paint_at(
             ui,
             egui::Rect::from_center_size(rect.center(), egui::vec2(14.0, 14.0)),

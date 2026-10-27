@@ -18,16 +18,16 @@ impl App {
         let Some(root) = root else {
             return;
         };
-        if self.git_list_root.as_ref() == Some(&root) {
+        if self.git.list_root.as_ref() == Some(&root) {
             return;
         }
-        self.git_list_root = Some(root);
-        self.git_branches.clear();
-        self.git_log.clear();
-        self.git_shelves.clear();
-        self.git_compare = None;
-        self.git_compare_root = None;
-        self.git_base_ref = None;
+        self.git.list_root = Some(root);
+        self.git.branches.clear();
+        self.git.log.clear();
+        self.git.shelves.clear();
+        self.git.compare = None;
+        self.git.compare_root = None;
+        self.git.base_ref = None;
         self.queue_workspace(workspace_ops::Op::Branches);
         self.queue_workspace(workspace_ops::Op::Log);
         self.queue_workspace(workspace_ops::Op::Shelves);
@@ -67,6 +67,8 @@ pub struct GitPanelInput<'a> {
     pub compare: Option<&'a workspace_ops::CompareData>,
     /// User-picked base ref; `None` means the upstream branch is used.
     pub base_ref: Option<&'a str>,
+    /// A commit is in flight; commit controls are disabled until it reports.
+    pub committing: bool,
 }
 
 /// A concrete file action with its target, ready for `App` to perform.
@@ -212,7 +214,9 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
                     outcome.stage_all = true;
                 }
                 // Amending with an empty message keeps the previous message.
-                let can_commit = staged && (*input.amend || !input.commit_draft.trim().is_empty());
+                let can_commit = !input.committing
+                    && staged
+                    && (*input.amend || !input.commit_draft.trim().is_empty());
                 let commit = ui.add_enabled(can_commit, egui::Button::new("Commit"));
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "git-commit", commit.rect);
@@ -224,6 +228,9 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
                 diagnostics::record(ui.ctx(), "git-commit-push", commit_push.rect);
                 if commit_push.clicked() {
                     outcome.commit_push = true;
+                }
+                if input.committing {
+                    ui.spinner().on_hover_text("Committing…");
                 }
                 let shelve = ui
                     .add_enabled(staged, egui::Button::new("Shelve"))

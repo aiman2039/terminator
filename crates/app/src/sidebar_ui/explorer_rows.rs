@@ -130,11 +130,17 @@ pub(super) fn explorer_segmented(ui: &mut egui::Ui, mode: &mut ExplorerSearchMod
             .on_hover_text(label);
         let selected = *mode == value;
         if selected {
-            ui.painter()
-                .rect_filled(cell.shrink(3.0), 5, ui.visuals().widgets.active.bg_fill);
+            ui.painter().rect_filled(
+                cell.shrink(3.0),
+                appearance::WIDGET_RADIUS,
+                ui.visuals().widgets.active.bg_fill,
+            );
         } else if response.hovered() {
-            ui.painter()
-                .rect_filled(cell.shrink(3.0), 5, ui.visuals().widgets.hovered.bg_fill);
+            ui.painter().rect_filled(
+                cell.shrink(3.0),
+                appearance::WIDGET_RADIUS,
+                ui.visuals().widgets.hovered.bg_fill,
+            );
         }
         ui.painter().text(
             cell.center(),
@@ -311,25 +317,31 @@ pub(super) fn paint_header_count(ui: &egui::Ui, rect: egui::Rect, count: usize, 
     } else {
         count.to_string()
     };
-    let galley =
-        ui.painter()
-            .layout_no_wrap(label, egui::FontId::proportional(9.0), Color32::WHITE);
+    let galley = ui.painter().layout_no_wrap(
+        label,
+        egui::FontId::proportional(BADGE_FONT),
+        Color32::WHITE,
+    );
     let text = galley.size();
     let badge = egui::Rect::from_center_size(
         egui::pos2(rect.right() - 6.0, rect.top() + 7.0),
         egui::vec2(text.x + 4.0, text.y),
     );
-    ui.painter().rect_filled(badge, 6.0, color);
-    // Waiting gold and the text color are both light, so the digit stays dark.
+    ui.painter()
+        .rect_filled(badge, appearance::WIDGET_RADIUS, color);
     ui.painter().galley(
         egui::pos2(
             badge.center().x - text.x * 0.5,
             badge.center().y - text.y * 0.5,
         ),
         galley,
-        Color32::from_rgb(20, 20, 22),
+        appearance::contrast_text(color),
     );
 }
+
+/// Count badge digits on sidebar icons; the smallest size that stays legible
+/// inside the 22pt icon square.
+const BADGE_FONT: f32 = 10.0;
 
 pub(super) const ATTENTION_ACTION_SIZE: f32 = 22.0;
 

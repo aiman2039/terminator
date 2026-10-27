@@ -461,6 +461,7 @@ mod tests {
                         open_shortcut: "",
                         compare: Some(&compare),
                         base_ref: None,
+                        committing: false,
                     };
                     *outcome = git_panel(ui, &mut input);
                 },
@@ -537,6 +538,7 @@ mod tests {
                         open_shortcut: "",
                         compare: Some(&compare),
                         base_ref: None,
+                        committing: false,
                     };
                     *outcome = git_panel(ui, &mut input);
                 },

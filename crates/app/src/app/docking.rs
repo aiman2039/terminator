@@ -91,12 +91,12 @@ impl App {
 
     /// Clear a finished or cancelled pane drag, including its ghost snapshot.
     pub(crate) fn end_pane_drag(&mut self) {
-        self.pane_drag = None;
-        self.pane_drag_source = None;
-        self.pane_drag_from_strip = false;
-        self.pane_drag_snapshot.clear();
-        self.strip_tab_hover = false;
-        self.strip_new_tab_hover = false;
+        self.drag.pane = None;
+        self.drag.pane_source = None;
+        self.drag.pane_from_strip = false;
+        self.drag.pane_snapshot.clear();
+        self.drag.strip_tab_hover = false;
+        self.drag.strip_new_tab_hover = false;
     }
 
     /// Drop zone within a hovered split leaf: the middle swaps or joins,
@@ -128,7 +128,7 @@ impl App {
     /// workspace strip runs earlier in the frame and consumes releases over
     /// its own tabs.
     pub(crate) fn finish_pane_drop(&mut self, ui: &mut egui::Ui, dock: &mut Workspace) {
-        let Some(pane) = self.pane_drag.clone() else {
+        let Some(pane) = self.drag.pane.clone() else {
             return;
         };
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -155,8 +155,9 @@ impl App {
             .iter_leaves()
             .find(|(_, leaf)| leaf.rect.contains(pos))
             .map(|(path, leaf)| (path, leaf.rect));
-        let tab_insert = self.pane_drag_source.as_ref().and_then(|_| {
-            self.pane_drop_tabs
+        let tab_insert = self.drag.pane_source.as_ref().and_then(|_| {
+            self.drag
+                .drop_tabs
                 .iter()
                 .find(|(_, rect)| rect.contains(pos))
                 .map(|(path, rect)| {
@@ -179,7 +180,7 @@ impl App {
             // Hovering a strip tab interior previews the move-into outcome
             // at real size: wash the previewed tab's focused leaf, where a
             // release would land the pane.
-            if target.is_none() && self.strip_tab_hover {
+            if target.is_none() && self.drag.strip_tab_hover {
                 let path = dock
                     .main_surface()
                     .focused_leaf()
@@ -212,8 +213,8 @@ impl App {
         if released {
             if let Some((path, _)) = target {
                 let group = dock.active.clone();
-                let from_strip = self.pane_drag_from_strip;
-                let moved = if let Some(source) = self.pane_drag_source.clone() {
+                let from_strip = self.drag.pane_from_strip;
+                let moved = if let Some(source) = self.drag.pane_source.clone() {
                     self.selected.as_ref() == Some(&source.project)
                         && dock.move_view_to_leaf(
                             &source,
@@ -261,7 +262,7 @@ impl App {
                     }
                 };
                 if moved {
-                    if self.pane_drag_source.is_some() {
+                    if self.drag.pane_source.is_some() {
                         if let Some(project) = self.selected.clone() {
                             self.focus_moved_view(&pane, &project, dock);
                         }
@@ -272,7 +273,7 @@ impl App {
                         self.focus_tab = Some(pane.clone());
                     }
                     self.pane_index = None;
-                    self.drop_preview_origin = None;
+                    self.drag.preview_origin = None;
                 } else {
                     self.revert_drop_preview(dock);
                 }
@@ -288,7 +289,7 @@ impl App {
     /// Switch back to the tab a cancelled drag started from. Previewing never
     /// moves panes, so the origin group always still exists.
     pub(crate) fn revert_drop_preview(&mut self, dock: &mut Workspace) {
-        if let Some((_, origin)) = self.drop_preview_origin.take()
+        if let Some((_, origin)) = self.drag.preview_origin.take()
             && dock.tabs.iter().any(|tab| tab.id == origin)
         {
             dock.active = origin;

@@ -399,6 +399,29 @@ mod tests {
     }
 
     #[test]
+    fn an_unreadable_old_store_does_not_block_routing_to_other_owners() {
+        let (_dir, paths, mut catalog) = fixture();
+        let broken = owner(&paths, &catalog);
+        let a = owner(&paths, &catalog);
+        catalog.activate(&broken.id).unwrap();
+        catalog.activate(&a.id).unwrap();
+        let session = session(&a.id, Lifecycle::Running);
+        save(
+            &a,
+            &State {
+                generation: a.id.clone(),
+                sessions: vec![session.clone()],
+                ..Default::default()
+            },
+        );
+        fs::remove_file(broken.data.join("state.sqlite3")).unwrap();
+        let stop = |id: &str| Request::Stop { session: id.into() };
+        assert_eq!(owner_for(&paths, &stop(&session.id)).unwrap().data, a.data);
+        let error = owner_for(&paths, &stop("missing")).unwrap_err();
+        assert!(format!("{error:#}").contains(&broken.id), "{error:#}");
+    }
+
+    #[test]
     fn activation_preserves_old_session_identity_and_routes_new_work() {
         let (_dir, paths, mut catalog) = fixture();
         let a = owner(&paths, &catalog);

@@ -6,6 +6,7 @@ use super::header::{HeaderAction, header_action_view};
 use super::tabs::cached_terminal_theme;
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::app::painted_text;
 
     #[test]
     fn diff_neighbors_walks_the_sibling_list() {
@@ -776,25 +777,6 @@ pub(crate) mod tests {
         }
         app.diffs.insert(tab.key(), Ok(doc.into()));
         paint_diff_view(&mut app, &ctx, &tab)
-    }
-
-    pub(crate) fn painted_text(shapes: &[egui::epaint::ClippedShape]) -> Vec<(egui::Pos2, String)> {
-        fn walk(out: &mut Vec<(egui::Pos2, String)>, shape: &egui::Shape) {
-            match shape {
-                egui::Shape::Vec(shapes) => {
-                    for shape in shapes {
-                        walk(out, shape);
-                    }
-                }
-                egui::Shape::Text(text) => out.push((text.pos, text.galley.text().to_owned())),
-                _ => {}
-            }
-        }
-        let mut out = Vec::new();
-        for clipped in shapes {
-            walk(&mut out, &clipped.shape);
-        }
-        out
     }
 
     fn require_text<'a>(

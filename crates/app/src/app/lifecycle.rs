@@ -11,7 +11,7 @@ use terminator_core::*;
 use super::super::*;
 impl App {
     pub(crate) fn command_dialog_open(&self) -> bool {
-        self.palette_open
+        self.palette.open
             || self.search_open
             || self.worktree_open
             || self.worktree_draft.is_some()
@@ -69,18 +69,7 @@ impl App {
         lsp.set_services(services.clone());
         Self {
             file_activation: None,
-            git_commit: String::new(),
-            git_amend: false,
-            git_signoff: false,
-            git_history: false,
-            git_branches: Vec::new(),
-            git_log: Vec::new(),
-            git_shelves: Vec::new(),
-            git_list_root: None,
-            git_collapse: 0,
-            git_compare: None,
-            git_compare_root: None,
-            git_base_ref: None,
+            git: super::git_panel_state::GitPanelState::default(),
             explorer_search: Vec::new(),
             explorer_search_error: None,
             explorer_search_generation: 0,
@@ -185,25 +174,16 @@ impl App {
             floating: Vec::new(),
             float_pane_by_tab: HashMap::new(),
             float_pane_tabs: HashMap::new(),
-            strip_tab_drag: None,
             strip_pane_by_tab: HashMap::new(),
             strip_pane_tabs: HashMap::new(),
             pane_by_tab: HashMap::new(),
 
             pane_tabs: HashMap::new(),
             pane_index: None,
-            pane_drag: None,
-            pane_drag_source: None,
             pane_action_source: None,
-            pane_drop_tabs: Vec::new(),
             native_focus_pending: None,
-            pane_drag_from_strip: false,
             pending_layout_save: false,
-            tab_drag: None,
-            strip_tab_hover: false,
-            strip_new_tab_hover: false,
-            pane_drag_snapshot: Vec::new(),
-            drop_preview_origin: None,
+            drag: super::drag_state::DragState::default(),
             focus_tab: None,
             diff_replacement: None,
             terminal_context: HashMap::new(),
@@ -216,7 +196,7 @@ impl App {
             diff_preview: HashSet::new(),
             diff_reviews: HashMap::new(),
             loading: HashSet::new(),
-            git_logs: HashMap::new(),
+            git_views: HashMap::new(),
             selected_commit: None,
             dirs: HashMap::new(),
             directory_errors: HashMap::new(),
@@ -246,15 +226,11 @@ impl App {
             settings_section: SettingsSection::Appearance,
             settings_search: String::new(),
             custom_shell: false,
+            settings_probes: std::cell::RefCell::default(),
             custom_editor: false,
             shortcut_capture: None,
             browse_target: None,
-            palette_open: false,
-            palette_query: String::new(),
-            palette_filters: 0,
-            palette_index: 0,
-            palette_cache: None,
-            palette_query_changed_at: Instant::now(),
+            palette: super::palette_state::PaletteState::new(),
             worktree_draft: None,
             worktree_remove: None,
             theme: AppearanceConfig::default(),

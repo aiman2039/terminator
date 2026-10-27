@@ -7,7 +7,7 @@ impl App {
             ui,
             "New Terminal",
             "Terminal",
-            &self.shortcut_label("new_terminal"),
+            &self.shortcut_label(Action::NewTerminal),
         )
         .clicked()
         {
@@ -18,7 +18,7 @@ impl App {
             ui,
             "New Browser Tab",
             "Globe",
-            &self.shortcut_label("new_browser"),
+            &self.shortcut_label(Action::NewBrowser),
         )
         .clicked()
         {
@@ -29,7 +29,7 @@ impl App {
             ui,
             "New VNC Viewer",
             "Monitor",
-            &self.shortcut_label("new_vnc"),
+            &self.shortcut_label(Action::NewVnc),
         )
         .clicked()
         {
@@ -142,7 +142,7 @@ impl App {
                 ui,
                 "New Browser Tab",
                 "Globe",
-                &self.shortcut_label("new_browser"),
+                &self.shortcut_label(Action::NewBrowser),
             )
             .clicked()
             {
@@ -153,7 +153,7 @@ impl App {
                 ui,
                 "New VNC Viewer",
                 "Monitor",
-                &self.shortcut_label("new_vnc"),
+                &self.shortcut_label(Action::NewVnc),
             )
             .clicked()
             {
@@ -226,7 +226,7 @@ impl App {
     }
     pub(crate) fn rename_action(&mut self, ui: &mut egui::Ui, sid: &str, surface: RenameSurface) {
         self.terminal_style_menu(ui, sid);
-        let shortcut = self.shortcut_label("rename_terminal");
+        let shortcut = self.shortcut_label(Action::RenameTerminal);
         if appearance::menu_item(ui, "Rename terminal…", "Pencil", &shortcut).clicked() {
             self.begin_rename(sid, surface);
             ui.close();

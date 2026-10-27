@@ -170,7 +170,7 @@ fn paint_seek_bar(ui: &Ui, rect: Rect, fraction: f32, seekable: bool) {
     if seekable {
         let x = track.min.x + track.width() * fraction.clamp(0.0, 1.0);
         ui.painter()
-            .circle_filled(pos2(x, track.center().y), 7.0, appearance::ICON_COLOR);
+            .circle_filled(pos2(x, track.center().y), 7.0, appearance::icon_color());
     }
 }
 
@@ -331,6 +331,14 @@ fn playlist_rows(app: &mut App, ui: &mut Ui, rect: Rect, project: &str) {
     );
     if tracks.is_empty() {
         child.weak("No tracks yet.");
+        child.horizontal_wrapped(|ui| {
+            if ui.button("Add files…").clicked() {
+                app.pick_audio = true;
+            }
+            if ui.button("Add folder…").clicked() {
+                app.pick_audio_dir = true;
+            }
+        });
         return;
     }
     let mut play = None;
@@ -508,12 +516,30 @@ fn rem_menu(app: &mut App, ui: &mut Ui) {
             app.player.stack = None;
         }
         if ui.button("Crop").clicked() {
-            app.player_crop();
-            app.player.stack = None;
+            app.player.confirm = Some(PlaylistConfirm::Crop);
         }
         if ui.button("Clear").clicked() {
-            app.player_clear_tracks();
+            app.player.confirm = Some(PlaylistConfirm::Clear);
+        }
+    });
+    let Some(confirm) = app.player.confirm else {
+        return;
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.label(match confirm {
+            PlaylistConfirm::Crop => "Remove every unselected track?",
+            PlaylistConfirm::Clear => "Remove every track from this playlist?",
+        });
+        if ui.button("Remove").clicked() {
+            match confirm {
+                PlaylistConfirm::Crop => app.player_crop(),
+                PlaylistConfirm::Clear => app.player_clear_tracks(),
+            }
+            app.player.confirm = None;
             app.player.stack = None;
+        }
+        if ui.button("Cancel").clicked() {
+            app.player.confirm = None;
         }
     });
 }
@@ -664,7 +690,7 @@ fn radio_panel(app: &mut App, ui: &mut Ui, project: &str) {
                     vec2(16.0, 16.0),
                 );
                 egui::Image::new(icons::source("Radio"))
-                    .tint(appearance::ICON_COLOR)
+                    .tint(appearance::icon_color())
                     .paint_at(ui, icon);
                 let mut label = station.name.clone();
                 if !station.country.is_empty() {
@@ -750,7 +776,7 @@ fn mode_half(ui: &mut Ui, rect: Rect, icon: &str, tip: &str, active: bool) -> eg
     let tint = if active {
         ui.visuals().selection.stroke.color
     } else {
-        appearance::ICON_COLOR
+        appearance::icon_color()
     };
     egui::Image::new(icons::source(icon))
         .tint(tint)

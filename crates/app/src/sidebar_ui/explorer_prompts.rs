@@ -10,7 +10,65 @@ use crate::{
 use eframe::egui::{self, RichText};
 use std::path::{Path, PathBuf};
 
+/// A destructive Git action that waits for an explicit confirmation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum GitConfirm {
+    Discard { path: PathBuf, untracked: bool },
+    DropShelf(String),
+}
+
+impl GitConfirm {
+    fn prompt(&self) -> (String, &'static str) {
+        match self {
+            Self::Discard { path, untracked } => {
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                if *untracked {
+                    (format!("Delete untracked {name}?"), "Delete")
+                } else {
+                    (format!("Discard changes to {name}?"), "Discard")
+                }
+            }
+            Self::DropShelf(reference) => (format!("Drop shelf {reference}?"), "Drop"),
+        }
+    }
+
+    fn into_op(self) -> workspace_ops::Op {
+        match self {
+            Self::Discard { path, untracked } => workspace_ops::Op::Discard { path, untracked },
+            Self::DropShelf(reference) => workspace_ops::Op::DropShelf(reference),
+        }
+    }
+}
+
 impl App {
+    pub(super) fn pending_git_confirm_bar(&mut self, ui: &mut egui::Ui) {
+        let Some(pending) = self.git.confirm.clone() else {
+            return;
+        };
+        let (prompt, verb) = pending.prompt();
+        ui.horizontal(|ui| {
+            ui.label(prompt);
+            if ui.button(verb).clicked() {
+                self.git.confirm = None;
+                self.queue_workspace(pending.into_op());
+            }
+            if ui.button("Cancel").clicked() {
+                self.git.confirm = None;
+            }
+        });
+    }
+
+    /// Put a failed commit's message back into an empty draft. A push that
+    /// failed after a successful commit keeps the draft clear.
+    pub(crate) fn restore_failed_commit(&mut self, error: &str) {
+        let Some(message) = self.git.commit_inflight.take() else {
+            return;
+        };
+        if !error.starts_with(workspace_ops::PUSH_FAILED) && self.git.commit.trim().is_empty() {
+            self.git.commit = message;
+        }
+    }
+
     pub(super) fn pending_delete_bar(&mut self, ui: &mut egui::Ui) {
         let Some(path) = self.pending_delete.clone() else {
             return;

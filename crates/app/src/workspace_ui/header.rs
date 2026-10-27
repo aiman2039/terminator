@@ -242,7 +242,7 @@ pub(super) fn header_icon_button(
         [width, 32.0],
         egui::Button::image(
             egui::Image::new(icons::source(icon))
-                .tint(appearance::ICON_COLOR)
+                .tint(appearance::icon_color())
                 .fit_to_exact_size(egui::vec2(16.0, 16.0)),
         )
         .frame(false),
@@ -306,8 +306,11 @@ pub(super) fn paint_window_controls(ui: &egui::Ui, rect: egui::Rect) {
             )
             .on_hover_text(tip);
         if response.hovered() {
-            ui.painter()
-                .rect_filled(control, 4.0, ui.visuals().widgets.hovered.bg_fill);
+            ui.painter().rect_filled(
+                control,
+                appearance::WIDGET_RADIUS,
+                ui.visuals().widgets.hovered.bg_fill,
+            );
         }
         let font = egui::TextStyle::Body.resolve(ui.style());
         let color = ui.visuals().text_color();

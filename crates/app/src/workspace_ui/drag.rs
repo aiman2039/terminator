@@ -115,16 +115,16 @@ impl App {
     /// rows. Painted on the tooltip layer so it floats above splits and
     /// sidebars without intercepting input.
     pub(crate) fn paint_drag_ghost(&self, ui: &mut egui::Ui) {
-        let Some(pane) = &self.pane_drag else {
+        let Some(pane) = &self.drag.pane else {
             return;
         };
         // The IDE strip tab is already floating in the dock's drag layer.
-        if self.pane_drag_from_strip {
+        if self.drag.pane_from_strip {
             return;
         }
         // The tab ghost owns the pointer over strip new-tab zones so the
         // two never stack.
-        if self.strip_new_tab_hover {
+        if self.drag.strip_new_tab_hover {
             return;
         }
         if !ui.input(|i| i.pointer.any_down()) {
@@ -140,19 +140,19 @@ impl App {
         let mut job = egui::text::LayoutJob::simple(
             self.drag_title(pane),
             egui::FontId::proportional(13.0),
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 235),
+            appearance::color(&self.theme.text),
             320.0,
         );
         job.wrap.max_rows = 1;
         job.wrap.break_anywhere = true;
-        if !self.pane_drag_snapshot.is_empty() {
-            job.wrap.max_rows = 1usize.saturating_add(self.pane_drag_snapshot.len().min(8));
+        if !self.drag.pane_snapshot.is_empty() {
+            job.wrap.max_rows = 1usize.saturating_add(self.drag.pane_snapshot.len().min(8));
             job.append(
-                &format!("\n{}", self.pane_drag_snapshot.join("\n")),
+                &format!("\n{}", self.drag.pane_snapshot.join("\n")),
                 0.0,
                 egui::TextFormat {
                     font_id: egui::FontId::monospace(11.0),
-                    color: egui::Color32::from_rgba_unmultiplied(220, 220, 228, 200),
+                    color: appearance::color(&self.theme.secondary),
                     ..Default::default()
                 },
             );
@@ -174,24 +174,25 @@ impl App {
             (screen.max.y - size.y - 4.0).max(screen.min.y),
         );
         let rect = egui::Rect::from_min_size(min, size);
-        painter.rect_filled(
-            rect,
-            6.0,
-            egui::Color32::from_rgba_unmultiplied(24, 24, 28, 205),
-        );
+        painter.rect_filled(rect, appearance::WIDGET_RADIUS, self.ghost_fill());
         painter.rect_stroke(
             rect,
-            6.0,
+            appearance::WIDGET_RADIUS,
             egui::Stroke::new(1.5, appearance::color(&self.theme.accent)),
             egui::StrokeKind::Inside,
         );
         painter.galley(
             egui::pos2(rect.min.x + padding.x, rect.min.y + padding.y),
             galley,
-            egui::Color32::WHITE,
+            appearance::color(&self.theme.text),
         );
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "pane-ghost", rect);
+    }
+
+    /// Translucent theme window fill behind drag ghosts.
+    fn ghost_fill(&self) -> egui::Color32 {
+        appearance::color(&self.theme.window).gamma_multiply(0.92)
     }
 
     /// Tab-sized ghost following the cursor while a strip tab is dragged to
@@ -200,7 +201,7 @@ impl App {
     pub(crate) fn paint_tab_ghost(&self, ui: &mut egui::Ui) {
         // Tab reorder drags always show the tab ghost; pane drags show it
         // over strip new-tab zones, where the outcome is a fresh tab.
-        if self.tab_drag.is_none() && !(self.pane_drag.is_some() && self.strip_new_tab_hover) {
+        if self.drag.tab.is_none() && !(self.drag.pane.is_some() && self.drag.strip_new_tab_hover) {
             return;
         }
         if !ui.input(|i| i.pointer.any_down()) {
@@ -209,7 +210,7 @@ impl App {
         let Some(pos) = ui.input(|i| i.pointer.hover_pos().or(i.pointer.latest_pos())) else {
             return;
         };
-        let title = if let Some(dragged) = &self.tab_drag {
+        let title = if let Some(dragged) = &self.drag.tab {
             let mut title = "Tab".to_owned();
             for workspace in self.layouts.values() {
                 if let Some(group) = workspace.tabs.iter().find(|tab| &tab.id == dragged) {
@@ -225,7 +226,7 @@ impl App {
                 }
             }
             title
-        } else if let Some(pane) = &self.pane_drag {
+        } else if let Some(pane) = &self.drag.pane {
             self.drag_title(pane)
         } else {
             return;
@@ -237,7 +238,7 @@ impl App {
         let mut job = egui::text::LayoutJob::simple(
             title,
             egui::FontId::proportional(13.0),
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 235),
+            appearance::color(&self.theme.text),
             TAB_TEXT_MAX,
         );
         job.wrap.max_rows = 1;
@@ -255,21 +256,17 @@ impl App {
             (screen.max.y - size.y - 4.0).max(screen.min.y),
         );
         let rect = egui::Rect::from_min_size(min, size);
-        painter.rect_filled(
-            rect,
-            4.0,
-            egui::Color32::from_rgba_unmultiplied(24, 24, 28, 205),
-        );
+        painter.rect_filled(rect, appearance::WIDGET_RADIUS, self.ghost_fill());
         painter.rect_stroke(
             rect,
-            4.0,
+            appearance::WIDGET_RADIUS,
             egui::Stroke::new(1.5, appearance::color(&self.theme.accent)),
             egui::StrokeKind::Inside,
         );
         painter.galley(
             egui::pos2(rect.left() + 10.0, rect.center().y - galley.size().y * 0.5),
             galley,
-            egui::Color32::WHITE,
+            appearance::color(&self.theme.text),
         );
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "tab-ghost", rect);

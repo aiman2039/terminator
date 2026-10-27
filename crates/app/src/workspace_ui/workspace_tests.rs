@@ -1,11 +1,12 @@
 use super::super::*;
 use super::diff_paint::{DiffColors, paint_diff_document};
-use super::diff_tests::tests::{long_doc, painted_text};
+use super::diff_tests::tests::long_doc;
 use super::header::{
     HEADER_ACTIONS, ProjectHeaderChrome, filter_history_lines, header_row_width,
     header_visible_count, project_header_chrome,
 };
 use super::hover::{advance_menu_modifier, link_menu_modifier_pressed};
+use crate::app::painted_text;
 #[cfg(test)]
 mod tests {
     use super::*;

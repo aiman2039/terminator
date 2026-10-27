@@ -1,3 +1,11 @@
+mod daemon;
+mod files;
+mod git;
+mod platform;
+mod remote;
+mod settings;
+mod vnc;
+
 use super::submit::Services;
 use crate::{After, Job, Tab, Update, editor_close, image_preview};
 use anyhow::Result;
@@ -67,6 +75,10 @@ pub(super) fn rejection(job: &Job) -> Vec<Update> {
         Job::DiffAction(tab, _) => vec![Update::DiffActionFailed(tab.key(), busy())],
         Job::ResolveTarget(key, _, _) => vec![Update::ResolvedTarget(key.clone(), None)],
         Job::ExitSave(id, _) => vec![Update::ExitSaved(*id, Err(busy()))],
+        Job::GitView(tab) => vec![Update::GitView(
+            tab.key(),
+            crate::GitView::failed(tab, busy()),
+        )],
         _ => Vec::new(),
     }
 }
@@ -109,6 +121,7 @@ pub(super) fn context(job: &Job) -> OperationContext {
         }
         Job::DiffAction(tab, _) => ("diff-action", tab.key(), Policy::OrderedMutation),
         Job::ResolveTarget(key, _, _) => ("files", key.clone(), Policy::ReplaceableRead),
+        Job::GitView(tab) => ("git-view", tab.key(), Policy::ReplaceableRead),
         Job::HookStatus => ("catalog", "hooks".into(), Policy::ReplaceableRead),
         Job::TestNtfy { .. } => ("platform", "ntfy-test".into(), Policy::ReplaceableRead),
         Job::Preferences(_) => ("catalog", "preferences".into(), Policy::OrderedMutation),

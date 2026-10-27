@@ -2,34 +2,62 @@
 use eframe::egui::{self, Key, Modifiers};
 use std::collections::{BTreeMap, HashMap};
 
-pub const ACTIONS: &[(&str, &str)] = &[
-    ("new_terminal", "New terminal"),
-    ("open_file", "Open file"),
-    ("split_up", "Split up"),
-    ("split_down", "Split down"),
-    ("split_left", "Split left"),
-    ("split_right", "Split right"),
-    ("next_pane", "Next pane"),
-    ("select_all", "Select all"),
-    ("find_in_terminal", "Find in terminal"),
-    ("search_scrollback", "Search scrollback"),
-    ("copy_working_directory", "Copy working directory"),
-    ("rename_terminal", "Rename terminal"),
-    ("close_session", "Close session"),
-    ("clear_scrollback", "Clear saved scrollback"),
-    ("editor_save", "Save all"),
-    ("compare_disk", "Compare disk"),
-    ("toggle_left_sidebar", "Toggle left sidebar"),
-    ("toggle_right_sidebar", "Toggle right sidebar"),
-    ("toggle_ide_mode", "Toggle IDE mode"),
-    ("move_to_main", "Move terminal to main pane"),
-    ("move_to_strip", "Move terminal to lower pane"),
-    ("open_settings", "Settings"),
-    ("open_palette", "Search Everywhere"),
-    ("next_attention", "Next agent needing attention"),
-    ("new_browser", "New browser tab"),
-    ("new_vnc", "New VNC viewer"),
-];
+macro_rules! actions {
+    ($($variant:ident => $id:literal, $label:literal;)*) => {
+        /// A shortcut or palette command. `id` is the persisted
+        /// keybinding key; Settings stay string-keyed.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum Action {
+            $($variant,)*
+        }
+
+        impl Action {
+            /// Every action, in Settings and dispatch order.
+            pub const ALL: &[Action] = &[$(Action::$variant,)*];
+
+            pub const fn id(self) -> &'static str {
+                match self {
+                    $(Action::$variant => $id,)*
+                }
+            }
+
+            pub const fn label(self) -> &'static str {
+                match self {
+                    $(Action::$variant => $label,)*
+                }
+            }
+        }
+    };
+}
+
+actions! {
+    NewTerminal => "new_terminal", "New terminal";
+    OpenFile => "open_file", "Open file";
+    SplitUp => "split_up", "Split up";
+    SplitDown => "split_down", "Split down";
+    SplitLeft => "split_left", "Split left";
+    SplitRight => "split_right", "Split right";
+    NextPane => "next_pane", "Next pane";
+    SelectAll => "select_all", "Select all";
+    FindInTerminal => "find_in_terminal", "Find in terminal";
+    SearchScrollback => "search_scrollback", "Search scrollback";
+    CopyWorkingDirectory => "copy_working_directory", "Copy working directory";
+    RenameTerminal => "rename_terminal", "Rename terminal";
+    CloseSession => "close_session", "Close session";
+    ClearScrollback => "clear_scrollback", "Clear saved scrollback";
+    EditorSave => "editor_save", "Save all";
+    CompareDisk => "compare_disk", "Compare disk";
+    ToggleLeftSidebar => "toggle_left_sidebar", "Toggle left sidebar";
+    ToggleRightSidebar => "toggle_right_sidebar", "Toggle right sidebar";
+    ToggleIdeMode => "toggle_ide_mode", "Toggle IDE mode";
+    MoveToMain => "move_to_main", "Move terminal to main pane";
+    MoveToStrip => "move_to_strip", "Move terminal to lower pane";
+    OpenSettings => "open_settings", "Settings";
+    OpenPalette => "open_palette", "Search Everywhere";
+    NextAttention => "next_attention", "Next agent needing attention";
+    NewBrowser => "new_browser", "New browser tab";
+    NewVnc => "new_vnc", "New VNC viewer";
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Chord {
@@ -327,6 +355,12 @@ mod tests {
     }
 
     #[test]
+    fn action_ids_are_unique() {
+        let ids: std::collections::HashSet<_> = Action::ALL.iter().map(|a| a.id()).collect();
+        assert_eq!(ids.len(), Action::ALL.len());
+    }
+
+    #[test]
     fn parses_default_chords() {
         assert!(parse("command+T").is_some());
         assert!(parse("command+shift+D").is_some());
@@ -369,8 +403,8 @@ mod tests {
     #[test]
     fn every_menu_action_has_a_unique_default_chord() {
         let defaults = terminator_core::Settings::default().keybindings;
-        for (action, _) in ACTIONS {
-            let value = defaults.get(*action).unwrap_or_else(|| panic!("{action}"));
+        for action in Action::ALL.iter().map(|action| action.id()) {
+            let value = defaults.get(action).unwrap_or_else(|| panic!("{action}"));
             assert!(parse(value).is_some(), "{action}={value}");
         }
         assert_eq!(invalid(&defaults), None);

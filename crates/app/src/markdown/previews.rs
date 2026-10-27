@@ -146,7 +146,7 @@ impl Preview {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     egui::Frame::new()
                         .fill(ui.visuals().panel_fill)
-                        .corner_radius(10)
+                        .corner_radius(crate::appearance::MENU_RADIUS)
                         .inner_margin(egui::Margin::symmetric(8, 3))
                         .show(ui, |ui| {
                             ui.weak(label);

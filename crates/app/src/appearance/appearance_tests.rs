@@ -266,7 +266,7 @@ mod row_tests {
                 .collect::<Vec<_>>();
             assert!(!icons.is_empty(), "Missing rendered {surface} icon");
             assert!(
-                icons.iter().all(|icon| icon.fill == ICON_COLOR),
+                icons.iter().all(|icon| icon.fill == icon_color()),
                 "The {surface} icon must remain bright even when its text is muted"
             );
         }
@@ -807,15 +807,15 @@ mod row_tests {
             ..Default::default()
         };
         menu_style(&mut style);
-        assert_eq!(style.visuals.window_fill, MENU_FILL);
-        assert_eq!(style.visuals.override_text_color, Some(MENU_TEXT));
-        assert_eq!(style.visuals.weak_text_color, Some(MENU_MUTED));
-        assert_eq!(style.visuals.window_stroke.color, MENU_LINE);
+        assert_eq!(style.visuals.window_fill, menu_fill());
+        assert_eq!(style.visuals.override_text_color, Some(menu_text()));
+        assert_eq!(style.visuals.weak_text_color, Some(menu_muted()));
+        assert_eq!(style.visuals.window_stroke.color, menu_line());
         assert_eq!(
             style.visuals.menu_corner_radius,
             egui::CornerRadius::same(MENU_RADIUS)
         );
-        assert_eq!(style.visuals.widgets.hovered.bg_fill, MENU_LINE);
+        assert_eq!(style.visuals.widgets.hovered.bg_fill, menu_line());
         assert_eq!(
             style.text_styles.get(&TextStyle::Body),
             Some(&FontId::proportional(12.0))
@@ -865,7 +865,7 @@ mod row_tests {
             );
             output.textures_delta.clear();
         }
-        assert_eq!(fill, Some(MENU_FILL));
-        assert_eq!(text, Some(MENU_TEXT));
+        assert_eq!(fill, Some(menu_fill()));
+        assert_eq!(text, Some(menu_text()));
     }
 }

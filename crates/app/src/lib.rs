@@ -41,6 +41,7 @@ use settings_ui::{BrowseTarget, SettingsSection};
 mod palette;
 mod settings_controls;
 mod shortcuts;
+use shortcuts::Action;
 mod ui_control;
 mod vnc_ui;
 mod worktree_ui;
@@ -77,8 +78,8 @@ pub(crate) use app::app_state::{
 };
 pub(crate) use app::frame::RepaintProbe;
 pub(crate) use app::types::{
-    After, FileActivation, HoverPopup, Job, PaneDropZone, PaneSource, RenameSurface, SpawnDiff,
-    Tab, Update,
+    After, FileActivation, GitView, HoverPopup, Job, PaneDropZone, PaneSource, RenameSurface,
+    SpawnDiff, Tab, Update,
 };
 pub(crate) use app::window::{
     FloatingWindow, PaneIndex, TerminalFind, begin_native_window_gesture, header_drag_space,

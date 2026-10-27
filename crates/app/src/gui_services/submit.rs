@@ -2,24 +2,21 @@
 use super::jobs::{context, editor_ids, rejection};
 #[cfg(feature = "test-support")]
 use crate::nvim_rpc;
-use crate::{
-    After, Job, Tab, Update, clipboard, daemon_connection, diff, editor_close, external_editor,
-    image_preview, installation, notify_test, player, search, services, workspace_ops,
-};
-use anyhow::{Context, Result};
+use crate::{Job, Update, daemon_connection, installation, player};
+use anyhow::Result;
 
 use eframe::egui;
 use std::{
     collections::HashMap,
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, mpsc::Sender},
     time::{Duration, Instant},
 };
 #[cfg(feature = "test-support")]
 use terminator_core::CommandOptions;
 use terminator_core::appearance::{AppearanceFile, config_path};
-use terminator_core::{Paths, Request, Response, State, sanitize_layout};
+use terminator_core::{Paths, Response, State};
 use terminator_core::{
     async_client::Client,
     async_process::Processes,
@@ -162,6 +159,9 @@ impl Services {
     pub fn cpu(&self) -> &NativePool {
         &self.0.client.cpu
     }
+    pub(super) fn platform(&self) -> &NativePool {
+        &self.0.platform
+    }
     pub fn processes(&self) -> &Processes {
         &self.0.processes
     }
@@ -197,7 +197,11 @@ impl Services {
     pub fn reads_paused(&self) -> bool {
         self.0.paused.load(std::sync::atomic::Ordering::Acquire)
     }
-    async fn recover_service(&self, state: State, cancel: &CancellationToken) -> Result<bool> {
+    pub(super) async fn recover_service(
+        &self,
+        state: State,
+        cancel: &CancellationToken,
+    ) -> Result<bool> {
         if !state
             .generations
             .iter()
@@ -478,604 +482,93 @@ impl Services {
         for lock in locks {
             guards.push(lock.lock_owned().await);
         }
-        let client = self.client();
-        let mut updates = Vec::new();
         if let Job::Control(request, _) = &job
-            && let Request::CreateReview {
-                project,
-                path,
-                staged,
-                ..
-            } = request.as_ref()
+            && let Some(updates) = self.reuse_review(request, &cancel).await?
         {
-            let Response::State(state) = client.snapshot(None).await? else {
-                anyhow::bail!("Expected review session inventory");
-            };
-            let candidates: Vec<_> = state
-                .sessions
-                .iter()
-                .filter(|session| {
-                    session.project_id == *project
-                        && session.review
-                        && session.lifecycle.live()
-                        && session.file.as_ref() == Some(path)
-                        && daemon_connection::session_owner_available(&state, session)
-                })
-                .map(|session| session.id.clone())
-                .collect();
-            let paths = client.paths.clone();
-            let staged = *staged;
-            let existing = client
-                .catalog
-                .run(&cancel, move || {
-                    for session in candidates {
-                        let owner = terminator_core::generations::owner_for(
-                            &paths,
-                            &Request::EditorStatus {
-                                session: session.clone(),
-                            },
-                        )?;
-                        let config = owner.runtime.join(format!("review-{session}/config.json"));
-                        if !fs::metadata(&config).is_ok_and(|metadata| metadata.len() <= 65536) {
-                            continue;
-                        }
-                        let Ok(bytes) = fs::read(config) else {
-                            continue;
-                        };
-                        let Ok(config) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-                            continue;
-                        };
-                        if config.get("left_label").and_then(serde_json::Value::as_str)
-                            == Some(if staged { "HEAD" } else { "Index" })
-                            && config
-                                .get("right_label")
-                                .and_then(serde_json::Value::as_str)
-                                == Some(if staged { "Index" } else { "Working tree" })
-                        {
-                            return Ok(Some(session));
-                        }
-                    }
-                    Ok(None)
-                })
-                .await?;
-            if let Some(session) = existing {
-                updates.push(Update::State(state));
-                updates.push(Update::RevealFileSession(session, project.clone()));
-                return Ok(updates);
-            }
+            return Ok(updates);
         }
+        let mut updates = Vec::new();
         match job {
             Job::PrepareLayouts(generation, layouts) => {
-                let layouts = self
-                    .cpu()
-                    .run(&cancel, move || {
-                        layouts
-                            .into_iter()
-                            .map(|(project, layout)| {
-                                let value = sanitize_layout(serde_json::to_value(layout)?);
-                                let text = value.to_string();
-                                Ok((project, value, text))
-                            })
-                            .collect::<Result<Vec<_>>>()
-                    })
-                    .await?;
-                updates.push(Update::LayoutsPrepared(generation, layouts));
+                self.prepare_layouts(generation, layouts, cancel, &mut updates)
+                    .await?
             }
             Job::SaveLayout(project, layout, text) => {
-                let result = client
-                    .rpc(Request::SaveLayout {
-                        project: project.clone(),
-                        layout,
-                    })
-                    .await
-                    .and_then(|response| {
-                        anyhow::ensure!(
-                            matches!(response, Response::Ok),
-                            "Layout save was not acknowledged"
-                        );
-                        Ok(())
-                    })
-                    .map_err(|e| format!("{e:#}"));
-                updates.push(Update::LayoutSaved(project, text, result));
+                self.save_layout(project, layout, text, &mut updates)
+                    .await?
             }
-
-            Job::Control(request, after) => match client.rpc(*request).await? {
-                Response::Created(session) => {
-                    if let Ok(Response::State(state)) = client.rpc(Request::Snapshot).await {
-                        updates.push(Update::State(state));
-                    }
-                    match after {
-                        After::Create(split) => updates.push(Update::Created(session, split, None)),
-                        After::CreateAt(anchors, split) => {
-                            updates.push(Update::Created(session, split, Some(anchors)));
-                        }
-                        After::Workspace(id, anchors) => {
-                            updates.push(Update::WorkspaceCreated(session, id, anchors));
-                        }
-                        After::Strip => {
-                            updates.push(Update::StripCreated(session, None, Vec::new()));
-                        }
-                        After::StripAt(anchors, split) => {
-                            updates.push(Update::StripCreated(session, split, anchors));
-                        }
-                        After::Float(viewport, anchors, split) => {
-                            updates.push(Update::FloatCreated(session, viewport, split, anchors));
-                        }
-                        _ => {}
-                    }
-                }
-                Response::VncCreated(session) => {
-                    if let Ok(Response::State(state)) = client.rpc(Request::Snapshot).await {
-                        updates.push(Update::State(state));
-                    }
-                    updates.push(Update::VncConnected(session, after));
-                }
-                Response::Text(text) => {
-                    if let After::Text(key) = after {
-                        updates.push(Update::Text(key, text));
-                    }
-                }
-                _ => {}
-            },
+            Job::Control(request, after) => self.control(request, after, &mut updates).await?,
             Job::CloseIdle(target, generation, ids) => {
-                let result = client
-                    .rpc(Request::CloseIdleSessions {
-                        generation,
-                        sessions: ids.clone(),
-                    })
-                    .await
-                    .and_then(|response| match response {
-                        Response::IdleSessionsClosed(outcomes) => Ok(outcomes),
-                        _ => anyhow::bail!("Unexpected idle-close response"),
-                    })
-                    .map_err(|e| format!("{e:#}"));
-                updates.push(Update::IdleClosed(target, ids, result));
+                self.close_idle(target, generation, ids, &mut updates)
+                    .await?
             }
             Job::CloseEditors(target, ids, mode, timeout) => {
-                let result = editor_close::close_async(client, &ids, mode, timeout)
-                    .await
-                    .map_err(|e| format!("{e:#}"));
-                updates.push(Update::EditorsClosed(target, ids, result));
+                self.close_editors(target, ids, mode, timeout, &mut updates)
+                    .await?
             }
-            Job::Preferences(prefs) => {
-                let data = client.paths.data.clone();
-                let result = client
-                    .catalog
-                    .run(&cancel, move || {
-                        prefs.save(&data)?;
-                        Ok(prefs)
-                    })
-                    .await
-                    .map_err(|e| format!("Save UI preferences: {e:#}"));
-                updates.push(Update::PreferencesSaved(Box::new(result)));
-            }
+            Job::Preferences(prefs) => self.save_preferences(prefs, cancel, &mut updates).await?,
             Job::SaveAppearance(theme, expected) => {
-                let paths = client.paths.clone();
-                let file = client
-                    .catalog
-                    .run(&cancel, move || {
-                        AppearanceFile::save(&config_path(&paths)?, &theme, &expected)
-                    })
-                    .await?;
-                updates.push(Update::Appearance(Box::new(file)));
+                self.save_appearance(theme, expected, cancel, &mut updates)
+                    .await?
             }
             Job::ExitSave(id, checkpoint) => {
-                let result = async {
-                    // Quit pauses polling. Recheck owners here as the daemon can
-                    // have exited since the last accepted GUI snapshot.
-                    let Response::State(state) = client.snapshot(None).await? else {
-                        anyhow::bail!("Could not verify the session service before closing")
-                    };
-                    self.recover_service(*state, &cancel).await?;
-                    let Response::State(state) = client.snapshot(None).await? else {
-                        anyhow::bail!("Could not verify the recovered session service")
-                    };
-                    checkpoint.for_state(&state).save_async(client).await
-                }
-                .await;
-                updates.push(Update::ExitSaved(id, result.map_err(|e| format!("{e:#}"))));
+                self.exit_save(id, checkpoint, cancel, &mut updates).await?
             }
             Job::ExitDrain(id, serial) => updates.push(Update::ExitDrained(id, serial)),
             Job::ResolveTarget(key, text, cwd) => {
-                let target = self
-                    .fs()
-                    .run(&cancel, move || {
-                        Ok(services::resolve_target(&text, &cwd).ok())
-                    })
-                    .await?;
-                updates.push(Update::ResolvedTarget(key, target));
+                self.resolve_target(key, text, cwd, cancel, &mut updates)
+                    .await?
             }
             Job::OpenProject(path, generation) => {
-                let path = self
-                    .fs()
-                    .run(&cancel, move || {
-                        let path = path.canonicalize()?;
-                        anyhow::ensure!(path.is_dir(), "Project must be a directory");
-                        Ok(path)
-                    })
-                    .await?;
-                let Response::State(state) = client.rpc(Request::Snapshot).await? else {
-                    anyhow::bail!("Expected project inventory")
-                };
-                let lookup = path.clone();
-                let (state, project) = self
-                    .fs()
-                    .run(&cancel, move || {
-                        let project = services::project_for_directory(&state.projects, &lookup)
-                            .map(|p| p.id.clone());
-                        Ok((state, project))
-                    })
-                    .await?;
-                let (state, project) = if let Some(project) = project {
-                    (state, project)
-                } else {
-                    client
-                        .rpc(Request::AddProject { path: path.clone() })
-                        .await?;
-                    let Response::State(state) = client.rpc(Request::Snapshot).await? else {
-                        anyhow::bail!("Expected project inventory")
-                    };
-                    self.fs()
-                        .run(&cancel, move || {
-                            let project = services::project_for_directory(&state.projects, &path)
-                                .context("Opened project missing from inventory")?
-                                .id
-                                .clone();
-                            Ok((state, project))
-                        })
-                        .await?
-                };
-                updates.push(Update::OpenedProject(state, project, generation));
+                self.open_project(path, generation, cancel, &mut updates)
+                    .await?
             }
-            Job::MigrateAttention | Job::MigrateTypography => {
-                let attention = matches!(job, Job::MigrateAttention);
-                let Response::State(mut state) = client.rpc(Request::Snapshot).await? else {
-                    anyhow::bail!("Expected settings snapshot")
-                };
-                if attention {
-                    state.settings.notifications_side = true;
-                    state
-                        .settings
-                        .keybindings
-                        .entry("open_file".into())
-                        .or_insert_with(|| "command+O".into());
-                } else {
-                    state.settings.font_size = 13.0;
-                }
-                anyhow::ensure!(
-                    matches!(
-                        client.rpc(Request::Settings(state.settings)).await?,
-                        Response::Ok
-                    ),
-                    "Settings not acknowledged"
-                );
-                updates.push(if attention {
-                    Update::AttentionMigrated(Ok(()))
-                } else {
-                    Update::TypographyMigrated
-                });
-                if let Response::State(state) = client.rpc(Request::Snapshot).await? {
-                    updates.push(Update::State(state));
-                }
-            }
+            Job::MigrateAttention => self.migrate_settings(true, &mut updates).await?,
+            Job::MigrateTypography => self.migrate_settings(false, &mut updates).await?,
             Job::DiffAction(tab, request) => {
-                anyhow::ensure!(
-                    !matches!(
-                        &tab,
-                        Tab::Diff {
-                            remote: Some(_),
-                            ..
-                        }
-                    ),
-                    "Remote Git diffs are read-only; use the SSH terminal to change Git state"
-                );
-                let undo = matches!(request.as_ref(), diff::actions::Request::Undo(_));
-                let staged = matches!(&tab, Tab::Diff { staged: true, .. });
-                let result = diff::actions::execute(self, *request, staged, &cancel)
-                    .await
-                    .map_err(|error| format!("{error:#}"));
-                updates.push(Update::DiffAction(tab, undo, result));
+                self.diff_action(tab, request, cancel, &mut updates).await?
             }
             Job::DiffContext(tab, context) => {
-                if let Tab::Diff {
-                    cwd, path, staged, ..
-                } = &tab
-                {
-                    let result = if matches!(
-                        &tab,
-                        Tab::Diff {
-                            remote: Some(_),
-                            ..
-                        }
-                    ) {
-                        diff::remote_document(self, client, &tab, context, &cancel).await
-                    } else {
-                        diff::document_with_context(
-                            self,
-                            cwd.clone(),
-                            path.clone(),
-                            *staged,
-                            context,
-                            &cancel,
-                        )
-                        .await
-                    }
-                    .map_err(|e| format!("{e:#}"));
-                    updates.push(Update::Diff(tab.key(), result));
-                }
+                self.diff_context(tab, context, cancel, &mut updates)
+                    .await?
             }
             Job::DiffExpand(tab, doc, gap) => {
-                if let Tab::Diff { path, staged, .. } = &tab {
-                    let path = path.clone();
-                    let staged = *staged;
-                    let result = self
-                        .cpu()
-                        .run(&cancel, move || doc.expand_gap(&path, gap, staged))
-                        .await
-                        .map_err(|error| format!("{error:#}"));
-                    updates.push(Update::Diff(tab.key(), result));
-                }
+                self.diff_expand(tab, doc, gap, cancel, &mut updates)
+                    .await?
             }
-            Job::Diff(tab) => {
-                if let Tab::Diff {
-                    cwd, path, staged, ..
-                } = &tab
-                {
-                    let result = if matches!(
-                        &tab,
-                        Tab::Diff {
-                            remote: Some(_),
-                            ..
-                        }
-                    ) {
-                        diff::remote_document(self, client, &tab, 6, &cancel).await
-                    } else {
-                        diff::document_async(self, cwd.clone(), path.clone(), *staged, &cancel)
-                            .await
-                    }
-                    .map_err(|e| format!("{e:#}"));
-                    updates.push(Update::Diff(tab.key(), result));
-                }
-            }
-            Job::CreateWorktree(draft) => {
-                anyhow::ensure!(
-                    matches!(
-                        client
-                            .rpc(Request::WorktreeAdd {
-                                project: draft.source,
-                                path: draft.dest.clone(),
-                                branch: Some(draft.branch.trim().to_owned())
-                                    .filter(|s| !s.is_empty()),
-                                start: draft.start.trim().to_owned()
-                            })
-                            .await?,
-                        Response::Ok
-                    ),
-                    "Unexpected worktree creation response"
-                );
-                let canonical = self
-                    .fs()
-                    .run(&cancel, move || Ok(draft.dest.canonicalize()?))
-                    .await?;
-                let Response::State(state) = client.rpc(Request::Snapshot).await? else {
-                    anyhow::bail!("Expected worktree snapshot")
-                };
-                let project = state
-                    .projects
-                    .iter()
-                    .find(|p| p.path == canonical)
-                    .context("Created worktree missing from inventory")?
-                    .id
-                    .clone();
-                updates.push(Update::WorktreeCreated(state, project, draft.open_terminal));
-            }
-            Job::HookStatus => {
-                let status = client
-                    .catalog
-                    .run(&cancel, move || {
-                        let home = std::env::var_os("HOME")
-                            .map(PathBuf::from)
-                            .unwrap_or_default();
-                        Ok(terminator_integrations::AGENTS
-                            .iter()
-                            .map(|kind| {
-                                (
-                                    (*kind).to_string(),
-                                    terminator_integrations::installed(&home, kind),
-                                )
-                            })
-                            .collect())
-                    })
-                    .await?;
-                updates.push(Update::HookStatus(status));
-            }
+            Job::Diff(tab) => self.diff(tab, cancel, &mut updates).await?,
+            Job::CreateWorktree(draft) => self.create_worktree(draft, cancel, &mut updates).await?,
+            Job::HookStatus => self.hook_status(cancel, &mut updates).await?,
             Job::PasteClipboard(session) => {
-                if let Some(text) = self.0.platform.run(&cancel, clipboard::read_paste).await? {
-                    updates.push(Update::ClipboardPaste(session, text));
-                }
+                self.paste_clipboard(session, cancel, &mut updates).await?
             }
-            Job::Browser(url) => {
-                self.0
-                    .platform
-                    .run(&cancel, move || {
-                        open::that(url)?;
-                        Ok(())
-                    })
-                    .await?;
-            }
-            Job::Install(kind, remove) => {
-                let paths = client.paths.clone();
-                let message = client
-                    .catalog
-                    .run(&cancel, move || {
-                        anyhow::ensure!(
-                            remove || terminator_core::agents::find_installed(&kind).is_some(),
-                            "Install the {kind} CLI before configuring its hooks"
-                        );
-                        let home = std::env::var_os("HOME").context("No home directory")?;
-                        let helper = terminator_core::sibling_exe(
-                            &std::env::current_exe()?,
-                            "terminator-hook",
-                        );
-                        let path = terminator_integrations::install_at(
-                            Path::new(&home),
-                            &kind,
-                            &helper,
-                            remove,
-                            &paths,
-                        )?;
-                        Ok(format!(
-                            "{} hooks: {}",
-                            if remove { "Removed" } else { "Installed" },
-                            path.display()
-                        ))
-                    })
-                    .await?;
-                updates.push(Update::Info(message));
-            }
+            Job::Browser(url) => self.open_browser(url, cancel).await?,
+            Job::Install(kind, remove) => self.install(kind, remove, cancel, &mut updates).await?,
             Job::TestNtfy { channel, machine } => {
-                let delivered = self
-                    .0
-                    .platform
-                    .run(&cancel, move || {
-                        notify_test::send(notify_test::ENDPOINT, &channel, &machine)
-                    })
-                    .await;
-                match delivered {
-                    Ok(()) => updates.push(Update::Info(
-                        "ntfy test posted. If your phone stayed silent, open the channel in ntfy to subscribe."
-                            .into(),
-                    )),
-                    Err(error) => updates.push(Update::Error(format!(
-                        "ntfy test failed: {error:#}"
-                    ))),
-                }
+                self.test_ntfy(channel, machine, cancel, &mut updates)
+                    .await?
             }
-            Job::External(path) => {
-                let (program, args) = if image_preview::supported(&path) {
-                    external_editor::image_opener()
-                } else {
-                    let Response::State(state) = client.rpc(Request::Snapshot).await? else {
-                        anyhow::bail!("Expected editor settings snapshot")
-                    };
-                    (state.settings.external_editor, state.settings.external_args)
-                };
-                self.launch_external(path, program, args, false, &cancel)
-                    .await?;
-            }
+            Job::External(path) => self.open_external(path, cancel).await?,
             Job::TestExternal(path, program, args) => {
-                self.launch_external(path, program, args, true, &cancel)
-                    .await?;
+                self.test_external(path, program, args, cancel).await?
             }
             Job::RepairInstallation(generation, checkpoint) => {
-                let result = async {
-                    checkpoint.save_async(client).await?;
-                    let paths = client.paths.clone();
-                    self.0
-                        .platform
-                        .run(&cancel, move || {
-                            daemon_connection::repair(
-                                &paths,
-                                &std::env::current_exe()?,
-                                &generation,
-                            )
-                        })
-                        .await
-                }
-                .await
-                .map_err(|e| format!("{e:#}"));
-                let mut result = result;
-                if let Ok(state) = &mut result {
-                    client.observe(state);
-                }
-                updates.push(Update::InstallationRepaired(result));
+                self.repair_installation(generation, checkpoint, cancel, &mut updates)
+                    .await?
             }
             Job::RestartSessionService(inventory) => {
-                let paths = client.paths.clone();
-                let watched = self
-                    .0
-                    .platform
-                    .run(&cancel, move || {
-                        installation::begin_restart(
-                            installation::restart_invocation(&std::env::current_exe()?, &paths)?,
-                            inventory,
-                        )
-                    })
-                    .await?;
-                let service = self.clone();
-                let cancel = CancellationToken::new();
-                let token = cancel.clone();
-                let mut context = OperationContext::new(
-                    "platform",
-                    "restart-observer".into(),
-                    Policy::ServiceLifetime,
-                );
-                context.deadline = None;
-                self.handle().submit(context, cancel, async move {
-                    use tokio::io::AsyncReadExt;
-                    let mut completion = watched.completion.into_tokio()?;
-                    let mut bytes = [0; 256];
-                    loop {
-                        tokio::select! {
-                            () = token.cancelled() => return Ok(Vec::new()),
-                            n = completion.read(&mut bytes) => if n? == 0 { break; }
-                        }
-                    }
-                    let message = service
-                        .fs()
-                        .run(&token, move || {
-                            Ok(installation::restart_message(
-                                watched.log_path,
-                                watched.log_start,
-                            ))
-                        })
-                        .await?;
-                    Ok(vec![Update::RestartFinished(message)])
-                })?;
+                self.restart_session_service(inventory, cancel).await?
             }
             Job::RemoteAdd {
                 project,
                 probe,
                 generation,
             } => {
-                let request = if probe {
-                    Request::ProbeRemoteProject {
-                        project: project.clone(),
-                    }
-                } else {
-                    Request::AddRemoteProject {
-                        project: project.clone(),
-                    }
-                };
-                let result = match client.rpc(request).await {
-                    Ok(Response::RemoteProject(terminator_core::remote::Reply::Probe { root })) => {
-                        Ok(crate::remote_ui::FormResult::Probe(root))
-                    }
-                    Ok(Response::Ok) => match client.rpc(Request::Snapshot).await {
-                        Ok(Response::State(state)) => {
-                            Ok(crate::remote_ui::FormResult::Added(state))
-                        }
-                        Ok(_) => Err("Expected project snapshot".into()),
-                        Err(e) => Err(format!("{e:#}")),
-                    },
-                    Ok(_) => Err("Unexpected SSH project response".into()),
-                    Err(e) => Err(format!("{e:#}")),
-                };
-                updates.push(Update::RemoteAdded(project, generation, result));
+                self.remote_add(project, probe, generation, &mut updates)
+                    .await?
             }
             Job::RemoteRead { project, operation } => {
-                let result = match client
-                    .rpc(Request::RemoteProject {
-                        project: project.clone(),
-                        operation: operation.clone(),
-                    })
-                    .await
-                {
-                    Ok(Response::RemoteProject(reply)) => Ok(reply),
-                    Ok(_) => Err("Unexpected SSH project response".into()),
-                    Err(e) => Err(format!("{e:#}")),
-                };
-                updates.push(Update::RemoteReply(project, operation, result));
+                self.remote_read(project, operation, &mut updates).await?
             }
             Job::RemoteAsset {
                 project,
@@ -1083,204 +576,44 @@ impl Services {
                 cache_root,
                 after,
             } => {
-                terminator_core::remote::validate_relative(&path)?;
-                let reply = client
-                    .rpc(Request::RemoteProject {
-                        project: project.clone(),
-                        operation: terminator_core::remote::Operation::Read { path: path.clone() },
-                    })
-                    .await?;
-                let Response::RemoteProject(terminator_core::remote::Reply::File {
-                    path: actual,
-                    base64,
-                }) = reply
-                else {
-                    anyhow::bail!("Unexpected remote file response")
-                };
-                anyhow::ensure!(actual == path, "Remote file response identity changed");
-                let target = cache_root.join(&path);
-                let saved = target.clone();
-                self.fs()
-                    .run(&cancel, move || {
-                        use base64::Engine;
-                        let bytes = base64::engine::general_purpose::STANDARD.decode(base64)?;
-                        anyhow::ensure!(
-                            bytes.len() <= terminator_core::remote::MAX_FILE_BYTES,
-                            "Remote preview exceeds 2 MiB"
-                        );
-                        if let Some(parent) = saved.parent() {
-                            fs::create_dir_all(parent)?;
-                        }
-                        terminator_core::atomic_write(&saved, &bytes)?;
-                        let mut permissions = fs::metadata(&saved)?.permissions();
-                        permissions.set_readonly(true);
-                        fs::set_permissions(&saved, permissions)?;
-                        Ok(())
-                    })
-                    .await?;
-                updates.push(Update::RemoteAsset(project, target, after));
+                self.remote_asset(project, path, cache_root, after, cancel, &mut updates)
+                    .await?
             }
             Job::VncPickTransfer {
                 session,
                 direction,
                 remote,
             } => {
-                let upload = direction == terminator_core::vnc::TransferDirection::Upload;
-                let picked = self
-                    .fs()
-                    .run(&cancel, move || {
-                        let dialog = rfd::FileDialog::new().set_title(if upload {
-                            "Upload via SFTP"
-                        } else {
-                            "Save SFTP download to a new file"
-                        });
-                        Ok(if upload {
-                            dialog.pick_file()
-                        } else {
-                            dialog.save_file()
-                        })
-                    })
-                    .await;
-                let result = match picked {
-                    Ok(Some(local)) => {
-                        let id = terminator_core::id();
-                        let request = Request::VncTransfer {
-                            session: session.clone(),
-                            transfer: terminator_core::vnc::VncTransfer {
-                                id: id.clone(),
-                                direction,
-                                local,
-                                remote,
-                            },
-                        };
-                        match client.rpc(request).await {
-                            Ok(Response::Ok) => Ok(Some(terminator_core::vnc::VncTransferStatus {
-                                id,
-                                done: false,
-                                bytes: 0,
-                                error: None,
-                            })),
-                            Ok(_) => Err("Unexpected SFTP transfer response".into()),
-                            Err(e) => Err(format!("{e:#}")),
-                        }
-                    }
-                    Ok(None) => Ok(None),
-                    Err(e) => Err(format!("{e:#}")),
-                };
-                updates.push(Update::VncTransfer(session, result));
+                self.vnc_pick_transfer(session, direction, remote, cancel, &mut updates)
+                    .await?
             }
             Job::VncTransferPoll { session, id } => {
-                let result = match client
-                    .rpc(Request::VncTransferStatus {
-                        session: session.clone(),
-                        id,
-                    })
-                    .await
-                {
-                    Ok(Response::VncTransferStatus(status)) => Ok(Some(status)),
-                    Ok(_) => Err("Unexpected SFTP transfer status".into()),
-                    Err(e) => Err(format!("{e:#}")),
-                };
-                updates.push(Update::VncTransfer(session, result));
+                self.vnc_transfer_poll(session, id, &mut updates).await?
             }
             Job::VncConnectTab { tab_id, request } => {
-                let result = match client.rpc(request).await {
-                    Ok(Response::VncCreated(session)) => {
-                        if let Ok(Response::State(state)) = client.rpc(Request::Snapshot).await {
-                            updates.push(Update::State(state));
-                        }
-                        Ok(session)
-                    }
-                    Ok(_) => Err("Unexpected VNC connection response".into()),
-                    Err(err) => Err(format!("{err:#}")),
-                };
-                updates.push(Update::VncTabConnected(tab_id, result));
+                self.vnc_connect_tab(tab_id, request, &mut updates).await?
             }
             Job::VncFrame {
                 session,
                 since,
                 regions,
             } => {
-                let result = match client
-                    .rpc(Request::VncFrame {
-                        session: session.clone(),
-                        since,
-                        regions,
-                    })
-                    .await
-                {
-                    Ok(Response::VncFrame(frame)) => self
-                        .cpu()
-                        .run(&cancel, move || crate::vnc_ui::decode_frame(*frame))
-                        .await
-                        .map(Some)
-                        .map_err(|e| format!("{e:#}")),
-                    Ok(Response::Unchanged) => Ok(None),
-                    Ok(_) => Err("Unexpected VNC frame response".into()),
-                    Err(err) => Err(format!("{err:#}")),
-                };
-                updates.push(Update::VncFrame(session, result));
+                self.vnc_frame(session, since, regions, cancel, &mut updates)
+                    .await?
             }
-            Job::Workspace(root, op) => {
-                let reply = op.clone();
-                let result = match op {
-                    workspace_ops::Op::Perforce(op) => {
-                        crate::perforce::perform(self, &root, op, &cancel).await
-                    }
-                    op => {
-                        self.fs()
-                            .run(&cancel, move || workspace_ops::perform(&root, op))
-                            .await
-                    }
-                }
-                .map_err(|error| format!("{error:#}"));
-                updates.push(Update::Workspace(reply, result));
-            }
+            Job::Workspace(root, op) => self.workspace_op(root, op, cancel, &mut updates).await?,
             Job::Search {
                 id,
                 root,
                 query,
                 show_ignored,
             } => {
-                let result = self
-                    .fs()
-                    .run(&cancel, move || {
-                        Ok(search::run(&root, &query, show_ignored))
-                    })
-                    .await;
-                let result = match result {
-                    Ok(inner) => inner,
-                    Err(error) => Err(format!("{error:#}")),
-                };
-                updates.push(Update::Search(id, result));
+                self.search(id, root, query, show_ignored, cancel, &mut updates)
+                    .await?
             }
-            Job::StartSessionService => {
-                let paths = client.paths.clone();
-                let result = self
-                    .0
-                    .platform
-                    .run(&cancel, move || {
-                        daemon_connection::ensure_running(&paths, &std::env::current_exe()?)
-                    })
-                    .await
-                    .map_err(|error| format!("{error:#}"));
-                updates.push(Update::ServiceStarted(result));
-            }
+            Job::GitView(tab) => self.git_view(tab, cancel, &mut updates).await?,
+            Job::StartSessionService => self.start_session_service(cancel, &mut updates).await?,
         }
         Ok(updates)
-    }
-    async fn launch_external(
-        &self,
-        path: PathBuf,
-        program: String,
-        args: Vec<String>,
-        test: bool,
-        _cancel: &CancellationToken,
-    ) -> Result<()> {
-        external_editor::launch_supervised(self.clone(), program, args, path).await?;
-        if test {
-            self.emit(Update::Info("External editor launched with draft settings. Check the selected file in the editor.".into())).await?;
-        }
-        Ok(())
     }
 }

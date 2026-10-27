@@ -180,7 +180,7 @@ impl TabViewer for Viewer<'_> {
                     ui,
                     "New Browser Tab",
                     "Globe",
-                    &self.app.shortcut_label("new_browser"),
+                    &self.app.shortcut_label(Action::NewBrowser),
                 )
                 .clicked()
                 {
@@ -191,7 +191,7 @@ impl TabViewer for Viewer<'_> {
                     ui,
                     "New VNC Viewer",
                     "Monitor",
-                    &self.app.shortcut_label("new_vnc"),
+                    &self.app.shortcut_label(Action::NewVnc),
                 )
                 .clicked()
                 {
@@ -312,7 +312,7 @@ impl TabViewer for Viewer<'_> {
             cursor += appearance::TERMINAL_LEADING_SLOT;
         };
         if let Some(brand) = leading.brand {
-            paint(brand, appearance::ICON_COLOR, false);
+            paint(brand, appearance::icon_color(), false);
         }
         if let Some((icon, tint, spin)) = leading.status {
             paint(icon, tint, spin);
@@ -426,7 +426,7 @@ impl TabViewer for Viewer<'_> {
                 .is_some_and(|drag_id| response.id == drag_id.with("dragged"));
             if response.drag_started() || response.dragged() || response.drag_stopped() || floating
             {
-                self.app.strip_tab_drag = Some(sid.clone());
+                self.app.drag.strip_tab = Some(sid.clone());
             }
             #[cfg(feature = "test-support")]
             diagnostics::record(&response.ctx, &format!("strip-tab:{sid}"), response.rect);
@@ -450,7 +450,7 @@ impl TabViewer for Viewer<'_> {
     ) -> bool {
         self.on_tab_button(tab, response);
         if !self.strip && self.window.is_none() {
-            self.app.pane_drop_tabs.push((path, response.rect));
+            self.app.drag.drop_tabs.push((path, response.rect));
         }
         #[cfg(feature = "test-support")]
         diagnostics::record(
@@ -470,17 +470,17 @@ impl TabViewer for Viewer<'_> {
         if !self.strip
             && self.window.is_none()
             && matches!(tab, Tab::NativeEditor { .. })
-            && self.app.pane_drag.is_none()
+            && self.app.drag.pane.is_none()
             && dragging
             && let (Some(project), Some(group)) = (&self.project, &self.tab)
         {
-            self.app.pane_drag = Some(tab.clone());
-            self.app.pane_drag_source = Some(PaneSource {
+            self.app.drag.pane = Some(tab.clone());
+            self.app.drag.pane_source = Some(PaneSource {
                 project: project.clone(),
                 group: group.clone(),
                 path,
             });
-            self.app.pane_drag_snapshot.clear();
+            self.app.drag.pane_snapshot.clear();
             return true;
         }
         false
@@ -561,7 +561,7 @@ impl TabViewer for Viewer<'_> {
                     ui,
                     "Move to main pane",
                     "ArrowUp",
-                    &self.app.shortcut_label("move_to_main"),
+                    &self.app.shortcut_label(Action::MoveToMain),
                 )
                 .clicked()
             {
@@ -577,7 +577,7 @@ impl TabViewer for Viewer<'_> {
                     ui,
                     "Move to lower pane",
                     "ArrowDown",
-                    &self.app.shortcut_label("move_to_strip"),
+                    &self.app.shortcut_label(Action::MoveToStrip),
                 )
                 .clicked()
             {
@@ -588,7 +588,7 @@ impl TabViewer for Viewer<'_> {
                 ui,
                 "Search scrollback",
                 "Search",
-                &self.app.shortcut_label("search_scrollback"),
+                &self.app.shortcut_label(Action::SearchScrollback),
             )
             .clicked()
             {
@@ -599,7 +599,7 @@ impl TabViewer for Viewer<'_> {
                 ui,
                 "Clear saved scrollback",
                 "Eraser",
-                &self.app.shortcut_label("clear_scrollback"),
+                &self.app.shortcut_label(Action::ClearScrollback),
             )
             .clicked()
             {
@@ -697,8 +697,9 @@ impl TabViewer for Viewer<'_> {
                         Some(name) => format!("{name}\nOpen Git"),
                         None => "Open Git".into(),
                     };
-                    let vertical_tip = self.app.action_tip("Split vertically", "split_right");
-                    let horizontal_tip = self.app.action_tip("Split horizontally", "split_down");
+                    let vertical_tip = self.app.action_tip("Split vertically", Action::SplitRight);
+                    let horizontal_tip =
+                        self.app.action_tip("Split horizontally", Action::SplitDown);
                     let (response, close, actions) = if is_markdown {
                         let header = self.markdown_header(ui, &session, editing);
                         (header.0, header.1, None)
@@ -834,17 +835,17 @@ impl TabViewer for Viewer<'_> {
                         && !closing
                         && !on_control
                     {
-                        self.app.pane_drag = Some(Tab::Terminal(sid.clone()));
+                        self.app.drag.pane = Some(Tab::Terminal(sid.clone()));
                         // Snapshot once: the ghost reuses it every frame instead
                         // of re-reading the live grid while it scrolls.
-                        self.app.pane_drag_snapshot = self
+                        self.app.drag.pane_snapshot = self
                             .app
                             .backends
                             .get(sid)
                             .map(snapshot_rows)
                             .unwrap_or_default();
                     }
-                    if self.app.pane_drag.as_ref() == Some(&Tab::Terminal(sid.clone()))
+                    if self.app.drag.pane.as_ref() == Some(&Tab::Terminal(sid.clone()))
                         && response.hovered()
                         && ui.input(|i| i.pointer.any_down())
                     {
@@ -970,7 +971,7 @@ impl TabViewer for Viewer<'_> {
                             .hint_text("Filter saved scrollback")
                             .desired_width(220.0),
                         );
-                        if ui.small_button("✕").on_hover_text("Back").clicked() {
+                        if appearance::sidebar_action(ui, "X", "Back").clicked() {
                             self.app.search_session = None;
                             self.app.history_filter.remove(sid);
                         }

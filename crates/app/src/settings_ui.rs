@@ -6,4 +6,4 @@ mod nav;
 mod settings_tests;
 mod state;
 
-pub(crate) use state::{BrowseTarget, SettingsPending, SettingsSection};
+pub(crate) use state::{BrowseTarget, Probes, SettingsPending, SettingsSection};

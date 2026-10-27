@@ -1,8 +1,8 @@
 //! Async transport with the same owner routing and pre-execution redirects as CLI clients.
 use crate::transport::AsyncStream;
 use crate::{
-    Context, Duration, Envelope, MAX_FRAME, PROTOCOL_VERSION, PathBuf, Paths, Request, Response,
-    Result, SnapshotHint, State,
+    Context, Envelope, MAX_FRAME, PROTOCOL_VERSION, PathBuf, Paths, Request, Response, Result,
+    SnapshotHint, State,
     async_service::{CancellationToken, NativePool},
     bail, ensure, generations,
     ipc::{archived_generation, redirect_allowed},
@@ -415,19 +415,7 @@ impl Client {
         // Static operation name for the deadline below; the envelope takes
         // ownership of the request afterwards.
         let operation = request.name();
-        let timeout = if matches!(
-            request,
-            Request::RemoteProject { .. } | Request::ProbeRemoteProject { .. }
-        ) {
-            Duration::from_secs(40)
-        } else if matches!(
-            request,
-            Request::VncFrame { .. } | Request::CloseIdleSessions { .. }
-        ) {
-            Duration::from_secs(30)
-        } else {
-            Duration::from_secs(3)
-        };
+        let timeout = request.response_deadline();
         let envelope = Envelope {
             version: PROTOCOL_VERSION,
             auth: token,
@@ -673,7 +661,7 @@ mod tests {
             envelope(&mut socket).await;
             drop(socket);
             assert!(
-                tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
                     .await
                     .is_err()
             );

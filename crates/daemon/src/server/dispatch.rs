@@ -1,15 +1,15 @@
-use anyhow::{Result, ensure};
+use anyhow::{Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use portable_pty::PtySize;
 use std::{
     io::Read,
-    sync::{Arc, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::Duration,
 };
 use terminator_core::*;
 
-use super::shared::{Disconnect, Shared, relock};
+use super::shared::{Disconnect, Runtime, Shared, relock};
 use crate::presence;
 
 /// Drain the notification waker socketpair after `poll` reports it readable.
@@ -23,15 +23,73 @@ pub(crate) fn drain_wake(stream: &mut transport::Stream) {
     }
 }
 
+/// Raw snapshot bytes per attach frame. Base64 and the JSON envelope expand
+/// this by about a third, which keeps every frame well under `MAX_FRAME`.
+const SNAPSHOT_CHUNK: usize = MAX_FRAME / 2;
+
+/// Tell the client why the connection is refused before closing it, so it
+/// does not see a bare EOF and guess at the cause.
+fn reject(stream: &mut transport::Stream, error: anyhow::Error) -> anyhow::Error {
+    let _ = write_frame(stream, &Response::Error(format!("{error:#}")));
+    error
+}
+
+/// A registered attach: its runtime, subscriber stream, and initial snapshot.
+type Attached = (Arc<Mutex<Runtime>>, mpsc::Receiver<Response>, Vec<u8>);
+
+/// Validate an attach, resize the terminal, and register the subscriber.
+/// The snapshot is captured under the runtime lock with the subscriber so no
+/// output is lost between them, but it is written after the lock is released.
+fn attach_setup(shared: &Shared, session: &str, rows: u16, cols: u16) -> Result<Attached> {
+    anyhow::ensure!(
+        rows > 0 && cols > 0 && rows <= 500 && cols <= 1000,
+        "Invalid terminal dimensions"
+    );
+    let rt = shared.runtime(session)?;
+    let (tx, rx) = mpsc::sync_channel(128);
+    let snapshot = {
+        let mut r = relock(&rt);
+        r.master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+        r.parser.screen_mut().set_size(rows, cols);
+        let snapshot = crate::terminal_events::attachment_snapshot(&r.parser);
+        r.subscribers.push(tx);
+        snapshot
+    };
+    Ok((rt, rx, snapshot))
+}
+
+/// Split an attach snapshot into `Data` frames that each fit `MAX_FRAME`.
+/// An empty snapshot still yields one frame: clients read it as the attach
+/// acknowledgement.
+fn snapshot_frames(snapshot: &[u8]) -> Vec<Response> {
+    if snapshot.is_empty() {
+        return vec![Response::Data(String::new())];
+    }
+    snapshot
+        .chunks(SNAPSHOT_CHUNK)
+        .map(|chunk| Response::Data(B64.encode(chunk)))
+        .collect()
+}
+
 pub(crate) fn serve(mut stream: transport::Stream, shared: Arc<Shared>) -> Result<()> {
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
     stream.set_write_timeout(Some(Duration::from_secs(3)))?;
     let env: Envelope = read_frame(&mut stream)?;
-    ensure!(
-        env.version == PROTOCOL_VERSION,
-        "Unsupported protocol version"
-    );
+    if env.version != PROTOCOL_VERSION {
+        return Err(reject(
+            &mut stream,
+            anyhow!(
+                "Unsupported protocol version {} (daemon speaks {PROTOCOL_VERSION}); restart the session service",
+                env.version
+            ),
+        ));
+    }
     let authenticated = if env.auth == shared.auth {
         true
     } else {
@@ -48,7 +106,9 @@ pub(crate) fn serve(mut stream: transport::Stream, shared: Arc<Shared>) -> Resul
             _ => false,
         }
     };
-    ensure!(authenticated, "Authentication failed");
+    if !authenticated {
+        return Err(reject(&mut stream, anyhow!("Authentication failed")));
+    }
     if matches!(env.request, Request::VncFrame { .. }) && env.snapshot_chunks {
         stream.set_write_timeout(Some(Duration::from_secs(30)))?;
     }
@@ -81,24 +141,14 @@ pub(crate) fn serve(mut stream: transport::Stream, shared: Arc<Shared>) -> Resul
     } = env.request
     {
         let _disconnect = Disconnect(stream.try_clone()?);
-        ensure!(
-            rows > 0 && cols > 0 && rows <= 500 && cols <= 1000,
-            "Invalid terminal dimensions"
-        );
-        let rt = shared.runtime(&session)?;
-        let (tx, rx) = mpsc::sync_channel(128);
-        {
-            let mut r = relock(&rt);
-            r.master.resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })?;
-            r.parser.screen_mut().set_size(rows, cols);
-            let snapshot = crate::terminal_events::attachment_snapshot(&r.parser);
-            write_frame(&mut stream, &Response::Data(B64.encode(snapshot)))?;
-            r.subscribers.push(tx);
+        let (rt, rx, snapshot) = match attach_setup(&shared, &session, rows, cols) {
+            Ok(setup) => setup,
+            Err(error) => return Err(reject(&mut stream, error)),
+        };
+        // A slow client must not hold the runtime lock: that would stall the
+        // PTY reader and every request that locks state before the runtime.
+        for frame in snapshot_frames(&snapshot) {
+            write_frame(&mut stream, &frame)?;
         }
         stream.set_read_timeout(None)?;
         let mut input = stream.try_clone()?;
@@ -172,5 +222,52 @@ pub(crate) fn serve(mut stream: transport::Stream, shared: Arc<Shared>) -> Resul
             .handle(env.request)
             .unwrap_or_else(|e| Response::Error(format!("{e:#}")));
         snapshot::write_response(&mut stream, &response, env.snapshot_chunks)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn decoded(frames: &[Response]) -> Vec<u8> {
+        frames
+            .iter()
+            .flat_map(|frame| match frame {
+                Response::Data(data) => B64.decode(data).unwrap(),
+                _ => panic!("snapshot frames are data"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn large_snapshots_split_into_frames_that_fit() {
+        let snapshot: Vec<u8> = (0..MAX_FRAME + 17)
+            .map(|i| u8::try_from(i % 251).unwrap())
+            .collect();
+        let frames = snapshot_frames(&snapshot);
+        assert!(frames.len() > 1);
+        for frame in &frames {
+            assert!(serde_json::to_vec(frame).unwrap().len() <= MAX_FRAME);
+        }
+        assert_eq!(decoded(&frames), snapshot);
+    }
+
+    #[test]
+    fn small_and_empty_snapshots_are_one_frame() {
+        assert_eq!(snapshot_frames(b"hi").len(), 1);
+        let empty = snapshot_frames(b"");
+        assert_eq!(empty.len(), 1);
+        assert!(decoded(&empty).is_empty());
+    }
+
+    #[test]
+    fn rejected_connections_hear_why() {
+        let (mut client, mut server) = transport::pair().unwrap();
+        let error = reject(&mut server, anyhow!("Authentication failed"));
+        assert_eq!(error.to_string(), "Authentication failed");
+        let Response::Error(text) = read_frame::<Response>(&mut client).unwrap() else {
+            panic!("expected an error frame");
+        };
+        assert_eq!(text, "Authentication failed");
     }
 }

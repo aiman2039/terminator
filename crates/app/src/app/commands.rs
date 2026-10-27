@@ -5,7 +5,7 @@ use terminator_core::*;
 
 use super::super::*;
 impl App {
-    pub(crate) fn shortcut_allowed(&self, action: &str) -> bool {
+    pub(crate) fn shortcut_allowed(&self, action: Action) -> bool {
         if self.command_dialog_open()
             || self.shortcut_capture.is_some()
             || self.rename_blocks_input()
@@ -14,16 +14,19 @@ impl App {
             return false;
         }
         if self.settings_open || self.player_open {
-            return matches!(action, "open_settings" | "open_palette" | "toggle_ide_mode");
+            return matches!(
+                action,
+                Action::OpenSettings | Action::OpenPalette | Action::ToggleIdeMode
+            );
         }
         true
     }
 
-    pub(crate) fn shortcut_applies(&self, action: &str) -> bool {
+    pub(crate) fn shortcut_applies(&self, action: Action) -> bool {
         match action {
-            "editor_save" | "compare_disk" => self.active_editor_id().is_some(),
-            "move_to_main" => self.focused_strip_shell().is_some(),
-            "move_to_strip" => self.preferences.ide_mode && self.focused_main_shell().is_some(),
+            Action::EditorSave | Action::CompareDisk => self.active_editor_id().is_some(),
+            Action::MoveToMain => self.focused_strip_shell().is_some(),
+            Action::MoveToStrip => self.preferences.ide_mode && self.focused_main_shell().is_some(),
             _ => true,
         }
     }
@@ -67,49 +70,48 @@ impl App {
         })
     }
 
-    pub(crate) fn shortcut_label(&self, action: &str) -> String {
-        shortcuts::pretty(&self.state.settings.keybindings, action)
+    pub(crate) fn shortcut_label(&self, action: Action) -> String {
+        shortcuts::pretty(&self.state.settings.keybindings, action.id())
     }
 
-    pub(crate) fn run_shortcut(&mut self, ctx: &egui::Context, action: &str) {
+    pub(crate) fn run_shortcut(&mut self, ctx: &egui::Context, action: Action) {
         match action {
-            "open_file" => self.open_path = true,
-            "new_terminal" => self.create(None),
-            "split_up" => self.create(Some("up")),
-            "split_down" => self.create(Some("down")),
-            "split_left" => self.create(Some("left")),
-            "split_right" => self.create(Some("right")),
-            "open_settings" => self.open_settings(),
-            "open_palette" => self.open_command_palette(),
-            "find_in_terminal" => self.find_in_active_terminal(ctx),
-            "next_pane" => self.focus_next_pane(),
-            "select_all" => self.select_all_active(),
-            "search_scrollback" => self.search_active_scrollback(ctx),
-            "copy_working_directory" => self.copy_active_working_directory(ctx),
-            "rename_terminal" => self.rename_active_terminal(),
-            "close_session" => self.close_active_session(),
-            "clear_scrollback" => self.clear_active_scrollback(),
-            "editor_save" => self.save_active_editor(),
-            "compare_disk" => self.compare_active_editor(),
-            "toggle_left_sidebar" => self.toggle_left_sidebar(),
-            "toggle_right_sidebar" => self.toggle_right_sidebar(),
-            "toggle_ide_mode" => self.toggle_ide_mode(),
-            "move_to_main" => {
+            Action::OpenFile => self.open_path = true,
+            Action::NewTerminal => self.create(None),
+            Action::SplitUp => self.create(Some("up")),
+            Action::SplitDown => self.create(Some("down")),
+            Action::SplitLeft => self.create(Some("left")),
+            Action::SplitRight => self.create(Some("right")),
+            Action::OpenSettings => self.open_settings(),
+            Action::OpenPalette => self.open_command_palette(),
+            Action::FindInTerminal => self.find_in_active_terminal(ctx),
+            Action::NextPane => self.focus_next_pane(),
+            Action::SelectAll => self.select_all_active(),
+            Action::SearchScrollback => self.search_active_scrollback(ctx),
+            Action::CopyWorkingDirectory => self.copy_active_working_directory(ctx),
+            Action::RenameTerminal => self.rename_active_terminal(),
+            Action::CloseSession => self.close_active_session(),
+            Action::ClearScrollback => self.clear_active_scrollback(),
+            Action::EditorSave => self.save_active_editor(),
+            Action::CompareDisk => self.compare_active_editor(),
+            Action::ToggleLeftSidebar => self.toggle_left_sidebar(),
+            Action::ToggleRightSidebar => self.toggle_right_sidebar(),
+            Action::ToggleIdeMode => self.toggle_ide_mode(),
+            Action::MoveToMain => {
                 if let Some(sid) = self.focused_strip_shell() {
                     self.move_strip_session_to_main(&sid);
                 }
             }
-            "move_to_strip" => {
+            Action::MoveToStrip => {
                 if self.preferences.ide_mode
                     && let Some(sid) = self.focused_main_shell()
                 {
                     self.move_main_session_to_strip(&sid);
                 }
             }
-            "next_attention" => self.next_attention(),
-            "new_browser" => self.open_new_browser_tab(None),
-            "new_vnc" => self.open_new_vnc_tab(None),
-            _ => {}
+            Action::NextAttention => self.next_attention(),
+            Action::NewBrowser => self.open_new_browser_tab(None),
+            Action::NewVnc => self.open_new_vnc_tab(None),
         }
     }
 
@@ -209,12 +211,12 @@ impl App {
     }
 
     pub(crate) fn open_command_palette(&mut self) {
-        self.palette_open = true;
-        self.palette_query.clear();
-        self.palette_index = 0;
-        self.palette_filters = 0;
-        self.palette_cache = None;
-        self.palette_query_changed_at = Instant::now();
+        self.palette.open = true;
+        self.palette.query.clear();
+        self.palette.index = 0;
+        self.palette.filters = 0;
+        self.palette.cache = None;
+        self.palette.query_changed_at = Instant::now();
         self.lsp.clear_workspace_symbols();
         // Go-to-file stays fresh: a background rescan starts here when
         // roots changed or the index aged out.

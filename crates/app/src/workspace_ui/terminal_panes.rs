@@ -35,8 +35,8 @@ impl Viewer<'_> {
             Some(name) => format!("{name}\nOpen Git"),
             None => "Open Git".into(),
         };
-        let vertical_tip = self.app.action_tip("Split vertically", "split_right");
-        let horizontal_tip = self.app.action_tip("Split horizontally", "split_down");
+        let vertical_tip = self.app.action_tip("Split vertically", Action::SplitRight);
+        let horizontal_tip = self.app.action_tip("Split horizontally", Action::SplitDown);
         let (dot, _) = ui.allocate_exact_size(egui::vec2(14.0, 22.0), egui::Sense::hover());
         if let Some(color) = sid.as_ref().and_then(|sid| {
             self.app
@@ -310,7 +310,7 @@ impl Viewer<'_> {
                     find.step(1);
                     reveal = find.outcome.matches.get(find.current).map(|hit| hit.line);
                 }
-                if ui.small_button("✕").on_hover_text("Close (Esc)").clicked() {
+                if appearance::sidebar_action(ui, "X", "Close (Esc)").clicked() {
                     close = true;
                 }
                 if response.has_focus()

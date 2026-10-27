@@ -54,7 +54,7 @@ pub(super) fn vnc_screen(
         };
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
         ui.painter()
-            .rect_filled(rect, 0.0, Color32::from_rgb(16, 16, 20));
+            .rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
         image_rect = egui::Rect::from_center_size(rect.center(), display_size);
         egui::Image::new(texture).uv(uv).paint_at(ui, image_rect);
         if view.draft_options.show_remote_cursor

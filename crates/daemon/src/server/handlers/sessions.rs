@@ -3,14 +3,18 @@ use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use portable_pty::{PtySize, native_pty_system};
 use std::{
     io::Read,
-    sync::{Arc, Mutex, atomic::Ordering},
+    sync::{Arc, Mutex, atomic::Ordering, mpsc},
     thread,
+    time::Duration,
 };
 use terminator_core::*;
 
 use super::super::shared::{HistoryJob, Runtime, Shared, relock};
 use crate::Launch;
 use crate::{editor, review, shell, terminal_env, terminal_events};
+
+/// Upper bound on waiting for a PTY reader to drain after its child exits.
+const READER_DRAIN: Duration = Duration::from_millis(500);
 
 impl Shared {
     pub(crate) fn create(
@@ -258,7 +262,11 @@ impl Shared {
         let shared = Arc::clone(self);
         let read_sid = sid.clone();
         let read_rt = Arc::clone(&runtime);
+        // Dropped when the reader finishes, so the exit thread can deliver
+        // the final output before ending subscriber streams.
+        let (reader_done, reader_finished) = mpsc::channel::<()>();
         thread::spawn(move || {
+            let _reader_done = reader_done;
             let mut bytes = [0u8; 8192];
             while let Ok(n) = reader.read(&mut bytes) {
                 if n == 0 {
@@ -311,6 +319,10 @@ impl Shared {
         let shared = Arc::clone(self);
         thread::spawn(move || {
             let exit = child.wait();
+            // Output still buffered in the PTY (often the error that made a
+            // launch fail) must reach subscribers before `End`. Background
+            // children may keep the PTY open, so the wait is bounded.
+            let _ = reader_finished.recv_timeout(READER_DRAIN);
             {
                 let mut rt = relock(&runtime);
                 rt.ended = true;

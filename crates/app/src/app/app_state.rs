@@ -13,21 +13,7 @@ use terminator_core::*;
 use super::super::*;
 pub struct App {
     pub(crate) file_activation: Option<FileActivation>,
-    pub(crate) git_commit: String,
-    pub(crate) git_amend: bool,
-    pub(crate) git_signoff: bool,
-    pub(crate) git_history: bool,
-    pub(crate) git_branches: Vec<String>,
-    pub(crate) git_log: Vec<(String, String)>,
-    pub(crate) git_shelves: Vec<(String, String)>,
-    pub(crate) git_list_root: Option<PathBuf>,
-    pub(crate) git_collapse: u64,
-    /// Branch comparison for the current Git root (upstream, ahead/behind,
-    /// and files committed since the base ref).
-    pub(crate) git_compare: Option<workspace_ops::CompareData>,
-    pub(crate) git_compare_root: Option<PathBuf>,
-    /// User-picked base ref; falls back to the upstream branch when `None`.
-    pub(crate) git_base_ref: Option<String>,
+    pub(crate) git: super::git_panel_state::GitPanelState,
     /// Explorer search results (Contents mode) and the query that produced them.
     pub(crate) explorer_search: Vec<search::Hit>,
     pub(crate) explorer_search_error: Option<String>,
@@ -179,10 +165,6 @@ pub struct App {
     /// docks; no cache). Reads the window under render only.
     pub(crate) float_pane_by_tab: HashMap<String, egui_dock::NodePath>,
     pub(crate) float_pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
-    /// Strip tab whose drag has started. Promoted to [`Self::pane_drag`] once
-    /// the pointer leaves the strip, so reordering inside the strip stays
-    /// with the dock.
-    pub(crate) strip_tab_drag: Option<String>,
     /// Strip-dock pane lookup, rebuilt every strip render (the main-dock
     /// maps only ever cover the main dock; paths are meaningless across
     /// docks).
@@ -192,38 +174,12 @@ pub struct App {
 
     pub(crate) pane_tabs: HashMap<egui_dock::NodePath, Vec<Tab>>,
     pub(crate) pane_index: Option<PaneIndex>,
-    /// Terminal pane currently dragged by its caption header or, once the
-    /// pointer leaves the IDE strip, by a strip tab. Dropped onto another
-    /// split leaf, a workspace tab, or the opposite dock.
-    pub(crate) pane_drag: Option<Tab>,
-    pub(crate) pane_drag_source: Option<PaneSource>,
     pub(crate) pane_action_source: Option<PaneSource>,
-    pub(crate) pane_drop_tabs: Vec<(egui_dock::TabPath, egui::Rect)>,
     pub(crate) native_focus_pending: Option<PaneSource>,
-    /// The dragged pane started in the IDE strip. A drop on the main pane
-    /// moves it there; a drop back on the strip cancels that move.
-    pub(crate) pane_drag_from_strip: bool,
     /// A cross-dock move changed a dock that was checked out for paint.
     /// Baselines and layout save run after that dock is inserted again.
     pub(crate) pending_layout_save: bool,
-    /// Top-level tab currently dragged by its strip tab. Dropping it over
-    /// the strip reorders it to the insertion slot; releasing elsewhere
-    /// cancels. Only one of `pane_drag` and `tab_drag` is active at a time.
-    pub(crate) tab_drag: Option<String>,
-    /// Last text snapshot of the dragged terminal, taken when its drag
-    /// starts and shown in the floating ghost.
-    pub(crate) pane_drag_snapshot: Vec<String>,
-    /// Group previewed while a pane drag hovers its strip tab, as
-    /// (project, origin group) so a cancelled drag can switch back.
-    pub(crate) drop_preview_origin: Option<(String, String)>,
-    /// A pane drag hovers the interior of a strip tab this frame. The dock
-    /// paints the previewed tab's focused leaf at real size so the
-    /// move-into outcome is visible, not just the strip outline.
-    pub(crate) strip_tab_hover: bool,
-    /// A pane drag hovers a strip gap, "+", or empty strip background this
-    /// frame, where a release opens a fresh top-level tab. The tab ghost
-    /// (not the pane snapshot ghost) follows the pointer there.
-    pub(crate) strip_new_tab_hover: bool,
+    pub(crate) drag: super::drag_state::DragState,
     pub(crate) focus_tab: Option<Tab>,
     /// Diff navigation requested while its dock is checked out for painting.
     pub(crate) diff_replacement: Option<(Tab, Tab)>,
@@ -237,7 +193,8 @@ pub struct App {
     pub(crate) diff_preview: HashSet<String>,
     pub(crate) diff_reviews: HashMap<String, diff::review::State>,
     pub(crate) loading: HashSet<String>,
-    pub(crate) git_logs: HashMap<String, git_log::CommitLog>,
+    /// Commit-log and blame tab contents, loaded by `Job::GitView`.
+    pub(crate) git_views: HashMap<String, crate::GitView>,
     pub(crate) selected_commit: Option<String>,
     pub(crate) dirs: HashMap<PathBuf, Vec<terminator_git::Entry>>,
     pub(crate) directory_errors: HashMap<PathBuf, services::DirectoryError>,
@@ -270,16 +227,13 @@ pub struct App {
     pub(crate) settings_section: SettingsSection,
     pub(crate) settings_search: String,
     pub(crate) custom_shell: bool,
+    /// Settings-session cache of PATH probes so the Settings page does not
+    /// walk PATH on every repaint. Cleared when a session begins.
+    pub(crate) settings_probes: std::cell::RefCell<settings_ui::Probes>,
     pub(crate) custom_editor: bool,
     pub(crate) shortcut_capture: Option<String>,
     pub(crate) browse_target: Option<BrowseTarget>,
-    pub(crate) palette_open: bool,
-    pub(crate) palette_query: String,
-    /// Bit set of palette chips. `0` means every kind in the current project.
-    pub(crate) palette_filters: u8,
-    pub(crate) palette_index: usize,
-    pub(crate) palette_cache: Option<palette::PaletteCache>,
-    pub(crate) palette_query_changed_at: Instant,
+    pub(crate) palette: super::palette_state::PaletteState,
     pub(crate) worktree_draft: Option<worktree_ui::WorktreeDraft>,
     pub(crate) worktree_remove: Option<String>,
     pub(crate) theme: AppearanceConfig,
@@ -325,7 +279,9 @@ pub struct App {
     pub(crate) native_docs: HashMap<PathBuf, native_editor::NativeDoc>,
     pub(crate) native_hover_markdown_cache: egui_commonmark::CommonMarkCache,
     pub(crate) native_pending_line: HashMap<PathBuf, usize>,
-    pub(crate) native_pending_col: HashMap<PathBuf, usize>,
+    /// LSP (UTF-16) column for a pending jump, converted against the loaded
+    /// line so the GUI thread never reads the target file itself.
+    pub(crate) native_pending_col: HashMap<PathBuf, u32>,
     pub(crate) lsp: lsp_manager::LspManager,
     /// Dirty-editor close prompt: the file plus the issuing pane, if the
     /// prompt came from a view (dock X). Flow-issued prompts (quit,

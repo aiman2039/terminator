@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 use terminator_core::{
-    AgentState, HookEvent, PROTOCOL_VERSION, Paths, Resume, atomic_write, id, now, quote,
+    AgentState, HookEvent, PROTOCOL_VERSION, Paths, Resume, atomic_write, id, quote,
 };
 pub const AGENTS: [&str; 6] = ["claude", "codex", "opencode", "muse", "grok", "cursor"];
 const MARKER: &str = "terminator-managed:v1";
@@ -174,22 +174,46 @@ pub fn install_at(
         serde_json::to_string_pretty(&doc)? + "\n"
     };
     if !before.is_empty() && before != after {
-        atomic_write(
-            &path.with_extension(format!("terminator-backup-{}", now())),
-            before.as_bytes(),
-        )?;
+        atomic_write(&backup_path(&path), before.as_bytes())?;
     }
     if remove && kind == "opencode" {
         if path.exists() {
             fs::remove_file(&path)?;
         }
     } else if !(after.is_empty() && !path.exists()) {
-        atomic_write(&path, after.as_bytes())?;
+        write_config(&path, after.as_bytes())?;
     }
     if kind == "muse" {
         sync_muse_settings(home, &command, remove)?;
     }
     Ok(path)
+}
+
+/// A backup name no earlier backup uses: two installs within one second
+/// must not overwrite the backup of the user's original configuration.
+fn backup_path(path: &Path) -> PathBuf {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis());
+    let base = format!("terminator-backup-{millis}");
+    let mut candidate = path.with_extension(&base);
+    let mut n = 1u32;
+    while candidate.exists() {
+        candidate = path.with_extension(format!("{base}-{n}"));
+        n = n.saturating_add(1);
+    }
+    candidate
+}
+
+/// Replace an agent's configuration file, keeping the permissions the user
+/// gave it instead of the private mode used for new files.
+fn write_config(path: &Path, bytes: &[u8]) -> Result<()> {
+    let permissions = fs::metadata(path).ok().map(|meta| meta.permissions());
+    atomic_write(path, bytes)?;
+    if let Some(permissions) = permissions {
+        fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
 }
 
 fn sync_muse_settings(home: &Path, command: &str, remove: bool) -> Result<()> {
@@ -247,13 +271,10 @@ fn sync_muse_settings(home: &Path, command: &str, remove: bool) -> Result<()> {
     }
     let after = serde_json::to_string_pretty(&doc)? + "\n";
     if !before.is_empty() && before != after {
-        atomic_write(
-            &path.with_extension(format!("terminator-backup-{}", now())),
-            before.as_bytes(),
-        )?;
+        atomic_write(&backup_path(&path), before.as_bytes())?;
     }
     if before != after {
-        atomic_write(&path, after.as_bytes())?;
+        write_config(&path, after.as_bytes())?;
     }
     Ok(())
 }
@@ -675,6 +696,31 @@ mod tests {
             assert!(after.contains("echo mine"));
             assert!(!after.contains(MARKER));
         }
+    }
+    #[test]
+    fn backups_within_one_second_do_not_overwrite_each_other() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("settings.json");
+        let first = backup_path(&path);
+        fs::write(&first, "original").unwrap();
+        let second = backup_path(&path);
+        assert_ne!(first, second);
+        assert_eq!(fs::read_to_string(first).unwrap(), "original");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn rewriting_a_config_keeps_its_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("settings.json");
+        fs::write(&path, "{}").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        write_config(&path, b"{\"a\":1}").unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"a\":1}");
     }
     #[test]
     fn codex_preserves_comments_and_hooks() {

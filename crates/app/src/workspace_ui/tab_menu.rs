@@ -16,13 +16,13 @@ pub(super) struct WorkspaceTabMenuSpec<'a> {
     pub(super) pinned: bool,
 }
 
-pub(super) fn split_action(direction: Option<&str>) -> &'static str {
+pub(super) fn split_action(direction: Option<&str>) -> Action {
     match direction {
-        Some("up") => "split_up",
-        Some("down") => "split_down",
-        Some("left") => "split_left",
-        Some("right") => "split_right",
-        _ => "new_terminal",
+        Some("up") => Action::SplitUp,
+        Some("down") => Action::SplitDown,
+        Some("left") => Action::SplitLeft,
+        Some("right") => Action::SplitRight,
+        _ => Action::NewTerminal,
     }
 }
 

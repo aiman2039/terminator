@@ -244,7 +244,7 @@ impl App {
                                     } else {
                                         "ChevronRight"
                                     }))
-                                    .tint(appearance::ICON_COLOR)
+                                    .tint(appearance::icon_color())
                                     .fit_to_exact_size(egui::vec2(12.0, 12.0)),
                                 )
                                 .frame(false),
@@ -479,7 +479,7 @@ impl App {
                                 } else {
                                     "ChevronRight"
                                 }))
-                                .tint(appearance::ICON_COLOR)
+                                .tint(appearance::icon_color())
                                 .fit_to_exact_size(egui::vec2(12.0, 12.0)),
                             )
                             .frame(false),

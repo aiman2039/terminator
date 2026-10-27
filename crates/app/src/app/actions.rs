@@ -172,7 +172,7 @@ impl App {
         }
         if outcome.refresh {
             self.refresh_request = None;
-            self.git_list_root = None;
+            self.git.list_root = None;
         }
         if outcome.view_log {
             self.open_commit_log();
@@ -184,23 +184,24 @@ impl App {
             self.file_action(ui, picked.action, &picked.path, None);
         }
         if let Some(history) = outcome.history {
-            self.git_history = history;
+            self.git.history = history;
         }
         if outcome.collapse {
-            self.git_collapse = self.git_collapse.wrapping_add(1);
+            self.git.collapse = self.git.collapse.wrapping_add(1);
         }
         if let Some(name) = outcome.switch {
             self.queue_workspace(workspace_ops::Op::Switch(name));
         }
         if outcome.commit || outcome.commit_push {
-            let message = std::mem::take(&mut self.git_commit);
+            let message = std::mem::take(&mut self.git.commit);
+            self.git.commit_inflight = Some(message.clone());
             self.queue_workspace(workspace_ops::Op::Commit {
                 message,
-                amend: self.git_amend,
-                signoff: self.git_signoff,
+                amend: self.git.amend,
+                signoff: self.git.signoff,
                 push: outcome.commit_push,
             });
-            self.git_amend = false;
+            self.git.amend = false;
         }
         if outcome.shelve {
             let paths: Vec<PathBuf> = self
@@ -221,7 +222,7 @@ impl App {
             self.queue_workspace(workspace_ops::Op::Unshelve(reference));
         }
         if let Some(reference) = outcome.drop_shelf {
-            self.queue_workspace(workspace_ops::Op::DropShelf(reference));
+            self.git.confirm = Some(crate::sidebar_ui::GitConfirm::DropShelf(reference));
         }
         for path in outcome.stage {
             self.queue_workspace(workspace_ops::Op::Stage(path));
@@ -247,23 +248,23 @@ impl App {
             self.preferences.git_view_list = !self.preferences.git_view_list;
         }
         if outcome.clear_base {
-            self.git_base_ref = None;
+            self.git.base_ref = None;
             self.queue_workspace(workspace_ops::Op::Compare { base: None });
         }
         if let Some(base) = outcome.set_base {
-            self.git_base_ref = Some(base.clone());
+            self.git.base_ref = Some(base.clone());
             self.queue_workspace(workspace_ops::Op::Compare { base: Some(base) });
         }
         if outcome.refresh_compare {
             self.queue_workspace(workspace_ops::Op::Compare {
-                base: self.git_base_ref.clone(),
+                base: self.git.base_ref.clone(),
             });
         }
         for path in outcome.unstage {
             self.queue_workspace(workspace_ops::Op::Unstage(path));
         }
-        for (path, untracked) in outcome.discard {
-            self.queue_workspace(workspace_ops::Op::Discard { path, untracked });
+        if let Some((path, untracked)) = outcome.discard.into_iter().last() {
+            self.git.confirm = Some(crate::sidebar_ui::GitConfirm::Discard { path, untracked });
         }
         for path in outcome.delete {
             self.pending_delete = Some(path);

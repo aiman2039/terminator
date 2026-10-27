@@ -1,5 +1,5 @@
 use super::super::*;
-use super::nav_common::*;
+use super::tests::support::*;
 use egui_dock::{DockState, NodeIndex, NodePath, SurfaceIndex, TabIndex, TabInsert};
 
 fn fixture_with_copies() -> (App, egui::Context, tempfile::TempDir, Tab, PaneSource) {
@@ -52,7 +52,7 @@ fn begin_drag(app: &mut App, ctx: &egui::Context, source: &PaneSource) -> egui::
     #[allow(clippy::arithmetic_side_effects)] // Bounded fixture coordinates.
     let moved = start + egui::vec2(18.0, 12.0);
     frame_glide(app, ctx, start, moved, 3);
-    assert_eq!(app.pane_drag_source.as_ref(), Some(source));
+    assert_eq!(app.drag.pane_source.as_ref(), Some(source));
     start
 }
 
@@ -77,7 +77,7 @@ fn editor_drag_moves_the_selected_same_file_copy_to_another_workspace() {
     assert_eq!(destination.layout.iter_all_tabs().count(), 2);
     assert!(destination.layout.find_tab(&pane).is_some());
     assert_eq!(dock.active, "destination");
-    assert!(app.pane_drag.is_none());
+    assert!(app.drag.pane.is_none());
     assert!(app.active_session.is_none());
     assert!(app.native_dirty(match &pane {
         Tab::NativeEditor { path } => path,
@@ -124,7 +124,7 @@ fn editor_drag_to_plus_and_a_strip_gap_creates_one_new_workspace() {
                 .sum::<usize>(),
             3
         );
-        assert!(app.pane_drag.is_none());
+        assert!(app.drag.pane.is_none());
     }
 }
 
@@ -140,8 +140,8 @@ fn escape_cancels_editor_drag_and_restores_origin_workspace() {
     combined_frame(&mut app, &ctx, vec![frame_press(end, false)]);
     assert_eq!(app.layouts["a"].active, source.group);
     assert_eq!(app.layouts["a"].tabs.len(), 2);
-    assert!(app.pane_drag.is_none());
-    assert!(app.pane_drag_source.is_none());
+    assert!(app.drag.pane.is_none());
+    assert!(app.drag.pane_source.is_none());
 }
 
 #[test]

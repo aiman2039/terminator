@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 use super::super::*;
-use super::nav_common::{drain_updates, fixture, session_fixture};
+use super::tests::support::{drain_updates, fixture, session_fixture};
 use std::{path::PathBuf, sync::mpsc};
 use terminator_core::*;
 

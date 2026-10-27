@@ -458,31 +458,31 @@ impl App {
     /// A strip-tab drag that has left the strip becomes a pane drag so the
     /// main pane can accept the drop. Releasing inside the strip does not.
     pub(crate) fn track_strip_tab_drag(&mut self, ui: &egui::Ui, strip_rect: egui::Rect) {
-        let Some(sid) = self.strip_tab_drag.clone() else {
+        let Some(sid) = self.drag.strip_tab.clone() else {
             return;
         };
         let down = ui.input(|input| input.pointer.any_down());
         let released = ui.input(|input| input.pointer.any_released());
         if !down && !released {
-            self.strip_tab_drag = None;
+            self.drag.strip_tab = None;
             return;
         }
         let outside = ui
             .input(|input| input.pointer.interact_pos().or(input.pointer.latest_pos()))
             .is_some_and(|pos| !strip_rect.contains(pos));
-        if outside && self.pane_drag.is_none() {
-            self.pane_drag = Some(Tab::Terminal(sid));
-            self.pane_drag_from_strip = true;
+        if outside && self.drag.pane.is_none() {
+            self.drag.pane = Some(Tab::Terminal(sid));
+            self.drag.pane_from_strip = true;
         }
         if released || !down {
-            self.strip_tab_drag = None;
+            self.drag.strip_tab = None;
         }
     }
 
     /// Drop a main-pane shell onto the IDE strip. A strip-origin drag released
     /// back here cancels instead, leaving the dock reorder in place.
     pub(crate) fn take_main_drop_on_strip(&mut self, ui: &egui::Ui, strip_rect: egui::Rect) {
-        let Some(Tab::Terminal(sid)) = self.pane_drag.clone() else {
+        let Some(Tab::Terminal(sid)) = self.drag.pane.clone() else {
             return;
         };
         let over = ui
@@ -493,7 +493,7 @@ impl App {
         }
         let released = ui.input(|input| input.pointer.any_released());
         let down = ui.input(|input| input.pointer.any_down());
-        if self.pane_drag_from_strip {
+        if self.drag.pane_from_strip {
             if released {
                 self.end_pane_drag();
             }

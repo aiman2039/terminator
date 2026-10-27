@@ -413,15 +413,6 @@ impl UiPreferences {
         Some(preset)
     }
 
-    /// Delete a named layout preset.
-    #[allow(dead_code)]
-    pub fn delete_layout(&mut self, name: &str) {
-        self.named_layouts.remove(name);
-        if self.active_layout.as_deref() == Some(name) {
-            self.active_layout = None;
-        }
-    }
-
     pub fn save(&self, data: &Path) -> Result<()> {
         fs::create_dir_all(data)?;
         terminator_core::atomic_write(

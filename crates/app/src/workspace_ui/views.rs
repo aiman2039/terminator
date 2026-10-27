@@ -7,9 +7,9 @@ impl App {
         let mut fit = false;
         let mut actual = false;
         appearance::wrapping_path_row(ui, &services::compact_path(path), |ui| {
-            reload = ui.button("Reload").clicked();
-            as_text = ui.button("Open as text").clicked();
-            if ui.button("Open externally").clicked() {
+            reload = appearance::sidebar_action(ui, "RefreshCw", "Reload image").clicked();
+            as_text = appearance::sidebar_action(ui, "FileText", "Open as text").clicked();
+            if appearance::sidebar_action(ui, "ExternalLink", "Open externally").clicked() {
                 let _ = self.jobs.send(Job::External(path.into()));
             }
             if let Some(texture) = self
@@ -84,8 +84,9 @@ impl App {
         let mut forward = false;
         let mut go = false;
         ui.horizontal_wrapped(|ui| {
-            back = ui.button("Back").clicked();
-            forward = ui.button("Forward").clicked();
+            back = appearance::sidebar_action(ui, "ArrowLeft", "Back").clicked();
+            forward = appearance::sidebar_action(ui, "ArrowRight", "Forward").clicked();
+            reload = appearance::sidebar_action(ui, "RefreshCw", "Reload").clicked();
             let url = ui.add(
                 appearance::singleline(&mut draft)
                     .desired_width(240.0)
@@ -98,9 +99,9 @@ impl App {
             diagnostics::record(ui.ctx(), "browser-go", go_btn.rect);
             go = go_btn.clicked()
                 || (url.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
-            reload = ui.button("Reload").clicked();
-            as_text = target.file().is_some() && ui.button("Open as text").clicked();
-            let open = ui.button("Open in browser");
+            as_text = target.file().is_some()
+                && appearance::sidebar_action(ui, "FileText", "Open as text").clicked();
+            let open = appearance::sidebar_action(ui, "ExternalLink", "Open in system browser");
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "html-open-browser", open.rect);
             system = open.clicked();
@@ -145,18 +146,34 @@ impl App {
                 rect,
             });
     }
+    /// Start loading `tab`'s Git view if needed; shows a spinner and returns
+    /// false until the result arrives.
+    fn git_view_ready(&mut self, ui: &mut egui::Ui, key: &str, tab: &Tab) -> bool {
+        if !self.git_views.contains_key(key) {
+            self.git_views
+                .insert(key.to_owned(), crate::GitView::Loading);
+            let _ = self.jobs.send(Job::GitView(tab.clone()));
+        }
+        if matches!(self.git_views.get(key), Some(crate::GitView::Loading)) {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.weak("Loading…");
+            });
+            return false;
+        }
+        true
+    }
     pub(super) fn commit_log_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
-        let Tab::CommitLog { cwd } = tab else { return };
+        if !matches!(tab, Tab::CommitLog { .. }) {
+            return;
+        }
         let key = tab.key();
-        let log = self.git_logs.entry(key.clone()).or_insert_with(|| {
-            match git_log::fetch_log(cwd.as_path()) {
-                Ok(log) => log,
-                Err(e) => git_log::CommitLog {
-                    error: Some(e),
-                    ..Default::default()
-                },
-            }
-        });
+        if !self.git_view_ready(ui, &key, tab) {
+            return;
+        }
+        let Some(crate::GitView::Log(log)) = self.git_views.get(&key) else {
+            return;
+        };
         if let Some(error) = &log.error {
             ui.colored_label(appearance::color(&self.theme.status_failed), error);
             return;
@@ -174,7 +191,6 @@ impl App {
                         git_log::RefKind::LocalBranch => "\u{2398}",
                         git_log::RefKind::RemoteBranch => "\u{1F310}",
                         git_log::RefKind::Tag => "\u{2B50}",
-                        git_log::RefKind::Head => "\u{1F4CC}",
                     };
                     let selected = rf.name == log.active_branch;
                     let text = if selected {
@@ -247,13 +263,20 @@ impl App {
             }
         });
     }
-    pub(super) fn blame_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
-        let Tab::Blame { cwd, path } = tab else {
+    pub(crate) fn blame_view(&mut self, ui: &mut egui::Ui, tab: &Tab) {
+        let Tab::Blame { path, .. } = tab else {
             return;
         };
         ui.weak(format!("Blame: {}", path.display()));
         ui.separator();
-        match git_log::fetch_blame(cwd, path) {
+        let key = tab.key();
+        if !self.git_view_ready(ui, &key, tab) {
+            return;
+        }
+        let Some(crate::GitView::Blame(result)) = self.git_views.get(&key) else {
+            return;
+        };
+        match result {
             Ok(data) => {
                 appearance::sidebar_scroll("blame").show(ui, |ui| {
                     for entry in &data.entries {

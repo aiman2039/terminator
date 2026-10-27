@@ -61,7 +61,7 @@ impl App {
             "Bell",
             &tip,
             self.preferences.left_agents,
-            appearance::ICON_COLOR,
+            appearance::icon_color(),
         );
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Agents"));
         let count = waiting.saturating_add(unread);
@@ -271,7 +271,7 @@ impl App {
             #[cfg(not(feature = "test-support"))]
             let _ = &response;
             if !self.preferences.agents_search.is_empty()
-                && ui.small_button("✕").on_hover_text("Clear search").clicked()
+                && appearance::sidebar_action(ui, "X", "Clear search").clicked()
             {
                 self.preferences.agents_search.clear();
             }

@@ -76,8 +76,13 @@ impl App {
                         .colors_match(&AppearanceConfig::terminator_dark())
                     {
                         3
-                    } else {
+                    } else if self
+                        .theme_draft
+                        .colors_match(&AppearanceConfig::intellij_light())
+                    {
                         4
+                    } else {
+                        5
                     };
                     if settings_controls::segmented(
                         ui,
@@ -87,6 +92,7 @@ impl App {
                             ("IntelliJ dark", 1),
                             ("High contrast", 2),
                             ("Terminator dark", 3),
+                            ("IntelliJ light", 4),
                         ],
                     ) {
                         let density = self.theme_draft.density;
@@ -96,13 +102,14 @@ impl App {
                             1 => AppearanceConfig::intellij_dark(),
                             2 => AppearanceConfig::high_contrast(),
                             3 => AppearanceConfig::terminator_dark(),
+                            4 => AppearanceConfig::intellij_light(),
                             _ => self.theme_committed.clone(),
                         };
                         self.theme_draft.density = density;
                         self.theme_draft.pane_divider_width = divider;
                         self.theme_draft.border_width = border;
                     }
-                    if choice == 4 {
+                    if choice == 5 {
                         ui.weak("Custom colors");
                     }
                 },
@@ -250,8 +257,7 @@ impl App {
     ) -> Option<BrowseTarget> {
         ui.heading("Terminal & Editor");
         let mut browse = None;
-        let shells = settings_controls::shell_options();
-        let editors = settings_controls::editor_options();
+        let (shells, editors) = self.settings_binary_options();
         self.custom_shell |= shells
             .iter()
             .all(|option| option.value != self.settings_draft.shell);
@@ -286,7 +292,9 @@ impl App {
                         browse = Some(BrowseTarget::Shell);
                     }
                     if !self.settings_draft.shell.is_empty()
-                        && terminator_core::find_executable(&self.settings_draft.shell).is_none()
+                        && self
+                            .settings_executable(&self.settings_draft.shell)
+                            .is_none()
                     {
                         ui.colored_label(
                             appearance::color(&self.theme.status_failed),
@@ -396,7 +404,7 @@ impl App {
                             .insert(language.to_owned(), value.clone());
                     }
                     if !value.trim().is_empty() {
-                        match terminator_core::find_executable(value.trim()) {
+                        match self.settings_executable(value.trim()) {
                             Some(path) => ui.weak(path.display().to_string()),
                             None => ui.colored_label(
                                 appearance::color(&self.theme.status_failed),
@@ -457,7 +465,7 @@ impl App {
                     if pick {
                         browse = Some(BrowseTarget::Editor);
                     }
-                    match terminator_core::find_executable(&self.settings_draft.editor_program) {
+                    match self.settings_executable(&self.settings_draft.editor_program) {
                         Some(path) => ui.weak(path.display().to_string()),
                         None => ui.colored_label(
                             appearance::color(&self.theme.status_failed),
@@ -523,7 +531,8 @@ impl App {
                         {
                             ui.horizontal(|ui| {
                                 ui.text_edit_singleline(arg);
-                                if ui.small_button("×").clicked() {
+                                if appearance::sidebar_action(ui, "X", "Remove argument").clicked()
+                                {
                                     remove = Some(index);
                                 }
                             });
@@ -799,17 +808,18 @@ impl App {
             self.shortcut_capture = None;
         }
         ui.add_space(8.0);
-        for (action, label) in shortcuts::ACTIONS {
+        for action in Action::ALL {
+            let (action, label) = (action.id(), action.label());
             if !self.field_visible(label, action) {
                 continue;
             }
             let binding = self
                 .settings_draft
                 .keybindings
-                .entry((*action).into())
+                .entry(action.into())
                 .or_default()
                 .clone();
-            let capturing = self.shortcut_capture.as_deref() == Some(*action);
+            let capturing = self.shortcut_capture.as_deref() == Some(action);
             let shown = if capturing {
                 "Press keys…".into()
             } else if binding.is_empty() {
@@ -822,7 +832,7 @@ impl App {
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), &format!("shortcut:{action}"), button.rect);
                 if button.clicked() {
-                    self.shortcut_capture = Some((*action).into());
+                    self.shortcut_capture = Some(action.into());
                 }
             });
         }

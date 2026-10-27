@@ -92,6 +92,14 @@ impl App {
             self.abort_workspace_close();
             return;
         }
+        // Asynchronous editor and idle-close checks finish here after the
+        // GUI stayed usable, so a native buffer may have become dirty since
+        // `poll_workspace_close` checked it.
+        if let Some(path) = self.dirty_native_in_tab(project, tab_id).into_iter().next() {
+            self.native_close_prompt = Some((path, None));
+            self.abort_workspace_close();
+            return;
+        }
         if let Some(workspace) = self.layouts.get_mut(project) {
             let previous = workspace.active.clone();
             workspace.close(tab_id);
@@ -270,7 +278,7 @@ impl App {
     pub(crate) fn center_covers_workspace(&self) -> bool {
         self.settings_open
             || self.player_open
-            || self.palette_open
+            || self.palette.open
             || self.worktree_open
             || self.worktree_draft.is_some()
             || self.search_open

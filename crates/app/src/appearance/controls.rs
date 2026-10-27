@@ -1,12 +1,12 @@
 use super::rows::row;
 use super::theme::{
-    ICON_COLOR, MENU_FILL, MENU_LINE, MENU_MUTED, MENU_RADIUS, MENU_TEXT, WIDGET_RADIUS,
+    MENU_RADIUS, WIDGET_RADIUS, icon_color, menu_fill, menu_line, menu_muted, menu_text,
 };
 use eframe::egui::{self, Color32, FontId, TextStyle};
 
 /// Title-bar sidebar glyph. Resting state has no frame; hover fills only.
 pub fn framed_icon(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
-    framed_icon_button(ui, icon, tip, false, ICON_COLOR)
+    framed_icon_button(ui, icon, tip, false, icon_color())
 }
 
 /// Same square as [`framed_icon`], with a selected fill and a custom glyph tint.
@@ -38,7 +38,26 @@ pub fn framed_icon_button(
             ui,
             egui::Rect::from_center_size(response.rect.center(), egui::vec2(14.0, 14.0)),
         );
+    accessible_icon(ui, &response, tip);
     response
+}
+
+/// Name an icon-only control for screen readers and outline it while it has
+/// keyboard focus; the frameless paint otherwise shows hover state only.
+fn accessible_icon(ui: &egui::Ui, response: &egui::Response, tip: &str) {
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tip));
+    paint_focus(ui, response);
+}
+
+fn paint_focus(ui: &egui::Ui, response: &egui::Response) {
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect,
+            WIDGET_RADIUS,
+            ui.visuals().selection.stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
 }
 
 /// Single-line field. Placeholder and typed text share a vertical center,
@@ -66,6 +85,7 @@ fn exact_button(ui: &mut egui::Ui, size: egui::Vec2) -> egui::Response {
 pub fn sidebar_action(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
     let response = exact_button(ui, egui::Vec2::splat(TOOLBAR_BUTTON));
     paint_action_icon(ui, &response, icon);
+    accessible_icon(ui, &response, tip);
     response.on_hover_text(tip)
 }
 
@@ -92,7 +112,7 @@ fn paint_action_icon(ui: &egui::Ui, response: &egui::Response, icon: &str) {
         ui.painter()
             .rect_filled(rect, WIDGET_RADIUS, ui.visuals().widgets.hovered.bg_fill);
     }
-    paint_centered_icon(ui, rect, icon, TOOLBAR_ICON, ICON_COLOR);
+    paint_centered_icon(ui, rect, icon, TOOLBAR_ICON, icon_color());
 }
 
 /// Frameless icon button that opens a menu, matching `sidebar_action`.
@@ -113,6 +133,7 @@ pub fn icon_menu_button<R>(
         })
         .inner;
     paint_action_icon(ui, &response, icon);
+    paint_focus(ui, &response);
     egui::InnerResponse::new(inner.map(|shown| shown.inner), response)
 }
 
@@ -131,8 +152,9 @@ pub fn selectable_icon(ui: &mut egui::Ui, icon: &str, tip: &str, selected: bool)
             },
         );
     }
-    paint_centered_icon(ui, response.rect, icon, TOOLBAR_ICON, ICON_COLOR);
+    paint_centered_icon(ui, response.rect, icon, TOOLBAR_ICON, icon_color());
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tip));
+    paint_focus(ui, &response);
     response
 }
 
@@ -167,7 +189,7 @@ pub fn stripe_button(
         ),
         icon,
         16.0,
-        ICON_COLOR,
+        icon_color(),
     );
     ui.painter()
         .with_clip_rect(ui.clip_rect().intersect(response.rect))
@@ -177,7 +199,7 @@ pub fn stripe_button(
             label,
             FontId::proportional(9.0),
             if selected {
-                ICON_COLOR
+                icon_color()
             } else {
                 ui.visuals().weak_text_color()
             },
@@ -222,7 +244,7 @@ pub fn tool_button(
             },
         );
     }
-    let tint = ICON_COLOR;
+    let tint = icon_color();
     let icon = match tool {
         SidebarTool::Explorer => "Files",
         SidebarTool::Agents => "Bell",
@@ -252,10 +274,10 @@ pub fn menu_style(style: &mut egui::Style) {
         .text_styles
         .insert(TextStyle::Small, FontId::proportional(11.0));
     style.spacing.menu_margin = egui::Margin::same(4);
-    style.visuals.window_fill = MENU_FILL;
-    style.visuals.override_text_color = Some(MENU_TEXT);
-    style.visuals.weak_text_color = Some(MENU_MUTED);
-    style.visuals.window_stroke = egui::Stroke::new(1.0, MENU_LINE);
+    style.visuals.window_fill = menu_fill();
+    style.visuals.override_text_color = Some(menu_text());
+    style.visuals.weak_text_color = Some(menu_muted());
+    style.visuals.window_stroke = egui::Stroke::new(1.0, menu_line());
     style.visuals.menu_corner_radius = egui::CornerRadius::same(MENU_RADIUS);
     style.visuals.popup_shadow = egui::epaint::Shadow {
         offset: [0, 16],
@@ -263,10 +285,10 @@ pub fn menu_style(style: &mut egui::Style) {
         spread: 0,
         color: Color32::from_black_alpha(102),
     };
-    style.visuals.widgets.hovered.bg_fill = MENU_LINE;
-    style.visuals.widgets.hovered.weak_bg_fill = MENU_LINE;
-    style.visuals.widgets.open.bg_fill = MENU_LINE;
-    style.visuals.widgets.open.weak_bg_fill = MENU_LINE;
+    style.visuals.widgets.hovered.bg_fill = menu_line();
+    style.visuals.widgets.hovered.weak_bg_fill = menu_line();
+    style.visuals.widgets.open.bg_fill = menu_line();
+    style.visuals.widgets.open.weak_bg_fill = menu_line();
     for widget in [
         &mut style.visuals.widgets.noninteractive,
         &mut style.visuals.widgets.inactive,
@@ -274,7 +296,7 @@ pub fn menu_style(style: &mut egui::Style) {
         &mut style.visuals.widgets.active,
         &mut style.visuals.widgets.open,
     ] {
-        widget.fg_stroke = egui::Stroke::new(1.0, MENU_TEXT);
+        widget.fg_stroke = egui::Stroke::new(1.0, menu_text());
     }
 }
 
@@ -347,12 +369,21 @@ pub fn compact_menu_button<R>(
         egui::Align2::CENTER_CENTER,
         label,
         FontId::proportional(14.0),
-        ICON_COLOR,
+        icon_color(),
     );
     let popup = egui::Popup::menu(&response)
         .style(menu_style)
         .show(add_contents);
     egui::InnerResponse::new(popup.map(|shown| shown.inner), response)
+}
+
+/// Hover text for an action, with its bound shortcut when there is one.
+pub fn shortcut_tip(label: &str, keys: &str) -> String {
+    if keys.is_empty() {
+        label.to_owned()
+    } else {
+        format!("{label} ({keys})")
+    }
 }
 
 /// Flat full-width action row with a fixed icon column and optional shortcut.

@@ -1,5 +1,5 @@
 use super::rows::{paint_status_icon, u8_from_f32};
-use super::theme::{ICON_COLOR, color};
+use super::theme::{WIDGET_RADIUS, color, icon_color};
 use eframe::egui::{self, Color32, FontId, RichText};
 use terminator_core::appearance::AppearanceConfig;
 
@@ -44,19 +44,18 @@ pub fn unsaved_close_bar(ui: &mut egui::Ui, input: UnsavedCloseBar<'_>) -> Unsav
         enabled,
     } = input;
     let warn = color(&theme.status_failed);
-    let channel = |value: u8, divisor: u8| value.checked_div(divisor).unwrap_or(0);
-    let fill = Color32::from_rgb(
-        channel(warn.r(), 2).saturating_add(24),
-        channel(warn.g(), 6),
-        channel(warn.b(), 6),
-    );
+    // A warning wash over the panel surface reads in light and dark themes.
+    let fill = color(&theme.surface).lerp_to_gamma(warn, 0.28);
     let response = egui::Frame::new()
         .fill(fill)
         .inner_margin(egui::Margin::symmetric(10, 5))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.add_enabled_ui(enabled, |ui| {
-                ui.add(egui::Label::new(RichText::new(message).color(ICON_COLOR).strong()).wrap());
+                ui.add(
+                    egui::Label::new(RichText::new(message).color(color(&theme.text)).strong())
+                        .wrap(),
+                );
                 ui.horizontal_wrapped(|ui| {
                     let save = ui.button("Save and close");
                     let discard = ui.button("Discard changes");
@@ -157,7 +156,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
     let branch_width = branch
         .map(|text| {
             ui.painter()
-                .layout_no_wrap(text.into(), FontId::proportional(12.0), ICON_COLOR)
+                .layout_no_wrap(text.into(), FontId::proportional(12.0), icon_color())
                 .size()
                 .x
                 + 6.0
@@ -205,12 +204,12 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
         lead += TERMINAL_LEADING_SLOT;
     };
     if let Some(brand) = brand {
-        paint_lead(ui, brand, ICON_COLOR, false);
+        paint_lead(ui, brand, icon_color(), false);
     }
     if let Some(icon) = status_icon {
-        paint_lead(ui, icon, status_tint.unwrap_or(ICON_COLOR), spin);
+        paint_lead(ui, icon, status_tint.unwrap_or(icon_color()), spin);
     } else if let Some(kind) = kind {
-        paint_lead(ui, kind, title_tint.unwrap_or(ICON_COLOR), false);
+        paint_lead(ui, kind, title_tint.unwrap_or(icon_color()), false);
     }
     let dot_gap = if status.is_some() { 14.0 } else { 0.0 };
     let title_width = (git_rect.left() - dot_gap - lead - 4.0).max(0.0);
@@ -248,11 +247,11 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
             });
             if response.hovered() {
                 ui.painter()
-                    .rect_filled(rect, 6.0, ui.visuals().widgets.hovered.bg_fill);
+                    .rect_filled(rect, WIDGET_RADIUS, ui.visuals().widgets.hovered.bg_fill);
             }
             let tint = hover_tint
                 .filter(|_| response.hovered())
-                .unwrap_or(ICON_COLOR);
+                .unwrap_or(icon_color());
             egui::Image::new(crate::icons::source(icon))
                 .tint(tint)
                 .paint_at(

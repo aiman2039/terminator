@@ -34,12 +34,10 @@ pub struct RefEntry {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[allow(dead_code)]
 pub enum RefKind {
     LocalBranch,
     RemoteBranch,
     Tag,
-    Head,
 }
 
 /// Blame annotation for a single line.
@@ -340,6 +338,32 @@ pub fn fetch_blame(cwd: &Path, path: &Path) -> Result<BlameData, String> {
         entries,
         error: None,
     })
+}
+
+impl crate::GitView {
+    /// Run the blocking git query behind a commit-log or blame tab.
+    pub(crate) fn load(tab: &crate::Tab) -> Self {
+        match tab {
+            crate::Tab::CommitLog { cwd } => {
+                Self::Log(fetch_log(cwd).unwrap_or_else(|error| CommitLog {
+                    error: Some(error),
+                    ..Default::default()
+                }))
+            }
+            crate::Tab::Blame { cwd, path } => Self::Blame(fetch_blame(cwd, path)),
+            _ => Self::failed(tab, "Not a Git view".into()),
+        }
+    }
+
+    pub(crate) fn failed(tab: &crate::Tab, error: String) -> Self {
+        match tab {
+            crate::Tab::Blame { .. } => Self::Blame(Err(error)),
+            _ => Self::Log(CommitLog {
+                error: Some(error),
+                ..Default::default()
+            }),
+        }
+    }
 }
 
 #[cfg(test)]

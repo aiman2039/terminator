@@ -200,6 +200,20 @@ pub enum Request {
     RetireIfDraining,
 }
 impl Request {
+    /// How long a client waits for this request's response. Requests whose
+    /// daemon work runs Git or SSH get longer than the 3 s default: a client
+    /// that gives up early reports failure for work that then succeeds.
+    #[must_use]
+    pub fn response_deadline(&self) -> Duration {
+        Duration::from_secs(match self {
+            Self::RemoteProject { .. }
+            | Self::ProbeRemoteProject { .. }
+            | Self::WorktreeAdd { .. }
+            | Self::WorktreeRemove { .. } => 40,
+            Self::VncFrame { .. } | Self::CloseIdleSessions { .. } => 30,
+            _ => 3,
+        })
+    }
     /// Short stable name for timeouts and diagnostics. Never includes IDs,
     /// paths, or labels.
     #[must_use]
@@ -331,24 +345,7 @@ fn connect_hint(
     let routed = generations::owner_for(paths, &request)?;
     let paths = &routed;
     let mut s = transport::Stream::connect_ipc(&paths.socket())?;
-    s.set_timeouts(
-        Duration::from_secs(
-            if matches!(
-                &request,
-                Request::RemoteProject { .. } | Request::ProbeRemoteProject { .. }
-            ) {
-                40
-            } else if matches!(
-                &request,
-                Request::VncFrame { .. } | Request::CloseIdleSessions { .. }
-            ) {
-                30
-            } else {
-                3
-            },
-        ),
-        Duration::from_secs(3),
-    )?;
+    s.set_timeouts(request.response_deadline(), Duration::from_secs(3))?;
     write_frame(
         &mut s,
         &Envelope {
@@ -553,6 +550,27 @@ pub fn sanitize_layout(mut value: serde_json::Value) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worktree_requests_outlast_their_git_timeout() {
+        let add = Request::WorktreeAdd {
+            project: "p".into(),
+            path: "/tmp/w".into(),
+            branch: None,
+            start: "HEAD".into(),
+        };
+        let remove = Request::WorktreeRemove {
+            project: "p".into(),
+        };
+        // `worktrees::run` gives Git 30 s; the client must wait longer.
+        for request in [add, remove] {
+            assert!(request.response_deadline() > Duration::from_secs(30));
+        }
+        assert_eq!(
+            Request::Snapshot.response_deadline(),
+            Duration::from_secs(3)
+        );
+    }
 
     #[test]
     fn oversized_frame_rejected_before_allocation() {

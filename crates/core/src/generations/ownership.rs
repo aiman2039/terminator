@@ -93,11 +93,21 @@ pub fn owner_for(paths: &Paths, request: &Request) -> Result<Paths> {
             Request::Notice { .. } | Request::DismissTerminalNotice { .. }
         )
     {
+        // One unreadable store (pruned mid-scan, missing, corrupt) must not
+        // stop routing to the owners that are readable; report it only when
+        // no readable owner has the target.
+        let mut unreadable = None;
         for owner in owners {
             if owner.status == Status::Prepared {
                 continue;
             }
-            let state = saved(&owner.paths())?;
+            let state = match saved(&owner.paths()) {
+                Ok(state) => state,
+                Err(error) => {
+                    unreadable.get_or_insert((owner.id, error));
+                    continue;
+                }
+            };
             let matches = match request {
                 Request::Notice { id, .. } => state.notifications.iter().any(|n| &n.id == id),
                 Request::DismissTerminalNotice { id } => {
@@ -119,6 +129,11 @@ pub fn owner_for(paths: &Paths, request: &Request) -> Result<Paths> {
             if matches {
                 return Ok(owner.paths());
             }
+        }
+        if let Some((generation, error)) = unreadable {
+            return Err(error.context(format!(
+                "Session owner is unavailable; generation {generation} store is unreadable"
+            )));
         }
         bail!("Session owner is unavailable");
     }

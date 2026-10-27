@@ -16,6 +16,7 @@ pub(crate) use attention::{
     notice_rank, notice_waiting, state_color,
 };
 pub(crate) use explorer::ExplorerReveal;
+pub(crate) use explorer_prompts::GitConfirm;
 pub(crate) use explorer_rows::explorer_query_keeps_file;
 #[cfg(test)]
 pub(crate) use git_panel::{GitPanelInput, git_click_action, git_panel};

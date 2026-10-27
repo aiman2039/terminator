@@ -4,6 +4,13 @@ use engine::{Handle, Outcome, Playable, Status};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
+/// Playlist edits that remove many tracks at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PlaylistConfirm {
+    Crop,
+    Clear,
+}
+
 pub(crate) struct Skip<'a> {
     pub project: &'a str,
     pub playlist: &'a [PathBuf],
@@ -41,6 +48,8 @@ pub(crate) struct Controller {
     pub(crate) selected: HashSet<usize>,
     pub(crate) last_clicked: Option<usize>,
     pub(crate) stack: Option<Stack>,
+    /// Destructive playlist edit waiting for confirmation in the REM menu.
+    pub(crate) confirm: Option<PlaylistConfirm>,
     pub(crate) eq_open: bool,
     pub(crate) pl_open: bool,
     pub(crate) eq_on: bool,
@@ -81,6 +90,7 @@ impl Controller {
             selected: HashSet::new(),
             last_clicked: None,
             stack: None,
+            confirm: None,
             eq_open: true,
             pl_open: true,
             eq_on: true,

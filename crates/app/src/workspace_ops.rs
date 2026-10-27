@@ -186,6 +186,10 @@ fn git_path(root: &Path, prefix: &[&str], path: &Path, verb: &str) -> Result<Rep
     Ok(Report::Message(format!("{verb} {relative}")))
 }
 
+/// Error prefix for a push that failed after its commit succeeded; the draft
+/// must not be restored then, or committing again would duplicate the commit.
+pub(crate) const PUSH_FAILED: &str = "Committed, but push failed";
+
 fn commit(root: &Path, message: &str, amend: bool, signoff: bool, push: bool) -> Result<Report> {
     let message = message.trim();
     ensure!(amend || !message.is_empty(), "Commit message is empty");
@@ -210,7 +214,7 @@ fn commit(root: &Path, message: &str, amend: bool, signoff: bool, push: bool) ->
     }
     run_command(git::command(root, &args), options)?;
     if push {
-        git_text(root, &["push"])?;
+        git_text(root, &["push"]).context(PUSH_FAILED)?;
         return Ok(Report::Message("Committed and pushed".into()));
     }
     Ok(Report::Message("Committed".into()))

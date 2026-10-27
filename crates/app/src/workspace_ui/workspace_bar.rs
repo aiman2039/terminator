@@ -188,7 +188,7 @@ impl App {
         project: &str,
         workspace: &mut Workspace,
     ) {
-        if self.pane_drag.is_some() && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        if self.drag.pane.is_some() && ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.revert_drop_preview(workspace);
             self.end_pane_drag();
             ui.ctx().stop_dragging();
@@ -200,7 +200,7 @@ impl App {
         let mut close_right = None;
         let mut toggle_pin = None;
         let mut add_at = None;
-        if self.pane_drag.is_none() && self.tab_drag.is_none() && self.drop_preview_origin.is_none()
+        if self.drag.pane.is_none() && self.drag.tab.is_none() && self.drag.preview_origin.is_none()
         {
             workspace.record_active();
         }
@@ -261,20 +261,22 @@ impl App {
             #[allow(clippy::cast_precision_loss)]
             let gaps = tab_layout.len().saturating_sub(1) as f32;
             let content_width = tab_layout.iter().map(|(width, _)| *width).sum::<f32>() + gaps;
-            let width = (ui.available_width() - 72.0).max(40.0);
+            // Reserve exactly the trailing `+` and menu buttons, and the two
+            // scroll arrows on overflow, so the strip never clips a tab.
+            let control = appearance::TOOLBAR_BUTTON + ui.spacing().item_spacing.x;
+            let width = (ui.available_width() - 2.0 * control).max(40.0);
             let overflow = content_width > width;
-            let width = (width - if overflow { 58.0 } else { 0.0 }).max(1.0);
+            let width = (width - if overflow { 2.0 * control } else { 0.0 }).max(1.0);
             let scroll_id = ui.make_persistent_id(egui::IdSalt::new(("workspace-tabs", project)));
             let offset = egui::scroll_area::State::load(ui.ctx(), scroll_id)
                 .map_or(0.0, |s| s.unclamped_offset().x);
             let mut direction = 0.0;
             if overflow {
                 let left = ui
-                    .add_enabled(
-                        offset > 0.5,
-                        egui::Button::new("‹").min_size(egui::vec2(27.0, 30.0)),
-                    )
-                    .on_hover_text("Scroll tabs left");
+                    .add_enabled_ui(offset > 0.5, |ui| {
+                        appearance::sidebar_action(ui, "ChevronLeft", "Scroll tabs left")
+                    })
+                    .inner;
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "tabs-left", left.rect);
                 if left.clicked() {
@@ -294,8 +296,8 @@ impl App {
             // Strip tabs are drop targets while a terminal pane is dragged,
             // and drag handles for reordering the tabs themselves. Only
             // match drags from this project.
-            let drag_same_project = self.pane_drag.as_ref().is_some_and(|pane| {
-                if let Some(source) = &self.pane_drag_source {
+            let drag_same_project = self.drag.pane.as_ref().is_some_and(|pane| {
+                if let Some(source) = &self.drag.pane_source {
                     return source.project == project && workspace.view_exists(source, pane);
                 }
                 match pane {
@@ -338,10 +340,10 @@ impl App {
                             // Dragging a strip tab reorders the top-level
                             // tabs; pane drags keep their own payload.
                             if response.drag_started()
-                                && self.pane_drag.is_none()
-                                && self.tab_drag.is_none()
+                                && self.drag.pane.is_none()
+                                && self.drag.tab.is_none()
                             {
-                                self.tab_drag = Some(group.id.clone());
+                                self.drag.tab = Some(group.id.clone());
                             }
                             // Destination preview: hovering a strip tab while
                             // dragging a terminal shows that tab's splits so
@@ -354,15 +356,16 @@ impl App {
                                     .is_some_and(|pos| rect.contains(pos));
                             if hovering_tab {
                                 if self
-                                    .drop_preview_origin
+                                    .drag
+                                    .preview_origin
                                     .as_ref()
                                     .is_some_and(|(p, g)| p == project && g == &group.id)
                                 {
-                                    self.drop_preview_origin = None;
-                                } else if self.drop_preview_origin.is_none()
+                                    self.drag.preview_origin = None;
+                                } else if self.drag.preview_origin.is_none()
                                     && workspace.active != group.id
                                 {
-                                    self.drop_preview_origin =
+                                    self.drag.preview_origin =
                                         Some((project.to_owned(), workspace.active.clone()));
                                 }
                                 workspace.active.clone_from(&group.id);
@@ -415,7 +418,7 @@ impl App {
                                         egui::vec2(13.0, 13.0),
                                     ),
                                     brand,
-                                    appearance::ICON_COLOR,
+                                    appearance::icon_color(),
                                     false,
                                 );
                             }
@@ -439,7 +442,7 @@ impl App {
                                 );
                             } else {
                                 egui::Image::new(icons::source(face.icon))
-                                    .tint(terminal_tint.unwrap_or(appearance::ICON_COLOR))
+                                    .tint(terminal_tint.unwrap_or(appearance::icon_color()))
                                     .paint_at(ui, icon_rect);
                             }
                             let label_x = if face.brand.is_some() { 36.0 } else { 30.0 };
@@ -547,7 +550,7 @@ impl App {
                                 );
                             } else if response.hovered() || close_response.hovered() || active {
                                 egui::Image::new(icons::source("X"))
-                                    .tint(appearance::ICON_COLOR)
+                                    .tint(appearance::icon_color())
                                     .paint_at(
                                         ui,
                                         egui::Rect::from_center_size(
@@ -561,8 +564,8 @@ impl App {
                             }
                             if response.clicked()
                                 && !editing
-                                && self.pane_drag.is_none()
-                                && self.tab_drag.is_none()
+                                && self.drag.pane.is_none()
+                                && self.drag.tab.is_none()
                                 && !close_rect.contains(
                                     response.interact_pointer_pos().unwrap_or(egui::Pos2::ZERO),
                                 )
@@ -571,7 +574,7 @@ impl App {
                             }
                             if response.double_clicked()
                                 && !editing
-                                && self.tab_drag.is_none()
+                                && self.drag.tab.is_none()
                                 && let Some(sid) = &face.sid
                             {
                                 self.begin_rename(sid, RenameSurface::Workspace);
@@ -663,11 +666,10 @@ impl App {
             if overflow {
                 let max_offset = (scroll.content_size.x - scroll.inner_rect.width()).max(0.0);
                 let right = ui
-                    .add_enabled(
-                        scroll.state.unclamped_offset().x < max_offset - 0.5,
-                        egui::Button::new("›").min_size(egui::vec2(27.0, 30.0)),
-                    )
-                    .on_hover_text("Scroll tabs right");
+                    .add_enabled_ui(scroll.state.unclamped_offset().x < max_offset - 0.5, |ui| {
+                        appearance::sidebar_action(ui, "ChevronRight", "Scroll tabs right")
+                    })
+                    .inner;
                 #[cfg(feature = "test-support")]
                 diagnostics::record(ui.ctx(), "tabs-right", right.rect);
                 if right.clicked() {
@@ -682,16 +684,18 @@ impl App {
                     ui.ctx().request_repaint();
                 }
             }
-            let plus_response = ui
-                .add_sized(
-                    [30.0, 30.0],
-                    egui::Button::new(RichText::new("+").size(18.0)).frame(false),
-                )
-                .on_hover_text("New tab (right-click for Browser or VNC)");
+            let plus_response = appearance::sidebar_action(
+                ui,
+                "Plus",
+                &format!(
+                    "{} — right-click for Browser or VNC",
+                    appearance::shortcut_tip("New tab", &self.shortcut_label(Action::NewTerminal))
+                ),
+            );
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "workspace-plus", plus_response.rect);
             let plus_rect = plus_response.rect;
-            if plus_response.clicked() && self.pane_drag.is_none() {
+            if plus_response.clicked() && self.drag.pane.is_none() {
                 self.create(None);
             }
             appearance::context_menu(&plus_response, |ui| {
@@ -746,18 +750,18 @@ impl App {
             // top-level tab at that slot. Dropping a dragged strip tab
             // reorders it to the insertion slot instead.
             let released = ui.input(|i| i.pointer.any_released());
-            if let Some(pane) = self.pane_drag.clone()
+            if let Some(pane) = self.drag.pane.clone()
                 && drag_same_project
                 && released
                 && let Some(pos) = ui.input(|i| i.pointer.interact_pos())
             {
                 if let Some(group_id) = Self::strip_interior_tab(&strip_rects, pos) {
-                    if self.pane_drag_from_strip
+                    if self.drag.pane_from_strip
                         && let Tab::Terminal(sid) = &pane
                     {
                         self.pull_strip_shell_into(workspace, sid);
                     }
-                    let moved = if let Some(source) = &self.pane_drag_source {
+                    let moved = if let Some(source) = &self.drag.pane_source {
                         workspace.move_view_to_group(source, &pane, &group_id)
                     } else {
                         workspace.move_pane_to_group(&pane, &group_id)
@@ -772,7 +776,7 @@ impl App {
                         self.pane_index = None;
                         switch = None;
                     }
-                    self.drop_preview_origin = None;
+                    self.drag.preview_origin = None;
                     self.end_pane_drag();
                 } else {
                     let index = if plus_rect.contains(pos) {
@@ -781,12 +785,12 @@ impl App {
                         Self::strip_insertion_at(&strip_rect, &strip_rects, pos)
                     };
                     if let Some(index) = index {
-                        if self.pane_drag_from_strip
+                        if self.drag.pane_from_strip
                             && let Tab::Terminal(sid) = &pane
                         {
                             self.pull_strip_shell_into(workspace, sid);
                         }
-                        let moved = if let Some(source) = &self.pane_drag_source {
+                        let moved = if let Some(source) = &self.drag.pane_source {
                             workspace
                                 .move_view_to_new_group(source, &pane, index)
                                 .is_some()
@@ -803,16 +807,16 @@ impl App {
                             self.pane_index = None;
                             switch = None;
                         }
-                        self.drop_preview_origin = None;
+                        self.drag.preview_origin = None;
                         self.end_pane_drag();
                     }
                 }
             }
             // A released tab drag the strip did not consume was dropped
             // outside of it: cancel without moving anything.
-            if self.tab_drag.is_some() && released {
+            if self.drag.tab.is_some() && released {
                 if let (Some(dragged), Some(pos)) = (
-                    self.tab_drag.clone(),
+                    self.drag.tab.clone(),
                     ui.input(|i| i.pointer.interact_pos()),
                 ) && workspace.tabs.iter().any(|tab| tab.id == dragged)
                 {
@@ -828,10 +832,10 @@ impl App {
                         switch = None;
                     }
                 }
-                self.tab_drag = None;
+                self.drag.tab = None;
             }
-            if self.tab_drag.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.tab_drag = None;
+            if self.drag.tab.is_some() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.drag.tab = None;
             }
             // The dock paints the previewed tab's focused leaf at real size
             // while a pane hovers a strip tab interior; hovering a gap,
@@ -840,10 +844,10 @@ impl App {
             let strip_pos = (!released && ui.input(|i| i.pointer.any_down()))
                 .then(|| ui.input(|i| i.pointer.interact_pos()))
                 .flatten();
-            self.strip_tab_hover = drag_same_project
+            self.drag.strip_tab_hover = drag_same_project
                 && strip_pos
                     .is_some_and(|pos| Self::strip_interior_tab(&strip_rects, pos).is_some());
-            self.strip_new_tab_hover = drag_same_project
+            self.drag.strip_new_tab_hover = drag_same_project
                 && strip_pos.is_some_and(|pos| {
                     Self::strip_interior_tab(&strip_rects, pos).is_none()
                         && (plus_rect.contains(pos)
@@ -859,10 +863,11 @@ impl App {
             {
                 let accent = appearance::color(&self.theme.accent);
                 let pane_gap = drag_same_project
-                    && self.pane_drag.is_some()
+                    && self.drag.pane.is_some()
                     && Self::strip_interior_tab(&strip_rects, pos).is_none();
                 let tab_member = self
-                    .tab_drag
+                    .drag
+                    .tab
                     .clone()
                     .is_some_and(|dragged| workspace.tabs.iter().any(|tab| tab.id == dragged));
                 if pane_gap || tab_member {
@@ -881,7 +886,7 @@ impl App {
                             );
                         }
                         Self::paint_strip_insertion(ui, &strip_rect, &strip_rects, index, accent);
-                        if let Some(dragged) = self.tab_drag.clone()
+                        if let Some(dragged) = self.drag.tab.clone()
                             && let Some((_, rect)) =
                                 strip_rects.iter().find(|(id, _)| id == &dragged)
                         {
@@ -897,7 +902,7 @@ impl App {
                     }
                 }
             }
-            if self.pane_drag.is_some() {
+            if self.drag.pane.is_some() {
                 ui.ctx().request_repaint();
             }
             header_drag_space(ui);

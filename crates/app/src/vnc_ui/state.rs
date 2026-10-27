@@ -120,6 +120,8 @@ pub(crate) struct VncSidebarState {
     pub(crate) save_password: bool,
     pub(crate) shared: bool,
     pub(crate) view_only: bool,
+    /// Saved host awaiting removal confirmation.
+    pub(crate) confirm_remove: Option<String>,
 }
 
 impl Default for VncSidebarState {
@@ -142,6 +144,7 @@ impl Default for VncSidebarState {
             save_password: true,
             shared: true,
             view_only: false,
+            confirm_remove: None,
         }
     }
 }

@@ -1,10 +1,21 @@
 use eframe::egui::{self, Color32, FontFamily, FontId, TextStyle};
+use std::sync::atomic::{AtomicU32, Ordering};
 use terminator_core::appearance::{AppearanceConfig, rgb};
 use terminator_native_edit::view::{BOLD_FAMILY, ITALIC_FAMILY};
 
-/// Keep small navigation/action glyphs legible independently of secondary text.
-pub const ICON_COLOR: Color32 = Color32::from_rgb(242, 244, 248);
+/// Chrome tints that follow the theme: dark themes keep the fixed Orca
+/// values below, light themes derive them from the palette. Set by
+/// [`apply`]; every viewport shares one theme.
+struct Chrome {
+    icon: AtomicU32,
+    menu_fill: AtomicU32,
+    menu_text: AtomicU32,
+    menu_muted: AtomicU32,
+    menu_line: AtomicU32,
+}
 
+/// Keep small navigation/action glyphs legible independently of secondary text.
+const DARK_ICON: Color32 = Color32::from_rgb(242, 244, 248);
 // No font-atlas cap: the renderer limit (16384 on Metal) applies to every
 // viewport. A parent-only `max_texture_side` cannot reach immediate
 // (floating) viewports — eframe builds their input without calling the
@@ -13,13 +24,96 @@ pub const ICON_COLOR: Color32 = Color32::from_rgb(242, 244, 248);
 
 /// Orca dark context menu fill: `--background` `#0a0a0a`, used as the solid
 /// stand-in for `dark:bg-[rgba(0,0,0,0.12)]` + `backdrop-blur-2xl`.
-pub const MENU_FILL: Color32 = Color32::from_rgb(10, 10, 10);
+const DARK_MENU_FILL: Color32 = Color32::from_rgb(10, 10, 10);
 /// Orca `--popover-foreground` `#fafafa`.
-pub const MENU_TEXT: Color32 = Color32::from_rgb(250, 250, 250);
+const DARK_MENU_TEXT: Color32 = Color32::from_rgb(250, 250, 250);
 /// Orca `--muted-foreground` `#a1a1a1` (shortcuts use this at 85% in CSS).
-pub(super) const MENU_MUTED: Color32 = Color32::from_rgb(161, 161, 161);
+const DARK_MENU_MUTED: Color32 = Color32::from_rgb(161, 161, 161);
 /// Orca `dark:border-white/14` and `dark:focus:bg-white/14`.
-pub(super) const MENU_LINE: Color32 = Color32::from_rgba_premultiplied(36, 36, 36, 36);
+const DARK_MENU_LINE: Color32 = Color32::from_rgba_premultiplied(36, 36, 36, 36);
+
+const fn packed(color: Color32) -> u32 {
+    u32::from_le_bytes(color.to_array())
+}
+
+static CHROME: Chrome = Chrome {
+    icon: AtomicU32::new(packed(DARK_ICON)),
+    menu_fill: AtomicU32::new(packed(DARK_MENU_FILL)),
+    menu_text: AtomicU32::new(packed(DARK_MENU_TEXT)),
+    menu_muted: AtomicU32::new(packed(DARK_MENU_MUTED)),
+    menu_line: AtomicU32::new(packed(DARK_MENU_LINE)),
+};
+
+fn load(slot: &AtomicU32) -> Color32 {
+    let [r, g, b, a] = slot.load(Ordering::Relaxed).to_le_bytes();
+    Color32::from_rgba_premultiplied(r, g, b, a)
+}
+
+fn store(slot: &AtomicU32, color: Color32) {
+    slot.store(packed(color), Ordering::Relaxed);
+}
+
+/// Tint for small navigation and action glyphs.
+pub fn icon_color() -> Color32 {
+    load(&CHROME.icon)
+}
+/// Context menu and popup fill.
+pub fn menu_fill() -> Color32 {
+    load(&CHROME.menu_fill)
+}
+/// Context menu text.
+pub fn menu_text() -> Color32 {
+    load(&CHROME.menu_text)
+}
+/// Context menu secondary text (shortcuts).
+pub(super) fn menu_muted() -> Color32 {
+    load(&CHROME.menu_muted)
+}
+/// Context menu border and hover fill.
+pub(super) fn menu_line() -> Color32 {
+    load(&CHROME.menu_line)
+}
+
+/// Icon, menu fill, menu text, menu muted, and menu line colors for `theme`.
+fn chrome_for(theme: &AppearanceConfig) -> [Color32; 5] {
+    if theme.is_light() {
+        [
+            color(&theme.text),
+            color(&theme.surface),
+            color(&theme.text),
+            color(&theme.secondary),
+            Color32::from_black_alpha(20),
+        ]
+    } else {
+        [
+            DARK_ICON,
+            DARK_MENU_FILL,
+            DARK_MENU_TEXT,
+            DARK_MENU_MUTED,
+            DARK_MENU_LINE,
+        ]
+    }
+}
+
+fn set_chrome(theme: &AppearanceConfig) {
+    let [icon, fill, text, muted, line] = chrome_for(theme);
+    store(&CHROME.icon, icon);
+    store(&CHROME.menu_fill, fill);
+    store(&CHROME.menu_text, text);
+    store(&CHROME.menu_muted, muted);
+    store(&CHROME.menu_line, line);
+}
+
+/// Black or white, whichever reads on `background`.
+pub fn contrast_text(background: Color32) -> Color32 {
+    let [r, g, b, _] = background.to_array();
+    let luma = 0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b);
+    if luma > 140.0 {
+        Color32::from_rgb(20, 20, 22)
+    } else {
+        Color32::WHITE
+    }
+}
 
 pub fn color(value: &str) -> Color32 {
     let [r, g, b] = rgb(value).unwrap_or([209, 211, 217]);
@@ -120,8 +214,14 @@ pub fn install(ctx: &egui::Context) {
     apply(ctx, &AppearanceConfig::default());
 }
 pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
+    let light = theme.is_light();
+    set_chrome(theme);
     let mut style = egui::Style {
-        visuals: egui::Visuals::dark(),
+        visuals: if light {
+            egui::Visuals::light()
+        } else {
+            egui::Visuals::dark()
+        },
         ..Default::default()
     };
     for role in [TextStyle::Body, TextStyle::Button] {
@@ -173,7 +273,7 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
         offset: [0, 8],
         blur: 24,
         spread: 0,
-        color: Color32::from_black_alpha(80),
+        color: Color32::from_black_alpha(if light { 30 } else { 80 }),
     };
     style.visuals.popup_shadow = style.visuals.window_shadow;
     style.visuals.indent_has_left_vline = false;
@@ -212,4 +312,40 @@ pub fn apply(ctx: &egui::Context, theme: &AppearanceConfig) {
     style.spacing.interact_size.y = if compact { 24.0 } else { 28.0 };
     ctx.set_style_of(egui::Theme::Dark, style);
     ctx.set_theme(egui::Theme::Dark);
+}
+
+#[cfg(test)]
+mod chrome_tests {
+    use super::*;
+
+    #[test]
+    fn dark_themes_keep_the_fixed_chrome_and_light_themes_follow_the_palette() {
+        for dark in [
+            AppearanceConfig::intellij_dark(),
+            AppearanceConfig::high_contrast(),
+        ] {
+            assert_eq!(
+                chrome_for(&dark),
+                [
+                    DARK_ICON,
+                    DARK_MENU_FILL,
+                    DARK_MENU_TEXT,
+                    DARK_MENU_MUTED,
+                    DARK_MENU_LINE
+                ]
+            );
+        }
+        let light = AppearanceConfig::intellij_light();
+        let [icon, fill, text, ..] = chrome_for(&light);
+        assert_eq!(icon, color(&light.text));
+        assert_eq!(fill, color(&light.surface));
+        assert_eq!(text, color(&light.text));
+    }
+
+    #[test]
+    fn packed_colors_round_trip() {
+        let slot = AtomicU32::new(0);
+        store(&slot, DARK_MENU_LINE);
+        assert_eq!(load(&slot), DARK_MENU_LINE);
+    }
 }

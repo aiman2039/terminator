@@ -7,6 +7,7 @@ pub(super) fn panel(
     ui: &mut egui::Ui,
     context: &ContextData,
     theme: &AppearanceConfig,
+    open_shortcut: &str,
 ) -> GitPanelOutcome {
     let mut outcome = GitPanelOutcome::default();
     let Some(workspace) = &context.perforce else {
@@ -140,7 +141,8 @@ pub(super) fn panel(
                                 });
                             }
                             row.context_menu(|ui| {
-                                if appearance::menu_item(ui, "Open file", "FileText", "").clicked()
+                                if appearance::menu_item(ui, "Open file", "FileText", open_shortcut)
+                                    .clicked()
                                 {
                                     outcome.menu.push(GitFileAction {
                                         action: FileAction::Open,
@@ -232,7 +234,7 @@ mod tests {
                             data.insert_temp(id.with("submit"), "42".to_string());
                         }
                     });
-                    outcome = panel(ui, &context, &theme);
+                    outcome = panel(ui, &context, &theme, "");
                 },
             );
             output.textures_delta.clear();
