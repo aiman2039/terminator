@@ -89,7 +89,7 @@ pub fn source(name: &str) -> egui::ImageSource<'static> {
         return langs::source(language);
     }
     IconTables::source(ui_sources::UI_SOURCES, name)
-        .unwrap_or_else(|| egui::include_image!("../../assets/icons/file.svg"))
+        .unwrap_or(egui::include_image!("../../assets/icons/file.svg"))
 }
 
 #[cfg(test)]
