@@ -61,14 +61,25 @@ impl Case {
     }
 }
 
+#[derive(clap::Args)]
 pub struct Options {
+    /// Baseline daemon binary (defaults to the built debug daemon).
+    #[arg(long)]
     pub baseline_bin: Option<PathBuf>,
+    /// Candidate daemon binary (defaults to the built debug daemon).
+    #[arg(long)]
     pub candidate_bin: Option<PathBuf>,
+    #[arg(long, default_value = "60")]
     pub seconds: u64,
+    #[arg(long, default_value = "10")]
     pub warmup: u64,
+    #[arg(long, default_value = "3")]
     pub repetitions: u32,
+    #[arg(long, default_value = "20")]
     pub burst: usize,
+    #[arg(long, default_value = "all")]
     pub cases: String,
+    #[arg(long)]
     pub output: Option<PathBuf>,
 }
 
