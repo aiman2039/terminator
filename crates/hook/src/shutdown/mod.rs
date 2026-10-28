@@ -242,6 +242,32 @@ fn wait_daemon_exit(paths: &Paths, timeout: Duration) -> Result<()> {
     }
 }
 
+/// Owners that are not yet retired and must be shut down after the sessions stop.
+fn retiring_owners(paths: &Paths) -> Result<Vec<generations::Generation>> {
+    Ok(if generations::exists(paths) {
+        generations::Catalog::open(paths)?
+            .generations()?
+            .into_iter()
+            .filter(|g| g.status != generations::Status::Retired)
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
+    })
+}
+
+/// The shutdown request the owner understands: idle-only when advertised.
+fn shutdown_request(state: &State) -> Request {
+    if state
+        .capabilities
+        .iter()
+        .any(|c| c == SHUTDOWN_IF_IDLE_CAPABILITY)
+    {
+        Request::ShutdownIfIdle
+    } else {
+        Request::Shutdown
+    }
+}
+
 struct FinishCleanupInput<'a> {
     paths: &'a Paths,
     state: State,
@@ -274,15 +300,7 @@ fn finish_cleanup(input: FinishCleanupInput<'_>) -> Result<usize> {
             targets.len()
         ));
     }
-    let retiring = if generations::exists(paths) {
-        generations::Catalog::open(paths)?
-            .generations()?
-            .into_iter()
-            .filter(|g| g.status != generations::Status::Retired)
-            .collect::<Vec<_>>()
-    } else {
-        vec![]
-    };
+    let retiring = retiring_owners(paths)?;
     for sid in &targets {
         stop_session(StopSessionInput {
             paths,
@@ -297,17 +315,8 @@ fn finish_cleanup(input: FinishCleanupInput<'_>) -> Result<usize> {
         targets: &targets,
         timeout,
     })?;
-    let request = if state
-        .capabilities
-        .iter()
-        .any(|c| c == SHUTDOWN_IF_IDLE_CAPABILITY)
-    {
-        Request::ShutdownIfIdle
-    } else {
-        Request::Shutdown
-    };
     ensure!(
-        matches!(rpc(paths, request)?, Response::Ok),
+        matches!(rpc(paths, shutdown_request(&state))?, Response::Ok),
         "Daemon shutdown was not acknowledged"
     );
     if generations::exists(paths) {

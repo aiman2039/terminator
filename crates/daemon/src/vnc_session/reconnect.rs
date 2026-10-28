@@ -71,39 +71,58 @@ pub(super) async fn run(input: RunInput) {
                 }
                 let delay = spec.options.reconnect.delay_seconds(attempt);
                 attempt = attempt.saturating_add(1);
-                {
-                    let mut state = relock(&shared.state);
-                    if let Some(session) = state.vnc_sessions.iter_mut().find(|s| s.id == sid) {
-                        session.status = VncSessionStatus::Connecting;
-                        session.error = Some(message.clone());
-                        session.retry_attempt = attempt;
-                        session.retry_in_seconds = delay;
-                    }
-                    state.revision = state.revision.saturating_add(1);
-                }
-                {
-                    let mut rt = relock(&runtime);
-                    rt.status = VncSessionStatus::Connecting;
-                    rt.error = Some(format!("Retry {attempt} in {delay}s: {message}"));
-                    rt.revision = rt.revision.saturating_add(1);
-                }
-                let mut cancelled = false;
-                for remaining in (0..delay).rev() {
-                    if !wait_retry_tick(&mut input_rx).await {
-                        cancelled = true;
-                        break;
-                    }
-                    let mut state = relock(&shared.state);
-                    if let Some(session) = state.vnc_sessions.iter_mut().find(|s| s.id == sid) {
-                        session.retry_in_seconds = remaining;
-                    }
-                    state.revision = state.revision.saturating_add(1);
-                }
-                if cancelled {
+                let retry = Retry {
+                    shared: &shared,
+                    runtime: &runtime,
+                    sid: &sid,
+                };
+                retry.announce(attempt, delay, &message);
+                if !retry.count_down(delay, &mut input_rx).await {
                     break;
                 }
             }
         }
+    }
+}
+
+/// Publishes one pending reconnect of a VNC session to the runtime and state.
+struct Retry<'a> {
+    shared: &'a Arc<Shared>,
+    runtime: &'a Arc<Mutex<VncRuntime>>,
+    sid: &'a str,
+}
+
+impl Retry<'_> {
+    fn announce(&self, attempt: u8, delay: u64, message: &str) {
+        {
+            let mut state = relock(&self.shared.state);
+            if let Some(session) = state.vnc_sessions.iter_mut().find(|s| s.id == self.sid) {
+                session.status = VncSessionStatus::Connecting;
+                session.error = Some(message.to_owned());
+                session.retry_attempt = attempt;
+                session.retry_in_seconds = delay;
+            }
+            state.revision = state.revision.saturating_add(1);
+        }
+        let mut rt = relock(self.runtime);
+        rt.status = VncSessionStatus::Connecting;
+        rt.error = Some(format!("Retry {attempt} in {delay}s: {message}"));
+        rt.revision = rt.revision.saturating_add(1);
+    }
+
+    /// Counts the retry delay down one second at a time; false when cancelled.
+    async fn count_down(&self, delay: u64, input_rx: &mut mpsc::Receiver<VncInputEvent>) -> bool {
+        for remaining in (0..delay).rev() {
+            if !wait_retry_tick(input_rx).await {
+                return false;
+            }
+            let mut state = relock(&self.shared.state);
+            if let Some(session) = state.vnc_sessions.iter_mut().find(|s| s.id == self.sid) {
+                session.retry_in_seconds = remaining;
+            }
+            state.revision = state.revision.saturating_add(1);
+        }
+        true
     }
 }
 
