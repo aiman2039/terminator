@@ -7500,7 +7500,6 @@ dependencies = [
 name = "terminator-integrations"
 version = "0.138.0"
 dependencies = [
- "anyhow",
  "serde_json",
  "tempfile",
  "terminator-core",
