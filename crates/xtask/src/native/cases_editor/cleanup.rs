@@ -18,19 +18,11 @@ pub(crate) fn cleanup(o: &Options) -> Result<()> {
 }
 
 fn seed_settings(h: &Harness) -> Result<()> {
-    let mut settings = h
-        .state()?
-        .get("settings")
-        .cloned()
-        .ok_or_else(|| anyhow!("missing settings"))?;
-    let settings_object = settings
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("settings is not an object"))?;
-    settings_object.insert("external_editor".into(), json!("/bin/echo"));
-    settings_object.insert("external_args".into(), json!(["one argument with spaces"]));
-    settings_object.insert("notifications_side".into(), json!(false));
-    h.rpc(json!({"Settings":settings}))?;
-    Ok(())
+    h.update_settings(|settings| {
+        settings.insert("external_editor".into(), json!("/bin/echo"));
+        settings.insert("external_args".into(), json!(["one argument with spaces"]));
+        settings.insert("notifications_side".into(), json!(false));
+    })
 }
 
 fn seed_git_tree(root: &Path) -> Result<()> {
@@ -118,16 +110,7 @@ fn reopen_first_tab(case: Case<'_>, s: &[Value], overflow_state: &Value) -> Resu
     let tabs = require_first_layout(overflow_state)?["tabs"]
         .as_array()
         .unwrap();
-    let mut settings = h
-        .state()?
-        .get("settings")
-        .cloned()
-        .ok_or_else(|| anyhow!("missing settings"))?;
-    settings
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("settings is not an object"))?
-        .insert("notifications_side".into(), json!(false));
-    h.rpc(json!({"Settings":settings}))?;
+    h.set_setting("notifications_side", json!(false))?;
     plain(CaptureInput {
         h,
         opts: o,

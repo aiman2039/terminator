@@ -258,32 +258,36 @@ impl Harness {
                 serde_json::to_vec(&json!({"version": 2, "ide_mode": false}))?,
             )?;
         }
-        let mut settings = self
-            .state()?
-            .get("settings")
-            .cloned()
-            .ok_or_else(|| anyhow!("missing settings"))?;
-        settings
-            .as_object_mut()
-            .ok_or_else(|| anyhow!("settings is not an object"))?
-            .insert("shell".into(), json!("/bin/sh"));
-        self.rpc(json!({"Settings":settings}))?;
-        Ok(())
+        self.set_setting("shell", json!("/bin/sh"))
     }
     /// Route terminal notices to the OS so the daemon exercises its real
     /// notification path (Cocoa pump + Notification Center enumeration).
     pub fn enable_os_notifications(&self) -> Result<()> {
+        self.set_setting("terminal_notifications_os", json!(true))
+    }
+    /// Read the daemon settings, apply `edit`, and save them back.
+    pub fn update_settings(
+        &self,
+        edit: impl FnOnce(&mut serde_json::Map<String, Value>),
+    ) -> Result<()> {
         let mut settings = self
             .state()?
             .get("settings")
             .cloned()
             .ok_or_else(|| anyhow!("missing settings"))?;
-        settings
-            .as_object_mut()
-            .ok_or_else(|| anyhow!("settings is not an object"))?
-            .insert("terminal_notifications_os".into(), json!(true));
+        edit(
+            settings
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("settings is not an object"))?,
+        );
         self.rpc(json!({"Settings":settings}))?;
         Ok(())
+    }
+    /// Change one daemon setting.
+    pub fn set_setting(&self, key: &str, value: Value) -> Result<()> {
+        self.update_settings(|settings| {
+            settings.insert(key.into(), value);
+        })
     }
     pub fn terminal_notify(&self, session: &str, title: &str, body: &str) -> Result<()> {
         self.rpc(json!({
