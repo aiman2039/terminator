@@ -95,46 +95,15 @@ pub(super) fn git_change_row(input: GitChangeRowInput<'_>) {
     if skip_clipped_git_row(ui) {
         return;
     }
-    let letter = change.letter(group);
-    let trailing = match ctx.stats.get(&change.path).copied() {
-        Some((added, deleted)) if deleted > 0 => format!("+{added} -{deleted} {letter}"),
-        Some((added, _)) => format!("+{added} {letter}"),
-        None => letter.to_string(),
+    let row = ChangeRow {
+        ctx,
+        change,
+        group,
+        letter: change.letter(group),
     };
-    // Checked means staged (included in the next commit). Conflicts must be
-    // resolved first, so they get no checkbox.
-    let mut check_clicked = false;
-    let response = ui
-        .horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            if group != terminator_git::GitGroup::Conflicts {
-                let checked = usize::from(group == terminator_git::GitGroup::Staged);
-                check_clicked =
-                    tri_checkbox(ui, check_state(CheckStateInput { checked, total: 1 }));
-            }
-            appearance::file_row(appearance::FileRowInput {
-                ui,
-                label,
-                icon: icons::file_icon(&change.path),
-                selected: false,
-                height: GIT_TREE_ROW_HEIGHT,
-                trailing: &trailing,
-                tint: git_color(ctx.theme, letter),
-            })
-        })
-        .inner
-        .on_hover_text(format!(
-            "{}\n{} ({})",
-            change.path.display(),
-            terminator_git::status_description(letter),
-            group.label()
-        ));
+    let (response, check_clicked) = row.widget(ui, label);
     if check_clicked {
-        if group == terminator_git::GitGroup::Staged {
-            outcome.unstage.push(change.path.clone());
-        } else {
-            outcome.stage.push(change.path.clone());
-        }
+        outcome.toggle_staged(group, &change.path);
     }
     #[cfg(feature = "test-support")]
     diagnostics::record(
@@ -149,85 +118,168 @@ pub(super) fn git_change_row(input: GitChangeRowInput<'_>) {
         ),
         response.rect,
     );
-    let staged = (!change.conflict()).then_some(group == terminator_git::GitGroup::Staged);
-    if let Some(action) = git_click_action(GitClickActionInput {
-        deleted: letter == 'D',
-        staged,
-        clicked: response.clicked() || response.double_clicked(),
-        review_mode: ctx.review_mode,
-        neovim_review: ctx.neovim_review,
-    }) {
+    if let Some(action) = row.click_action(response.clicked() || response.double_clicked()) {
         outcome.clicked.push(GitFileAction {
             action,
             path: change.path.clone(),
         });
     }
     appearance::context_menu(&response, |ui| {
-        let open_changes = git_click_action(GitClickActionInput {
-            deleted: letter == 'D',
-            staged,
-            clicked: true,
-            review_mode: ctx.review_mode,
-            neovim_review: ctx.neovim_review,
-        });
-        if let Some(action) = open_changes
-            && appearance::menu_item(ui, "Open changes", "FileDiff", "").clicked()
-        {
-            outcome.menu.push(GitFileAction {
-                action,
-                path: change.path.clone(),
-            });
-            ui.close();
-        }
-        if appearance::menu_item(ui, "Open file", "FileCode", ctx.open_shortcut).clicked() {
-            outcome.menu.push(GitFileAction {
-                action: FileAction::Open,
-                path: change.path.clone(),
-            });
-            ui.close();
-        }
-        if group == terminator_git::GitGroup::Conflicts
-            && appearance::menu_item(ui, "Resolve conflicts…", "GitCompareArrows", "").clicked()
-        {
-            outcome.resolve = Some(change.path.clone());
-            ui.close();
-        }
+        row.menu_open(ui, outcome);
         ui.separator();
-        if group == terminator_git::GitGroup::Staged {
-            if appearance::menu_item(ui, "Unstage", "ArrowLeft", "").clicked() {
-                outcome.unstage.push(change.path.clone());
-                ui.close();
-            }
-        } else if appearance::menu_item(ui, "Stage", "Plus", "").clicked() {
-            outcome.stage.push(change.path.clone());
-            ui.close();
-        }
-        if appearance::menu_item(ui, "Discard changes", "Eraser", "").clicked() {
-            outcome.discard.push((
-                change.path.clone(),
-                group == terminator_git::GitGroup::Untracked,
-            ));
-            ui.close();
-        }
+        row.menu_stage(ui, outcome);
         ui.separator();
-        if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
-            outcome.copy.push(change.path.display().to_string());
-            ui.close();
-        }
-        if let Some(root) = ctx.root
-            && appearance::menu_item(ui, "Copy relative path", "Copy", "").clicked()
-        {
-            outcome
-                .copy
-                .push(workspace_ops::relative_display(root, &change.path));
-            ui.close();
-        }
+        row.menu_copy(ui, outcome);
         ui.separator();
         if appearance::menu_item(ui, "Delete file", "X", "").clicked() {
             outcome.delete.push(change.path.clone());
             ui.close();
         }
     });
+}
+
+impl GitPanelOutcome {
+    /// Checked means staged: a staged file unstages, any other stages.
+    pub(super) fn toggle_staged(&mut self, group: terminator_git::GitGroup, path: &Path) {
+        if group == terminator_git::GitGroup::Staged {
+            self.unstage.push(path.to_owned());
+        } else {
+            self.stage.push(path.to_owned());
+        }
+    }
+}
+
+/// One changed file in one group.
+struct ChangeRow<'a> {
+    ctx: &'a GitRowCtx<'a>,
+    change: &'a terminator_git::Change,
+    group: terminator_git::GitGroup,
+    letter: char,
+}
+
+impl ChangeRow<'_> {
+    /// Checkbox and file row. Returns the row response and whether the
+    /// checkbox was clicked.
+    fn widget(&self, ui: &mut egui::Ui, label: &str) -> (egui::Response, bool) {
+        let change = self.change;
+        let group = self.group;
+        let trailing = self.trailing();
+        // Checked means staged (included in the next commit). Conflicts must be
+        // resolved first, so they get no checkbox.
+        let mut check_clicked = false;
+        let response = ui
+            .horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if group != terminator_git::GitGroup::Conflicts {
+                    let checked = usize::from(group == terminator_git::GitGroup::Staged);
+                    check_clicked =
+                        tri_checkbox(ui, check_state(CheckStateInput { checked, total: 1 }));
+                }
+                appearance::file_row(appearance::FileRowInput {
+                    ui,
+                    label,
+                    icon: icons::file_icon(&change.path),
+                    selected: false,
+                    height: GIT_TREE_ROW_HEIGHT,
+                    trailing: &trailing,
+                    tint: git_color(self.ctx.theme, self.letter),
+                })
+            })
+            .inner
+            .on_hover_text(format!(
+                "{}\n{} ({})",
+                change.path.display(),
+                terminator_git::status_description(self.letter),
+                group.label()
+            ));
+        (response, check_clicked)
+    }
+
+    /// Diffstat and status letter.
+    fn trailing(&self) -> String {
+        let letter = self.letter;
+        match self.ctx.stats.get(&self.change.path).copied() {
+            Some((added, deleted)) if deleted > 0 => format!("+{added} -{deleted} {letter}"),
+            Some((added, _)) => format!("+{added} {letter}"),
+            None => letter.to_string(),
+        }
+    }
+
+    fn click_action(&self, clicked: bool) -> Option<FileAction> {
+        let staged =
+            (!self.change.conflict()).then_some(self.group == terminator_git::GitGroup::Staged);
+        git_click_action(GitClickActionInput {
+            deleted: self.letter == 'D',
+            staged,
+            clicked,
+            review_mode: self.ctx.review_mode,
+            neovim_review: self.ctx.neovim_review,
+        })
+    }
+
+    /// Open changes, Open file, and Resolve conflicts.
+    fn menu_open(&self, ui: &mut egui::Ui, outcome: &mut GitPanelOutcome) {
+        let path = &self.change.path;
+        if let Some(action) = self.click_action(true)
+            && appearance::menu_item(ui, "Open changes", "FileDiff", "").clicked()
+        {
+            outcome.menu.push(GitFileAction {
+                action,
+                path: path.clone(),
+            });
+            ui.close();
+        }
+        if appearance::menu_item(ui, "Open file", "FileCode", self.ctx.open_shortcut).clicked() {
+            outcome.menu.push(GitFileAction {
+                action: FileAction::Open,
+                path: path.clone(),
+            });
+            ui.close();
+        }
+        if self.group == terminator_git::GitGroup::Conflicts
+            && appearance::menu_item(ui, "Resolve conflicts…", "GitCompareArrows", "").clicked()
+        {
+            outcome.resolve = Some(path.clone());
+            ui.close();
+        }
+    }
+
+    /// Stage or Unstage, and Discard changes.
+    fn menu_stage(&self, ui: &mut egui::Ui, outcome: &mut GitPanelOutcome) {
+        let path = &self.change.path;
+        if self.group == terminator_git::GitGroup::Staged {
+            if appearance::menu_item(ui, "Unstage", "ArrowLeft", "").clicked() {
+                outcome.unstage.push(path.clone());
+                ui.close();
+            }
+        } else if appearance::menu_item(ui, "Stage", "Plus", "").clicked() {
+            outcome.stage.push(path.clone());
+            ui.close();
+        }
+        if appearance::menu_item(ui, "Discard changes", "Eraser", "").clicked() {
+            outcome.discard.push((
+                path.clone(),
+                self.group == terminator_git::GitGroup::Untracked,
+            ));
+            ui.close();
+        }
+    }
+
+    fn menu_copy(&self, ui: &mut egui::Ui, outcome: &mut GitPanelOutcome) {
+        let path = &self.change.path;
+        if appearance::menu_item(ui, "Copy path", "Copy", "").clicked() {
+            outcome.copy.push(path.display().to_string());
+            ui.close();
+        }
+        if let Some(root) = self.ctx.root
+            && appearance::menu_item(ui, "Copy relative path", "Copy", "").clicked()
+        {
+            outcome
+                .copy
+                .push(workspace_ops::relative_display(root, path));
+            ui.close();
+        }
+    }
 }
 
 pub(super) const GIT_SECTION_LIMIT: usize = 8;

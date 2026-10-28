@@ -24,7 +24,6 @@ pub(super) fn git_group_section(input: GitGroupSectionInput<'_, '_>) {
     let group = prepared.group;
     let entries = &prepared.entries;
     let label = git_group_label(group);
-    let total = entries.len();
     let id = ui.make_persistent_id(("git-section", root, label, collapse_generation));
     let state = egui::collapsing_header::CollapsingState::load_with_default_open(
         ui.ctx(),
@@ -34,42 +33,7 @@ pub(super) fn git_group_section(input: GitGroupSectionInput<'_, '_>) {
     let mut group_check_clicked = false;
     let _ = state
         .show_header(ui, |ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            if group != terminator_git::GitGroup::Conflicts {
-                let checked = if group == terminator_git::GitGroup::Staged {
-                    total
-                } else {
-                    0
-                };
-                group_check_clicked =
-                    tri_checkbox(ui, check_state(CheckStateInput { checked, total }));
-            }
-            ui.add(
-                egui::Label::new(RichText::new(format!("{label} {total}")).small().strong())
-                    .selectable(false),
-            );
-            ui.with_layout(
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| match group {
-                    terminator_git::GitGroup::Staged => {
-                        let action = appearance::sidebar_action(ui, "ArrowLeft", "Unstage all");
-                        if action.clicked() {
-                            for change in entries {
-                                outcome.unstage.push(change.path.clone());
-                            }
-                        }
-                    }
-                    terminator_git::GitGroup::Changes | terminator_git::GitGroup::Untracked => {
-                        let action = appearance::sidebar_action(ui, "Plus", "Stage all");
-                        if action.clicked() {
-                            for change in entries {
-                                outcome.stage.push(change.path.clone());
-                            }
-                        }
-                    }
-                    terminator_git::GitGroup::Conflicts => {}
-                },
-            );
+            group_check_clicked = git_group_header(ui, prepared, outcome);
         })
         .body(|ui| {
             let tree = &prepared.tree;
@@ -86,12 +50,65 @@ pub(super) fn git_group_section(input: GitGroupSectionInput<'_, '_>) {
         });
     if group_check_clicked {
         for change in entries {
-            if group == terminator_git::GitGroup::Staged {
-                outcome.unstage.push(change.path.clone());
-            } else {
-                outcome.stage.push(change.path.clone());
+            outcome.toggle_staged(group, &change.path);
+        }
+    }
+}
+
+/// Group checkbox, `LABEL count`, and the stage/unstage-all action.
+/// Returns whether the checkbox was clicked.
+fn git_group_header(
+    ui: &mut egui::Ui,
+    prepared: &PreparedGroup,
+    outcome: &mut GitPanelOutcome,
+) -> bool {
+    let group = prepared.group;
+    let total = prepared.entries.len();
+    let label = git_group_label(group);
+    ui.spacing_mut().item_spacing.x = 2.0;
+    let mut check_clicked = false;
+    if group != terminator_git::GitGroup::Conflicts {
+        let checked = if group == terminator_git::GitGroup::Staged {
+            total
+        } else {
+            0
+        };
+        check_clicked = tri_checkbox(ui, check_state(CheckStateInput { checked, total }));
+    }
+    ui.add(
+        egui::Label::new(RichText::new(format!("{label} {total}")).small().strong())
+            .selectable(false),
+    );
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        git_group_bulk_action(ui, prepared, outcome);
+    });
+    check_clicked
+}
+
+fn git_group_bulk_action(
+    ui: &mut egui::Ui,
+    prepared: &PreparedGroup,
+    outcome: &mut GitPanelOutcome,
+) {
+    let entries = &prepared.entries;
+    match prepared.group {
+        terminator_git::GitGroup::Staged => {
+            let action = appearance::sidebar_action(ui, "ArrowLeft", "Unstage all");
+            if action.clicked() {
+                outcome
+                    .unstage
+                    .extend(entries.iter().map(|change| change.path.clone()));
             }
         }
+        terminator_git::GitGroup::Changes | terminator_git::GitGroup::Untracked => {
+            let action = appearance::sidebar_action(ui, "Plus", "Stage all");
+            if action.clicked() {
+                outcome
+                    .stage
+                    .extend(entries.iter().map(|change| change.path.clone()));
+            }
+        }
+        terminator_git::GitGroup::Conflicts => {}
     }
 }
 
@@ -246,92 +263,17 @@ pub(super) fn git_change_tree(input: GitChangeTreeInput<'_, '_>) {
         } else {
             format!("{prefix}/{name}")
         };
-        let id = ui.make_persistent_id(("git-tree", key.clone(), group.label()));
-        let count = child.count_files();
-        let mut folder_response = None;
-        let mut folder_check_clicked = false;
-        let mut header =
-            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
-                .show_header(ui, |ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    if group != terminator_git::GitGroup::Conflicts {
-                        let checked = if group == terminator_git::GitGroup::Staged {
-                            count
-                        } else {
-                            0
-                        };
-                        folder_check_clicked = tri_checkbox(
-                            ui,
-                            check_state(CheckStateInput {
-                                checked,
-                                total: count,
-                            }),
-                        );
-                    }
-                    let trailing = count.to_string();
-                    folder_response = Some(appearance::file_row(appearance::FileRowInput {
-                        ui,
-                        label: name,
-                        icon: "Folder",
-                        selected: false,
-                        height: GIT_TREE_ROW_HEIGHT,
-                        trailing: &trailing,
-                        tint: appearance::color(&ctx.theme.secondary),
-                    }));
-                });
-        if folder_check_clicked {
-            let mut files = Vec::new();
-            child.collect(&mut files);
-            for change in files {
-                if group == terminator_git::GitGroup::Staged {
-                    outcome.unstage.push(change.path.clone());
-                } else {
-                    outcome.stage.push(change.path.clone());
-                }
-            }
-        }
-        if folder_response
-            .as_ref()
-            .is_some_and(eframe::egui::Response::clicked)
-        {
-            header.toggle();
-        }
-        let _ = header.body(|ui| {
-            git_change_tree(GitChangeTreeInput {
-                ui,
-                ctx,
-                outcome,
-                node: child,
-                prefix: &key,
+        git_tree_folder(GitTreeFolderInput {
+            ui,
+            ctx,
+            outcome,
+            folder: TreeFolder {
+                name,
+                key: &key,
+                child,
                 group,
-            })
+            },
         });
-        if let Some(response) = folder_response {
-            let response = response.on_hover_text(format!("{key} ({count} changed)"));
-            appearance::context_menu(&response, |ui| match group {
-                terminator_git::GitGroup::Staged => {
-                    if appearance::menu_item(ui, "Unstage folder", "ArrowLeft", "").clicked() {
-                        let mut files = Vec::new();
-                        child.collect(&mut files);
-                        for change in files {
-                            outcome.unstage.push(change.path.clone());
-                        }
-                        ui.close();
-                    }
-                }
-                terminator_git::GitGroup::Changes | terminator_git::GitGroup::Untracked => {
-                    if appearance::menu_item(ui, "Stage folder", "Plus", "").clicked() {
-                        let mut files = Vec::new();
-                        child.collect(&mut files);
-                        for change in files {
-                            outcome.stage.push(change.path.clone());
-                        }
-                        ui.close();
-                    }
-                }
-                terminator_git::GitGroup::Conflicts => {}
-            });
-        }
     }
     for (change, label) in node.files.iter().zip(&node.labels) {
         git_change_row(GitChangeRowInput {
@@ -342,5 +284,131 @@ pub(super) fn git_change_tree(input: GitChangeTreeInput<'_, '_>) {
             group,
             label,
         });
+    }
+}
+
+/// One folder of the change tree within one group.
+struct TreeFolder<'a> {
+    name: &'a str,
+    key: &'a str,
+    child: &'a ChangeTree,
+    group: terminator_git::GitGroup,
+}
+
+struct GitTreeFolderInput<'a, 'b> {
+    ui: &'a mut egui::Ui,
+    ctx: &'a GitRowCtx<'b>,
+    outcome: &'a mut GitPanelOutcome,
+    folder: TreeFolder<'a>,
+}
+
+/// A collapsible folder row with its checkbox, then its subtree.
+fn git_tree_folder(input: GitTreeFolderInput<'_, '_>) {
+    let GitTreeFolderInput {
+        ui,
+        ctx,
+        outcome,
+        folder,
+    } = input;
+    let id = ui.make_persistent_id(("git-tree", folder.key.to_owned(), folder.group.label()));
+    let count = folder.child.count_files();
+    let mut folder_response = None;
+    let mut folder_check_clicked = false;
+    let mut header =
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
+            .show_header(ui, |ui| {
+                let (clicked, response) = folder.header(ui, ctx.theme);
+                folder_check_clicked = clicked;
+                folder_response = Some(response);
+            });
+    if folder_check_clicked {
+        for path in folder.paths() {
+            outcome.toggle_staged(folder.group, &path);
+        }
+    }
+    if folder_response
+        .as_ref()
+        .is_some_and(eframe::egui::Response::clicked)
+    {
+        header.toggle();
+    }
+    let _ = header.body(|ui| {
+        git_change_tree(GitChangeTreeInput {
+            ui,
+            ctx,
+            outcome,
+            node: folder.child,
+            prefix: folder.key,
+            group: folder.group,
+        })
+    });
+    if let Some(response) = folder_response {
+        let response = response.on_hover_text(format!("{} ({count} changed)", folder.key));
+        appearance::context_menu(&response, |ui| folder.menu(ui, outcome));
+    }
+}
+
+impl TreeFolder<'_> {
+    /// Folder checkbox and row. Returns whether the checkbox was clicked
+    /// and the row response.
+    fn header(&self, ui: &mut egui::Ui, theme: &AppearanceConfig) -> (bool, egui::Response) {
+        let group = self.group;
+        let count = self.child.count_files();
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let mut check_clicked = false;
+        if group != terminator_git::GitGroup::Conflicts {
+            let checked = if group == terminator_git::GitGroup::Staged {
+                count
+            } else {
+                0
+            };
+            check_clicked = tri_checkbox(
+                ui,
+                check_state(CheckStateInput {
+                    checked,
+                    total: count,
+                }),
+            );
+        }
+        let trailing = count.to_string();
+        let response = appearance::file_row(appearance::FileRowInput {
+            ui,
+            label: self.name,
+            icon: "Folder",
+            selected: false,
+            height: GIT_TREE_ROW_HEIGHT,
+            trailing: &trailing,
+            tint: appearance::color(&theme.secondary),
+        });
+        (check_clicked, response)
+    }
+
+    /// Every file under this folder.
+    fn paths(&self) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        self.child.collect(&mut files);
+        files
+            .into_iter()
+            .map(|change| change.path.clone())
+            .collect()
+    }
+
+    /// Stage or unstage the whole folder.
+    fn menu(&self, ui: &mut egui::Ui, outcome: &mut GitPanelOutcome) {
+        match self.group {
+            terminator_git::GitGroup::Staged => {
+                if appearance::menu_item(ui, "Unstage folder", "ArrowLeft", "").clicked() {
+                    outcome.unstage.extend(self.paths());
+                    ui.close();
+                }
+            }
+            terminator_git::GitGroup::Changes | terminator_git::GitGroup::Untracked => {
+                if appearance::menu_item(ui, "Stage folder", "Plus", "").clicked() {
+                    outcome.stage.extend(self.paths());
+                    ui.close();
+                }
+            }
+            terminator_git::GitGroup::Conflicts => {}
+        }
     }
 }
