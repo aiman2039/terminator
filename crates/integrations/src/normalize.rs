@@ -53,7 +53,20 @@ fn cursor_session_end_state(payload: &Value) -> AgentState {
     }
 }
 
-fn hook_state(kind: &str, name: &str, payload: &Value, tool: &str) -> Option<AgentState> {
+struct HookStateInput<'a> {
+    kind: &'a str,
+    name: &'a str,
+    payload: &'a Value,
+    tool: &'a str,
+}
+
+fn hook_state(input: HookStateInput<'_>) -> Option<AgentState> {
+    let HookStateInput {
+        kind,
+        name,
+        payload,
+        tool,
+    } = input;
     match name {
         "SessionStart" | "session.created" | "sessionStart" => Some(AgentState::Unknown),
         "UserPromptSubmit"
@@ -104,12 +117,20 @@ fn resume_for(kind: &str, provider: &str) -> Option<Resume> {
     })
 }
 
-pub fn normalize(
-    kind: &str,
-    session: &str,
-    parent: &str,
-    payload: &Value,
-) -> Result<Option<HookEvent>> {
+pub struct NormalizeInput<'a> {
+    pub kind: &'a str,
+    pub session: &'a str,
+    pub parent: &'a str,
+    pub payload: &'a Value,
+}
+
+pub fn normalize(input: NormalizeInput<'_>) -> Result<Option<HookEvent>> {
+    let NormalizeInput {
+        kind,
+        session,
+        parent,
+        payload,
+    } = input;
     let provider = first_str(
         payload,
         &[
@@ -129,7 +150,12 @@ pub fn normalize(
     let tool = first_str(payload, &["tool_name", "toolName"])
         .unwrap_or("")
         .to_lowercase();
-    let Some(state) = hook_state(kind, name, payload, &tool) else {
+    let Some(state) = hook_state(HookStateInput {
+        kind,
+        name,
+        payload,
+        tool: &tool,
+    }) else {
         return Ok(None);
     };
     let Some(provider) = provider else {

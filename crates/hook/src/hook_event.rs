@@ -149,7 +149,12 @@ impl HookCommand {
             return Ok(None);
         }
         let Some(mut event) =
-            terminator_integrations::normalize(kind, &sid, &ancestry.parent, &payload)?
+            terminator_integrations::normalize(terminator_integrations::NormalizeInput {
+                kind,
+                session: &sid,
+                parent: &ancestry.parent,
+                payload: &payload,
+            })?
         else {
             return Ok(None);
         };

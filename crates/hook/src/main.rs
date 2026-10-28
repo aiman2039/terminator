@@ -55,12 +55,13 @@ fn main() -> Result<()> {
                     kind,
                 ));
             } else {
-                let path = terminator_integrations::install(
-                    std::path::Path::new(&home),
-                    kind,
-                    &std::env::current_exe()?,
-                    args.first().is_some_and(|arg| arg == "remove"),
-                )?;
+                let path =
+                    terminator_integrations::install(terminator_integrations::InstallInput {
+                        home: std::path::Path::new(&home),
+                        kind,
+                        helper: &std::env::current_exe()?,
+                        remove: args.first().is_some_and(|arg| arg == "remove"),
+                    })?;
                 Output::line(path.display());
             }
             Ok(())
