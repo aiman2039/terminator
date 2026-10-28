@@ -213,8 +213,12 @@ fn merge_inventory(aggregate: &mut State, (owner, state, error): Inventory) {
     // Presence merges only from live owners advertising the capability;
     // historical and unavailable owners stay presence-free so hook records
     // render as unverified.
-    let present =
-        generations::mergeable_presence(&owner, &state.capabilities, &error, &aggregate.generation);
+    let present = generations::mergeable_presence(generations::MergeablePresenceInput {
+        owner: &owner,
+        capabilities: &state.capabilities,
+        error: &error,
+        active: &aggregate.generation,
+    });
     aggregate.generations.push(generations::Health {
         live_sessions: state.sessions.iter().filter(|s| s.lifecycle.live()).count(),
         owner,

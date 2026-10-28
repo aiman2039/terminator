@@ -271,7 +271,12 @@ impl<T: Send + 'static, E> Supervisor<T, E> {
         let thread = std::thread::Builder::new()
             .name("gui-supervisor".into())
             .spawn(move || {
-                runtime.block_on(supervise(receiver, complete, owner, Arc::new(wake)));
+                runtime.block_on(supervise(SuperviseInput {
+                    requests: receiver,
+                    complete,
+                    shared: owner,
+                    wake: Arc::new(wake),
+                }));
             })?;
         Ok(Self {
             handle: Handle(shared, PhantomData),
@@ -301,7 +306,7 @@ impl<T, E> Drop for Supervisor<T, E> {
 mod native_pool;
 mod supervise;
 pub use native_pool::{ChunkReadError, NativePool, read_chunks};
-use supervise::supervise;
+use supervise::{SuperviseInput, supervise};
 
 #[cfg(test)]
 mod tests;

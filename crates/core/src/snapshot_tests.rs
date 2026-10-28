@@ -39,7 +39,20 @@ fn restarting_changes_hint_even_if_revision_is_equal() {
     assert_ne!(previous, state.snapshot_hint());
 }
 
-fn presence_for(session: &str, kind: &str, pid: u32, start: u64) -> State {
+struct PresenceForInput<'a> {
+    session: &'a str,
+    kind: &'a str,
+    pid: u32,
+    start: u64,
+}
+
+fn presence_for(input: PresenceForInput<'_>) -> State {
+    let PresenceForInput {
+        session,
+        kind,
+        pid,
+        start,
+    } = input;
     let mut state = setup();
     state.presence.push(agents::TerminalPresence {
         session_id: session.into(),
@@ -60,7 +73,12 @@ fn presence_for(session: &str, kind: &str, pid: u32, start: u64) -> State {
 
 #[test]
 fn hook_process_identity_links_only_to_a_verified_live_observation() {
-    let mut state = presence_for("s", "codex", 4242, 777);
+    let mut state = presence_for(PresenceForInput {
+        session: "s",
+        kind: "codex",
+        pid: 4242,
+        start: 777,
+    });
     let mut linked = event(1, AgentState::Running);
     linked.agent_kind = "codex".into();
     linked.process = Some(agents::ProcessIdentity {
@@ -81,7 +99,12 @@ fn hook_process_identity_links_only_to_a_verified_live_observation() {
         (4242, 778, "codex"),
         (4242, 777, "claude"),
     ] {
-        let mut state = presence_for("s", "codex", 4242, 777);
+        let mut state = presence_for(PresenceForInput {
+            session: "s",
+            kind: "codex",
+            pid: 4242,
+            start: 777,
+        });
         let mut e = event(1, AgentState::Running);
         e.agent_kind = kind.into();
         e.event_id = format!("e-{pid}-{start}-{kind}");
@@ -98,7 +121,12 @@ fn hook_process_identity_links_only_to_a_verified_live_observation() {
         assert_eq!(state.agents[0].state, AgentState::Running);
     }
     // Stale observations cannot verify new links.
-    let mut state = presence_for("s", "codex", 4242, 777);
+    let mut state = presence_for(PresenceForInput {
+        session: "s",
+        kind: "codex",
+        pid: 4242,
+        start: 777,
+    });
     state.presence[0].observed_at = now().saturating_sub(30);
     let mut e = event(1, AgentState::Running);
     e.agent_kind = "codex".into();
@@ -112,7 +140,12 @@ fn hook_process_identity_links_only_to_a_verified_live_observation() {
 
 #[test]
 fn hook_without_process_identity_preserves_existing_delivery() {
-    let mut state = presence_for("s", "codex", 4242, 777);
+    let mut state = presence_for(PresenceForInput {
+        session: "s",
+        kind: "codex",
+        pid: 4242,
+        start: 777,
+    });
     let delivered = state
         .apply_hook(event(1, AgentState::WaitingInput))
         .unwrap();
@@ -124,7 +157,12 @@ fn hook_without_process_identity_preserves_existing_delivery() {
 
 #[test]
 fn new_invocation_cannot_inherit_an_earlier_invocations_process_link() {
-    let mut state = presence_for("s", "codex", 4242, 777);
+    let mut state = presence_for(PresenceForInput {
+        session: "s",
+        kind: "codex",
+        pid: 4242,
+        start: 777,
+    });
     let mut first = event(1, AgentState::Running);
     first.agent_kind = "codex".into();
     first.agent_invocation_id = "first".into();
@@ -151,7 +189,12 @@ fn new_invocation_cannot_inherit_an_earlier_invocations_process_link() {
 
 #[test]
 fn presence_observations_never_emit_lifecycle_events_or_notifications() {
-    let state = presence_for("s", "codex", 4242, 777);
+    let state = presence_for(PresenceForInput {
+        session: "s",
+        kind: "codex",
+        pid: 4242,
+        start: 777,
+    });
     assert!(state.agents.is_empty());
     assert!(state.notifications.is_empty());
     assert!(state.recent_events.is_empty());
@@ -177,7 +220,12 @@ fn presence_fields_are_additive_and_old_snapshots_parse_cleanly() {
     .unwrap();
     assert!(legacy_event.process.is_none());
     // New snapshots round-trip through the additive fields.
-    let state = presence_for("s", "codex", 4242, 777);
+    let state = presence_for(PresenceForInput {
+        session: "s",
+        kind: "codex",
+        pid: 4242,
+        start: 777,
+    });
     let encoded = serde_json::to_value(&state).unwrap();
     assert_eq!(encoded["presence"][0]["agents"][0]["kind"], "codex");
     let restored: State = serde_json::from_value(encoded).unwrap();
@@ -186,7 +234,12 @@ fn presence_fields_are_additive_and_old_snapshots_parse_cleanly() {
 
 #[test]
 fn recovery_clears_presence_and_process_links_without_relaunching() {
-    let mut state = presence_for("s", "codex", 4242, 777);
+    let mut state = presence_for(PresenceForInput {
+        session: "s",
+        kind: "codex",
+        pid: 4242,
+        start: 777,
+    });
     let mut e = event(1, AgentState::Running);
     e.agent_kind = "codex".into();
     e.process = Some(agents::ProcessIdentity {

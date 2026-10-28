@@ -67,18 +67,26 @@ pub struct ShellDetection {
     pub agents: Vec<DetectedAgent>,
 }
 
+pub struct DetectAgentsInput<'a> {
+    pub procs: &'a [ProcView],
+    pub shell_pid: u32,
+    pub shell_start_time: u64,
+    pub foreground_pgid: Option<u32>,
+}
+
 /// Detect agent roots beneath one owned shell.
 ///
 /// Only descendants of the verified shell (PID/start-time identity) are
 /// considered. An agent keeps its identity while it runs child tools: nested
 /// agent processes beneath an already recognized root are ignored, while
 /// independently launched sibling agents each produce an entry.
-pub fn detect_agents(
-    procs: &[ProcView],
-    shell_pid: u32,
-    shell_start_time: u64,
-    foreground_pgid: Option<u32>,
-) -> ShellDetection {
+pub fn detect_agents(input: DetectAgentsInput<'_>) -> ShellDetection {
+    let DetectAgentsInput {
+        procs,
+        shell_pid,
+        shell_start_time,
+        foreground_pgid,
+    } = input;
     let shell = procs.iter().find(|p| p.pid == shell_pid);
     let Some(shell) = shell else {
         return ShellDetection {
@@ -234,7 +242,12 @@ pub fn inspect_shells(
     targets
         .iter()
         .map(|target| {
-            let found = detect_agents(procs, target.pid, target.start_time, target.foreground_pgid);
+            let found = detect_agents(DetectAgentsInput {
+                procs,
+                shell_pid: target.pid,
+                shell_start_time: target.start_time,
+                foreground_pgid: target.foreground_pgid,
+            });
             TerminalPresence {
                 session_id: target.session_id.clone(),
                 generation: target.generation.clone(),

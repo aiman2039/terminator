@@ -23,14 +23,24 @@ impl Cache {
         let changed = self.enter(cwd);
         if self.git_due(changed) {
             let previous = self.data.branch.clone();
-            self.data.root = git_async(processes, files, cwd, &["rev-parse", "--show-toplevel"])
-                .await
-                .ok()
-                .map(PathBuf::from);
-            self.data.branch = git_async(processes, files, cwd, &["branch", "--show-current"])
-                .await
-                .ok()
-                .filter(|s| !s.is_empty());
+            self.data.root = git_async(GitAsyncInput {
+                processes,
+                files,
+                cwd,
+                args: &["rev-parse", "--show-toplevel"],
+            })
+            .await
+            .ok()
+            .map(PathBuf::from);
+            self.data.branch = git_async(GitAsyncInput {
+                processes,
+                files,
+                cwd,
+                args: &["branch", "--show-current"],
+            })
+            .await
+            .ok()
+            .filter(|s| !s.is_empty());
             let root = self.data.root.clone();
             self.data.worktree = files
                 .run(&crate::async_service::CancellationToken::new(), move || {
@@ -52,12 +62,20 @@ impl Cache {
     }
 }
 
-async fn git_async(
-    processes: &crate::async_process::Processes,
-    files: &crate::async_service::NativePool,
-    cwd: &Path,
-    args: &[&str],
-) -> Result<String> {
+struct GitAsyncInput<'a> {
+    processes: &'a crate::async_process::Processes,
+    files: &'a crate::async_service::NativePool,
+    cwd: &'a Path,
+    args: &'a [&'a str],
+}
+
+async fn git_async(input: GitAsyncInput<'_>) -> Result<String> {
+    let GitAsyncInput {
+        processes,
+        files,
+        cwd,
+        args,
+    } = input;
     let args = args.iter().map(OsString::from).collect();
     let output = crate::git::run(
         processes,

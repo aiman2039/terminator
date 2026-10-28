@@ -28,14 +28,27 @@ pub fn connect(
     request: Request,
     token: Option<String>,
 ) -> Result<transport::Stream> {
-    connect_hint(paths, request, token, None)
+    connect_hint(ConnectHintInput {
+        paths,
+        request,
+        token,
+        snapshot_hint: None,
+    })
 }
-fn connect_hint(
-    paths: &Paths,
+struct ConnectHintInput<'a> {
+    paths: &'a Paths,
     request: Request,
     token: Option<String>,
     snapshot_hint: Option<SnapshotHint>,
-) -> Result<transport::Stream> {
+}
+
+fn connect_hint(input: ConnectHintInput<'_>) -> Result<transport::Stream> {
+    let ConnectHintInput {
+        paths,
+        request,
+        token,
+        snapshot_hint,
+    } = input;
     let routed = generations::owner_for(paths, &request)?;
     let paths = &routed;
     let mut s = transport::Stream::connect_ipc(&paths.socket())?;
@@ -218,7 +231,12 @@ pub fn conditional_snapshot(paths: &Paths, hint: Option<SnapshotHint>) -> Result
             Ok(Response::State(Box::new(state)))
         };
     }
-    let mut stream = connect_hint(paths, Request::Snapshot, None, hint)?;
+    let mut stream = connect_hint(ConnectHintInput {
+        paths,
+        request: Request::Snapshot,
+        token: None,
+        snapshot_hint: hint,
+    })?;
     snapshot::read_response(&mut stream)?.checked()
 }
 

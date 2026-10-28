@@ -31,7 +31,12 @@ impl Shared {
         let source = self.project_path(&project)?;
         let common_dir = worktrees::common_dir(&source)?;
         let revision = worktrees::resolve_start(&source, &start)?;
-        let checkout = worktrees::add(&common_dir, &path, branch.as_deref(), &revision)?;
+        let checkout = worktrees::add(worktrees::AddInput {
+            common: &common_dir,
+            path: &path,
+            branch: branch.as_deref(),
+            start: &revision,
+        })?;
         self.register_worktree(common_dir, checkout.path);
         Ok(Outcome::Changed)
     }

@@ -62,17 +62,25 @@ pub fn historical(owner: &Generation, active: Option<&str>) -> bool {
     owner.status == Status::Retired && active != Some(owner.id.as_str())
 }
 
+pub struct MergeablePresenceInput<'a> {
+    pub owner: &'a Generation,
+    pub capabilities: &'a [String],
+    pub error: &'a Option<String>,
+    pub active: &'a str,
+}
+
 /// True when an owner's presence observations may merge into an aggregate
 /// snapshot: the owner is live (not historical fallback, no health error)
 /// and advertises the presence capability. Shared by the synchronous and
 /// asynchronous generation clients.
 #[must_use]
-pub fn mergeable_presence(
-    owner: &Generation,
-    capabilities: &[String],
-    error: &Option<String>,
-    active: &str,
-) -> bool {
+pub fn mergeable_presence(input: MergeablePresenceInput<'_>) -> bool {
+    let MergeablePresenceInput {
+        owner,
+        capabilities,
+        error,
+        active,
+    } = input;
     error.is_none()
         && !historical(owner, Some(active))
         && capabilities
@@ -218,8 +226,12 @@ pub fn snapshot(paths: &Paths) -> Result<State> {
         // Presence merges only from live owners advertising the capability.
         // Historical fallback and unavailable owners stay presence-free, so
         // their hook records render as unverified presence.
-        let present =
-            mergeable_presence(&owner, &state.capabilities, &error, &aggregate.generation);
+        let present = mergeable_presence(MergeablePresenceInput {
+            owner: &owner,
+            capabilities: &state.capabilities,
+            error: &error,
+            active: &aggregate.generation,
+        });
         aggregate.generations.push(Health {
             live_sessions: state.sessions.iter().filter(|s| s.lifecycle.live()).count(),
             owner,

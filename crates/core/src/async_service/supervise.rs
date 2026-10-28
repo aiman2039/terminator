@@ -30,12 +30,20 @@ async fn deliver<T>(input: DeliverInput<'_, T>) {
         .await;
     wake();
 }
-pub(super) async fn supervise<T: Send + 'static>(
-    mut requests: mpsc::Receiver<ServiceRequest<T>>,
-    complete: mpsc::Sender<Completion<T>>,
-    shared: Arc<Shared<T>>,
-    wake: Arc<dyn Fn() + Send + Sync>,
-) {
+pub(super) struct SuperviseInput<T> {
+    pub(super) requests: mpsc::Receiver<ServiceRequest<T>>,
+    pub(super) complete: mpsc::Sender<Completion<T>>,
+    pub(super) shared: Arc<Shared<T>>,
+    pub(super) wake: Arc<dyn Fn() + Send + Sync>,
+}
+
+pub(super) async fn supervise<T: Send + 'static>(input: SuperviseInput<T>) {
+    let SuperviseInput {
+        mut requests,
+        complete,
+        shared,
+        wake,
+    } = input;
     let mut tasks = JoinSet::new();
     let mut active = Vec::<(OperationContext, CancellationToken)>::new();
     let mut pending = VecDeque::<ServiceRequest<T>>::new();
