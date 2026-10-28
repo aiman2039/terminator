@@ -300,12 +300,22 @@ impl Source for PreparedSource {
         None
     }
 }
-fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
-    device: &cpal::Device,
-    config: &cpal::StreamConfig,
-    mut source: PreparedSource,
+struct OutputStreamInput<'a> {
+    device: &'a cpal::Device,
+    config: &'a cpal::StreamConfig,
+    source: PreparedSource,
     failed: Arc<AtomicBool>,
+}
+
+fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
+    input: OutputStreamInput<'_>,
 ) -> Result<cpal::Stream> {
+    let OutputStreamInput {
+        device,
+        config,
+        mut source,
+        failed,
+    } = input;
     Ok(device.build_output_stream(
         config,
         move |output: &mut [T], _| {
@@ -319,16 +329,29 @@ fn output_stream<T: cpal::SizedSample + cpal::FromSample<f32>>(
         None,
     )?)
 }
-pub(super) fn start_output(
-    device: &cpal::Device,
-    config: &cpal::SupportedStreamConfig,
-    source: PreparedSource,
-    failed: Arc<AtomicBool>,
-) -> Result<cpal::Stream> {
+pub(super) struct StartOutputInput<'a> {
+    pub(super) device: &'a cpal::Device,
+    pub(super) config: &'a cpal::SupportedStreamConfig,
+    pub(super) source: PreparedSource,
+    pub(super) failed: Arc<AtomicBool>,
+}
+
+pub(super) fn start_output(input: StartOutputInput<'_>) -> Result<cpal::Stream> {
+    let StartOutputInput {
+        device,
+        config,
+        source,
+        failed,
+    } = input;
     let settings = config.config();
     macro_rules! build {
         ($sample:ty) => {
-            output_stream::<$sample>(device, &settings, source, failed)?
+            output_stream::<$sample>(OutputStreamInput {
+                device,
+                config: &settings,
+                source,
+                failed,
+            })?
         };
     }
     let stream = match config.sample_format() {

@@ -4,6 +4,13 @@ use crate::player::PollInput;
 use engine::Status;
 use std::path::PathBuf;
 use std::time::Duration;
+pub(super) struct PlayerIconButtonInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) name: &'a str,
+    pub(super) tip: &'a str,
+    pub(super) lit: bool,
+}
+
 impl App {
     pub(crate) fn poll_player(&mut self) {
         let project = self.player.project.clone().unwrap_or_default();
@@ -330,15 +337,16 @@ impl App {
     }
 
     pub(super) fn player_tool_button(ui: &mut egui::Ui, name: &str, tip: &str) -> egui::Response {
-        Self::player_icon_button(ui, name, tip, false)
+        Self::player_icon_button(PlayerIconButtonInput {
+            ui,
+            name,
+            tip,
+            lit: false,
+        })
     }
 
-    pub(super) fn player_icon_button(
-        ui: &mut egui::Ui,
-        name: &str,
-        tip: &str,
-        lit: bool,
-    ) -> egui::Response {
+    pub(super) fn player_icon_button(input: PlayerIconButtonInput<'_>) -> egui::Response {
+        let PlayerIconButtonInput { ui, name, tip, lit } = input;
         Self::paint_player_icon(
             ui,
             PlayerIconButton {

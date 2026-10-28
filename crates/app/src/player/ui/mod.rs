@@ -1,4 +1,5 @@
 //! Flat Terminator-themed player. One center-pane singleton.
+use super::app_player::PlayerIconButtonInput;
 use super::eq::{EqPreset, eq_bass, eq_flat, eq_treble, format_clock};
 use super::*;
 use eframe::egui::{self, Color32, Rect, Sense, Stroke, Ui, pos2, vec2};
@@ -136,7 +137,12 @@ fn seek_row(app: &mut App, ui: &mut Ui, status: &Status) {
     });
     let (rect, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
-    paint_seek_bar(ui, rect, fraction, seekable);
+    paint_seek_bar(PaintSeekBarInput {
+        ui,
+        rect,
+        fraction,
+        seekable,
+    });
     if seekable
         && (response.clicked() || response.dragged())
         && let Some(total) = duration
@@ -150,7 +156,20 @@ fn seek_row(app: &mut App, ui: &mut Ui, status: &Status) {
     }
 }
 
-fn paint_seek_bar(ui: &Ui, rect: Rect, fraction: f32, seekable: bool) {
+struct PaintSeekBarInput<'a> {
+    ui: &'a Ui,
+    rect: Rect,
+    fraction: f32,
+    seekable: bool,
+}
+
+fn paint_seek_bar(input: PaintSeekBarInput<'_>) {
+    let PaintSeekBarInput {
+        ui,
+        rect,
+        fraction,
+        seekable,
+    } = input;
     let visuals = ui.visuals();
     let track = Rect::from_center_size(rect.center(), vec2(rect.width(), 8.0));
     ui.painter()
@@ -231,18 +250,36 @@ fn controls_row(app: &mut App, ui: &mut Ui) {
             app.pick_audio = true;
         }
         ui.add_space(8.0);
-        if App::player_icon_button(ui, "Shuffle", "Shuffle", app.preferences.player_shuffle)
-            .clicked()
+        if App::player_icon_button(PlayerIconButtonInput {
+            ui,
+            name: "Shuffle",
+            tip: "Shuffle",
+            lit: app.preferences.player_shuffle,
+        })
+        .clicked()
         {
             app.preferences.player_shuffle = !app.preferences.player_shuffle;
             app.player.shuffle_bag.clear();
         }
-        if App::player_icon_button(ui, "Repeat", "Repeat", app.preferences.player_repeat).clicked()
+        if App::player_icon_button(PlayerIconButtonInput {
+            ui,
+            name: "Repeat",
+            tip: "Repeat",
+            lit: app.preferences.player_repeat,
+        })
+        .clicked()
         {
             app.preferences.player_repeat = !app.preferences.player_repeat;
         }
         ui.add_space(8.0);
-        if App::player_icon_button(ui, "FileSliders", "Equalizer", app.player.eq_open).clicked() {
+        if App::player_icon_button(PlayerIconButtonInput {
+            ui,
+            name: "FileSliders",
+            tip: "Equalizer",
+            lit: app.player.eq_open,
+        })
+        .clicked()
+        {
             app.player.eq_open = !app.player.eq_open;
         }
         ui.add_space(8.0);

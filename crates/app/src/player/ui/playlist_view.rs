@@ -5,11 +5,29 @@ pub(super) fn playlist_panel(app: &mut App, ui: &mut Ui, project: &str) {
     let footer_h = if extra { 92.0 } else { 36.0 };
     let height = (ui.available_height() - footer_h).max(120.0);
     let (list, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
-    playlist_rows(app, ui, list, project);
+    playlist_rows(PlaylistRowsInput {
+        app,
+        ui,
+        rect: list,
+        project,
+    });
     playlist_footer(app, ui, project);
 }
 
-pub(super) fn playlist_rows(app: &mut App, ui: &mut Ui, rect: Rect, project: &str) {
+pub(super) struct PlaylistRowsInput<'a> {
+    pub(super) app: &'a mut App,
+    pub(super) ui: &'a mut Ui,
+    pub(super) rect: Rect,
+    pub(super) project: &'a str,
+}
+
+pub(super) fn playlist_rows(input: PlaylistRowsInput<'_>) {
+    let PlaylistRowsInput {
+        app,
+        ui,
+        rect,
+        project,
+    } = input;
     let surface = appearance::color(&app.theme.surface);
     ui.painter().rect_filled(rect, 3.0, surface);
     let tracks = app.playlist();

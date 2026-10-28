@@ -209,7 +209,12 @@ pub fn sort_history(input: HistoryInput<'_>) -> Vec<HistoryGroup> {
         filter,
     } = input;
     let ranking = HistoryRanking {
-        activity: session_activity(sessions, agents, notifications, terminal_notices),
+        activity: session_activity(SessionActivityInput {
+            sessions,
+            agents,
+            notifications,
+            terminal_notices,
+        }),
         query: filter.trim().to_lowercase(),
         sort,
     };
@@ -244,13 +249,21 @@ pub fn sort_history(input: HistoryInput<'_>) -> Vec<HistoryGroup> {
     groups
 }
 
-/// Each session's latest activity: creation, agent updates, and notices.
-fn session_activity<'a>(
+struct SessionActivityInput<'a> {
     sessions: &'a [Session],
-    agents: &[Agent],
-    notifications: &[Notification],
-    terminal_notices: &[TerminalNotice],
-) -> HashMap<&'a str, u64> {
+    agents: &'a [Agent],
+    notifications: &'a [Notification],
+    terminal_notices: &'a [TerminalNotice],
+}
+
+/// Each session's latest activity: creation, agent updates, and notices.
+fn session_activity<'a>(input: SessionActivityInput<'a>) -> HashMap<&'a str, u64> {
+    let SessionActivityInput {
+        sessions,
+        agents,
+        notifications,
+        terminal_notices,
+    } = input;
     let mut activity = HashMap::new();
     for session in sessions {
         activity.insert(session.id.as_str(), session.created);

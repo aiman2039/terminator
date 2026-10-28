@@ -2,7 +2,8 @@ use super::super::super::tap;
 use super::super::analysis::Analysis;
 use super::super::handle::{Controls, Desired, Event, MAX_PCM_SAMPLES, Playable, Status};
 use super::super::pipeline::{
-    PipelineGuard, PlaybackCounters, PreparedSource, StreamInput, StreamReader, start_output,
+    PipelineGuard, PlaybackCounters, PreparedSource, StartOutputInput, StreamInput, StreamReader,
+    start_output,
 };
 use super::Permanent;
 use anyhow::{Context, Result, ensure};
@@ -321,14 +322,15 @@ impl DecodeLoop<'_> {
         if self.output.is_some() || (self.produced < self.threshold && !self.eof) {
             return Ok(());
         }
-        let stream = start_output(
-            &self.device.device,
-            &self.device.configuration,
-            self.prepared
+        let stream = start_output(StartOutputInput {
+            device: &self.device.device,
+            config: &self.device.configuration,
+            source: self
+                .prepared
                 .take()
                 .context("audio output was not prepared")?,
-            Arc::clone(&self.output_failed),
-        )?;
+            failed: Arc::clone(&self.output_failed),
+        })?;
         self.output = Some(stream);
         self.ready.store(true, Ordering::Release);
         Ok(())

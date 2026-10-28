@@ -175,7 +175,20 @@ fn latest_activity_includes_notice_timestamps() {
     );
 }
 
-fn history_session(id: &str, project: &str, label: &str, created: u64) -> Session {
+struct HistorySessionInput<'a> {
+    id: &'a str,
+    project: &'a str,
+    label: &'a str,
+    created: u64,
+}
+
+fn history_session(input: HistorySessionInput<'_>) -> Session {
+    let HistorySessionInput {
+        id,
+        project,
+        label,
+        created,
+    } = input;
     let mut s = session(id, project, created);
     s.label = label.into();
     s.lifecycle = terminator_core::Lifecycle::Ended;
@@ -227,9 +240,24 @@ fn history_groups(input: HistoryGroupsInput<'_>) -> Vec<(String, Vec<String>)> {
 fn history_sorts_projects_by_last_activity_and_sessions_by_activity() {
     let projects = vec![project("a", "alpha"), project("b", "beta")];
     let sessions = vec![
-        history_session("a-old", "a", "Terminal 1", 10),
-        history_session("a-new", "a", "Terminal 4", 12),
-        history_session("b-only", "b", "Terminal 2", 11),
+        history_session(HistorySessionInput {
+            id: "a-old",
+            project: "a",
+            label: "Terminal 1",
+            created: 10,
+        }),
+        history_session(HistorySessionInput {
+            id: "a-new",
+            project: "a",
+            label: "Terminal 4",
+            created: 12,
+        }),
+        history_session(HistorySessionInput {
+            id: "b-only",
+            project: "b",
+            label: "Terminal 2",
+            created: 11,
+        }),
     ];
     let agents = vec![history_agent("a-old", 30), history_agent("b-only", 20)];
     let groups = history_groups(HistoryGroupsInput {
@@ -249,8 +277,18 @@ fn history_sorts_projects_by_last_activity_and_sessions_by_activity() {
 fn history_name_sort_orders_projects_and_sessions() {
     let projects = vec![project("b", "beta"), project("a", "alpha")];
     let sessions = vec![
-        history_session("s2", "a", "Terminal 4", 2),
-        history_session("s1", "a", "Terminal 1", 1),
+        history_session(HistorySessionInput {
+            id: "s2",
+            project: "a",
+            label: "Terminal 4",
+            created: 2,
+        }),
+        history_session(HistorySessionInput {
+            id: "s1",
+            project: "a",
+            label: "Terminal 1",
+            created: 1,
+        }),
     ];
     let groups = history_groups(HistoryGroupsInput {
         projects: projects.clone(),
@@ -274,8 +312,18 @@ fn history_name_sort_orders_projects_and_sessions() {
     assert_eq!(groups[0].1, vec!["s2".to_string(), "s1".to_string()]);
     let projects = vec![project("b", "beta"), project("a", "alpha")];
     let sessions = vec![
-        history_session("sa", "a", "Terminal 1", 1),
-        history_session("sb", "b", "Terminal 2", 1),
+        history_session(HistorySessionInput {
+            id: "sa",
+            project: "a",
+            label: "Terminal 1",
+            created: 1,
+        }),
+        history_session(HistorySessionInput {
+            id: "sb",
+            project: "b",
+            label: "Terminal 2",
+            created: 1,
+        }),
     ];
     let groups = history_groups(HistoryGroupsInput {
         projects,
@@ -293,9 +341,24 @@ fn history_name_sort_orders_projects_and_sessions() {
 fn history_filter_matches_session_and_project_names() {
     let projects = vec![project("a", "alpha"), project("b", "beta")];
     let sessions = vec![
-        history_session("s1", "a", "Terminal 1", 1),
-        history_session("s2", "a", "Terminal 4", 2),
-        history_session("s3", "b", "Terminal 2", 3),
+        history_session(HistorySessionInput {
+            id: "s1",
+            project: "a",
+            label: "Terminal 1",
+            created: 1,
+        }),
+        history_session(HistorySessionInput {
+            id: "s2",
+            project: "a",
+            label: "Terminal 4",
+            created: 2,
+        }),
+        history_session(HistorySessionInput {
+            id: "s3",
+            project: "b",
+            label: "Terminal 2",
+            created: 3,
+        }),
     ];
     let groups = history_groups(HistoryGroupsInput {
         projects: projects.clone(),
