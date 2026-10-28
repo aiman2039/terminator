@@ -90,7 +90,7 @@ fn save_and_close(h: &Harness, o: &Options, source: &Path) -> Result<()> {
             actions: json!([{"at_ms":1100,"target":"explorer-file:source.rs"},{"at_ms":2700,"target":"workspace-close:source.rs"},{"at_ms":3400,"target":"Cancel"},{"at_ms":4100,"target":"workspace-close:source.rs"},{"at_ms":4700,"target":"Save and close"}]),
             after: 6500,
         },
-        |_| h.type_into_running_editor(None, "iUnsaved change "),
+        |_| h.type_into_running_editor(None, "iUnsaved change ", 5),
     )?;
     ensure!(
         fs::read_to_string(source)?.contains("Unsaved change"),
@@ -115,7 +115,7 @@ fn discard_and_close(h: &Harness, o: &Options, root: &Path) -> Result<()> {
             ]),
             after: 5500,
         },
-        |_| h.type_into_running_editor(Some("keep.rs"), "iDiscarded change "),
+        |_| h.type_into_running_editor(Some("keep.rs"), "iDiscarded change ", 5),
     )?;
     ensure!(
         fs::read_to_string(&keep)? == "fn keep() {}\n",
@@ -143,7 +143,7 @@ fn unsaved_close_bar(h: &Harness, o: &Options, root: &Path) -> Result<()> {
             ]),
             after: 3400,
         },
-        |_| h.type_into_running_editor(Some("bar.rs"), "iBar change "),
+        |_| h.type_into_running_editor(Some("bar.rs"), "iBar change ", 5),
     )?;
     ensure!(
         fs::read_to_string(&bar)? == "fn bar() {}\n",

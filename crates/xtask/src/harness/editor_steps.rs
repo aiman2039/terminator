@@ -24,16 +24,21 @@ impl Harness {
         )?;
         Ok(())
     }
-    /// Wait for a running editor (labelled `label` when given), type `keys`,
-    /// then wait up to 3 seconds for at least one modified buffer.
+    /// Wait up to `seconds` for a running editor (labelled `label` when given),
+    /// type `keys`, then wait up to 3 seconds for at least one modified buffer.
     #[track_caller]
-    pub fn type_into_running_editor(&self, label: Option<&str>, keys: &str) -> Result<()> {
+    pub fn type_into_running_editor(
+        &self,
+        label: Option<&str>,
+        keys: &str,
+        seconds: u64,
+    ) -> Result<()> {
         let running = |s: &Value| {
             s["kind"] == "editor"
                 && s["lifecycle"] == "running"
                 && label.is_none_or(|label| s["label"] == label)
         };
-        let state = self.wait(|st| sessions(st).iter().any(running), 5)?;
+        let state = self.wait(|st| sessions(st).iter().any(running), seconds)?;
         let editor = sessions(&state).iter().find(|s| running(s)).unwrap();
         self.write(&mut self.attach(editor)?, keys)?;
         self.wait(
