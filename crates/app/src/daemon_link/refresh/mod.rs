@@ -101,15 +101,23 @@ enum Wake {
     Timer,
 }
 
+struct DirectoriesToListInput<'a> {
+    directories: &'a [PathBuf],
+    listed: &'a dyn Fn(&std::path::Path) -> bool,
+    dirty: &'a [PathBuf],
+    full: bool,
+}
+
 /// The visible directories a refresh lists again: every one when `full`,
 /// else those not listed yet and those a changed path is in (or under a
 /// changed path, for moved folders). `dirty` holds normalized paths.
-fn directories_to_list(
-    directories: &[PathBuf],
-    listed: &dyn Fn(&std::path::Path) -> bool,
-    dirty: &[PathBuf],
-    full: bool,
-) -> Vec<PathBuf> {
+fn directories_to_list(input: DirectoriesToListInput<'_>) -> Vec<PathBuf> {
+    let DirectoriesToListInput {
+        directories,
+        listed,
+        dirty,
+        full,
+    } = input;
     directories
         .iter()
         .filter(|path| {

@@ -5,12 +5,20 @@ use crate::gui_services::Services;
 use std::{ffi::OsString, path::Path, path::PathBuf};
 use terminator_core::{CommandOptions, async_service::CancellationToken};
 
-pub async fn context_async(
-    service: &Services,
-    cwd: PathBuf,
-    include_stats: bool,
-    cancel: &CancellationToken,
-) -> ContextData {
+pub struct ContextAsyncInput<'a> {
+    pub service: &'a Services,
+    pub cwd: PathBuf,
+    pub include_stats: bool,
+    pub cancel: &'a CancellationToken,
+}
+
+pub async fn context_async(input: ContextAsyncInput<'_>) -> ContextData {
+    let ContextAsyncInput {
+        service,
+        cwd,
+        include_stats,
+        cancel,
+    } = input;
     let mut result = ContextData {
         cwd: cwd.clone(),
         root: None,

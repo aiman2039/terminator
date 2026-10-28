@@ -1,9 +1,11 @@
 mod context;
 mod listing;
 
-pub use context::context_async;
+pub use context::{ContextAsyncInput, context_async};
 pub(crate) use listing::Listing;
-pub use listing::{directories_with_ignored_async, directory_raw_async};
+pub use listing::{
+    DirectoriesWithIgnoredAsyncInput, directories_with_ignored_async, directory_raw_async,
+};
 #[cfg(test)]
 mod tests;
 
@@ -41,16 +43,25 @@ pub struct ContextData {
     pub error: Option<String>,
 }
 
+#[cfg(test)]
+pub struct MergeStatsInput<'a> {
+    pub root: &'a Path,
+    pub working: &'a [u8],
+    pub staged: &'a [u8],
+    pub changes: &'a [Change],
+}
+
 /// Merge `--numstat` output for the index and worktree, then add line counts
 /// for untracked files. Paths match the porcelain records so the Git rows can
 /// look stats up directly.
 #[cfg(test)]
-pub fn merge_stats(
-    root: &Path,
-    working: &[u8],
-    staged: &[u8],
-    changes: &[Change],
-) -> std::collections::HashMap<PathBuf, (u32, u32)> {
+pub fn merge_stats(input: MergeStatsInput<'_>) -> std::collections::HashMap<PathBuf, (u32, u32)> {
+    let MergeStatsInput {
+        root,
+        working,
+        staged,
+        changes,
+    } = input;
     merge_stats_cancel(MergeStatsCancelInput {
         root,
         working,
@@ -135,7 +146,12 @@ pub fn context_stats(
         |args: &[&str]| terminator_git::run_blocking(cwd, args, options()).unwrap_or_default();
     let working = git(&["diff", "--numstat", "-z"]);
     let staged = git(&["diff", "--cached", "--numstat", "-z"]);
-    merge_stats(root, &working, &staged, changes)
+    merge_stats(MergeStatsInput {
+        root,
+        working: &working,
+        staged: &staged,
+        changes,
+    })
 }
 
 #[derive(Clone, Debug)]

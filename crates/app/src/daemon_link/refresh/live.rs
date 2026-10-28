@@ -1,6 +1,7 @@
 //! Production refresh worker: watcher-driven, cancellable, partial re-listing.
 use super::{
-    Dirty, Request, Wake, directories_to_list, ignore_rules_changed, normalize, watch_targets,
+    DirectoriesToListInput, Dirty, Request, Wake, directories_to_list, ignore_rules_changed,
+    normalize, watch_targets,
 };
 use crate::{Update, gui_services::Services, services};
 use notify::{RecursiveMode, Watcher};
@@ -241,12 +242,12 @@ impl RefreshWorker {
         self.service
             .fs()
             .run(operation, move || {
-                anyhow::Ok(directories_to_list(
-                    &wanted,
-                    &|path| known.contains(path),
-                    &changed_paths,
+                anyhow::Ok(directories_to_list(DirectoriesToListInput {
+                    directories: &wanted,
+                    listed: &|path| known.contains(path),
+                    dirty: &changed_paths,
                     full,
-                ))
+                }))
             })
             .await
             .unwrap_or_else(|_| request.directories.clone())
@@ -393,12 +394,12 @@ async fn load(input: LoadInput<'_>) -> anyhow::Result<Loaded> {
             .await?;
         raw_directories.push((path.clone(), entries));
     }
-    let context = services::context_async(
+    let context = services::context_async(services::ContextAsyncInput {
         service,
-        request.cwd.clone(),
-        request.include_stats,
-        operation,
-    )
+        cwd: request.cwd.clone(),
+        include_stats: request.include_stats,
+        cancel: operation,
+    })
     .await;
     let targets = watch_targets(request, &context);
     let cache = Arc::clone(watcher);
@@ -408,13 +409,14 @@ async fn load(input: LoadInput<'_>) -> anyhow::Result<Loaded> {
             anyhow::Ok(rewatch(&cache, watched, targets))
         })
         .await?;
-    let directories = services::directories_with_ignored_async(
-        service,
-        &request.cwd,
-        raw_directories,
-        context.root.is_some() && context.perforce.is_none(),
-    )
-    .await;
+    let directories =
+        services::directories_with_ignored_async(services::DirectoriesWithIgnoredAsyncInput {
+            service,
+            cwd: &request.cwd,
+            listings: raw_directories,
+            in_git: context.root.is_some() && context.perforce.is_none(),
+        })
+        .await;
     Ok(Loaded {
         targets,
         fallback,

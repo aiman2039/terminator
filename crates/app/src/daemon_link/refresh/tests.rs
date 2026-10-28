@@ -91,7 +91,14 @@ fn watch_events_relist_only_the_folders_they_touch() {
     std::fs::create_dir_all(&docs).unwrap();
     let visible = [root.clone(), src.clone(), src.join("nested"), docs.clone()];
     let listed = |_: &std::path::Path| true;
-    let list = |dirty: &[PathBuf], full| directories_to_list(&visible, &listed, dirty, full);
+    let list = |dirty: &[PathBuf], full| {
+        directories_to_list(DirectoriesToListInput {
+            directories: &visible,
+            listed: &listed,
+            dirty,
+            full,
+        })
+    };
     // A new file re-lists its own folder only.
     assert_eq!(
         list(&[src.join("new.rs")], false),
@@ -106,7 +113,12 @@ fn watch_events_relist_only_the_folders_they_touch() {
     assert!(list(&[], false).is_empty());
     assert_eq!(list(&[], true), visible);
     // Folders never listed are always listed.
-    let fresh = directories_to_list(&visible, &|path| path != docs, &[], false);
+    let fresh = directories_to_list(DirectoriesToListInput {
+        directories: &visible,
+        listed: &|path| path != docs,
+        dirty: &[],
+        full: false,
+    });
     assert_eq!(fresh, std::slice::from_ref(&docs));
     assert!(ignore_rules_changed(&[root.join(".gitignore")]));
     assert!(!ignore_rules_changed(&[src.join("lib.rs")]));

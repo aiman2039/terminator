@@ -31,7 +31,13 @@ async fn batched_ignore_check_marks_entries_across_directories() {
             entries_raw(&root.join("src"), &cancel).map_err(|_| unreachable!()),
         ),
     ];
-    let listings = directories_with_ignored_async(&service, &root, listings, true).await;
+    let listings = directories_with_ignored_async(DirectoriesWithIgnoredAsyncInput {
+        service: &service,
+        cwd: &root,
+        listings,
+        in_git: true,
+    })
+    .await;
     let ignored: Vec<String> = listings
         .iter()
         .flat_map(|(_, entries)| entries.as_ref().unwrap())
@@ -65,7 +71,12 @@ fn merge_stats_adds_index_worktree_and_untracked_lines() {
             status: "??".into(),
         },
     ];
-    let stats = merge_stats(root, b"1\t1\ta.txt\0", b"3\t0\ta.txt\0", &changes);
+    let stats = merge_stats(MergeStatsInput {
+        root,
+        working: b"1\t1\ta.txt\0",
+        staged: b"3\t0\ta.txt\0",
+        changes: &changes,
+    });
     assert_eq!(stats[&tracked], (4, 1));
     assert_eq!(stats[&root.join("new.txt")], (2, 0));
 }

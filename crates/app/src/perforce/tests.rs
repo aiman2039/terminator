@@ -76,7 +76,13 @@ impl P4Fixture {
         )
         .unwrap();
         let cancel = CancellationToken::new();
-        let context = crate::services::context_async(&service, root.clone(), true, &cancel).await;
+        let context = crate::services::context_async(crate::services::ContextAsyncInput {
+            service: &service,
+            cwd: root.clone(),
+            include_stats: true,
+            cancel: &cancel,
+        })
+        .await;
         assert!(context.error.is_none(), "{:?}", context.error);
         let workspace = context.perforce.unwrap();
         assert_eq!(workspace.client, "terminator-fixture");

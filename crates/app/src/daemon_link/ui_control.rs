@@ -69,31 +69,64 @@ pub fn spawn(paths: Paths, service: Services) -> Result<Server> {
     Ok(Server { cancel })
 }
 async fn serve(stream: transport::AsyncStream, service: Services, paths: Paths) -> Result<()> {
-    serve_for(stream, service, paths, Duration::from_secs(8)).await
+    serve_for(ServeForInput {
+        stream,
+        service,
+        paths,
+        timeout: Duration::from_secs(8),
+    })
+    .await
 }
-async fn serve_for(
+struct ServeForInput {
     stream: transport::AsyncStream,
     service: Services,
     paths: Paths,
     timeout: Duration,
-) -> Result<()> {
+}
+
+async fn serve_for(input: ServeForInput) -> Result<()> {
+    let ServeForInput {
+        stream,
+        service,
+        paths,
+        timeout,
+    } = input;
     let deadline = Instant::now()
         .checked_add(timeout)
         .ok_or_else(|| anyhow::anyhow!("GUI response deadline overflow"))?;
     tokio::time::timeout_at(
         deadline.into(),
-        serve_until(stream, service, paths, deadline),
+        serve_until(ServeUntilInput {
+            stream,
+            service,
+            paths,
+            deadline,
+        }),
     )
     .await
     .map_err(|_| anyhow::anyhow!("GUI response deadline exceeded"))?
 }
-async fn serve_until(
-    mut stream: transport::AsyncStream,
+struct ServeUntilInput {
+    stream: transport::AsyncStream,
     service: Services,
     paths: Paths,
     deadline: Instant,
-) -> Result<()> {
-    let result = answer(&mut stream, &service, paths, deadline).await;
+}
+
+async fn serve_until(input: ServeUntilInput) -> Result<()> {
+    let ServeUntilInput {
+        mut stream,
+        service,
+        paths,
+        deadline,
+    } = input;
+    let result = answer(AnswerInput {
+        stream: &mut stream,
+        service: &service,
+        paths,
+        deadline,
+    })
+    .await;
     let response = match result {
         Ok(value) => Response {
             result: Some(value),
@@ -107,13 +140,21 @@ async fn serve_until(
     write_response(&mut stream, &service, response).await
 }
 
-/// Reads, authenticates and runs one request; the error becomes the reply.
-async fn answer(
-    stream: &mut transport::AsyncStream,
-    service: &Services,
+struct AnswerInput<'a> {
+    stream: &'a mut transport::AsyncStream,
+    service: &'a Services,
     paths: Paths,
     deadline: Instant,
-) -> Result<serde_json::Value> {
+}
+
+/// Reads, authenticates and runs one request; the error becomes the reply.
+async fn answer(input: AnswerInput<'_>) -> Result<serde_json::Value> {
+    let AnswerInput {
+        stream,
+        service,
+        paths,
+        deadline,
+    } = input;
     let bytes = read_frame(stream).await?;
     let request = authenticated_request(service, paths, bytes).await?;
     sync_state(service, &request).await?;
@@ -239,7 +280,12 @@ mod tests {
             .await
             .unwrap();
         let (server, _) = listener.accept().await.unwrap();
-        let task = tokio::spawn(serve_for(server, service, paths, Duration::from_millis(80)));
+        let task = tokio::spawn(serve_for(ServeForInput {
+            stream: server,
+            service,
+            paths,
+            timeout: Duration::from_millis(80),
+        }));
         let bytes = serde_json::to_vec(&Envelope {
             version: 1,
             auth: "fixture".into(),

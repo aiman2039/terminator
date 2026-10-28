@@ -26,16 +26,26 @@ pub async fn directory_raw_async(
 
 pub(crate) type Listing = (PathBuf, std::result::Result<Vec<Entry>, DirectoryError>);
 
+pub struct DirectoriesWithIgnoredAsyncInput<'a> {
+    pub service: &'a crate::gui_services::Services,
+    pub cwd: &'a Path,
+    pub listings: Vec<Listing>,
+    pub in_git: bool,
+}
+
 /// Apply Git ignore rules to every listed directory with one
 /// `check-ignore` process from `cwd`, instead of one per directory. A
 /// batch Git rejects (a nested repository, say) falls back to the
 /// per-directory check, which runs Git from each directory itself.
 pub async fn directories_with_ignored_async(
-    service: &crate::gui_services::Services,
-    cwd: &Path,
-    listings: Vec<Listing>,
-    in_git: bool,
+    input: DirectoriesWithIgnoredAsyncInput<'_>,
 ) -> Vec<Listing> {
+    let DirectoriesWithIgnoredAsyncInput {
+        service,
+        cwd,
+        listings,
+        in_git,
+    } = input;
     let all: Vec<Entry> = listings
         .iter()
         .filter_map(|(_, entries)| entries.as_ref().ok())
@@ -82,18 +92,34 @@ pub async fn directories_with_ignored_async(
     }
     let mut out = Vec::with_capacity(listings.len());
     for (path, entries) in listings {
-        let entries = directory_with_ignored_async(service, path.clone(), entries, in_git).await;
+        let entries = directory_with_ignored_async(DirectoryWithIgnoredAsyncInput {
+            service,
+            path: path.clone(),
+            entries,
+            in_git,
+        })
+        .await;
         out.push((path, entries));
     }
     out
 }
 
-async fn directory_with_ignored_async(
-    service: &crate::gui_services::Services,
+struct DirectoryWithIgnoredAsyncInput<'a> {
+    service: &'a crate::gui_services::Services,
     path: PathBuf,
     entries: std::result::Result<Vec<Entry>, DirectoryError>,
     in_git: bool,
+}
+
+async fn directory_with_ignored_async(
+    input: DirectoryWithIgnoredAsyncInput<'_>,
 ) -> std::result::Result<Vec<Entry>, DirectoryError> {
+    let DirectoryWithIgnoredAsyncInput {
+        service,
+        path,
+        entries,
+        in_git,
+    } = input;
     let mut entries = entries?;
     let result = async {
         if in_git {
