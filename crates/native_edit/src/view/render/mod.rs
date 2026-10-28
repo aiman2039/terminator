@@ -29,7 +29,7 @@ use crate::highlight::{HighlightCache, Language};
 use crate::view::IdeEdit;
 use crate::vim::ModalEngine;
 use crate::vim::{Effect, VimEngine};
-use geometry::{Geometry, Viewport};
+use geometry::{Geometry, MeasureInput, Viewport};
 
 /// Widest annotation column, in cells.
 const ANNOTATION_CELLS: usize = 28;
@@ -53,7 +53,12 @@ pub fn show_source<B: Buffer>(
         language,
         id,
     } = input;
-    let geometry = Geometry::measure(ui, &*doc, options, id);
+    let geometry = Geometry::measure(MeasureInput {
+        ui,
+        doc: &*doc,
+        options,
+        id,
+    });
     // Vim off is modeless: IDE caret and selection semantics.
     engine.set_modeless(!options.vim);
     let mut view = SourceView {

@@ -8,7 +8,20 @@ fn modeless(text: &str) -> (VimEngine, Doc) {
     (engine, Doc::new(text))
 }
 
-fn at(engine: &mut VimEngine, doc: &mut Doc, line: usize, col: usize) {
+struct AtInput<'a> {
+    engine: &'a mut VimEngine,
+    doc: &'a mut Doc,
+    line: usize,
+    col: usize,
+}
+
+fn at(input: AtInput<'_>) {
+    let AtInput {
+        engine,
+        doc,
+        line,
+        col,
+    } = input;
     engine.place_cursor(doc, line, col);
 }
 
@@ -27,7 +40,12 @@ fn shift_right_selects_end_exclusive_text() {
 #[test]
 fn plain_arrows_collapse_a_selection_to_its_edge() {
     let (mut engine, mut doc) = modeless("hello");
-    at(&mut engine, &mut doc, 0, 1);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 0,
+        col: 1,
+    });
     engine.ide_move(&mut doc, IdeMotion::Right, true);
     engine.ide_move(&mut doc, IdeMotion::Right, true);
     engine.ide_move(&mut doc, IdeMotion::Left, false);
@@ -63,7 +81,12 @@ fn word_motions_stop_at_word_edges() {
 #[test]
 fn smart_home_toggles_between_indent_and_column_zero() {
     let (mut engine, mut doc) = modeless("    x = 1");
-    at(&mut engine, &mut doc, 0, 7);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 0,
+        col: 7,
+    });
     engine.ide_move(&mut doc, IdeMotion::LineStart, false);
     assert_eq!(engine.cursor().col, 4);
     engine.ide_move(&mut doc, IdeMotion::LineStart, false);
@@ -93,7 +116,12 @@ fn duplicate_selection_selects_the_copy() {
 #[test]
 fn move_lines_carries_the_caret() {
     let (mut engine, mut doc) = modeless("one\ntwo\nthree\n");
-    at(&mut engine, &mut doc, 1, 1);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 1,
+        col: 1,
+    });
     engine.ide_move_lines(&mut doc, true);
     assert_eq!(doc.text(), "two\none\nthree\n");
     assert_eq!(engine.cursor(), Cursor { line: 0, col: 1 });
@@ -108,10 +136,20 @@ fn move_lines_carries_the_caret() {
 #[test]
 fn delete_lines_removes_the_newline_too() {
     let (mut engine, mut doc) = modeless("a\nb\nc");
-    at(&mut engine, &mut doc, 1, 0);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 1,
+        col: 0,
+    });
     engine.ide_delete_lines(&mut doc);
     assert_eq!(doc.text(), "a\nc");
-    at(&mut engine, &mut doc, 1, 0);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 1,
+        col: 0,
+    });
     engine.ide_delete_lines(&mut doc);
     assert_eq!(doc.text(), "a");
 }
@@ -138,7 +176,12 @@ fn toggle_comment_without_selection_moves_down() {
 #[test]
 fn enter_keeps_indent_and_splits_braces() {
     let (mut engine, mut doc) = modeless("    if x {}");
-    at(&mut engine, &mut doc, 0, 10);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 0,
+        col: 10,
+    });
     engine.modeless_key(&mut doc, Key::Enter);
     assert_eq!(doc.text(), "    if x {\n        \n    }");
     assert_eq!(engine.cursor(), Cursor { line: 1, col: 8 });
@@ -173,7 +216,12 @@ fn backspace_removes_an_empty_pair_and_whole_indent_levels() {
     engine.modeless_key(&mut doc, Key::Backspace);
     assert_eq!(doc.text(), "");
     let (mut engine, mut doc) = modeless("        x");
-    at(&mut engine, &mut doc, 0, 8);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 0,
+        col: 8,
+    });
     engine.modeless_key(&mut doc, Key::Backspace);
     assert_eq!(doc.text(), "    x");
 }
@@ -192,7 +240,12 @@ fn typing_replaces_the_selection() {
 #[test]
 fn modeless_undo_works_without_escape() {
     let (mut engine, mut doc) = modeless("x");
-    at(&mut engine, &mut doc, 0, 1);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 0,
+        col: 1,
+    });
     engine.modeless_key(&mut doc, Key::Char('y'));
     engine.type_text(&mut doc, "z");
     engine.undo(&mut doc);
@@ -202,11 +255,21 @@ fn modeless_undo_works_without_escape() {
 #[test]
 fn tab_inserts_spaces_to_the_next_stop() {
     let (mut engine, mut doc) = modeless("ab");
-    at(&mut engine, &mut doc, 0, 1);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 0,
+        col: 1,
+    });
     engine.modeless_key(&mut doc, Key::Tab);
     assert_eq!(doc.text(), "a   b");
     let (mut engine, mut doc) = modeless("\tx\n");
-    at(&mut engine, &mut doc, 1, 0);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 1,
+        col: 0,
+    });
     engine.modeless_key(&mut doc, Key::Tab);
     assert_eq!(doc.text(), "\tx\n\t");
 }
@@ -216,7 +279,12 @@ fn join_lines_glues_with_one_space() {
     let (mut engine, mut doc) = modeless("let x =\n    1;\nfoo(\n  a)");
     engine.ide_join_lines(&mut doc);
     assert_eq!(doc.text(), "let x = 1;\nfoo(\n  a)");
-    at(&mut engine, &mut doc, 1, 0);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 1,
+        col: 0,
+    });
     engine.ide_join_lines(&mut doc);
     assert_eq!(doc.text(), "let x = 1;\nfoo(a)");
 }
@@ -232,17 +300,32 @@ fn delete_word_back_stops_at_the_word_start() {
 #[test]
 fn matching_bracket_and_caret_word() {
     let (mut engine, mut doc) = modeless("f(a[0], {b})\n");
-    at(&mut engine, &mut doc, 0, 1);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 0,
+        col: 1,
+    });
     assert_eq!(
         engine.matching_bracket(&doc),
         Some((Cursor { line: 0, col: 1 }, Cursor { line: 0, col: 11 }))
     );
-    at(&mut engine, &mut doc, 0, 10);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 0,
+        col: 10,
+    });
     assert_eq!(
         engine.matching_bracket(&doc),
         Some((Cursor { line: 0, col: 8 }, Cursor { line: 0, col: 10 }))
     );
-    at(&mut engine, &mut doc, 0, 2);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 0,
+        col: 2,
+    });
     assert_eq!(engine.word_at_caret(&doc).as_deref(), Some("a"));
 }
 
@@ -257,7 +340,12 @@ fn tab_indents_only_lines_the_selection_covers() {
 #[test]
 fn extend_selection_grows_word_contents_brackets_line_and_shrinks_back() {
     let (mut engine, mut doc) = modeless("    call(one, two_x);\nnext\n");
-    at(&mut engine, &mut doc, 0, 15);
+    at(AtInput {
+        engine: &mut engine,
+        doc: &mut doc,
+        line: 0,
+        col: 15,
+    });
     let mut grown = Vec::new();
     for _ in 0..6 {
         engine.ide_extend_selection(&mut doc);

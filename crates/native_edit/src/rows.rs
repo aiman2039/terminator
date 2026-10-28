@@ -120,7 +120,12 @@ pub fn visual_rows_folded<B: Buffer>(
                 text,
                 folded: false,
             });
-            mark_folded(&mut rows, first, line, folds);
+            mark_folded(MarkFoldedInput {
+                rows: &mut rows,
+                first,
+                line,
+                folds,
+            });
             continue;
         }
         let limit = wrap_columns.unwrap_or(usize::MAX).max(1);
@@ -158,18 +163,31 @@ pub fn visual_rows_folded<B: Buffer>(
             });
             start = end;
         }
-        mark_folded(&mut rows, first, line, folds);
+        mark_folded(MarkFoldedInput {
+            rows: &mut rows,
+            first,
+            line,
+            folds,
+        });
     }
     rows
 }
 
-/// Flag the last row of `line` when a folded region starts there.
-fn mark_folded(
-    rows: &mut [VisualRow],
+struct MarkFoldedInput<'a> {
+    rows: &'a mut [VisualRow],
     first: usize,
     line: usize,
-    folds: Option<&crate::fold::Folds>,
-) {
+    folds: Option<&'a crate::fold::Folds>,
+}
+
+/// Flag the last row of `line` when a folded region starts there.
+fn mark_folded(input: MarkFoldedInput<'_>) {
+    let MarkFoldedInput {
+        rows,
+        first,
+        line,
+        folds,
+    } = input;
     if folds.is_some_and(|folds| folds.is_folded(line))
         && rows.len() > first
         && let Some(last) = rows.last_mut()

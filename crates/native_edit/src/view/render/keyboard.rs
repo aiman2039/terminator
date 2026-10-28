@@ -23,6 +23,13 @@ struct ShortcutBatch {
     pastes: Vec<String>,
 }
 
+struct EditCaretInput<'a, B> {
+    engine: &'a mut VimEngine,
+    doc: &'a mut B,
+    edit: IdeEdit,
+    language: Language,
+}
+
 impl<B: Buffer> SourceView<'_, B> {
     /// Multiple carets (`IntelliJ`): Add / Unselect / Select All
     /// Occurrences, and Escape back to one caret. Modeless only.
@@ -289,7 +296,12 @@ impl<B: Buffer> SourceView<'_, B> {
         let language = self.language;
         let vertical_move = &mut self.out.vertical_move;
         self.engine.for_each_caret(self.doc, |engine, doc| {
-            if let Some(down) = Self::edit_caret(engine, doc, edit, language) {
+            if let Some(down) = Self::edit_caret(EditCaretInput {
+                engine,
+                doc,
+                edit,
+                language,
+            }) {
                 *vertical_move = Some(down);
             }
             Vec::new()
@@ -298,12 +310,13 @@ impl<B: Buffer> SourceView<'_, B> {
 
     /// Apply `edit` at the engine's current caret; a vertical move reports
     /// its direction (`true` = down).
-    fn edit_caret(
-        engine: &mut VimEngine,
-        doc: &mut B,
-        edit: IdeEdit,
-        language: Language,
-    ) -> Option<bool> {
+    fn edit_caret(input: EditCaretInput<'_, B>) -> Option<bool> {
+        let EditCaretInput {
+            engine,
+            doc,
+            edit,
+            language,
+        } = input;
         match edit {
             IdeEdit::DeleteWordBack => engine.ide_delete_word_back(doc),
             IdeEdit::DeleteLines => engine.ide_delete_lines(doc),
