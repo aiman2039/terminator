@@ -1,4 +1,4 @@
-use super::source::Snapshot;
+use super::source::{Revision, Snapshot};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use std::{
     collections::{HashMap, HashSet},
@@ -291,26 +291,9 @@ pub(super) fn prepare(snapshot: Snapshot) -> Document {
                 );
             }
             Event::Start(Tag::Image { dest_url, .. }) => {
-                let mut alt = String::new();
-                for (event, _) in events.by_ref() {
-                    match event {
-                        Event::End(TagEnd::Image) => break,
-                        Event::Text(text) | Event::Code(text) => alt.push_str(&text),
-                        _ => {}
-                    }
-                }
-                let alt = alt.replace(['[', ']'], "");
-                let replacement = match resolve_link(&snapshot.path, &dest_url) {
-                    Some(Link::File(path)) => match Url::from_file_path(path) {
-                        Ok(url) => {
-                            let uri = format!("markdown-image:{url}");
-                            images.insert(uri.clone());
-                            format!("![{alt}](<{uri}>)")
-                        }
-                        Err(()) => format!("Image: {alt}"),
-                    },
-                    _ => format!("Image: {alt}"),
-                };
+                let alt = image_alt(&mut events);
+                let (replacement, uri) = image_replacement(&snapshot.path, &dest_url, &alt);
+                images.extend(uri);
                 replacements.push((range, replacement));
             }
             Event::Html(_) | Event::InlineHtml(_) => {
@@ -326,40 +309,77 @@ pub(super) fn prepare(snapshot: Snapshot) -> Document {
     for (range, replacement) in replacements.into_iter().rev() {
         text.replace_range(range, &replacement);
     }
-    // Preserve source line breaks, including those in converted HTML blocks.
-    // Parser offsets keep code, list/quote prefixes and existing hard breaks intact.
-    let breaks: Vec<_> = Parser::new_ext(&text, Options::all())
-        .into_offset_iter()
-        .filter_map(|(event, range)| matches!(event, Event::SoftBreak).then_some(range))
-        .collect();
-    for range in breaks.into_iter().rev() {
-        text.replace_range(range, "  \n");
-    }
+    preserve_line_breaks(&mut text);
     let words = text.split_whitespace().count();
-    let headings = text
-        .lines()
-        .filter(|line| {
-            let hashes = line.bytes().take_while(|byte| *byte == b'#').count();
-            (1..=6).contains(&hashes) && line.as_bytes().get(hashes) == Some(&b' ')
-        })
-        .count();
+    let headings = count_headings(&text);
     let mermaid = super::mermaid::render_fences(&text);
     Document {
         text,
         mermaid,
         words,
         headings,
-        status: match snapshot.revision {
-            Some(revision) if snapshot.paused && revision.modified => {
-                "Unsaved preview · live updates paused"
-            }
-            Some(_) if snapshot.paused => "Last live preview · live updates paused",
-            None if snapshot.paused => "Saved file · live preview paused",
-            Some(revision) if revision.modified => "Unsaved changes",
-            Some(_) => "Live preview",
-            None => "Saved file",
-        },
+        status: snapshot_status(snapshot.revision, snapshot.paused),
         links,
         images,
+    }
+}
+
+/// The text of an image's alt, consuming events through its end tag.
+fn image_alt<'a>(events: &mut impl Iterator<Item = (Event<'a>, std::ops::Range<usize>)>) -> String {
+    let mut alt = String::new();
+    for (event, _) in events.by_ref() {
+        match event {
+            Event::End(TagEnd::Image) => break,
+            Event::Text(text) | Event::Code(text) => alt.push_str(&text),
+            _ => {}
+        }
+    }
+    alt.replace(['[', ']'], "")
+}
+
+/// Markdown for an image: a `markdown-image:` link (also returned, for the
+/// loader) when it resolves to a local file, else a text placeholder.
+fn image_replacement(base: &Path, dest_url: &str, alt: &str) -> (String, Option<String>) {
+    let Some(Link::File(path)) = resolve_link(base, dest_url) else {
+        return (format!("Image: {alt}"), None);
+    };
+    match Url::from_file_path(path) {
+        Ok(url) => {
+            let uri = format!("markdown-image:{url}");
+            (format!("![{alt}](<{uri}>)"), Some(uri))
+        }
+        Err(()) => (format!("Image: {alt}"), None),
+    }
+}
+
+/// Preserve source line breaks, including those in converted HTML blocks.
+/// Parser offsets keep code, list/quote prefixes and existing hard breaks intact.
+fn preserve_line_breaks(text: &mut String) {
+    let breaks: Vec<_> = Parser::new_ext(text, Options::all())
+        .into_offset_iter()
+        .filter_map(|(event, range)| matches!(event, Event::SoftBreak).then_some(range))
+        .collect();
+    for range in breaks.into_iter().rev() {
+        text.replace_range(range, "  \n");
+    }
+}
+
+fn count_headings(text: &str) -> usize {
+    text.lines()
+        .filter(|line| {
+            let hashes = line.bytes().take_while(|byte| *byte == b'#').count();
+            (1..=6).contains(&hashes) && line.as_bytes().get(hashes) == Some(&b' ')
+        })
+        .count()
+}
+
+fn snapshot_status(revision: Option<Revision>, paused: bool) -> &'static str {
+    match revision {
+        Some(revision) if paused && revision.modified => "Unsaved preview · live updates paused",
+        Some(_) if paused => "Last live preview · live updates paused",
+        None if paused => "Saved file · live preview paused",
+        Some(revision) if revision.modified => "Unsaved changes",
+        Some(_) => "Live preview",
+        None => "Saved file",
     }
 }
