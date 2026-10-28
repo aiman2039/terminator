@@ -78,8 +78,21 @@ fn failed_exit() -> std::process::ExitStatus {
     }
 }
 
+struct NewInput<'a> {
+    paths: &'a Paths,
+    project: &'a str,
+    session: &'a Session,
+    before: &'a State,
+}
+
 impl AttachFixture {
-    fn new(paths: &Paths, project: &str, session: &Session, before: &State) -> Self {
+    fn new(input: NewInput<'_>) -> Self {
+        let NewInput {
+            paths,
+            project,
+            session,
+            before,
+        } = input;
         let ctx = egui::Context::default();
         let mut app = App::with_context(&ctx, paths.clone());
         app.apply_state(before.clone());
@@ -239,13 +252,26 @@ impl AttachFixture {
     }
 }
 
-async fn attachment_heals_and_backs_off(
-    paths: &Paths,
-    project: &str,
-    old: &Session,
-    before: &State,
-) {
-    let mut fixture = AttachFixture::new(paths, project, old, before);
+struct AttachmentHealsAndBacksOffInput<'a> {
+    paths: &'a Paths,
+    project: &'a str,
+    old: &'a Session,
+    before: &'a State,
+}
+
+async fn attachment_heals_and_backs_off(input: AttachmentHealsAndBacksOffInput<'_>) {
+    let AttachmentHealsAndBacksOffInput {
+        paths,
+        project,
+        old,
+        before,
+    } = input;
+    let mut fixture = AttachFixture::new(NewInput {
+        paths,
+        project,
+        session: old,
+        before,
+    });
     fixture.reattaches_after_expired_delay().await;
     let first_bridge = fixture.failed_bridge_waits_before_respawning();
     let second_bridge = fixture.respawn_ignores_stale_bridge(first_bridge);
@@ -308,12 +334,20 @@ fn new_terminal_attaches(paths: &Paths, project: &str) -> Session {
     new
 }
 
-async fn checkpoint_saves_after_recovery(
-    paths: &Paths,
-    project: &str,
+struct CheckpointSavesAfterRecoveryInput<'a> {
+    paths: &'a Paths,
+    project: &'a str,
     focused: String,
-    after: &State,
-) {
+    after: &'a State,
+}
+
+async fn checkpoint_saves_after_recovery(input: CheckpointSavesAfterRecoveryInput<'_>) {
+    let CheckpointSavesAfterRecoveryInput {
+        paths,
+        project,
+        focused,
+        after,
+    } = input;
     let client = async_client::Client::new(
         paths.clone(),
         async_service::NativePool::new("exit-catalog-test", 1).unwrap(),
@@ -369,7 +403,13 @@ async fn dead_service_recovers_attachment_and_exit_checkpoint() {
     let project = snapshot(&paths).projects[0].id.clone();
     let old = create_terminal(&paths, &project);
     let before = snapshot(&paths);
-    attachment_heals_and_backs_off(&paths, &project, &old, &before).await;
+    attachment_heals_and_backs_off(AttachmentHealsAndBacksOffInput {
+        paths: &paths,
+        project: &project,
+        old: &old,
+        before: &before,
+    })
+    .await;
     let after = kill_and_recover(&paths, &before, &exe).await;
     let historical = after
         .sessions
@@ -385,7 +425,13 @@ async fn dead_service_recovers_attachment_and_exit_checkpoint() {
             .any(|session| session.lifecycle.live())
     );
     let new = new_terminal_attaches(&paths, &project);
-    checkpoint_saves_after_recovery(&paths, &project, old.id, &after).await;
+    checkpoint_saves_after_recovery(CheckpointSavesAfterRecoveryInput {
+        paths: &paths,
+        project: &project,
+        focused: old.id,
+        after: &after,
+    })
+    .await;
     rpc(&paths, Request::Stop { session: new.id }).unwrap();
 }
 

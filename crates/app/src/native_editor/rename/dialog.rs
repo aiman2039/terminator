@@ -17,6 +17,13 @@ struct RenameColors {
     context: Color32,
 }
 
+struct RenameFileDiffInput<'a> {
+    ui: &'a mut egui::Ui,
+    root: &'a Path,
+    file: &'a PreparedFile,
+    colors: RenameColors,
+}
+
 impl App {
     pub(crate) fn show_native_rename_dialog(&mut self, ctx: &egui::Context) {
         self.lsp.poll();
@@ -231,7 +238,12 @@ impl App {
             .max_height(420.0)
             .show(ui, |ui| {
                 for file in &prepared.files {
-                    Self::rename_file_diff(ui, &prepared.root, file, colors);
+                    Self::rename_file_diff(RenameFileDiffInput {
+                        ui,
+                        root: &prepared.root,
+                        file,
+                        colors,
+                    });
                 }
             });
         let apply_button = ui.button("Apply rename");
@@ -240,7 +252,13 @@ impl App {
         apply_button.clicked()
     }
 
-    fn rename_file_diff(ui: &mut egui::Ui, root: &Path, file: &PreparedFile, colors: RenameColors) {
+    fn rename_file_diff(input: RenameFileDiffInput<'_>) {
+        let RenameFileDiffInput {
+            ui,
+            root,
+            file,
+            colors,
+        } = input;
         let relative = file.path.strip_prefix(root).unwrap_or(&file.path);
         egui::CollapsingHeader::new(format!(
             "{} ({} edits)",

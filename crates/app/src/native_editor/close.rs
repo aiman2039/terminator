@@ -62,17 +62,25 @@ impl CloseIssuer {
     }
 }
 
+pub(super) struct CloseIssuerInput<'a> {
+    pub(super) ui: &'a egui::Ui,
+    pub(super) project: Option<&'a str>,
+    pub(super) tab: Option<&'a str>,
+    pub(super) node: Option<egui_dock::NodePath>,
+}
+
 impl App {
     /// Issuing view for a close requested from a file view: the floating
     /// window it renders in, else the docked project/tab/leaf under
     /// render. Captured now (not at drain time) so later focus moves
     /// cannot redirect the close.
-    pub(super) fn close_issuer(
-        ui: &egui::Ui,
-        project: Option<&str>,
-        tab: Option<&str>,
-        node: Option<egui_dock::NodePath>,
-    ) -> Option<CloseIssuer> {
+    pub(super) fn close_issuer(input: CloseIssuerInput<'_>) -> Option<CloseIssuer> {
+        let CloseIssuerInput {
+            ui,
+            project,
+            tab,
+            node,
+        } = input;
         let viewport = ui.ctx().viewport_id();
         if viewport != egui::ViewportId::ROOT {
             Some(CloseIssuer::Floating {
@@ -159,7 +167,12 @@ impl App {
         }
         for window in &mut self.floating {
             if let Some(dock) = window.dock.as_mut() {
-                while Self::remove_copy_from_float_dock(dock, &target, None, false) {}
+                while Self::remove_copy_from_float_dock(RemoveCopyFromFloatDockInput {
+                    dock,
+                    target: &target,
+                    node: None,
+                    strict: false,
+                }) {}
             }
         }
         self.drop_empty_floats();
@@ -218,7 +231,14 @@ impl App {
             .tabs
             .iter_mut()
             .find(|tab_state| tab_state.id == *tab)
-            .is_some_and(|tab_state| Self::remove_copy_from_tab(tab_state, &target, node, strict));
+            .is_some_and(|tab_state| {
+                Self::remove_copy_from_tab(RemoveCopyFromTabInput {
+                    tab_state,
+                    target: &target,
+                    node,
+                    strict,
+                })
+            });
         if !removed && !strict {
             // Issuing tab replaced since the request queued: one copy in
             // the project, focused first.
@@ -244,7 +264,12 @@ impl App {
         if let Some(window) = self.floating.iter_mut().find(|w| w.viewport == viewport)
             && let Some(dock) = window.dock.as_mut()
         {
-            Self::remove_copy_from_float_dock(dock, &target, node, strict);
+            Self::remove_copy_from_float_dock(RemoveCopyFromFloatDockInput {
+                dock,
+                target: &target,
+                node,
+                strict,
+            });
         }
         self.drop_empty_floats();
     }

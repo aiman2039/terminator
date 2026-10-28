@@ -110,12 +110,12 @@ impl ViewPass<'_> {
 
     pub(super) fn gutter_popup(&mut self, ui: &egui::Ui, gutter_hunks: &[gutter::GutterHunk]) {
         let rollback_index = self.popups.gutter.as_ref().map(|popup| popup.index);
-        if gutter::popup_ui(
+        if gutter::popup_ui(gutter::PopupUiInput {
             ui,
-            &mut self.popups.gutter,
-            gutter_hunks,
-            self.frame.change_colors[2],
-        ) && let Some(hunk) = rollback_index.and_then(|index| gutter_hunks.get(index))
+            popup: &mut self.popups.gutter,
+            hunks: gutter_hunks,
+            deleted: self.frame.change_colors[2],
+        }) && let Some(hunk) = rollback_index.and_then(|index| gutter_hunks.get(index))
             && let Some(live) = self.doc.doc.as_mut()
         {
             gutter::rollback(live, &mut self.doc.engine, hunk);

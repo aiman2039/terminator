@@ -309,7 +309,20 @@ fn sample(system: &mut System, request: &Request) -> Sample {
 mod tests {
     use super::*;
 
-    fn node(pid: u32, parent: Option<u32>, cpu: f32, memory: u64) -> ProcNode {
+    struct NodeInput {
+        pid: u32,
+        parent: Option<u32>,
+        cpu: f32,
+        memory: u64,
+    }
+
+    fn node(input: NodeInput) -> ProcNode {
+        let NodeInput {
+            pid,
+            parent,
+            cpu,
+            memory,
+        } = input;
         ProcNode {
             pid,
             parent,
@@ -322,11 +335,36 @@ mod tests {
     #[test]
     fn info_session_tree_sums_descendants_and_rejects_pid_reuse() {
         let nodes = [
-            node(1, None, 1.0, 10),
-            node(10, Some(1), 10.0, 100),
-            node(11, Some(10), 5.0, 50),
-            node(12, Some(11), 1.0, 10),
-            node(20, Some(1), 99.0, 999),
+            node(NodeInput {
+                pid: 1,
+                parent: None,
+                cpu: 1.0,
+                memory: 10,
+            }),
+            node(NodeInput {
+                pid: 10,
+                parent: Some(1),
+                cpu: 10.0,
+                memory: 100,
+            }),
+            node(NodeInput {
+                pid: 11,
+                parent: Some(10),
+                cpu: 5.0,
+                memory: 50,
+            }),
+            node(NodeInput {
+                pid: 12,
+                parent: Some(11),
+                cpu: 1.0,
+                memory: 10,
+            }),
+            node(NodeInput {
+                pid: 20,
+                parent: Some(1),
+                cpu: 99.0,
+                memory: 999,
+            }),
         ];
         let usage = tree_usage(&nodes, 10, 1_000).unwrap();
         assert!((usage.cpu - 16.0).abs() < f32::EPSILON);

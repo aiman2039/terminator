@@ -189,7 +189,12 @@ impl App {
             self.pending_native_close.push((
                 path.to_owned(),
                 force,
-                Self::close_issuer(ui, project, tab, node),
+                Self::close_issuer(CloseIssuerInput {
+                    ui,
+                    project,
+                    tab,
+                    node,
+                }),
             ));
             return;
         }

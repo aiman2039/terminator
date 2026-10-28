@@ -46,7 +46,12 @@ impl ViewPass<'_> {
         let ViewSite {
             project, tab, node, ..
         } = self.site;
-        self.requests.wq_issuer = App::close_issuer(ui, project, tab, node);
+        self.requests.wq_issuer = App::close_issuer(CloseIssuerInput {
+            ui,
+            project,
+            tab,
+            node,
+        });
     }
 
     fn request_hover(&mut self) {

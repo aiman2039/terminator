@@ -2,6 +2,20 @@
 //! windows.
 use super::*;
 
+pub(super) struct RemoveCopyFromTabInput<'a> {
+    pub(super) tab_state: &'a mut WorkspaceTab,
+    pub(super) target: &'a Tab,
+    pub(super) node: Option<egui_dock::NodePath>,
+    pub(super) strict: bool,
+}
+
+pub(super) struct RemoveCopyFromFloatDockInput<'a> {
+    pub(super) dock: &'a mut egui_dock::DockState<Tab>,
+    pub(super) target: &'a Tab,
+    pub(super) node: Option<egui_dock::NodePath>,
+    pub(super) strict: bool,
+}
+
 impl App {
     /// Remove one `target` copy from one top-level tab: the copy in
     /// `node` (the issuing pane recorded when the command started), then
@@ -9,12 +23,13 @@ impl App {
     /// `:wq` naming its pane), only the recorded pane goes: a stale node
     /// (issuing view already closed) is a no-op, never another copy.
     /// Fixes `primary` afterwards. Returns whether a copy was removed.
-    pub(super) fn remove_copy_from_tab(
-        tab_state: &mut WorkspaceTab,
-        target: &Tab,
-        node: Option<egui_dock::NodePath>,
-        strict: bool,
-    ) -> bool {
+    pub(super) fn remove_copy_from_tab(input: RemoveCopyFromTabInput<'_>) -> bool {
+        let RemoveCopyFromTabInput {
+            tab_state,
+            target,
+            node,
+            strict,
+        } = input;
         let same_leaf = |at: &egui_dock::TabPath, leaf: egui_dock::NodePath| {
             at.surface == leaf.surface && at.node == leaf.node
         };
@@ -65,7 +80,12 @@ impl App {
         };
         let mut removed = false;
         for tab in &mut workspace.tabs {
-            if Self::remove_copy_from_tab(tab, &target, None, false) {
+            if Self::remove_copy_from_tab(RemoveCopyFromTabInput {
+                tab_state: tab,
+                target: &target,
+                node: None,
+                strict: false,
+            }) {
                 removed = true;
                 break;
             }
@@ -82,12 +102,13 @@ impl App {
     /// mirrors [`Self::remove_copy_from_tab`]: a delayed `:wq` whose
     /// issuing view is gone closes nothing. Returns whether a copy was
     /// removed.
-    pub(super) fn remove_copy_from_float_dock(
-        dock: &mut egui_dock::DockState<Tab>,
-        target: &Tab,
-        node: Option<egui_dock::NodePath>,
-        strict: bool,
-    ) -> bool {
+    pub(super) fn remove_copy_from_float_dock(input: RemoveCopyFromFloatDockInput<'_>) -> bool {
+        let RemoveCopyFromFloatDockInput {
+            dock,
+            target,
+            node,
+            strict,
+        } = input;
         let same_leaf = |at: &egui_dock::TabPath, leaf: egui_dock::NodePath| {
             at.surface == leaf.surface && at.node == leaf.node
         };

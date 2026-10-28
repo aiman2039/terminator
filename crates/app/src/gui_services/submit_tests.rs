@@ -119,12 +119,29 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn submit_fixture(
-        service: &Services,
-        resource: &str,
+    struct SubmitFixtureInput<
+        'a,
+        F: std::future::Future<Output = anyhow::Result<Vec<Update>>> + Send + 'static,
+    > {
+        service: &'a Services,
+        resource: &'a str,
         token: CancellationToken,
-        work: impl std::future::Future<Output = anyhow::Result<Vec<Update>>> + Send + 'static,
+        work: F,
+    }
+
+    #[cfg(unix)]
+    fn submit_fixture(
+        input: SubmitFixtureInput<
+            '_,
+            impl std::future::Future<Output = anyhow::Result<Vec<Update>>> + Send + 'static,
+        >,
     ) {
+        let SubmitFixtureInput {
+            service,
+            resource,
+            token,
+            work,
+        } = input;
         service
             .handle()
             .submit(
@@ -138,17 +155,22 @@ mod tests {
     #[cfg(unix)]
     fn submit_stalled_git(service: &Services, token: CancellationToken) {
         let processes = service.processes().clone();
-        submit_fixture(service, "git", token, async move {
-            let mut command = std::process::Command::new("sh");
-            command.args(["-c", "sleep 10"]);
-            processes
-                .run(
-                    command,
-                    CommandOptions::default(),
-                    Some("stalled-repo".into()),
-                )
-                .await?;
-            Ok(Vec::new())
+        submit_fixture(SubmitFixtureInput {
+            service,
+            resource: "git",
+            token,
+            work: async move {
+                let mut command = std::process::Command::new("sh");
+                command.args(["-c", "sleep 10"]);
+                processes
+                    .run(
+                        command,
+                        CommandOptions::default(),
+                        Some("stalled-repo".into()),
+                    )
+                    .await?;
+                Ok(Vec::new())
+            },
         });
     }
 
@@ -213,30 +235,41 @@ mod tests {
         let (slow_server, nvim_ready) = spawn_stalled_nvim(slow, stop.clone());
         let good_server = spawn_good_nvim(good);
         let radio = CancellationToken::new();
-        submit_fixture(&service, "radio", radio.clone(), async move {
-            player::fixture_download(url).await?;
-            Ok(Vec::new())
+        submit_fixture(SubmitFixtureInput {
+            service: &service,
+            resource: "radio",
+            token: radio.clone(),
+            work: async move {
+                player::fixture_download(url).await?;
+                Ok(Vec::new())
+            },
         });
         let nvim = CancellationToken::new();
         let cpu = service.cpu().clone();
-        submit_fixture(&service, "nvim", nvim.clone(), async move {
-            let mut connection =
-                nvim_rpc::AsyncConnection::connect(&slow_path, Duration::from_secs(3), cpu).await?;
-            connection
-                .call("nvim_get_mode", serde_json::json!([]), 4096)
-                .await?;
-            Ok(Vec::new())
+        submit_fixture(SubmitFixtureInput {
+            service: &service,
+            resource: "nvim",
+            token: nvim.clone(),
+            work: async move {
+                let mut connection =
+                    nvim_rpc::AsyncConnection::connect(&slow_path, Duration::from_secs(3), cpu)
+                        .await?;
+                connection
+                    .call("nvim_get_mode", serde_json::json!([]), 4096)
+                    .await?;
+                Ok(Vec::new())
+            },
         });
         let git = CancellationToken::new();
         submit_stalled_git(&service, git.clone());
         http_ready.await.unwrap();
         nvim_ready.await.unwrap();
         let cpu = service.cpu().clone();
-        submit_fixture(
-            &service,
-            "other-editor",
-            CancellationToken::new(),
-            async move {
+        submit_fixture(SubmitFixtureInput {
+            service: &service,
+            resource: "other-editor",
+            token: CancellationToken::new(),
+            work: async move {
                 let mut connection =
                     nvim_rpc::AsyncConnection::connect(&good_path, Duration::from_millis(400), cpu)
                         .await?;
@@ -249,7 +282,7 @@ mod tests {
                 );
                 Ok(vec![Update::Info("other editor progressed".into())])
             },
-        );
+        });
         wait_for_other_editor(&mut owner).await;
         radio.cancel();
         nvim.cancel();

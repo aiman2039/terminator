@@ -107,8 +107,21 @@ fn nvim(paths: &Paths, session: &Session, expression: &str) -> String {
     String::from_utf8_lossy(&output.stdout).trim().into()
 }
 
+struct WaitUntilInput<'a, F: FnMut() -> bool> {
+    limit: Duration,
+    step: Duration,
+    message: &'a str,
+    done: F,
+}
+
 /// Polls `done` every `step` until it holds; fails with `message` after `limit`.
-fn wait_until(limit: Duration, step: Duration, message: &str, mut done: impl FnMut() -> bool) {
+fn wait_until(input: WaitUntilInput<'_, impl FnMut() -> bool>) {
+    let WaitUntilInput {
+        limit,
+        step,
+        message,
+        mut done,
+    } = input;
     let deadline = Instant::now().checked_add(limit).unwrap();
     while !done() {
         assert!(Instant::now() < deadline, "{message}");
@@ -202,12 +215,12 @@ impl Fixture {
             },
         )
         .unwrap();
-        wait_until(
-            Duration::from_secs(5),
-            Duration::from_millis(50),
-            "editor did not start",
-            || endpoint.editor_socket(&editor.id).exists(),
-        );
+        wait_until(WaitUntilInput {
+            limit: Duration::from_secs(5),
+            step: Duration::from_millis(50),
+            message: "editor did not start",
+            done: || endpoint.editor_socket(&editor.id).exists(),
+        });
         nvim(paths, &editor, "setline(1, 'UNSAVED-GENERATION-A')");
         let job = self.start_background_job(&shell);
         GenerationA {
@@ -231,12 +244,12 @@ impl Fixture {
             )
             .as_bytes(),
         );
-        wait_until(
-            Duration::from_secs(5),
-            Duration::from_millis(50),
-            "background job did not start",
-            || job_file.exists(),
-        );
+        wait_until(WaitUntilInput {
+            limit: Duration::from_secs(5),
+            step: Duration::from_millis(50),
+            message: "background job did not start",
+            done: || job_file.exists(),
+        });
         fs::read_to_string(&job_file)
             .unwrap()
             .trim()
@@ -414,12 +427,12 @@ fn assert_only_exited_owner_is_reconciled(paths: &Paths, b: &Session) {
     assert!(session_in(&unavailable, &b.id).lifecycle.live());
     assert!(signals::signal_process(b_pid, signals::ProcSignal::Cont).is_ok());
     assert!(signals::signal_process(b_pid, signals::ProcSignal::Term).is_ok());
-    wait_until(
-        Duration::from_secs(8),
-        Duration::from_millis(100),
-        "Only the crashed owner should be reconciled",
-        || !session_in(&state(paths), &b.id).lifecycle.live(),
-    );
+    wait_until(WaitUntilInput {
+        limit: Duration::from_secs(8),
+        step: Duration::from_millis(100),
+        message: "Only the crashed owner should be reconciled",
+        done: || !session_in(&state(paths), &b.id).lifecycle.live(),
+    });
     assert_eq!(
         session_in(&state(paths), &b.id).lifecycle,
         Lifecycle::Interrupted
@@ -434,11 +447,11 @@ fn assert_draining_owners_retire(paths: &Paths, a: &Session, b: &Session) {
         },
     )
     .unwrap();
-    wait_until(
-        Duration::from_secs(8),
-        Duration::from_millis(100),
-        "draining owners did not retire",
-        || {
+    wait_until(WaitUntilInput {
+        limit: Duration::from_secs(8),
+        step: Duration::from_millis(100),
+        message: "draining owners did not retire",
+        done: || {
             Catalog::open(paths)
                 .unwrap()
                 .generations()
@@ -447,7 +460,7 @@ fn assert_draining_owners_retire(paths: &Paths, a: &Session, b: &Session) {
                 .filter(|g| g.id == a.generation || g.id == b.generation)
                 .all(|g| g.status == Status::Retired)
         },
-    );
+    });
     assert!(
         rpc(
             paths,
