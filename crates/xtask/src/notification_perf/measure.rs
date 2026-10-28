@@ -71,8 +71,18 @@ pub(super) fn measure(input: MeasureInput<'_>) -> Result<Run> {
             .or_else(|| state.get("daemon_build").and_then(Value::as_str))
             .map(str::to_owned)
     });
-    let mut workload = Workload::new(&h, &session, case, options.burst);
-    let mut samples = run_workload(&mut workload, options, daemon_pid, &io)?;
+    let mut workload = Workload::new(NewInput {
+        h: &h,
+        session: &session,
+        case,
+        burst: options.burst,
+    });
+    let mut samples = run_workload(RunWorkloadInput {
+        workload: &mut workload,
+        options,
+        daemon_pid,
+        io: &io,
+    })?;
     let cpu_ms = cpu_delta(samples.cpu_start, sample_cpu_ms(daemon_pid));
     samples.ipc.sort_by(f64::total_cmp);
     let (daemon_binary, daemon_binary_len, daemon_binary_mtime) = binary_identity(binary);
@@ -94,13 +104,21 @@ pub(super) fn measure(input: MeasureInput<'_>) -> Result<Run> {
     })
 }
 
-/// Drive the workload for warmup plus measurement, sampling the daemon every 100 ms.
-fn run_workload<T>(
-    workload: &mut Workload<'_>,
-    options: &Options,
+struct RunWorkloadInput<'a, 'w, T> {
+    workload: &'a mut Workload<'w>,
+    options: &'a Options,
     daemon_pid: u32,
-    io: &Option<T>,
-) -> Result<Samples> {
+    io: &'a Option<T>,
+}
+
+/// Drive the workload for warmup plus measurement, sampling the daemon every 100 ms.
+fn run_workload<T>(input: RunWorkloadInput<'_, '_, T>) -> Result<Samples> {
+    let RunWorkloadInput {
+        workload,
+        options,
+        daemon_pid,
+        io,
+    } = input;
     let h = workload.h;
     let total = Duration::from_secs(options.warmup.saturating_add(options.seconds));
     let started = Instant::now();
@@ -136,8 +154,21 @@ fn cpu_delta(cpu_start: Option<f64>, cpu_end: Option<f64>) -> Option<f64> {
     }
 }
 
+struct NewInput<'a> {
+    h: &'a Harness,
+    session: &'a str,
+    case: Case,
+    burst: usize,
+}
+
 impl<'a> Workload<'a> {
-    fn new(h: &'a Harness, session: &'a str, case: Case, burst: usize) -> Self {
+    fn new(input: NewInput<'a>) -> Self {
+        let NewInput {
+            h,
+            session,
+            case,
+            burst,
+        } = input;
         Self {
             h,
             session,
