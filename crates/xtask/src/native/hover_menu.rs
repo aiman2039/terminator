@@ -217,28 +217,8 @@ impl Fixture {
         Ok(())
     }
     fn copy_hovered_path(&self, opts: &Options) -> Result<()> {
+        let other = self.trap_focused_shell()?;
         let h = &self.h;
-        // The hovered terminal is deliberately rendered after the focused one.
-        // Copy must be consumed before that focused terminal can receive Ctrl+C.
-        let other = h.shell(&self.project)?;
-        h.layout(&self.project, &[other.clone(), self.shell.clone()])?;
-        // dash does not dispatch an INT trap at its interactive prompt. Keep a
-        // builtin read active so an unconsumed Ctrl+C runs the trap on Linux too.
-        h.write(
-        &mut h.attach(&other)?,
-        "trap 'printf \"COPY_INTERRUPT_REACHED\\n\"' INT; printf '\\033[H\\033[2J\\033[3J'; printf 'HOVER_INPUT_%s\\n' READY; while :; do read -r line; done\n",
-    )?;
-        h.write(
-            &mut h.attach(&self.shell)?,
-            "printf '\\033[2J\\033[Hfirst-file.rs\\nsecond-file.rs\\n'\n",
-        )?;
-        h.wait(
-            |_| {
-                h.history(id(&other))
-                    .is_ok_and(|text| text.contains("HOVER_INPUT_READY"))
-            },
-            5,
-        )?;
         let target = format!("terminal:{}", id(&self.shell));
         let logs = capture(
             CaptureInput {
@@ -262,6 +242,37 @@ impl Fixture {
             },
             |_| Ok(()),
         )?;
+        self.check_hover_copy(&logs, other)
+    }
+    /// Lay out a second, focused shell that reports any Ctrl+C it receives;
+    /// returns it.
+    fn trap_focused_shell(&self) -> Result<Value> {
+        let h = &self.h;
+        // The hovered terminal is deliberately rendered after the focused one.
+        // Copy must be consumed before that focused terminal can receive Ctrl+C.
+        let other = h.shell(&self.project)?;
+        h.layout(&self.project, &[other.clone(), self.shell.clone()])?;
+        // dash does not dispatch an INT trap at its interactive prompt. Keep a
+        // builtin read active so an unconsumed Ctrl+C runs the trap on Linux too.
+        h.write(
+        &mut h.attach(&other)?,
+        "trap 'printf \"COPY_INTERRUPT_REACHED\\n\"' INT; printf '\\033[H\\033[2J\\033[3J'; printf 'HOVER_INPUT_%s\\n' READY; while :; do read -r line; done\n",
+    )?;
+        h.write(
+            &mut h.attach(&self.shell)?,
+            "printf '\\033[2J\\033[Hfirst-file.rs\\nsecond-file.rs\\n'\n",
+        )?;
+        h.wait(
+            |_| {
+                h.history(id(&other))
+                    .is_ok_and(|text| text.contains("HOVER_INPUT_READY"))
+            },
+            5,
+        )?;
+        Ok(other)
+    }
+    fn check_hover_copy(&self, logs: &str, other: Value) -> Result<()> {
+        let h = &self.h;
         let copied = format!(
             "Fixture copied text: {:?}",
             self.first.display().to_string()
