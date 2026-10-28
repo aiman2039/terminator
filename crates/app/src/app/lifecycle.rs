@@ -32,6 +32,7 @@ impl App {
         }
         app
     }
+    // sarah-allow(large_function): one struct literal naming every App field's initial value, a pure data table
     pub(crate) fn with_context(ctx: &egui::Context, paths: Paths) -> Self {
         appearance::install(ctx);
         let loaded = UiPreferences::load(&paths.data);
