@@ -3,6 +3,7 @@
 //! pending-line handoff behave exactly like an Explorer open.
 
 use crate::app::OpenFileInput;
+#[cfg(feature = "test-support")]
 use crate::diagnostics;
 use crate::{App, appearance};
 use eframe::egui;

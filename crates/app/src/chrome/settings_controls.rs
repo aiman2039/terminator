@@ -59,7 +59,11 @@ pub fn segmented<T: Copy + PartialEq>(
 pub fn path_field(
     ui: &mut egui::Ui,
     value: &mut String,
-    #[cfg_attr(not(feature = "test-support"), allow(unused_variables))] browse_id: &str,
+    #[cfg_attr(
+        not(feature = "test-support"),
+        expect(unused_variables, reason = "only fixtures address the browse button")
+    )]
+    browse_id: &str,
     browse: &mut bool,
 ) -> egui::Response {
     ui.horizontal(|ui| {
