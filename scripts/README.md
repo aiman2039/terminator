@@ -129,7 +129,9 @@ Run `sh scripts/check.sh` for the async-boundary check, formatting, build,
 Clippy with warnings denied, `cargo audit`, and `cargo deny` (bans, licenses,
 sources). Clippy includes compiler checks, so the full sequence skips the
 separate `lint` pass. Run `sh scripts/check.sh test` for workspace tests. Individual checks
-accept `fmt`, `lint`, `build`, `clippy`, `audit`, or `deny`. `windows-check`
+accept `fmt`, `lint`, `build`, `clippy`, `sarah`, `audit`, or `deny`. `sarah`
+enforces the file, function and folder limits in `sarah.toml` (install with
+`cargo install --git https://github.com/aiman2039/sarah --locked`); CI runs it on Linux. `windows-check`
 and `windows-clippy` cross-check `x86_64-pc-windows-msvc` from macOS/Linux via
 zig 0.14.x (`TERMINATOR_ZIG` when not on PATH; check-only, linking stays on
 windows-2025 CI). Checks use the
