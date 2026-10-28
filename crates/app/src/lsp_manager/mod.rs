@@ -31,6 +31,8 @@ pub(crate) struct RequestHierarchyChildrenInput<'a> {
     pub node: usize,
 }
 
+mod answers;
+use answers::{Answer, RenameAnswer};
 mod docs;
 mod edits;
 mod navigation;
