@@ -215,7 +215,14 @@ impl App {
         };
         let outcome = if context.perforce.is_some() {
             let open_shortcut = self.shortcut_label(Action::OpenFile);
-            crate::sidebar_ui::perforce_panel::panel(ui, &context, &self.theme, &open_shortcut)
+            crate::sidebar_ui::perforce_panel::panel(
+                ui,
+                crate::sidebar_ui::perforce_panel::PerforcePanelInput {
+                    context: &context,
+                    theme: &self.theme,
+                    open_shortcut: &open_shortcut,
+                },
+            )
         } else {
             self.git_panel_for(ui, &context)
         };
