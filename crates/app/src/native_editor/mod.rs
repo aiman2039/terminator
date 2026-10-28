@@ -8,6 +8,7 @@
 mod actions;
 mod blame;
 mod close;
+mod close_copies;
 mod complete;
 mod doc;
 mod file_io;
