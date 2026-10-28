@@ -8,12 +8,12 @@ fn ide_status_badge_renders_without_sidebars() {
     app.preferences.left_visible = false;
     app.preferences.visible = false;
     app.state.sessions = vec![session_fixture("live-shell", SessionKind::Shell)];
-    app.state.notifications = vec![notice_fixture(
-        "wait",
-        "live-shell",
-        AgentState::WaitingPermission,
-        now(),
-    )];
+    app.state.notifications = vec![notice_fixture(NoticeFixtureInput {
+        id: "wait",
+        session: "live-shell",
+        state: AgentState::WaitingPermission,
+        created: now(),
+    })];
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(

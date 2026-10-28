@@ -15,7 +15,20 @@ fn vnc_tab(id: &str, session: &str, label: &str) -> Tab {
     }
 }
 
-fn float_window(name: &str, project: &str, home: &str, tabs: Vec<Tab>) -> FloatingWindow {
+struct FloatWindowInput<'a> {
+    name: &'a str,
+    project: &'a str,
+    home: &'a str,
+    tabs: Vec<Tab>,
+}
+
+fn float_window(input: FloatWindowInput<'_>) -> FloatingWindow {
+    let FloatWindowInput {
+        name,
+        project,
+        home,
+        tabs,
+    } = input;
     FloatingWindow {
         viewport: egui::ViewportId::from_hash_of(name),
         dock: Some(DockState::new(tabs)),
@@ -73,8 +86,12 @@ fn pruning_keeps_view_state_for_open_tabs_and_drafts_only() {
 
     // A float counts as an open tab on its own.
     let float = vnc_tab("t3", "s1", "dev");
-    app.floating
-        .push(float_window("float-vnc", "a", "home", vec![float.clone()]));
+    app.floating.push(float_window(FloatWindowInput {
+        name: "float-vnc",
+        project: "a",
+        home: "home",
+        tabs: vec![float.clone()],
+    }));
     app.layouts.insert(
         "a".into(),
         Workspace::from_layout(DockState::new(vec![vnc_tab("t2", "other", "")])),

@@ -126,12 +126,14 @@ fn sidebar_notice_cache_updates_on_read_dismiss_and_snooze_expiry() {
     app.state
         .sessions
         .push(session_fixture("shell", SessionKind::Shell));
-    app.state.notifications.push(notice_fixture(
-        "notice",
-        "shell",
-        AgentState::WaitingInput,
-        1,
-    ));
+    app.state
+        .notifications
+        .push(notice_fixture(NoticeFixtureInput {
+            id: "notice",
+            session: "shell",
+            state: AgentState::WaitingInput,
+            created: 1,
+        }));
     app.reconcile_presentations();
     assert_eq!(app.attention_counts(), (1, 1));
     let unread = app.cached_unread_groups();
@@ -204,7 +206,12 @@ fn opening_or_creating_a_project_ranks_it_by_latest_activity() {
             app.selection_generation,
         ))
         .unwrap();
-    drain_until_project_activity(&mut app, &ctx, "a", 2);
+    drain_until_project_activity(DrainUntilProjectActivityInput {
+        app: &mut app,
+        ctx: &ctx,
+        project: "a",
+        at_least: 2,
+    });
     assert_eq!(visible_ids(&app), ["a", "b"]);
     assert!(app.preferences.project_activity["a"] >= 2);
     app.preferences.project_activity.insert("a".into(), 1);
@@ -215,7 +222,12 @@ fn opening_or_creating_a_project_ranks_it_by_latest_activity() {
             false,
         ))
         .unwrap();
-    drain_until_project_activity(&mut app, &ctx, "a", 2);
+    drain_until_project_activity(DrainUntilProjectActivityInput {
+        app: &mut app,
+        ctx: &ctx,
+        project: "a",
+        at_least: 2,
+    });
     assert_eq!(visible_ids(&app), ["a", "b"]);
     assert!(app.preferences.project_activity["a"] >= 2);
 }

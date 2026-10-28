@@ -644,7 +644,20 @@ fn keyboard_tree() -> (App, egui::Context, tempfile::TempDir) {
     (app, ctx, dir)
 }
 
-fn draw_tree(app: &mut App, ctx: &egui::Context, root: &std::path::Path, events: Vec<egui::Event>) {
+struct DrawTreeInput<'a> {
+    app: &'a mut App,
+    ctx: &'a egui::Context,
+    root: &'a std::path::Path,
+    events: Vec<egui::Event>,
+}
+
+fn draw_tree(input: DrawTreeInput<'_>) {
+    let DrawTreeInput {
+        app,
+        ctx,
+        root,
+        events,
+    } = input;
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -669,21 +682,34 @@ fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
     }
 }
 
-fn click_row(app: &mut App, ctx: &egui::Context, root: &std::path::Path, y: f32) {
+struct ClickRowInput<'a> {
+    app: &'a mut App,
+    ctx: &'a egui::Context,
+    root: &'a std::path::Path,
+    y: f32,
+}
+
+fn click_row(input: ClickRowInput<'_>) {
+    let ClickRowInput { app, ctx, root, y } = input;
     let pos = egui::pos2(60.0, y);
-    draw_tree(app, ctx, root, vec![egui::Event::PointerMoved(pos)]);
+    draw_tree(DrawTreeInput {
+        app,
+        ctx,
+        root,
+        events: vec![egui::Event::PointerMoved(pos)],
+    });
     for pressed in [true, false] {
-        draw_tree(
+        draw_tree(DrawTreeInput {
             app,
             ctx,
             root,
-            vec![egui::Event::PointerButton {
+            events: vec![egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed,
                 modifiers: egui::Modifiers::default(),
             }],
-        );
+        });
     }
 }
 
@@ -691,13 +717,30 @@ fn click_row(app: &mut App, ctx: &egui::Context, root: &std::path::Path, y: f32)
 fn explorer_keyboard_walks_selects_and_acts_on_the_tree() {
     let (mut app, ctx, dir) = keyboard_tree();
     let root = dir.path().to_path_buf();
-    draw_tree(&mut app, &ctx, &root, vec![]);
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![],
+    });
     // Clicking the folder selects it, expands it, and focuses the tree.
-    click_row(&mut app, &ctx, &root, 12.0);
+    click_row(ClickRowInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        y: 12.0,
+    });
     assert_eq!(app.explorer_selection, [root.join("src")]);
     assert!(app.expanded_dirs.contains(&root.join("src")));
     let none = egui::Modifiers::NONE;
-    let press = |app: &mut App, event| draw_tree(app, &ctx, &root, vec![event]);
+    let press = |app: &mut App, event| {
+        draw_tree(DrawTreeInput {
+            app,
+            ctx: &ctx,
+            root: &root,
+            events: vec![event],
+        })
+    };
     press(&mut app, key(egui::Key::ArrowDown, none));
     assert_eq!(app.explorer_selection, [root.join("src/main.rs")]);
     // Left on a file selects its folder; Left again collapses it.
@@ -727,16 +770,31 @@ fn explorer_keyboard_walks_selects_and_acts_on_the_tree() {
 fn explorer_type_to_search_selects_the_next_match() {
     let (mut app, ctx, dir) = keyboard_tree();
     let root = dir.path().to_path_buf();
-    draw_tree(&mut app, &ctx, &root, vec![]);
-    click_row(&mut app, &ctx, &root, 12.0);
-    draw_tree(&mut app, &ctx, &root, vec![egui::Event::Text("b".into())]);
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![],
+    });
+    click_row(ClickRowInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        y: 12.0,
+    });
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![egui::Event::Text("b".into())],
+    });
     assert_eq!(app.explorer_selection, [root.join("b.rs")]);
-    draw_tree(
-        &mut app,
-        &ctx,
-        &root,
-        vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
-    );
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+    });
     assert!(app.explorer_speed.is_empty());
 }
 
@@ -792,7 +850,12 @@ fn rename_and_new_items_edit_inline_in_the_tree() {
             .unwrap_or_else(|| panic!("missing {name}"))
     };
     let center_y = |r: [f32; 4]| r[1] + r[3] / 2.0;
-    draw_tree(&mut app, &ctx, &root, vec![]);
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![],
+    });
     let a_row = rect(&app, "explorer-file:a.rs");
     let b_row = rect(&app, "explorer-file:b.rs");
     // Rename edits the row itself, with the stem selected so typing
@@ -801,21 +864,36 @@ fn rename_and_new_items_edit_inline_in_the_tree() {
         from: root.join("a.rs"),
         name: "a.rs".into(),
     });
-    draw_tree(&mut app, &ctx, &root, vec![]);
-    draw_tree(&mut app, &ctx, &root, vec![]);
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![],
+    });
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![],
+    });
     let field = center_y(rect(&app, "explorer-name-field"));
     assert!(
         (a_row[1]..a_row[1] + a_row[3]).contains(&field),
         "{field} in {a_row:?}"
     );
     assert_eq!(rect(&app, "explorer-file:b.rs"), b_row);
-    draw_tree(&mut app, &ctx, &root, vec![egui::Event::Text("c".into())]);
-    draw_tree(
-        &mut app,
-        &ctx,
-        &root,
-        vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
-    );
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![egui::Event::Text("c".into())],
+    });
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![key(egui::Key::Enter, egui::Modifiers::NONE)],
+    });
     assert!(app.name_prompt.is_none());
     assert!(received.try_iter().any(|job| matches!(
         job,
@@ -829,18 +907,28 @@ fn rename_and_new_items_edit_inline_in_the_tree() {
         name: String::new(),
     });
     assert!(app.expanded_dirs.contains(&root.join("src")));
-    draw_tree(&mut app, &ctx, &root, vec![]);
-    draw_tree(&mut app, &ctx, &root, vec![]);
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![],
+    });
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![],
+    });
     let field = center_y(rect(&app, "explorer-name-field"));
     let main = rect(&app, "explorer-file:main.rs");
     assert!(field < main[1], "new row sits above the folder's files");
     assert!(field > a_row[1], "and below the folder row");
-    draw_tree(
-        &mut app,
-        &ctx,
-        &root,
-        vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
-    );
+    draw_tree(DrawTreeInput {
+        app: &mut app,
+        ctx: &ctx,
+        root: &root,
+        events: vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+    });
     assert!(app.name_prompt.is_none());
     assert!(received.try_iter().next().is_none());
 }

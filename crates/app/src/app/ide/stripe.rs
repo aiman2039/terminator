@@ -26,6 +26,14 @@ const STRIPE_TOOLS: [(StripeTool, &str, &str); 10] = [
     (StripeTool::Tool(SidebarTool::Hosts), "Globe", "Hosts"),
 ];
 
+#[cfg(feature = "test-support")]
+struct RecordStripeToolInput<'a> {
+    ui: &'a egui::Ui,
+    right: bool,
+    label: &'a str,
+    rect: egui::Rect,
+}
+
 impl App {
     /// Both stripes carry every tool; clicking renders it in that side's
     /// sidebar. Registered before its sidebar so it stays on the window edge.
@@ -114,7 +122,12 @@ impl App {
             response
         };
         #[cfg(feature = "test-support")]
-        Self::record_stripe_tool(ui, right, label, response.rect);
+        Self::record_stripe_tool(RecordStripeToolInput {
+            ui,
+            right,
+            label,
+            rect: response.rect,
+        });
         if response.clicked() {
             self.stripe_activate(right, tool);
         }
@@ -136,7 +149,13 @@ impl App {
     }
 
     #[cfg(feature = "test-support")]
-    fn record_stripe_tool(ui: &egui::Ui, right: bool, label: &str, rect: egui::Rect) {
+    fn record_stripe_tool(input: RecordStripeToolInput<'_>) {
+        let RecordStripeToolInput {
+            ui,
+            right,
+            label,
+            rect,
+        } = input;
         diagnostics::record(
             ui.ctx(),
             &format!("stripe-{}-{label}", if right { "right" } else { "left" }),

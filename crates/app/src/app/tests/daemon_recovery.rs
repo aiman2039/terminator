@@ -1,11 +1,19 @@
 use super::*;
 
-fn paint_attachment(
-    app: &mut App,
-    ctx: &egui::Context,
-    session: &Session,
+struct PaintAttachmentInput<'a> {
+    app: &'a mut App,
+    ctx: &'a egui::Context,
+    session: &'a Session,
     events: Vec<egui::Event>,
-) -> Option<egui::Pos2> {
+}
+
+fn paint_attachment(input: PaintAttachmentInput<'_>) -> Option<egui::Pos2> {
+    let PaintAttachmentInput {
+        app,
+        ctx,
+        session,
+        events,
+    } = input;
     let mut output = ctx.run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -427,8 +435,18 @@ fn unavailable_owner_stays_saved_but_disappears_from_running_sidebar() {
     stranded.generation = "old".into();
     app.state.generation = "active".into();
     app.state.sessions = vec![reachable, stranded];
-    let active = generation_health("active", directory.path(), 1, generations::Status::Active);
-    let mut old = generation_health("old", directory.path(), 1, generations::Status::Draining);
+    let active = generation_health(GenerationHealthInput {
+        id: "active",
+        directory: directory.path(),
+        revision: 1,
+        status: generations::Status::Active,
+    });
+    let mut old = generation_health(GenerationHealthInput {
+        id: "old",
+        directory: directory.path(),
+        revision: 1,
+        status: generations::Status::Draining,
+    });
     old.error = Some("Cannot read authentication file".into());
     app.state.generations = vec![active, old];
     app.insert("a", Tab::Terminal("stranded".into()), None);
@@ -599,25 +617,31 @@ fn retry_now_bypasses_the_delay_without_creating_a_session() {
     app.attach_started
         .insert(session.id.clone(), std::time::Instant::now());
     let backend = app.next_backend;
-    let pos = paint_attachment(&mut app, &ctx, &session, vec![]).expect("Retry button");
-    paint_attachment(
-        &mut app,
-        &ctx,
-        &session,
-        vec![egui::Event::PointerMoved(pos)],
-    );
+    let pos = paint_attachment(PaintAttachmentInput {
+        app: &mut app,
+        ctx: &ctx,
+        session: &session,
+        events: vec![],
+    })
+    .expect("Retry button");
+    paint_attachment(PaintAttachmentInput {
+        app: &mut app,
+        ctx: &ctx,
+        session: &session,
+        events: vec![egui::Event::PointerMoved(pos)],
+    });
     for pressed in [true, false] {
-        paint_attachment(
-            &mut app,
-            &ctx,
-            &session,
-            vec![egui::Event::PointerButton {
+        paint_attachment(PaintAttachmentInput {
+            app: &mut app,
+            ctx: &ctx,
+            session: &session,
+            events: vec![egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed,
                 modifiers: egui::Modifiers::default(),
             }],
-        );
+        });
     }
     assert!(!app.attach_budget.contains_key(&session.id));
     assert!(!app.attach_error.contains_key(&session.id));
@@ -642,7 +666,12 @@ fn terminal_retries_after_cooldown_without_a_click_or_new_session() {
     app.attach_budget.insert(session.id.clone(), retry);
     let before = app.next_backend;
     let paint = |app: &mut App| {
-        paint_attachment(app, &ctx, &session, vec![]);
+        paint_attachment(PaintAttachmentInput {
+            app,
+            ctx: &ctx,
+            session: &session,
+            events: vec![],
+        });
     };
     paint(&mut app);
     assert_eq!(app.next_backend, before, "No spawn during cooldown");
@@ -721,13 +750,18 @@ fn stale_historical_owner_does_not_block_shell_exit_cleanup() {
     app.state.revision = 10;
     app.state.client_observation = 5;
     app.state.generations = vec![
-        generation_health("active", directory.path(), 10, generations::Status::Active),
-        generation_health(
-            "retired",
-            directory.path(),
-            50,
-            generations::Status::Retired,
-        ),
+        generation_health(GenerationHealthInput {
+            id: "active",
+            directory: directory.path(),
+            revision: 10,
+            status: generations::Status::Active,
+        }),
+        generation_health(GenerationHealthInput {
+            id: "retired",
+            directory: directory.path(),
+            revision: 50,
+            status: generations::Status::Retired,
+        }),
     ];
     let mut ended = app.state.clone();
     ended.revision = 11;
@@ -831,7 +865,12 @@ fn unavailable_owner_keeps_last_records_but_updates_health() {
         .unwrap()
         .clone();
     let backend = app.next_backend;
-    paint_attachment(&mut app, &ctx, &session, vec![]);
+    paint_attachment(PaintAttachmentInput {
+        app: &mut app,
+        ctx: &ctx,
+        session: &session,
+        events: vec![],
+    });
     assert_eq!(
         app.next_backend, backend,
         "An unavailable owner must not receive attachment attempts"
