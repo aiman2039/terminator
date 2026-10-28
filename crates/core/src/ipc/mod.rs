@@ -1,4 +1,3 @@
-use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     io::{Read, Write},
@@ -376,17 +375,18 @@ pub enum Response {
 }
 impl Response {
     pub fn checked(self) -> Result<Self> {
-        if let Self::Redirect { generation } = self {
-            bail!("Request rejected before execution; use active generation {generation}")
-        } else if let Self::Error(e) = self {
-            bail!("{e}")
-        } else if let Self::SshError(e) = self {
-            return Err(e.into());
+        match self {
+            Self::Redirect { generation } => Err(IpcError::Redirected { generation }),
+            Self::Error(message) => Err(IpcError::Daemon { message }),
+            Self::SshError(error) => Err(IpcError::Ssh(error)),
+            response => Ok(response),
         }
-        Ok(self)
     }
 }
 mod client;
+mod error;
+pub use error::{FrameError, IpcError};
+type Result<T, E = IpcError> = std::result::Result<T, E>;
 pub use client::{
     SnapshotHint, conditional_snapshot, connect, read_frame, rpc, sanitize_layout, write_frame,
 };

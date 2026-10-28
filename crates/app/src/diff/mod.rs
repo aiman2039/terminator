@@ -971,7 +971,7 @@ pub(crate) async fn document_with_context(
             })
             .await;
         }
-        Err(error) => return Err(error),
+        Err(error) => return Err(error.into()),
     };
     let root = PathBuf::from(std::str::from_utf8(&root_bytes)?.trim());
     let (root, relative) = service
@@ -979,7 +979,7 @@ pub(crate) async fn document_with_context(
         .run(cancel, move || {
             let root = root.canonicalize().context("Resolve Git root")?;
             let relative = terminator_git::relative_path(&root, &path)?;
-            Ok((root, relative))
+            anyhow::Ok((root, relative))
         })
         .await?;
     let mut args: Vec<std::ffi::OsString> = [

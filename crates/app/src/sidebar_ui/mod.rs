@@ -1,5 +1,5 @@
 //! Project, file, Git, notification, and session-info sidebar rendering.
-#[cfg(test)]
+#[cfg(all(test, feature = "test-support"))]
 pub(crate) use git_panel::GitPanelInput;
 mod agents;
 mod attention;
@@ -26,6 +26,8 @@ pub(crate) use attention::{
 pub(crate) use explorer::ExplorerReveal;
 pub(crate) use explorer_prompts::GitConfirm;
 pub(crate) use explorer_rows::explorer_query_keeps_file;
+#[cfg(all(test, feature = "test-support"))]
+pub(crate) use git_panel::git_panel;
 #[cfg(test)]
-pub(crate) use git_panel::{GitClickActionInput, git_click_action, git_panel};
+pub(crate) use git_panel::{GitClickActionInput, git_click_action};
 pub(crate) use git_panel::{GitPanelOutcome, PreparedGit};

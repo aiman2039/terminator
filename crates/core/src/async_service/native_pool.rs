@@ -1,5 +1,14 @@
 use super::*;
 
+/// Why [`read_chunks`] stopped before the limit or end of input.
+#[derive(Debug, thiserror::Error)]
+pub enum ChunkReadError {
+    #[error(transparent)]
+    Stopped(#[from] Failure),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
 type NativeCall = Box<dyn FnOnce() + Send>;
 struct NativeJob {
     call: NativeCall,
@@ -54,11 +63,13 @@ impl NativePool {
         }
         Ok(Self { sender, owner })
     }
-    pub async fn run<T: Send + 'static>(
+    /// Runs `call` on a pool thread. Cancellation, shutdown, and a panic in
+    /// `call` surface as the matching [`Failure`], converted into `E`.
+    pub async fn run<T: Send + 'static, E: From<Failure> + Send + 'static>(
         &self,
         cancellation: &CancellationToken,
-        call: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
-    ) -> anyhow::Result<T> {
+        call: impl FnOnce() -> Result<T, E> + Send + 'static,
+    ) -> Result<T, E> {
         if cancellation.is_cancelled() {
             return Err(Failure::Cancelled.into());
         }
@@ -104,7 +115,7 @@ pub fn read_chunks(
     mut reader: impl std::io::Read,
     limit: usize,
     cancel: &CancellationToken,
-) -> anyhow::Result<Vec<u8>> {
+) -> Result<Vec<u8>, ChunkReadError> {
     let mut bytes = Vec::new();
     let mut buffer = [0; 16 * 1024];
     while bytes.len() < limit {

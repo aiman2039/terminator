@@ -317,40 +317,54 @@ fn expanded_project_terminals_stay_indented_at_all_sidebar_sizes() {
                 app.selected = Some(selected.into());
                 // Include the first frame and settled layout frames.
                 for _ in 0..3 {
-                    let mut expected_indent = 0.0;
-                    let mut output = ctx.run_ui(
-                        egui::RawInput {
-                            screen_rect: Some(egui::Rect::from_min_size(
-                                egui::Pos2::ZERO,
-                                egui::vec2(width, 800.0),
-                            )),
-                            ..Default::default()
-                        },
-                        |ui| {
-                            expected_indent = ui.spacing().indent;
-                            app.projects(ui);
-                        },
+                    let expected_indent = paint_projects_sidebar(&mut app, &ctx, width);
+                    assert_session_rows_indented(
+                        &ctx,
+                        expected_indent,
+                        &format!("width={width}, scale={scale}"),
                     );
-                    output.textures_delta.clear();
-                    let target = |name: &str| {
-                        ctx.data(|data| {
-                            data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name)))
-                        })
-                        .unwrap()
-                    };
-                    for (project, session) in [("a", "first-shell"), ("b", "second-shell")] {
-                        let parent = target(&format!("project-row:{project}"));
-                        let child = target(&format!("session-row:{session}"));
-                        let indent = child.left() - parent.left();
-                        assert!(
-                            indent >= expected_indent - 0.1,
-                            "width={width}, scale={scale}, project={project}: indent={indent}"
-                        );
-                        assert!(child.top() >= parent.bottom());
-                    }
                 }
             }
         }
+    }
+}
+
+/// Paints the projects sidebar `width` wide; returns egui's indent.
+#[cfg(feature = "test-support")]
+fn paint_projects_sidebar(app: &mut App, ctx: &egui::Context, width: f32) -> f32 {
+    let mut expected_indent = 0.0;
+    let mut output = ctx.run_ui(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 800.0),
+            )),
+            ..Default::default()
+        },
+        |ui| {
+            expected_indent = ui.spacing().indent;
+            app.projects(ui);
+        },
+    );
+    output.textures_delta.clear();
+    expected_indent
+}
+
+#[cfg(feature = "test-support")]
+fn assert_session_rows_indented(ctx: &egui::Context, expected_indent: f32, label: &str) {
+    let target = |name: &str| {
+        ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
+            .unwrap()
+    };
+    for (project, session) in [("a", "first-shell"), ("b", "second-shell")] {
+        let parent = target(&format!("project-row:{project}"));
+        let child = target(&format!("session-row:{session}"));
+        let indent = child.left() - parent.left();
+        assert!(
+            indent >= expected_indent - 0.1,
+            "{label}, project={project}: indent={indent}"
+        );
+        assert!(child.top() >= parent.bottom());
     }
 }
 

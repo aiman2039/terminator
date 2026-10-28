@@ -79,7 +79,7 @@ impl Attach {
                 runtime: args.get(1).context("Missing runtime path")?.clone().into(),
             });
         }
-        Paths::discover()
+        Ok(Paths::discover()?)
     }
     fn spawn_input(input_writer: SharedWriter) {
         std::thread::spawn(move || {
@@ -186,10 +186,10 @@ impl Attach {
     }
     fn write_winsize(writer: &Mutex<impl Write>) -> Result<()> {
         let (rows, cols) = Self::dimensions();
-        write_frame(
+        Ok(write_frame(
             &mut *Self::lock_writer(writer),
             &Request::Resize { rows, cols },
-        )
+        )?)
     }
 }
 

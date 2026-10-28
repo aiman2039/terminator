@@ -4,6 +4,7 @@ use futures_util::{FutureExt, future::BoxFuture};
 use std::{
     collections::VecDeque,
     future::Future,
+    marker::PhantomData,
     panic::AssertUnwindSafe,
     sync::{
         Arc, Mutex, PoisonError,
@@ -91,12 +92,17 @@ impl std::fmt::Display for Failure {
     }
 }
 impl Failure {
-    fn from_error(error: anyhow::Error) -> Self {
-        let message = format!("{error:#}");
-        if error
-            .downcast_ref::<crate::async_client::UncertainMutation>()
-            .is_some()
-        {
+    /// Keeps the full source chain as text. A failure anywhere in the chain
+    /// that left a mutation's outcome unknown makes this `UncertainMutation`.
+    fn from_error(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+        let error: Box<dyn std::error::Error + Send + Sync> = error.into();
+        let root: &(dyn std::error::Error + 'static) = &*error;
+        let message = crate::ErrorChain(root).to_string();
+        let uncertain = std::iter::successors(Some(root), |e| e.source()).any(|e| {
+            e.downcast_ref::<crate::async_client::AsyncClientError>()
+                .is_some_and(crate::async_client::AsyncClientError::is_uncertain_mutation)
+        });
+        if uncertain {
             Self::UncertainMutation(message)
         } else {
             Self::Failed(message)
@@ -143,7 +149,7 @@ impl<T> Drop for Completion<T> {
 struct ServiceRequest<T> {
     context: OperationContext,
     cancellation: CancellationToken,
-    future: BoxFuture<'static, anyhow::Result<T>>,
+    future: BoxFuture<'static, Result<T, Failure>>,
     read_epoch: u64,
 }
 struct Shared<T> {
@@ -154,18 +160,21 @@ struct Shared<T> {
     read_epoch: AtomicU64,
     counters: Arc<Counters>,
 }
-pub struct Handle<T>(Arc<Shared<T>>);
-impl<T> Clone for Handle<T> {
+/// Submits work whose futures fail with `E`. A failure reaches the completion
+/// as [`Failure::Failed`] (or [`Failure::UncertainMutation`]) with the text of
+/// `E` and its sources.
+pub struct Handle<T, E>(Arc<Shared<T>>, PhantomData<fn() -> E>);
+impl<T, E> Clone for Handle<T, E> {
     fn clone(&self) -> Self {
-        Self(Arc::clone(&self.0))
+        Self(Arc::clone(&self.0), PhantomData)
     }
 }
-impl<T: Send + 'static> Handle<T> {
+impl<T: Send + 'static, E: Into<Box<dyn std::error::Error + Send + Sync>> + 'static> Handle<T, E> {
     pub fn submit(
         &self,
         mut context: OperationContext,
         cancellation: CancellationToken,
-        future: impl Future<Output = anyhow::Result<T>> + Send + 'static,
+        future: impl Future<Output = Result<T, E>> + Send + 'static,
     ) -> Result<OperationId, Failure> {
         if self.0.closed.load(Ordering::Acquire) {
             return Err(Failure::Closed);
@@ -194,7 +203,9 @@ impl<T: Send + 'static> Handle<T> {
                 context,
                 cancellation,
                 read_epoch: self.0.read_epoch.load(Ordering::Acquire),
-                future: future.boxed(),
+                future: future
+                    .map(|result| result.map_err(Failure::from_error))
+                    .boxed(),
             })
             .is_err()
         {
@@ -234,12 +245,12 @@ impl<T: Send + 'static> Handle<T> {
     }
 }
 /// Runtime destruction happens on the coordinator thread, never in a UI callback.
-pub struct Supervisor<T> {
-    pub handle: Handle<T>,
+pub struct Supervisor<T, E> {
+    pub handle: Handle<T, E>,
     results: mpsc::Receiver<Completion<T>>,
     thread: Option<JoinHandle<()>>,
 }
-impl<T: Send + 'static> Supervisor<T> {
+impl<T: Send + 'static, E> Supervisor<T, E> {
     pub fn new(wake: impl Fn() + Send + Sync + 'static) -> std::io::Result<Self> {
         let (requests, receiver) = mpsc::channel(QUEUE_LIMIT);
         let (complete, results) = mpsc::channel(QUEUE_LIMIT);
@@ -263,7 +274,7 @@ impl<T: Send + 'static> Supervisor<T> {
                 runtime.block_on(supervise(receiver, complete, owner, Arc::new(wake)));
             })?;
         Ok(Self {
-            handle: Handle(shared),
+            handle: Handle(shared, PhantomData),
             results,
             thread: Some(thread),
         })
@@ -279,7 +290,7 @@ impl<T: Send + 'static> Supervisor<T> {
         self.thread.as_ref().is_none_or(JoinHandle::is_finished)
     }
 }
-impl<T> Drop for Supervisor<T> {
+impl<T, E> Drop for Supervisor<T, E> {
     fn drop(&mut self) {
         self.handle.0.closed.store(true, Ordering::Release);
         self.handle.0.stop.cancel();
@@ -287,243 +298,10 @@ impl<T> Drop for Supervisor<T> {
         // Keep the UI free to complete native window teardown.
     }
 }
-struct DeliverInput<'a, T> {
-    context: OperationContext,
-    result: Result<T, Failure>,
-    shared: &'a Shared<T>,
-    complete: &'a mpsc::Sender<Completion<T>>,
-    wake: &'a Arc<dyn Fn() + Send + Sync>,
-}
-
-async fn deliver<T>(input: DeliverInput<'_, T>) {
-    let DeliverInput {
-        context,
-        result,
-        shared,
-        complete,
-        wake,
-    } = input;
-    shared.counters.completed.fetch_add(1, Ordering::Relaxed);
-    if matches!(result, Err(Failure::Panicked)) {
-        shared.counters.panics.fetch_add(1, Ordering::Relaxed);
-    }
-    let _ = complete
-        .send(Completion {
-            context,
-            result: Some(result),
-            counters: Arc::clone(&shared.counters),
-        })
-        .await;
-    wake();
-}
-async fn supervise<T: Send + 'static>(
-    mut requests: mpsc::Receiver<ServiceRequest<T>>,
-    complete: mpsc::Sender<Completion<T>>,
-    shared: Arc<Shared<T>>,
-    wake: Arc<dyn Fn() + Send + Sync>,
-) {
-    let mut tasks = JoinSet::new();
-    let mut active = Vec::<(OperationContext, CancellationToken)>::new();
-    let mut pending = VecDeque::<ServiceRequest<T>>::new();
-    let mut stopping = false;
-    let mut epoch = shared.read_epoch.load(Ordering::Acquire);
-    loop {
-        epoch = refresh_epoch(&shared, &active, epoch);
-        store_oldest(&shared, &active, &pending);
-        admit_pending(AdmitPendingInput {
-            pending: &mut pending,
-            active: &mut active,
-            tasks: &mut tasks,
-            shared: &shared,
-            complete: &complete,
-            wake: &wake,
-            epoch,
-            stopping,
-        })
-        .await;
-        if stopping && tasks.is_empty() && pending.is_empty() && requests.is_empty() {
-            break;
-        }
-        tokio::select! {
-            () = shared.stop.cancelled(), if !stopping => {
-                stopping = true;
-                requests.close();
-                for (context, cancellation) in &active {
-                    if context.policy != Policy::OrderedMutation { cancellation.cancel(); }
-                }
-            }
-            Some(job) = requests.recv() => {
-                cancel_replaceable(&active, &pending, &job);
-                pending.push_back(job);
-            }
-            Some(result) = tasks.join_next(), if !tasks.is_empty() => {
-                // User future panics are caught inside the task, retaining its operation identity.
-                if let Ok((context, mut result, read_epoch)) = result {
-                    if context.policy == Policy::ReplaceableRead && read_epoch != shared.read_epoch.load(Ordering::Acquire) { result = Err(Failure::Cancelled); }
-                    active.retain(|(c, _)| c.id != context.id);
-                    if context.policy == Policy::ServiceLifetime { shared.counters.actors.fetch_sub(1, Ordering::AcqRel); }
-                    else { shared.counters.active.fetch_sub(1, Ordering::AcqRel); }
-                    deliver(DeliverInput { context, result, shared: &shared, complete: &complete, wake: &wake }).await;
-                }
-            }
-            () = tokio::time::sleep(Duration::from_millis(10)) => {}
-        }
-    }
-}
-
-fn refresh_epoch<T>(
-    shared: &Shared<T>,
-    active: &[(OperationContext, CancellationToken)],
-    epoch: u64,
-) -> u64 {
-    let current = shared.read_epoch.load(Ordering::Acquire);
-    if epoch != current {
-        for (context, token) in active {
-            if context.policy == Policy::ReplaceableRead {
-                token.cancel();
-            }
-        }
-    }
-    current
-}
-
-fn store_oldest<T>(
-    shared: &Shared<T>,
-    active: &[(OperationContext, CancellationToken)],
-    pending: &VecDeque<ServiceRequest<T>>,
-) {
-    let age = active
-        .iter()
-        .map(|(c, _)| c)
-        .chain(pending.iter().map(|r| &r.context))
-        .filter(|c| c.policy != Policy::ServiceLifetime)
-        .map(|c| u64::try_from(c.admitted.elapsed().as_millis()).unwrap_or(u64::MAX))
-        .max()
-        .unwrap_or(0);
-    shared.counters.oldest_ms.store(age, Ordering::Release);
-}
-
-fn cancel_replaceable<T>(
-    active: &[(OperationContext, CancellationToken)],
-    pending: &VecDeque<ServiceRequest<T>>,
-    job: &ServiceRequest<T>,
-) {
-    if job.context.policy != Policy::ReplaceableRead {
-        return;
-    }
-    for (context, cancellation) in active {
-        if context.subsystem == job.context.subsystem
-            && context.resource == job.context.resource
-            && context.policy == Policy::ReplaceableRead
-        {
-            cancellation.cancel();
-        }
-    }
-    for previous in pending {
-        if previous.context.subsystem == job.context.subsystem
-            && previous.context.resource == job.context.resource
-            && previous.context.policy == Policy::ReplaceableRead
-        {
-            previous.cancellation.cancel();
-        }
-    }
-}
-
-struct AdmitPendingInput<'a, T> {
-    pending: &'a mut VecDeque<ServiceRequest<T>>,
-    active: &'a mut Vec<(OperationContext, CancellationToken)>,
-    tasks: &'a mut JoinSet<(OperationContext, Result<T, Failure>, u64)>,
-    shared: &'a Shared<T>,
-    complete: &'a mpsc::Sender<Completion<T>>,
-    wake: &'a Arc<dyn Fn() + Send + Sync>,
-    epoch: u64,
-    stopping: bool,
-}
-
-async fn admit_pending<T: Send + 'static>(input: AdmitPendingInput<'_, T>) {
-    let AdmitPendingInput {
-        pending,
-        active,
-        tasks,
-        shared,
-        complete,
-        wake,
-        epoch,
-        stopping,
-    } = input;
-    let mut index = 0;
-    while index < pending.len() {
-        let Some(job) = pending.get(index) else {
-            break;
-        };
-        let cancelled = job.cancellation.is_cancelled()
-            || (job.context.policy == Policy::ReplaceableRead && job.read_epoch != epoch)
-            || (stopping && job.context.policy != Policy::OrderedMutation);
-        let expired = job.context.deadline.is_some_and(|d| Instant::now() >= d);
-        if cancelled || expired {
-            let Some(job) = pending.remove(index) else {
-                break;
-            };
-            shared.counters.queued.fetch_sub(1, Ordering::AcqRel);
-            deliver(DeliverInput {
-                context: job.context,
-                result: Err(if cancelled {
-                    Failure::Cancelled
-                } else {
-                    Failure::Timeout
-                }),
-                shared,
-                complete,
-                wake,
-            })
-            .await;
-            continue;
-        }
-        let actor = job.context.policy == Policy::ServiceLifetime;
-        let busy = active.iter().any(|(c, _)| {
-            c.resource == job.context.resource && c.subsystem == job.context.subsystem
-        });
-        if busy
-            || (!actor && shared.counters.active.load(Ordering::Acquire) >= ACTIVE_LIMIT)
-            || (actor && shared.counters.actors.load(Ordering::Acquire) >= ACTOR_LIMIT)
-        {
-            index = index.saturating_add(1);
-            continue;
-        }
-        let Some(job) = pending.remove(index) else {
-            break;
-        };
-        shared.counters.queued.fetch_sub(1, Ordering::AcqRel);
-        if actor {
-            shared.counters.actors.fetch_add(1, Ordering::AcqRel);
-        } else {
-            shared.counters.active.fetch_add(1, Ordering::AcqRel);
-        }
-        active.push((job.context.clone(), job.cancellation.clone()));
-        tasks.spawn(async move {
-                let _cancel_native_reads = (job.context.policy == Policy::ReplaceableRead).then(|| job.cancellation.clone().drop_guard());
-                let result = AssertUnwindSafe(async {
-                    // Mutations own their deadlines: transport errors after write are uncertain,
-                    // and native writes must remain tracked until the library returns.
-                    if job.context.policy == Policy::ReplaceableRead {
-                        let deadline = job.context.deadline;
-                        tokio::select! {
-                            biased;
-                            () = job.cancellation.cancelled() => Err(Failure::Cancelled),
-                            () = async { match deadline { Some(d) => tokio::time::sleep_until(d.into()).await, None => std::future::pending().await } } => Err(Failure::Timeout),
-                            result = job.future => result.map_err(Failure::from_error),
-                        }
-                    } else {
-                        job.future.await.map_err(Failure::from_error)
-                    }
-                }).catch_unwind().await.unwrap_or(Err(Failure::Panicked));
-                (job.context, result, job.read_epoch)
-            });
-    }
-}
-
 mod native_pool;
-pub use native_pool::{NativePool, read_chunks};
+mod supervise;
+pub use native_pool::{ChunkReadError, NativePool, read_chunks};
+use supervise::supervise;
 
 #[cfg(test)]
 mod tests;

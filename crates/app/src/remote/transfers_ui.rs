@@ -202,7 +202,7 @@ impl App {
         let failure = match &result {
             Ok(Some(status)) if status.done => status.ssh.clone().map(|ssh| {
                 let error = anyhow::Error::from(ssh);
-                Failure::from_error(&error)
+                Failure::from_error(error.as_ref())
             }),
             Err(failure) => Some(failure.clone()),
             _ => None,

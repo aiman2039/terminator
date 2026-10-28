@@ -38,8 +38,8 @@ impl From<String> for Failure {
     }
 }
 impl Failure {
-    pub(crate) fn from_error(error: &anyhow::Error) -> Self {
-        let ssh = error.downcast_ref::<SshError>().map(|e| e.failure.clone());
+    pub(crate) fn from_error(error: &(dyn std::error::Error + 'static)) -> Self {
+        let ssh = SshError::find(error).map(|e| e.failure.clone());
         let text = match &ssh {
             Some(SshFailure::AuthFailed) => {
                 "SSH sign-in required. Open an SSH terminal to sign in; files and Git then reuse its connection.".into()
@@ -48,7 +48,7 @@ impl Failure {
             Some(SshFailure::ChangedHostKey) => {
                 "The SSH host key changed. Nothing was trusted automatically.".into()
             }
-            _ => format!("{error:#}"),
+            _ => terminator_core::ErrorChain(error).to_string(),
         };
         Self { text, ssh }
     }

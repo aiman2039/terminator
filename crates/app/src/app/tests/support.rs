@@ -299,6 +299,7 @@ pub(crate) struct CrossGlideInput<'a> {
     pub(crate) steps: usize,
 }
 
+#[cfg(feature = "test-support")]
 pub(crate) fn cross_glide(input: CrossGlideInput<'_>) {
     let CrossGlideInput {
         app,
@@ -372,6 +373,7 @@ pub(crate) struct FrameGlideInput<'a> {
     pub(crate) steps: usize,
 }
 
+#[cfg(feature = "test-support")]
 pub(crate) fn frame_glide(input: FrameGlideInput<'_>) {
     let FrameGlideInput {
         app,

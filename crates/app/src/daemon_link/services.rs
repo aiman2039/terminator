@@ -411,7 +411,7 @@ pub async fn context_async(
     };
     let root = service
         .fs()
-        .run(cancel, move || Ok(root.canonicalize()?))
+        .run(cancel, move || anyhow::Ok(root.canonicalize()?))
         .await
         .unwrap_or_else(|_| cwd.clone());
     for arg in ["--absolute-git-dir", "--git-common-dir"] {
@@ -475,7 +475,7 @@ pub async fn context_async(
         result.stats = service
             .fs()
             .run(cancel, move || {
-                Ok(merge_stats_cancel(MergeStatsCancelInput {
+                anyhow::Ok(merge_stats_cancel(MergeStatsCancelInput {
                     root: &root,
                     working: &working,
                     staged: &staged,

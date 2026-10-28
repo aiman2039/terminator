@@ -89,46 +89,61 @@ impl Settings {
         .into()
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<(), SettingsError> {
         // Disabled ntfy accepts any channel/machine contents (including
         // leftovers) so turning the toggle off always saves. Enabling
         // requires a usable channel again, and delivery still re-validates.
         if self.ntfy_enabled {
-            ensure!(
-                (1..=128).contains(&self.ntfy_channel.len())
-                    && self
-                        .ntfy_channel
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
-                "ntfy channel must contain 1–128 letters, digits, underscores or hyphens when enabled"
-            );
-            ensure!(
-                self.ntfy_machine.len() <= 128 && !self.ntfy_machine.chars().any(char::is_control),
-                "ntfy machine name must be at most 128 bytes without control characters"
-            );
+            self.validate_ntfy()?;
         }
-        ensure!(
-            (1..=3650).contains(&self.history_days),
-            "History age must be 1–3650 days"
-        );
-        ensure!(
-            (1..=4096).contains(&self.session_mib)
-                && self.total_mib >= self.session_mib
-                && self.total_mib <= 65536,
-            "Invalid disk limits"
-        );
-        ensure!(
-            (100..=20_000).contains(&self.scrollback_lines),
-            "History lines must be 100–20000"
-        );
-        ensure!(
-            (9.0..=32.0).contains(&self.font_size),
-            "Font size must be 9–32"
-        );
-        ensure!(
-            (1..=30).contains(&self.editor_close_timeout_secs),
-            "Editor close timeout must be 1–30 seconds"
-        );
+        if !(1..=3650).contains(&self.history_days) {
+            return Err(SettingsError::HistoryDays {
+                days: self.history_days,
+            });
+        }
+        if !((1..=4096).contains(&self.session_mib)
+            && self.total_mib >= self.session_mib
+            && self.total_mib <= 65536)
+        {
+            return Err(SettingsError::DiskLimits {
+                session_mib: self.session_mib,
+                total_mib: self.total_mib,
+            });
+        }
+        if !(100..=20_000).contains(&self.scrollback_lines) {
+            return Err(SettingsError::ScrollbackLines {
+                lines: self.scrollback_lines,
+            });
+        }
+        if !(9.0..=32.0).contains(&self.font_size) {
+            return Err(SettingsError::FontSize {
+                size: self.font_size,
+            });
+        }
+        if !(1..=30).contains(&self.editor_close_timeout_secs) {
+            return Err(SettingsError::EditorCloseTimeout {
+                seconds: self.editor_close_timeout_secs,
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_ntfy(&self) -> Result<(), SettingsError> {
+        let valid_channel = (1..=128).contains(&self.ntfy_channel.len())
+            && self
+                .ntfy_channel
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+        if !valid_channel {
+            return Err(SettingsError::NtfyChannel {
+                channel: self.ntfy_channel.clone(),
+            });
+        }
+        if self.ntfy_machine.len() > 128 || self.ntfy_machine.chars().any(char::is_control) {
+            return Err(SettingsError::NtfyMachine {
+                machine: self.ntfy_machine.clone(),
+            });
+        }
         Ok(())
     }
 }

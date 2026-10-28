@@ -1,19 +1,24 @@
 use super::*;
 
-pub fn write_frame<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<()> {
+pub fn write_frame<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<(), FrameError> {
     let data = serde_json::to_vec(value)?;
-    ensure!(data.len() <= MAX_FRAME, "IPC frame too large");
-    let len = u32::try_from(data.len()).context("IPC frame too large")?;
+    let too_large = || FrameError::TooLarge { bytes: data.len() };
+    if data.len() > MAX_FRAME {
+        return Err(too_large());
+    }
+    let len = u32::try_from(data.len()).map_err(|_| too_large())?;
     writer.write_all(&len.to_be_bytes())?;
     writer.write_all(&data)?;
     writer.flush()?;
     Ok(())
 }
-pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read) -> Result<T> {
+pub fn read_frame<T: DeserializeOwned>(reader: &mut impl Read) -> Result<T, FrameError> {
     let mut header = [0; 4];
     reader.read_exact(&mut header)?;
     let n = u32::from_be_bytes(header) as usize;
-    ensure!(n <= MAX_FRAME, "IPC frame too large");
+    if n > MAX_FRAME {
+        return Err(FrameError::TooLarge { bytes: n });
+    }
     let mut bytes = vec![0; n];
     reader.read_exact(&mut bytes)?;
     Ok(serde_json::from_slice(&bytes)?)
@@ -89,18 +94,22 @@ pub fn rpc(paths: &Paths, request: Request) -> Result<Response> {
             && generations::exists(paths)
             && redirect_allowed(&request)
         {
-            ensure!(
-                generations::Catalog::open(paths)?
-                    .generations()?
-                    .iter()
-                    .any(|g| &g.id == generation),
-                "Redirect names an unregistered owner"
-            );
+            if !generations::Catalog::open(paths)?
+                .generations()?
+                .iter()
+                .any(|g| &g.id == generation)
+            {
+                return Err(IpcError::UnregisteredRedirect {
+                    generation: generation.clone(),
+                });
+            }
             continue;
         }
         return response.checked();
     }
-    bail!("Active service changed repeatedly before execution; retry the operation")
+    Err(IpcError::Unstable {
+        request: request.name(),
+    })
 }
 
 pub(crate) fn redirect_allowed(request: &Request) -> bool {

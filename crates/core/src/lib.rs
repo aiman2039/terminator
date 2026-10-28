@@ -25,18 +25,18 @@ pub mod ui_control;
 pub mod vnc;
 pub mod worktrees;
 
-use anyhow::{Context, Result, bail, ensure};
+pub use error::{AtomicWriteError, ErrorChain, ErrorReport, NoShellError, PathsError};
 pub use ipc::{
-    Envelope, Request, Response, SnapshotHint, conditional_snapshot, connect, read_frame, rpc,
-    sanitize_layout, write_frame,
+    Envelope, FrameError, IpcError, Request, Response, SnapshotHint, conditional_snapshot, connect,
+    read_frame, rpc, sanitize_layout, write_frame,
 };
 pub use model::{
     AGENT_PRESENCE_CAPABILITY, Agent, AgentState, DIFF_CLOSE_SETTINGS_CAPABILITY, Dismissal,
     EditorMode, HookEvent, Lifecycle, METADATA_SETTINGS_CAPABILITY, NOTIFICATION_SOUND_CAPABILITY,
     NTFY_CAPABILITY, Notification, Project, Resume, ReviewMode, SCREEN_CAPABILITY,
-    SHUTDOWN_IF_IDLE_CAPABILITY, STABLE_HELPER_CAPABILITY, Session, SessionKind, Settings, State,
-    TERMINAL_NOTICES_CAPABILITY, TerminalNotice, VNC_CAPABILITY, VNC_REGIONS_CAPABILITY,
-    WORKTREES_CAPABILITY,
+    SHUTDOWN_IF_IDLE_CAPABILITY, STABLE_HELPER_CAPABILITY, Session, SessionKind, Settings,
+    SettingsError, State, StateError, TERMINAL_NOTICES_CAPABILITY, TerminalNotice, VNC_CAPABILITY,
+    VNC_REGIONS_CAPABILITY, WORKTREES_CAPABILITY,
 };
 use serde::{Deserialize, Serialize};
 #[cfg(unix)]
@@ -232,13 +232,13 @@ pub fn executable_available(path: &Path) -> bool {
         path.is_file()
     }
 }
-pub fn default_shell() -> Result<PathBuf> {
+pub fn default_shell() -> Result<PathBuf, NoShellError> {
     #[cfg(unix)]
     {
         ["zsh", "bash", "sh"]
             .into_iter()
             .find_map(find_executable)
-            .context("No zsh, bash, or sh executable found")
+            .ok_or(NoShellError)
     }
     #[cfg(not(unix))]
     {
@@ -246,7 +246,7 @@ pub fn default_shell() -> Result<PathBuf> {
             .into_iter()
             .find_map(find_executable)
             .or_else(|| std::env::var_os("COMSPEC").map(PathBuf::from))
-            .context("No pwsh, powershell, or cmd executable found")
+            .ok_or(NoShellError)
     }
 }
 #[must_use]
@@ -260,7 +260,7 @@ pub struct Paths {
     pub runtime: PathBuf,
 }
 impl Paths {
-    pub fn discover() -> Result<Self> {
+    pub fn discover() -> Result<Self, PathsError> {
         if let Some(path) = std::env::var_os("TERMINATOR_DATA_DIR") {
             let mut paths = Self::at(PathBuf::from(path));
             if let Some(runtime) = std::env::var_os("TERMINATOR_RUNTIME_DIR") {
@@ -269,9 +269,9 @@ impl Paths {
             return Ok(paths);
         }
         let dirs = directories::ProjectDirs::from("dev", "terminator", "Terminator")
-            .context("No user data directory")?;
+            .ok_or(PathsError::NoDataDirectory)?;
         // Unix sockets have short path limits, particularly on macOS.
-        let home = directories::BaseDirs::new().context("No home directory")?;
+        let home = directories::BaseDirs::new().ok_or(PathsError::NoHomeDirectory)?;
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         home.home_dir().hash(&mut h);
@@ -291,23 +291,21 @@ impl Paths {
             data,
         }
     }
-    pub fn init(&self) -> Result<()> {
+    pub fn init(&self) -> Result<(), PathsError> {
         for path in [&self.data, &self.runtime, &self.history_dir()] {
-            if path.exists() {
-                ensure!(
-                    !fs::symlink_metadata(path)?.file_type().is_symlink(),
-                    "Refusing symlink data directory"
-                );
+            if path.exists() && fs::symlink_metadata(path)?.file_type().is_symlink() {
+                return Err(PathsError::SymlinkDataDirectory { path: path.clone() });
             }
             fs::create_dir_all(path)?;
             #[cfg(unix)]
             fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
         }
         #[cfg(unix)]
-        ensure!(
-            self.socket().as_os_str().len() < SOCKET_PATH_LIMIT,
-            "Runtime path too long for Unix socket; use a shorter data directory"
-        );
+        if self.socket().as_os_str().len() >= SOCKET_PATH_LIMIT {
+            return Err(PathsError::SocketPathTooLong {
+                socket: self.socket(),
+            });
+        }
         Ok(())
     }
     #[must_use]
@@ -354,24 +352,26 @@ impl Paths {
         self.runtime
             .join(format!("{}.nvim", session.get(..8).unwrap_or(session)))
     }
-    pub fn token(&self) -> Result<String> {
+    pub fn token(&self) -> Result<String, PathsError> {
         Ok(fs::read_to_string(self.auth())
-            .with_context(|| {
-                format!(
-                    "Cannot read session service authentication file {}",
-                    self.auth().display()
-                )
+            .map_err(|source| PathsError::Token {
+                path: self.auth(),
+                source,
             })?
             .trim()
             .into())
     }
 }
 
-pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path.parent().context("Missing parent directory")?;
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AtomicWriteError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| AtomicWriteError::MissingParent {
+            path: path.to_path_buf(),
+        })?;
     fs::create_dir_all(parent)?;
     let tmp = parent.join(format!(".terminator-{}.tmp", id()));
-    let result = (|| -> Result<()> {
+    let result = (|| -> Result<(), AtomicWriteError> {
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -388,13 +388,14 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     result
 }
 
+mod error;
 pub mod process;
-pub use process::{CommandOptions, run_command, spawn_session_leader};
+pub use process::{CommandOptions, ProcessError, run_command, spawn_session_leader};
 /// Legacy callers inspect the exit status themselves.
 pub fn bounded_output(
     cmd: std::process::Command,
     timeout: Duration,
-) -> Result<std::process::Output> {
+) -> Result<std::process::Output, ProcessError> {
     run_command(
         cmd,
         CommandOptions {

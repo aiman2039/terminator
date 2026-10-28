@@ -52,7 +52,7 @@ impl Services {
         let target = self
             .fs()
             .run(&cancel, move || {
-                Ok(services::resolve_target(&text, &cwd).ok())
+                anyhow::Ok(services::resolve_target(&text, &cwd).ok())
             })
             .await?;
         updates.push(Update::ResolvedTarget(key, target));
@@ -87,7 +87,7 @@ impl Services {
             .run(&cancel, move || {
                 let project =
                     services::project_for_directory(&state.projects, &lookup).map(|p| p.id.clone());
-                Ok((state, project))
+                anyhow::Ok((state, project))
             })
             .await?;
         let (state, project) = if let Some(project) = project {
@@ -105,7 +105,7 @@ impl Services {
                         .context("Opened project missing from inventory")?
                         .id
                         .clone();
-                    Ok((state, project))
+                    anyhow::Ok((state, project))
                 })
                 .await?
         };
@@ -151,7 +151,7 @@ impl Services {
         let result = self
             .fs()
             .run(&cancel, move || {
-                Ok(search::run(&root, &query, show_ignored))
+                anyhow::Ok(search::run(&root, &query, show_ignored))
             })
             .await;
         let result = match result {

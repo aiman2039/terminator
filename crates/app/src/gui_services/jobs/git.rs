@@ -239,7 +239,7 @@ impl Services {
         );
         let canonical = self
             .fs()
-            .run(&cancel, move || Ok(draft.dest.canonicalize()?))
+            .run(&cancel, move || anyhow::Ok(draft.dest.canonicalize()?))
             .await?;
         let Response::State(state) = client.rpc(Request::Snapshot).await? else {
             anyhow::bail!("Expected worktree snapshot")
@@ -265,7 +265,7 @@ impl Services {
         let task = tab.clone();
         let view = self
             .fs()
-            .run(&cancel, move || Ok(crate::GitView::load(&task)))
+            .run(&cancel, move || anyhow::Ok(crate::GitView::load(&task)))
             .await
             .unwrap_or_else(|error| crate::GitView::failed(&tab, format!("{error:#}")));
         updates.push(Update::GitView(key, view));

@@ -17,8 +17,8 @@ use support::*;
 use terminator_core::*;
 
 pub(super) mod support;
-pub(crate) use support::CrossGlideInput;
-pub(crate) use support::FrameGlideInput;
+#[cfg(feature = "test-support")]
+pub(crate) use support::{CrossGlideInput, FrameGlideInput};
 
 mod attention_inbox;
 mod center_overlays;

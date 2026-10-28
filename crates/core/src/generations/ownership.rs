@@ -1,4 +1,5 @@
-use crate::{Context, Paths, Request, Result, bail, ensure, fs};
+use super::{GenerationsError, Result};
+use crate::{Paths, Request, fs};
 use fs2::FileExt;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -73,21 +74,27 @@ pub fn owner_for(paths: &Paths, request: &Request) -> Result<Paths> {
             Request::Notice { .. } | Request::DismissTerminalNotice { .. }
         )
     {
-        bail!("Session owner is unavailable");
+        return Err(GenerationsError::OwnerUnavailable {
+            request: request.name(),
+        });
     }
     if let Request::CloseIdleSessions { generation, .. } = request {
         return owners
             .into_iter()
             .find(|g| &g.id == generation)
             .map(|g| g.paths())
-            .context("Unknown close owner");
+            .ok_or_else(|| GenerationsError::UnknownCloseOwner {
+                generation: generation.clone(),
+            });
     }
-    let active = catalog.active()?.context("No active generation")?;
+    let active = catalog
+        .active()?
+        .ok_or(GenerationsError::NoActiveGeneration)?;
     owners
         .into_iter()
         .find(|g| g.id == active)
         .map(|g| g.paths())
-        .context("Active owner is unregistered")
+        .ok_or(GenerationsError::ActiveUnregistered { generation: active })
 }
 
 fn request_sessions(request: &Request) -> (Option<&str>, Option<&str>) {
@@ -184,9 +191,10 @@ fn find_session_owner(input: FindSessionOwnerInput<'_>) -> Result<Option<Paths>>
         }
     }
     if let Some((generation, error)) = unreadable {
-        return Err(error.context(format!(
-            "Session owner is unavailable; generation {generation} store is unreadable"
-        )));
+        return Err(GenerationsError::UnreadableStore {
+            generation,
+            source: Box::new(error),
+        });
     }
     Ok(None)
 }
@@ -196,11 +204,15 @@ pub fn validate_endpoint(root: &Paths, paths: &Paths, generation: &str) -> Resul
         .generations()?
         .into_iter()
         .find(|g| g.id == generation)
-        .context("Generation is not registered in this catalog")?;
-    ensure!(
-        owner.data.canonicalize()? == paths.data.canonicalize()?
-            && owner.runtime.canonicalize()? == paths.runtime.canonicalize()?,
-        "Inherited generation/catalog routing does not match this data/runtime directory; clear inherited TERMINATOR_CATALOG_DATA, TERMINATOR_CATALOG_RUNTIME and TERMINATOR_GENERATION for isolated development"
-    );
+        .ok_or_else(|| GenerationsError::Unregistered {
+            generation: generation.to_owned(),
+        })?;
+    if owner.data.canonicalize()? != paths.data.canonicalize()?
+        || owner.runtime.canonicalize()? != paths.runtime.canonicalize()?
+    {
+        return Err(GenerationsError::RoutingMismatch {
+            generation: generation.to_owned(),
+        });
+    }
     Ok(())
 }

@@ -251,7 +251,7 @@ pub async fn context(
                 .strip_prefix(&canonical)
                 .context("Folder is outside the Perforce workspace")?;
             let command_root = root.join(relative);
-            Ok((cwd, command_root))
+            anyhow::Ok((cwd, command_root))
         })
         .await
     else {
@@ -290,7 +290,9 @@ pub async fn context(
         let root = root.clone();
         service
             .fs()
-            .run(cancel, move || Ok(parse_files(&root, &opened, &offline)))
+            .run(cancel, move || {
+                anyhow::Ok(parse_files(&root, &opened, &offline))
+            })
             .await
     }
     .await;
@@ -424,7 +426,7 @@ pub async fn document(input: DocumentInput<'_>) -> Result<crate::diff::DiffDocum
             let canonical = root.canonicalize()?;
             let relative = terminator_git::relative_path(&canonical, &path)?;
             let spec = filespec(&root.join(&relative))?;
-            Ok((canonical, relative, spec))
+            anyhow::Ok((canonical, relative, spec))
         })
         .await?;
     // fstat reports EV_EMPTY for both new files and paths outside the client

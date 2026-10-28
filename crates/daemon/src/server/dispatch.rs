@@ -147,66 +147,104 @@ fn serve_attach(
         write_frame(stream, &frame)?;
     }
     stream.set_read_timeout(None)?;
-    let mut input_stream = stream.try_clone()?;
-    let input_disconnect = Disconnect(input_stream.try_clone()?);
-    let input_rt = Arc::clone(&rt);
-    let input_shared = Arc::clone(shared);
-    let session_id = session.clone();
-    thread::spawn(move || {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _disconnect = input_disconnect;
-            while let Ok(req) = read_frame::<Request>(&mut input_stream) {
-                match req {
-                    Request::Input { data } => {
-                        if let Ok(bytes) = B64.decode(data)
-                            && input_shared.forward_input(&input_rt, &bytes).is_err()
-                        {
-                            break;
-                        }
+    AttachedInput {
+        shared: Arc::clone(shared),
+        rt: Arc::clone(&rt),
+        session,
+    }
+    .spawn(stream)?;
+    relay_attach_output(stream, &rx, &rt)
+}
+
+/// The input half of an attach: client keystrokes and resizes for one session.
+struct AttachedInput {
+    shared: Arc<Shared>,
+    rt: Arc<Mutex<Runtime>>,
+    session: String,
+}
+
+impl AttachedInput {
+    /// Reads input frames on a clone of `stream` until the client stops
+    /// sending or input can no longer be delivered.
+    fn spawn(self, stream: &transport::Stream) -> Result<()> {
+        let mut input_stream = stream.try_clone()?;
+        let input_disconnect = Disconnect(input_stream.try_clone()?);
+        thread::spawn(move || {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _disconnect = input_disconnect;
+                while let Ok(req) = read_frame::<Request>(&mut input_stream) {
+                    if !self.apply(req) {
+                        break;
                     }
-                    Request::Resize { rows, cols }
-                        if rows > 0 && cols > 0 && rows <= 500 && cols <= 1000 =>
-                    {
-                        let mut r = relock(&input_rt);
-                        let _ = r.master.resize(PtySize {
-                            rows,
-                            cols,
-                            pixel_width: 0,
-                            pixel_height: 0,
-                        });
-                        r.parser.screen_mut().set_size(rows, cols);
-                        drop(r);
-                        let mut s = relock(&input_shared.state);
-                        if let Some(rec) = s.sessions.iter_mut().find(|s| s.id == session_id) {
-                            rec.rows = rows;
-                            rec.cols = cols;
-                        }
-                    }
-                    _ => break,
                 }
+            }));
+        });
+        Ok(())
+    }
+
+    /// Applies one input frame; `false` ends the input stream.
+    fn apply(&self, req: Request) -> bool {
+        match req {
+            Request::Input { data } => match B64.decode(data) {
+                Ok(bytes) => self.shared.forward_input(&self.rt, &bytes).is_ok(),
+                Err(_) => true,
+            },
+            Request::Resize { rows, cols }
+                if rows > 0 && cols > 0 && rows <= 500 && cols <= 1000 =>
+            {
+                self.resize(rows, cols);
+                true
             }
-        }));
-    });
+            _ => false,
+        }
+    }
+
+    fn resize(&self, rows: u16, cols: u16) {
+        let mut r = relock(&self.rt);
+        let _ = r.master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+        r.parser.screen_mut().set_size(rows, cols);
+        drop(r);
+        let mut s = relock(&self.shared.state);
+        if let Some(rec) = s.sessions.iter_mut().find(|s| s.id == self.session) {
+            rec.rows = rows;
+            rec.cols = cols;
+        }
+    }
+}
+
+/// Forwards subscriber frames until `End`. Once the session is live past
+/// the first quiet 2 s, idle periods send `Ok` keepalives.
+fn relay_attach_output(
+    stream: &mut transport::Stream,
+    rx: &mpsc::Receiver<Response>,
+    rt: &Arc<Mutex<Runtime>>,
+) -> Result<()> {
     while let Ok(frame) = rx.recv_timeout(Duration::from_secs(2)) {
         write_frame(stream, &frame)?;
         if matches!(frame, Response::End) {
             return Ok(());
         }
     }
-    if !relock(&rt).ended {
-        loop {
-            match rx.recv_timeout(Duration::from_secs(2)) {
-                Ok(frame) => {
-                    write_frame(stream, &frame)?;
-                    if matches!(frame, Response::End) {
-                        break;
-                    }
+    if relock(rt).ended {
+        return Ok(());
+    }
+    loop {
+        match rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(frame) => {
+                write_frame(stream, &frame)?;
+                if matches!(frame, Response::End) {
+                    break;
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    write_frame(stream, &Response::Ok)?;
-                }
-                Err(_) => break,
             }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                write_frame(stream, &Response::Ok)?;
+            }
+            Err(_) => break,
         }
     }
     Ok(())
@@ -252,7 +290,7 @@ pub(crate) fn serve(mut stream: transport::Stream, shared: Arc<Shared>) -> Resul
     }
     let ssh_errors = env.ssh_errors;
     let response = shared.handle(env.request).unwrap_or_else(|e| {
-        match e.downcast_ref::<terminator_core::ssh::SshError>() {
+        match terminator_core::ssh::SshError::find(e.as_ref()) {
             Some(ssh) if ssh_errors => Response::SshError(terminator_core::ssh::SshError {
                 failure: ssh.failure.clone(),
                 message: format!("{e:#}"),
@@ -260,7 +298,11 @@ pub(crate) fn serve(mut stream: transport::Stream, shared: Arc<Shared>) -> Resul
             _ => Response::Error(format!("{e:#}")),
         }
     });
-    snapshot::write_response(&mut stream, &response, env.snapshot_chunks)
+    Ok(snapshot::write_response(
+        &mut stream,
+        &response,
+        env.snapshot_chunks,
+    )?)
 }
 
 #[cfg(test)]

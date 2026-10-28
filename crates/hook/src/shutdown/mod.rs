@@ -171,7 +171,7 @@ fn stop_session(
             .iter()
             .any(|s| s.id == sid && s.lifecycle.live())
         {
-            return Err(error.context(format!(
+            return Err(anyhow::Error::from(error).context(format!(
                 "Could not stop session {sid}; the daemon was left running"
             )));
         }

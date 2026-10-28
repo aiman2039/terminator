@@ -1,4 +1,3 @@
-use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -126,23 +125,26 @@ impl AppearanceConfig {
             ("status_failed", &mut self.status_failed),
         ]
     }
-    pub fn validate(&self) -> Result<()> {
-        ensure!(
-            self.version == 1,
-            "Unsupported appearance version {}; expected 1",
-            self.version
-        );
-        for (name, value) in self.clone().colors_mut() {
-            rgb(value).with_context(|| format!("appearance.{name}: expected #RRGGBB"))?;
+    pub fn validate(&self) -> Result<(), AppearanceError> {
+        if self.version != 1 {
+            return Err(AppearanceError::UnsupportedVersion {
+                version: self.version,
+            });
         }
-        ensure!(
-            self.border_width.is_finite() && (0.0..=8.0).contains(&self.border_width),
-            "appearance.border_width must be between 0 and 8"
-        );
-        ensure!(
-            self.pane_divider_width.is_finite() && (1.0..=24.0).contains(&self.pane_divider_width),
-            "appearance.pane_divider_width must be between 1 and 24"
-        );
+        for (name, value) in self.clone().colors_mut() {
+            rgb(value).map_err(|source| AppearanceError::InvalidColorField { name, source })?;
+        }
+        if !(self.border_width.is_finite() && (0.0..=8.0).contains(&self.border_width)) {
+            return Err(AppearanceError::BorderWidth {
+                width: self.border_width,
+            });
+        }
+        if !(self.pane_divider_width.is_finite() && (1.0..=24.0).contains(&self.pane_divider_width))
+        {
+            return Err(AppearanceError::PaneDividerWidth {
+                width: self.pane_divider_width,
+            });
+        }
         Ok(())
     }
     #[must_use]
@@ -244,27 +246,32 @@ impl AppearanceConfig {
         self.accent = accent;
     }
 }
-pub fn rgb(value: &str) -> Result<[u8; 3]> {
-    let Some(body) = value.get(1..) else {
-        anyhow::bail!("Invalid color {value:?}");
+pub fn rgb(value: &str) -> Result<[u8; 3], ColorError> {
+    let invalid = || ColorError::Invalid {
+        value: value.to_owned(),
     };
-    ensure!(
-        value.len() == 7 && value.starts_with('#') && body.bytes().all(|b| b.is_ascii_hexdigit()),
-        "Invalid color {value:?}"
-    );
-    let hex = |start: usize| -> Result<u8> {
+    let Some(body) = value.get(1..) else {
+        return Err(invalid());
+    };
+    if !(value.len() == 7 && value.starts_with('#') && body.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err(invalid());
+    }
+    let hex = |start: usize| -> Result<u8, ColorError> {
         let end = start.saturating_add(2);
-        let part = value.get(start..end).context("Invalid color")?;
+        let part = value.get(start..end).ok_or_else(|| ColorError::Truncated {
+            value: value.to_owned(),
+        })?;
         Ok(u8::from_str_radix(part, 16)?)
     };
     Ok([hex(1)?, hex(3)?, hex(5)?])
 }
-pub fn config_path(paths: &crate::Paths) -> Result<PathBuf> {
+pub fn config_path(paths: &crate::Paths) -> Result<PathBuf, AppearanceError> {
     if let Some(dir) = std::env::var_os("TERMINATOR_CONFIG_DIR") {
         return Ok(PathBuf::from(dir).join("config.toml"));
     }
     let default = directories::ProjectDirs::from("dev", "terminator", "Terminator")
-        .context("No data directory")?;
+        .ok_or(AppearanceError::NoDataDirectory)?;
     if std::env::var_os("TERMINATOR_DATA_DIR").is_some() || paths.data != default.data_local_dir() {
         return Ok(paths.data.join("config.toml"));
     }
@@ -272,7 +279,7 @@ pub fn config_path(paths: &crate::Paths) -> Result<PathBuf> {
         .map(PathBuf::from)
         .unwrap_or(
             directories::BaseDirs::new()
-                .context("No home directory")?
+                .ok_or(AppearanceError::NoHomeDirectory)?
                 .home_dir()
                 .join(".config"),
         );
@@ -284,20 +291,23 @@ pub struct AppearanceFile {
     pub source: String,
 }
 impl AppearanceFile {
-    pub fn load(path: &Path) -> Result<Self> {
+    pub fn load(path: &Path) -> Result<Self, AppearanceError> {
         let source = match fs::read_to_string(path) {
             Ok(s) => s,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(e.into()),
         };
-        let doc = source
-            .parse::<toml_edit::DocumentMut>()
-            .context("Invalid config.toml; correct the TOML and save again")?;
+        let doc = source.parse::<toml_edit::DocumentMut>().map_err(|source| {
+            AppearanceError::InvalidToml {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
         let config = if let Some(item) = doc.get("appearance") {
             toml_edit::de::from_str::<AppearanceConfig>(
                 &item
                     .as_table()
-                    .context("appearance must be a table")?
+                    .ok_or(AppearanceError::NotATable)?
                     .to_string(),
             )?
         } else {
@@ -306,13 +316,18 @@ impl AppearanceFile {
         config.validate()?;
         Ok(Self { config, source })
     }
-    pub fn save(path: &Path, config: &AppearanceConfig, expected: &str) -> Result<Self> {
+    pub fn save(
+        path: &Path,
+        config: &AppearanceConfig,
+        expected: &str,
+    ) -> Result<Self, AppearanceError> {
         config.validate()?;
         let current = Self::load(path)?;
-        ensure!(
-            current.source == expected,
-            "Configuration changed externally; reload before applying"
-        );
+        if current.source != expected {
+            return Err(AppearanceError::ChangedExternally {
+                path: path.to_path_buf(),
+            });
+        }
         let mut doc = current.source.parse::<toml_edit::DocumentMut>()?;
         if !doc.contains_key("appearance") {
             doc.insert(
@@ -323,7 +338,7 @@ impl AppearanceFile {
         let table = doc
             .get_mut("appearance")
             .and_then(toml_edit::Item::as_table_mut)
-            .context("appearance must be a table")?;
+            .ok_or(AppearanceError::NotATable)?;
         let values = toml_edit::ser::to_document(config)?;
         for (key, item) in values.iter() {
             let mut new = item.clone();
@@ -335,10 +350,9 @@ impl AppearanceFile {
             }
             table.insert(key, new);
         }
-        fs::create_dir_all(
-            path.parent()
-                .context("Configuration has no parent directory")?,
-        )?;
+        fs::create_dir_all(path.parent().ok_or_else(|| AppearanceError::NoParent {
+            path: path.to_path_buf(),
+        })?)?;
         let source = doc.to_string();
         crate::atomic_write(path, source.as_bytes())?;
         Ok(Self {
@@ -347,6 +361,60 @@ impl AppearanceFile {
         })
     }
 }
+/// Why a `#RRGGBB` color string is invalid.
+#[derive(Debug, thiserror::Error)]
+pub enum ColorError {
+    #[error("Invalid color {value:?}")]
+    Invalid { value: String },
+    #[error("Invalid color")]
+    Truncated { value: String },
+    #[error(transparent)]
+    Hex(#[from] std::num::ParseIntError),
+}
+
+/// Why the appearance configuration could not be validated, loaded, or saved.
+#[derive(Debug, thiserror::Error)]
+pub enum AppearanceError {
+    #[error("Unsupported appearance version {version}; expected 1")]
+    UnsupportedVersion { version: u32 },
+    #[error("appearance.{name}: expected #RRGGBB")]
+    InvalidColorField {
+        name: &'static str,
+        #[source]
+        source: ColorError,
+    },
+    #[error("appearance.border_width must be between 0 and 8")]
+    BorderWidth { width: f32 },
+    #[error("appearance.pane_divider_width must be between 1 and 24")]
+    PaneDividerWidth { width: f32 },
+    #[error("No data directory")]
+    NoDataDirectory,
+    #[error("No home directory")]
+    NoHomeDirectory,
+    #[error("Invalid config.toml; correct the TOML and save again")]
+    InvalidToml {
+        path: PathBuf,
+        #[source]
+        source: toml_edit::TomlError,
+    },
+    #[error("appearance must be a table")]
+    NotATable,
+    #[error("Configuration changed externally; reload before applying")]
+    ChangedExternally { path: PathBuf },
+    #[error("Configuration has no parent directory")]
+    NoParent { path: PathBuf },
+    #[error(transparent)]
+    Toml(#[from] toml_edit::TomlError),
+    #[error(transparent)]
+    Deserialize(#[from] toml_edit::de::Error),
+    #[error(transparent)]
+    Serialize(#[from] toml_edit::ser::Error),
+    #[error(transparent)]
+    Write(#[from] crate::AtomicWriteError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

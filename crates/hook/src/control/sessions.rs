@@ -73,7 +73,10 @@ impl Ctl {
         Ok(serde_json::to_value(s)?)
     }
     pub(super) fn focus(&self, session: String) -> Result<Value> {
-        ui_control::rpc(&self.paths, ui_control::Request::Focus { session })
+        Ok(ui_control::rpc(
+            &self.paths,
+            ui_control::Request::Focus { session },
+        )?)
     }
     pub(super) fn send(&self, args: SendArgs) -> Result<Value> {
         let SendArgs {
@@ -172,14 +175,14 @@ impl Ctl {
         }
     }
     pub(super) fn open_file(&self, name: &str, path: PathBuf, text: bool) -> Result<Value> {
-        ui_control::rpc(
+        Ok(ui_control::rpc(
             &self.paths,
             ui_control::Request::OpenFile {
                 project: Self::project(&self.state, name)?.id.clone(),
                 path: std::path::absolute(path)?,
                 as_text: text,
             },
-        )
+        )?)
     }
     pub(super) fn notify(&self, args: NotifyArgs) -> Result<Value> {
         let NotifyArgs {
@@ -213,9 +216,12 @@ impl Ctl {
         ))?)
     }
     pub(super) fn ui_snapshot(&self) -> Result<Value> {
-        ui_control::rpc(&self.paths, ui_control::Request::Snapshot)
+        Ok(ui_control::rpc(&self.paths, ui_control::Request::Snapshot)?)
     }
     pub(super) fn window(&self, action: String) -> Result<Value> {
-        ui_control::rpc(&self.paths, ui_control::Request::Window { action })
+        Ok(ui_control::rpc(
+            &self.paths,
+            ui_control::Request::Window { action },
+        )?)
     }
 }

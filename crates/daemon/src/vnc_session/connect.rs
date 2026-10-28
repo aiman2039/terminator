@@ -10,108 +10,33 @@ pub(super) struct SpawnVncThreadInput {
     pub options: terminator_core::vnc::VncOptions,
     pub input_rx: mpsc::Receiver<VncInputEvent>,
 }
-impl Shared {
-    pub(crate) fn vnc_connect(self: &Arc<Self>, spec: VncConnectSpec) -> Result<VncSession> {
-        let VncConnectSpec {
-            mut options,
-            project,
-            profile_id,
-            host,
-            port,
-            mut username,
-            mut password,
-            mut shared,
-            mut view_only,
-            label,
-        } = spec;
-        let host = host.trim().to_owned();
-        ensure!(!host.is_empty() && host.len() <= 255, "Invalid VNC host");
-        ensure!(port > 0, "Invalid VNC port");
+impl VncConnectSpec {
+    fn validate(&self) -> Result<()> {
         ensure!(
-            password.len() <= 4096
-                && username.len() <= 4096
-                && !username.chars().any(char::is_control),
+            !self.host.is_empty() && self.host.len() <= 255,
+            "Invalid VNC host"
+        );
+        ensure!(self.port > 0, "Invalid VNC port");
+        ensure!(
+            self.password.len() <= 4096
+                && self.username.len() <= 4096
+                && !self.username.chars().any(char::is_control),
             "VNC credentials exceed their supported limits"
         );
-        options.validate()?;
-        let saved_profile = profile_id.as_ref().and_then(|pid| {
-            relock(&self.state)
-                .vnc_profiles
-                .iter()
-                .find(|p| &p.id == pid)
-                .cloned()
-        });
-        if let Some(profile) = &saved_profile {
-            ensure!(
-                profile.host == host && profile.port == port,
-                "Saved credentials cannot be used for another VNC endpoint"
-            );
-            options = profile.options.clone();
-            if password.is_empty() && profile.credential_saved {
-                password =
-                    credentials::load(self.catalog_paths.as_ref().unwrap_or(&self.paths), profile)?;
-            }
-        }
-        options.validate()?;
+        self.options.validate()?;
+        Ok(())
+    }
+}
+
+impl Shared {
+    pub(crate) fn vnc_connect(self: &Arc<Self>, mut spec: VncConnectSpec) -> Result<VncSession> {
+        let host = spec.host.trim().to_owned();
+        spec.host = host;
+        spec.validate()?;
+        self.apply_saved_endpoint(&mut spec)?;
+        spec.options.validate()?;
         let sid = id();
-        let now_ts = now();
-        let _ = now_ts;
-        // A reconnect to the same endpoint leaves the previous dead record
-        // behind forever; drop it (and its runtime) so the sidebar and the
-        // session list do not fill with duplicates.
-        let mut stale: Vec<String> = Vec::new();
-        let record = {
-            let mut state = relock(&self.state);
-            validate_project(&state, &project)?;
-            state.vnc_sessions.retain(|session| {
-                let duplicate = session.project_id == project
-                    && session.host == host
-                    && session.port == port
-                    && !session.status.live();
-                if duplicate {
-                    stale.push(session.id.clone());
-                }
-                !duplicate
-            });
-            if let Some(pid) = &profile_id
-                && let Some(profile) = state.vnc_profiles.iter_mut().find(|p| &p.id == pid)
-            {
-                if password.is_empty() {
-                    password.clone_from(&profile.password);
-                }
-                if username.is_empty() {
-                    username.clone_from(&profile.username);
-                }
-                shared = profile.shared;
-                view_only = profile.view_only;
-                profile.last_connected = now_ts;
-            }
-            let resolved_label = label
-                .map(|l| l.trim().to_owned())
-                .filter(|l| !l.is_empty())
-                .unwrap_or_else(|| format!("{host}:{port}"));
-            let record = VncSession {
-                options: options.clone(),
-                retry_attempt: 0,
-                retry_in_seconds: 0,
-                id: sid.clone(),
-                project_id: project,
-                profile_id,
-                label: resolved_label,
-                host: host.clone(),
-                port,
-                width: 0,
-                height: 0,
-                view_only,
-                status: VncSessionStatus::Connecting,
-                error: None,
-                created: now_ts,
-                generation: state.generation.clone(),
-            };
-            state.vnc_sessions.push(record.clone());
-            state.revision = state.revision.saturating_add(1);
-            record
-        };
+        let (record, stale) = self.record_vnc_session(&mut spec, &sid)?;
         if let Some(paths) = &self.catalog_paths {
             let _ = terminator_core::generations::Catalog::open(paths)
                 .and_then(|c| c.save_workspace(&relock(&self.state)));
@@ -119,6 +44,134 @@ impl Shared {
         let _ = self.persist();
 
         self.clear_stale_vnc_runtimes(&stale);
+        self.start_vnc_runtime(sid, spec);
+        Ok(record)
+    }
+
+    /// A saved profile pins the endpoint and supplies its options and,
+    /// unless one was typed, the stored password.
+    fn apply_saved_endpoint(&self, spec: &mut VncConnectSpec) -> Result<()> {
+        let saved_profile = spec.profile_id.as_ref().and_then(|pid| {
+            relock(&self.state)
+                .vnc_profiles
+                .iter()
+                .find(|p| &p.id == pid)
+                .cloned()
+        });
+        let Some(profile) = &saved_profile else {
+            return Ok(());
+        };
+        ensure!(
+            profile.host == spec.host && profile.port == spec.port,
+            "Saved credentials cannot be used for another VNC endpoint"
+        );
+        spec.options = profile.options.clone();
+        if spec.password.is_empty() && profile.credential_saved {
+            spec.password =
+                credentials::load(self.catalog_paths.as_ref().unwrap_or(&self.paths), profile)?;
+        }
+        Ok(())
+    }
+
+    /// Adds the connecting session's record and returns it with the ids of
+    /// the dead duplicates it replaced.
+    fn record_vnc_session(
+        &self,
+        spec: &mut VncConnectSpec,
+        sid: &str,
+    ) -> Result<(VncSession, Vec<String>)> {
+        let now_ts = now();
+        let mut state = relock(&self.state);
+        validate_project(&state, &spec.project)?;
+        let stale = Self::drop_dead_duplicates(&mut state, spec);
+        Self::merge_saved_profile(&mut state, spec, now_ts);
+        let label = spec
+            .label
+            .take()
+            .map(|l| l.trim().to_owned())
+            .filter(|l| !l.is_empty())
+            .unwrap_or_else(|| format!("{}:{}", spec.host, spec.port));
+        let record = VncSession {
+            options: spec.options.clone(),
+            retry_attempt: 0,
+            retry_in_seconds: 0,
+            id: sid.to_owned(),
+            project_id: std::mem::take(&mut spec.project),
+            profile_id: spec.profile_id.take(),
+            label,
+            host: spec.host.clone(),
+            port: spec.port,
+            width: 0,
+            height: 0,
+            view_only: spec.view_only,
+            status: VncSessionStatus::Connecting,
+            error: None,
+            created: now_ts,
+            generation: state.generation.clone(),
+        };
+        state.vnc_sessions.push(record.clone());
+        state.revision = state.revision.saturating_add(1);
+        Ok((record, stale))
+    }
+
+    /// A reconnect to the same endpoint leaves the previous dead record
+    /// behind forever; drop it (and its runtime) so the sidebar and the
+    /// session list do not fill with duplicates.
+    fn drop_dead_duplicates(
+        state: &mut terminator_core::State,
+        spec: &VncConnectSpec,
+    ) -> Vec<String> {
+        let mut stale: Vec<String> = Vec::new();
+        state.vnc_sessions.retain(|session| {
+            let duplicate = session.project_id == spec.project
+                && session.host == spec.host
+                && session.port == spec.port
+                && !session.status.live();
+            if duplicate {
+                stale.push(session.id.clone());
+            }
+            !duplicate
+        });
+        stale
+    }
+
+    /// Fills missing credentials and the sharing flags from the saved
+    /// profile, and stamps its last connection time.
+    fn merge_saved_profile(
+        state: &mut terminator_core::State,
+        spec: &mut VncConnectSpec,
+        now_ts: u64,
+    ) {
+        let Some(pid) = &spec.profile_id else {
+            return;
+        };
+        let Some(profile) = state.vnc_profiles.iter_mut().find(|p| &p.id == pid) else {
+            return;
+        };
+        if spec.password.is_empty() {
+            spec.password.clone_from(&profile.password);
+        }
+        if spec.username.is_empty() {
+            spec.username.clone_from(&profile.username);
+        }
+        spec.shared = profile.shared;
+        spec.view_only = profile.view_only;
+        profile.last_connected = now_ts;
+    }
+
+    fn start_vnc_runtime(self: &Arc<Self>, sid: String, spec: VncConnectSpec) {
+        let VncConnectSpec {
+            options,
+            project: _,
+            profile_id: _,
+            host,
+            port,
+            username,
+            password,
+            shared,
+            view_only,
+            label: _,
+        } = spec;
         let (input_tx, input_rx) = mpsc::channel::<VncInputEvent>(256);
         let runtime = Arc::new(Mutex::new(VncRuntime::new(view_only, input_tx)));
         relock(&runtime).options = options.clone();
@@ -134,7 +187,6 @@ impl Shared {
             options,
             input_rx,
         });
-        Ok(record)
     }
 
     fn clear_stale_vnc_runtimes(&self, stale: &[String]) {

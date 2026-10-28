@@ -28,45 +28,96 @@ fn hidden_rename_field_releases_terminal_input() {
     let (jobs, requests) = mpsc::channel();
     app.jobs = jobs.into();
     app.state.sessions = vec![session_fixture("named", SessionKind::Shell)];
+    app.state.sessions = vec![session_fixture("named", SessionKind::Shell)];
     app.preferences.expanded.insert("a".into(), true);
-    app.begin_rename("named", RenameSurface::Sidebar);
+    begin_draft_rename(&mut app, RenameSurface::Sidebar);
+    sidebar_hiding_releases_rename(&mut app, &ctx);
+    painted_rename_releases_focus_when_hidden(&mut app, &ctx);
+
+    begin_draft_rename(&mut app, RenameSurface::Pane);
+    covers_keep_the_pane_rename_draft(&mut app, &ctx);
+    strip_input_follows_the_strip(&mut app);
+
+    app.state.sessions = vec![ended_session_fixture()];
+    app.state.agents = vec![stopped_agent_fixture()];
+    app.preferences.tool = SidebarTool::History;
+    app.preferences.visible = true;
+    begin_draft_rename(&mut app, RenameSurface::Sidebar);
+    history_hiding_releases_rename(&mut app);
+
+    app.state.sessions = vec![session_fixture("named", SessionKind::Shell)];
+    begin_draft_rename(&mut app, RenameSurface::Workspace);
+    app.note_rename_frame(&ctx);
+    assert_rename_blocks(&app);
+    app.note_rename_frame(&ctx);
+    assert_rename_draft_stays_live(&app);
+    while requests.try_recv().is_ok() {}
+    paint_workspace_rename(&mut app, &ctx);
+    app.note_rename_frame(&ctx);
+    assert_rename_blocks(&app);
+    assert!(requests.try_recv().is_err());
+}
+
+/// Starts renaming `named` on `surface` with a typed "Draft" title.
+fn begin_draft_rename(app: &mut App, surface: RenameSurface) {
+    app.begin_rename("named", surface);
     app.rename_session.as_mut().unwrap().1 = "Draft".into();
-    assert_rename_blocks(&app);
+    assert_rename_blocks(app);
+}
 
+/// `hide` takes the rename field off screen, keeping the draft but
+/// releasing input; `show` brings it back and it blocks again.
+fn assert_hiding_releases(app: &mut App, hide: fn(&mut App), show: fn(&mut App)) {
+    hide(app);
+    assert_rename_draft_stays_live(app);
+    show(app);
+    assert_rename_blocks(app);
+}
+
+fn sidebar_hiding_releases_rename(app: &mut App, ctx: &egui::Context) {
     app.preferences.left_visible = false;
-    app.suspend_hidden_rename(&ctx);
-    assert_rename_draft_stays_live(&app);
+    app.suspend_hidden_rename(ctx);
+    assert_rename_draft_stays_live(app);
     app.preferences.left_visible = true;
-    assert_rename_blocks(&app);
+    assert_rename_blocks(app);
+    assert_hiding_releases(
+        app,
+        |app| app.preferences.left_agents = true,
+        |app| app.preferences.left_agents = false,
+    );
+    assert_hiding_releases(
+        app,
+        |app| {
+            app.preferences.expanded.insert("a".into(), false);
+        },
+        |app| {
+            app.preferences.expanded.insert("a".into(), true);
+        },
+    );
+    assert_hiding_releases(
+        app,
+        |app| {
+            app.preferences.hidden_projects.insert("a".into());
+        },
+        |app| {
+            app.preferences.hidden_projects.remove("a");
+        },
+    );
+}
 
-    app.preferences.left_agents = true;
-    assert_rename_draft_stays_live(&app);
-    app.preferences.left_agents = false;
-    assert_rename_blocks(&app);
-
-    app.preferences.expanded.insert("a".into(), false);
-    assert_rename_draft_stays_live(&app);
-    app.preferences.expanded.insert("a".into(), true);
-    assert_rename_blocks(&app);
-
-    app.preferences.hidden_projects.insert("a".into());
-    assert_rename_draft_stays_live(&app);
-    app.preferences.hidden_projects.remove("a");
-    assert_rename_blocks(&app);
-
+fn painted_rename_releases_focus_when_hidden(app: &mut App, ctx: &egui::Context) {
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.projects(ui));
     output.textures_delta.clear();
     assert!(app.rename_painted);
     assert!(ctx.memory(|memory| memory.focused().is_some()));
     app.preferences.left_visible = false;
-    app.suspend_hidden_rename(&ctx);
+    app.suspend_hidden_rename(ctx);
     assert!(ctx.memory(|memory| memory.focused().is_none()));
-    assert_rename_draft_stays_live(&app);
+    assert_rename_draft_stays_live(app);
     app.preferences.left_visible = true;
+}
 
-    app.begin_rename("named", RenameSurface::Pane);
-    app.rename_session.as_mut().unwrap().1 = "Draft".into();
-    assert_rename_blocks(&app);
+fn covers_keep_the_pane_rename_draft(app: &mut App, ctx: &egui::Context) {
     let covers: [fn(&mut App); 5] = [
         |app| app.settings_open = true,
         |app| app.player_open = true,
@@ -75,8 +126,8 @@ fn hidden_rename_field_releases_terminal_input() {
         |app| app.search_open = true,
     ];
     for cover in covers {
-        cover(&mut app);
-        app.suspend_hidden_rename(&ctx);
+        cover(app);
+        app.suspend_hidden_rename(ctx);
         assert_eq!(
             app.rename_session.as_ref().map(|(_, title)| title.as_str()),
             Some("Draft")
@@ -87,7 +138,7 @@ fn hidden_rename_field_releases_terminal_input() {
         app.palette.open = false;
         app.worktree_open = false;
         app.search_open = false;
-        assert_rename_blocks(&app);
+        assert_rename_blocks(app);
     }
     app.worktree_draft = Some(worktree_ui::WorktreeDraft {
         source: "a".into(),
@@ -98,8 +149,10 @@ fn hidden_rename_field_releases_terminal_input() {
     });
     assert!(app.strip_terminal_input_enabled("named"));
     app.worktree_draft = None;
-    assert_rename_blocks(&app);
+    assert_rename_blocks(app);
+}
 
+fn strip_input_follows_the_strip(app: &mut App) {
     app.preferences.ide_mode = true;
     app.preferences.ide_strip_docks.0.insert(
         "a".into(),
@@ -113,11 +166,16 @@ fn hidden_rename_field_releases_terminal_input() {
     app.preferences.ide_mode = false;
     app.preferences.ide_terminal_collapsed = false;
     app.preferences.ide_strip_docks.0.clear();
+}
 
+fn ended_session_fixture() -> Session {
     let mut ended = session_fixture("named", SessionKind::Shell);
     ended.lifecycle = Lifecycle::Ended;
-    app.state.sessions = vec![ended];
-    app.state.agents = vec![Agent {
+    ended
+}
+
+fn stopped_agent_fixture() -> Agent {
+    Agent {
         invocation_id: "agent-1".into(),
         session_id: "named".into(),
         kind: "codex".into(),
@@ -130,38 +188,37 @@ fn hidden_rename_field_releases_terminal_input() {
             args: vec!["resume".into(), "provider-1".into()],
         }),
         process: None,
-    }];
-    app.preferences.tool = SidebarTool::History;
-    app.preferences.visible = true;
-    app.begin_rename("named", RenameSurface::Sidebar);
-    app.rename_session.as_mut().unwrap().1 = "Draft".into();
-    assert_rename_blocks(&app);
-    app.preferences.visible = false;
-    assert_rename_draft_stays_live(&app);
-    app.preferences.visible = true;
-    assert_rename_blocks(&app);
-    app.preferences.tool = SidebarTool::Agents;
-    assert_rename_draft_stays_live(&app);
-    app.preferences.tool = SidebarTool::History;
-    assert_rename_blocks(&app);
-    app.preferences.history_expanded.insert("a".into(), false);
-    assert_rename_draft_stays_live(&app);
-    app.preferences.history_expanded.insert("a".into(), true);
-    assert_rename_blocks(&app);
-    app.preferences.history_filter = "zzz".into();
-    assert_rename_draft_stays_live(&app);
-    app.preferences.history_filter.clear();
-    assert_rename_blocks(&app);
+    }
+}
 
-    app.state.sessions = vec![session_fixture("named", SessionKind::Shell)];
-    app.begin_rename("named", RenameSurface::Workspace);
-    app.rename_session.as_mut().unwrap().1 = "Draft".into();
-    assert_rename_blocks(&app);
-    app.note_rename_frame(&ctx);
-    assert_rename_blocks(&app);
-    app.note_rename_frame(&ctx);
-    assert_rename_draft_stays_live(&app);
-    while requests.try_recv().is_ok() {}
+fn history_hiding_releases_rename(app: &mut App) {
+    assert_hiding_releases(
+        app,
+        |app| app.preferences.visible = false,
+        |app| app.preferences.visible = true,
+    );
+    assert_hiding_releases(
+        app,
+        |app| app.preferences.tool = SidebarTool::Agents,
+        |app| app.preferences.tool = SidebarTool::History,
+    );
+    assert_hiding_releases(
+        app,
+        |app| {
+            app.preferences.history_expanded.insert("a".into(), false);
+        },
+        |app| {
+            app.preferences.history_expanded.insert("a".into(), true);
+        },
+    );
+    assert_hiding_releases(
+        app,
+        |app| app.preferences.history_filter = "zzz".into(),
+        |app| app.preferences.history_filter.clear(),
+    );
+}
+
+fn paint_workspace_rename(app: &mut App, ctx: &egui::Context) {
     let rect = egui::Rect::from_min_size(egui::pos2(8.0, 8.0), egui::vec2(220.0, 24.0));
     let mut output = ctx.run_ui(
         egui::RawInput {
@@ -181,9 +238,6 @@ fn hidden_rename_field_releases_terminal_input() {
         },
     );
     output.textures_delta.clear();
-    app.note_rename_frame(&ctx);
-    assert_rename_blocks(&app);
-    assert!(requests.try_recv().is_err());
 }
 
 #[test]

@@ -7407,7 +7407,6 @@ dependencies = [
 name = "terminator-core"
 version = "0.138.0"
 dependencies = [
- "anyhow",
  "base64 0.23.1",
  "directories",
  "dunce",
@@ -7421,6 +7420,7 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "terminator-sys",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "toml_edit 0.25.17+spec-1.1.0",
@@ -7469,7 +7469,6 @@ dependencies = [
 name = "terminator-git"
 version = "0.138.0"
 dependencies = [
- "anyhow",
  "tempfile",
  "terminator-core",
  "thiserror 2.0.21",
@@ -7500,7 +7499,6 @@ dependencies = [
 name = "terminator-integrations"
 version = "0.138.0"
 dependencies = [
- "anyhow",
  "serde_json",
  "tempfile",
  "terminator-core",

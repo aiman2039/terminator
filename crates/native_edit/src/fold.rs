@@ -147,95 +147,137 @@ impl Folds {
 /// indented lines. One region per first line: the longest.
 #[must_use]
 pub fn fold_ranges<B: Buffer>(doc: &B, language: Language) -> Vec<(usize, usize)> {
-    let lines = doc.line_count();
-    let mut found: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
-    let mut record = |first: usize, last: usize| {
+    let mut regions = Regions::default();
+    if matches!(language, Language::Python | Language::Yaml) {
+        regions.indent_regions(doc);
+    } else {
+        regions.bracket_regions(doc);
+    }
+    regions.found.into_iter().collect()
+}
+
+/// Regions found so far, by first line.
+#[derive(Default)]
+struct Regions {
+    found: std::collections::BTreeMap<usize, usize>,
+}
+
+impl Regions {
+    /// Keep the longest region per first line.
+    fn record(&mut self, first: usize, last: usize) {
         if last > first {
-            let end = found.entry(first).or_insert(last);
+            let end = self.found.entry(first).or_insert(last);
             *end = (*end).max(last);
         }
-    };
-    if matches!(language, Language::Python | Language::Yaml) {
-        let indent = |line: usize| -> Option<usize> {
-            let text = doc.line_text(line);
-            (!text.trim().is_empty())
-                .then(|| text.chars().take_while(|c| c.is_whitespace()).count())
-        };
-        for line in 0..lines {
-            let Some(depth) = indent(line) else {
+    }
+
+    /// A line followed by deeper indented lines (blank lines included).
+    fn indent_regions<B: Buffer>(&mut self, doc: &B) {
+        for line in 0..doc.line_count() {
+            let Some(depth) = Self::indent(doc, line) else {
                 continue;
             };
-            let mut last = line;
-            let mut next = line.saturating_add(1);
-            while next < lines {
-                match indent(next) {
-                    Some(inner) if inner <= depth => break,
-                    Some(_) => last = next,
-                    None => {}
-                }
-                next = next.saturating_add(1);
-            }
-            record(line, last);
-        }
-    } else {
-        let mut stack: Vec<(char, usize)> = Vec::new();
-        // Brackets inside strings and comments do not open or close blocks.
-        let mut block_comment = false;
-        for line in 0..lines {
-            let text: Vec<char> = doc.line_text(line).chars().collect();
-            let mut in_string = false;
-            let mut index = 0usize;
-            while let Some(&c) = text.get(index) {
-                let next = text.get(index.saturating_add(1)).copied();
-                index = index.saturating_add(1);
-                if block_comment {
-                    if c == '*' && next == Some('/') {
-                        block_comment = false;
-                        index = index.saturating_add(1);
-                    }
-                    continue;
-                }
-                if in_string {
-                    match c {
-                        '\\' => index = index.saturating_add(1),
-                        '"' => in_string = false,
-                        _ => {}
-                    }
-                    continue;
-                }
-                match (c, next) {
-                    ('/', Some('/')) => break,
-                    ('/', Some('*')) => {
-                        block_comment = true;
-                        index = index.saturating_add(1);
-                        continue;
-                    }
-                    ('"', _) => {
-                        in_string = true;
-                        continue;
-                    }
-                    _ => {}
-                }
-                match c {
-                    '{' | '[' | '(' => stack.push((c, line)),
-                    '}' | ']' | ')' => {
-                        let open = match c {
-                            '}' => '{',
-                            ']' => '[',
-                            _ => '(',
-                        };
-                        if let Some(at) = stack.iter().rposition(|(kind, _)| *kind == open) {
-                            let (_, first) = stack.remove(at);
-                            stack.truncate(at);
-                            record(first, line);
-                        }
-                    }
-                    _ => {}
-                }
-            }
+            self.record(line, Self::indented_block_end(doc, line, depth));
         }
     }
-    found.into_iter().collect()
+
+    /// Leading whitespace of a non-blank line.
+    fn indent<B: Buffer>(doc: &B, line: usize) -> Option<usize> {
+        let text = doc.line_text(line);
+        (!text.trim().is_empty()).then(|| text.chars().take_while(|c| c.is_whitespace()).count())
+    }
+
+    /// Last line indented deeper than `depth` after `line`.
+    fn indented_block_end<B: Buffer>(doc: &B, line: usize, depth: usize) -> usize {
+        let lines = doc.line_count();
+        let mut last = line;
+        let mut next = line.saturating_add(1);
+        while next < lines {
+            match Self::indent(doc, next) {
+                Some(inner) if inner <= depth => break,
+                Some(_) => last = next,
+                None => {}
+            }
+            next = next.saturating_add(1);
+        }
+        last
+    }
+
+    /// Brackets opened on one line and closed on a later one.
+    fn bracket_regions<B: Buffer>(&mut self, doc: &B) {
+        let mut scan = BracketScan::default();
+        for line in 0..doc.line_count() {
+            let text: Vec<char> = doc.line_text(line).chars().collect();
+            scan.scan_line(self, line, &text);
+        }
+    }
+}
+
+/// Open brackets across lines. Brackets inside strings and comments do
+/// not open or close blocks.
+#[derive(Default)]
+struct BracketScan {
+    stack: Vec<(char, usize)>,
+    block_comment: bool,
+}
+
+impl BracketScan {
+    fn scan_line(&mut self, regions: &mut Regions, line: usize, text: &[char]) {
+        let mut in_string = false;
+        let mut index = 0usize;
+        while let Some(&c) = text.get(index) {
+            let next = text.get(index.saturating_add(1)).copied();
+            index = index.saturating_add(1);
+            if self.block_comment {
+                if c == '*' && next == Some('/') {
+                    self.block_comment = false;
+                    index = index.saturating_add(1);
+                }
+                continue;
+            }
+            if in_string {
+                match c {
+                    '\\' => index = index.saturating_add(1),
+                    '"' => in_string = false,
+                    _ => {}
+                }
+                continue;
+            }
+            match (c, next) {
+                ('/', Some('/')) => break,
+                ('/', Some('*')) => {
+                    self.block_comment = true;
+                    index = index.saturating_add(1);
+                    continue;
+                }
+                ('"', _) => {
+                    in_string = true;
+                    continue;
+                }
+                _ => {}
+            }
+            self.bracket(regions, c, line);
+        }
+    }
+
+    /// Open on `{[(`; close the nearest matching opener on `}])`.
+    fn bracket(&mut self, regions: &mut Regions, c: char, line: usize) {
+        let open = match c {
+            '{' | '[' | '(' => {
+                self.stack.push((c, line));
+                return;
+            }
+            '}' => '{',
+            ']' => '[',
+            ')' => '(',
+            _ => return,
+        };
+        if let Some(at) = self.stack.iter().rposition(|(kind, _)| *kind == open) {
+            let (_, first) = self.stack.remove(at);
+            self.stack.truncate(at);
+            regions.record(first, line);
+        }
+    }
 }
 
 #[cfg(test)]
