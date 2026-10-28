@@ -1,9 +1,9 @@
-#[cfg(test)]
-use super::cache::PresentationCache;
 use super::cache::{SessionView, ago};
 use super::counts::{AttentionCounts, attention_status_icon};
 use super::owner::OwnerSupport;
 use super::presentation::{AgentPresentation, Diagnostics};
+#[cfg(test)]
+use crate::agent_presence::GetInput;
 #[cfg(test)]
 use terminator_core::State;
 use terminator_core::{
@@ -15,8 +15,14 @@ use terminator_core::{
 #[cfg(test)]
 #[must_use]
 pub(crate) fn present_session(state: &State, session_id: &str, now: u64) -> AgentPresentation {
-    let mut cache = PresentationCache::default();
-    (*cache.get(state, session_id, now, None)).clone()
+    let mut cache = super::cache::PresentationCache::default();
+    (*cache.get(GetInput {
+        state,
+        id: session_id,
+        now,
+        fresh: None,
+    }))
+    .clone()
 }
 
 pub(super) fn unknown_presentation() -> AgentPresentation {
@@ -143,19 +149,32 @@ pub(crate) fn notice_preview(markdown: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-#[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
-pub(super) fn diagnostics_text(
-    session: &Session,
-    presence: Option<&terminator_core::agents::TerminalPresence>,
-    detected: &[terminator_core::agents::DetectedAgent],
-    hook: Option<&terminator_core::Agent>,
-    support: OwnerSupport,
-    verified: bool,
-    hook_linked: bool,
-    status_label: &str,
-    unread: usize,
-    now: u64,
-) -> String {
+pub(crate) struct DiagnosticsTextInput<'a> {
+    pub(crate) session: &'a Session,
+    pub(crate) presence: Option<&'a terminator_core::agents::TerminalPresence>,
+    pub(crate) detected: &'a [terminator_core::agents::DetectedAgent],
+    pub(crate) hook: Option<&'a terminator_core::Agent>,
+    pub(crate) support: OwnerSupport,
+    pub(crate) verified: bool,
+    pub(crate) hook_linked: bool,
+    pub(crate) status_label: &'a str,
+    pub(crate) unread: usize,
+    pub(crate) now: u64,
+}
+
+pub(super) fn diagnostics_text(input: DiagnosticsTextInput<'_>) -> String {
+    let DiagnosticsTextInput {
+        session,
+        presence,
+        detected,
+        hook,
+        support,
+        verified,
+        hook_linked,
+        status_label,
+        unread,
+        now,
+    } = input;
     let mut lines = Vec::new();
     if !session.lifecycle.live() {
         lines.push("Session ended".into());

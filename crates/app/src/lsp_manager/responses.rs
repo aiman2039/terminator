@@ -1,5 +1,12 @@
 use super::*;
 
+pub(super) struct OnResponseInput<'a> {
+    pub(super) key: &'a ServerKey,
+    pub(super) id: L::RequestId,
+    pub(super) result: Option<serde_json::Value>,
+    pub(super) error: Option<L::ResponseError>,
+}
+
 impl LspManager {
     pub(super) fn on_body(&mut self, key: &ServerKey, body: &[u8]) {
         let Some(message) = L::parse_message(body) else {
@@ -16,7 +23,12 @@ impl LspManager {
                 }
             }
             L::LspMessage::Response { id, result, error } => {
-                self.on_response(key, id, result, error);
+                self.on_response(OnResponseInput {
+                    key,
+                    id,
+                    result,
+                    error,
+                });
             }
             // Answer server-to-client requests with null (progress and
             // registration prompts), like the probe verified: unanswered
@@ -37,13 +49,13 @@ impl LspManager {
         }
     }
 
-    pub(super) fn on_response(
-        &mut self,
-        key: &ServerKey,
-        id: L::RequestId,
-        result: Option<serde_json::Value>,
-        error: Option<L::ResponseError>,
-    ) {
+    pub(super) fn on_response(&mut self, input: OnResponseInput<'_>) {
+        let OnResponseInput {
+            key,
+            id,
+            result,
+            error,
+        } = input;
         let L::RequestId::Number(number) = id else {
             return;
         };

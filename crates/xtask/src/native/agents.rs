@@ -6,7 +6,22 @@ fn gui(h: &Harness) -> Result<Value> {
     ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)
 }
 
-fn toggle_agents(h: &Harness, o: &Options, name: &str, open: bool, project: &Value) -> Result<()> {
+struct ToggleAgentsInput<'a> {
+    h: &'a Harness,
+    o: &'a Options,
+    name: &'a str,
+    open: bool,
+    project: &'a Value,
+}
+
+fn toggle_agents(input: ToggleAgentsInput<'_>) -> Result<()> {
+    let ToggleAgentsInput {
+        h,
+        o,
+        name,
+        open,
+        project,
+    } = input;
     let path = h.root.join("agent-toggle.json");
     terminator_core::atomic_write(&path, b"[]")?;
     let result = capture(
@@ -162,7 +177,13 @@ pub fn run(o: &Options) -> Result<()> {
             Ok(())
         },
     )?;
-    toggle_agents(&h, o, "agents-open", true, &second)?;
+    toggle_agents(ToggleAgentsInput {
+        h: &h,
+        o,
+        name: "agents-open",
+        open: true,
+        project: &second,
+    })?;
     ensure!(
         prefs(&h)?
             .get("left_agents")
@@ -209,7 +230,13 @@ pub fn run(o: &Options) -> Result<()> {
         },
         5,
     )?;
-    toggle_agents(&h, o, "projects-restored", false, &first)?;
+    toggle_agents(ToggleAgentsInput {
+        h: &h,
+        o,
+        name: "projects-restored",
+        open: false,
+        project: &first,
+    })?;
     ensure!(
         prefs(&h)?
             .get("left_agents")

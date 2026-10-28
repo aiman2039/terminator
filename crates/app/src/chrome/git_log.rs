@@ -540,13 +540,13 @@ pub fn revision_document(
     if old.is_none() && new.is_none() {
         return Err(format!("{name} is not a text file in either revision"));
     }
-    let mut doc = crate::diff::build_with_context(
-        &relative,
-        old.as_deref().unwrap_or_default(),
-        new.as_deref().unwrap_or_default(),
-        false,
-        3,
-    );
+    let mut doc = crate::diff::build_with_context(crate::diff::BuildWithContextInput {
+        path: &relative,
+        left: old.as_deref().unwrap_or_default(),
+        right: new.as_deref().unwrap_or_default(),
+        staged: false,
+        context: 3,
+    });
     let short = |revision: &str| {
         if revision.len() > 12 && revision.chars().all(|c| c.is_ascii_hexdigit() || c == '^') {
             revision.chars().take(8).collect()

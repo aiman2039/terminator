@@ -1,7 +1,15 @@
 //! GUI client for `worktrees-v1`. Git still owns the checkout.
-use super::*;
+use crate::*;
 #[cfg(test)]
 use anyhow::Context;
+
+pub(crate) struct WorktreeFormInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) draft: &'a mut WorktreeDraft,
+    pub(crate) submit: &'a mut bool,
+    pub(crate) browse: &'a mut bool,
+    pub(crate) cancel: &'a mut bool,
+}
 
 #[derive(Clone)]
 pub(crate) struct WorktreeDraft {
@@ -39,7 +47,7 @@ pub(crate) fn default_dest(source: &Path, branch: &str) -> PathBuf {
 
 /// Resolve the created project on the worker, only after an acknowledged add.
 #[cfg(test)]
-pub(super) fn create(
+pub(crate) fn create(
     draft: &WorktreeDraft,
     mut request: impl FnMut(Request) -> Result<Response>,
 ) -> Result<(Box<State>, String)> {
@@ -70,14 +78,14 @@ pub(super) fn create(
 }
 
 impl App {
-    pub(super) fn has_worktrees(&self) -> bool {
+    pub(crate) fn has_worktrees(&self) -> bool {
         self.state
             .capabilities
             .iter()
             .any(|capability| capability == WORKTREES_CAPABILITY)
     }
 
-    pub(super) fn managed_worktree<'a>(
+    pub(crate) fn managed_worktree<'a>(
         &'a self,
         project_id: &str,
     ) -> Option<&'a terminator_core::worktrees::Registration> {
@@ -87,7 +95,7 @@ impl App {
             .find(|worktree| worktree.project_id == project_id && !worktree.removed)
     }
 
-    pub(super) fn open_worktree_wizard(&mut self) {
+    pub(crate) fn open_worktree_wizard(&mut self) {
         if !self.has_worktrees() {
             self.info = Some(
                 "The running session service does not support worktrees. Update it after finishing live sessions."
@@ -114,7 +122,7 @@ impl App {
         });
     }
 
-    pub(super) fn worktree_center(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn worktree_center(&mut self, ui: &mut egui::Ui) {
         let Some(mut draft) = self.worktree_draft.clone() else {
             return;
         };
@@ -131,7 +139,13 @@ impl App {
             });
         });
         ui.add_space(8.0);
-        self.worktree_form(ui, &mut draft, &mut submit, &mut browse, &mut cancel);
+        self.worktree_form(WorktreeFormInput {
+            ui,
+            draft: &mut draft,
+            submit: &mut submit,
+            browse: &mut browse,
+            cancel: &mut cancel,
+        });
         if browse {
             self.browse_target = Some(BrowseTarget::WorktreeDest);
         }
@@ -145,14 +159,14 @@ impl App {
         }
     }
 
-    pub(super) fn worktree_form(
-        &self,
-        ui: &mut egui::Ui,
-        draft: &mut WorktreeDraft,
-        submit: &mut bool,
-        browse: &mut bool,
-        cancel: &mut bool,
-    ) {
+    pub(crate) fn worktree_form(&self, input: WorktreeFormInput<'_>) {
+        let WorktreeFormInput {
+            ui,
+            draft,
+            submit,
+            browse,
+            cancel,
+        } = input;
         ui.weak(
             "Creates an isolated git checkout as a new project. You start agents in its terminal.",
         );
@@ -237,15 +251,15 @@ impl App {
         });
     }
 
-    pub(super) fn submit_worktree(&mut self, draft: &WorktreeDraft) {
+    pub(crate) fn submit_worktree(&mut self, draft: &WorktreeDraft) {
         let _ = self.jobs.send(Job::CreateWorktree(draft.clone()));
     }
 
-    pub(super) fn confirm_remove_worktree(&mut self, project_id: &str) {
+    pub(crate) fn confirm_remove_worktree(&mut self, project_id: &str) {
         self.worktree_remove = Some(project_id.into());
     }
 
-    pub(super) fn worktree_remove_dialog(&mut self, ctx: &egui::Context) {
+    pub(crate) fn worktree_remove_dialog(&mut self, ctx: &egui::Context) {
         let Some(project_id) = self.worktree_remove.clone() else {
             return;
         };

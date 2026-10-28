@@ -35,16 +35,31 @@ pub(super) fn powershell(root: &Path, host: &str, script: &str) -> Command {
 }
 
 pub fn run(source: &Path, artifacts: &Path, host: &str, bash: &str) -> Result<()> {
-    run_with(source, artifacts, host, bash, &System)
+    run_with(
+        RunWithInput {
+            source,
+            artifacts,
+            host,
+            bash,
+        },
+        &System,
+    )
 }
 
-pub(super) fn run_with(
-    source: &Path,
-    artifacts: &Path,
-    host: &str,
-    bash: &str,
-    runner: &impl Runner,
-) -> Result<()> {
+pub(super) struct RunWithInput<'a> {
+    pub(super) source: &'a Path,
+    pub(super) artifacts: &'a Path,
+    pub(super) host: &'a str,
+    pub(super) bash: &'a str,
+}
+
+pub(super) fn run_with(input: RunWithInput<'_>, runner: &impl Runner) -> Result<()> {
+    let RunWithInput {
+        source,
+        artifacts,
+        host,
+        bash,
+    } = input;
     validate_host(host)?;
     let source = source.canonicalize()?;
     fs::create_dir_all(artifacts)?;

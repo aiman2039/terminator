@@ -1,9 +1,34 @@
 use super::super::appearance;
+use crate::app::OpenFileInput;
+use crate::app::OpenFileModeInput;
+use crate::native_editor::OpenNativeInput;
 use eframe::egui::{self};
 use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+
+pub(crate) struct TerminalActionInput<'a> {
+    pub(crate) ctx: &'a egui::Context,
+    pub(crate) session: &'a Session,
+    pub(crate) target: &'a services::Target,
+    pub(crate) action: FileAction,
+}
+
+pub(crate) struct FileActionInput<'a> {
+    pub(crate) ui: &'a egui::Ui,
+    pub(crate) action: FileAction,
+    pub(crate) path: &'a std::path::Path,
+    pub(crate) line: Option<u32>,
+}
+
+pub(crate) struct NoteFileActivationInput {
+    pub(crate) path: PathBuf,
+    pub(crate) staged: Option<bool>,
+    pub(crate) action: FileAction,
+    pub(crate) interval: Duration,
+}
+
 use terminator_core::*;
 
 use super::super::*;
@@ -35,13 +60,14 @@ impl App {
             self.non_terminal_selected = false;
         }
     }
-    pub(crate) fn terminal_action(
-        &mut self,
-        ctx: &egui::Context,
-        session: &Session,
-        target: &services::Target,
-        action: FileAction,
-    ) {
+
+    pub(crate) fn terminal_action(&mut self, input: TerminalActionInput<'_>) {
+        let TerminalActionInput {
+            ctx,
+            session,
+            target,
+            action,
+        } = input;
         if action == FileAction::Copy {
             ctx.copy_text(target.display());
             return;
@@ -78,12 +104,12 @@ impl App {
                 {
                     let _ = self.jobs.send(Job::External(path.clone()));
                 } else if self.state.settings.editor_mode == EditorMode::Native {
-                    self.open_native(
-                        &session.project_id,
-                        path.clone(),
-                        *line,
-                        Self::split_for(action),
-                    );
+                    self.open_native(OpenNativeInput {
+                        project: &session.project_id,
+                        path: path.clone(),
+                        line: *line,
+                        split: Self::split_for(action),
+                    });
                 } else {
                     if Self::split_for(action).is_none()
                         && self.reuse_file_session(&session.project_id, path)
@@ -111,19 +137,46 @@ impl App {
             }
         }
     }
-    pub(crate) fn file_action(
-        &mut self,
-        ui: &egui::Ui,
-        action: FileAction,
-        path: &std::path::Path,
-        line: Option<u32>,
-    ) {
+
+    pub(crate) fn file_action(&mut self, input: FileActionInput<'_>) {
+        let FileActionInput {
+            ui,
+            action,
+            path,
+            line,
+        } = input;
         match action {
-            FileAction::Open => self.open_file(path.into(), line, None, false),
-            FileAction::Text => self.open_file_mode(path.into(), line, None, false, true),
-            FileAction::Split => self.open_file(path.into(), line, Some("right"), false),
-            FileAction::Here => self.open_file(path.into(), line, Some(Self::SPLIT_HERE), false),
-            FileAction::External => self.open_file(path.into(), line, None, true),
+            FileAction::Open => self.open_file(OpenFileInput {
+                path: path.into(),
+                line,
+                split: None,
+                external: false,
+            }),
+            FileAction::Text => self.open_file_mode(OpenFileModeInput {
+                path: path.into(),
+                line,
+                split: None,
+                external: false,
+                text: true,
+            }),
+            FileAction::Split => self.open_file(OpenFileInput {
+                path: path.into(),
+                line,
+                split: Some("right"),
+                external: false,
+            }),
+            FileAction::Here => self.open_file(OpenFileInput {
+                path: path.into(),
+                line,
+                split: Some(Self::SPLIT_HERE),
+                external: false,
+            }),
+            FileAction::External => self.open_file(OpenFileInput {
+                path: path.into(),
+                line,
+                split: None,
+                external: true,
+            }),
             FileAction::Copy => ui.ctx().copy_text(path.display().to_string()),
             FileAction::StagedDiff | FileAction::WorkingDiff => {
                 if let Some(root) = self.git_root() {
@@ -181,7 +234,12 @@ impl App {
             self.activate_file_action(ui, &clicked.path, clicked.action);
         }
         for picked in outcome.menu {
-            self.file_action(ui, picked.action, &picked.path, None);
+            self.file_action(FileActionInput {
+                ui,
+                action: picked.action,
+                path: &picked.path,
+                line: None,
+            });
         }
         if let Some(path) = outcome.resolve.clone() {
             self.open_merge(path);
@@ -333,7 +391,12 @@ impl App {
             ui.ctx()
                 .options(|options| options.input_options.max_double_click_delay),
         );
-        if !self.note_file_activation(path.to_path_buf(), staged, action, interval) {
+        if !self.note_file_activation(NoteFileActivationInput {
+            path: path.to_path_buf(),
+            staged,
+            action,
+            interval,
+        }) {
             return;
         }
         if matches!(
@@ -345,17 +408,22 @@ impl App {
         ) {
             self.hide_center_overlay();
         }
-        self.file_action(ui, action, path, None);
+        self.file_action(FileActionInput {
+            ui,
+            action,
+            path,
+            line: None,
+        });
     }
     /// Records a click activation; returns false when it repeats the previous
     /// one within the double-click interval.
-    pub(crate) fn note_file_activation(
-        &mut self,
-        path: PathBuf,
-        staged: Option<bool>,
-        action: FileAction,
-        interval: Duration,
-    ) -> bool {
+    pub(crate) fn note_file_activation(&mut self, input: NoteFileActivationInput) -> bool {
+        let NoteFileActivationInput {
+            path,
+            staged,
+            action,
+            interval,
+        } = input;
         if self.file_activation.as_ref().is_some_and(|last| {
             last.project == self.selected
                 && last.path == path

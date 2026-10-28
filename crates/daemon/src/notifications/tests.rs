@@ -1,5 +1,4 @@
 use super::*;
-use super::*;
 use std::{
     collections::HashSet,
     sync::{Arc, Condvar, Mutex as StdMutex},

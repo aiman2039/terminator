@@ -1,5 +1,12 @@
 use super::*;
 
+pub(crate) struct SubmitTextInput<'a> {
+    pub path: &'a Path,
+    pub language: Language,
+    pub revision: u64,
+    pub text: &'a str,
+}
+
 impl LspManager {
     /// Per-frame sync for one loaded buffer. Returns true when the
     /// caller should clone the text and hand it to [`submit_text`]:
@@ -37,7 +44,13 @@ impl LspManager {
     /// still starting parks on the doc and flushes as `didOpen` when the
     /// handshake completes, so a slow start neither blocks typing nor
     /// drops the open.
-    pub fn submit_text(&mut self, path: &Path, language: Language, revision: u64, text: &str) {
+    pub fn submit_text(&mut self, input: SubmitTextInput<'_>) {
+        let SubmitTextInput {
+            path,
+            language,
+            revision,
+            text,
+        } = input;
         let Some(language_id) = L::server_language(language) else {
             return;
         };

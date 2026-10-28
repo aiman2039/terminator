@@ -305,15 +305,25 @@ impl Cache {
     }
 }
 #[cfg(feature = "async-client")]
+pub struct CollectAsyncInput<'a> {
+    pub cwd: &'a Path,
+    pub identity: Option<(u32, u64)>,
+    pub include_pr: bool,
+}
+
+#[cfg(feature = "async-client")]
 impl Cache {
     pub async fn collect_async(
         &mut self,
         processes: &crate::async_process::Processes,
         files: &crate::async_service::NativePool,
-        cwd: &Path,
-        identity: Option<(u32, u64)>,
-        include_pr: bool,
+        input: CollectAsyncInput<'_>,
     ) -> Metadata {
+        let CollectAsyncInput {
+            cwd,
+            identity,
+            include_pr,
+        } = input;
         let changed = self.cwd.as_deref() != Some(cwd);
         if changed {
             self.cwd = Some(cwd.into());
@@ -392,12 +402,14 @@ async fn git_async(
     let output = crate::git::run(
         processes,
         files,
-        cwd,
-        args,
-        CommandOptions {
-            timeout: Duration::from_secs(3),
-            stdout_limit: 65536,
-            ..Default::default()
+        crate::git::RunInput {
+            cwd,
+            args,
+            options: CommandOptions {
+                timeout: Duration::from_secs(3),
+                stdout_limit: 65536,
+                ..Default::default()
+            },
         },
     )
     .await?;

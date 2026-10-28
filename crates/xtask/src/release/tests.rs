@@ -681,10 +681,12 @@ fn windows_failure_still_collects_artifacts() {
     let fixture = Fixture::new();
     let runner = WindowsRunner(Mutex::default());
     let error = windows::run_with(
-        &fixture.root,
-        &fixture.root.join(".artifacts/windows"),
-        "windows-fixture",
-        "C:/Program Files/Git/bin/bash.exe",
+        windows::RunWithInput {
+            source: &fixture.root,
+            artifacts: &fixture.root.join(".artifacts/windows"),
+            host: "windows-fixture",
+            bash: "C:/Program Files/Git/bin/bash.exe",
+        },
         &runner,
     )
     .unwrap_err();

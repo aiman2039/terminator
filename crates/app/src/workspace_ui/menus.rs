@@ -1,11 +1,11 @@
 use super::super::*;
 use super::header::click_enabled_menu_item;
 use super::tab_menu::{WorkspaceTabMenu, WorkspaceTabMenuSpec, click_menu_item, split_action};
-pub(super) struct NewTerminalMenuInput<'a> {
-    pub(super) ui: &'a mut egui::Ui,
-    pub(super) pane: Option<egui_dock::NodePath>,
-    pub(super) strip: bool,
-    pub(super) window: Option<egui::ViewportId>,
+pub(crate) struct NewTerminalMenuInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) pane: Option<egui_dock::NodePath>,
+    pub(crate) strip: bool,
+    pub(crate) window: Option<egui::ViewportId>,
 }
 
 pub(crate) struct InlineRenameInput<'a> {
@@ -110,7 +110,12 @@ impl App {
         }
     }
     pub(super) fn new_terminal_menu(&mut self, input: NewTerminalMenuInput<'_>) {
-        let NewTerminalMenuInput { ui, pane, strip, window } = input;
+        let NewTerminalMenuInput {
+            ui,
+            pane,
+            strip,
+            window,
+        } = input;
 
         self.new_terminal_split_items(NewTerminalMenuInput {
             ui: &mut *ui,
@@ -143,11 +148,21 @@ impl App {
                 ui.close();
             }
         }
-        self.new_terminal_pane_tabs(NewTerminalMenuInput { ui, pane, strip, window });
+        self.new_terminal_pane_tabs(NewTerminalMenuInput {
+            ui,
+            pane,
+            strip,
+            window,
+        });
     }
 
     fn new_terminal_split_items(&mut self, input: NewTerminalMenuInput<'_>) {
-        let NewTerminalMenuInput { ui, pane, strip, window } = input;
+        let NewTerminalMenuInput {
+            ui,
+            pane,
+            strip,
+            window,
+        } = input;
         for (label, split) in [
             ("New tab", None),
             ("Split up", Some("up")),
@@ -185,7 +200,12 @@ impl App {
     }
 
     fn new_terminal_pane_tabs(&mut self, input: NewTerminalMenuInput<'_>) {
-        let NewTerminalMenuInput { ui, pane, strip, window } = input;
+        let NewTerminalMenuInput {
+            ui,
+            pane,
+            strip,
+            window,
+        } = input;
         let tabs_in_pane = pane.and_then(|pane| {
             if strip {
                 self.strip_pane_tabs.get(&pane).cloned()
@@ -259,7 +279,12 @@ impl App {
         }
     }
     pub(crate) fn inline_rename(&mut self, input: InlineRenameInput<'_>) {
-        let InlineRenameInput { ui, sid, surface, rect } = input;
+        let InlineRenameInput {
+            ui,
+            sid,
+            surface,
+            rect,
+        } = input;
 
         if !self.renaming(sid, surface) {
             return;

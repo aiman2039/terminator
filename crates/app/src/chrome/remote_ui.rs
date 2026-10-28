@@ -6,6 +6,15 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+
+pub(crate) struct OpenRemoteFileInput<'a> {
+    pub(crate) project: &'a RemoteProject,
+    pub(crate) path: String,
+    pub(crate) line: Option<u32>,
+    pub(crate) split: Option<&'a str>,
+    pub(crate) text: bool,
+}
+
 use terminator_core::{
     Project, Request,
     remote::{Change, Entry, Operation, RemoteProject, Reply},
@@ -537,7 +546,13 @@ impl App {
             });
         }
         if let Some((path, text)) = open {
-            self.open_remote_file(&project, path, None, None, text);
+            self.open_remote_file(OpenRemoteFileInput {
+                project: &project,
+                path,
+                line: None,
+                split: None,
+                text,
+            });
         }
         if let Some((path, staged)) = diff {
             let tab = Tab::Diff {
@@ -550,14 +565,15 @@ impl App {
             self.place_gui_tab(project.id, tab, after);
         }
     }
-    pub(crate) fn open_remote_file(
-        &mut self,
-        project: &RemoteProject,
-        path: String,
-        line: Option<u32>,
-        split: Option<&str>,
-        text: bool,
-    ) {
+
+    pub(crate) fn open_remote_file(&mut self, input: OpenRemoteFileInput<'_>) {
+        let OpenRemoteFileInput {
+            project,
+            path,
+            line,
+            split,
+            text,
+        } = input;
         if !self.remote_supported() {
             self.error = Some("Restart the session service to open SSH project files".into());
             return;

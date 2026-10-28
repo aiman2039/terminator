@@ -1,4 +1,4 @@
-use super::rows::row;
+use super::rows::{RowInput, row};
 use super::theme::{
     MENU_RADIUS, WIDGET_RADIUS, icon_color, menu_fill, menu_line, menu_muted, menu_text,
 };
@@ -6,18 +6,33 @@ use eframe::egui::{self, Color32, FontId, TextStyle};
 
 /// Title-bar sidebar glyph. Resting state has no frame; hover fills only.
 pub fn framed_icon(ui: &mut egui::Ui, icon: &str, tip: &str) -> egui::Response {
-    framed_icon_button(ui, icon, tip, false, icon_color())
+    framed_icon_button(FramedIconButtonInput {
+        ui,
+        icon,
+        tip,
+        selected: false,
+        tint: icon_color(),
+    })
 }
 
 /// Same square as [`framed_icon`], with a selected fill and a custom glyph tint.
 /// The project header uses one size for hide, Player, Agents, and the overflow menu.
-pub fn framed_icon_button(
-    ui: &mut egui::Ui,
-    icon: &str,
-    tip: &str,
-    selected: bool,
-    tint: Color32,
-) -> egui::Response {
+pub(crate) struct FramedIconButtonInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub icon: &'a str,
+    pub tip: &'a str,
+    pub selected: bool,
+    pub tint: Color32,
+}
+
+pub fn framed_icon_button(input: FramedIconButtonInput<'_>) -> egui::Response {
+    let FramedIconButtonInput {
+        ui,
+        icon,
+        tip,
+        selected,
+        tint,
+    } = input;
     let response = ui
         .allocate_response(egui::vec2(28.0, 28.0), egui::Sense::click())
         .on_hover_text(tip);
@@ -112,7 +127,22 @@ pub fn toolbar_button(ui: &mut egui::Ui) -> egui::Response {
 }
 
 /// Pixel-snapped centered icon paint, so adjacent icons share one center line.
-pub fn paint_centered_icon(ui: &egui::Ui, rect: egui::Rect, icon: &str, size: f32, tint: Color32) {
+pub(crate) struct PaintCenteredIconInput<'a> {
+    pub ui: &'a egui::Ui,
+    pub rect: egui::Rect,
+    pub icon: &'a str,
+    pub size: f32,
+    pub tint: Color32,
+}
+
+pub fn paint_centered_icon(input: PaintCenteredIconInput<'_>) {
+    let PaintCenteredIconInput {
+        ui,
+        rect,
+        icon,
+        size,
+        tint,
+    } = input;
     use egui::emath::GuiRounding;
     let icon_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(size, size))
         .round_to_pixels(ui.pixels_per_point());
@@ -128,7 +158,13 @@ fn paint_action_icon(ui: &egui::Ui, response: &egui::Response, icon: &str) {
         ui.painter()
             .rect_filled(rect, WIDGET_RADIUS, ui.visuals().widgets.hovered.bg_fill);
     }
-    paint_centered_icon(ui, rect, icon, TOOLBAR_ICON, icon_color());
+    paint_centered_icon(PaintCenteredIconInput {
+        ui,
+        rect,
+        icon,
+        size: TOOLBAR_ICON,
+        tint: icon_color(),
+    });
 }
 
 /// Frameless icon button that opens a menu, matching `sidebar_action`.
@@ -168,7 +204,13 @@ pub fn selectable_icon(ui: &mut egui::Ui, icon: &str, tip: &str, selected: bool)
             },
         );
     }
-    paint_centered_icon(ui, response.rect, icon, TOOLBAR_ICON, icon_color());
+    paint_centered_icon(PaintCenteredIconInput {
+        ui,
+        rect: response.rect,
+        icon,
+        size: TOOLBAR_ICON,
+        tint: icon_color(),
+    });
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tip));
     paint_focus(ui, &response);
     response
@@ -176,13 +218,22 @@ pub fn selectable_icon(ui: &mut egui::Ui, icon: &str, tip: &str, selected: bool)
 
 /// Tool-window stripe button: icon over a tiny label, pill when selected.
 /// `badge` paints a waiting dot in the top-right corner (agent attention).
-pub fn stripe_button(
-    ui: &mut egui::Ui,
-    icon: &str,
-    label: &str,
-    selected: bool,
-    badge: Option<Color32>,
-) -> egui::Response {
+pub(crate) struct StripeButtonInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub icon: &'a str,
+    pub label: &'a str,
+    pub selected: bool,
+    pub badge: Option<Color32>,
+}
+
+pub fn stripe_button(input: StripeButtonInput<'_>) -> egui::Response {
+    let StripeButtonInput {
+        ui,
+        icon,
+        label,
+        selected,
+        badge,
+    } = input;
     let response = ui
         .allocate_response(egui::vec2(40.0, 46.0), egui::Sense::click())
         .on_hover_text(label);
@@ -197,16 +248,16 @@ pub fn stripe_button(
             },
         );
     }
-    paint_centered_icon(
+    paint_centered_icon(PaintCenteredIconInput {
         ui,
-        egui::Rect::from_min_size(
+        rect: egui::Rect::from_min_size(
             egui::pos2(response.rect.left(), response.rect.top() + 3.0),
             egui::vec2(40.0, 20.0),
         ),
         icon,
-        16.0,
-        icon_color(),
-    );
+        size: 16.0,
+        tint: icon_color(),
+    });
     ui.painter()
         .with_clip_rect(ui.clip_rect().intersect(response.rect))
         .text(
@@ -420,7 +471,15 @@ pub fn menu_item(ui: &mut egui::Ui, label: &str, icon: &str, shortcut: &str) -> 
     if destructive {
         ui.visuals_mut().override_text_color = Some(tint);
     }
-    let response = row(ui, label, icon, false, 26.0, shortcut, tint);
+    let response = row(RowInput {
+        ui,
+        label,
+        icon,
+        selected: false,
+        height: 26.0,
+        trailing: shortcut,
+        tint,
+    });
     ui.visuals_mut().override_text_color = previous;
     #[cfg(feature = "test-support")]
     crate::diagnostics::record_ui(ui, label, response.rect);

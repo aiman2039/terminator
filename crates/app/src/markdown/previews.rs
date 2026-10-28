@@ -9,6 +9,14 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+
+pub(crate) struct ShowSyncedInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub sid: &'a str,
+    pub status_override: Option<&'a str>,
+    pub scroll_fraction: Option<f32>,
+}
+
 #[cfg(test)]
 use terminator_core::Paths;
 
@@ -85,15 +93,21 @@ impl Preview {
         sid: &str,
         status_override: Option<&str>,
     ) -> Option<Link> {
-        self.show_synced(ui, sid, status_override, None)
+        self.show_synced(ShowSyncedInput {
+            ui,
+            sid,
+            status_override,
+            scroll_fraction: None,
+        })
     }
-    pub fn show_synced(
-        &mut self,
-        ui: &mut egui::Ui,
-        sid: &str,
-        status_override: Option<&str>,
-        scroll_fraction: Option<f32>,
-    ) -> Option<Link> {
+
+    pub fn show_synced(&mut self, input: ShowSyncedInput<'_>) -> Option<Link> {
+        let ShowSyncedInput {
+            ui,
+            sid,
+            status_override,
+            scroll_fraction,
+        } = input;
         self.preview_rect = ui.max_rect();
         self.pointer_focus(ui);
         #[cfg(feature = "test-support")]
@@ -316,7 +330,7 @@ impl Previews {
                         let failed = Arc::clone(&failed);
                         let force = changed || failed.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(&source.session);
                         async move {
-                            let result = match read_source_async(&service, &source, previous.clone(), &operation, force).await {
+                            let result = match read_source_async(ReadSourceAsyncInput { service: &service, source: &source, previous: previous.clone(), cancel: &operation, force }).await {
                                 Ok(None) => return None,
                                 Ok(Some(snapshot)) if !force && previous.as_deref() == Some(&snapshot) => return None,
                                 Ok(Some(snapshot)) => {
@@ -495,13 +509,22 @@ impl Previews {
     }
 }
 
-async fn read_source_async(
-    service: &crate::gui_services::Services,
-    source: &Source,
-    previous: Option<Arc<Snapshot>>,
-    cancel: &terminator_core::async_service::CancellationToken,
-    force: bool,
-) -> Result<Option<Snapshot>> {
+pub(crate) struct ReadSourceAsyncInput<'a> {
+    pub(crate) service: &'a crate::gui_services::Services,
+    pub(crate) source: &'a Source,
+    pub(crate) previous: Option<Arc<Snapshot>>,
+    pub(crate) cancel: &'a terminator_core::async_service::CancellationToken,
+    pub(crate) force: bool,
+}
+
+async fn read_source_async(input: ReadSourceAsyncInput<'_>) -> Result<Option<Snapshot>> {
+    let ReadSourceAsyncInput {
+        service,
+        source,
+        previous,
+        cancel,
+        force,
+    } = input;
     let socket = source.socket.clone();
     // Windows Neovim listens on a named pipe with no filesystem record, so
     // the existence probe is Unix-only; on Windows the connect attempt below

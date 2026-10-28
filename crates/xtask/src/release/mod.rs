@@ -224,13 +224,22 @@ fn reusable_export(source: &Path, marker: &Path, original: &str) -> Option<(Stri
 
 /// Copy the current index tree into the export directory, bump its version,
 /// commit it as the validated tree, and record the marker a retry reads.
-fn export_source(
-    root: &Path,
-    temporary: &Path,
-    source: &Path,
-    marker: &Path,
-    original: &str,
-) -> Result<(String, String)> {
+struct ExportSourceInput<'a> {
+    root: &'a Path,
+    temporary: &'a Path,
+    source: &'a Path,
+    marker: &'a Path,
+    original: &'a str,
+}
+
+fn export_source(input: ExportSourceInput<'_>) -> Result<(String, String)> {
+    let ExportSourceInput {
+        root,
+        temporary,
+        source,
+        marker,
+        original,
+    } = input;
     if source.exists() {
         fs::remove_dir_all(source)?;
     }
@@ -333,7 +342,13 @@ fn execute(
             );
             (tag, validated)
         } else {
-            export_source(root, temporary.path(), &source, &marker, &original)?
+            export_source(ExportSourceInput {
+                root,
+                temporary: temporary.path(),
+                source: &source,
+                marker: &marker,
+                original: &original,
+            })?
         };
     if !options.check_only {
         ensure!(

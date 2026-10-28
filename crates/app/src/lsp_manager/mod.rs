@@ -22,7 +22,17 @@ use terminator_native_edit::view::DiagnosticMark;
 
 use crate::gui_services::Services;
 
+pub(crate) struct RequestHierarchyChildrenInput<'a> {
+    pub path: &'a Path,
+    pub item: &'a serde_json::Value,
+    pub kind: L::HierarchyKind,
+    pub direction: L::HierarchyDirection,
+    pub generation: u64,
+    pub node: usize,
+}
+
 mod docs;
+pub(crate) use docs::SubmitTextInput;
 mod responses;
 mod supervisor;
 
@@ -530,15 +540,15 @@ impl LspManager {
 
     /// Ask for one hierarchy node's children (through the server that
     /// serves `path`). False when no ready server can take it.
-    pub fn request_hierarchy_children(
-        &mut self,
-        path: &Path,
-        item: &serde_json::Value,
-        kind: L::HierarchyKind,
-        direction: L::HierarchyDirection,
-        generation: u64,
-        node: usize,
-    ) -> bool {
+    pub fn request_hierarchy_children(&mut self, input: RequestHierarchyChildrenInput<'_>) -> bool {
+        let RequestHierarchyChildrenInput {
+            path,
+            item,
+            kind,
+            direction,
+            generation,
+            node,
+        } = input;
         let Some(key) = self.docs.get(path).map(|doc| doc.server.clone()) else {
             return false;
         };

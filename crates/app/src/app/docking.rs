@@ -1,9 +1,20 @@
 use super::super::appearance;
+use super::center::PaintFloatDockInput;
+use crate::app::LandStripShellOnLeafInput;
 use eframe::egui::{self};
 use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
+
+pub(crate) struct PaintLandingPreviewInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) dock: &'a Workspace,
+    pub(crate) pane: &'a Tab,
+    pub(crate) target: Option<egui_dock::NodePath>,
+    pub(crate) zone: Option<PaneDropZone>,
+}
+
 use terminator_core::*;
 
 use super::super::*;
@@ -176,7 +187,13 @@ impl App {
             }
         });
         if dragging && !released {
-            self.paint_landing_preview(ui, dock, &pane, target.map(|(path, _)| path), zone);
+            self.paint_landing_preview(PaintLandingPreviewInput {
+                ui,
+                dock,
+                pane: &pane,
+                target: target.map(|(path, _)| path),
+                zone,
+            });
             // Hovering a strip tab interior previews the move-into outcome
             // at real size: wash the previewed tab's focused leaf, where a
             // release would land the pane.
@@ -198,13 +215,13 @@ impl App {
                     if let Ok(leaf) = dock.leaf(path) {
                         diagnostics::record(ui.ctx(), "strip-drop-wash", leaf.rect);
                     }
-                    self.paint_landing_preview(
+                    self.paint_landing_preview(PaintLandingPreviewInput {
                         ui,
                         dock,
-                        &pane,
-                        Some(path),
-                        Some(PaneDropZone::Center),
-                    );
+                        pane: &pane,
+                        target: Some(path),
+                        zone: Some(PaneDropZone::Center),
+                    });
                 }
             }
             ui.ctx().request_repaint();
@@ -216,23 +233,31 @@ impl App {
                 let from_strip = self.drag.pane_from_strip;
                 let moved = if let Some(source) = self.drag.pane_source.clone() {
                     self.selected.as_ref() == Some(&source.project)
-                        && dock.move_view_to_leaf(crate::workspace::MoveViewToLeafInput { source: &source, pane: &pane, group: &group, dest: path, insertion: tab_insert
-                                .map(egui_dock::TabInsert::Insert)
-                                .unwrap_or_else(|| {
+                        && dock.move_view_to_leaf(crate::workspace::MoveViewToLeafInput {
+                            source: &source,
+                            pane: &pane,
+                            group: &group,
+                            dest: path,
+                            insertion: tab_insert.map(egui_dock::TabInsert::Insert).unwrap_or_else(
+                                || {
                                     zone.and_then(PaneDropZone::split).map_or(
                                         egui_dock::TabInsert::Append,
                                         egui_dock::TabInsert::Split,
                                     )
-                                }) })
+                                },
+                            ),
+                        })
                 } else if from_strip {
                     match &pane {
-                        Tab::Terminal(sid) => self.land_strip_shell_on_leaf(
-                            dock,
-                            sid,
-                            &group,
-                            path,
-                            zone.unwrap_or(PaneDropZone::Center),
-                        ),
+                        Tab::Terminal(sid) => {
+                            self.land_strip_shell_on_leaf(LandStripShellOnLeafInput {
+                                dock,
+                                sid,
+                                group: &group,
+                                path,
+                                zone: zone.unwrap_or(PaneDropZone::Center),
+                            })
+                        }
                         _ => false,
                     }
                 } else {
@@ -250,7 +275,12 @@ impl App {
                             // `move_pane_to_split` focuses a lone pane dropped on
                             // an edge of its own leaf instead of splitting it.
                             edge.split().is_some_and(|split| {
-                                dock.move_pane_to_split(crate::workspace::MovePaneToSplitInput { pane: &pane, dest_group: &group, dest: path, split })
+                                dock.move_pane_to_split(crate::workspace::MovePaneToSplitInput {
+                                    pane: &pane,
+                                    dest_group: &group,
+                                    dest: path,
+                                    split,
+                                })
                             })
                         }
                     }
@@ -295,14 +325,14 @@ impl App {
     /// edge half a split drop would open), with a divider on the future
     /// split boundary. A center drop between two single panes exchanges
     /// them, so the source leaf is outlined as well.
-    pub(crate) fn paint_landing_preview(
-        &self,
-        ui: &mut egui::Ui,
-        dock: &Workspace,
-        pane: &Tab,
-        target: Option<egui_dock::NodePath>,
-        zone: Option<PaneDropZone>,
-    ) {
+    pub(crate) fn paint_landing_preview(&self, input: PaintLandingPreviewInput<'_>) {
+        let PaintLandingPreviewInput {
+            ui,
+            dock,
+            pane,
+            target,
+            zone,
+        } = input;
         let (Some(path), Some(zone)) = (target, zone) else {
             return;
         };
@@ -738,7 +768,12 @@ impl App {
                     {
                         close = true;
                     }
-                    self.paint_float_dock(ui, viewport, &project, &mut dock);
+                    self.paint_float_dock(PaintFloatDockInput {
+                        ui,
+                        viewport,
+                        project: &project,
+                        dock: &mut dock,
+                    });
                 },
             );
             if close {

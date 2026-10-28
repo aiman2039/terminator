@@ -268,6 +268,13 @@ pub struct HighlightCache {
     folds: crate::fold::Folds,
 }
 
+pub struct EnsureInput<'a> {
+    pub language: Language,
+    pub dark: bool,
+    pub revision: u64,
+    pub text: &'a str,
+}
+
 impl HighlightCache {
     /// True when the cache already holds this exact revision: the view
     /// can skip rebuilding the buffer text entirely.
@@ -281,7 +288,13 @@ impl HighlightCache {
 
     /// Recompute when the key changed; over-cap and plain buffers cache
     /// as empty (every row paints plain).
-    pub fn ensure(&mut self, language: Language, dark: bool, revision: u64, text: &str) {
+    pub fn ensure(&mut self, input: EnsureInput<'_>) {
+        let EnsureInput {
+            language,
+            dark,
+            revision,
+            text,
+        } = input;
         if self.is_current(language, dark, revision) {
             return;
         }
@@ -565,12 +578,27 @@ mod tests {
     #[test]
     fn cache_only_recomputes_on_key_change() {
         let mut cache = HighlightCache::default();
-        cache.ensure(Language::Rust, true, 1, "fn a() {}");
+        cache.ensure(EnsureInput {
+            language: Language::Rust,
+            dark: true,
+            revision: 1,
+            text: "fn a() {}",
+        });
         let first = cache.line(0).to_vec();
         assert!(!first.is_empty());
-        cache.ensure(Language::Rust, true, 1, "fn replaced() {}");
+        cache.ensure(EnsureInput {
+            language: Language::Rust,
+            dark: true,
+            revision: 1,
+            text: "fn replaced() {}",
+        });
         assert_eq!(cache.line(0), first.as_slice());
-        cache.ensure(Language::Rust, true, 2, "fn b() {}");
+        cache.ensure(EnsureInput {
+            language: Language::Rust,
+            dark: true,
+            revision: 2,
+            text: "fn b() {}",
+        });
         assert_eq!(cache.line(0).len(), first.len());
         assert!(cache.is_current(Language::Rust, true, 2));
         assert!(!cache.is_current(Language::Rust, false, 2));

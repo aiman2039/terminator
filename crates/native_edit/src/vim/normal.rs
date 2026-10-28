@@ -1,5 +1,7 @@
 use super::super::doc::Buffer;
+use super::cursor::GotoInput;
 use super::mode::{Bit, Cursor, Effect, Key, Mode, PendingOp, Place};
+use super::operators::{ApplyOperatorInput, JumpToMatchInput};
 use super::state::VimEngine;
 use super::words::{WordClass, current_char, line_len, word_class};
 impl VimEngine {
@@ -192,7 +194,14 @@ impl VimEngine {
                 let from = self.char_idx(doc, self.cursor).saturating_add(1);
                 self.clear_pending();
                 self.rec_discard();
-                if !self.jump_to_match(doc, &pattern, from, true) {
+                if !self.jump_to_match(
+                    doc,
+                    JumpToMatchInput {
+                        pattern: &pattern,
+                        from,
+                        forward: true,
+                    },
+                ) {
                     return vec![Effect::Bell];
                 }
             }
@@ -205,7 +214,14 @@ impl VimEngine {
                 let from = self.char_idx(doc, self.cursor);
                 self.clear_pending();
                 self.rec_discard();
-                if !self.jump_to_match(doc, &pattern, from, false) {
+                if !self.jump_to_match(
+                    doc,
+                    JumpToMatchInput {
+                        pattern: &pattern,
+                        from,
+                        forward: false,
+                    },
+                ) {
                     return vec![Effect::Bell];
                 }
             }
@@ -288,7 +304,14 @@ impl VimEngine {
             match kind {
                 'h' | 'l' | '0' | '$' | 'w' | 'b' | 'e' => {
                     let (target, inclusive) = self.motion_target(doc, kind, count);
-                    self.apply_operator(doc, op, target, inclusive);
+                    self.apply_operator(
+                        doc,
+                        ApplyOperatorInput {
+                            op,
+                            target,
+                            inclusive,
+                        },
+                    );
                 }
                 'j' | 'k' => {
                     // Vertical motions under an operator stay charwise in v1;
@@ -302,7 +325,14 @@ impl VimEngine {
                     let target = self.cursor;
                     self.cursor = saved;
                     let inclusive = target.line != saved.line;
-                    self.apply_operator(doc, op, target, inclusive);
+                    self.apply_operator(
+                        doc,
+                        ApplyOperatorInput {
+                            op,
+                            target,
+                            inclusive,
+                        },
+                    );
                 }
                 _ => {
                     self.rec_discard();
@@ -320,12 +350,33 @@ impl VimEngine {
             'l' => self.move_l(doc, count),
             'w' | 'b' | 'e' => {
                 let (target, _) = self.motion_target(doc, kind, count);
-                self.goto(doc, target.line, target.col, true);
+                self.goto(
+                    doc,
+                    GotoInput {
+                        line: target.line,
+                        col: target.col,
+                        preferred: true,
+                    },
+                );
             }
-            '0' => self.goto(doc, self.cursor.line, 0, true),
+            '0' => self.goto(
+                doc,
+                GotoInput {
+                    line: self.cursor.line,
+                    col: 0,
+                    preferred: true,
+                },
+            ),
             '$' => {
                 let len = line_len(doc, self.cursor.line);
-                self.goto(doc, self.cursor.line, len.saturating_sub(1), true);
+                self.goto(
+                    doc,
+                    GotoInput {
+                        line: self.cursor.line,
+                        col: len.saturating_sub(1),
+                        preferred: true,
+                    },
+                );
             }
             _ => {}
         }
@@ -337,13 +388,27 @@ impl VimEngine {
             self.pending_g = false;
             self.count.clear();
             self.rec_bit(Bit::Motion(motion));
-            self.apply_operator(doc, op, target, false);
+            self.apply_operator(
+                doc,
+                ApplyOperatorInput {
+                    op,
+                    target,
+                    inclusive: false,
+                },
+            );
             return;
         }
         self.pending_g = false;
         self.count.clear();
         self.rec_discard();
-        self.goto(doc, target.line, target.col, true);
+        self.goto(
+            doc,
+            GotoInput {
+                line: target.line,
+                col: target.col,
+                preferred: true,
+            },
+        );
         doc.end_run();
     }
 

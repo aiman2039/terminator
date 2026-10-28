@@ -2,6 +2,8 @@ use super::super::*;
 use super::header::filter_history_lines;
 use super::tab_menu::split_action;
 use super::tabs::snapshot_rows;
+use crate::native_editor::NativeEditorViewInput;
+use crate::vnc_ui::VncViewInput;
 pub(crate) struct Viewer<'a> {
     pub(crate) app: &'a mut App,
     /// True when rendering the IDE strip dock instead of the main dock.
@@ -297,9 +299,9 @@ impl TabViewer for Viewer<'_> {
         let leading = self.app.tab_leading(sid);
         let mut cursor = rect.left();
         let mut paint = |icon: &str, tint: egui::Color32, spin: bool| {
-            appearance::paint_status_icon(
+            appearance::paint_status_icon(appearance::PaintStatusIconInput {
                 ui,
-                egui::Rect::from_center_size(
+                rect: egui::Rect::from_center_size(
                     egui::pos2(
                         cursor + appearance::TERMINAL_LEADING_SLOT / 2.0,
                         rect.center().y,
@@ -309,7 +311,7 @@ impl TabViewer for Viewer<'_> {
                 icon,
                 tint,
                 spin,
-            );
+            });
             cursor += appearance::TERMINAL_LEADING_SLOT;
         };
         if let Some(brand) = leading.brand {
@@ -507,7 +509,12 @@ impl TabViewer for Viewer<'_> {
             ui.separator();
         }
         self.app
-            .new_terminal_menu(super::menus::NewTerminalMenuInput { ui, pane: Some(pane), strip: self.strip, window: self.window });
+            .new_terminal_menu(super::menus::NewTerminalMenuInput {
+                ui,
+                pane: Some(pane),
+                strip: self.strip,
+                window: self.window,
+            });
         ui.separator();
         // Detach, dock-back, and float ops reshape main-dock top-level
         // tabs; a floating window owns a single dock with no tab layer,
@@ -624,13 +631,13 @@ impl TabViewer for Viewer<'_> {
                 ui.close();
             }
             Tab::Diff { .. } => self.app.diff_view(ui, tab),
-            Tab::NativeEditor { path } => self.app.native_editor_view(
+            Tab::NativeEditor { path } => self.app.native_editor_view(NativeEditorViewInput {
                 ui,
                 path,
-                self.project.as_deref(),
-                self.tab.as_deref(),
-                self.render_path,
-            ),
+                project: self.project.as_deref(),
+                tab: self.tab.as_deref(),
+                node: self.render_path,
+            }),
             Tab::CommitLog { .. } => self.app.commit_log_view(ui, tab),
             Tab::Blame { .. } => self.app.blame_view(ui, tab),
             Tab::RevisionDiff { .. } => self.app.revision_diff_view(ui, tab),
@@ -644,8 +651,17 @@ impl TabViewer for Viewer<'_> {
                 label,
             } => {
                 let tab_id = id.clone();
-                self.app
-                    .vnc_view(ui, &tab_id, session, profile_id, host, port, label);
+                self.app.vnc_view(
+                    ui,
+                    VncViewInput {
+                        tab_id: &tab_id,
+                        session_id: session,
+                        profile_id,
+                        host,
+                        port,
+                        label,
+                    },
+                );
             }
             Tab::Terminal(sid) => {
                 let Some(session) = self
@@ -672,8 +688,12 @@ impl TabViewer for Viewer<'_> {
                             egui::vec2(ui.available_width(), 26.0),
                             egui::Sense::hover(),
                         );
-                        self.app
-                            .inline_rename(super::menus::InlineRenameInput { ui, sid, surface: RenameSurface::Pane, rect: slot.rect });
+                        self.app.inline_rename(super::menus::InlineRenameInput {
+                            ui,
+                            sid,
+                            surface: RenameSurface::Pane,
+                            rect: slot.rect,
+                        });
                     }
                 } else {
                     let pane = self.pane_for(&Tab::Terminal(sid.clone()).key());
@@ -773,10 +793,15 @@ impl TabViewer for Viewer<'_> {
                                 }
                         });
                     if editing {
-                        self.app.inline_rename(super::menus::InlineRenameInput { ui, sid, surface: RenameSurface::Pane, rect: egui::Rect::from_min_max(
+                        self.app.inline_rename(super::menus::InlineRenameInput {
+                            ui,
+                            sid,
+                            surface: RenameSurface::Pane,
+                            rect: egui::Rect::from_min_max(
                                 egui::pos2(response.rect.min.x + 8.0, response.rect.min.y + 1.0),
                                 egui::pos2(controls_left, response.rect.bottom() - 1.0),
-                            ) });
+                            ),
+                        });
                     }
                     let closing = close.as_ref().is_some_and(eframe::egui::Response::clicked);
                     let git_clicked = actions.as_ref().is_some_and(|(git, _, _, _)| git.clicked());

@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 terminator-core.workspace = true
 anyhow.workspace = true
+thiserror = "2"
 serde_json.workspace = true
 toml_edit = "0.25"
 

@@ -89,15 +89,24 @@ fn leaf_tabs<'a>(node: &'a Value, out: &mut Vec<(&'a Vec<Value>, usize)>) {
 /// (`screencapture`, window-list polls) plus daemon state; the fixture
 /// exits through `TERMINATOR_TEST_EXIT_MARKER`, with the capture
 /// deadline fallback as a safety net.
-fn drive(
-    h: &Harness,
-    o: &Options,
-    name: &str,
+struct DriveInput<'a> {
+    h: &'a Harness,
+    o: &'a Options,
+    name: &'a str,
     actions: Value,
     after: u64,
-    exit: &PathBuf,
-    observe: impl FnOnce(&mut Child) -> Result<()>,
-) -> Result<String> {
+    exit: &'a PathBuf,
+}
+
+fn drive<F: FnOnce(&mut Child) -> Result<()>>(input: DriveInput<'_>, observe: F) -> Result<String> {
+    let DriveInput {
+        h,
+        o,
+        name,
+        actions,
+        after,
+        exit,
+    } = input;
     let directory = std::path::absolute(&o.output)?;
     fs::create_dir_all(&directory)?;
     // A stale exit file would close the fresh fixture on its first frame.
@@ -331,15 +340,26 @@ fn capture_window(id: u32, path: &PathBuf) -> Result<()> {
 /// pane returned with its session untouched. `home` is the shell that
 /// should keep sharing a tab with the floated pane, or `None` when the
 /// floated pane is alone (its tab is dropped: the missing-home path).
-fn float_close(
-    h: &mut Harness,
-    o: &Options,
-    name: &str,
-    shells: &[Value],
-    floated: &Value,
+struct FloatCloseInput<'a> {
+    h: &'a mut Harness,
+    o: &'a Options,
+    name: &'a str,
+    shells: &'a [Value],
+    floated: &'a Value,
     after: u64,
-    exit: &PathBuf,
-) -> Result<()> {
+    exit: &'a PathBuf,
+}
+
+fn float_close(input: FloatCloseInput<'_>) -> Result<()> {
+    let FloatCloseInput {
+        h,
+        o,
+        name,
+        shells,
+        floated,
+        after,
+        exit,
+    } = input;
     let label = session_label(&h.state()?, id(floated))?;
     let marker = o.output.join(format!("{name}-close"));
     let _ = fs::remove_file(&marker);
@@ -351,15 +371,17 @@ fn float_close(
     );
     let caption = format!("pane-caption:{label}");
     drive(
-        h,
-        o,
-        name,
-        json!([
-            {"at_ms":1500,"target":caption,"right_click":true},
-            {"at_ms":1600,"target":"Float window"},
-        ]),
-        after,
-        exit,
+        DriveInput {
+            h,
+            o,
+            name,
+            actions: json!([
+                {"at_ms":1500,"target":caption,"right_click":true},
+                {"at_ms":1600,"target":"Float window"},
+            ]),
+            after,
+            exit,
+        },
         |_child| {
             #[cfg(target_os = "macos")]
             {
@@ -440,15 +462,15 @@ pub fn run(o: &Options) -> Result<()> {
     h.layout(&p, &shells)?;
     let mut home_opts = o.clone();
     home_opts.output = o.output.join("float-home");
-    float_close(
-        &mut h,
-        &home_opts,
-        "float-home",
-        &shells,
-        &first,
-        30000,
-        &exit,
-    )?;
+    float_close(FloatCloseInput {
+        h: &mut h,
+        o: &home_opts,
+        name: "float-home",
+        shells: &shells,
+        floated: &first,
+        after: 30000,
+        exit: &exit,
+    })?;
     let state = h.state()?;
     let layout = project_layout(&state)?;
     ensure!(top_tabs(layout)? == 1, "float changed the top-level tabs");
@@ -458,15 +480,15 @@ pub fn run(o: &Options) -> Result<()> {
     h.layout(&p, std::slice::from_ref(&first))?;
     let mut missing_opts = o.clone();
     missing_opts.output = o.output.join("float-missing");
-    float_close(
-        &mut h,
-        &missing_opts,
-        "float-missing",
-        &shells,
-        &first,
-        25000,
-        &exit,
-    )?;
+    float_close(FloatCloseInput {
+        h: &mut h,
+        o: &missing_opts,
+        name: "float-missing",
+        shells: &shells,
+        floated: &first,
+        after: 25000,
+        exit: &exit,
+    })?;
     let state = h.state()?;
     let layout = project_layout(&state)?;
     ensure!(
@@ -493,16 +515,18 @@ pub fn run(o: &Options) -> Result<()> {
     let mut split_opts = o.clone();
     split_opts.output = o.output.join("insplit");
     let logs = drive(
-        &h,
-        &split_opts,
-        "insplit",
-        json!([
-            {"at_ms":1500,"target":"terminal","hover":true},
-            {"at_ms":2000,"target":"terminal","hover_offset":[45,10]},
-            {"at_ms":2600,"target":"Open in current split"},
-        ]),
-        20000,
-        &exit,
+        DriveInput {
+            h: &h,
+            o: &split_opts,
+            name: "insplit",
+            actions: json!([
+                {"at_ms":1500,"target":"terminal","hover":true},
+                {"at_ms":2000,"target":"terminal","hover_offset":[45,10]},
+                {"at_ms":2600,"target":"Open in current split"},
+            ]),
+            after: 20000,
+            exit: &exit,
+        },
         |_| Ok(()),
     )?;
     ensure!(
@@ -531,12 +555,14 @@ pub fn run(o: &Options) -> Result<()> {
     let mut plus_opts = o.clone();
     plus_opts.output = o.output.join("stacked-plus");
     drive(
-        &h,
-        &plus_opts,
-        "stacked-plus",
-        json!([{"at_ms":1500,"target":"pane-plus"}]),
-        14000,
-        &exit,
+        DriveInput {
+            h: &h,
+            o: &plus_opts,
+            name: "stacked-plus",
+            actions: json!([{"at_ms":1500,"target":"pane-plus"}]),
+            after: 14000,
+            exit: &exit,
+        },
         |_| Ok(()),
     )?;
     h.assert_pids(&shells)?;
@@ -557,12 +583,14 @@ pub fn run(o: &Options) -> Result<()> {
     let mut switch_opts = o.clone();
     switch_opts.output = o.output.join("stacked-switch");
     drive(
-        &h,
-        &switch_opts,
-        "stacked-switch",
-        json!([{"at_ms":1500,"target":format!("leaf-tab:{}",tab_key(&editor_sid))}]),
-        12000,
-        &exit,
+        DriveInput {
+            h: &h,
+            o: &switch_opts,
+            name: "stacked-switch",
+            actions: json!([{"at_ms":1500,"target":format!("leaf-tab:{}",tab_key(&editor_sid))}]),
+            after: 12000,
+            exit: &exit,
+        },
         |_| Ok(()),
     )?;
     let state = h.state()?;
@@ -582,19 +610,21 @@ pub fn run(o: &Options) -> Result<()> {
     let mut detach_opts = o.clone();
     detach_opts.output = o.output.join("detach-dockback");
     drive(
-        &h,
-        &detach_opts,
-        "detach-dockback",
-        json!([
-            {"at_ms":1000,"target":format!("leaf-tab:{}", tab_key(id(&first)))},
-            {"at_ms":1800,"target":format!("pane-caption:{shell_label}"),"right_click":true},
-            {"at_ms":2600,"target":"Detach to new tab"},
-            {"at_ms":4400,"target":format!("pane-caption:{shell_label}"),"right_click":true},
-            {"at_ms":5200,"target":"Move to tab","hover":true},
-            {"at_ms":6000,"target":editor_label},
-        ]),
-        16000,
-        &exit,
+        DriveInput {
+            h: &h,
+            o: &detach_opts,
+            name: "detach-dockback",
+            actions: json!([
+                {"at_ms":1000,"target":format!("leaf-tab:{}", tab_key(id(&first)))},
+                {"at_ms":1800,"target":format!("pane-caption:{shell_label}"),"right_click":true},
+                {"at_ms":2600,"target":"Detach to new tab"},
+                {"at_ms":4400,"target":format!("pane-caption:{shell_label}"),"right_click":true},
+                {"at_ms":5200,"target":"Move to tab","hover":true},
+                {"at_ms":6000,"target":editor_label},
+            ]),
+            after: 16000,
+            exit: &exit,
+        },
         |_| Ok(()),
     )?;
     h.assert_pids(&shells)?;
@@ -617,17 +647,19 @@ pub fn run(o: &Options) -> Result<()> {
     let mut drag_opts = o.clone();
     drag_opts.output = o.output.join("drag-detach");
     drive(
-        &h,
-        &drag_opts,
-        "drag-detach",
-        json!([
-            {"at_ms":1500,"target":format!("pane-caption:{shell_label}"),"hold":true},
-            {"at_ms":2300,"target":"workspace-plus","hover":true},
-            {"at_ms":3000,"target":"workspace-plus","hover":true},
-            {"at_ms":3700,"target":"workspace-plus","release_button":true},
-        ]),
-        12000,
-        &exit,
+        DriveInput {
+            h: &h,
+            o: &drag_opts,
+            name: "drag-detach",
+            actions: json!([
+                {"at_ms":1500,"target":format!("pane-caption:{shell_label}"),"hold":true},
+                {"at_ms":2300,"target":"workspace-plus","hover":true},
+                {"at_ms":3000,"target":"workspace-plus","hover":true},
+                {"at_ms":3700,"target":"workspace-plus","release_button":true},
+            ]),
+            after: 12000,
+            exit: &exit,
+        },
         |_| Ok(()),
     )?;
     h.assert_pids(&shells)?;

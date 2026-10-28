@@ -1,5 +1,12 @@
 //! Modal rendering.
-use super::{AttentionAction, AttentionCard, attention_card, *};
+use crate::{AttentionAction, AttentionCard, attention_card, *};
+
+struct ConfirmWorkspaceCloseInput<'a> {
+    ctx: &'a egui::Context,
+    project: &'a str,
+    tab_id: &'a str,
+    live: Vec<String>,
+}
 
 impl App {
     fn first_project_dialog(&mut self, ctx: &egui::Context) {
@@ -35,7 +42,7 @@ impl App {
             });
     }
 
-    pub(super) fn modals(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
+    pub(crate) fn modals(&mut self, ctx: &egui::Context, frame: &eframe::Frame) {
         self.first_project_dialog(ctx);
         self.native_close_modal(ctx);
         self.layout_save_dialog(ctx);
@@ -430,7 +437,7 @@ impl App {
         }
     }
 
-    pub(super) fn poll_workspace_close(&mut self, ctx: &egui::Context) {
+    pub(crate) fn poll_workspace_close(&mut self, ctx: &egui::Context) {
         loop {
             let Some((project, tab_id)) = self.close_workspace.clone() else {
                 return;
@@ -465,7 +472,12 @@ impl App {
             ) {
                 return;
             }
-            self.confirm_workspace_close(ctx, &project, &tab_id, live);
+            self.confirm_workspace_close(ConfirmWorkspaceCloseInput {
+                ctx,
+                project: &project,
+                tab_id: &tab_id,
+                live,
+            });
             return;
         }
     }
@@ -497,13 +509,13 @@ impl App {
             .collect()
     }
 
-    fn confirm_workspace_close(
-        &mut self,
-        ctx: &egui::Context,
-        project: &str,
-        tab_id: &str,
-        live: Vec<String>,
-    ) {
+    fn confirm_workspace_close(&mut self, input: ConfirmWorkspaceCloseInput<'_>) {
+        let ConfirmWorkspaceCloseInput {
+            ctx,
+            project,
+            tab_id,
+            live,
+        } = input;
         let mut open = true;
         let mut decided = false;
         self.popups
@@ -586,7 +598,7 @@ impl App {
             });
     }
 
-    pub(super) fn save_layout_dialog(&mut self) {
+    pub(crate) fn save_layout_dialog(&mut self) {
         self.layout_save_name = Some(String::new());
     }
 }

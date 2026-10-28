@@ -121,8 +121,14 @@ pub fn run(options: Options) -> Result<()> {
                     case.as_str(),
                     label.as_str()
                 );
-                let run = measure(label, *case, repetition, binary, &options)
-                    .with_context(|| format!("{} {} run failed", case.as_str(), label.as_str()))?;
+                let run = measure(MeasureInput {
+                    label,
+                    case: *case,
+                    repetition,
+                    binary,
+                    options: &options,
+                })
+                .with_context(|| format!("{} {} run failed", case.as_str(), label.as_str()))?;
                 runs.push(run);
             }
         }
@@ -199,13 +205,22 @@ struct Run {
     daemon_binary_mtime: Option<u64>,
 }
 
-fn measure(
+struct MeasureInput<'a> {
     label: Label,
     case: Case,
     repetition: u32,
-    binary: &Path,
-    options: &Options,
-) -> Result<Run> {
+    binary: &'a Path,
+    options: &'a Options,
+}
+
+fn measure(input: MeasureInput<'_>) -> Result<Run> {
+    let MeasureInput {
+        label,
+        case,
+        repetition,
+        binary,
+        options,
+    } = input;
     let h = Harness::configured(Some(binary.to_owned()), true)?;
     h.setup()?;
     h.enable_os_notifications()?;

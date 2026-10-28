@@ -1,5 +1,5 @@
 //! Shared Settings row grammar: label, description, and a right-hand control.
-use super::*;
+use crate::*;
 use terminator_core::find_executable;
 
 pub fn matches_search(query: &str, haystacks: &[&str]) -> bool {
@@ -154,13 +154,22 @@ pub fn editor_options() -> Vec<BinaryOption> {
     options
 }
 
-pub fn combo_or_custom(
-    ui: &mut egui::Ui,
-    id: &str,
-    value: &mut String,
-    options: &[BinaryOption],
-    custom: &mut bool,
-) -> bool {
+pub struct ComboOrCustomInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub id: &'a str,
+    pub value: &'a mut String,
+    pub options: &'a [BinaryOption],
+    pub custom: &'a mut bool,
+}
+
+pub fn combo_or_custom(input: ComboOrCustomInput<'_>) -> bool {
+    let ComboOrCustomInput {
+        ui,
+        id,
+        value,
+        options,
+        custom,
+    } = input;
     let mut changed = false;
     let selected = options
         .iter()
@@ -241,7 +250,13 @@ mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    combo_or_custom(ui, "test-binary", &mut value, &options, &mut custom);
+                    combo_or_custom(ComboOrCustomInput {
+                        ui,
+                        id: "test-binary",
+                        value: &mut value,
+                        options: &options,
+                        custom: &mut custom,
+                    });
                     if custom {
                         field_visible = true;
                         ui.text_edit_singleline(&mut value);

@@ -56,13 +56,13 @@ impl App {
         } else {
             format!("{badge}. Click to switch between Agents and Projects.")
         };
-        let response = appearance::framed_icon_button(
+        let response = appearance::framed_icon_button(appearance::FramedIconButtonInput {
             ui,
-            "Bell",
-            &tip,
-            self.preferences.left_agents,
-            appearance::icon_color(),
-        );
+            icon: "Bell",
+            tip: &tip,
+            selected: self.preferences.left_agents,
+            tint: appearance::icon_color(),
+        });
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Agents"));
         let count = waiting.saturating_add(unread);
         if count > 0 {
@@ -292,19 +292,11 @@ impl App {
             }
             for (project, sessions) in &rows.groups {
                 let collapsed = self.preferences.agents_collapsed.contains(&project.id);
-                let header = appearance::row(
-                    ui,
-                    &project.name,
-                    if collapsed {
+                let header = appearance::row(appearance::RowInput { ui, label: &project.name, icon: if collapsed {
                         "ChevronRight"
                     } else {
                         "ChevronDown"
-                    },
-                    false,
-                    26.0,
-                    &sessions.len().to_string(),
-                    appearance::color(&self.theme.text),
-                )
+                    }, selected: false, height: 26.0, trailing: &sessions.len().to_string(), tint: appearance::color(&self.theme.text) })
                 .on_hover_text(format!(
                     "{}{}{}",
                     self.project_location_label(&project.id),
@@ -339,19 +331,11 @@ impl App {
             }
             if !unverified.is_empty() {
                 let collapsed = self.preferences.agents_collapsed.contains("unverified");
-                let header = appearance::row(
-                    ui,
-                    "Presence unverified",
-                    if collapsed {
+                let header = appearance::row(appearance::RowInput { ui, label: "Presence unverified", icon: if collapsed {
                         "ChevronRight"
                     } else {
                         "ChevronDown"
-                    },
-                    false,
-                    26.0,
-                    &unverified.len().to_string(),
-                    appearance::color(&self.theme.status_waiting),
-                )
+                    }, selected: false, height: 26.0, trailing: &unverified.len().to_string(), tint: appearance::color(&self.theme.status_waiting) })
                 .on_hover_text(
                     "Hook-only or unavailable-owner sessions.\nLast reported hook state; no verified live process.",
                 );

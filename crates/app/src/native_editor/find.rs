@@ -164,13 +164,22 @@ fn step(matches: &[FindMatch], caret: (usize, usize), forward: bool) -> Option<u
 }
 
 /// Paint the bar and act on it. Returns the matches to highlight.
-pub(crate) fn find_bar(
-    ui: &mut egui::Ui,
-    bar: &mut FindBar,
-    buffer: &mut Doc,
-    engine: &mut VimEngine,
-    read_only: bool,
-) -> (FindOutcome, Arc<Vec<FindMatch>>) {
+pub(crate) struct FindBarInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) bar: &'a mut FindBar,
+    pub(crate) buffer: &'a mut Doc,
+    pub(crate) engine: &'a mut VimEngine,
+    pub(crate) read_only: bool,
+}
+
+pub(crate) fn find_bar(input: FindBarInput<'_>) -> (FindOutcome, Arc<Vec<FindMatch>>) {
+    let FindBarInput {
+        ui,
+        bar,
+        buffer,
+        engine,
+        read_only,
+    } = input;
     let mut outcome = FindOutcome::default();
     let mut go: Option<bool> = None;
     let mut replace_one = false;
@@ -266,14 +275,14 @@ pub(crate) fn find_bar(
     let matches = bar.matches(buffer);
     if replace_all && !matches.is_empty() {
         if let Ok(pattern) = bar.pattern() {
-            replace_matches(
+            replace_matches(ReplaceMatchesInput {
                 buffer,
                 engine,
-                &pattern,
-                &bar.replacement,
-                &matches,
-                bar.regex,
-            );
+                pattern: &pattern,
+                replacement: &bar.replacement,
+                matches: &matches,
+                regex: bar.regex,
+            });
         }
         bar.current = None;
     } else if replace_one {
@@ -281,14 +290,14 @@ pub(crate) fn find_bar(
         if let (Some(index), Ok(pattern)) = (bar.current, bar.pattern())
             && let Some(found) = matches.get(index).copied()
         {
-            replace_matches(
+            replace_matches(ReplaceMatchesInput {
                 buffer,
                 engine,
-                &pattern,
-                &bar.replacement,
-                &[found],
-                bar.regex,
-            );
+                pattern: &pattern,
+                replacement: &bar.replacement,
+                matches: &[found],
+                regex: bar.regex,
+            });
             go = Some(true);
         } else {
             go = Some(true);
@@ -314,14 +323,24 @@ pub(crate) fn find_bar(
 /// Replace `matches` (sorted) with `replacement`, last first so earlier
 /// positions stay valid, as one undo step. Regex mode expands `$1`-style
 /// groups against each matched text.
-fn replace_matches(
-    buffer: &mut Doc,
-    engine: &mut VimEngine,
-    pattern: &regex::Regex,
-    replacement: &str,
-    matches: &[FindMatch],
-    regex: bool,
-) {
+pub(crate) struct ReplaceMatchesInput<'a> {
+    pub(crate) buffer: &'a mut Doc,
+    pub(crate) engine: &'a mut VimEngine,
+    pub(crate) pattern: &'a regex::Regex,
+    pub(crate) replacement: &'a str,
+    pub(crate) matches: &'a [FindMatch],
+    pub(crate) regex: bool,
+}
+
+fn replace_matches(input: ReplaceMatchesInput<'_>) {
+    let ReplaceMatchesInput {
+        buffer,
+        engine,
+        pattern,
+        replacement,
+        matches,
+        regex,
+    } = input;
     buffer.begin_undo_group();
     for found in matches.iter().rev() {
         let from = buffer.char_at_line_col(found.line, found.start);
@@ -388,7 +407,14 @@ mod tests {
         find.regex = true;
         let matches = find.matches(&doc);
         let pattern = find.pattern().unwrap();
-        replace_matches(&mut doc, &mut engine, &pattern, "const $1", &matches, true);
+        replace_matches(ReplaceMatchesInput {
+            buffer: &mut doc,
+            engine: &mut engine,
+            pattern: &pattern,
+            replacement: "const $1",
+            matches: &matches,
+            regex: true,
+        });
         assert_eq!(doc.text(), "const a = 1;\nconst b = 2;\n");
         engine.undo(&mut doc);
         assert_eq!(doc.text(), "let a = 1;\nlet b = 2;\n");

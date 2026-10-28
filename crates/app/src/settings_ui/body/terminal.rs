@@ -51,13 +51,13 @@ impl App {
             "Shell override",
             "Used for new terminals. Leave Automatic unless you need a specific binary.",
             |ui| {
-                settings_controls::combo_or_custom(
+                settings_controls::combo_or_custom(settings_controls::ComboOrCustomInput {
                     ui,
-                    "shell-override",
-                    &mut self.settings_draft.shell,
-                    shells,
-                    &mut self.custom_shell,
-                );
+                    id: "shell-override",
+                    value: &mut self.settings_draft.shell,
+                    options: shells,
+                    custom: &mut self.custom_shell,
+                });
                 let mut pick = false;
                 if self.custom_shell {
                     settings_controls::path_field(
@@ -267,13 +267,13 @@ impl App {
             "Editor executable",
             "Embedded and terminal editors launch this Neovim.",
             |ui| {
-                settings_controls::combo_or_custom(
+                settings_controls::combo_or_custom(settings_controls::ComboOrCustomInput {
                     ui,
-                    "editor-program",
-                    &mut self.settings_draft.editor_program,
-                    editors,
-                    &mut self.custom_editor,
-                );
+                    id: "editor-program",
+                    value: &mut self.settings_draft.editor_program,
+                    options: editors,
+                    custom: &mut self.custom_editor,
+                });
                 let mut pick = false;
                 if self.custom_editor {
                     settings_controls::path_field(

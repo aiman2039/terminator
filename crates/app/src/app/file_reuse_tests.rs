@@ -1,5 +1,6 @@
 use super::super::*;
 use super::tests::support::{drain_updates, fixture, session_fixture};
+use crate::app::OpenFileInput;
 use std::{path::PathBuf, sync::mpsc};
 use terminator_core::*;
 
@@ -40,7 +41,12 @@ fn repeated_native_opens_reveal_the_existing_split_and_preserve_the_buffer() {
         },
     );
     for _ in 0..2 {
-        app.open_file(path.clone(), Some(8), None, false);
+        app.open_file(OpenFileInput {
+            path: path.clone(),
+            line: Some(8),
+            split: None,
+            external: false,
+        });
     }
     drain_updates(&mut app, &ctx);
     assert_eq!(app.layouts["a"].tabs.len(), 2);
@@ -58,11 +64,21 @@ fn queued_first_opens_create_one_view_but_explicit_splits_create_another() {
     app.state.settings.editor_mode = EditorMode::Native;
     let path = PathBuf::from("/a/file.rs");
     for _ in 0..2 {
-        app.open_file(path.clone(), None, None, false);
+        app.open_file(OpenFileInput {
+            path: path.clone(),
+            line: None,
+            split: None,
+            external: false,
+        });
     }
     drain_updates(&mut app, &ctx);
     assert_eq!(panes(&app, "a"), 1);
-    app.open_file(path, None, Some("right"), false);
+    app.open_file(OpenFileInput {
+        path,
+        line: None,
+        split: Some("right"),
+        external: false,
+    });
     drain_updates(&mut app, &ctx);
     assert_eq!(panes(&app, "a"), 2);
     assert_eq!(app.layouts["a"].tabs.len(), 1);
@@ -148,7 +164,12 @@ fn opening_a_floated_file_reveals_its_window_without_a_docked_copy() {
         home: ("a".into(), "home".into()),
         dock: Some(egui_dock::DockState::new(vec![tab.clone()])),
     });
-    app.open_file(path, None, None, false);
+    app.open_file(OpenFileInput {
+        path,
+        line: None,
+        split: None,
+        external: false,
+    });
     drain_updates(&mut app, &ctx);
     assert_eq!(panes(&app, "a"), 0);
     assert_eq!(app.floating.len(), 1);
@@ -183,7 +204,12 @@ fn opening_a_daemon_editor_focuses_its_session_without_creating_another() {
             path: "/a/image.png".into(),
         },
     );
-    app.open_file("/a/file.rs".into(), None, None, false);
+    app.open_file(OpenFileInput {
+        path: "/a/file.rs".into(),
+        line: None,
+        split: None,
+        external: false,
+    });
     drain_updates(&mut app, &ctx);
     assert_eq!(app.layouts["a"].tabs.len(), 2);
     assert_eq!(app.active_session.as_deref(), Some("editor"));

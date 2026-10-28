@@ -5,6 +5,17 @@ use crate::{
     preferences::{self, HistoryGroup, HistoryInput, HistorySort, ProjectSort, VisibleProjects},
     sidebar_ui::{NoticeGroup, group_notices, notice_rank},
 };
+
+struct WalkInput<'a> {
+    app: &'a App,
+    path: &'a std::path::Path,
+    depth: usize,
+    query: Option<&'a str>,
+    reveal_file: Option<&'a std::path::Path>,
+    rows: &'a mut Vec<ExplorerRow>,
+    dirs: &'a mut Vec<PathBuf>,
+}
+
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
@@ -21,7 +32,7 @@ struct Stamp {
 }
 
 #[derive(Default)]
-pub(super) struct Cache {
+pub(crate) struct Cache {
     stamp: Option<Stamp>,
     index: Arc<Index>,
     projects: Option<(ProjectKey, Arc<Vec<Arc<terminator_core::Project>>>)>,
@@ -33,7 +44,7 @@ pub(super) struct Cache {
     pub files_revision: u64,
 }
 #[derive(Default)]
-pub(super) struct Index {
+pub(crate) struct Index {
     pub sessions: HashMap<String, Arc<Session>>,
     pub by_project: HashMap<String, Vec<Arc<Session>>>,
     pub terminal_notes: HashMap<String, TerminalNotice>,
@@ -62,11 +73,11 @@ struct ProjectKey {
     activity: HashMap<String, u64>,
 }
 #[derive(Default)]
-pub(super) struct LiveRows {
+pub(crate) struct LiveRows {
     pub groups: Vec<(Arc<terminator_core::Project>, Vec<Arc<Session>>)>,
     pub unverified: Vec<Arc<Session>>,
 }
-pub(super) struct ExplorerCache {
+pub(crate) struct ExplorerCache {
     pub revision: u64,
     pub root: PathBuf,
     pub expanded: HashSet<PathBuf>,
@@ -77,7 +88,7 @@ pub(super) struct ExplorerCache {
     pub rows: Arc<Vec<ExplorerRow>>,
     pub dirs: Vec<PathBuf>,
 }
-pub(super) struct ExplorerRow {
+pub(crate) struct ExplorerRow {
     pub entry: Option<terminator_git::Entry>,
     pub path: PathBuf,
     pub label: String,
@@ -94,11 +105,11 @@ impl Cache {
     }
 }
 impl App {
-    pub(super) fn sidebar_index(&self) -> Arc<Index> {
+    pub(crate) fn sidebar_index(&self) -> Arc<Index> {
         self.sidebar_index_at(crate::now())
     }
 
-    pub(super) fn sidebar_index_at(&self, moment: u64) -> Arc<Index> {
+    pub(crate) fn sidebar_index_at(&self, moment: u64) -> Arc<Index> {
         let generation = self.presentations.borrow_mut().generation(
             &self.state,
             moment,
@@ -208,7 +219,7 @@ impl App {
         }
         let now = moment;
         for notice in &self.state.notifications {
-            if !notice.read && super::sidebar_ui::notice_pending(notice, now) {
+            if !notice.read && crate::sidebar_ui::notice_pending(notice, now) {
                 index.unread_count = index.unread_count.saturating_add(1);
             }
             if !notice.dismissed
@@ -298,7 +309,7 @@ impl App {
         cache.live_rows = None;
         index
     }
-    pub(super) fn cached_projects(&self) -> Arc<Vec<Arc<terminator_core::Project>>> {
+    pub(crate) fn cached_projects(&self) -> Arc<Vec<Arc<terminator_core::Project>>> {
         self.sidebar_index();
         let mut cache = self.sidebar_cache.borrow_mut();
         if let Some((key, rows)) = &cache.projects
@@ -339,7 +350,7 @@ impl App {
         ));
         rows
     }
-    pub(super) fn cached_history(&self) -> Arc<Vec<HistoryGroup>> {
+    pub(crate) fn cached_history(&self) -> Arc<Vec<HistoryGroup>> {
         let index = self.sidebar_index();
         let mut cache = self.sidebar_cache.borrow_mut();
         if let Some((sort, filter, rows)) = &cache.history
@@ -364,7 +375,7 @@ impl App {
         ));
         rows
     }
-    pub(super) fn cached_live_rows(&self) -> Arc<LiveRows> {
+    pub(crate) fn cached_live_rows(&self) -> Arc<LiveRows> {
         let index = self.sidebar_index();
         let query = self.preferences.agents_search.trim().to_lowercase();
         let kind = &self.preferences.agents_filter;
@@ -433,7 +444,7 @@ impl App {
         cache.live_rows = Some((query, kind.clone(), Arc::clone(&rows)));
         rows
     }
-    pub(super) fn explorer_rows(&mut self, root: &std::path::Path) -> Arc<Vec<ExplorerRow>> {
+    pub(crate) fn explorer_rows(&mut self, root: &std::path::Path) -> Arc<Vec<ExplorerRow>> {
         let reveal_file = self
             .explorer_reveal
             .as_ref()
@@ -454,15 +465,17 @@ impl App {
             self.visible_dirs.extend(model.dirs.iter().cloned());
             return Arc::clone(&model.rows);
         }
-        fn walk(
-            app: &App,
-            path: &std::path::Path,
-            depth: usize,
-            query: Option<&str>,
-            reveal_file: Option<&std::path::Path>,
-            rows: &mut Vec<ExplorerRow>,
-            dirs: &mut Vec<PathBuf>,
-        ) {
+
+        fn walk(input: WalkInput<'_>) {
+            let WalkInput {
+                app,
+                path,
+                depth,
+                query,
+                reveal_file,
+                rows,
+                dirs,
+            } = input;
             if depth > 20 {
                 return;
             }
@@ -542,15 +555,15 @@ impl App {
                         // whether it stays compact.
                         let upper = chain.len().saturating_sub(1);
                         dirs.extend(chain.iter().take(upper).map(|link| link.path.clone()));
-                        walk(
+                        walk(WalkInput {
                             app,
-                            &deepest.path,
-                            depth.saturating_add(1),
+                            path: &deepest.path,
+                            depth: depth.saturating_add(1),
                             query,
                             reveal_file,
                             rows,
                             dirs,
-                        );
+                        });
                     }
                 }
             }
@@ -558,15 +571,15 @@ impl App {
         let query = (!self.explorer_query.is_empty()).then(|| self.explorer_query.to_lowercase());
         let mut rows = Vec::new();
         let mut dirs = Vec::new();
-        walk(
-            self,
-            root,
-            0,
-            query.as_deref(),
-            reveal_file.as_deref(),
-            &mut rows,
-            &mut dirs,
-        );
+        walk(WalkInput {
+            app: self,
+            path: root,
+            depth: 0,
+            query: query.as_deref(),
+            reveal_file: reveal_file.as_deref(),
+            rows: &mut rows,
+            dirs: &mut dirs,
+        });
         self.visible_dirs.extend(dirs.iter().cloned());
         let rows = Arc::new(rows);
         let cache = self.sidebar_cache.get_mut();
@@ -583,7 +596,7 @@ impl App {
         });
         rows
     }
-    pub(super) fn cached_unread_groups(&self) -> Arc<Vec<NoticeGroup>> {
+    pub(crate) fn cached_unread_groups(&self) -> Arc<Vec<NoticeGroup>> {
         let index = self.sidebar_index();
         let mut cache = self.sidebar_cache.borrow_mut();
         if let Some((selected, rows)) = &cache.unread

@@ -54,7 +54,13 @@ fn begin_drag(app: &mut App, ctx: &egui::Context, source: &PaneSource) -> egui::
         reason = "Bounded fixture coordinates."
     )]
     let moved = start + egui::vec2(18.0, 12.0);
-    frame_glide(app, ctx, start, moved, 3);
+    frame_glide(FrameGlideInput {
+        app,
+        ctx,
+        from: start,
+        to: moved,
+        steps: 3,
+    });
     assert_eq!(app.drag.pane_source.as_ref(), Some(source));
     start
 }
@@ -65,7 +71,13 @@ fn editor_drag_moves_the_selected_same_file_copy_to_another_workspace() {
     let (mut app, ctx, _dir, pane, source) = fixture_with_copies();
     let start = begin_drag(&mut app, &ctx, &source);
     let end = frame_center(&app, &ctx, "workspace-tab:target.rs");
-    frame_glide(&mut app, &ctx, start, end, 8);
+    frame_glide(FrameGlideInput {
+        app: &mut app,
+        ctx: &ctx,
+        from: start,
+        to: end,
+        steps: 8,
+    });
     combined_frame(&mut app, &ctx, vec![frame_press(end, false)]);
     combined_frame(&mut app, &ctx, vec![]);
     let dock = &app.layouts["a"];
@@ -113,7 +125,13 @@ fn editor_drag_to_plus_and_a_strip_gap_creates_one_new_workspace() {
                 first[1] + first[3] / 2.0,
             )
         };
-        frame_glide(&mut app, &ctx, start, end, 8);
+        frame_glide(FrameGlideInput {
+            app: &mut app,
+            ctx: &ctx,
+            from: start,
+            to: end,
+            steps: 8,
+        });
         combined_frame(&mut app, &ctx, vec![frame_press(end, false)]);
         combined_frame(&mut app, &ctx, vec![]);
         let dock = &app.layouts["a"];
@@ -137,7 +155,13 @@ fn escape_cancels_editor_drag_and_restores_origin_workspace() {
     let (mut app, ctx, _dir, _pane, source) = fixture_with_copies();
     let start = begin_drag(&mut app, &ctx, &source);
     let end = frame_center(&app, &ctx, "workspace-tab:target.rs");
-    frame_glide(&mut app, &ctx, start, end, 8);
+    frame_glide(FrameGlideInput {
+        app: &mut app,
+        ctx: &ctx,
+        from: start,
+        to: end,
+        steps: 8,
+    });
     assert_eq!(app.layouts["a"].active, "destination");
     combined_frame(&mut app, &ctx, vec![key_press(egui::Key::Escape)]);
     combined_frame(&mut app, &ctx, vec![frame_press(end, false)]);
@@ -176,7 +200,15 @@ fn exact_editor_moves_reject_stale_sources_and_keep_stack_order() {
         )
             .into(),
     };
-    assert!(dock.move_view_to_leaf(crate::workspace::MoveViewToLeafInput { source: &source, pane: &pane, group: &source.group, dest: source.path.node_path(), insertion: TabInsert::Insert(TabIndex(0)) }));
+    assert!(
+        dock.move_view_to_leaf(crate::workspace::MoveViewToLeafInput {
+            source: &source,
+            pane: &pane,
+            group: &source.group,
+            dest: source.path.node_path(),
+            insertion: TabInsert::Insert(TabIndex(0))
+        })
+    );
     let tabs = &dock.leaf(source.path.node_path()).unwrap().tabs;
     assert_eq!(tabs, &[pane.clone(), pane, other]);
 }

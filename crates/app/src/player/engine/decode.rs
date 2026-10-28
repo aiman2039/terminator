@@ -1,5 +1,5 @@
 use super::super::tap;
-use super::analysis::{Analysis, playback};
+use super::analysis::{Analysis, PlaybackInput, playback};
 use super::handle::{Controls, Desired, Event, MAX_PCM_SAMPLES, Playable, Status};
 use super::pipeline::{
     PipelineGuard, PlaybackCounters, PreparedSource, StreamInput, StreamReader, start_output,
@@ -41,14 +41,24 @@ impl reqwest::dns::Resolve for Resolver {
         })
     }
 }
-pub(super) async fn run(
-    service: crate::gui_services::Services,
-    mut commands: watch::Receiver<Desired>,
-    controls: Arc<Controls>,
-    status: watch::Sender<Event>,
-    spectrum: watch::Sender<Option<[f32; tap::BARS]>>,
-    lifetime: CancellationToken,
-) -> Result<()> {
+pub(super) struct RunInput {
+    pub(super) service: crate::gui_services::Services,
+    pub(super) commands: watch::Receiver<Desired>,
+    pub(super) controls: Arc<Controls>,
+    pub(super) status: watch::Sender<Event>,
+    pub(super) spectrum: watch::Sender<Option<[f32; tap::BARS]>>,
+    pub(super) lifetime: CancellationToken,
+}
+
+pub(super) async fn run(input: RunInput) -> Result<()> {
+    let RunInput {
+        service,
+        mut commands,
+        controls,
+        status,
+        spectrum,
+        lifetime,
+    } = input;
     let runtime = tokio::runtime::Handle::current();
     let client = service
         .client()
@@ -96,19 +106,19 @@ pub(super) async fn run(
         }
         let session = CancellationToken::new();
         let cleanup = session.clone().drop_guard();
-        let work = playback(
-            &client,
-            &decoder,
-            desired.clone(),
-            Arc::clone(&controls),
-            status.clone(),
-            Analysis {
+        let work = playback(PlaybackInput {
+            client: &client,
+            decoder: &decoder,
+            desired: desired.clone(),
+            controls: Arc::clone(&controls),
+            status: status.clone(),
+            spectrum: Analysis {
                 service: service.clone(),
                 sender: spectrum.clone(),
                 controls: Arc::clone(&controls),
             },
-            session.clone(),
-        );
+            cancellation: session.clone(),
+        });
         tokio::pin!(work);
         loop {
             tokio::select! {
@@ -134,15 +144,30 @@ pub(super) async fn run(
     }
     Ok(())
 }
-pub(super) fn decode_audio(
-    desired: Desired,
-    controls: Arc<Controls>,
-    status: watch::Sender<Event>,
-    spectrum: Analysis,
-    receiver: mpsc::Receiver<Vec<u8>>,
-    cancel: CancellationToken,
-    (ready, counters, healthy): (Arc<AtomicBool>, Arc<PlaybackCounters>, Arc<AtomicBool>),
-) -> Result<()> {
+pub(super) struct DecodeAudioInput {
+    pub(super) desired: Desired,
+    pub(super) controls: Arc<Controls>,
+    pub(super) status: watch::Sender<Event>,
+    pub(super) spectrum: Analysis,
+    pub(super) receiver: mpsc::Receiver<Vec<u8>>,
+    pub(super) cancel: CancellationToken,
+    pub(super) ready: Arc<AtomicBool>,
+    pub(super) counters: Arc<PlaybackCounters>,
+    pub(super) healthy: Arc<AtomicBool>,
+}
+
+pub(super) fn decode_audio(input: DecodeAudioInput) -> Result<()> {
+    let DecodeAudioInput {
+        desired,
+        controls,
+        status,
+        spectrum,
+        receiver,
+        cancel,
+        ready,
+        counters,
+        healthy,
+    } = input;
     let _decoder = PipelineGuard::new(Arc::clone(&controls), false);
     let source = desired.source.as_ref().context("audio source missing")?;
     let mut decoder: Box<dyn Source<Item = f32> + Send> = match source {

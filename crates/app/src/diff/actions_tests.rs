@@ -1,4 +1,5 @@
 use super::*;
+use crate::diff::ExpandGapInput;
 use crate::gui_services::Owner;
 
 struct Fixture {
@@ -53,13 +54,13 @@ impl Fixture {
 
     async fn doc(&self, staged: bool) -> Arc<DiffDocument> {
         Arc::new(
-            super::super::document_async(
-                &self.service,
-                self.dir.path().into(),
-                self.absolute(),
+            super::super::document_async(super::super::DocumentAsyncInput {
+                service: &self.service,
+                cwd: self.dir.path().into(),
+                path: self.absolute(),
                 staged,
-                &CancellationToken::new(),
-            )
+                cancel: &CancellationToken::new(),
+            })
             .await
             .unwrap(),
         )
@@ -350,15 +351,20 @@ async fn stale_disk_snapshot_cannot_discard_any_changes() {
 
 #[test]
 fn context_expansion_keeps_hunk_ranges_and_rows_correct() {
-    let compact =
-        super::super::build_with_context(Path::new("file.txt"), &original(), &changed(), false, 3);
-    let expanded = super::super::build_with_context(
-        Path::new("file.txt"),
-        &original(),
-        &changed(),
-        false,
-        100,
-    );
+    let compact = super::super::build_with_context(super::super::BuildWithContextInput {
+        path: Path::new("file.txt"),
+        left: &original(),
+        right: &changed(),
+        staged: false,
+        context: 3,
+    });
+    let expanded = super::super::build_with_context(super::super::BuildWithContextInput {
+        path: Path::new("file.txt"),
+        left: &original(),
+        right: &changed(),
+        staged: false,
+        context: 100,
+    });
     assert!(expanded.unified.len() > compact.unified.len());
     assert_eq!(compact.hunks.len(), 2);
     for (before, after) in compact.hunks.iter().zip(&expanded.hunks) {
@@ -395,12 +401,22 @@ fn expanding_one_gap_keeps_other_gaps_and_the_change_identity() {
     let changed = original
         .replacen("10\n", "changed\n", 1)
         .replacen("80\n", "another\n", 1);
-    let doc =
-        super::super::build_with_context(Path::new("file.txt"), &original, &changed, false, 3);
+    let doc = super::super::build_with_context(super::super::BuildWithContextInput {
+        path: Path::new("file.txt"),
+        left: &original,
+        right: &changed,
+        staged: false,
+        context: 3,
+    });
     assert_eq!(doc.gaps.len(), 3);
     let selected = doc.gaps[1].old.clone();
     let expanded = doc
-        .expand_gap(Path::new("file.txt"), 1, super::super::GapPart::All, false)
+        .expand_gap(ExpandGapInput {
+            path: Path::new("file.txt"),
+            gap: 1,
+            part: super::super::GapPart::All,
+            staged: false,
+        })
         .unwrap();
     assert_eq!(expanded.gaps.len(), 2);
     assert!(expanded.gaps.iter().all(|gap| gap.old != selected));
@@ -426,13 +442,22 @@ fn expanding_one_gap_keeps_other_gaps_and_the_change_identity() {
     );
 }
 
-async fn change_lines(
-    fixture: &Fixture,
+struct ChangeLinesInput<'a> {
+    fixture: &'a Fixture,
     doc: Arc<DiffDocument>,
     kind: Kind,
-    old: &[usize],
-    new: &[usize],
-) -> Result<Outcome> {
+    old: &'a [usize],
+    new: &'a [usize],
+}
+
+async fn change_lines(input: ChangeLinesInput<'_>) -> Result<Outcome> {
+    let ChangeLinesInput {
+        fixture,
+        doc,
+        kind,
+        old,
+        new,
+    } = input;
     execute(
         &fixture.service,
         Request::Hunk {
@@ -457,22 +482,40 @@ async fn picked_lines_stage_unstage_and_discard_only_themselves() {
     let doc = fixture.doc(false).await;
     assert_eq!(doc.hunks.len(), 1);
     // Stage only the first added line; the removal stays unstaged.
-    let outcome = change_lines(&fixture, doc, Kind::Stage, &[], &[1])
-        .await
-        .unwrap();
+    let outcome = change_lines(ChangeLinesInput {
+        fixture: &fixture,
+        doc,
+        kind: Kind::Stage,
+        old: &[],
+        new: &[1],
+    })
+    .await
+    .unwrap();
     assert!(outcome.message.contains("1 line"), "{}", outcome.message);
     assert_eq!(fixture.index(), "a\nold\nnew one\nz\n");
     // Unstage it again by picking that line on the staged side.
     let staged = fixture.doc(true).await;
-    change_lines(&fixture, staged, Kind::Unstage, &[], &[2])
-        .await
-        .unwrap();
+    change_lines(ChangeLinesInput {
+        fixture: &fixture,
+        doc: staged,
+        kind: Kind::Unstage,
+        old: &[],
+        new: &[2],
+    })
+    .await
+    .unwrap();
     assert_eq!(fixture.index(), "a\nold\nz\n");
     // Discard only the second added line from the working tree.
     let working = fixture.doc(false).await;
-    change_lines(&fixture, working, Kind::Discard, &[], &[2])
-        .await
-        .unwrap();
+    change_lines(ChangeLinesInput {
+        fixture: &fixture,
+        doc: working,
+        kind: Kind::Discard,
+        old: &[],
+        new: &[2],
+    })
+    .await
+    .unwrap();
     assert_eq!(
         std::fs::read_to_string(fixture.absolute()).unwrap(),
         "a\nnew one\nz\n"

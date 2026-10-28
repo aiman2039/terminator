@@ -209,9 +209,7 @@ impl Shared {
         }
         Ok(Reply::Transfer(status))
     }
-    fn validate_transfer_operation(
-        operation: &Operation,
-    ) -> Result<(bool, String, String)> {
+    fn validate_transfer_operation(operation: &Operation) -> Result<(bool, String, String)> {
         let (upload, name, remote_dir) = match operation {
             Operation::Upload { local, remote_dir } => {
                 ensure!(local.is_absolute(), "Local upload path must be absolute");

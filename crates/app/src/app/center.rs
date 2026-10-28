@@ -1,9 +1,18 @@
 use super::super::appearance;
+use crate::worktree_ui::WorktreeFormInput;
 use eframe::egui::{self};
 use egui_dock::DockArea;
 use terminator_core::*;
 
 use super::super::*;
+
+pub(crate) struct PaintFloatDockInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) viewport: egui::ViewportId,
+    pub(crate) project: &'a str,
+    pub(crate) dock: &'a mut egui_dock::DockState<Tab>,
+}
+
 impl App {
     pub(crate) fn center_pane(&mut self, ui: &mut egui::Ui) {
         self.settings_unsaved_dialog(ui.ctx());
@@ -107,7 +116,13 @@ impl App {
             let mut browse = false;
             let mut cancel = false;
             let mut clone = draft.clone();
-            self.worktree_form(ui, &mut clone, &mut submit, &mut browse, &mut cancel);
+            self.worktree_form(WorktreeFormInput {
+                ui,
+                draft: &mut clone,
+                submit: &mut submit,
+                browse: &mut browse,
+                cancel: &mut cancel,
+            });
             if browse {
                 self.browse_target = Some(BrowseTarget::WorktreeDest);
             }
@@ -156,15 +171,15 @@ impl App {
                     let path = project.path.display().to_string();
                     let name = project.name.clone();
                     let project_id = project.id.clone();
-                    let response = appearance::project_row(
+                    let response = appearance::project_row(appearance::ProjectRowInput {
                         ui,
-                        &name,
-                        "GitBranch",
-                        is_selected,
-                        self.theme.row_height(),
-                        &live.to_string(),
-                        appearance::color(&self.theme.secondary),
-                    )
+                        label: &name,
+                        icon: "GitBranch",
+                        selected: is_selected,
+                        height: self.theme.row_height(),
+                        trailing: &live.to_string(),
+                        tint: appearance::color(&self.theme.secondary),
+                    })
                     .on_hover_text(format!(
                         "{}\n{}",
                         path,
@@ -386,13 +401,13 @@ impl App {
     /// and pane controls. Cross-window drag-drop is unsupported, so no
     /// drop landing runs here; a main-dock drag released over a float is
     /// cancelled by the main window's own release handling.
-    pub(crate) fn paint_float_dock(
-        &mut self,
-        ui: &mut egui::Ui,
-        viewport: egui::ViewportId,
-        project: &str,
-        dock: &mut egui_dock::DockState<Tab>,
-    ) {
+    pub(crate) fn paint_float_dock(&mut self, input: PaintFloatDockInput<'_>) {
+        let PaintFloatDockInput {
+            ui,
+            viewport,
+            project,
+            dock,
+        } = input;
         let style = self.dock_style(ui);
         self.refresh_float_pane_maps(dock);
         DockArea::new(dock)

@@ -147,11 +147,21 @@ impl Workspace {
     }
 
     pub fn add_from(&mut self, id: String, pane: Tab, anchors: &[Tab]) {
-        self.add_at_from(crate::workspace::AddAtFromInput { index: self.tabs.len(), id, pane, anchors });
+        self.add_at_from(crate::workspace::AddAtFromInput {
+            index: self.tabs.len(),
+            id,
+            pane,
+            anchors,
+        });
     }
 
     pub fn add_at_from(&mut self, input: AddAtFromInput<'_>) {
-        let AddAtFromInput { index, id, pane, anchors } = input;
+        let AddAtFromInput {
+            index,
+            id,
+            pane,
+            anchors,
+        } = input;
 
         let origin = anchors.iter().find_map(|anchor| {
             self.tabs
@@ -420,7 +430,17 @@ impl Workspace {
     }
 
     fn exchange_single_pane(&mut self, input: ExchangeSinglePaneInput<'_>) -> Option<bool> {
-        let ExchangeSinglePaneInput { src, dst, pane, dest, src_path, dest_group, other, src_len, dst_len } = input;
+        let ExchangeSinglePaneInput {
+            src,
+            dst,
+            pane,
+            dest,
+            src_path,
+            dest_group,
+            other,
+            src_len,
+            dst_len,
+        } = input;
         if src_len == 1 && dst_len == 1 {
             // Exchange single panes across groups: no structure changes, so
             // both terminals stay exactly where the user can see them.
@@ -455,7 +475,12 @@ impl Workspace {
     }
 
     pub fn move_pane_to_split(&mut self, input: MovePaneToSplitInput<'_>) -> bool {
-        let MovePaneToSplitInput { pane, dest_group, dest, split } = input;
+        let MovePaneToSplitInput {
+            pane,
+            dest_group,
+            dest,
+            split,
+        } = input;
 
         let Some(src) = self.group_with_pane(pane) else {
             return false;

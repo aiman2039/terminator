@@ -1,6 +1,7 @@
 use super::analysis::{Analysis, download};
-use super::decode::{Permanent, decode_audio};
+use super::decode::{DecodeAudioInput, Permanent, decode_audio};
 use super::handle::{COMPRESSED_SLOTS, Controls, Desired, Event, Playable, Status};
+use crate::player::engine::DownloadInput;
 use anyhow::{Context, Result, ensure};
 use cpal::traits::{DeviceTrait, StreamTrait};
 use rodio::Source;
@@ -38,15 +39,28 @@ impl Drop for PipelineGuard {
         }
     }
 }
-pub(super) async fn pipeline(
-    client: &reqwest::Client,
-    pool: &NativePool,
-    desired: Desired,
-    controls: Arc<Controls>,
-    status: watch::Sender<Event>,
-    spectrum: Analysis,
-    (cancel, healthy): (CancellationToken, Arc<AtomicBool>),
-) -> Result<()> {
+pub(super) struct PipelineInput<'a> {
+    pub(super) client: &'a reqwest::Client,
+    pub(super) pool: &'a NativePool,
+    pub(super) desired: Desired,
+    pub(super) controls: Arc<Controls>,
+    pub(super) status: watch::Sender<Event>,
+    pub(super) spectrum: Analysis,
+    pub(super) cancel: CancellationToken,
+    pub(super) healthy: Arc<AtomicBool>,
+}
+
+pub(super) async fn pipeline(input: PipelineInput<'_>) -> Result<()> {
+    let PipelineInput {
+        client,
+        pool,
+        desired,
+        controls,
+        status,
+        spectrum,
+        cancel,
+        healthy,
+    } = input;
     let _cancel_on_drop = cancel.clone().drop_guard();
     let (sender, receiver) = mpsc::channel(COMPRESSED_SLOTS);
     let source = desired.source.clone().context("audio source missing")?;
@@ -54,13 +68,13 @@ pub(super) async fn pipeline(
     let network = async {
         if let Playable::Stream { url, .. } = source {
             let _network = PipelineGuard::new(network_controls, true);
-            download(
+            download(DownloadInput {
                 client,
                 url,
                 sender,
-                Duration::from_secs(8),
-                Duration::from_secs(10),
-            )
+                headers: Duration::from_secs(8),
+                read_timeout: Duration::from_secs(10),
+            })
             .await
         } else {
             drop(sender);
@@ -83,15 +97,17 @@ pub(super) async fn pipeline(
     let monitor_generation = desired.generation;
     let decode_cancel = cancel.clone();
     let decode = pool.run(&cancel, move || {
-        decode_audio(
+        decode_audio(DecodeAudioInput {
             desired,
             controls,
             status,
             spectrum,
             receiver,
-            decode_cancel,
-            (ready, counters, healthy),
-        )
+            cancel: decode_cancel,
+            ready,
+            counters,
+            healthy,
+        })
     });
     let startup = async move {
         loop {
@@ -127,11 +143,11 @@ pub(super) async fn pipeline(
 pub(super) struct StreamReader {
     pub(super) inner: Mutex<StreamInput>,
 }
-pub(super) struct StreamInput {
-    pub(super) receiver: mpsc::Receiver<Vec<u8>>,
-    pub(super) current: std::io::Cursor<Vec<u8>>,
-    pub(super) position: u64,
-    pub(super) cancel: CancellationToken,
+pub(crate) struct StreamInput {
+    pub(crate) receiver: mpsc::Receiver<Vec<u8>>,
+    pub(crate) current: std::io::Cursor<Vec<u8>>,
+    pub(crate) position: u64,
+    pub(crate) cancel: CancellationToken,
 }
 impl Read for StreamReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {

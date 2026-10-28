@@ -38,12 +38,14 @@ async fn git(
     terminator_git::run(
         service.processes(),
         service.fs(),
-        root,
-        args,
-        CommandOptions {
-            input,
-            stdout_limit: 4 * 1024 * 1024,
-            ..Default::default()
+        terminator_git::RunInput {
+            cwd: root,
+            args,
+            options: CommandOptions {
+                input,
+                stdout_limit: 4 * 1024 * 1024,
+                ..Default::default()
+            },
         },
     )
     .await
@@ -73,17 +75,19 @@ impl Source {
         let head = terminator_git::run(
             service.processes(),
             service.fs(),
-            root,
-            vec![
-                "ls-tree".into(),
-                "-z".into(),
-                "HEAD".into(),
-                "--".into(),
-                literal(path),
-            ],
-            CommandOptions {
-                accepted_exit_codes: Some(vec![0, 128]),
-                ..Default::default()
+            terminator_git::RunInput {
+                cwd: root,
+                args: vec![
+                    "ls-tree".into(),
+                    "-z".into(),
+                    "HEAD".into(),
+                    "--".into(),
+                    literal(path),
+                ],
+                options: CommandOptions {
+                    accepted_exit_codes: Some(vec![0, 128]),
+                    ..Default::default()
+                },
             },
         )
         .await?;
@@ -270,13 +274,22 @@ fn replace_lines(
         .collect()
 }
 
-fn edit(
-    source: &Source,
-    doc: &DiffDocument,
-    hunk: &Hunk,
+struct EditInput<'a> {
+    source: &'a Source,
+    doc: &'a DiffDocument,
+    hunk: &'a Hunk,
     kind: Kind,
-    lines: Option<&LineSelection>,
-) -> Undo {
+    lines: Option<&'a LineSelection>,
+}
+
+fn edit(input: EditInput<'_>) -> Undo {
+    let EditInput {
+        source,
+        doc,
+        hunk,
+        kind,
+        lines,
+    } = input;
     let index = kind != Kind::Discard;
     let before = match kind {
         Kind::Stage => Version {
@@ -499,13 +512,13 @@ pub(crate) async fn execute(
                 .source
                 .as_ref()
                 .context("Refresh the diff before editing")?;
-            let fresh = super::document_async(
+            let fresh = super::document_async(super::DocumentAsyncInput {
                 service,
-                source.root.clone(),
-                source.root.join(&source.path),
-                false,
+                cwd: source.root.clone(),
+                path: source.root.join(&source.path),
+                staged: false,
                 cancel,
-            )
+            })
             .await?;
             ensure!(
                 fresh.source == document.source
@@ -550,13 +563,13 @@ pub(crate) async fn execute(
                 .source
                 .as_ref()
                 .context("Refresh the diff before changing a hunk")?;
-            let fresh = super::document_async(
+            let fresh = super::document_async(super::DocumentAsyncInput {
                 service,
-                source.root.clone(),
-                source.root.join(&source.path),
+                cwd: source.root.clone(),
+                path: source.root.join(&source.path),
                 staged,
                 cancel,
-            )
+            })
             .await?;
             ensure!(
                 fresh.source == document.source
@@ -568,7 +581,13 @@ pub(crate) async fn execute(
                 .hunks
                 .get(hunk)
                 .context("This hunk is no longer available; refresh the diff")?;
-            let change = edit(source, &document, hunk, kind, lines.as_ref());
+            let change = edit(EditInput {
+                source,
+                doc: &document,
+                hunk,
+                kind,
+                lines: lines.as_ref(),
+            });
             apply(service, &change, cancel).await?;
             Ok(Outcome {
                 undo: Some(change),

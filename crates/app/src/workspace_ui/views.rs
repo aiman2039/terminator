@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::app::OpenFileModeInput;
 impl App {
     pub(super) fn image_view(&mut self, ui: &mut egui::Ui, path: &std::path::Path) {
         self.visible_images.insert(path.into());
@@ -30,7 +31,13 @@ impl App {
             }
         });
         if as_text {
-            self.open_file_mode(path.into(), None, None, false, true);
+            self.open_file_mode(OpenFileModeInput {
+                path: path.into(),
+                line: None,
+                split: None,
+                external: false,
+                text: true,
+            });
         }
         if reload && let Some(preview) = self.images.get_mut(path) {
             if let Some(cancel) = preview.cancellation.take() {
@@ -123,7 +130,13 @@ impl App {
             self.browser_host.drop_view(&key);
         }
         if as_text && let Some(path) = target.file() {
-            self.open_file_mode(path.into(), None, None, false, true);
+            self.open_file_mode(OpenFileModeInput {
+                path: path.into(),
+                line: None,
+                split: None,
+                external: false,
+                text: true,
+            });
         }
         if system {
             match target {
@@ -355,7 +368,15 @@ impl App {
             }
         };
         let split = self.diff_split.contains(&key);
-        super::diff_paint::comparison_headers(super::diff_paint::ComparisonHeadersInput { ui, doc: &doc, split, ratio: self.diff_split_ratio, path: &cwd.join(path), editable: false, staged: false });
+        super::diff_paint::comparison_headers(super::diff_paint::ComparisonHeadersInput {
+            ui,
+            doc: &doc,
+            split,
+            ratio: self.diff_split_ratio,
+            path: &cwd.join(path),
+            editable: false,
+            staged: false,
+        });
         if doc.hunks.is_empty() {
             ui.weak("No differences");
             return;
@@ -367,7 +388,15 @@ impl App {
             text: appearance::color(&self.theme.text),
         };
         let mut sync = self.diff_split_scroll.get(&key).copied().unwrap_or(0.0);
-        super::diff_paint::paint_diff_document(super::diff_paint::PaintDiffDocumentInput { ui, doc: &doc, split, colors, scroll_key: &key, ratio: &mut self.diff_split_ratio, sync: &mut sync });
+        super::diff_paint::paint_diff_document(super::diff_paint::PaintDiffDocumentInput {
+            ui,
+            doc: &doc,
+            split,
+            colors,
+            scroll_key: &key,
+            ratio: &mut self.diff_split_ratio,
+            sync: &mut sync,
+        });
         self.diff_split_scroll.insert(key, sync);
     }
 

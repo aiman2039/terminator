@@ -42,57 +42,20 @@ use std::{
 use terminator_core::*;
 
 mod server;
+mod startup;
 use server::{HistoryJob, Shared, drain_wake, relock, serve};
+use startup::{Bootstrap, bootstrap, open_state};
 
 fn main() -> Result<()> {
     accept::raise_fd_limit();
     notifications::initialize();
-    let mut paths = Paths::discover()?;
-    if let Some(p) = std::env::var_os("TERMINATOR_RUNTIME_DIR") {
-        paths.runtime = p.into();
-    }
-    paths.init()?;
-    crash::install(crash::CrashInstall {
-        binary: "terminator-daemon",
-        version: env!("CARGO_PKG_VERSION"),
-        data_dir: paths.data.clone(),
-        notify: None,
-    });
-    let catalog_paths = if let Some(data) = std::env::var_os("TERMINATOR_CATALOG_DATA") {
-        Some(Paths {
-            data: data.into(),
-            runtime: std::env::var_os("TERMINATOR_CATALOG_RUNTIME")
-                .context("Catalog runtime")?
-                .into(),
-        })
-    } else {
-        None
-    };
-    if let Some(root) = &catalog_paths {
-        generations::validate_endpoint(
-            root,
-            &paths,
-            &std::env::var("TERMINATOR_GENERATION").context("Missing generation identity")?,
-        )?;
-    }
-    let _legacy_guard = if let Some(root) = &catalog_paths {
-        let guard = fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(root.runtime.join("daemon.lock"))?;
-        FileExt::try_lock_shared(&guard).context("Legacy service has not retired")?;
-        Some(guard)
-    } else {
-        None
-    };
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(paths.runtime.join("daemon.lock"))?;
-    lock.try_lock_exclusive()
-        .context("Daemon already running")?;
+    let boot = bootstrap()?;
+    let Bootstrap {
+        paths,
+        catalog_paths,
+        _legacy_guard,
+        _lock,
+    } = boot;
     helper::cleanup_abandoned(&paths.data)?;
     let helper = helper::Helper::stage(
         &std::env::current_exe()?.with_file_name(exe_name("terminator-hook")),
@@ -102,81 +65,7 @@ fn main() -> Result<()> {
     listener.set_nonblocking(true)?;
     let auth = id();
     atomic_write(&paths.auth(), auth.as_bytes())?;
-    let (mut store, mut state) = storage::Store::open(&paths)?;
-    // Store::open may report a quarantined store or reset settings via the
-    // degraded flag; recover() clears runtime health, so keep that note.
-    let load_note = state.degraded.clone();
-    state.recover();
-    if load_note.is_some() {
-        state.degraded = load_note;
-    }
-    // Migrate existing stores: drop historical sessions without an agent
-    // resume command so old plain shells/editors stop filling History.
-    let removed = state.prune_non_resumable_ended();
-    if !removed.is_empty()
-        && let Ok(mut history) = storage::History::new(paths.clone())
-    {
-        for id in &removed {
-            let _ = history.clear(Some(id), true);
-        }
-        let _ = history.flush();
-    }
-    if let Some(root) = &catalog_paths {
-        let owner = std::env::var("TERMINATOR_GENERATION")?;
-        ensure!(
-            state.sessions.is_empty(),
-            "Generation directory must be new; never restart owned processes"
-        );
-        state.generation.clone_from(&owner);
-        store.bind_owner(owner);
-        generations::Catalog::open(root)?.refresh(&mut state)?;
-    }
-    state.daemon_version = Some(env!("CARGO_PKG_VERSION").into());
-    state.capabilities = vec![
-        terminator_core::idle_close::CAPABILITY.into(),
-        STABLE_HELPER_CAPABILITY.into(),
-        SHUTDOWN_IF_IDLE_CAPABILITY.into(),
-        snapshot::CAPABILITY.into(),
-        NVIM_REVIEW_CAPABILITY.into(),
-        TERMINAL_NOTICES_CAPABILITY.into(),
-        NOTIFICATION_SOUND_CAPABILITY.into(),
-        NTFY_CAPABILITY.into(),
-        DIFF_CLOSE_SETTINGS_CAPABILITY.into(),
-        WORKTREES_CAPABILITY.into(),
-        SCREEN_CAPABILITY.into(),
-        METADATA_SETTINGS_CAPABILITY.into(),
-        AGENT_PRESENCE_CAPABILITY.into(),
-        VNC_CAPABILITY.into(),
-        VNC_REGIONS_CAPABILITY.into(),
-        terminator_core::remote::CAPABILITY.into(),
-        terminator_core::ssh::HOST_KEYS_CAPABILITY.into(),
-        terminator_core::remote::HOSTS_CAPABILITY.into(),
-        terminator_core::remote::FORWARDING_CAPABILITY.into(),
-        terminator_core::remote::TRANSFER_CAPABILITY.into(),
-        vnc::FEATURES_CAPABILITY.into(),
-    ];
-    if catalog_paths.is_some() {
-        state.daemon_build = Some(generations::build_identity(
-            std::env::current_exe()?
-                .parent()
-                .context("Missing executable directory")?,
-        )?);
-        state.daemon_catalog_version = Some(generations::CATALOG_VERSION);
-        state.capabilities.push(generations::CAPABILITY.into());
-    }
-    let credential_paths = catalog_paths.as_ref().unwrap_or(&paths);
-    let pending = vnc_session::credentials::migrate(credential_paths, &mut state.vnc_profiles);
-    ensure!(
-        pending == 0,
-        "{pending} legacy VNC passwords could not be migrated; unlock the OS credential store before restarting. Existing saved state was not overwritten"
-    );
-    if let Some(root) = &catalog_paths {
-        let catalog = generations::Catalog::open(root)?;
-        if catalog.active()?.as_deref() == Some(&state.generation) {
-            catalog.save_workspace(&state)?;
-        }
-    }
-    store.save(&state)?;
+    let (store, state) = open_state(&paths, &catalog_paths)?;
     let (history, history_rx) = mpsc::sync_channel::<HistoryJob>(512);
     let (alerts, alert_rx) = mpsc::sync_channel::<String>(64);
     let shared = Arc::new(Shared {
@@ -200,7 +89,43 @@ fn main() -> Result<()> {
         remote_transfers: Mutex::new(crate::remote::Transfers::default()),
     });
     vnc_session::credentials::finish_activation(Arc::downgrade(&shared));
-    let weak = Arc::downgrade(&shared);
+    spawn_history_worker(Arc::downgrade(&shared), history_rx);
+    spawn_alert_worker(Arc::downgrade(&shared), alert_rx);
+    spawn_generation_worker(Arc::downgrade(&shared));
+    presence::start(Arc::downgrade(&shared));
+    let active = Arc::new(AtomicUsize::new(0));
+    // Event-driven accept loop: the main thread blocks in `poll` with no
+    // timeout while no notification waiter exists, so an idle daemon does no
+    // periodic work. A socketpair wakes it when a waiter needs Cocoa run-loop
+    // pumping or has finished; a shutdown request wakes it explicitly. The
+    // listener is still non-blocking so the poll/accept pair never blocks.
+    // Windows has no `poll` on sockets here; the loop below polls the
+    // non-blocking listener and waker on a short sleep instead.
+    let (wake_tx, wake_rx) = transport::pair()?;
+    wake_tx.set_nonblocking(true)?;
+    wake_rx.set_nonblocking(true)?;
+    // Draining through a clone: the poll set borrows `wake_rx` while a wake
+    // needs a mutable drain handle on the same socket buffer.
+    let mut wake_drain = wake_rx.try_clone()?;
+    notifications::set_waker({
+        let wake_tx = Mutex::new(wake_tx.try_clone()?);
+        move || {
+            if let Ok(mut guard) = wake_tx.lock() {
+                let _ = guard.write(&[1u8]);
+            }
+        }
+    });
+    accept_loop(AcceptLoopInput {
+        listener: &listener,
+        shared: &shared,
+        active: &active,
+        wake_drain: &mut wake_drain,
+        wake_rx: &wake_rx,
+    })?;
+    shutdown(&shared, &active)
+}
+
+fn spawn_history_worker(weak: std::sync::Weak<Shared>, history_rx: mpsc::Receiver<HistoryJob>) {
     thread::spawn(move || {
         let Some(shared) = weak.upgrade() else { return };
         let mut history = match storage::History::new(shared.paths.clone()) {
@@ -211,86 +136,27 @@ fn main() -> Result<()> {
             }
         };
         drop(shared);
-        let mut last_flush = Instant::now();
-        let mut last_prune = Instant::now();
-        let mut previous_settings = None;
+        let mut timers = HistoryTimers {
+            last_flush: Instant::now(),
+            last_prune: Instant::now(),
+            previous_settings: None,
+        };
         loop {
             let Some(s) = weak.upgrade() else { break };
             match history_rx.recv_timeout(Duration::from_millis(250)) {
-                Ok(HistoryJob::Prune(budget, tx)) => {
-                    let settings = relock(&s.state).settings.clone();
-                    let _ = tx.send(
-                        history
-                            .prune_with_budget(&settings, budget)
-                            .map_err(|e| e.to_string()),
-                    );
-                }
-                Ok(HistoryJob::Append(sid, data)) => {
-                    if let Err(e) = history.append(&sid, &data) {
-                        let mut state = relock(&s.state);
-                        if let Some(record) = state.sessions.iter_mut().find(|r| r.id == sid) {
-                            record.truncated = true;
-                        }
-                        state.degraded = Some(format!(
-                            "History write failed; some terminal history was not saved: {e}"
-                        ));
-                        state.revision = state.revision.saturating_add(1);
-                    }
-                }
-                Ok(HistoryJob::Flush(tx)) => {
-                    let _ = tx.send(history.flush().map_err(|e| e.to_string()));
-                }
-                Ok(HistoryJob::Clear(session, remove, tx)) => {
-                    let _ = tx.send(
-                        history
-                            .clear(session.as_deref(), remove)
-                            .map_err(|e| e.to_string()),
-                    );
-                }
+                Ok(job) => handle_history_job(&mut history, &s, job),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 _ => {}
             }
-            if last_flush.elapsed() >= Duration::from_millis(250) {
-                if let Err(e) = history.flush() {
-                    s.degraded(&format!("History flush failed: {e}"));
-                }
-                last_flush = Instant::now();
-            }
-            let settings = relock(&s.state).settings.clone();
-            let limits = (
-                settings.history_days,
-                settings.session_mib,
-                settings.total_mib,
-            );
-            if history.exceeds(&settings)
-                || previous_settings != Some(limits)
-                || last_prune.elapsed() >= Duration::from_secs(30)
-            {
-                match history.prune(&settings) {
-                    Ok(ids) if !ids.is_empty() => {
-                        let mut state = relock(&s.state);
-                        for record in &mut state.sessions {
-                            if ids.contains(&record.id) {
-                                record.truncated = true;
-                            }
-                        }
-                        state.revision = state.revision.saturating_add(1);
-                        drop(state);
-                        let _ = s.persist();
-                    }
-                    Ok(_) => {}
-                    Err(e) => s.degraded(&format!("History cleanup failed: {e}")),
-                }
-                previous_settings = Some(limits);
-                last_prune = Instant::now();
-            }
+            maintain_history(&mut history, &s, &mut timers);
             if s.shutdown.load(Ordering::Relaxed) {
                 break;
             }
         }
         let _ = history.flush();
     });
-    let weak = Arc::downgrade(&shared);
+}
+fn spawn_alert_worker(weak: std::sync::Weak<Shared>, alert_rx: mpsc::Receiver<String>) {
     thread::spawn(move || {
         let mut last = Instant::now()
             .checked_sub(Duration::from_secs(10))
@@ -329,7 +195,8 @@ fn main() -> Result<()> {
             last = Instant::now();
         }
     });
-    let weak = Arc::downgrade(&shared);
+}
+fn spawn_generation_worker(weak: std::sync::Weak<Shared>) {
     thread::spawn(move || {
         let born = Instant::now();
         let mut global_prune = Instant::now()
@@ -398,30 +265,24 @@ fn main() -> Result<()> {
             }
         }
     });
-    presence::start(Arc::downgrade(&shared));
-    let active = Arc::new(AtomicUsize::new(0));
-    // Event-driven accept loop: the main thread blocks in `poll` with no
-    // timeout while no notification waiter exists, so an idle daemon does no
-    // periodic work. A socketpair wakes it when a waiter needs Cocoa run-loop
-    // pumping or has finished; a shutdown request wakes it explicitly. The
-    // listener is still non-blocking so the poll/accept pair never blocks.
-    // Windows has no `poll` on sockets here; the loop below polls the
-    // non-blocking listener and waker on a short sleep instead.
-    let (wake_tx, wake_rx) = transport::pair()?;
-    wake_tx.set_nonblocking(true)?;
-    wake_rx.set_nonblocking(true)?;
-    // Draining through a clone: the poll set borrows `wake_rx` while a wake
-    // needs a mutable drain handle on the same socket buffer.
-    let mut wake_drain = wake_rx.try_clone()?;
-    notifications::set_waker({
-        let wake_tx = Mutex::new(wake_tx.try_clone()?);
-        move || {
-            if let Ok(mut guard) = wake_tx.lock() {
-                let _ = guard.write(&[1u8]);
-            }
-        }
-    });
-    #[cfg(unix)]
+}
+struct AcceptLoopInput<'a> {
+    listener: &'a transport::Listener,
+    shared: &'a Arc<Shared>,
+    active: &'a Arc<AtomicUsize>,
+    wake_drain: &'a mut transport::Stream,
+    wake_rx: &'a transport::Stream,
+}
+
+#[cfg(unix)]
+fn accept_loop(input: AcceptLoopInput<'_>) -> Result<()> {
+    let AcceptLoopInput {
+        listener,
+        shared,
+        active,
+        wake_drain,
+        wake_rx,
+    } = input;
     while !shared.shutdown.load(Ordering::Relaxed) {
         let waiting = notifications::waiting();
         // While a waiter exists, service the Cocoa run loop often enough that
@@ -439,14 +300,14 @@ fn main() -> Result<()> {
             Ok(0) => notifications::pump(),
             Ok(_) => {
                 if fds[1].revents().contains(PollFlags::IN) {
-                    drain_wake(&mut wake_drain);
+                    drain_wake(wake_drain);
                 }
                 if fds[0].revents().contains(PollFlags::IN) {
                     match listener.accept() {
                         Ok((stream, _)) => {
                             if active.load(Ordering::Relaxed) <= 256 {
-                                let s = Arc::clone(&shared);
-                                let count = Arc::clone(&active);
+                                let s = Arc::clone(shared);
+                                let count = Arc::clone(active);
                                 count.fetch_add(1, Ordering::Relaxed);
                                 thread::spawn(move || {
                                     // A panicking request kills at most its
@@ -481,17 +342,27 @@ fn main() -> Result<()> {
             Err(e) => return Err(e.into()),
         }
     }
-    #[cfg(not(unix))]
+    Ok(())
+}
+#[cfg(not(unix))]
+fn accept_loop(input: AcceptLoopInput<'_>) -> Result<()> {
+    let AcceptLoopInput {
+        listener,
+        shared,
+        active,
+        wake_drain,
+        wake_rx: _,
+    } = input;
     while !shared.shutdown.load(Ordering::Relaxed) {
-        drain_wake(&mut wake_drain);
+        drain_wake(wake_drain);
         if notifications::waiting() {
             notifications::pump();
         }
         match listener.accept() {
             Ok((stream, _)) => {
                 if active.load(Ordering::Relaxed) <= 256 {
-                    let s = Arc::clone(&shared);
-                    let count = Arc::clone(&active);
+                    let s = Arc::clone(shared);
+                    let count = Arc::clone(active);
                     count.fetch_add(1, Ordering::Relaxed);
                     thread::spawn(move || {
                         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -513,6 +384,10 @@ fn main() -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+    Ok(())
+}
+
+fn shutdown(shared: &Arc<Shared>, active: &Arc<AtomicUsize>) -> Result<()> {
     // Shutdown is set by a connection handler before it writes the reply.
     // Keep the process alive until accepted requests finish, or a fast main
     // loop can exit while the shutdown client is still reading its frame.
@@ -545,4 +420,87 @@ fn main() -> Result<()> {
     }
     shared.exit_ssh_controls();
     Ok(())
+}
+
+fn handle_history_job(history: &mut storage::History, s: &Shared, job: HistoryJob) {
+    match job {
+        HistoryJob::Prune(budget, tx) => {
+            let settings = relock(&s.state).settings.clone();
+            let _ = tx.send(
+                history
+                    .prune_with_budget(&settings, budget)
+                    .map_err(|e| e.to_string()),
+            );
+        }
+        HistoryJob::Append(sid, data) => {
+            if let Err(e) = history.append(&sid, &data) {
+                let mut state = relock(&s.state);
+                if let Some(record) = state.sessions.iter_mut().find(|r| r.id == sid) {
+                    record.truncated = true;
+                }
+                state.degraded = Some(format!(
+                    "History write failed; some terminal history was not saved: {e}"
+                ));
+                state.revision = state.revision.saturating_add(1);
+            }
+        }
+        HistoryJob::Flush(tx) => {
+            let _ = tx.send(history.flush().map_err(|e| e.to_string()));
+        }
+        HistoryJob::Clear(session, remove, tx) => {
+            let _ = tx.send(
+                history
+                    .clear(session.as_deref(), remove)
+                    .map_err(|e| e.to_string()),
+            );
+        }
+    }
+}
+
+struct HistoryTimers {
+    last_flush: Instant,
+    last_prune: Instant,
+    previous_settings: Option<(u64, u64, u64)>,
+}
+
+fn maintain_history(history: &mut storage::History, s: &Shared, timers: &mut HistoryTimers) {
+    let HistoryTimers {
+        last_flush,
+        last_prune,
+        previous_settings,
+    } = timers;
+    if last_flush.elapsed() >= Duration::from_millis(250) {
+        if let Err(e) = history.flush() {
+            s.degraded(&format!("History flush failed: {e}"));
+        }
+        *last_flush = Instant::now();
+    }
+    let settings = relock(&s.state).settings.clone();
+    let limits = (
+        settings.history_days,
+        settings.session_mib,
+        settings.total_mib,
+    );
+    if history.exceeds(&settings)
+        || *previous_settings != Some(limits)
+        || last_prune.elapsed() >= Duration::from_secs(30)
+    {
+        match history.prune(&settings) {
+            Ok(ids) if !ids.is_empty() => {
+                let mut state = relock(&s.state);
+                for record in &mut state.sessions {
+                    if ids.contains(&record.id) {
+                        record.truncated = true;
+                    }
+                }
+                state.revision = state.revision.saturating_add(1);
+                drop(state);
+                let _ = s.persist();
+            }
+            Ok(_) => {}
+            Err(e) => s.degraded(&format!("History cleanup failed: {e}")),
+        }
+        *previous_settings = Some(limits);
+        *last_prune = Instant::now();
+    }
 }

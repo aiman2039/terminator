@@ -9,6 +9,32 @@
 //! [`terminator_core::CommandOptions`] so timeouts and limits stay per caller.
 #![forbid(unsafe_code)]
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("{0}")]
+    Message(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Core(#[from] anyhow::Error),
+    #[error(transparent)]
+    Utf8(#[from] std::str::Utf8Error),
+    #[error("{context}")]
+    OutsideRepository {
+        context: &'static str,
+        #[source]
+        source: std::path::StripPrefixError,
+    },
+}
+
+impl Error {
+    fn message(text: impl Into<String>) -> Self {
+        Self::Message(text.into())
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
 pub mod diffstat;
 pub mod ignore;
 pub mod snapshot;
@@ -20,4 +46,4 @@ pub use snapshot::{
     SNAPSHOT_LIMIT, blob, check_text, find_record, relative_path, snapshots, worktree_file,
 };
 pub use status::{Change, GitGroup, decorations, parse_porcelain, status_description};
-pub use terminator_core::git::{command, command_with, run, run_blocking};
+pub use terminator_core::git::{RunInput, command, command_with, run, run_blocking};

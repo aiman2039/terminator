@@ -48,7 +48,7 @@ pub fn spawn(service: Services) -> tokio::sync::watch::Sender<Option<Request>> {
             let result = tokio::select! {
                 () = token.cancelled() => break,
                 result = requests.changed() => { if result.is_err() { break; } continue; }
-                result = collecting.collect_async(service.processes(), service.fs(), &request.cwd, request.identity, request.include_pr) => result,
+                result = collecting.collect_async(service.processes(), service.fs(), terminator_core::metadata::CollectAsyncInput { cwd: &request.cwd, identity: request.identity, include_pr: request.include_pr }) => result,
             };
             cache = collecting;
             service.emit_read(Update::Metadata(request.generation, result)).await?;

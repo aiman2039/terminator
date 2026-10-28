@@ -26,6 +26,10 @@ pub(crate) use rename::RenameDialog;
 
 use super::workspace::WorkspaceTab;
 use super::*;
+use crate::app::OpenFileInput;
+use crate::lsp_manager::SubmitTextInput;
+use crate::markdown::ShowSyncedInput;
+use crate::remote_ui::OpenRemoteFileInput;
 use anyhow::Context as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
@@ -35,8 +39,42 @@ use terminator_native_edit::doc::{Buffer, Doc};
 use terminator_native_edit::highlight::{HighlightCache, Language, language_for_path};
 use terminator_native_edit::lsp as native_lsp;
 use terminator_native_edit::view::{
-    DiagnosticMark, SourceOptions, mode_color, mode_name, show_source, source_focus_id,
+    DiagnosticMark, ShowSourceInput, SourceOptions, mode_color, mode_name, show_source,
+    source_focus_id,
 };
+
+struct NativeClosePromptBarInput<'a> {
+    ui: &'a mut egui::Ui,
+    path: &'a Path,
+    project: Option<&'a str>,
+    tab: Option<&'a str>,
+    node: Option<egui_dock::NodePath>,
+}
+
+pub(crate) struct OpenNativeInput<'a> {
+    pub(crate) project: &'a str,
+    pub(crate) path: PathBuf,
+    pub(crate) line: Option<u32>,
+    pub(crate) split: Option<&'a str>,
+}
+
+pub(crate) struct NativeEditorViewInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) path: &'a Path,
+    pub(crate) project: Option<&'a str>,
+    pub(crate) tab: Option<&'a str>,
+    pub(crate) node: Option<egui_dock::NodePath>,
+}
+
+struct NativeMarkdownPreviewInput<'a> {
+    ui: &'a mut egui::Ui,
+    path: &'a Path,
+    preview_key: &'a str,
+    preview_hovered: bool,
+    source_scroll: Option<f32>,
+    remote_snapshot: bool,
+}
+
 use terminator_native_edit::vim::{
     Effect, Key as VimKey, ModalEngine, VimEngine, VimrcOptions, parse_vimrc,
 };
@@ -660,19 +698,24 @@ impl App {
     pub(crate) fn open_file_at(&mut self, path: PathBuf, position: native_lsp::Position) {
         self.record_jump_origin();
         let absolute = std::path::absolute(&path).unwrap_or_else(|_| path.clone());
-        self.open_file(path, position.line.checked_add(1), None, false);
+        self.open_file(OpenFileInput {
+            path,
+            line: position.line.checked_add(1),
+            split: None,
+            external: false,
+        });
         if self.native_pending_line.contains_key(&absolute) {
             self.native_pending_col.insert(absolute, position.character);
         }
     }
 
-    pub(super) fn open_native(
-        &mut self,
-        project: &str,
-        path: PathBuf,
-        line: Option<u32>,
-        split: Option<&str>,
-    ) {
+    pub(super) fn open_native(&mut self, input: OpenNativeInput<'_>) {
+        let OpenNativeInput {
+            project,
+            path,
+            line,
+            split,
+        } = input;
         self.hide_center_overlay();
         let origin = self
             .active_session
@@ -701,14 +744,14 @@ impl App {
     /// Render the native editor pane for an open file. `project`/`tab`/
     /// `node` locate the docked view under render, if any: close requests
     /// remember their issuing view so plain closes take only that copy.
-    pub(super) fn native_editor_view(
-        &mut self,
-        ui: &mut egui::Ui,
-        path: &Path,
-        project: Option<&str>,
-        tab: Option<&str>,
-        node: Option<egui_dock::NodePath>,
-    ) {
+    pub(super) fn native_editor_view(&mut self, input: NativeEditorViewInput<'_>) {
+        let NativeEditorViewInput {
+            ui,
+            path,
+            project,
+            tab,
+            node,
+        } = input;
         let vim = self.state.settings.native_vim;
         let failed_color = appearance::color(&self.theme.status_failed);
         let services = self.services.clone();
@@ -718,7 +761,13 @@ impl App {
             return;
         }
 
-        if self.native_close_prompt_bar(ui, path, project, tab, node) {
+        if self.native_close_prompt_bar(NativeClosePromptBarInput {
+            ui,
+            path,
+            project,
+            tab,
+            node,
+        }) {
             return;
         }
 
@@ -730,7 +779,13 @@ impl App {
             ui.horizontal(|ui| {
                 ui.weak("Remote snapshot · read-only");
                 if ui.button("Open in SSH editor").clicked() {
-                    self.open_remote_file(remote, relative.clone(), None, None, true);
+                    self.open_remote_file(OpenRemoteFileInput {
+                        project: remote,
+                        path: relative.clone(),
+                        line: None,
+                        split: None,
+                        text: true,
+                    });
                 }
             });
         }
@@ -1188,13 +1243,13 @@ impl App {
                     (find::FindOutcome::default(), bar.matches(buffer))
                 } else {
                     bar.drawn = Some(pass);
-                    find::find_bar(
+                    find::find_bar(find::FindBarInput {
                         ui,
                         bar,
                         buffer,
-                        &mut doc.engine,
-                        rename_applying || remote_snapshot,
-                    )
+                        engine: &mut doc.engine,
+                        read_only: rename_applying || remote_snapshot,
+                    })
                 };
                 find_matches =
                     std::sync::Arc::new(matches.iter().map(|m| (m.line, m.start, m.end)).collect());
@@ -1209,35 +1264,37 @@ impl App {
                     ui,
                     buffer,
                     &mut doc.engine,
-                    &SourceOptions {
-                        vim,
-                        read_only: rename_applying || remote_snapshot,
-                        menu_style: Some(appearance::menu_style),
-                        menu_header: Some(appearance::target_header),
-                        menu_item: Some(appearance::menu_item),
-                        soft_wrap,
-                        font_size: if is_markdown { 14.0 } else { 13.0 },
-                        scroll_fraction: if mode == markdown::Mode::Split {
-                            preview_scroll
-                        } else {
-                            None
+                    ShowSourceInput {
+                        options: &SourceOptions {
+                            vim,
+                            read_only: rename_applying || remote_snapshot,
+                            menu_style: Some(appearance::menu_style),
+                            menu_header: Some(appearance::target_header),
+                            menu_item: Some(appearance::menu_item),
+                            soft_wrap,
+                            font_size: if is_markdown { 14.0 } else { 13.0 },
+                            scroll_fraction: if mode == markdown::Mode::Split {
+                                preview_scroll
+                            } else {
+                                None
+                            },
+                            diagnostics: marks,
+                            squiggles,
+                            find_matches,
+                            find_current,
+                            popup_keys,
+                            change_marks,
+                            change_colors,
+                            inlay_hints,
+                            reference: Some(reference),
+                            annotations,
+                            blame: blame_offer,
+                            ..SourceOptions::default()
                         },
-                        diagnostics: marks,
-                        squiggles,
-                        find_matches,
-                        find_current,
-                        popup_keys,
-                        change_marks,
-                        change_colors,
-                        inlay_hints,
-                        reference: Some(reference),
-                        annotations,
-                        blame: blame_offer,
-                        ..SourceOptions::default()
+                        highlight: &mut doc.highlight,
+                        language,
+                        id: &source_id,
                     },
-                    &mut doc.highlight,
-                    language,
-                    &source_id,
                 )
             };
             let outcome = match mode {
@@ -1531,13 +1588,14 @@ impl App {
                 gutter::rollback(live, &mut doc.engine, hunk);
             }
             if let Some(live) = doc.doc.as_ref() {
-                signature_request = complete::signature_after_frame(
-                    &mut signature,
-                    live,
-                    &doc.engine,
-                    revision_before,
-                    native_lsp::server_language(language).is_some(),
-                );
+                signature_request =
+                    complete::signature_after_frame(complete::SignatureAfterFrameInput {
+                        popup: &mut signature,
+                        buffer: live,
+                        engine: &doc.engine,
+                        revision_before,
+                        server: native_lsp::server_language(language).is_some(),
+                    });
                 if let Some(shown) = signature.as_mut() {
                     if caret_rect.is_some() {
                         shown.anchor = caret_rect;
@@ -1546,16 +1604,16 @@ impl App {
                 }
             }
             if let Some(live) = doc.doc.as_mut() {
-                completion_request = complete::after_frame(
+                completion_request = complete::after_frame(complete::AfterFrameInput {
                     ui,
-                    &mut completion,
-                    live,
-                    &mut doc.engine,
+                    popup: &mut completion,
+                    buffer: live,
+                    engine: &mut doc.engine,
                     revision_before,
-                    complete_now,
+                    manual: complete_now,
                     caret_rect,
-                    native_lsp::server_language(language).is_some(),
-                );
+                    server: native_lsp::server_language(language).is_some(),
+                });
             }
             // The view the user clicked or types in owns the live caret
             // between frames; another view only borrowed it to draw.
@@ -1598,7 +1656,12 @@ impl App {
                 .map(|buffer| (buffer.revision(), buffer.text()))
         {
             // Both act on the text as typed: send it past the debounce.
-            self.lsp.submit_text(path, language, revision, &text);
+            self.lsp.submit_text(SubmitTextInput {
+                path,
+                language,
+                revision,
+                text: &text,
+            });
             if format_now && !self.lsp.request_format(path, revision) {
                 self.info = Some("The language server is not ready to format".into());
             }
@@ -1625,7 +1688,12 @@ impl App {
                 .and_then(|doc| doc.buffer())
                 .map(|buffer| (buffer.revision(), buffer.text()))
         {
-            self.lsp.submit_text(path, language, revision, &text);
+            self.lsp.submit_text(SubmitTextInput {
+                path,
+                language,
+                revision,
+                text: &text,
+            });
             if let Some(generation) = self.lsp.request_signature_help(path, position) {
                 // Keep showing the previous signature until the update lands.
                 let help = self
@@ -1659,7 +1727,12 @@ impl App {
                 .and_then(|doc| doc.buffer())
                 .map(|buffer| (buffer.revision(), buffer.text()))
         {
-            self.lsp.submit_text(path, language, revision, &text);
+            self.lsp.submit_text(SubmitTextInput {
+                path,
+                language,
+                revision,
+                text: &text,
+            });
             if let Some(generation) = self.lsp.request_completion(path, position) {
                 self.completion = Some(CompletionPopup {
                     path: path.to_owned(),
@@ -1682,14 +1755,14 @@ impl App {
             popup.generation = None;
         }
         if is_markdown {
-            self.native_markdown_preview(
+            self.native_markdown_preview(NativeMarkdownPreviewInput {
                 ui,
                 path,
-                &preview_key,
+                preview_key: &preview_key,
                 preview_hovered,
                 source_scroll,
                 remote_snapshot,
-            );
+            });
         }
         if let PostEdit::Close { force } = post {
             self.pending_native_close.push((
@@ -1836,14 +1909,14 @@ impl App {
 
     /// In-pane unsaved-changes bar for this view's pending tab close.
     /// Returns true when the view should stop rendering this frame.
-    fn native_close_prompt_bar(
-        &mut self,
-        ui: &mut egui::Ui,
-        path: &Path,
-        project: Option<&str>,
-        tab: Option<&str>,
-        node: Option<egui_dock::NodePath>,
-    ) -> bool {
+    fn native_close_prompt_bar(&mut self, input: NativeClosePromptBarInput<'_>) -> bool {
+        let NativeClosePromptBarInput {
+            ui,
+            path,
+            project,
+            tab,
+            node,
+        } = input;
         // Tab-close prompt for this pane: an in-pane bar, not a modal, so
         // the rest of the GUI stays usable while the choice is pending.
         // Quit-flow prompts carry no issuer and stay modal (`native_close_modal`).
@@ -1914,15 +1987,15 @@ impl App {
     }
 
     /// Markdown preview for a native view in Preview or Split mode.
-    fn native_markdown_preview(
-        &mut self,
-        ui: &mut egui::Ui,
-        path: &Path,
-        preview_key: &str,
-        preview_hovered: bool,
-        source_scroll: Option<f32>,
-        remote_snapshot: bool,
-    ) {
+    fn native_markdown_preview(&mut self, input: NativeMarkdownPreviewInput<'_>) {
+        let NativeMarkdownPreviewInput {
+            ui,
+            path,
+            preview_key,
+            preview_hovered,
+            source_scroll,
+            remote_snapshot,
+        } = input;
         let mode = self.native_docs.get(path).map(|doc| doc.markdown_mode);
         if mode != Some(markdown::Mode::Edit) {
             let text = self
@@ -1961,7 +2034,12 @@ impl App {
                     } else {
                         None
                     };
-                    link = preview.show_synced(ui, preview_key, Some(&status), sync);
+                    link = preview.show_synced(ShowSyncedInput {
+                        ui,
+                        sid: preview_key,
+                        status_override: Some(&status),
+                        scroll_fraction: sync,
+                    });
                 };
                 if mode == Some(markdown::Mode::Split) {
                     egui::CentralPanel::default()
@@ -1973,7 +2051,12 @@ impl App {
                 if let Some(link) = link {
                     match link {
                         markdown::Link::File(target) => {
-                            self.open_file(target, None, None, false);
+                            self.open_file(OpenFileInput {
+                                path: target,
+                                line: None,
+                                split: None,
+                                external: false,
+                            });
                         }
                         markdown::Link::Web(url) => {
                             let _ = self.jobs.send(Job::Browser(url));
@@ -1999,7 +2082,12 @@ impl App {
                 .and_then(|doc| doc.doc.as_ref())
                 .map(|buffer| buffer.text())
         {
-            self.lsp.submit_text(path, language, revision, &text);
+            self.lsp.submit_text(SubmitTextInput {
+                path,
+                language,
+                revision,
+                text: &text,
+            });
         }
     }
 
@@ -2040,12 +2128,12 @@ impl App {
         let Some(project) = self.project_with_native_tab(&jump.from) else {
             return;
         };
-        self.open_native(
-            &project,
-            target_path.clone(),
-            target.range.start.line.checked_add(1),
-            None,
-        );
+        self.open_native(OpenNativeInput {
+            project: &project,
+            path: target_path.clone(),
+            line: target.range.start.line.checked_add(1),
+            split: None,
+        });
         // The column converts once the target buffer has loaded.
         let absolute = std::path::absolute(&target_path).unwrap_or(target_path);
         self.native_pending_col

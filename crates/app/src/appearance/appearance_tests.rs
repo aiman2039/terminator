@@ -86,13 +86,13 @@ mod row_tests {
                 ..Default::default()
             },
             |ui| {
-                header = Some(markdown_header(
+                header = Some(markdown_header(MarkdownHeaderInput {
                     ui,
-                    "a-long-markdown-file-name.md",
-                    true,
-                    false,
-                    crate::markdown::Mode::Preview,
-                ));
+                    title: "a-long-markdown-file-name.md",
+                    active: true,
+                    editing: false,
+                    mode: crate::markdown::Mode::Preview,
+                }));
             },
         );
         output.textures_delta.clear();
@@ -172,15 +172,15 @@ mod row_tests {
             ..Default::default()
         };
         let mut output = ctx.run_ui(input, |ui| {
-            response = Some(row(
+            response = Some(row(RowInput {
                 ui,
-                "Terminal 1",
-                "Terminal",
-                false,
-                24.0,
-                "",
-                Color32::GRAY,
-            ));
+                label: "Terminal 1",
+                icon: "Terminal",
+                selected: false,
+                height: 24.0,
+                trailing: "",
+                tint: Color32::GRAY,
+            }));
         });
         output.textures_delta.clear();
         response.unwrap()
@@ -226,7 +226,15 @@ mod row_tests {
                         tool_button(ui, crate::preferences::SidebarTool::Git, "Git", false);
                     }
                     "row" => {
-                        row(ui, "File", "FileCode", false, 24.0, "", Color32::GRAY);
+                        row(RowInput {
+                            ui,
+                            label: "File",
+                            icon: "FileCode",
+                            selected: false,
+                            height: 24.0,
+                            trailing: "",
+                            tint: Color32::GRAY,
+                        });
                     }
                     _ => {
                         terminal_bar(
@@ -455,7 +463,13 @@ mod row_tests {
             install(&ctx);
             let run = || {
                 let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                    paint_status_icon(ui, rect, "LoaderCircle", Color32::GREEN, spin);
+                    paint_status_icon(PaintStatusIconInput {
+                        ui,
+                        rect,
+                        icon: "LoaderCircle",
+                        tint: Color32::GREEN,
+                        spin,
+                    });
                 });
                 output.textures_delta.clear();
                 output
@@ -493,7 +507,13 @@ mod row_tests {
         let run = |clip: egui::Rect| {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 ui.set_clip_rect(clip);
-                paint_status_icon(ui, icon, "LoaderCircle", Color32::GREEN, true);
+                paint_status_icon(PaintStatusIconInput {
+                    ui,
+                    rect: icon,
+                    icon: "LoaderCircle",
+                    tint: Color32::GREEN,
+                    spin: true,
+                });
             });
             output.textures_delta.clear();
             output
@@ -531,7 +551,13 @@ mod row_tests {
                 .expect("root viewport")
                 .focused = focused;
             let mut output = ctx.run_ui(input, |ui| {
-                paint_status_icon(ui, icon, "LoaderCircle", Color32::GREEN, true);
+                paint_status_icon(PaintStatusIconInput {
+                    ui,
+                    rect: icon,
+                    icon: "LoaderCircle",
+                    tint: Color32::GREEN,
+                    spin: true,
+                });
             });
             output.textures_delta.clear();
             output

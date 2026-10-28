@@ -3,6 +3,14 @@ use std::collections::HashSet;
 use terminator_core::*;
 
 use super::super::*;
+
+pub(crate) struct HistorySessionRowCanShowInput<'a> {
+    pub(crate) session_id: &'a str,
+    pub(crate) project_id: &'a str,
+    pub(crate) label: &'a str,
+    pub(crate) live: bool,
+}
+
 impl App {
     pub(crate) fn create(&mut self, split: Option<&str>) {
         if self.selected_remote_project().is_some() && !self.remote_supported() {
@@ -303,7 +311,12 @@ impl App {
         if live && kind != SessionKind::Editor {
             return self.live_session_row_can_show(&project_id);
         }
-        self.history_session_row_can_show(sid, &project_id, &label, live)
+        self.history_session_row_can_show(HistorySessionRowCanShowInput {
+            session_id: sid,
+            project_id: &project_id,
+            label: &label,
+            live,
+        })
     }
     pub(crate) fn live_session_row_can_show(&self, project_id: &str) -> bool {
         self.preferences.left_visible
@@ -311,13 +324,17 @@ impl App {
             && self.preferences.expanded.get(project_id) != Some(&false)
             && !self.preferences.hidden_projects.contains(project_id)
     }
+
     pub(crate) fn history_session_row_can_show(
         &self,
-        session_id: &str,
-        project_id: &str,
-        label: &str,
-        live: bool,
+        input: HistorySessionRowCanShowInput<'_>,
     ) -> bool {
+        let HistorySessionRowCanShowInput {
+            session_id,
+            project_id,
+            label,
+            live,
+        } = input;
         if !self.preferences.visible || self.preferences.tool != SidebarTool::History {
             return false;
         }

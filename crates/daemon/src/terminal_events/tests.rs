@@ -1,5 +1,4 @@
 use super::*;
-use super::*;
 #[test]
 fn reconnect_preserves_focus_reporting_and_explicit_alternate_scroll() {
     let mut parser = vt100::Parser::new_with_callbacks(24, 80, 100, Events::default());

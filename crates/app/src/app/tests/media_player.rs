@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::OpenFileInput;
 
 #[test]
 fn background_player_advances_its_own_project_playlist() {
@@ -89,7 +90,12 @@ fn audio_open_plays_without_a_player_tab_and_keeps_original_project() {
     let (mut app, ctx, _dir) = fixture();
     let (jobs, requests) = mpsc::channel();
     app.jobs = jobs.into();
-    app.open_file(crate::test_path("/a/song.MP3"), None, None, false);
+    app.open_file(OpenFileInput {
+        path: crate::test_path("/a/song.MP3"),
+        line: None,
+        split: None,
+        external: false,
+    });
     app.select_project("b".into());
     drain_updates(&mut app, &ctx);
     assert_eq!(app.selected.as_deref(), Some("b"));

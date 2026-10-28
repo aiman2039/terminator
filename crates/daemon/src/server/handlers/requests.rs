@@ -9,83 +9,22 @@ use super::super::shared::{HistoryJob, Shared, relock};
 use crate::Launch;
 use crate::{notifications, ntfy, presence, signals, storage};
 
+struct PreparedRequest {
+    coordination: Option<std::fs::File>,
+    shared_write: bool,
+    early: Option<Response>,
+}
+
 impl Shared {
     pub(crate) fn handle(self: &Arc<Self>, request: Request) -> Result<Response> {
-        let shared_write = matches!(
-            &request,
-            Request::AddProject { .. }
-                | Request::AddRemoteProject { .. }
-                | Request::RemoveRemoteProject { .. }
-                | Request::SetRemoteProjectGroup { .. }
-                | Request::SetRemoteProjectForwards { .. }
-                | Request::SaveLayout { .. }
-                | Request::SelectProject { .. }
-                | Request::Settings(_)
-                | Request::WorktreeAdd { .. }
-                | Request::WorktreeRemove { .. }
-                | Request::VncProfileSave { .. }
-                | Request::VncProfileRemove { .. }
-                | Request::VncForgetCredential { .. }
-        );
-        let admission = shared_write
-            || matches!(
-                &request,
-                Request::Create { .. } | Request::CreateReview { .. } | Request::VncConnect { .. }
-            );
-        let coordinated = admission
-            || matches!(
-                &request,
-                Request::Cwd { .. }
-                    | Request::Shutdown
-                    | Request::ShutdownIfIdle
-                    | Request::RetireIfDraining
-            );
-        // Bounded wait: the client answers inside a 3 s deadline, so a
-        // contended lock must fail fast (certain, retryable) rather than
-        // hang the handler past the deadline (uncertain mutation).
-        let _coordination = if coordinated {
-            self.catalog_paths
-                .as_ref()
-                .map(|paths| generations::coordinate_timeout(paths, Duration::from_secs(2)))
-                .transpose()?
-        } else {
-            None
-        };
-        if let Some(paths) = &self.catalog_paths {
-            let catalog = generations::Catalog::open(paths)?;
-            let mut state = relock(&self.state);
-            if admission && catalog.active()?.as_deref() != Some(&state.generation) {
-                return Ok(Response::Redirect {
-                    generation: catalog.active()?.context("No active generation")?,
-                });
-            }
-            if admission && !shared_write && !catalog.admitted(&state.generation)? {
-                return Ok(Response::Error(
-                    "Creation rejected before execution: recovery is in progress".into(),
-                ));
-            }
-            if coordinated {
-                let mut refreshed = state.clone();
-                catalog.refresh(&mut refreshed)?;
-                if refreshed
-                    .vnc_profiles
-                    .iter()
-                    .any(|p| !p.password.is_empty())
-                {
-                    ensure!(
-                        crate::vnc_session::credentials::migrate(
-                            paths,
-                            &mut refreshed.vnc_profiles
-                        ) == 0,
-                        "Unlock the OS credential store to migrate legacy VNC passwords"
-                    );
-                    if catalog.active()?.as_deref() == Some(&refreshed.generation) {
-                        catalog.save_workspace(&refreshed)?;
-                    }
-                }
-                *state = refreshed;
-            }
+        let retire = matches!(request, Request::RetireIfDraining);
+        let prepared = self.prepare_request(&request)?;
+        if let Some(response) = prepared.early {
+            return Ok(response);
         }
+        let _coordination = prepared.coordination;
+        let shared_write = prepared.shared_write;
+        let _retire = retire;
         match request {
             Request::VncProfileSave {
                 mut profile,
@@ -788,6 +727,98 @@ impl Shared {
         self.persist()?;
         Ok(Response::Ok)
     }
+
+    fn prepare_request(self: &Arc<Self>, request: &Request) -> Result<PreparedRequest> {
+        let shared_write = matches!(
+            &request,
+            Request::AddProject { .. }
+                | Request::AddRemoteProject { .. }
+                | Request::RemoveRemoteProject { .. }
+                | Request::SetRemoteProjectGroup { .. }
+                | Request::SetRemoteProjectForwards { .. }
+                | Request::SaveLayout { .. }
+                | Request::SelectProject { .. }
+                | Request::Settings(_)
+                | Request::WorktreeAdd { .. }
+                | Request::WorktreeRemove { .. }
+                | Request::VncProfileSave { .. }
+                | Request::VncProfileRemove { .. }
+                | Request::VncForgetCredential { .. }
+        );
+        let admission = shared_write
+            || matches!(
+                &request,
+                Request::Create { .. } | Request::CreateReview { .. } | Request::VncConnect { .. }
+            );
+        let coordinated = admission
+            || matches!(
+                &request,
+                Request::Cwd { .. }
+                    | Request::Shutdown
+                    | Request::ShutdownIfIdle
+                    | Request::RetireIfDraining
+            );
+        // Bounded wait: the client answers inside a 3 s deadline, so a
+        // contended lock must fail fast (certain, retryable) rather than
+        // hang the handler past the deadline (uncertain mutation).
+        let _coordination = if coordinated {
+            self.catalog_paths
+                .as_ref()
+                .map(|paths| generations::coordinate_timeout(paths, Duration::from_secs(2)))
+                .transpose()?
+        } else {
+            None
+        };
+        if let Some(paths) = &self.catalog_paths {
+            let catalog = generations::Catalog::open(paths)?;
+            let mut state = relock(&self.state);
+            if admission && catalog.active()?.as_deref() != Some(&state.generation) {
+                return Ok(PreparedRequest {
+                    coordination: _coordination,
+                    shared_write,
+                    early: Some(Response::Redirect {
+                        generation: catalog.active()?.context("No active generation")?,
+                    }),
+                });
+            }
+            if admission && !shared_write && !catalog.admitted(&state.generation)? {
+                return Ok(PreparedRequest {
+                    coordination: _coordination,
+                    shared_write,
+                    early: Some(Response::Error(
+                        "Creation rejected before execution: recovery is in progress".into(),
+                    )),
+                });
+            }
+            if coordinated {
+                let mut refreshed = state.clone();
+                catalog.refresh(&mut refreshed)?;
+                if refreshed
+                    .vnc_profiles
+                    .iter()
+                    .any(|p| !p.password.is_empty())
+                {
+                    ensure!(
+                        crate::vnc_session::credentials::migrate(
+                            paths,
+                            &mut refreshed.vnc_profiles
+                        ) == 0,
+                        "Unlock the OS credential store to migrate legacy VNC passwords"
+                    );
+                    if catalog.active()?.as_deref() == Some(&refreshed.generation) {
+                        catalog.save_workspace(&refreshed)?;
+                    }
+                }
+                *state = refreshed;
+            }
+        }
+        Ok(PreparedRequest {
+            coordination: _coordination,
+            shared_write,
+            early: None,
+        })
+    }
+
     pub(crate) fn editor_rpc(&self, sid: &str, expression: &str) -> Result<Response> {
         let state = relock(&self.state);
         if let Some(remote) = state

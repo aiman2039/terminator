@@ -1,11 +1,11 @@
 use super::super::*;
 use super::tabs::{TAB_TEXT_MAX, workspace_tab_width};
-pub(super) struct PaintStripInsertionInput<'a> {
-    pub(super) ui: &'a mut egui::Ui,
-    pub(super) strip: &'a egui::Rect,
-    pub(super) tabs: &'a [(String, egui::Rect)],
-    pub(super) index: usize,
-    pub(super) accent: egui::Color32,
+pub(crate) struct PaintStripInsertionInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) strip: &'a egui::Rect,
+    pub(crate) tabs: &'a [(String, egui::Rect)],
+    pub(crate) index: usize,
+    pub(crate) accent: egui::Color32,
 }
 
 impl App {
@@ -44,7 +44,13 @@ impl App {
     /// Accent insertion bar marking where a strip drop will land: the gap
     /// before the first tab, between two tabs, or after the last one.
     pub(super) fn paint_strip_insertion(input: PaintStripInsertionInput<'_>) {
-        let PaintStripInsertionInput { ui, strip, tabs, index, accent } = input;
+        let PaintStripInsertionInput {
+            ui,
+            strip,
+            tabs,
+            index,
+            accent,
+        } = input;
 
         let x = if tabs.is_empty() {
             strip.left() + 2.0

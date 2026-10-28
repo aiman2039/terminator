@@ -1,5 +1,5 @@
 //! Directory listings with Git ignore rules applied.
-use anyhow::{Result, ensure};
+use crate::{Error, Result};
 use std::path::{Path, PathBuf};
 use terminator_core::{CommandOptions, git};
 
@@ -123,10 +123,11 @@ pub fn entries_known(path: &Path, in_git: bool) -> Result<Vec<Entry>> {
     let mut entries = Vec::new();
     for entry in std::fs::read_dir(path)? {
         let entry = entry?;
-        ensure!(
-            entries.len() < DISPLAY_LIMIT,
-            "Directory exceeds the {DISPLAY_LIMIT}-entry display limit"
-        );
+        if entries.len() >= DISPLAY_LIMIT {
+            return Err(Error::message(format!(
+                "Directory exceeds the {DISPLAY_LIMIT}-entry display limit"
+            )));
+        }
         entries.push(Entry {
             ignored: entry.file_name() == ".git",
             path: entry.path(),

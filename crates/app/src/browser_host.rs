@@ -8,6 +8,21 @@ use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
+
+struct MountVisibleInput<'a> {
+    frame: &'a eframe::Frame,
+    visible: &'a [VisibleBrowser],
+    covers: &'a [egui::Rect],
+    data_dir: &'a Path,
+}
+
+struct CreateViewInput<'a> {
+    frame: &'a eframe::Frame,
+    pane: &'a VisibleBrowser,
+    bounds: Rect,
+    data_dir: &'a Path,
+}
+
 use wry::{
     NewWindowResponse, PageLoadEvent, Rect, WebContext, WebView, WebViewBuilder,
     dpi::{LogicalPosition, LogicalSize},
@@ -178,19 +193,24 @@ impl BrowserHost {
             }
             return;
         }
-        self.mount_visible(frame, visible, covers, data_dir);
+        self.mount_visible(MountVisibleInput {
+            frame,
+            visible,
+            covers,
+            data_dir,
+        });
         self.hide_unlisted(visible);
         self.evict(visible);
         self.pump_linux();
     }
 
-    fn mount_visible(
-        &mut self,
-        frame: &eframe::Frame,
-        visible: &[VisibleBrowser],
-        covers: &[egui::Rect],
-        data_dir: &Path,
-    ) {
+    fn mount_visible(&mut self, input: MountVisibleInput<'_>) {
+        let MountVisibleInput {
+            frame,
+            visible,
+            covers,
+            data_dir,
+        } = input;
         for pane in visible {
             if pane.rect.width() < 32.0 || pane.rect.height() < 32.0 || covered(pane.rect, covers) {
                 if let Some(hosted) = self.views.get(&pane.key) {
@@ -225,7 +245,12 @@ impl BrowserHost {
             hosted.used = Instant::now();
             return Ok(());
         }
-        let view = self.create_view(frame, pane, bounds, data_dir)?;
+        let view = self.create_view(CreateViewInput {
+            frame,
+            pane,
+            bounds,
+            data_dir,
+        })?;
         self.views.insert(
             pane.key.clone(),
             Hosted {
@@ -238,13 +263,13 @@ impl BrowserHost {
         Ok(())
     }
 
-    fn create_view(
-        &mut self,
-        frame: &eframe::Frame,
-        pane: &VisibleBrowser,
-        bounds: Rect,
-        data_dir: &Path,
-    ) -> Result<WebView, String> {
+    fn create_view(&mut self, input: CreateViewInput<'_>) -> Result<WebView, String> {
+        let CreateViewInput {
+            frame,
+            pane,
+            bounds,
+            data_dir,
+        } = input;
         let href = browser::href(&pane.target).map_err(|e| e.to_string())?;
         let allow_local = pane.target.file().is_some();
         let profile = browser::ensure_profile(data_dir).map_err(|error| error.to_string())?;

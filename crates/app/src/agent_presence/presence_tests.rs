@@ -3,6 +3,8 @@ use super::cache::PresentationCache;
 use super::counts::{AttentionCounts, tab_attention};
 use super::owner::{OwnerSupport, owner_support};
 use super::queries::{live_sessions, present_session, unverified_sessions};
+use crate::agent_presence::AttentionInput;
+use crate::agent_presence::GetInput;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,25 +92,71 @@ mod tests {
             observed_at: 1,
         });
         let mut cache = PresentationCache::default();
-        let first = cache.get(&state, "s", 100, Some(true));
+        let first = cache.get(GetInput {
+            state: &state,
+            id: "s",
+            now: 100,
+            fresh: Some(true),
+        });
         assert!(
             first.verified,
             "successful unchanged snapshots keep presence fresh"
         );
         assert!(std::sync::Arc::ptr_eq(
             &first,
-            &cache.get(&state, "s", 200, Some(true))
+            &cache.get(GetInput {
+                state: &state,
+                id: "s",
+                now: 200,
+                fresh: Some(true)
+            })
         ));
-        assert!(!cache.get(&state, "s", 200, Some(false)).verified);
-        assert!(cache.get(&state, "s", 201, Some(true)).verified);
+        assert!(
+            !cache
+                .get(GetInput {
+                    state: &state,
+                    id: "s",
+                    now: 200,
+                    fresh: Some(false)
+                })
+                .verified
+        );
+        assert!(
+            cache
+                .get(GetInput {
+                    state: &state,
+                    id: "s",
+                    now: 201,
+                    fresh: Some(true)
+                })
+                .verified
+        );
         // A responsive daemon can explicitly expire a stalled inspector's data.
         state.presence[0].outcome = PresenceOutcome::Unavailable;
         cache.clear();
-        assert!(!cache.get(&state, "s", 202, Some(true)).verified);
+        assert!(
+            !cache
+                .get(GetInput {
+                    state: &state,
+                    id: "s",
+                    now: 202,
+                    fresh: Some(true)
+                })
+                .verified
+        );
         state.presence[0].outcome = PresenceOutcome::Verified;
         state.presence[0].observed_at = 203;
         cache.clear();
-        assert!(cache.get(&state, "s", 203, Some(true)).verified);
+        assert!(
+            cache
+                .get(GetInput {
+                    state: &state,
+                    id: "s",
+                    now: 203,
+                    fresh: Some(true)
+                })
+                .verified
+        );
         state.notifications.push(Notification {
             id: "n".into(),
             session_id: "s".into(),
@@ -124,11 +172,38 @@ mod tests {
             snoozed_until: 300,
         });
         cache.clear();
-        assert_eq!(cache.get(&state, "s", 299, Some(true)).attention.input, 0);
-        assert_eq!(cache.get(&state, "s", 300, Some(true)).attention.input, 1);
+        assert_eq!(
+            cache
+                .get(GetInput {
+                    state: &state,
+                    id: "s",
+                    now: 299,
+                    fresh: Some(true)
+                })
+                .attention
+                .input,
+            0
+        );
+        assert_eq!(
+            cache
+                .get(GetInput {
+                    state: &state,
+                    id: "s",
+                    now: 300,
+                    fresh: Some(true)
+                })
+                .attention
+                .input,
+            1
+        );
         state.sessions[0].lifecycle = Lifecycle::Ended;
         cache.clear();
-        let ended = cache.get(&state, "s", 301, Some(true));
+        let ended = cache.get(GetInput {
+            state: &state,
+            id: "s",
+            now: 301,
+            fresh: Some(true),
+        });
         assert!(!ended.verified);
         assert!(ended.attention.is_empty());
     }
@@ -431,19 +506,49 @@ mod tests {
         assert_eq!(cache.indexes_built, 1);
         assert_eq!(cache.notifications_visited, (notices + 1) as u64);
         assert_eq!(cache.presentations_rebuilt, (sessions + 1) as u64);
-        let kept = cache.get(&state, "s0", 50, Some(true));
-        let stable = cache.get(&state, "s1", 50, Some(true));
+        let kept = cache.get(GetInput {
+            state: &state,
+            id: "s0",
+            now: 50,
+            fresh: Some(true),
+        });
+        let stable = cache.get(GetInput {
+            state: &state,
+            id: "s1",
+            now: 50,
+            fresh: Some(true),
+        });
         for index in 0..sessions {
-            let _ = cache.get(&state, &format!("s{index}"), 50, Some(true));
+            let _ = cache.get(GetInput {
+                state: &state,
+                id: &format!("s{index}"),
+                now: 50,
+                fresh: Some(true),
+            });
         }
         assert_eq!(cache.indexes_built, 1);
         assert_eq!(cache.notifications_visited, (notices + 1) as u64);
         let ids = vec!["s0".into(), "s0".into(), "s1".into(), "ended".into()];
         assert_eq!(
-            cache.attention(&state, &ids, 50, Some(true)),
+            cache.attention(AttentionInput {
+                state: &state,
+                session_ids: &ids,
+                now: 50,
+                fresh: Some(true)
+            }),
             tab_attention(&state, &ids, 50)
         );
-        assert!(cache.attention(&state, &ids, 50, Some(true)).input > 0);
+        assert!(
+            cache
+                .attention(AttentionInput {
+                    state: &state,
+                    session_ids: &ids,
+                    now: 50,
+                    fresh: Some(true)
+                })
+                .input
+                > 0
+        );
         assert_eq!(cache.indexes_built, 1);
         state.projects.push(terminator_core::Project {
             id: "p".into(),
@@ -455,22 +560,49 @@ mod tests {
         cache.reconcile(&state, 50, Some(true));
         assert!(!std::sync::Arc::ptr_eq(
             &kept,
-            &cache.get(&state, "s0", 50, Some(true))
+            &cache.get(GetInput {
+                state: &state,
+                id: "s0",
+                now: 50,
+                fresh: Some(true)
+            })
         ));
         assert!(std::sync::Arc::ptr_eq(
             &stable,
-            &cache.get(&state, "s1", 50, Some(true))
+            &cache.get(GetInput {
+                state: &state,
+                id: "s1",
+                now: 50,
+                fresh: Some(true)
+            })
         ));
-        let other = cache.get(&state, "s1", 50, Some(true));
+        let other = cache.get(GetInput {
+            state: &state,
+            id: "s1",
+            now: 50,
+            fresh: Some(true),
+        });
         state.sessions.retain(|item| item.id != "s0");
         cache.reconcile(&state, 50, Some(true));
         assert_eq!(
-            cache.get(&state, "s0", 50, Some(true)).diagnostics(50),
+            cache
+                .get(GetInput {
+                    state: &state,
+                    id: "s0",
+                    now: 50,
+                    fresh: Some(true)
+                })
+                .diagnostics(50),
             "Unknown session"
         );
         assert!(std::sync::Arc::ptr_eq(
             &other,
-            &cache.get(&state, "s1", 50, Some(true))
+            &cache.get(GetInput {
+                state: &state,
+                id: "s1",
+                now: 50,
+                fresh: Some(true)
+            })
         ));
         assert_eq!(cache.notifications_visited, (notices + 1) as u64 * 3);
     }
@@ -496,19 +628,39 @@ mod tests {
             .push(notice("nb", "b", AgentState::WaitingInput, 2));
         let mut cache = PresentationCache::default();
         cache.reconcile(&state, 10, Some(true));
-        let left = cache.get(&state, "a", 10, Some(true));
-        let right = cache.get(&state, "b", 10, Some(true));
+        let left = cache.get(GetInput {
+            state: &state,
+            id: "a",
+            now: 10,
+            fresh: Some(true),
+        });
+        let right = cache.get(GetInput {
+            state: &state,
+            id: "b",
+            now: 10,
+            fresh: Some(true),
+        });
         state.presence[0].observed_at = 9;
         state.notifications[0].read = true;
         cache.reconcile(&state, 10, Some(true));
-        let next = cache.get(&state, "a", 10, Some(true));
+        let next = cache.get(GetInput {
+            state: &state,
+            id: "a",
+            now: 10,
+            fresh: Some(true),
+        });
         assert!(!std::sync::Arc::ptr_eq(&left, &next));
         assert!(next.verified);
         assert_eq!(next.unread, 0);
         assert_eq!(next.attention.failed, 1);
         assert!(std::sync::Arc::ptr_eq(
             &right,
-            &cache.get(&state, "b", 10, Some(true))
+            &cache.get(GetInput {
+                state: &state,
+                id: "b",
+                now: 10,
+                fresh: Some(true)
+            })
         ));
         assert_eq!(cache.presentations_rebuilt, 3);
         assert_eq!(cache.presentations_reused, 1);
@@ -541,7 +693,12 @@ mod tests {
         observe(&mut state, &["codex"], 10);
         let mut cache = PresentationCache::default();
         cache.reconcile(&state, 10, Some(true));
-        let first = cache.get(&state, "s", 10, Some(true));
+        let first = cache.get(GetInput {
+            state: &state,
+            id: "s",
+            now: 10,
+            fresh: Some(true),
+        });
         assert!(first.verified);
         assert_eq!(
             owner_support(&state, &state.sessions[0]),
@@ -552,7 +709,12 @@ mod tests {
         );
         state.sessions[0].generation = "missing".into();
         cache.reconcile(&state, 10, Some(true));
-        let next = cache.get(&state, "s", 10, Some(true));
+        let next = cache.get(GetInput {
+            state: &state,
+            id: "s",
+            now: 10,
+            fresh: Some(true),
+        });
         assert!(!std::sync::Arc::ptr_eq(&first, &next));
         assert!(!next.verified && !next.live);
         assert_eq!(
@@ -571,9 +733,19 @@ mod tests {
         capable(&mut state);
         observe(&mut state, &["codex"], 100);
         let mut cache = PresentationCache::default();
-        let fresh = cache.get(&state, "s", 105, Some(true));
+        let fresh = cache.get(GetInput {
+            state: &state,
+            id: "s",
+            now: 105,
+            fresh: Some(true),
+        });
         assert!(fresh.verified);
-        let later = cache.get(&state, "s", 10_000, Some(true));
+        let later = cache.get(GetInput {
+            state: &state,
+            id: "s",
+            now: 10_000,
+            fresh: Some(true),
+        });
         assert!(std::sync::Arc::ptr_eq(&fresh, &later));
         assert!(later.verified);
         assert_eq!(cache.indexes_built, 1);
@@ -586,14 +758,29 @@ mod tests {
         capable(&mut state);
         observe(&mut state, &["codex"], 100);
         let mut cache = PresentationCache::default();
-        let current = cache.get(&state, "s", 105, None);
+        let current = cache.get(GetInput {
+            state: &state,
+            id: "s",
+            now: 105,
+            fresh: None,
+        });
         assert!(current.verified);
         assert!(std::sync::Arc::ptr_eq(
             &current,
-            &cache.get(&state, "s", 105, None)
+            &cache.get(GetInput {
+                state: &state,
+                id: "s",
+                now: 105,
+                fresh: None
+            })
         ));
         assert_eq!(cache.indexes_built, 1);
-        let expired = cache.get(&state, "s", 106, None);
+        let expired = cache.get(GetInput {
+            state: &state,
+            id: "s",
+            now: 106,
+            fresh: None,
+        });
         assert!(!expired.verified);
         assert_eq!(cache.indexes_built, 2);
     }
@@ -612,17 +799,42 @@ mod tests {
         hook(&mut state, "codex", AgentState::Running, false);
         let mut cache = PresentationCache::default();
         cache.reconcile(&state, 10, Some(true));
-        assert!(cache.get(&state, "s", 10, Some(true)).attention.is_empty());
+        assert!(
+            cache
+                .get(GetInput {
+                    state: &state,
+                    id: "s",
+                    now: 10,
+                    fresh: Some(true)
+                })
+                .attention
+                .is_empty()
+        );
         assert_eq!(
             cache
-                .get(&state, "s", 10, Some(true))
+                .get(GetInput {
+                    state: &state,
+                    id: "s",
+                    now: 10,
+                    fresh: Some(true)
+                })
                 .notice_preview
                 .as_deref(),
             Some("note later")
         );
-        let other = cache.get(&state, "other", 10, Some(true));
+        let other = cache.get(GetInput {
+            state: &state,
+            id: "other",
+            now: 10,
+            fresh: Some(true),
+        });
         let built = cache.indexes_built;
-        let at_deadline = cache.get(&state, "s", 30, Some(true));
+        let at_deadline = cache.get(GetInput {
+            state: &state,
+            id: "s",
+            now: 30,
+            fresh: Some(true),
+        });
         assert_eq!(cache.indexes_built, built + 1);
         assert_eq!(
             at_deadline.attention,
@@ -634,12 +846,22 @@ mod tests {
         );
         assert!(std::sync::Arc::ptr_eq(
             &other,
-            &cache.get(&state, "other", 30, Some(true))
+            &cache.get(GetInput {
+                state: &state,
+                id: "other",
+                now: 30,
+                fresh: Some(true)
+            })
         ));
         state.notifications[0].read = true;
         state.notifications[1].dismissed = true;
         cache.reconcile(&state, 30, Some(true));
-        let updated = cache.get(&state, "s", 30, Some(true));
+        let updated = cache.get(GetInput {
+            state: &state,
+            id: "s",
+            now: 30,
+            fresh: Some(true),
+        });
         assert_eq!(updated.unread, 0);
         assert_eq!(updated.attention.input, 1);
         assert_eq!(updated.attention.permission, 0);
@@ -650,8 +872,18 @@ mod tests {
     fn empty_and_unknown_lookups_do_not_rebuild() {
         let state = State::default();
         let mut cache = PresentationCache::default();
-        let missing = cache.get(&state, "missing", 10, Some(true));
-        let again = cache.get(&state, "other", 10, Some(true));
+        let missing = cache.get(GetInput {
+            state: &state,
+            id: "missing",
+            now: 10,
+            fresh: Some(true),
+        });
+        let again = cache.get(GetInput {
+            state: &state,
+            id: "other",
+            now: 10,
+            fresh: Some(true),
+        });
         assert!(std::sync::Arc::ptr_eq(&missing, &again));
         assert_eq!(cache.indexes_built, 1);
         assert_eq!(cache.notifications_visited, 0);
@@ -659,8 +891,18 @@ mod tests {
         let mut state = State::default();
         state.sessions.push(session("s"));
         cache.reconcile(&state, 10, Some(true));
-        let _ = cache.get(&state, "nope", 10, Some(true));
-        let _ = cache.get(&state, "nope", 11, Some(true));
+        let _ = cache.get(GetInput {
+            state: &state,
+            id: "nope",
+            now: 10,
+            fresh: Some(true),
+        });
+        let _ = cache.get(GetInput {
+            state: &state,
+            id: "nope",
+            now: 11,
+            fresh: Some(true),
+        });
         assert_eq!(cache.indexes_built, 2);
     }
 
@@ -673,11 +915,21 @@ mod tests {
         let mut state = State::default();
         state.sessions.push(session("s"));
         hook(&mut state, "codex", AgentState::Running, false);
-        let presented = cache.get(&state, "s", 10, Some(true));
+        let presented = cache.get(GetInput {
+            state: &state,
+            id: "s",
+            now: 10,
+            fresh: Some(true),
+        });
         assert_eq!(presented.brand_icon, Some("AgentCodex"));
         assert_eq!(presented.status_icon, "LoaderCircle");
         assert_eq!(cache.indexes_built, 2);
-        let again = cache.get(&state, "s", 10, Some(true));
+        let again = cache.get(GetInput {
+            state: &state,
+            id: "s",
+            now: 10,
+            fresh: Some(true),
+        });
         assert!(std::sync::Arc::ptr_eq(&presented, &again));
         assert_eq!(cache.indexes_built, 2);
     }

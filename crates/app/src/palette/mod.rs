@@ -2,6 +2,7 @@
 //! Actions and settings stay global. The Projects filter lists every
 //! project. File scans and LSP symbol requests stay async.
 use super::*;
+use crate::app::OpenFileInput;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -649,7 +650,12 @@ impl App {
                 let exclude = self.palette_exclude_roots();
                 out.extend(
                     self.file_index
-                        .query_scored_in(Some(root), &exclude, "", room)
+                        .query_scored_in(terminator_native_edit::finder::QueryScoredInInput {
+                            root: Some(root),
+                            exclude: &exclude,
+                            pattern: "",
+                            limit: room,
+                        })
                         .into_iter()
                         .map(|(_, file)| file.path)
                         .filter(|path| seen_files.insert(path.clone()))
@@ -776,10 +782,14 @@ impl App {
             && !self.file_index.is_empty()
         {
             let exclude = self.palette_exclude_roots();
-            for (score, file) in
-                self.file_index
-                    .query_scored_in(Some(root), &exclude, query, FILE_RESULTS)
-            {
+            for (score, file) in self.file_index.query_scored_in(
+                terminator_native_edit::finder::QueryScoredInInput {
+                    root: Some(root),
+                    exclude: &exclude,
+                    pattern: query,
+                    limit: FILE_RESULTS,
+                },
+            ) {
                 let item = PaletteItem::File(file.path);
                 let title = item.title();
                 let boost = if title.eq_ignore_ascii_case(query) {
@@ -1026,7 +1036,12 @@ impl App {
                 {
                     self.select_project(project);
                 }
-                self.open_file(path, None, None, false);
+                self.open_file(OpenFileInput {
+                    path,
+                    line: None,
+                    split: None,
+                    external: false,
+                });
             }
             PaletteItem::Symbol {
                 path, line, column, ..

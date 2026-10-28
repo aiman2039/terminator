@@ -251,16 +251,30 @@ pub fn show(ui: &mut egui::Ui, model: &Model, toggles: &mut Toggles, theme: &App
         let text = appearance::color(&theme.text);
         let secondary = appearance::color(&theme.secondary);
         let live = appearance::color(&theme.status_running);
-        if section_header(
+        if section_header(SectionHeaderInput {
             ui,
-            "Process",
-            &mut toggles.process_open,
-            None,
+            title: "Process",
+            open: &mut toggles.process_open,
+            system: None,
             text,
             secondary,
-        ) {
-            value_row(ui, "session", &model.session, text, secondary, SESSION);
-            let cwd = value_row(ui, "cwd", &model.cwd, text, secondary, CWD);
+        }) {
+            value_row(ValueRowInput {
+                ui,
+                label: "session",
+                value: &model.session,
+                value_color: text,
+                label_color: secondary,
+                target: SESSION,
+            });
+            let cwd = value_row(ValueRowInput {
+                ui,
+                label: "cwd",
+                value: &model.cwd,
+                value_color: text,
+                label_color: secondary,
+                target: CWD,
+            });
             if let Some(full) = &model.cwd_full {
                 cwd.on_hover_text(full);
             }
@@ -273,30 +287,51 @@ pub fn show(ui: &mut egui::Ui, model: &Model, toggles: &mut Toggles, theme: &App
             }
             let branch = model.branch.as_deref().unwrap_or(DASH);
             let branch_color = if model.branch.is_some() { live } else { text };
-            value_row(ui, "branch", branch, branch_color, secondary, BRANCH);
-            value_row(ui, "started", &model.started, text, secondary, STARTED);
+            value_row(ValueRowInput {
+                ui,
+                label: "branch",
+                value: branch,
+                value_color: branch_color,
+                label_color: secondary,
+                target: BRANCH,
+            });
+            value_row(ValueRowInput {
+                ui,
+                label: "started",
+                value: &model.started,
+                value_color: text,
+                label_color: secondary,
+                target: STARTED,
+            });
         }
         ui.add_space(8.0);
         let system_toggle = toggles.show_system;
-        if section_header(
+        if section_header(SectionHeaderInput {
             ui,
-            "Resources",
-            &mut toggles.resources_open,
-            Some(&mut toggles.show_system),
+            title: "Resources",
+            open: &mut toggles.resources_open,
+            system: Some(&mut toggles.show_system),
             text,
             secondary,
-        ) {
+        }) {
             ui.add_space(4.0);
             ui.label(RichText::new("THIS SESSION").small().color(secondary));
-            value_row(ui, "cpu", &model.session_cpu, text, secondary, SESSION_CPU);
-            value_row(
+            value_row(ValueRowInput {
                 ui,
-                "memory",
-                &model.session_memory,
-                text,
-                secondary,
-                SESSION_MEMORY,
-            );
+                label: "cpu",
+                value: &model.session_cpu,
+                value_color: text,
+                label_color: secondary,
+                target: SESSION_CPU,
+            });
+            value_row(ValueRowInput {
+                ui,
+                label: "memory",
+                value: &model.session_memory,
+                value_color: text,
+                label_color: secondary,
+                target: SESSION_MEMORY,
+            });
             if system_toggle {
                 ui.add_space(6.0);
                 ui.label(RichText::new("SYSTEM").small().color(secondary));
@@ -309,52 +344,80 @@ pub fn show(ui: &mut egui::Ui, model: &Model, toggles: &mut Toggles, theme: &App
                     // One shared value column: without it each bar hugs its
                     // own value and the bars scatter across the panel.
                     let value_width = meter_value_width(ui, system);
-                    meter_row(
+                    meter_row(MeterRowInput {
                         ui,
-                        "cpu",
-                        &system.cpu,
-                        system.cpu_fraction,
-                        meter,
-                        SYSTEM_CPU,
+                        label: "cpu",
+                        value: &system.cpu,
+                        fraction: system.cpu_fraction,
+                        colors: meter,
+                        target: SYSTEM_CPU,
                         value_width,
-                    );
-                    meter_row(
+                    });
+                    meter_row(MeterRowInput {
                         ui,
-                        "memory",
-                        &system.memory,
-                        system.memory_fraction,
-                        meter,
-                        SYSTEM_MEMORY,
+                        label: "memory",
+                        value: &system.memory,
+                        fraction: system.memory_fraction,
+                        colors: meter,
+                        target: SYSTEM_MEMORY,
                         value_width,
-                    );
+                    });
                     let pressure_color = pressure_color(system.pressure_level, theme, text);
-                    meter_row(
+                    meter_row(MeterRowInput {
                         ui,
-                        "pressure",
-                        &system.pressure,
-                        system.pressure_fraction,
-                        MeterColors {
+                        label: "pressure",
+                        value: &system.pressure,
+                        fraction: system.pressure_fraction,
+                        colors: MeterColors {
                             bar: pressure_color,
                             value: pressure_color,
                             label: secondary,
                         },
-                        PRESSURE,
+                        target: PRESSURE,
                         value_width,
-                    );
-                    meter_row(
+                    });
+                    meter_row(MeterRowInput {
                         ui,
-                        "load",
-                        &system.load,
-                        system.load_fraction,
-                        meter,
-                        LOAD,
+                        label: "load",
+                        value: &system.load,
+                        fraction: system.load_fraction,
+                        colors: meter,
+                        target: LOAD,
                         value_width,
-                    );
+                    });
                 } else {
-                    value_row(ui, "cpu", DASH, text, secondary, SYSTEM_CPU);
-                    value_row(ui, "memory", DASH, text, secondary, SYSTEM_MEMORY);
-                    value_row(ui, "pressure", DASH, text, secondary, PRESSURE);
-                    value_row(ui, "load", DASH, text, secondary, LOAD);
+                    value_row(ValueRowInput {
+                        ui,
+                        label: "cpu",
+                        value: DASH,
+                        value_color: text,
+                        label_color: secondary,
+                        target: SYSTEM_CPU,
+                    });
+                    value_row(ValueRowInput {
+                        ui,
+                        label: "memory",
+                        value: DASH,
+                        value_color: text,
+                        label_color: secondary,
+                        target: SYSTEM_MEMORY,
+                    });
+                    value_row(ValueRowInput {
+                        ui,
+                        label: "pressure",
+                        value: DASH,
+                        value_color: text,
+                        label_color: secondary,
+                        target: PRESSURE,
+                    });
+                    value_row(ValueRowInput {
+                        ui,
+                        label: "load",
+                        value: DASH,
+                        value_color: text,
+                        label_color: secondary,
+                        target: LOAD,
+                    });
                 }
             }
         }
@@ -376,14 +439,24 @@ fn pressure_color(
     }
 }
 
-fn section_header(
-    ui: &mut egui::Ui,
-    title: &str,
-    open: &mut bool,
-    system: Option<&mut bool>,
+struct SectionHeaderInput<'a> {
+    ui: &'a mut egui::Ui,
+    title: &'a str,
+    open: &'a mut bool,
+    system: Option<&'a mut bool>,
     text: Color32,
     secondary: Color32,
-) -> bool {
+}
+
+fn section_header(input: SectionHeaderInput<'_>) -> bool {
+    let SectionHeaderInput {
+        ui,
+        title,
+        open,
+        system,
+        text,
+        secondary,
+    } = input;
     let mut toggle = false;
     ui.horizontal(|ui| {
         ui.set_min_height(22.0);
@@ -426,14 +499,24 @@ fn chevron(ui: &mut egui::Ui, open: bool, tint: Color32) -> egui::Response {
     )
 }
 
-fn value_row(
-    ui: &mut egui::Ui,
-    label: &str,
-    value: &str,
+struct ValueRowInput<'a> {
+    ui: &'a mut egui::Ui,
+    label: &'a str,
+    value: &'a str,
     value_color: Color32,
     label_color: Color32,
-    target: &str,
-) -> egui::Response {
+    target: &'a str,
+}
+
+fn value_row(input: ValueRowInput<'_>) -> egui::Response {
+    let ValueRowInput {
+        ui,
+        label,
+        value,
+        value_color,
+        label_color,
+        target,
+    } = input;
     let mut value_response = None;
     ui.horizontal(|ui| {
         ui.set_min_height(18.0);
@@ -483,15 +566,26 @@ fn meter_value_width(ui: &egui::Ui, system: &SystemRows) -> f32 {
     measured.min(max_value).max(28.0)
 }
 
-fn meter_row(
-    ui: &mut egui::Ui,
-    label: &str,
-    value: &str,
+struct MeterRowInput<'a> {
+    ui: &'a mut egui::Ui,
+    label: &'a str,
+    value: &'a str,
     fraction: f32,
     colors: MeterColors,
-    target: &str,
+    target: &'a str,
     value_width: f32,
-) {
+}
+
+fn meter_row(input: MeterRowInput<'_>) {
+    let MeterRowInput {
+        ui,
+        label,
+        value,
+        fraction,
+        colors,
+        target,
+        value_width,
+    } = input;
     ui.horizontal(|ui| {
         ui.set_min_height(18.0);
         ui.label(RichText::new(label).color(colors.label).size(12.0));

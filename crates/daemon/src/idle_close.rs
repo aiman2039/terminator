@@ -106,7 +106,11 @@ impl Shared {
                     ),
                     Err(error) => (Status::Unknown, error.to_string()),
                 };
-                Outcome { session, status, reason }
+                Outcome {
+                    session,
+                    status,
+                    reason,
+                }
             })
             .collect()
     }
@@ -132,7 +136,10 @@ impl Shared {
                         record.lifecycle = Lifecycle::Stopping;
                     }
                     state.revision = state.revision.saturating_add(1);
-                    (Status::Closed, "Idle shell signalled; waiting for exit".into())
+                    (
+                        Status::Closed,
+                        "Idle shell signalled; waiting for exit".into(),
+                    )
                 } else {
                     (Status::Failed, std::io::Error::last_os_error().to_string())
                 }
@@ -194,11 +201,15 @@ impl Shared {
         {
             let _operation = relock(&self.terminal_operations);
             if relock(&self.state).generation != generation {
-                return Ok(Response::IdleSessionsClosed(Self::stale_generation_outcomes(sessions)));
+                return Ok(Response::IdleSessionsClosed(
+                    Self::stale_generation_outcomes(sessions),
+                ));
             }
             let checks: Vec<_> = sessions.iter().map(|s| self.idle_preflight(s)).collect();
             if checks.iter().any(Result::is_err) {
-                return Ok(Response::IdleSessionsClosed(Self::preflight_failed_outcomes(sessions, checks)));
+                return Ok(Response::IdleSessionsClosed(
+                    Self::preflight_failed_outcomes(sessions, checks),
+                ));
             }
             let mut partial_failure = false;
             for session in sessions {
@@ -208,14 +219,17 @@ impl Shared {
                 }
                 let (status, reason) = self.signal_one(&session);
                 let failed = status == Status::Failed;
-                outcomes.push(Outcome { session, status, reason });
+                outcomes.push(Outcome {
+                    session,
+                    status,
+                    reason,
+                });
                 partial_failure = failed;
             }
         }
         self.confirm_outcomes(&mut outcomes);
         Ok(Response::IdleSessionsClosed(outcomes))
     }
-
 }
 
 #[cfg(test)]

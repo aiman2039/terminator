@@ -1,15 +1,55 @@
 use super::attention::state_color;
 use super::explorer_prompts::PromptSlot;
-use super::explorer_rows::{explorer_file_row, skip_clipped_row};
+use super::explorer_rows::{ExplorerFileRowInput, explorer_file_row, skip_clipped_row};
 use super::explorer_select::{ExplorerDrag, tree_focus_id};
-use super::git_panel::{GitPanelInput, PreparedGit, git_color, git_panel};
+use super::git_panel::{PreparedGit, git_color, git_panel};
+use crate::app::FileActionInput;
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
+use crate::sidebar_ui::ExplorerKeysInput;
+use crate::sidebar_ui::git_panel::GitPanelInput;
 use crate::{
     Action, App, RenameSurface, Tab, appearance,
     preferences::{ExplorerSearchMode, SidebarTool},
     workspace_ops,
 };
+
+struct ExplorerPromptRowInput<'a> {
+    ui: &'a mut egui::Ui,
+    depth: usize,
+    tree_focus: egui::Id,
+}
+
+struct ExplorerTreeRowInput<'a, 'b> {
+    ui: &'a mut egui::Ui,
+    row: &'a crate::sidebar_cache::ExplorerRow,
+    context: &'a RowContext<'b>,
+    drop_dir: &'a mut Option<PathBuf>,
+}
+
+struct ExplorerRowDndInput<'a> {
+    ui: &'a egui::Ui,
+    response: &'a egui::Response,
+    path: &'a Path,
+    directory: bool,
+    drop_dir: &'a mut Option<PathBuf>,
+}
+
+struct ExplorerEntryInput<'a, 'b> {
+    ui: &'a mut egui::Ui,
+    entry: &'a terminator_git::Entry,
+    row: &'a crate::sidebar_cache::ExplorerRow,
+    context: &'a RowContext<'b>,
+    drop_dir: &'a mut Option<PathBuf>,
+}
+
+pub(crate) struct SessionRowInTabInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) session: &'a Session,
+    pub(crate) project_id: &'a str,
+    pub(crate) tab_id: &'a str,
+}
+
 use eframe::egui::{self, RichText};
 use std::path::{Path, PathBuf};
 use terminator_core::{
@@ -170,13 +210,13 @@ impl App {
 
     /// One session row that stands in for a single-terminal tab. It offers to
     /// name that tab, since the tab node is not painted.
-    pub(super) fn session_row_in_tab(
-        &mut self,
-        ui: &mut egui::Ui,
-        session: &Session,
-        project_id: &str,
-        tab_id: &str,
-    ) {
+    pub(super) fn session_row_in_tab(&mut self, input: SessionRowInTabInput<'_>) {
+        let SessionRowInTabInput {
+            ui,
+            session,
+            project_id,
+            tab_id,
+        } = input;
         self.session_row_for_tab(ui, session, Some((project_id, tab_id)));
     }
 
@@ -266,10 +306,15 @@ impl App {
             response.rect,
         );
         if editing {
-            self.inline_rename(crate::workspace_ui::InlineRenameInput { ui, sid: &session.id, surface: RenameSurface::Sidebar, rect: egui::Rect::from_min_max(
+            self.inline_rename(crate::workspace_ui::InlineRenameInput {
+                ui,
+                sid: &session.id,
+                surface: RenameSurface::Sidebar,
+                rect: egui::Rect::from_min_max(
                     egui::pos2(response.rect.min.x + 36.0, response.rect.min.y + 4.0),
                     egui::pos2(response.rect.max.x - 6.0, response.rect.max.y - 3.0),
-                ) });
+                ),
+            });
         }
         if response.clicked() && !editing {
             self.go_session(&session.id);
@@ -329,15 +374,15 @@ impl App {
         });
         let count = live.to_string();
         let selected = self.selected.as_ref() == Some(&project.id);
-        let response = appearance::project_row(
+        let response = appearance::project_row(appearance::ProjectRowInput {
             ui,
-            &project.name,
-            "GitBranch",
+            label: &project.name,
+            icon: "GitBranch",
             selected,
-            self.theme.row_height(),
-            &count,
+            height: self.theme.row_height(),
+            trailing: &count,
             tint,
-        )
+        })
         .on_hover_text(format!(
             "{}\nManaged Git worktree\n{} live terminal(s)",
             self.project_location_label(&project.id),
@@ -394,7 +439,12 @@ impl App {
             focus,
             egui::Sense::focusable_noninteractive(),
         );
-        self.explorer_keys(ui, &rows, host, path);
+        self.explorer_keys(ExplorerKeysInput {
+            ui,
+            rows: &rows,
+            host,
+            root: path,
+        });
         let context = RowContext {
             rows: &rows,
             focus,
@@ -485,17 +535,28 @@ impl App {
             ui.allocate_space(egui::vec2(ui.available_width(), first as f32 * ROW_HEIGHT));
             for shown in first..last {
                 match row_at(shown) {
-                    None => {
-                        self.explorer_prompt_row(ui, insert.map_or(0, |(_, depth)| depth), focus)
-                    }
+                    None => self.explorer_prompt_row(ExplorerPromptRowInput {
+                        ui,
+                        depth: insert.map_or(0, |(_, depth)| depth),
+                        tree_focus: focus,
+                    }),
                     Some(index) => {
                         let Some(row) = rows.get(index) else {
                             continue;
                         };
                         if replace == Some(index) {
-                            self.explorer_prompt_row(ui, row.depth, focus);
+                            self.explorer_prompt_row(ExplorerPromptRowInput {
+                                ui,
+                                depth: row.depth,
+                                tree_focus: focus,
+                            });
                         } else {
-                            self.explorer_tree_row(ui, row, &context, &mut drop_dir);
+                            self.explorer_tree_row(ExplorerTreeRowInput {
+                                ui,
+                                row,
+                                context: &context,
+                                drop_dir: &mut drop_dir,
+                            });
                         }
                     }
                 }
@@ -507,14 +568,22 @@ impl App {
         } else {
             for shown in 0..count {
                 let Some(index) = row_at(shown) else {
-                    self.explorer_prompt_row(ui, insert.map_or(0, |(_, depth)| depth), focus);
+                    self.explorer_prompt_row(ExplorerPromptRowInput {
+                        ui,
+                        depth: insert.map_or(0, |(_, depth)| depth),
+                        tree_focus: focus,
+                    });
                     continue;
                 };
                 let Some(row) = rows.get(index) else {
                     continue;
                 };
                 if replace == Some(index) {
-                    self.explorer_prompt_row(ui, row.depth, focus);
+                    self.explorer_prompt_row(ExplorerPromptRowInput {
+                        ui,
+                        depth: row.depth,
+                        tree_focus: focus,
+                    });
                     continue;
                 }
                 let target =
@@ -531,7 +600,12 @@ impl App {
                         active.pending_scroll = false;
                     }
                 }
-                self.explorer_tree_row(ui, row, &context, &mut drop_dir);
+                self.explorer_tree_row(ExplorerTreeRowInput {
+                    ui,
+                    row,
+                    context: &context,
+                    drop_dir: &mut drop_dir,
+                });
             }
         }
         self.explorer_external_drop(ui, path, drop_dir);
@@ -581,7 +655,12 @@ impl App {
     }
 
     /// The open name prompt as a tree row at `depth`.
-    fn explorer_prompt_row(&mut self, ui: &mut egui::Ui, depth: usize, tree_focus: egui::Id) {
+    fn explorer_prompt_row(&mut self, input: ExplorerPromptRowInput<'_>) {
+        let ExplorerPromptRowInput {
+            ui,
+            depth,
+            tree_focus,
+        } = input;
         // Exactly one row tall, so virtualized row math stays exact.
         let (mut rect, _) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), ROW_HEIGHT),
@@ -599,13 +678,13 @@ impl App {
         self.name_prompt_row(&mut row, tree_focus);
     }
 
-    fn explorer_tree_row(
-        &mut self,
-        ui: &mut egui::Ui,
-        row: &crate::sidebar_cache::ExplorerRow,
-        context: &RowContext<'_>,
-        drop_dir: &mut Option<PathBuf>,
-    ) {
+    fn explorer_tree_row(&mut self, input: ExplorerTreeRowInput<'_, '_>) {
+        let ExplorerTreeRowInput {
+            ui,
+            row,
+            context,
+            drop_dir,
+        } = input;
         let mut rect = ui.available_rect_before_wrap();
         // Explorer indent is a UI coordinate; depth can exceed the f32 mantissa.
         let indent = row.depth as f32 * ui.spacing().indent;
@@ -616,7 +695,13 @@ impl App {
                     if skip_clipped_row(ui, ROW_HEIGHT) {
                         return;
                     }
-                    self.explorer_entry(ui, entry, row, context, drop_dir);
+                    self.explorer_entry(ExplorerEntryInput {
+                        ui,
+                        entry,
+                        row,
+                        context,
+                        drop_dir,
+                    });
                 } else {
                     self.explorer_directory_status(ui, &row.path);
                 }
@@ -661,14 +746,14 @@ impl App {
 
     /// Drag source and drop target wiring shared by file and folder rows.
     /// Dropping on a folder moves into it; on a file, into its folder.
-    fn explorer_row_dnd(
-        &mut self,
-        ui: &egui::Ui,
-        response: &egui::Response,
-        path: &Path,
-        directory: bool,
-        drop_dir: &mut Option<PathBuf>,
-    ) {
+    fn explorer_row_dnd(&mut self, input: ExplorerRowDndInput<'_>) {
+        let ExplorerRowDndInput {
+            ui,
+            response,
+            path,
+            directory,
+            drop_dir,
+        } = input;
         let target = if directory {
             Some(path.to_owned())
         } else {
@@ -734,14 +819,14 @@ impl App {
         }
     }
 
-    fn explorer_entry(
-        &mut self,
-        ui: &mut egui::Ui,
-        entry: &terminator_git::Entry,
-        row: &crate::sidebar_cache::ExplorerRow,
-        context: &RowContext<'_>,
-        drop_dir: &mut Option<PathBuf>,
-    ) {
+    fn explorer_entry(&mut self, input: ExplorerEntryInput<'_, '_>) {
+        let ExplorerEntryInput {
+            ui,
+            entry,
+            row,
+            context,
+            drop_dir,
+        } = input;
         let label = row.label.as_str();
         let modifiers = ui.input(|input| input.modifiers);
         if entry.directory {
@@ -757,17 +842,23 @@ impl App {
             } else {
                 git_color(&self.theme, status)
             };
-            let folder = appearance::file_row(
+            let folder = appearance::file_row(appearance::FileRowInput {
                 ui,
                 label,
-                if expanded { "FolderOpen" } else { "Folder" },
-                self.explorer_selected(&entry.path, None),
-                22.0,
-                &status.to_string(),
-                color,
-            )
+                icon: if expanded { "FolderOpen" } else { "Folder" },
+                selected: self.explorer_selected(&entry.path, None),
+                height: 22.0,
+                trailing: &status.to_string(),
+                tint: color,
+            })
             .interact(egui::Sense::drag());
-            self.explorer_row_dnd(ui, &folder, &entry.path, true, drop_dir);
+            self.explorer_row_dnd(ExplorerRowDndInput {
+                ui,
+                response: &folder,
+                path: &entry.path,
+                directory: true,
+                drop_dir,
+            });
             // Build the tooltip lazily: `format!` per visible row per
             // frame showed up as scroll-time allocations.
             let folder = if folder.hovered() {
@@ -855,24 +946,34 @@ impl App {
                 .unwrap_or(' ');
             let outcome = explorer_file_row(
                 ui,
-                &entry.path,
-                label,
-                status,
-                entry.ignored,
-                &self.theme,
-                &context.open_shortcut,
-                &context.split_shortcut,
-                self.explorer_selected(&entry.path, context.focused_file.as_deref()),
-                self.context
-                    .as_ref()
-                    .is_some_and(|context| context.perforce.is_some()),
-                self.context
-                    .as_ref()
-                    .and_then(|context| context.root.as_ref())
-                    .map(|_| self.git.branches.as_slice()),
+                ExplorerFileRowInput {
+                    path: &entry.path,
+                    label,
+                    status,
+                    ignored: entry.ignored,
+                    theme: &self.theme,
+                    open_shortcut: &context.open_shortcut,
+                    split_shortcut: &context.split_shortcut,
+                    selected: self.explorer_selected(&entry.path, context.focused_file.as_deref()),
+                    perforce: self
+                        .context
+                        .as_ref()
+                        .is_some_and(|context| context.perforce.is_some()),
+                    git_branches: self
+                        .context
+                        .as_ref()
+                        .and_then(|context| context.root.as_ref())
+                        .map(|_| self.git.branches.as_slice()),
+                },
             );
             if let Some(response) = &outcome.response {
-                self.explorer_row_dnd(ui, response, &entry.path, false, drop_dir);
+                self.explorer_row_dnd(ExplorerRowDndInput {
+                    ui,
+                    response,
+                    path: &entry.path,
+                    directory: false,
+                    drop_dir,
+                });
                 if response.secondary_clicked() && !self.explorer_selected(&entry.path, None) {
                     self.explorer_selection = vec![entry.path.clone()];
                     self.explorer_anchor = Some(entry.path.clone());
@@ -885,7 +986,12 @@ impl App {
                 }
             }
             if let Some(action) = outcome.menu {
-                self.file_action(ui, action, &entry.path, None);
+                self.file_action(FileActionInput {
+                    ui,
+                    action,
+                    path: &entry.path,
+                    line: None,
+                });
             }
             if let Some(op) = outcome.perforce {
                 self.queue_workspace(workspace_ops::Op::Perforce(op));
@@ -983,19 +1089,19 @@ impl App {
                         .history_expanded
                         .entry(group.project.id.clone())
                         .or_insert(true);
-                    let header = appearance::row(
+                    let header = appearance::row(appearance::RowInput {
                         ui,
-                        &group.project.name,
-                        if expanded {
+                        label: &group.project.name,
+                        icon: if expanded {
                             "ChevronDown"
                         } else {
                             "ChevronRight"
                         },
-                        false,
-                        26.0,
-                        &group.sessions.len().to_string(),
-                        appearance::color(&self.theme.text),
-                    )
+                        selected: false,
+                        height: 26.0,
+                        trailing: &group.sessions.len().to_string(),
+                        tint: appearance::color(&self.theme.text),
+                    })
                     .on_hover_text(self.project_location_label(&group.project.id));
                     #[cfg(feature = "test-support")]
                     diagnostics::record(

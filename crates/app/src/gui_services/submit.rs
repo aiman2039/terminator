@@ -1,5 +1,26 @@
 //! All ordinary GUI commands are submitted without waiting on the UI thread.
 use super::jobs::{context, editor_ids, rejection};
+use crate::gui_services::jobs::CloseEditorsInput;
+use crate::gui_services::jobs::CloseIdleInput;
+use crate::gui_services::jobs::DiffActionInput;
+use crate::gui_services::jobs::DiffContextInput;
+use crate::gui_services::jobs::ExitSaveInput;
+use crate::gui_services::jobs::InstallInput;
+use crate::gui_services::jobs::OpenProjectInput;
+use crate::gui_services::jobs::PrepareLayoutsInput;
+use crate::gui_services::jobs::RemoteAddInput;
+use crate::gui_services::jobs::RemoteAssetInput;
+use crate::gui_services::jobs::RemoteTransferInput;
+use crate::gui_services::jobs::RepairInstallationInput;
+use crate::gui_services::jobs::ResolveTargetInput;
+use crate::gui_services::jobs::SaveAppearanceInput;
+use crate::gui_services::jobs::SaveLayoutInput;
+use crate::gui_services::jobs::SearchInput;
+use crate::gui_services::jobs::TestExternalInput;
+use crate::gui_services::jobs::TestNtfyInput;
+use crate::gui_services::jobs::VncFrameInput;
+use crate::gui_services::jobs::VncPickTransferInput;
+use crate::gui_services::jobs::WorkspaceOpInput;
 #[cfg(feature = "test-support")]
 use crate::nvim_rpc;
 use crate::{Job, Update, daemon_connection, installation, player};
@@ -490,50 +511,112 @@ impl Services {
         let mut updates = Vec::new();
         match job {
             Job::PrepareLayouts(generation, layouts) => {
-                self.prepare_layouts(generation, layouts, cancel, &mut updates)
-                    .await?
+                self.prepare_layouts(PrepareLayoutsInput {
+                    generation,
+                    layouts,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::SaveLayout(project, layout, text) => {
-                self.save_layout(project, layout, text, &mut updates)
-                    .await?
+                self.save_layout(SaveLayoutInput {
+                    project,
+                    layout,
+                    text,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::Control(request, after) => self.control(request, after, &mut updates).await?,
             Job::CloseIdle(target, generation, ids) => {
-                self.close_idle(target, generation, ids, &mut updates)
-                    .await?
+                self.close_idle(CloseIdleInput {
+                    target,
+                    generation,
+                    ids,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::CloseEditors(target, ids, mode, timeout) => {
-                self.close_editors(target, ids, mode, timeout, &mut updates)
-                    .await?
+                self.close_editors(CloseEditorsInput {
+                    target,
+                    ids,
+                    mode,
+                    timeout,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::Preferences(prefs) => self.save_preferences(prefs, cancel, &mut updates).await?,
             Job::SaveAppearance(theme, expected) => {
-                self.save_appearance(theme, expected, cancel, &mut updates)
-                    .await?
+                self.save_appearance(SaveAppearanceInput {
+                    theme,
+                    expected,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::ExitSave(id, checkpoint) => {
-                self.exit_save(id, checkpoint, cancel, &mut updates).await?
+                self.exit_save(ExitSaveInput {
+                    id,
+                    checkpoint,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::ExitDrain(id, serial) => updates.push(Update::ExitDrained(id, serial)),
             Job::ResolveTarget(key, text, cwd) => {
-                self.resolve_target(key, text, cwd, cancel, &mut updates)
-                    .await?
+                self.resolve_target(ResolveTargetInput {
+                    key,
+                    text,
+                    cwd,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::OpenProject(path, generation) => {
-                self.open_project(path, generation, cancel, &mut updates)
-                    .await?
+                self.open_project(OpenProjectInput {
+                    path,
+                    generation,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::MigrateAttention => self.migrate_settings(true, &mut updates).await?,
             Job::MigrateTypography => self.migrate_settings(false, &mut updates).await?,
             Job::DiffAction(tab, request) => {
-                self.diff_action(tab, request, cancel, &mut updates).await?
+                self.diff_action(DiffActionInput {
+                    tab,
+                    request,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::DiffContext(tab, view) => {
-                self.diff_context(tab, view, cancel, &mut updates).await?
+                self.diff_context(DiffContextInput {
+                    tab,
+                    view,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::DiffExpand(tab, doc, gap, part) => {
-                self.diff_expand(tab, doc, (gap, part), cancel, &mut updates)
-                    .await?
+                self.diff_expand(super::jobs::DiffExpandInput {
+                    tab,
+                    doc,
+                    gap,
+                    part,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::Diff(tab) => self.diff(tab, cancel, &mut updates).await?,
             Job::CreateWorktree(draft) => self.create_worktree(draft, cancel, &mut updates).await?,
@@ -542,10 +625,23 @@ impl Services {
                 self.paste_clipboard(session, cancel, &mut updates).await?
             }
             Job::Browser(url) => self.open_browser(url, cancel).await?,
-            Job::Install(kind, remove) => self.install(kind, remove, cancel, &mut updates).await?,
+            Job::Install(kind, remove) => {
+                self.install(InstallInput {
+                    kind,
+                    remove,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
+            }
             Job::TestNtfy { channel, machine } => {
-                self.test_ntfy(channel, machine, cancel, &mut updates)
-                    .await?
+                self.test_ntfy(TestNtfyInput {
+                    channel,
+                    machine,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::External(path) => self.open_external(path, cancel).await?,
             Job::CommitFiles(cwd, hash) => {
@@ -592,11 +688,22 @@ impl Services {
                 updates.push(Update::LinePreviews(generation, lines));
             }
             Job::TestExternal(path, program, args) => {
-                self.test_external(path, program, args, cancel).await?
+                self.test_external(TestExternalInput {
+                    path,
+                    program,
+                    args,
+                    cancel,
+                })
+                .await?
             }
             Job::RepairInstallation(generation, checkpoint) => {
-                self.repair_installation(generation, checkpoint, cancel, &mut updates)
-                    .await?
+                self.repair_installation(RepairInstallationInput {
+                    generation,
+                    checkpoint,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::RestartSessionService(inventory) => {
                 self.restart_session_service(inventory, cancel).await?
@@ -606,8 +713,13 @@ impl Services {
                 probe,
                 generation,
             } => {
-                self.remote_add(project, probe, generation, &mut updates)
-                    .await?
+                self.remote_add(RemoteAddInput {
+                    project,
+                    probe,
+                    generation,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::RemoteRead { project, operation } => {
                 self.remote_read(project, operation, &mut updates).await?
@@ -627,12 +739,24 @@ impl Services {
                 cache_root,
                 after,
             } => {
-                self.remote_asset(project, path, cache_root, after, cancel, &mut updates)
-                    .await?
+                self.remote_asset(RemoteAssetInput {
+                    project,
+                    path,
+                    cache_root,
+                    after,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::RemoteTransfer { project, pick } => {
-                self.remote_transfer(project, pick, cancel, &mut updates)
-                    .await?
+                self.remote_transfer(RemoteTransferInput {
+                    project,
+                    pick,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::RemoteTransferPoll { project, id } => {
                 self.remote_transfer_poll(project, id, &mut updates).await?
@@ -642,8 +766,14 @@ impl Services {
                 direction,
                 remote,
             } => {
-                self.vnc_pick_transfer(session, direction, remote, cancel, &mut updates)
-                    .await?
+                self.vnc_pick_transfer(VncPickTransferInput {
+                    session,
+                    direction,
+                    remote,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::VncTransferPoll { session, id } => {
                 self.vnc_transfer_poll(session, id, &mut updates).await?
@@ -656,18 +786,39 @@ impl Services {
                 since,
                 regions,
             } => {
-                self.vnc_frame(session, since, regions, cancel, &mut updates)
-                    .await?
+                self.vnc_frame(VncFrameInput {
+                    session,
+                    since,
+                    regions,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
-            Job::Workspace(root, op) => self.workspace_op(root, op, cancel, &mut updates).await?,
+            Job::Workspace(root, op) => {
+                self.workspace_op(WorkspaceOpInput {
+                    root,
+                    op,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
+            }
             Job::Search {
                 id,
                 root,
                 query,
                 show_ignored,
             } => {
-                self.search(id, root, query, show_ignored, cancel, &mut updates)
-                    .await?
+                self.search(SearchInput {
+                    id,
+                    root,
+                    query,
+                    show_ignored,
+                    cancel,
+                    updates: &mut updates,
+                })
+                .await?
             }
             Job::GitView(tab) => self.git_view(tab, cancel, &mut updates).await?,
             Job::StartSessionService => self.start_session_service(cancel, &mut updates).await?,

@@ -99,8 +99,8 @@ where
         previous,
         profile,
         password,
-        save: mut save,
-        forget: mut forget,
+        mut save,
+        mut forget,
     } = input;
     let previous = previous.filter(|p| p.credential_saved);
     let changed = previous

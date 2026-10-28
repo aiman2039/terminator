@@ -2,6 +2,8 @@
 //! terminal-strip tabs, split-pane headers, session rows, and agent rows so
 //! identity, lifecycle, unread state, and diagnostics render consistently.
 mod cache;
+pub(crate) use cache::AttentionInput;
+pub(crate) use cache::GetInput;
 mod counts;
 mod owner;
 #[cfg(test)]

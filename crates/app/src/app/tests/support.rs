@@ -291,13 +291,22 @@ pub(crate) fn cross_dock_frame(app: &mut App, ctx: &egui::Context, events: Vec<e
 }
 
 #[cfg(feature = "test-support")]
-pub(crate) fn cross_glide(
-    app: &mut App,
-    ctx: &egui::Context,
-    from: egui::Pos2,
-    to: egui::Pos2,
-    steps: usize,
-) {
+pub(crate) struct CrossGlideInput<'a> {
+    pub(crate) app: &'a mut App,
+    pub(crate) ctx: &'a egui::Context,
+    pub(crate) from: egui::Pos2,
+    pub(crate) to: egui::Pos2,
+    pub(crate) steps: usize,
+}
+
+pub(crate) fn cross_glide(input: CrossGlideInput<'_>) {
+    let CrossGlideInput {
+        app,
+        ctx,
+        from,
+        to,
+        steps,
+    } = input;
     for step in 1..=steps {
         // Glide step is a UI coordinate blend; the count can exceed the f32 mantissa.
         let k = step as f32 / steps as f32;
@@ -355,13 +364,22 @@ pub(crate) fn frame_press(pos: egui::Pos2, pressed: bool) -> egui::Event {
 }
 
 #[cfg(feature = "test-support")]
-pub(crate) fn frame_glide(
-    app: &mut App,
-    ctx: &egui::Context,
-    from: egui::Pos2,
-    to: egui::Pos2,
-    steps: usize,
-) {
+pub(crate) struct FrameGlideInput<'a> {
+    pub(crate) app: &'a mut App,
+    pub(crate) ctx: &'a egui::Context,
+    pub(crate) from: egui::Pos2,
+    pub(crate) to: egui::Pos2,
+    pub(crate) steps: usize,
+}
+
+pub(crate) fn frame_glide(input: FrameGlideInput<'_>) {
+    let FrameGlideInput {
+        app,
+        ctx,
+        from,
+        to,
+        steps,
+    } = input;
     for step in 1..=steps {
         // Glide step is a UI coordinate blend; the count can exceed the f32 mantissa.
         let k = step as f32 / steps as f32;

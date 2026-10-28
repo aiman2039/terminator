@@ -1,4 +1,5 @@
 use super::*;
+use crate::vnc_ui::VncScreenInput;
 
 #[test]
 fn embedded_ports_cannot_override_the_visible_vnc_port() {
@@ -204,13 +205,13 @@ fn focused_vnc_clipboard_commands_send_remote_shortcuts() {
                 ..Default::default()
             },
             |ui| {
-                result = Some(vnc_screen(
+                result = Some(vnc_screen(VncScreenInput {
                     ui,
-                    &mut view,
-                    &texture,
+                    view: &mut view,
+                    texture: &texture,
                     view_only,
-                    VncPasteShortcut::ShiftInsert,
-                ));
+                    paste_shortcut: VncPasteShortcut::ShiftInsert,
+                }));
             },
         );
         output.textures_delta.clear();
@@ -397,13 +398,13 @@ fn a_selected_monitor_maps_pointer_input_to_that_monitor() {
                 ..Default::default()
             },
             |ui| {
-                events = vnc_screen(
+                events = vnc_screen(VncScreenInput {
                     ui,
-                    &mut view,
-                    &texture,
-                    false,
-                    VncPasteShortcut::ShiftInsert,
-                )
+                    view: &mut view,
+                    texture: &texture,
+                    view_only: false,
+                    paste_shortcut: VncPasteShortcut::ShiftInsert,
+                })
                 .events;
             },
         );

@@ -401,13 +401,22 @@ pub async fn perform(
     ))
 }
 
-pub async fn document(
-    service: &Services,
-    cwd: PathBuf,
-    path: PathBuf,
-    context: usize,
-    cancel: &CancellationToken,
-) -> Result<crate::diff::DiffDocument> {
+pub struct DocumentInput<'a> {
+    pub service: &'a Services,
+    pub cwd: PathBuf,
+    pub path: PathBuf,
+    pub context: usize,
+    pub cancel: &'a CancellationToken,
+}
+
+pub async fn document(input: DocumentInput<'_>) -> Result<crate::diff::DiffDocument> {
+    let DocumentInput {
+        service,
+        cwd,
+        path,
+        context,
+        cancel,
+    } = input;
     let root = cwd.clone();
     let (canonical, relative, spec) = service
         .fs()
@@ -476,7 +485,9 @@ pub async fn document(
     } else {
         service
             .fs()
-            .run(cancel, move || terminator_git::worktree_file(&path))
+            .run(cancel, move || {
+                terminator_git::worktree_file(&path).map_err(anyhow::Error::from)
+            })
             .await?
     };
     service
@@ -486,13 +497,13 @@ pub async fn document(
                 terminator_git::check_text(&left) && terminator_git::check_text(&right),
                 "Binary or non-UTF-8 files cannot be reviewed natively"
             );
-            let mut doc = crate::diff::build_with_context(
-                &relative,
-                std::str::from_utf8(&left)?,
-                std::str::from_utf8(&right)?,
-                false,
+            let mut doc = crate::diff::build_with_context(crate::diff::BuildWithContextInput {
+                path: &relative,
+                left: std::str::from_utf8(&left)?,
+                right: std::str::from_utf8(&right)?,
+                staged: false,
                 context,
-            );
+            });
             doc.read_only = true;
             doc.left_label = "Have revision".into();
             doc.right_label = "Workspace".into();

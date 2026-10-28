@@ -1,4 +1,6 @@
 mod actions;
+pub(crate) use actions::FileActionInput;
+pub(crate) use actions::TerminalActionInput;
 pub(crate) mod app_state;
 mod apply_state;
 mod center;
@@ -11,6 +13,8 @@ mod editor_drag_tests;
 #[cfg(test)]
 mod file_reuse_tests;
 mod files;
+pub(crate) use files::OpenFileInput;
+pub(crate) use files::OpenFileModeInput;
 pub(crate) mod frame;
 pub(crate) mod git_panel_state;
 mod ide;
@@ -19,9 +23,11 @@ mod layout_tests;
 mod lifecycle;
 pub(crate) mod palette_state;
 mod projects;
+pub(crate) use projects::InsertFloatInput;
 #[cfg(test)]
 mod repaint_tests;
 mod strip;
+pub(crate) use strip::LandStripShellOnLeafInput;
 mod tabs;
 #[cfg(test)]
 mod terminal_find_tests;

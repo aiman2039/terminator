@@ -244,15 +244,40 @@ fn popup_key(key: egui::Key) -> bool {
 /// for the session layer to act on. Highlighting derives from the buffer
 /// revision into the caller's [`HighlightCache`]: frames without edits
 /// repaint from the cache, edits re-derive once.
+pub struct PieceInput<'a> {
+    col: usize,
+    piece: &'a str,
+    font: &'a FontId,
+    color: Color32,
+}
+
+pub struct SelectionSpanForLineInput {
+    a: Cursor,
+    b: Cursor,
+    line: usize,
+    line_len: usize,
+    inclusive: bool,
+}
+
+pub struct ShowSourceInput<'a> {
+    pub options: &'a SourceOptions,
+    pub highlight: &'a mut HighlightCache,
+    pub language: Language,
+    pub id: &'a str,
+}
+
 pub fn show_source<B: Buffer>(
     ui: &mut egui::Ui,
     doc: &mut B,
     engine: &mut VimEngine,
-    options: &SourceOptions,
-    highlight: &mut HighlightCache,
-    language: Language,
-    id: &str,
+    input: ShowSourceInput<'_>,
 ) -> SourceOutcome {
+    let ShowSourceInput {
+        options,
+        highlight,
+        language,
+        id,
+    } = input;
     let font = FontId::monospace(options.font_size);
     let italic_font = FontId::new(
         options.font_size,
@@ -314,7 +339,12 @@ pub fn show_source<B: Buffer>(
             text.push_str(&doc.line_text(line));
             text.push('\n');
         }
-        highlight.ensure(language, dark, doc.revision(), &text);
+        highlight.ensure(crate::highlight::EnsureInput {
+            language,
+            dark,
+            revision: doc.revision(),
+            text: &text,
+        });
     }
     highlight.ensure_rows(doc, wrap_columns);
     // Fold changes wait until the row layout is no longer borrowed; they
@@ -938,7 +968,7 @@ pub fn show_source<B: Buffer>(
                     (left < right.min(len)).then(|| (left, right.min(len)))
                 }
                 _ => selection.and_then(|(a, b)| {
-                    selection_span_for_line(a, b, line, visual.line_len, options.vim)
+                    selection_span_for_line(SelectionSpanForLineInput { a, b, line, line_len: visual.line_len, inclusive: options.vim })
                 }),
             };
             if let Some((start_col, end_col)) = span
@@ -962,7 +992,7 @@ pub fn show_source<B: Buffer>(
             for caret in &extra_carets {
                 if let Some((a, b)) = caret.selection()
                     && let Some((start_col, end_col)) =
-                        selection_span_for_line(a, b, line, visual.line_len, false)
+                        selection_span_for_line(SelectionSpanForLineInput { a, b, line, line_len: visual.line_len, inclusive: false })
                     && let (start_col, end_col) =
                         (start_col.max(visual.start), end_col.min(visual.end))
                     && start_col < end_col
@@ -1917,7 +1947,13 @@ impl RowPaint<'_> {
 
     /// Paint `piece` (row text from char `col`) in one style, split at
     /// every hint inside it so the hint gaps open between chars.
-    fn piece(&self, col: usize, piece: &str, font: &FontId, color: Color32) {
+    fn piece(&self, input: PieceInput<'_>) {
+        let PieceInput {
+            col,
+            piece,
+            font,
+            color,
+        } = input;
         let geometry = RowCells {
             text: self.text,
             hints: self.hints,
@@ -1953,7 +1989,12 @@ impl RowPaint<'_> {
     fn paint(&self) {
         self.paint_hints();
         if self.spans.is_empty() {
-            self.piece(0, self.text, self.font, self.plain);
+            self.piece(PieceInput {
+                col: 0,
+                piece: self.text,
+                font: self.font,
+                color: self.plain,
+            });
             return;
         }
         let mut chars = self.text.chars();
@@ -1966,24 +2007,34 @@ impl RowPaint<'_> {
                 .take(span.start.saturating_sub(col))
                 .collect();
             if !gap.is_empty() {
-                self.piece(col, &gap, self.font, self.plain);
+                self.piece(PieceInput {
+                    col,
+                    piece: &gap,
+                    font: self.font,
+                    color: self.plain,
+                });
                 col = span.start;
             }
             let piece: String = chars.by_ref().take(span.end.saturating_sub(col)).collect();
             if !piece.is_empty() {
                 let [red, green, blue] = span.color;
-                self.piece(
+                self.piece(PieceInput {
                     col,
-                    &piece,
-                    &self.font_for(span.style),
-                    Color32::from_rgb(red, green, blue),
-                );
+                    piece: &piece,
+                    font: &self.font_for(span.style),
+                    color: Color32::from_rgb(red, green, blue),
+                });
             }
             col = span.end;
         }
         let tail: String = chars.collect();
         if !tail.is_empty() {
-            self.piece(col, &tail, self.font, self.plain);
+            self.piece(PieceInput {
+                col,
+                piece: &tail,
+                font: self.font,
+                color: self.plain,
+            });
         }
     }
 
@@ -2051,13 +2102,14 @@ pub(super) fn caret_reference(reference: &str, engine: &VimEngine) -> String {
 }
 
 /// Char span of the selection on one visual line, end-exclusive.
-fn selection_span_for_line(
-    a: Cursor,
-    b: Cursor,
-    line: usize,
-    line_len: usize,
-    inclusive: bool,
-) -> Option<(usize, usize)> {
+fn selection_span_for_line(input: SelectionSpanForLineInput) -> Option<(usize, usize)> {
+    let SelectionSpanForLineInput {
+        a,
+        b,
+        line,
+        line_len,
+        inclusive,
+    } = input;
     if line < a.line || line > b.line {
         return None;
     }
@@ -2132,7 +2184,7 @@ pub fn status_line(engine: &impl ModalEngine) -> String {
 
 #[cfg(test)]
 mod wrap_tests {
-    use super::{SourceOptions, show_source};
+    use super::{ShowSourceInput, SourceOptions, show_source};
     use crate::doc::{Buffer, Doc};
     use crate::highlight::{HighlightCache, Language};
     use crate::vim::VimEngine;
@@ -2158,13 +2210,15 @@ mod wrap_tests {
                     ui,
                     &mut doc,
                     &mut engine,
-                    &SourceOptions {
-                        soft_wrap: true,
-                        ..Default::default()
+                    ShowSourceInput {
+                        options: &SourceOptions {
+                            soft_wrap: true,
+                            ..Default::default()
+                        },
+                        highlight: &mut highlight,
+                        language: Language::Markdown,
+                        id: "wrapped.md",
                     },
-                    &mut highlight,
-                    Language::Markdown,
-                    "wrapped.md",
                 );
                 visual_count = outcome.visual_rows;
             },

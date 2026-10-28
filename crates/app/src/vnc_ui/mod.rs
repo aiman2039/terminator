@@ -1,5 +1,6 @@
 mod clipboard;
 mod display;
+pub(crate) use display::VncScreenInput;
 mod frame;
 mod keyboard;
 mod profiles;
@@ -115,6 +116,15 @@ struct PendingVncConnect {
     label: Option<String>,
     save_profile: bool,
     options: terminator_core::vnc::VncOptions,
+}
+
+pub(crate) struct VncViewInput<'a> {
+    pub(crate) tab_id: &'a str,
+    pub(crate) session_id: &'a mut String,
+    pub(crate) profile_id: &'a mut Option<String>,
+    pub(crate) host: &'a mut String,
+    pub(crate) port: &'a mut u16,
+    pub(crate) label: &'a mut String,
 }
 
 impl App {
@@ -424,17 +434,15 @@ impl App {
         self.place_gui_tab(project, tab, After::Workspace(id(), Vec::new()));
     }
 
-    #[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
-    pub(crate) fn vnc_view(
-        &mut self,
-        ui: &mut egui::Ui,
-        tab_id: &str,
-        session_id: &mut String,
-        profile_id: &mut Option<String>,
-        host: &mut String,
-        port: &mut u16,
-        label: &mut String,
-    ) {
+    pub(crate) fn vnc_view(&mut self, ui: &mut egui::Ui, input: VncViewInput<'_>) {
+        let VncViewInput {
+            tab_id,
+            session_id,
+            profile_id,
+            host,
+            port,
+            label,
+        } = input;
         let daemon_session = self
             .state
             .vnc_sessions
@@ -973,13 +981,13 @@ impl App {
         }
         let outcome = {
             let view = self.vnc_views.entry(sid.clone()).or_default();
-            vnc_screen(
+            vnc_screen(VncScreenInput {
                 ui,
                 view,
-                &texture,
+                texture: &texture,
                 view_only,
-                self.preferences.vnc_paste_shortcut,
-            )
+                paste_shortcut: self.preferences.vnc_paste_shortcut,
+            })
         };
         if outcome.activated {
             self.active_session = None;

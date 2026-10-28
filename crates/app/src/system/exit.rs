@@ -1,8 +1,8 @@
 //! A checkpoint is acknowledged only after all final writes succeed.
-use super::*;
+use crate::*;
 
 #[derive(Default)]
-pub(super) enum Exit {
+pub(crate) enum Exit {
     #[default]
     Idle,
     Waiting(Instant),
@@ -16,7 +16,7 @@ impl Exit {
     }
 }
 
-pub(super) struct Checkpoint {
+pub(crate) struct Checkpoint {
     layouts: Vec<(String, Workspace)>,
     preferences: Option<UiPreferences>,
     selected: Option<String>,
@@ -112,7 +112,7 @@ impl Checkpoint {
     }
 }
 impl App {
-    pub(super) fn begin_exit(&mut self) {
+    pub(crate) fn begin_exit(&mut self) {
         if self.block_unsaved_diff(None) {
             self.pending_app_quit = false;
             crate::updater::cancel_termination();
@@ -134,7 +134,7 @@ impl App {
     /// Window close, Quit, and Sparkle's terminate all arrive here.
     /// A dirty native buffer must be resolved before the checkpoint, and that
     /// resolution has to come back to this quit.
-    pub(super) fn accept_app_quit(&mut self, ctx: &egui::Context) {
+    pub(crate) fn accept_app_quit(&mut self, ctx: &egui::Context) {
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         if self.exit.active() {
             return;
@@ -155,7 +155,7 @@ impl App {
             self.begin_exit();
         }
     }
-    pub(super) fn continue_app_quit(&mut self, ctx: &egui::Context) {
+    pub(crate) fn continue_app_quit(&mut self, ctx: &egui::Context) {
         if !self.pending_app_quit || self.exit.active() {
             return;
         }
@@ -173,7 +173,7 @@ impl App {
         self.pending_app_quit = false;
         self.begin_exit();
     }
-    pub(super) fn cancel_app_quit(&mut self) {
+    pub(crate) fn cancel_app_quit(&mut self) {
         if !self.pending_app_quit {
             return;
         }
@@ -182,12 +182,12 @@ impl App {
         self.native_close_after_save_issuer = None;
         crate::updater::cancel_termination();
     }
-    pub(super) fn native_installation_cancelled(&mut self) {
+    pub(crate) fn native_installation_cancelled(&mut self) {
         self.exit = Exit::Idle;
         self.services.pause_reads(false);
         self.services.handle().reopen_admission();
     }
-    pub(super) fn cancel_exit(&mut self, error: String) {
+    pub(crate) fn cancel_exit(&mut self, error: String) {
         self.exit = Exit::Idle;
         self.services.pause_reads(false);
         self.services.handle().reopen_admission();
@@ -196,7 +196,7 @@ impl App {
         ));
         crate::updater::cancel_termination();
     }
-    pub(super) fn exit_checkpoint(&self) -> Result<Checkpoint> {
+    pub(crate) fn exit_checkpoint(&self) -> Result<Checkpoint> {
         Ok(Checkpoint {
             layouts: self.persistable_layouts(),
             preferences: self.preferences_writable.then(|| self.preferences.clone()),
@@ -207,7 +207,7 @@ impl App {
             focused: self.active_session.clone(),
         })
     }
-    pub(super) fn advance_exit(&mut self, ctx: &egui::Context) {
+    pub(crate) fn advance_exit(&mut self, ctx: &egui::Context) {
         let started = match self.exit {
             Exit::Waiting(t) | Exit::Draining(t, _) | Exit::Saving(t, _) => t,
             _ => return,
@@ -269,7 +269,7 @@ impl App {
 /// Count ordinary queued jobs so follow-up work produced while applying a drain
 /// is itself drained before taking the final GUI snapshot.
 #[derive(Clone)]
-pub(super) struct JobQueue {
+pub(crate) struct JobQueue {
     sender: Option<Sender<Job>>,
     services: Option<gui_services::Services>,
     serial: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -873,7 +873,7 @@ mod tests {
         let path = dir.path().join("note.txt");
         app.native_docs.insert(
             path.clone(),
-            super::native_editor::NativeDoc::dirty_for_test(path.clone()),
+            crate::native_editor::NativeDoc::dirty_for_test(path.clone()),
         );
         app.accept_app_quit(&ctx);
         assert!(app.pending_app_quit);
@@ -896,7 +896,7 @@ mod tests {
         let path = dir.path().join("note.txt");
         app.native_docs.insert(
             path.clone(),
-            super::native_editor::NativeDoc::dirty_for_test(path),
+            crate::native_editor::NativeDoc::dirty_for_test(path),
         );
         app.accept_app_quit(&ctx);
         app.cancel_app_quit();

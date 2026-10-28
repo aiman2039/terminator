@@ -2,13 +2,22 @@ use super::*;
 /// One remote screen inside its pane: painting, pointer mapping, wheel,
 /// keyboard events, and the pointer/key release bookkeeping that stops a
 /// key or button from sticking when focus moves away mid-gesture.
-pub(super) fn vnc_screen(
-    ui: &mut egui::Ui,
-    view: &mut VncViewState,
-    texture: &TextureHandle,
-    view_only: bool,
-    paste_shortcut: VncPasteShortcut,
-) -> VncScreenOutcome {
+pub(crate) struct VncScreenInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) view: &'a mut VncViewState,
+    pub(crate) texture: &'a TextureHandle,
+    pub(crate) view_only: bool,
+    pub(crate) paste_shortcut: VncPasteShortcut,
+}
+
+pub(super) fn vnc_screen(input: VncScreenInput<'_>) -> VncScreenOutcome {
+    let VncScreenInput {
+        ui,
+        view,
+        texture,
+        view_only,
+        paste_shortcut,
+    } = input;
     let mut outcome = VncScreenOutcome::default();
     let full_size = texture.size_vec2();
     let monitor = view

@@ -1,4 +1,4 @@
-use super::rows::{paint_status_icon, u8_from_f32};
+use super::rows::{PaintStatusIconInput, paint_status_icon, u8_from_f32};
 use super::theme::{WIDGET_RADIUS, color, icon_color};
 use eframe::egui::{self, Color32, FontId, RichText};
 use terminator_core::appearance::AppearanceConfig;
@@ -191,16 +191,16 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
     // hook lifecycle status, or the session-kind glyph for plain shells.
     let mut lead = rect.left() + 8.0;
     let mut paint_lead = |ui: &mut egui::Ui, icon: &str, tint: Color32, spin: bool| {
-        paint_status_icon(
+        paint_status_icon(PaintStatusIconInput {
             ui,
-            egui::Rect::from_center_size(
+            rect: egui::Rect::from_center_size(
                 egui::pos2(lead + 6.5, rect.center().y),
                 egui::vec2(13.0, 13.0),
             ),
             icon,
             tint,
             spin,
-        );
+        });
         lead += TERMINAL_LEADING_SLOT;
     };
     if let Some(brand) = brand {

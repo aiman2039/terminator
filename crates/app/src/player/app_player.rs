@@ -1,5 +1,6 @@
 use super::eq::{EqPreset, format_clock};
 use super::*;
+use crate::player::{PlayStationInput, PollInput};
 use crate::preferences::RadioStation;
 use engine::Status;
 use std::collections::HashSet;
@@ -169,13 +170,13 @@ impl App {
         } else {
             appearance::icon_color()
         };
-        let response = appearance::framed_icon_button(
+        let response = appearance::framed_icon_button(appearance::FramedIconButtonInput {
             ui,
-            "AudioLines",
-            self.player_chrome_tip(),
-            active,
+            icon: "AudioLines",
+            tip: self.player_chrome_tip(),
+            selected: active,
             tint,
-        );
+        });
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "player-chrome", response.rect);
         if response.clicked() {
@@ -520,8 +521,12 @@ impl App {
             .iter()
             .position(|item| item.url == station.url)
             .unwrap_or(0);
-        self.player
-            .play_station(project, station.name, station.url, index);
+        self.player.play_station(PlayStationInput {
+            project,
+            name: station.name,
+            url: station.url,
+            index,
+        });
     }
 
     #[cfg(test)]

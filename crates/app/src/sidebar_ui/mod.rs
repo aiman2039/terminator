@@ -1,11 +1,16 @@
 //! Project, file, Git, notification, and session-info sidebar rendering.
+#[cfg(test)]
+pub(crate) use git_panel::GitPanelInput;
 mod agents;
 mod attention;
 mod explorer;
+pub(crate) use explorer::SessionRowInTabInput;
 mod explorer_projects;
 mod explorer_prompts;
 mod explorer_rows;
+pub(crate) use explorer_rows::ExplorerToggleInput;
 mod explorer_select;
+pub(crate) use explorer_select::ExplorerKeysInput;
 mod git_panel;
 mod perforce_panel;
 mod problems;
@@ -22,5 +27,5 @@ pub(crate) use explorer::ExplorerReveal;
 pub(crate) use explorer_prompts::GitConfirm;
 pub(crate) use explorer_rows::explorer_query_keeps_file;
 #[cfg(test)]
-pub(crate) use git_panel::{GitPanelInput, git_click_action, git_panel};
+pub(crate) use git_panel::{GitClickActionInput, git_click_action, git_panel};
 pub(crate) use git_panel::{GitPanelOutcome, PreparedGit};

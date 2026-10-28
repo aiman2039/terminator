@@ -1,5 +1,4 @@
 use super::*;
-use super::*;
 use flate2::read::ZlibDecoder;
 use std::io::Read;
 

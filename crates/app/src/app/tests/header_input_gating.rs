@@ -427,10 +427,12 @@ fn select_all_yields_to_focused_native_editor() {
             ui,
             &mut doc,
             &mut engine,
-            &terminator_native_edit::view::SourceOptions::default(),
-            &mut highlight,
-            terminator_native_edit::highlight::Language::Rust,
-            "file.rs#split-pane",
+            terminator_native_edit::view::ShowSourceInput {
+                options: &terminator_native_edit::view::SourceOptions::default(),
+                highlight: &mut highlight,
+                language: terminator_native_edit::highlight::Language::Rust,
+                id: "file.rs#split-pane",
+            },
         );
     });
     output.textures_delta.clear();

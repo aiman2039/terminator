@@ -5,15 +5,34 @@ use anyhow::Result;
 use terminator_core::async_service::CancellationToken;
 use terminator_core::{Request, Response};
 
+pub(crate) struct VncPickTransferInput<'a> {
+    pub(in crate::gui_services) session: String,
+    pub(in crate::gui_services) direction: terminator_core::vnc::TransferDirection,
+    pub(in crate::gui_services) remote: String,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
+pub(crate) struct VncFrameInput<'a> {
+    pub(in crate::gui_services) session: String,
+    pub(in crate::gui_services) since: u64,
+    pub(in crate::gui_services) regions: bool,
+    pub(in crate::gui_services) cancel: CancellationToken,
+    pub(in crate::gui_services) updates: &'a mut Vec<Update>,
+}
+
 impl Services {
     pub(in crate::gui_services) async fn vnc_pick_transfer(
         &self,
-        session: String,
-        direction: terminator_core::vnc::TransferDirection,
-        remote: String,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
+        input: VncPickTransferInput<'_>,
     ) -> Result<()> {
+        let VncPickTransferInput {
+            session,
+            direction,
+            remote,
+            cancel,
+            updates,
+        } = input;
         let client = self.client();
         let upload = direction == terminator_core::vnc::TransferDirection::Upload;
         let picked = self
@@ -104,14 +123,14 @@ impl Services {
         Ok(())
     }
 
-    pub(in crate::gui_services) async fn vnc_frame(
-        &self,
-        session: String,
-        since: u64,
-        regions: bool,
-        cancel: CancellationToken,
-        updates: &mut Vec<Update>,
-    ) -> Result<()> {
+    pub(in crate::gui_services) async fn vnc_frame(&self, input: VncFrameInput<'_>) -> Result<()> {
+        let VncFrameInput {
+            session,
+            since,
+            regions,
+            cancel,
+            updates,
+        } = input;
         let client = self.client();
         let result = match client
             .rpc(Request::VncFrame {

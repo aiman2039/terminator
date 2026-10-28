@@ -21,6 +21,24 @@ pub(super) fn find_matches(text: &str, pattern: &str, ignorecase: bool) -> Vec<(
     }
 }
 
+pub(super) struct JumpToMatchInput<'a> {
+    pub(super) pattern: &'a str,
+    pub(super) from: usize,
+    pub(super) forward: bool,
+}
+
+pub(super) struct ApplyOperatorInput {
+    pub(super) op: PendingOp,
+    pub(super) target: Cursor,
+    pub(super) inclusive: bool,
+}
+
+pub(super) struct DeleteBlockRangesInput {
+    pub(super) top: usize,
+    pub(super) bottom: usize,
+    pub(super) left: usize,
+    pub(super) right_excl: usize,
+}
 impl VimEngine {
     pub(super) fn delete_range<B: Buffer>(
         &mut self,
@@ -197,10 +215,13 @@ impl VimEngine {
     pub(super) fn jump_to_match<B: Buffer>(
         &mut self,
         doc: &mut B,
-        pattern: &str,
-        from: usize,
-        forward: bool,
+        input: JumpToMatchInput<'_>,
     ) -> bool {
+        let JumpToMatchInput {
+            pattern,
+            from,
+            forward,
+        } = input;
         let matches = Self::search_matches(doc, pattern, self.ignorecase());
         if matches.is_empty() {
             return false;
@@ -250,10 +271,13 @@ impl VimEngine {
     pub(super) fn apply_operator<B: Buffer>(
         &mut self,
         doc: &mut B,
-        op: PendingOp,
-        target: Cursor,
-        inclusive: bool,
+        input: ApplyOperatorInput,
     ) -> Vec<Effect> {
+        let ApplyOperatorInput {
+            op,
+            target,
+            inclusive,
+        } = input;
         let from = self.char_idx(doc, self.cursor);
         let mut to = self.char_idx(doc, target);
         if inclusive {
@@ -438,11 +462,14 @@ impl VimEngine {
     pub(super) fn delete_block_ranges<B: Buffer>(
         &mut self,
         doc: &mut B,
-        top: usize,
-        bottom: usize,
-        left: usize,
-        right_excl: usize,
+        input: DeleteBlockRangesInput,
     ) {
+        let DeleteBlockRangesInput {
+            top,
+            bottom,
+            left,
+            right_excl,
+        } = input;
         for line in top..=bottom {
             if line >= doc.line_count() {
                 break;
@@ -464,7 +491,15 @@ impl VimEngine {
         let Some((top, bottom, left, right)) = self.block_span() else {
             return self.cursor;
         };
-        self.delete_block_ranges(doc, top, bottom, left, right);
+        self.delete_block_ranges(
+            doc,
+            DeleteBlockRangesInput {
+                top,
+                bottom,
+                left,
+                right_excl: right,
+            },
+        );
         Cursor {
             line: top,
             col: left.min(line_len(doc, top)),

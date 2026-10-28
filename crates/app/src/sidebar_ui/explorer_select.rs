@@ -10,6 +10,13 @@ use eframe::egui;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+pub(crate) struct ExplorerKeysInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) rows: &'a [ExplorerRow],
+    pub(crate) host: egui::Id,
+    pub(crate) root: &'a Path,
+}
+
 /// Type-to-search resets after this much idle time, like `IntelliJ`.
 const SPEED_SEARCH_IDLE: Duration = Duration::from_millis(1500);
 
@@ -133,13 +140,13 @@ impl App {
     /// Enter opens, F2 renames, Delete trashes, Cmd/Ctrl+C/X/V copy, cut,
     /// and paste files, Escape clears, and typed text searches the
     /// visible rows.
-    pub(super) fn explorer_keys(
-        &mut self,
-        ui: &mut egui::Ui,
-        rows: &[ExplorerRow],
-        host: egui::Id,
-        root: &Path,
-    ) {
+    pub(super) fn explorer_keys(&mut self, input: ExplorerKeysInput<'_>) {
+        let ExplorerKeysInput {
+            ui,
+            rows,
+            host,
+            root,
+        } = input;
         let focus = tree_focus_id(host);
         if !ui.memory(|memory| memory.has_focus(focus)) || self.name_prompt.is_some() {
             return;

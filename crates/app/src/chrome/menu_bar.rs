@@ -38,9 +38,10 @@ pub(crate) fn status_icon(waiting: usize) -> StatusIcon {
 fn base_icon() -> &'static image::RgbaImage {
     static ICON: OnceLock<image::RgbaImage> = OnceLock::new();
     ICON.get_or_init(|| {
-        let decoded = image::load_from_memory(include_bytes!("../assets/branding/terminator.png"))
-            .map(|image| image.to_rgba8())
-            .unwrap_or_else(|_| image::RgbaImage::new(ICON_PX, ICON_PX));
+        let decoded =
+            image::load_from_memory(include_bytes!("../../assets/branding/terminator.png"))
+                .map(|image| image.to_rgba8())
+                .unwrap_or_else(|_| image::RgbaImage::new(ICON_PX, ICON_PX));
         image::imageops::resize(
             &decoded,
             ICON_PX,
@@ -67,8 +68,22 @@ fn compose(waiting: usize) -> image::RgbaImage {
     let mut canvas = image::RgbaImage::new(width, CANVAS);
     image::imageops::overlay(&mut canvas, icon, 2, 2);
     let badge_x = width.saturating_sub(badge_w);
-    fill_pill(&mut canvas, badge_x, 0, badge_w, badge_h, BADGE);
-    blit_label(&mut canvas, &label, badge_x, 0, badge_w, badge_h);
+    fill_pill(FillPillInput {
+        image: &mut canvas,
+        x: badge_x,
+        y: 0,
+        w: badge_w,
+        h: badge_h,
+        color: BADGE,
+    });
+    blit_label(BlitLabelInput {
+        image: &mut canvas,
+        label: &label,
+        x: badge_x,
+        y: 0,
+        w: badge_w,
+        h: badge_h,
+    });
     canvas
 }
 
@@ -93,7 +108,24 @@ fn badge_width(label: &str, badge_h: u32) -> u32 {
 }
 
 // Pill geometry is pixel UI coordinates.
-fn fill_pill(image: &mut image::RgbaImage, x: u32, y: u32, w: u32, h: u32, color: image::Rgba<u8>) {
+struct FillPillInput<'a> {
+    image: &'a mut image::RgbaImage,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    color: image::Rgba<u8>,
+}
+
+fn fill_pill(input: FillPillInput<'_>) {
+    let FillPillInput {
+        image,
+        x,
+        y,
+        w,
+        h,
+        color,
+    } = input;
     let radius = h as f32 / 2.0;
     let left = x as f32 + radius;
     let right = x as f32 + w as f32 - radius;
@@ -115,7 +147,24 @@ fn fill_pill(image: &mut image::RgbaImage, x: u32, y: u32, w: u32, h: u32, color
     }
 }
 
-fn blit_label(image: &mut image::RgbaImage, label: &str, x: u32, y: u32, w: u32, h: u32) {
+struct BlitLabelInput<'a> {
+    image: &'a mut image::RgbaImage,
+    label: &'a str,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+}
+
+fn blit_label(input: BlitLabelInput<'_>) {
+    let BlitLabelInput {
+        image,
+        label,
+        x,
+        y,
+        w,
+        h,
+    } = input;
     let glyphs = u32::try_from(label.chars().count()).unwrap_or(u32::MAX);
     let text_w = glyphs
         .saturating_mul(5)

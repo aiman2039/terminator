@@ -2,7 +2,15 @@
 mod appearance_tests;
 mod bars;
 mod controls;
+pub(crate) use controls::FramedIconButtonInput;
+pub(crate) use controls::PaintCenteredIconInput;
+pub(crate) use controls::StripeButtonInput;
 mod rows;
+pub(crate) use rows::FileRowInput;
+pub(crate) use rows::MarkdownHeaderInput;
+pub(crate) use rows::PaintStatusIconInput;
+pub(crate) use rows::ProjectRowInput;
+pub(crate) use rows::RowInput;
 mod theme;
 
 pub use bars::*;

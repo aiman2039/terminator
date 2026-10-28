@@ -130,7 +130,13 @@ pub fn sync_status_item(png: &[u8], width_pt: f32, height_pt: f32) {
         if bar.png == png {
             return;
         }
-        apply_image(&bar.item, mtm, png, width_pt, height_pt);
+        apply_image(ApplyImageInput {
+            item: &bar.item,
+            mtm,
+            png,
+            width_pt,
+            height_pt,
+        });
         bar.png = png.to_vec();
     });
 }
@@ -251,13 +257,22 @@ fn new_target(mtm: MainThreadMarker) -> Retained<StatusTarget> {
     unsafe { msg_send![super(StatusTarget::alloc(mtm).set_ivars(StatusIvars)), init] }
 }
 
-fn apply_image(
-    item: &NSStatusItem,
+struct ApplyImageInput<'a> {
+    item: &'a NSStatusItem,
     mtm: MainThreadMarker,
-    png: &[u8],
+    png: &'a [u8],
     width_pt: f32,
     height_pt: f32,
-) {
+}
+
+fn apply_image(input: ApplyImageInput<'_>) {
+    let ApplyImageInput {
+        item,
+        mtm,
+        png,
+        width_pt,
+        height_pt,
+    } = input;
     let Some(button) = item.button(mtm) else {
         return;
     };

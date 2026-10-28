@@ -136,7 +136,13 @@ mod tests {
             (false, Some(false), false, ReviewMode::Neovim, true, None),
         ] {
             assert_eq!(
-                git_click_action(deleted, staged, clicked, mode, advertised),
+                git_click_action(GitClickActionInput {
+                    deleted,
+                    staged,
+                    clicked,
+                    review_mode: mode,
+                    neovim_review: advertised
+                }),
                 expected,
                 "deleted={deleted} staged={staged:?} clicked={clicked} mode={mode:?} advertised={advertised}"
             );
@@ -249,15 +255,15 @@ mod tests {
                         continue;
                     }
                     rendered += 1;
-                    appearance::file_row(
+                    appearance::file_row(appearance::FileRowInput {
                         ui,
-                        "file.rs",
-                        icons::file_icon(std::path::Path::new("file.rs")),
-                        false,
-                        GIT_TREE_ROW_HEIGHT,
-                        "M",
-                        egui::Color32::WHITE,
-                    );
+                        label: "file.rs",
+                        icon: icons::file_icon(std::path::Path::new("file.rs")),
+                        selected: false,
+                        height: GIT_TREE_ROW_HEIGHT,
+                        trailing: "M",
+                        tint: egui::Color32::WHITE,
+                    });
                 }
                 assert!((ui.next_widget_position().y - start - stride * 23_315.0).abs() < 2.0);
             });

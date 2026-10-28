@@ -1,4 +1,6 @@
 use super::*;
+use crate::lsp_manager::SubmitTextInput;
+use crate::lsp_manager::responses::OnResponseInput;
 
 #[test]
 fn root_prefers_language_marker_over_git() {
@@ -112,7 +114,12 @@ fn a_missing_server_stops_per_frame_resubmits() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("main.rs");
     assert!(manager.sync_doc(&path, Language::Rust, 1));
-    manager.submit_text(&path, Language::Rust, 1, "fn main() {}");
+    manager.submit_text(SubmitTextInput {
+        path: &path,
+        language: Language::Rust,
+        revision: 1,
+        text: "fn main() {}",
+    });
     assert!(manager.unavailable.contains_key("rust"));
     // Without a server there is nothing to open: frames must not ask
     // for another text clone.
@@ -541,7 +548,12 @@ async fn live_typescript_server_diagnostics_and_symbols() {
 
     let mut manager = LspManager::new();
     assert!(manager.sync_doc(&file, Language::TypeScript, 1));
-    manager.submit_text(&file, Language::TypeScript, 1, source);
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::TypeScript,
+        revision: 1,
+        text: source,
+    });
     let start = Instant::now();
     while manager.problems_for(&file).is_empty() {
         if let Some(note) = manager.server_note(&file)
@@ -607,7 +619,12 @@ async fn live_rust_analyzer_diagnostics() {
 
     let mut manager = LspManager::new();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
-    manager.submit_text(&file, Language::Rust, 1, main);
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::Rust,
+        revision: 1,
+        text: main,
+    });
     // Handshake + analysis need seconds; poll until diagnostics land.
     let start = Instant::now();
     while manager.problems_for(&file).is_empty() {
@@ -702,12 +719,12 @@ fn empty_outline_retries_on_a_delay_instead_of_caching_forever() {
         .copied()
         .next()
         .expect("pending symbols");
-    manager.on_response(
-        &key,
-        L::RequestId::Number(id),
-        Some(serde_json::json!([])),
-        None,
-    );
+    manager.on_response(OnResponseInput {
+        key: &key,
+        id: L::RequestId::Number(id),
+        result: Some(serde_json::json!([])),
+        error: None,
+    });
     assert!(manager.symbols_for(&path).is_empty());
 
     // Immediately after an empty answer the gate holds...
@@ -748,15 +765,15 @@ fn failed_initialize_reports_the_server_message() {
     let (key, _sent) = ready_server(&mut manager, &path);
     manager.servers.get_mut(&key).expect("server").init_id = Some(7);
 
-    manager.on_response(
-        &key,
-        L::RequestId::Number(7),
-        None,
-        Some(L::ResponseError {
+    manager.on_response(OnResponseInput {
+        key: &key,
+        id: L::RequestId::Number(7),
+        result: None,
+        error: Some(L::ResponseError {
             code: -32603,
             message: "Could not find a valid TypeScript installation.".into(),
         }),
-    );
+    });
 
     let note = manager.server_note(&path).expect("note");
     assert!(note.contains("Could not find a valid TypeScript"), "{note}");
@@ -812,7 +829,12 @@ async fn live_rust_analyzer_completion() {
     std::fs::write(&file, main).expect("main");
     let mut manager = LspManager::new();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
-    manager.submit_text(&file, Language::Rust, 1, main);
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::Rust,
+        revision: 1,
+        text: main,
+    });
     let at = L::Position {
         line: 2,
         character: 8,
@@ -865,7 +887,12 @@ async fn live_rust_analyzer_signature_help() {
     std::fs::write(&file, main).expect("main");
     let mut manager = LspManager::new();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
-    manager.submit_text(&file, Language::Rust, 1, main);
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::Rust,
+        revision: 1,
+        text: main,
+    });
     let at = L::Position {
         line: 2,
         character: 11,
@@ -924,12 +951,12 @@ async fn live_rust_analyzer_format_and_code_action() {
     std::fs::write(&file, main).expect("main");
     let mut manager = LspManager::new();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
-    manager.submit_text(
-        &file,
-        Language::Rust,
-        1,
-        "fn main(){\n    let x=1;\n    let _ = x;\n}\n",
-    );
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::Rust,
+        revision: 1,
+        text: "fn main(){\n    let x=1;\n    let _ = x;\n}\n",
+    });
     let start = Instant::now();
     // Formatting the cramped text proposes edits.
     let mut formatted = None;
@@ -950,7 +977,12 @@ async fn live_rust_analyzer_format_and_code_action() {
         }
     }
     assert!(!formatted.unwrap_or_default().is_empty(), "format edits");
-    manager.submit_text(&file, Language::Rust, 2, main);
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::Rust,
+        revision: 2,
+        text: main,
+    });
     let at = L::Position {
         line: 1,
         character: 8,
@@ -1031,7 +1063,12 @@ async fn live_rust_analyzer_inlay_hints() {
     std::fs::write(&file, main).expect("main");
     let mut manager = LspManager::new();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
-    manager.submit_text(&file, Language::Rust, 1, main);
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::Rust,
+        revision: 1,
+        text: main,
+    });
     let start = Instant::now();
     let hints = loop {
         assert!(start.elapsed() < Duration::from_secs(90), "no inlay hints");
@@ -1088,7 +1125,12 @@ async fn live_rust_analyzer_call_hierarchy() {
     std::fs::write(&file, main).expect("main");
     let mut manager = LspManager::new();
     assert!(manager.sync_doc(&file, Language::Rust, 1));
-    manager.submit_text(&file, Language::Rust, 1, main);
+    manager.submit_text(SubmitTextInput {
+        path: &file,
+        language: Language::Rust,
+        revision: 1,
+        text: main,
+    });
     let on_add = L::Position {
         line: 0,
         character: 4,
@@ -1160,14 +1202,16 @@ async fn live_rust_analyzer_call_hierarchy() {
         };
         // An indexing server answers empty at first: ask until it knows.
         let items = 'ask: loop {
-            assert!(manager.request_hierarchy_children(
-                &file,
-                &item.raw,
-                L::HierarchyKind::Call,
-                direction,
-                generation,
-                0,
-            ));
+            assert!(
+                manager.request_hierarchy_children(RequestHierarchyChildrenInput {
+                    path: &file,
+                    item: &item.raw,
+                    kind: L::HierarchyKind::Call,
+                    direction,
+                    generation,
+                    node: 0
+                })
+            );
             loop {
                 assert!(start.elapsed() < Duration::from_secs(90), "no children");
                 manager.poll();

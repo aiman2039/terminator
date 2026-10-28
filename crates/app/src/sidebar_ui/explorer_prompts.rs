@@ -1,9 +1,18 @@
 use super::explorer_rows::{
     explorer_segmented, explorer_toggle, prompt_button_width, skip_clipped_row,
 };
+
+struct FinishNamePromptInput {
+    prompt: workspace_ops::NamePrompt,
+    name: String,
+    submit: bool,
+    cancel: bool,
+}
+
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
 use crate::sidebar_cache::ExplorerRow;
+use crate::sidebar_ui::ExplorerToggleInput;
 use crate::{
     App, Job, appearance, file_actions::FileAction, icons, preferences::ExplorerSearchMode, search,
     workspace_ops,
@@ -277,27 +286,27 @@ impl App {
             #[cfg(feature = "test-support")]
             diagnostics::record(ui.ctx(), "explorer-search", find.rect);
             if contents {
-                let case = explorer_toggle(
+                let case = explorer_toggle(ExplorerToggleInput {
                     ui,
-                    "Aa",
-                    "Match case",
-                    self.preferences.explorer_match_case,
-                    "explorer-match-case",
-                );
-                let word = explorer_toggle(
+                    text: "Aa",
+                    tip: "Match case",
+                    selected: self.preferences.explorer_match_case,
+                    target: "explorer-match-case",
+                });
+                let word = explorer_toggle(ExplorerToggleInput {
                     ui,
-                    "ab",
-                    "Match whole word",
-                    self.preferences.explorer_whole_word,
-                    "explorer-whole-word",
-                );
-                let regex = explorer_toggle(
+                    text: "ab",
+                    tip: "Match whole word",
+                    selected: self.preferences.explorer_whole_word,
+                    target: "explorer-whole-word",
+                });
+                let regex = explorer_toggle(ExplorerToggleInput {
                     ui,
-                    ".*",
-                    "Use regular expression",
-                    self.preferences.explorer_regex,
-                    "explorer-regex",
-                );
+                    text: ".*",
+                    tip: "Use regular expression",
+                    selected: self.preferences.explorer_regex,
+                    target: "explorer-regex",
+                });
                 if case.clicked() {
                     self.preferences.explorer_match_case = !self.preferences.explorer_match_case;
                 }
@@ -429,15 +438,15 @@ impl App {
             if skip_clipped_row(ui, 20.0) {
                 continue;
             }
-            let response = appearance::file_row(
+            let response = appearance::file_row(appearance::FileRowInput {
                 ui,
-                &hit.text,
-                icons::file_icon(&hit.path),
-                false,
-                20.0,
-                &hit.line.to_string(),
-                appearance::color(&self.theme.text),
-            )
+                label: &hit.text,
+                icon: icons::file_icon(&hit.path),
+                selected: false,
+                height: 20.0,
+                trailing: &hit.line.to_string(),
+                tint: appearance::color(&self.theme.text),
+            })
             .on_hover_text(format!("{}:{}", hit.path.display(), hit.line));
             #[cfg(feature = "test-support")]
             diagnostics::record(
@@ -556,13 +565,13 @@ impl App {
     }
 
     /// Store the edited name, then cancel or submit the prompt.
-    fn finish_name_prompt(
-        &mut self,
-        prompt: workspace_ops::NamePrompt,
-        name: String,
-        submit: bool,
-        cancel: bool,
-    ) {
+    fn finish_name_prompt(&mut self, input: FinishNamePromptInput) {
+        let FinishNamePromptInput {
+            prompt,
+            name,
+            submit,
+            cancel,
+        } = input;
         if cancel {
             self.name_prompt = None;
             return;
@@ -613,7 +622,12 @@ impl App {
         if submit || cancel {
             ui.memory_mut(|memory| memory.request_focus(tree_focus));
         }
-        self.finish_name_prompt(prompt, name, submit, cancel);
+        self.finish_name_prompt(FinishNamePromptInput {
+            prompt,
+            name,
+            submit,
+            cancel,
+        });
     }
 
     fn name_prompt_bar(&mut self, ui: &mut egui::Ui, cwd: &Path) {
@@ -669,7 +683,12 @@ impl App {
                 || (field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)));
             cancel |= cancel_button.clicked();
         });
-        self.finish_name_prompt(prompt, name, submit, cancel);
+        self.finish_name_prompt(FinishNamePromptInput {
+            prompt,
+            name,
+            submit,
+            cancel,
+        });
     }
 
     fn submit_name_prompt(&mut self) {

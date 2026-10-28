@@ -1,4 +1,7 @@
 use super::super::appearance;
+#[cfg(all(not(test), target_os = "macos"))]
+use crate::chrome::menu_bar;
+use crate::vnc_ui::VncViewInput;
 use eframe::egui::{self};
 use std::time::{Duration, Instant};
 use terminator_core::*;
@@ -410,7 +413,17 @@ impl eframe::App for App {
                         label,
                     } = &mut tab
                     {
-                        self.vnc_view(ui, id, session, profile_id, host, port, label);
+                        self.vnc_view(
+                            ui,
+                            VncViewInput {
+                                tab_id: id,
+                                session_id: session,
+                                profile_id,
+                                host,
+                                port,
+                                label,
+                            },
+                        );
                     }
                     if self.vnc_fullscreen.is_some() {
                         self.vnc_fullscreen = Some(tab);

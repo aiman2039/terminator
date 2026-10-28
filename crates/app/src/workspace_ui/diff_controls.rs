@@ -10,18 +10,26 @@ pub(super) struct Interaction {
     pub gap: Option<(usize, diff::GapPart)>,
 }
 
-pub(super) struct JumpInput<'a> {
-    pub(super) ui: &'a egui::Ui,
-    pub(super) doc: &'a diff::DiffDocument,
-    pub(super) split: bool,
-    pub(super) aligned: bool,
-    pub(super) review: &'a mut diff::review::State,
-    pub(super) scroll: &'a [egui::scroll_area::ScrollAreaOutput<()>],
-    pub(super) sync: &'a mut f32,
+pub(crate) struct JumpInput<'a> {
+    pub(crate) ui: &'a egui::Ui,
+    pub(crate) doc: &'a diff::DiffDocument,
+    pub(crate) split: bool,
+    pub(crate) aligned: bool,
+    pub(crate) review: &'a mut diff::review::State,
+    pub(crate) scroll: &'a [egui::scroll_area::ScrollAreaOutput<()>],
+    pub(crate) sync: &'a mut f32,
 }
 
 pub(super) fn jump(input: JumpInput<'_>) {
-        let JumpInput { ui, doc, split, aligned, review, scroll, sync } = input;
+    let JumpInput {
+        ui,
+        doc,
+        split,
+        aligned,
+        review,
+        scroll,
+        sync,
+    } = input;
 
     if !review.jump {
         return;
@@ -59,15 +67,20 @@ fn hunk_row(hunk: &diff::review::Hunk, split: bool, aligned: bool) -> usize {
 /// The changed line a diff row shows on one side: `(old side, line)` for
 /// removed lines (left / unified deletions) and added lines (right /
 /// unified insertions); `None` for context, gaps, and fillers.
- struct ChangedLineInput<'a> {
-     doc: &'a diff::DiffDocument,
-     split: bool,
-     side: usize,
-     row: usize,
+pub(crate) struct ChangedLineInput<'a> {
+    pub(crate) doc: &'a diff::DiffDocument,
+    pub(crate) split: bool,
+    pub(crate) side: usize,
+    pub(crate) row: usize,
 }
 
 fn changed_line(input: ChangedLineInput<'_>) -> Option<(bool, usize)> {
-        let ChangedLineInput { doc, split, side, row } = input;
+    let ChangedLineInput {
+        doc,
+        split,
+        side,
+        row,
+    } = input;
 
     let line = if split {
         let row = doc.split.get(row)?;
@@ -101,16 +114,22 @@ pub(super) fn change_color(
 }
 
 /// Fill a smooth from/to band as a triangle strip, including zero-line sides.
-pub(super) struct PaintConnectorInput<'a> {
-    pub(super) ui: &'a egui::Ui,
-    pub(super) left: egui::Rect,
-    pub(super) right: egui::Rect,
-    pub(super) clip: egui::Rect,
-    pub(super) color: Color32,
+pub(crate) struct PaintConnectorInput<'a> {
+    pub(crate) ui: &'a egui::Ui,
+    pub(crate) left: egui::Rect,
+    pub(crate) right: egui::Rect,
+    pub(crate) clip: egui::Rect,
+    pub(crate) color: Color32,
 }
 
 pub(super) fn paint_connector(input: PaintConnectorInput<'_>) {
-        let PaintConnectorInput { ui, left, right, clip, color } = input;
+    let PaintConnectorInput {
+        ui,
+        left,
+        right,
+        clip,
+        color,
+    } = input;
 
     let mut mesh = egui::Mesh::default();
     let mut top = Vec::new();
@@ -138,22 +157,34 @@ pub(super) fn paint_connector(input: PaintConnectorInput<'_>) {
     painter.add(egui::Shape::line(bottom, stroke));
 }
 
-pub(super) struct PaintInput<'a> {
-    pub(super) ui: &'a mut egui::Ui,
-    pub(super) doc: &'a diff::DiffDocument,
-    pub(super) split: bool,
-    pub(super) staged: bool,
-    pub(super) editor_pane: bool,
-    pub(super) enabled: bool,
-    pub(super) review: &'a mut diff::review::State,
-    pub(super) scroll: &'a [egui::scroll_area::ScrollAreaOutput<()>],
-    pub(super) rail: egui::Rect,
-    pub(super) unified_gutter: egui::Rect,
-    pub(super) colors: super::diff_paint::DiffColors,
+pub(crate) struct PaintInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) doc: &'a diff::DiffDocument,
+    pub(crate) split: bool,
+    pub(crate) staged: bool,
+    pub(crate) editor_pane: bool,
+    pub(crate) enabled: bool,
+    pub(crate) review: &'a mut diff::review::State,
+    pub(crate) scroll: &'a [egui::scroll_area::ScrollAreaOutput<()>],
+    pub(crate) rail: egui::Rect,
+    pub(crate) unified_gutter: egui::Rect,
+    pub(crate) colors: super::diff_paint::DiffColors,
 }
 
 pub(super) fn paint(input: PaintInput<'_>) -> Interaction {
-        let PaintInput { ui, doc, split, staged, editor_pane, enabled, review, scroll, rail, unified_gutter, colors } = input;
+    let PaintInput {
+        ui,
+        doc,
+        split,
+        staged,
+        editor_pane,
+        enabled,
+        review,
+        scroll,
+        rail,
+        unified_gutter,
+        colors,
+    } = input;
 
     let mut result = Interaction::default();
     let Some(last) = scroll.last() else {
@@ -317,7 +348,13 @@ pub(super) fn paint(input: PaintInput<'_>) -> Interaction {
                 egui::pos2(first.inner_rect.right(), first.inner_rect.top()),
                 egui::pos2(last.inner_rect.left(), last.inner_rect.bottom()),
             );
-            paint_connector(PaintConnectorInput { ui, left, right, clip: gap_clip, color });
+            paint_connector(PaintConnectorInput {
+                ui,
+                left,
+                right,
+                clip: gap_clip,
+                color,
+            });
         }
         for (side, (rect, output)) in [(left, first), (right, last)].iter().enumerate() {
             if !split && side == 0 {
@@ -358,8 +395,12 @@ pub(super) fn paint(input: PaintInput<'_>) -> Interaction {
                         / row_h)
                         .floor()
                         .max(0.0) as usize;
-                    if let Some((old, line)) = changed_line(ChangedLineInput { doc, split, side, row })
-                        && (if old { &hunk.old } else { &hunk.new }).contains(&line)
+                    if let Some((old, line)) = changed_line(ChangedLineInput {
+                        doc,
+                        split,
+                        side,
+                        row,
+                    }) && (if old { &hunk.old } else { &hunk.new }).contains(&line)
                     {
                         review.toggle_line(index, old, line);
                     }
@@ -370,7 +411,12 @@ pub(super) fn paint(input: PaintInput<'_>) -> Interaction {
                 && *picked_hunk == index
             {
                 for row in hunk.rows(split) {
-                    let Some((old, line)) = changed_line(ChangedLineInput { doc, split, side, row }) else {
+                    let Some((old, line)) = changed_line(ChangedLineInput {
+                        doc,
+                        split,
+                        side,
+                        row,
+                    }) else {
                         continue;
                     };
                     if (if old { &lines.old } else { &lines.new }).contains(&line) {
@@ -490,11 +536,22 @@ mod tests {
             ("", "new\n", Color32::GREEN),
             ("old\n", "", Color32::RED),
         ] {
-            let doc =
-                diff::build_with_context(std::path::Path::new("file.txt"), old, new, false, 3);
+            let doc = diff::build_with_context(diff::BuildWithContextInput {
+                path: std::path::Path::new("file.txt"),
+                left: old,
+                right: new,
+                staged: false,
+                context: 3,
+            });
             let hunk = doc.hunks.first().unwrap();
             assert_eq!(change_color(hunk, colors), expected);
-            let row = super::super::diff_paint::row_colors(super::super::diff_paint::RowColorsInput { doc: &doc, row: hunk.row(true), split: true, colors });
+            let row =
+                super::super::diff_paint::row_colors(super::super::diff_paint::RowColorsInput {
+                    doc: &doc,
+                    row: hunk.row(true),
+                    split: true,
+                    colors,
+                });
             if hunk.replacement() {
                 assert_eq!(row.added, Color32::BLUE);
                 assert_eq!(row.deleted, Color32::BLUE);
@@ -512,13 +569,13 @@ mod tests {
         let changed = original
             .replace("line 20\n", "first change\n")
             .replace("line 1100\n", "last change\n");
-        let doc = diff::build_with_context(
-            std::path::Path::new("file.txt"),
-            &original,
-            &changed,
-            false,
-            2000,
-        );
+        let doc = diff::build_with_context(diff::BuildWithContextInput {
+            path: std::path::Path::new("file.txt"),
+            left: &original,
+            right: &changed,
+            staged: false,
+            context: 2000,
+        });
         for split in [false, true] {
             let ctx = egui::Context::default();
             let mut review = diff::review::State::default();
@@ -542,7 +599,17 @@ mod tests {
                             accent: Color32::BLUE,
                             text: Color32::WHITE,
                         };
-                        let scroll = super::super::diff_paint::paint_diff_document(super::super::diff_paint::PaintDiffDocumentInput { ui, doc: &doc, split, colors, scroll_key: "jump-regression", ratio: &mut ratio, sync: &mut sync });
+                        let scroll = super::super::diff_paint::paint_diff_document(
+                            super::super::diff_paint::PaintDiffDocumentInput {
+                                ui,
+                                doc: &doc,
+                                split,
+                                colors,
+                                scroll_key: "jump-regression",
+                                ratio: &mut ratio,
+                                sync: &mut sync,
+                            },
+                        );
                         for output in &scroll {
                             let top = output.inner_rect.top()
                                 + doc.hunks.get(1).unwrap().row(split) as f32 * diff_row_height(ui)
@@ -553,7 +620,15 @@ mod tests {
                                 !visible || top + diff_row_height(ui) <= output.inner_rect.bottom()
                             );
                         }
-                        jump(JumpInput { ui, doc: &doc, split, aligned: false, review: &mut review, scroll: &scroll, sync: &mut sync });
+                        jump(JumpInput {
+                            ui,
+                            doc: &doc,
+                            split,
+                            aligned: false,
+                            review: &mut review,
+                            scroll: &scroll,
+                            sync: &mut sync,
+                        });
                     },
                 );
                 output.textures_delta.clear();

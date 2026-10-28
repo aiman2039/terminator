@@ -177,7 +177,15 @@ impl LspManager {
         if services
             .handle()
             .submit(context, actor_cancel.clone(), async move {
-                run_server_actor(actor_key, binary, root, incoming, pump, actor_cancel).await?;
+                run_server_actor(RunServerActorInput {
+                    key: actor_key,
+                    binary,
+                    root,
+                    incoming,
+                    pump,
+                    cancel: actor_cancel,
+                })
+                .await?;
                 Ok(Vec::new())
             })
             .is_err()
@@ -272,14 +280,24 @@ impl LspManager {
 /// child forwards framed bodies and reports [`PumpEvent::Down`] when it
 /// exits. Cancellation (deliberate shutdown) kills the child, reaps it,
 /// and stays silent, so prunes never count as crashes.
-async fn run_server_actor(
-    key: ServerKey,
-    binary: PathBuf,
-    root: PathBuf,
-    mut incoming: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
-    pump: tokio::sync::mpsc::UnboundedSender<PumpEvent>,
-    cancel: CancellationToken,
-) -> anyhow::Result<()> {
+pub(crate) struct RunServerActorInput {
+    pub(crate) key: ServerKey,
+    pub(crate) binary: PathBuf,
+    pub(crate) root: PathBuf,
+    pub(crate) incoming: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    pub(crate) pump: tokio::sync::mpsc::UnboundedSender<PumpEvent>,
+    pub(crate) cancel: CancellationToken,
+}
+
+async fn run_server_actor(input: RunServerActorInput) -> anyhow::Result<()> {
+    let RunServerActorInput {
+        key,
+        binary,
+        root,
+        mut incoming,
+        pump,
+        cancel,
+    } = input;
     let mut child = match tokio::process::Command::new(&binary)
         .args(L::server_args(language_of(key.language)))
         .current_dir(&root)

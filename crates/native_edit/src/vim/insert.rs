@@ -1,7 +1,9 @@
 use super::super::doc::Buffer;
+use super::cursor::GotoInput;
 use super::helpers::range_text;
 use super::mode::{Bit, Cursor, Effect, Key, ModalEngine, Mode, Repeat};
 use super::operators::find_matches;
+use super::operators::{DeleteBlockRangesInput, JumpToMatchInput};
 use super::state::VimEngine;
 use super::words::line_len;
 impl VimEngine {
@@ -92,10 +94,24 @@ impl VimEngine {
             Key::Right => self.move_l(doc, 1),
             Key::Up => self.move_k(doc, 1),
             Key::Down => self.move_j(doc, 1),
-            Key::Home => self.goto(doc, self.cursor.line, 0, true),
+            Key::Home => self.goto(
+                doc,
+                GotoInput {
+                    line: self.cursor.line,
+                    col: 0,
+                    preferred: true,
+                },
+            ),
             Key::End => {
                 let len = line_len(doc, self.cursor.line);
-                self.goto(doc, self.cursor.line, len, true);
+                self.goto(
+                    doc,
+                    GotoInput {
+                        line: self.cursor.line,
+                        col: len,
+                        preferred: true,
+                    },
+                );
             }
             Key::Tab => {
                 let _ = self.type_text(doc, "\t");
@@ -172,21 +188,49 @@ impl VimEngine {
                     'b'
                 };
                 let (target, _) = self.motion_target(doc, kind, count);
-                self.goto(doc, target.line, target.col, true);
+                self.goto(
+                    doc,
+                    GotoInput {
+                        line: target.line,
+                        col: target.col,
+                        preferred: true,
+                    },
+                );
                 self.count.clear();
             }
             Key::Char('e' | 'E') => {
                 let (target, _) = self.motion_target(doc, 'e', count);
-                self.goto(doc, target.line, target.col, true);
+                self.goto(
+                    doc,
+                    GotoInput {
+                        line: target.line,
+                        col: target.col,
+                        preferred: true,
+                    },
+                );
                 self.count.clear();
             }
             Key::Char('0') => {
-                self.goto(doc, self.cursor.line, 0, true);
+                self.goto(
+                    doc,
+                    GotoInput {
+                        line: self.cursor.line,
+                        col: 0,
+                        preferred: true,
+                    },
+                );
                 self.count.clear();
             }
             Key::Char('$') => {
                 let len = line_len(doc, self.cursor.line);
-                self.goto(doc, self.cursor.line, len.saturating_sub(1), true);
+                self.goto(
+                    doc,
+                    GotoInput {
+                        line: self.cursor.line,
+                        col: len.saturating_sub(1),
+                        preferred: true,
+                    },
+                );
                 self.count.clear();
             }
             Key::Char('y') => {
@@ -236,7 +280,15 @@ impl VimEngine {
                     self.begin_change_group(doc);
                     let span = self.block_span();
                     if let Some((top, bottom, left, right)) = span {
-                        self.delete_block_ranges(doc, top, bottom, left, right);
+                        self.delete_block_ranges(
+                            doc,
+                            DeleteBlockRangesInput {
+                                top,
+                                bottom,
+                                left,
+                                right_excl: right,
+                            },
+                        );
                     }
                     self.rec_bit(Bit::Key(Key::Char('c')));
                     self.start_block_insert(doc, false);
@@ -377,7 +429,14 @@ impl VimEngine {
                     let from = self.char_idx(doc, self.cursor);
                     self.command.clear();
                     self.enter_normal(doc);
-                    if !self.jump_to_match(doc, &pattern, from, true) {
+                    if !self.jump_to_match(
+                        doc,
+                        JumpToMatchInput {
+                            pattern: &pattern,
+                            from,
+                            forward: true,
+                        },
+                    ) {
                         return vec![Effect::Bell];
                     }
                     return Vec::new();

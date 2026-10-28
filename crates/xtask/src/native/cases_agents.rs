@@ -164,17 +164,28 @@ pub(crate) fn scrolling_bounded(opts: &Options) -> Result<()> {
 /// input byte it receives. `start_before_attach` covers the reattach
 /// snapshot path; otherwise the agent starts while the GUI is attached
 /// (live-bytes path). Pass the SGR (or legacy) report markers to expect.
-#[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
-pub(crate) fn agent_wheel_case(
-    opts: &Options,
-    name: &str,
-    init: &str,
-    up_marker: &str,
-    down_marker: &str,
-    start_before_attach: bool,
-    wheel_at_ms: u64,
-    after_ms: u64,
-) -> Result<()> {
+pub(crate) struct AgentWheelCaseInput<'a> {
+    pub(crate) opts: &'a Options,
+    pub(crate) name: &'a str,
+    pub(crate) init: &'a str,
+    pub(crate) up_marker: &'a str,
+    pub(crate) down_marker: &'a str,
+    pub(crate) start_before_attach: bool,
+    pub(crate) wheel_at_ms: u64,
+    pub(crate) after_ms: u64,
+}
+
+pub(crate) fn agent_wheel_case(input: AgentWheelCaseInput<'_>) -> Result<()> {
+    let AgentWheelCaseInput {
+        opts,
+        name,
+        init,
+        up_marker,
+        down_marker,
+        start_before_attach,
+        wheel_at_ms,
+        after_ms,
+    } = input;
     let h = Harness::new()?;
     h.setup()?;
     let project = h.project(&format!("{name}-sample"))?;
@@ -246,44 +257,44 @@ pub(crate) fn agent_wheel_case(
 /// modes as real agent TUIs (alt-screen plus SGR mouse) before the GUI
 /// attaches, so this also covers the reattach snapshot path.
 pub(crate) fn agent_wheel(opts: &Options) -> Result<()> {
-    agent_wheel_case(
+    agent_wheel_case(AgentWheelCaseInput {
         opts,
-        "agent-wheel",
-        "\\033[?1049h\\033[?1000h\\033[?1006h",
-        "[<64;",
-        "[<65;",
-        true,
-        1500,
-        4500,
-    )
+        name: "agent-wheel",
+        init: "\\033[?1049h\\033[?1000h\\033[?1006h",
+        up_marker: "[<64;",
+        down_marker: "[<65;",
+        start_before_attach: true,
+        wheel_at_ms: 1500,
+        after_ms: 4500,
+    })
 }
 
 /// A legacy (non-SGR) mouse agent must receive `ESC [ M` reports with the
 /// single-byte coordinates instead of local scrollback or arrow keys.
 pub(crate) fn agent_wheel_legacy(opts: &Options) -> Result<()> {
-    agent_wheel_case(
+    agent_wheel_case(AgentWheelCaseInput {
         opts,
-        "agent-wheel-legacy",
-        "\\033[?1049h\\033[?1000h",
-        "\u{1b}[M`",
-        "\u{1b}[Ma",
-        true,
-        1500,
-        4500,
-    )
+        name: "agent-wheel-legacy",
+        init: "\\033[?1049h\\033[?1000h",
+        up_marker: "\u{1b}[M`",
+        down_marker: "\u{1b}[Ma",
+        start_before_attach: true,
+        wheel_at_ms: 1500,
+        after_ms: 4500,
+    })
 }
 
 /// An agent that starts while the GUI is already attached exercises the
 /// live-bytes path instead of the reattach snapshot.
 pub(crate) fn agent_wheel_live(opts: &Options) -> Result<()> {
-    agent_wheel_case(
+    agent_wheel_case(AgentWheelCaseInput {
         opts,
-        "agent-wheel-live",
-        "\\033[?1049h\\033[?1000h\\033[?1006h",
-        "[<64;",
-        "[<65;",
-        false,
-        3000,
-        6500,
-    )
+        name: "agent-wheel-live",
+        init: "\\033[?1049h\\033[?1000h\\033[?1006h",
+        up_marker: "[<64;",
+        down_marker: "[<65;",
+        start_before_attach: false,
+        wheel_at_ms: 3000,
+        after_ms: 6500,
+    })
 }

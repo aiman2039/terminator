@@ -41,16 +41,33 @@ pub fn merge_stats(
     staged: &[u8],
     changes: &[Change],
 ) -> std::collections::HashMap<PathBuf, (u32, u32)> {
-    merge_stats_cancel(root, working, staged, changes, None)
+    merge_stats_cancel(MergeStatsCancelInput {
+        root,
+        working,
+        staged,
+        changes,
+        cancel: None,
+    })
+}
+
+struct MergeStatsCancelInput<'a> {
+    root: &'a Path,
+    working: &'a [u8],
+    staged: &'a [u8],
+    changes: &'a [Change],
+    cancel: Option<&'a terminator_core::async_service::CancellationToken>,
 }
 
 fn merge_stats_cancel(
-    root: &Path,
-    working: &[u8],
-    staged: &[u8],
-    changes: &[Change],
-    cancel: Option<&terminator_core::async_service::CancellationToken>,
+    input: MergeStatsCancelInput<'_>,
 ) -> std::collections::HashMap<PathBuf, (u32, u32)> {
+    let MergeStatsCancelInput {
+        root,
+        working,
+        staged,
+        changes,
+        cancel,
+    } = input;
     let mut stats = terminator_git::parse_numstat(root, staged);
     for (path, (added, deleted)) in terminator_git::parse_numstat(root, working) {
         let entry = stats.entry(path).or_insert((0, 0));
@@ -125,9 +142,10 @@ pub fn directory_result(
 ) -> std::result::Result<Vec<Entry>, DirectoryError> {
     terminator_git::entries_known(path, in_git).map_err(|error| DirectoryError {
         path: path.into(),
-        kind: error
-            .downcast_ref::<std::io::Error>()
-            .map_or(std::io::ErrorKind::Other, std::io::Error::kind),
+        kind: match &error {
+            terminator_git::Error::Io(inner) => inner.kind(),
+            _ => std::io::ErrorKind::Other,
+        },
         message: error.to_string(),
     })
 }
@@ -369,7 +387,16 @@ pub async fn context_async(
         ..Default::default()
     };
     let git = |root: PathBuf, args: Vec<std::ffi::OsString>| async move {
-        terminator_git::run(service.processes(), service.fs(), &root, args, options()).await
+        terminator_git::run(
+            service.processes(),
+            service.fs(),
+            terminator_git::RunInput {
+                cwd: &root,
+                args,
+                options: options(),
+            },
+        )
+        .await
     };
     let root = if let Ok(bytes) = git(
         cwd.clone(),
@@ -448,13 +475,13 @@ pub async fn context_async(
         result.stats = service
             .fs()
             .run(cancel, move || {
-                Ok(merge_stats_cancel(
-                    &root,
-                    &working,
-                    &staged,
-                    &changes,
-                    Some(&operation),
-                ))
+                Ok(merge_stats_cancel(MergeStatsCancelInput {
+                    root: &root,
+                    working: &working,
+                    staged: &staged,
+                    changes: &changes,
+                    cancel: Some(&operation),
+                }))
             })
             .await
             .unwrap_or_default();
@@ -504,16 +531,18 @@ pub async fn directories_with_ignored_async(
         let output = terminator_git::run(
             service.processes(),
             service.fs(),
-            cwd,
-            terminator_git::ignore::CHECK_IGNORE_ARGV
-                .iter()
-                .map(std::ffi::OsString::from)
-                .collect(),
-            CommandOptions {
-                input: Some(terminator_git::ignore::stdin_batch(&all)),
-                stdout_limit: 4 * 1024 * 1024,
-                accepted_exit_codes: Some(vec![0, 1]),
-                ..Default::default()
+            terminator_git::RunInput {
+                cwd,
+                args: terminator_git::ignore::CHECK_IGNORE_ARGV
+                    .iter()
+                    .map(std::ffi::OsString::from)
+                    .collect(),
+                options: CommandOptions {
+                    input: Some(terminator_git::ignore::stdin_batch(&all)),
+                    stdout_limit: 4 * 1024 * 1024,
+                    accepted_exit_codes: Some(vec![0, 1]),
+                    ..Default::default()
+                },
             },
         )
         .await;
@@ -556,16 +585,18 @@ pub async fn directory_with_ignored_async(
             let output = terminator_git::run(
                 service.processes(),
                 service.fs(),
-                &path,
-                terminator_git::ignore::CHECK_IGNORE_ARGV
-                    .iter()
-                    .map(std::ffi::OsString::from)
-                    .collect(),
-                CommandOptions {
-                    input: Some(terminator_git::ignore::stdin_batch(&entries)),
-                    stdout_limit: 4 * 1024 * 1024,
-                    accepted_exit_codes: Some(vec![0, 1]),
-                    ..Default::default()
+                terminator_git::RunInput {
+                    cwd: &path,
+                    args: terminator_git::ignore::CHECK_IGNORE_ARGV
+                        .iter()
+                        .map(std::ffi::OsString::from)
+                        .collect(),
+                    options: CommandOptions {
+                        input: Some(terminator_git::ignore::stdin_batch(&entries)),
+                        stdout_limit: 4 * 1024 * 1024,
+                        accepted_exit_codes: Some(vec![0, 1]),
+                        ..Default::default()
+                    },
                 },
             )
             .await?;

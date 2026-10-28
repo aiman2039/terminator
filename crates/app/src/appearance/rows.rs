@@ -3,13 +3,13 @@ use eframe::egui::{self, Color32, FontId, TextStyle};
 use std::time::Duration;
 
 pub fn target_header(ui: &mut egui::Ui, label: &str, tooltip: &str) {
-    wrapping_path_tooltip(
+    wrapping_path_tooltip(WrappingPathTooltipInput {
+        color: ui.visuals().weak_text_color(),
         ui,
-        label,
+        path: label,
         tooltip,
-        FontId::proportional(11.0),
-        ui.visuals().weak_text_color(),
-    );
+        font: FontId::proportional(11.0),
+    });
     ui.separator();
 }
 
@@ -20,16 +20,31 @@ pub fn wrapping_path(
     font: FontId,
     color: Color32,
 ) -> egui::Response {
-    wrapping_path_tooltip(ui, path, path, font, color)
+    wrapping_path_tooltip(WrappingPathTooltipInput {
+        ui,
+        path,
+        tooltip: path,
+        font,
+        color,
+    })
 }
 
-pub(super) fn wrapping_path_tooltip(
-    ui: &mut egui::Ui,
-    path: &str,
-    tooltip: &str,
-    font: FontId,
-    color: Color32,
-) -> egui::Response {
+pub(crate) struct WrappingPathTooltipInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) path: &'a str,
+    pub(crate) tooltip: &'a str,
+    pub(crate) font: FontId,
+    pub(crate) color: Color32,
+}
+
+pub(super) fn wrapping_path_tooltip(input: WrappingPathTooltipInput<'_>) -> egui::Response {
+    let WrappingPathTooltipInput {
+        ui,
+        path,
+        tooltip,
+        font,
+        color,
+    } = input;
     let natural = ui
         .painter()
         .layout_no_wrap(path.to_owned(), font.clone(), color)
@@ -86,35 +101,73 @@ pub fn wrapping_path_row<R>(
     }
 }
 /// Git tint applies to the filename and badge; the icon stays bright.
-pub fn file_row(
-    ui: &mut egui::Ui,
-    label: &str,
-    icon: &str,
-    selected: bool,
-    height: f32,
-    trailing: &str,
-    tint: Color32,
-) -> egui::Response {
+pub(crate) struct FileRowInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub label: &'a str,
+    pub icon: &'a str,
+    pub selected: bool,
+    pub height: f32,
+    pub trailing: &'a str,
+    pub tint: Color32,
+}
+
+pub fn file_row(input: FileRowInput<'_>) -> egui::Response {
+    let FileRowInput {
+        ui,
+        label,
+        icon,
+        selected,
+        height,
+        trailing,
+        tint,
+    } = input;
     ui.scope(|ui| {
         ui.visuals_mut().override_text_color = Some(tint);
-        row(ui, label, icon, selected, height, trailing, tint)
+        row(RowInput {
+            ui,
+            label,
+            icon,
+            selected,
+            height,
+            trailing,
+            tint,
+        })
     })
     .inner
 }
-pub fn project_row(
-    ui: &mut egui::Ui,
-    label: &str,
-    icon: &str,
-    selected: bool,
-    height: f32,
-    trailing: &str,
-    tint: Color32,
-) -> egui::Response {
+pub(crate) struct ProjectRowInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub label: &'a str,
+    pub icon: &'a str,
+    pub selected: bool,
+    pub height: f32,
+    pub trailing: &'a str,
+    pub tint: Color32,
+}
+
+pub fn project_row(input: ProjectRowInput<'_>) -> egui::Response {
+    let ProjectRowInput {
+        ui,
+        label,
+        icon,
+        selected,
+        height,
+        trailing,
+        tint,
+    } = input;
     ui.scope(|ui| {
         ui.style_mut()
             .text_styles
             .insert(TextStyle::Body, FontId::proportional(14.0));
-        row(ui, label, icon, selected, height, trailing, tint)
+        row(RowInput {
+            ui,
+            label,
+            icon,
+            selected,
+            height,
+            trailing,
+            tint,
+        })
     })
     .inner
 }
@@ -259,7 +312,22 @@ pub(super) fn u8_from_f32(value: f32) -> u8 {
 }
 
 /// Paint an icon, optionally rotating it to signal ongoing work.
-pub fn paint_status_icon(ui: &egui::Ui, rect: egui::Rect, icon: &str, tint: Color32, spin: bool) {
+pub(crate) struct PaintStatusIconInput<'a> {
+    pub ui: &'a egui::Ui,
+    pub rect: egui::Rect,
+    pub icon: &'a str,
+    pub tint: Color32,
+    pub spin: bool,
+}
+
+pub fn paint_status_icon(input: PaintStatusIconInput<'_>) {
+    let PaintStatusIconInput {
+        ui,
+        rect,
+        icon,
+        tint,
+        spin,
+    } = input;
     if spin && !ui.is_rect_visible(rect) {
         return;
     }
@@ -302,15 +370,26 @@ struct RowSpec<'a> {
 }
 
 /// Consistent full-width native sidebar row with fixed icon and status columns.
-pub fn row(
-    ui: &mut egui::Ui,
-    label: &str,
-    icon: &str,
-    selected: bool,
-    height: f32,
-    trailing: &str,
-    tint: Color32,
-) -> egui::Response {
+pub(crate) struct RowInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub label: &'a str,
+    pub icon: &'a str,
+    pub selected: bool,
+    pub height: f32,
+    pub trailing: &'a str,
+    pub tint: Color32,
+}
+
+pub fn row(input: RowInput<'_>) -> egui::Response {
+    let RowInput {
+        ui,
+        label,
+        icon,
+        selected,
+        height,
+        trailing,
+        tint,
+    } = input;
     row_ext(
         ui,
         RowSpec {
@@ -414,16 +493,16 @@ fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
     let top = response.rect.center().y - block * 0.5;
     let label_center = top + galley.size().y * 0.5;
     if let Some(brand) = brand {
-        paint_status_icon(
+        paint_status_icon(PaintStatusIconInput {
             ui,
-            egui::Rect::from_center_size(
+            rect: egui::Rect::from_center_size(
                 egui::pos2(response.rect.left() + 9.0, label_center),
                 egui::vec2(14.0, 14.0),
             ),
-            brand,
-            icon_color(),
-            false,
-        );
+            icon: brand,
+            tint: icon_color(),
+            spin: false,
+        });
     }
     let size = if brand.is_some() { 14.0 } else { 16.0 };
     let icon_rect = egui::Rect::from_center_size(
@@ -433,7 +512,13 @@ fn row_ext(ui: &mut egui::Ui, spec: RowSpec<'_>) -> egui::Response {
         ),
         egui::vec2(size, size),
     );
-    paint_status_icon(ui, icon_rect, icon, icon_tint.unwrap_or(icon_color()), spin);
+    paint_status_icon(PaintStatusIconInput {
+        ui,
+        rect: icon_rect,
+        icon,
+        tint: icon_tint.unwrap_or(icon_color()),
+        spin,
+    });
     let painter = ui.painter().with_clip_rect(rect);
     let sub_top = top + galley.size().y + GAP;
     painter.galley(
@@ -480,13 +565,22 @@ pub struct MarkdownHeader {
 }
 
 /// One flat row: file title, view tabs, refresh, and the existing pane close.
-pub fn markdown_header(
-    ui: &mut egui::Ui,
-    title: &str,
-    active: bool,
-    editing: bool,
-    mode: crate::markdown::Mode,
-) -> MarkdownHeader {
+pub(crate) struct MarkdownHeaderInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub title: &'a str,
+    pub active: bool,
+    pub editing: bool,
+    pub mode: crate::markdown::Mode,
+}
+
+pub fn markdown_header(input: MarkdownHeaderInput<'_>) -> MarkdownHeader {
+    let MarkdownHeaderInput {
+        ui,
+        title,
+        active,
+        editing,
+        mode,
+    } = input;
     use crate::markdown::Mode;
     let (rect, row) =
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 32.0), egui::Sense::hover());
@@ -510,17 +604,17 @@ pub fn markdown_header(
         .on_hover_text(title)
         .on_hover_cursor(egui::CursorIcon::Grab);
     if !editing {
-        header_text(
+        header_text(HeaderTextInput {
             ui,
-            title_rect.shrink2(egui::vec2(8.0, 0.0)),
-            title,
-            FontId::proportional(12.0),
-            if active {
+            rect: title_rect.shrink2(egui::vec2(8.0, 0.0)),
+            text: title,
+            font: FontId::proportional(12.0),
+            tint: if active {
                 ui.visuals().selection.stroke.color
             } else {
                 ui.visuals().weak_text_color()
             },
-        );
+        });
     }
     title_response
         .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), title));
@@ -559,17 +653,17 @@ pub fn markdown_header(
                 egui::Stroke::new(2.0, ui.visuals().weak_text_color()),
             );
         }
-        header_text(
+        header_text(HeaderTextInput {
             ui,
-            tab_rect.shrink2(egui::vec2(8.0 * scale, 0.0)),
-            option.label(),
-            FontId::proportional(13.0),
-            if selected {
+            rect: tab_rect.shrink2(egui::vec2(8.0 * scale, 0.0)),
+            text: option.label(),
+            font: FontId::proportional(13.0),
+            tint: if selected {
                 ui.visuals().text_color()
             } else {
                 ui.visuals().weak_text_color()
             },
-        );
+        });
         response.widget_info(|| {
             egui::WidgetInfo::selected(
                 egui::Role::Button,
@@ -591,18 +685,39 @@ pub fn markdown_header(
     MarkdownHeader {
         title: title_response,
         modes,
-        refresh: header_icon(
+        refresh: header_icon(HeaderIconInput {
             ui,
-            refresh_rect,
-            row.id.with("refresh"),
-            "RefreshCw",
-            "Refresh preview",
-        ),
-        close: header_icon(ui, close_rect, row.id.with("close-pane"), "X", "Close pane"),
+            rect: refresh_rect,
+            id: row.id.with("refresh"),
+            icon: "RefreshCw",
+            label: "Refresh preview",
+        }),
+        close: header_icon(HeaderIconInput {
+            ui,
+            rect: close_rect,
+            id: row.id.with("close-pane"),
+            icon: "X",
+            label: "Close pane",
+        }),
     }
 }
 
-fn header_text(ui: &egui::Ui, rect: egui::Rect, text: &str, font: FontId, tint: Color32) {
+struct HeaderTextInput<'a> {
+    ui: &'a egui::Ui,
+    rect: egui::Rect,
+    text: &'a str,
+    font: FontId,
+    tint: Color32,
+}
+
+fn header_text(input: HeaderTextInput<'_>) {
+    let HeaderTextInput {
+        ui,
+        rect,
+        text,
+        font,
+        tint,
+    } = input;
     if rect.width() <= 0.0 {
         return;
     }
@@ -616,13 +731,22 @@ fn header_text(ui: &egui::Ui, rect: egui::Rect, text: &str, font: FontId, tint: 
         .galley(position, galley, tint);
 }
 
-fn header_icon(
-    ui: &egui::Ui,
-    rect: egui::Rect,
-    id: egui::Id,
-    icon: &str,
-    label: &str,
-) -> egui::Response {
+pub(crate) struct HeaderIconInput<'a> {
+    pub(crate) ui: &'a egui::Ui,
+    pub(crate) rect: egui::Rect,
+    pub(crate) id: egui::Id,
+    pub(crate) icon: &'a str,
+    pub(crate) label: &'a str,
+}
+
+fn header_icon(input: HeaderIconInput<'_>) -> egui::Response {
+    let HeaderIconInput {
+        ui,
+        rect,
+        id,
+        icon,
+        label,
+    } = input;
     let response = ui
         .interact(rect, id, egui::Sense::click())
         .on_hover_text(label)

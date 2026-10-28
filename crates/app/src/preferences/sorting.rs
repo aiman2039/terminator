@@ -3,6 +3,16 @@ use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
 };
+
+#[cfg(test)]
+struct HistoryGroupsInput<'a> {
+    projects: Vec<Project>,
+    sessions: &'a [Session],
+    agents: &'a [Agent],
+    sort: HistorySort,
+    filter: &'a str,
+}
+
 use terminator_core::{Agent, Notification, Project, Session, TerminalNotice};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -492,13 +502,14 @@ mod tests {
         }
     }
 
-    fn history_groups(
-        projects: Vec<Project>,
-        sessions: &[Session],
-        agents: &[Agent],
-        sort: HistorySort,
-        filter: &str,
-    ) -> Vec<(String, Vec<String>)> {
+    fn history_groups(input: HistoryGroupsInput<'_>) -> Vec<(String, Vec<String>)> {
+        let HistoryGroupsInput {
+            projects,
+            sessions,
+            agents,
+            sort,
+            filter,
+        } = input;
         sort_history(HistoryInput {
             projects,
             sessions,
@@ -527,13 +538,13 @@ mod tests {
             history_session("b-only", "b", "Terminal 2", 11),
         ];
         let agents = vec![history_agent("a-old", 30), history_agent("b-only", 20)];
-        let groups = history_groups(
+        let groups = history_groups(HistoryGroupsInput {
             projects,
-            &sessions,
-            &agents,
-            HistorySort::LatestActivity,
-            "",
-        );
+            sessions: &sessions,
+            agents: &agents,
+            sort: HistorySort::LatestActivity,
+            filter: "",
+        });
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].0, "a");
         assert_eq!(groups[0].1, vec!["a-old".to_string(), "a-new".to_string()]);
@@ -547,11 +558,23 @@ mod tests {
             history_session("s2", "a", "Terminal 4", 2),
             history_session("s1", "a", "Terminal 1", 1),
         ];
-        let groups = history_groups(projects.clone(), &sessions, &[], HistorySort::NameAsc, "");
+        let groups = history_groups(HistoryGroupsInput {
+            projects: projects.clone(),
+            sessions: &sessions,
+            agents: &[],
+            sort: HistorySort::NameAsc,
+            filter: "",
+        });
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].0, "a");
         assert_eq!(groups[0].1, vec!["s1".to_string(), "s2".to_string()]);
-        let groups = history_groups(projects, &sessions, &[], HistorySort::NameDesc, "");
+        let groups = history_groups(HistoryGroupsInput {
+            projects,
+            sessions: &sessions,
+            agents: &[],
+            sort: HistorySort::NameDesc,
+            filter: "",
+        });
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].0, "a");
         assert_eq!(groups[0].1, vec!["s2".to_string(), "s1".to_string()]);
@@ -560,7 +583,13 @@ mod tests {
             history_session("sa", "a", "Terminal 1", 1),
             history_session("sb", "b", "Terminal 2", 1),
         ];
-        let groups = history_groups(projects, &sessions, &[], HistorySort::NameDesc, "");
+        let groups = history_groups(HistoryGroupsInput {
+            projects,
+            sessions: &sessions,
+            agents: &[],
+            sort: HistorySort::NameDesc,
+            filter: "",
+        });
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].0, "b");
         assert_eq!(groups[1].0, "a");
@@ -574,23 +603,23 @@ mod tests {
             history_session("s2", "a", "Terminal 4", 2),
             history_session("s3", "b", "Terminal 2", 3),
         ];
-        let groups = history_groups(
-            projects.clone(),
-            &sessions,
-            &[],
-            HistorySort::LatestActivity,
-            "terminal 4",
-        );
+        let groups = history_groups(HistoryGroupsInput {
+            projects: projects.clone(),
+            sessions: &sessions,
+            agents: &[],
+            sort: HistorySort::LatestActivity,
+            filter: "terminal 4",
+        });
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].0, "a");
         assert_eq!(groups[0].1, vec!["s2".to_string()]);
-        let groups = history_groups(
+        let groups = history_groups(HistoryGroupsInput {
             projects,
-            &sessions,
-            &[],
-            HistorySort::LatestActivity,
-            "BETA",
-        );
+            sessions: &sessions,
+            agents: &[],
+            sort: HistorySort::LatestActivity,
+            filter: "BETA",
+        });
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].0, "b");
         assert_eq!(groups[0].1, vec!["s3".to_string()]);

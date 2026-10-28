@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use std::{
     collections::HashMap,
-    path::Path,
     fs,
     io::Write,
     sync::{Arc, Mutex, mpsc},
@@ -12,6 +11,12 @@ use terminator_core::*;
 use super::super::shared::{HistoryJob, Runtime, Shared, relock};
 use crate::storage;
 
+struct ApplyArchivedRequestInput<'a> {
+    paths: &'a Paths,
+    root: &'a Paths,
+    state: &'a mut State,
+    request: Request,
+}
 impl Shared {
     pub(crate) fn forward_input(&self, runtime: &Arc<Mutex<Runtime>>, bytes: &[u8]) -> Result<()> {
         let writer = {
@@ -155,7 +160,12 @@ impl Shared {
             !state.sessions.iter().any(|s| s.lifecycle.live()),
             "Retired owner still has live records"
         );
-        if let Some(response) = self.apply_archived_request(&paths, root, &mut state, *request)? {
+        if let Some(response) = self.apply_archived_request(ApplyArchivedRequestInput {
+            paths: &paths,
+            root,
+            state: &mut state,
+            request: *request,
+        })? {
             return Ok(response);
         }
         state.revision = state.revision.saturating_add(1);
@@ -165,18 +175,21 @@ impl Shared {
 
     fn apply_archived_request(
         &self,
-        paths: &Paths,
-        root: &Paths,
-        state: &mut State,
-        request: Request,
+        input: ApplyArchivedRequestInput<'_>,
     ) -> Result<Option<Response>> {
+        let ApplyArchivedRequestInput {
+            paths,
+            root,
+            state,
+            request,
+        } = input;
         let paths_owned = paths.clone();
         let _ = &paths_owned;
         match request {
             Request::PruneHistory { budget } => {
                 generations::Catalog::open(root)?.refresh(state)?;
-                let ids =
-                    storage::History::new(paths.clone())?.prune_with_budget(&state.settings, budget)?;
+                let ids = storage::History::new(paths.clone())?
+                    .prune_with_budget(&state.settings, budget)?;
                 for session in &mut state.sessions {
                     if ids.contains(&session.id) {
                         session.truncated = true;

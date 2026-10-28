@@ -528,20 +528,37 @@ fn attention_status_glyph(
         ui.colored_label(tint, state.label());
         ui.label(attention_status_detail(state));
     });
-    appearance::paint_centered_icon(ui, response.rect, attention_status_icon(state), 14.0, tint);
+    appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
+        ui,
+        rect: response.rect,
+        icon: attention_status_icon(state),
+        size: 14.0,
+        tint,
+    });
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, state.label()));
     response
 }
 
-fn attention_title(
-    ui: &mut egui::Ui,
-    notice: &Notification,
-    group_extra: &[Notification],
-    session: Option<&Session>,
-    theme: &AppearanceConfig,
-    brand: Option<(&'static str, &str)>,
+struct AttentionTitleInput<'a> {
+    ui: &'a mut egui::Ui,
+    notice: &'a Notification,
+    group_extra: &'a [Notification],
+    session: Option<&'a Session>,
+    theme: &'a AppearanceConfig,
+    brand: Option<(&'static str, &'a str)>,
     show_read: bool,
-) -> egui::Response {
+}
+
+fn attention_title(input: AttentionTitleInput<'_>) -> egui::Response {
+    let AttentionTitleInput {
+        ui,
+        notice,
+        group_extra,
+        session,
+        theme,
+        brand,
+        show_read,
+    } = input;
     let spacing = ui.spacing().item_spacing.x;
     let brand_response = brand.map(|(icon, label)| {
         let (rect, response) = ui.allocate_exact_size(
@@ -549,7 +566,13 @@ fn attention_title(
             egui::Sense::hover(),
         );
         // Brand glyphs carry their own colors; a white tint leaves them as-is.
-        appearance::paint_centered_icon(ui, rect, icon, 14.0, Color32::WHITE);
+        appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
+            ui,
+            rect,
+            icon,
+            size: 14.0,
+            tint: Color32::WHITE,
+        });
         response.on_hover_text(label)
     });
     let icon = attention_status_glyph(ui, notice.state, theme);
@@ -705,8 +728,15 @@ fn attention_card_contents(ui: &mut egui::Ui, input: AttentionCard<'_>) -> Atten
         let action = ui
             .horizontal(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
-                let header =
-                    attention_title(ui, notice, group_extra, session, theme, brand, show_read);
+                let header = attention_title(AttentionTitleInput {
+                    ui,
+                    notice,
+                    group_extra,
+                    session,
+                    theme,
+                    brand,
+                    show_read,
+                });
                 #[cfg(feature = "test-support")]
                 diagnostics::record(
                     ui.ctx(),

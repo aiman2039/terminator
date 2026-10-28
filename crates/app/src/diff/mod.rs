@@ -8,6 +8,14 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
+
+pub(crate) struct ExpandGapInput<'a> {
+    pub(crate) path: &'a Path,
+    pub(crate) gap: usize,
+    pub(crate) part: GapPart,
+    pub(crate) staged: bool,
+}
+
 use syntect::{
     easy::HighlightLines,
     highlighting::Theme,
@@ -146,13 +154,13 @@ impl DiffDocument {
             .filter(|hunk| hunk.rows(split).contains(&row))
     }
 
-    pub(crate) fn expand_gap(
-        &self,
-        path: &Path,
-        gap: usize,
-        part: GapPart,
-        staged: bool,
-    ) -> Result<Self> {
+    pub(crate) fn expand_gap(&self, input: ExpandGapInput<'_>) -> Result<Self> {
+        let ExpandGapInput {
+            path,
+            gap,
+            part,
+            staged,
+        } = input;
         let gap = self
             .gaps
             .get(gap)
@@ -178,7 +186,13 @@ impl DiffDocument {
     /// The same two texts laid out again under `view`, keeping the labels,
     /// source, and read-only flag of this document.
     pub(crate) fn rebuild(&self, path: &Path, staged: bool, view: &DiffView) -> Self {
-        let mut doc = build_with_options(path, &self.left_text, &self.right_text, staged, view);
+        let mut doc = build_with_options(BuildWithOptionsInput {
+            path,
+            left: &self.left_text,
+            right: &self.right_text,
+            staged,
+            view,
+        });
         doc.read_only = self.read_only;
         doc.source.clone_from(&self.source);
         doc.left_label.clone_from(&self.left_label);
@@ -448,26 +462,41 @@ fn overlay(spans: Vec<DiffSpan>, fragments: &[(bool, String)]) -> Vec<DiffSpan> 
 
 #[cfg(test)]
 fn build(path: &Path, left: &str, right: &str, staged: bool) -> DiffDocument {
-    build_with_context(path, left, right, staged, CONTEXT)
-}
-
-pub(crate) fn build_with_context(
-    path: &Path,
-    left: &str,
-    right: &str,
-    staged: bool,
-    context: usize,
-) -> DiffDocument {
-    build_with_options(
+    build_with_context(BuildWithContextInput {
         path,
         left,
         right,
         staged,
-        &DiffView {
+        context: CONTEXT,
+    })
+}
+
+pub(crate) struct BuildWithContextInput<'a> {
+    pub(crate) path: &'a Path,
+    pub(crate) left: &'a str,
+    pub(crate) right: &'a str,
+    pub(crate) staged: bool,
+    pub(crate) context: usize,
+}
+
+pub(crate) fn build_with_context(input: BuildWithContextInput<'_>) -> DiffDocument {
+    let BuildWithContextInput {
+        path,
+        left,
+        right,
+        staged,
+        context,
+    } = input;
+    build_with_options(BuildWithOptionsInput {
+        path,
+        left,
+        right,
+        staged,
+        view: &DiffView {
             context,
             ..DiffView::default()
         },
-    )
+    })
 }
 
 /// `text` with every whitespace char removed from each line (line breaks
@@ -492,13 +521,22 @@ pub(crate) struct Originals<'a> {
     new: Vec<&'a str>,
 }
 
-pub(crate) fn build_with_options(
-    path: &Path,
-    left: &str,
-    right: &str,
-    staged: bool,
-    view: &DiffView,
-) -> DiffDocument {
+pub(crate) struct BuildWithOptionsInput<'a> {
+    pub(crate) path: &'a Path,
+    pub(crate) left: &'a str,
+    pub(crate) right: &'a str,
+    pub(crate) staged: bool,
+    pub(crate) view: &'a DiffView,
+}
+
+pub(crate) fn build_with_options(input: BuildWithOptionsInput<'_>) -> DiffDocument {
+    let BuildWithOptionsInput {
+        path,
+        left,
+        right,
+        staged,
+        view,
+    } = input;
     let old_hl = highlight_file(path, left);
     let new_hl = highlight_file(path, right);
     let (compare_left, compare_right) = if view.whitespace {
@@ -535,15 +573,15 @@ pub(crate) fn build_with_options(
     let mut new_end = 0;
     for group in diff.grouped_ops(context) {
         if let Some(first) = group.first() {
-            emit_gap(
-                &mut doc,
-                &diff,
-                old_end..first.old_range().start,
-                new_end..first.new_range().start,
-                &old_hl,
-                &new_hl,
+            emit_gap(EmitGapInput {
+                doc: &mut doc,
+                diff: &diff,
+                old: old_end..first.old_range().start,
+                new: new_end..first.new_range().start,
+                old_hl: &old_hl,
+                new_hl: &new_hl,
                 originals,
-            );
+            });
         }
         for op in &group {
             if op.tag() != DiffTag::Equal {
@@ -554,44 +592,55 @@ pub(crate) fn build_with_options(
                     split_row: doc.split.len(),
                 });
             }
-            emit_op(
-                &diff,
+            emit_op(EmitOpInput {
+                diff: &diff,
                 op,
-                &old_hl,
-                &new_hl,
-                &mut doc.unified,
-                &mut doc.split,
+                old_hl: &old_hl,
+                new_hl: &new_hl,
+                unified: &mut doc.unified,
+                split: &mut doc.split,
                 originals,
-            );
+            });
             old_end = op.old_range().end;
             new_end = op.new_range().end;
         }
     }
     if !doc.hunks.is_empty() {
-        emit_gap(
-            &mut doc,
-            &diff,
-            old_end..left.split_inclusive('\n').count(),
-            new_end..right.split_inclusive('\n').count(),
-            &old_hl,
-            &new_hl,
+        emit_gap(EmitGapInput {
+            doc: &mut doc,
+            diff: &diff,
+            old: old_end..left.split_inclusive('\n').count(),
+            new: new_end..right.split_inclusive('\n').count(),
+            old_hl: &old_hl,
+            new_hl: &new_hl,
             originals,
-        );
+        });
     }
     doc
 }
 
 /// Unchanged lines between changes: runs the user revealed are shown, and
 /// every remaining run collapses into its own expandable gap row.
-fn emit_gap(
-    doc: &mut DiffDocument,
-    diff: &TextDiff<'_, '_, str>,
+struct EmitGapInput<'a, 'b> {
+    doc: &'a mut DiffDocument,
+    diff: &'a TextDiff<'b, 'b, str>,
     old: std::ops::Range<usize>,
     new: std::ops::Range<usize>,
-    old_hl: &[Vec<DiffSpan>],
-    new_hl: &[Vec<DiffSpan>],
-    originals: Option<&Originals<'_>>,
-) {
+    old_hl: &'a [Vec<DiffSpan>],
+    new_hl: &'a [Vec<DiffSpan>],
+    originals: Option<&'a Originals<'b>>,
+}
+
+fn emit_gap(input: EmitGapInput<'_, '_>) {
+    let EmitGapInput {
+        doc,
+        diff,
+        old,
+        new,
+        old_hl,
+        new_hl,
+        originals,
+    } = input;
     let mut start = old.start;
     while start < old.end {
         let shown = |line: usize| doc.revealed.iter().any(|range| range.contains(&line));
@@ -608,15 +657,15 @@ fn emit_gap(
                 new_index: new_start,
                 len,
             };
-            emit_op(
+            emit_op(EmitOpInput {
                 diff,
-                &op,
+                op: &op,
                 old_hl,
                 new_hl,
-                &mut doc.unified,
-                &mut doc.split,
+                unified: &mut doc.unified,
+                split: &mut doc.split,
                 originals,
-            );
+            });
         } else {
             let line = DiffLine {
                 kind: LineKind::Hunk,
@@ -644,15 +693,26 @@ fn emit_gap(
     }
 }
 
-fn emit_op(
-    diff: &TextDiff<'_, '_, str>,
-    op: &similar::DiffOp,
-    old_hl: &[Vec<DiffSpan>],
-    new_hl: &[Vec<DiffSpan>],
-    unified: &mut Vec<DiffLine>,
-    split: &mut Vec<SplitRow>,
-    originals: Option<&Originals<'_>>,
-) {
+struct EmitOpInput<'a, 'b> {
+    diff: &'a TextDiff<'b, 'b, str>,
+    op: &'a similar::DiffOp,
+    old_hl: &'a [Vec<DiffSpan>],
+    new_hl: &'a [Vec<DiffSpan>],
+    unified: &'a mut Vec<DiffLine>,
+    split: &'a mut Vec<SplitRow>,
+    originals: Option<&'a Originals<'b>>,
+}
+
+fn emit_op(input: EmitOpInput<'_, '_>) {
+    let EmitOpInput {
+        diff,
+        op,
+        old_hl,
+        new_hl,
+        unified,
+        split,
+        originals,
+    } = input;
     match op.tag() {
         DiffTag::Equal => {
             for change in diff.iter_changes(op) {
@@ -674,7 +734,13 @@ fn emit_op(
         }
         DiffTag::Delete => {
             for change in diff.iter_inline_changes(op) {
-                let line = change_line(change, LineKind::Delete, old_hl, true, originals);
+                let line = change_line(ChangeLineInput {
+                    change,
+                    kind: LineKind::Delete,
+                    highlighted: old_hl,
+                    old_side: true,
+                    originals,
+                });
                 unified.push(line.clone());
                 split.push(SplitRow {
                     left: Some(line),
@@ -684,7 +750,13 @@ fn emit_op(
         }
         DiffTag::Insert => {
             for change in diff.iter_inline_changes(op) {
-                let line = change_line(change, LineKind::Insert, new_hl, false, originals);
+                let line = change_line(ChangeLineInput {
+                    change,
+                    kind: LineKind::Insert,
+                    highlighted: new_hl,
+                    old_side: false,
+                    originals,
+                });
                 unified.push(line.clone());
                 split.push(SplitRow {
                     left: None,
@@ -698,22 +770,22 @@ fn emit_op(
             for change in diff.iter_inline_changes(op) {
                 match change.tag() {
                     ChangeTag::Delete => {
-                        deletes.push(change_line(
+                        deletes.push(change_line(ChangeLineInput {
                             change,
-                            LineKind::Delete,
-                            old_hl,
-                            true,
+                            kind: LineKind::Delete,
+                            highlighted: old_hl,
+                            old_side: true,
                             originals,
-                        ));
+                        }));
                     }
                     ChangeTag::Insert => {
-                        inserts.push(change_line(
+                        inserts.push(change_line(ChangeLineInput {
                             change,
-                            LineKind::Insert,
-                            new_hl,
-                            false,
+                            kind: LineKind::Insert,
+                            highlighted: new_hl,
+                            old_side: false,
                             originals,
-                        ));
+                        }));
                     }
                     ChangeTag::Equal => {}
                 }
@@ -762,13 +834,22 @@ fn equal_line(
     }
 }
 
-fn change_line(
-    change: similar::InlineChange<'_, str>,
+struct ChangeLineInput<'a, 'b> {
+    change: similar::InlineChange<'b, str>,
     kind: LineKind,
-    highlighted: &[Vec<DiffSpan>],
+    highlighted: &'a [Vec<DiffSpan>],
     old_side: bool,
-    originals: Option<&Originals<'_>>,
-) -> DiffLine {
+    originals: Option<&'a Originals<'b>>,
+}
+
+fn change_line(input: ChangeLineInput<'_, '_>) -> DiffLine {
+    let ChangeLineInput {
+        change,
+        kind,
+        highlighted,
+        old_side,
+        originals,
+    } = input;
     let side_index = if old_side {
         change.old_index()
     } else {
@@ -817,24 +898,53 @@ fn change_line(
     }
 }
 
-pub async fn document_async(
-    service: &crate::gui_services::Services,
-    cwd: PathBuf,
-    path: PathBuf,
-    staged: bool,
-    cancel: &terminator_core::async_service::CancellationToken,
-) -> Result<DiffDocument> {
-    document_with_context(service, cwd, path, staged, CONTEXT, cancel).await
+pub struct DocumentAsyncInput<'a> {
+    pub service: &'a crate::gui_services::Services,
+    pub cwd: PathBuf,
+    pub path: PathBuf,
+    pub staged: bool,
+    pub cancel: &'a terminator_core::async_service::CancellationToken,
+}
+
+pub async fn document_async(input: DocumentAsyncInput<'_>) -> Result<DiffDocument> {
+    let DocumentAsyncInput {
+        service,
+        cwd,
+        path,
+        staged,
+        cancel,
+    } = input;
+    document_with_context(DocumentWithContextInput {
+        service,
+        cwd,
+        path,
+        staged,
+        context: CONTEXT,
+        cancel,
+    })
+    .await
+}
+
+pub(crate) struct DocumentWithContextInput<'a> {
+    pub(crate) service: &'a crate::gui_services::Services,
+    pub(crate) cwd: PathBuf,
+    pub(crate) path: PathBuf,
+    pub(crate) staged: bool,
+    pub(crate) context: usize,
+    pub(crate) cancel: &'a terminator_core::async_service::CancellationToken,
 }
 
 pub(crate) async fn document_with_context(
-    service: &crate::gui_services::Services,
-    cwd: PathBuf,
-    path: PathBuf,
-    staged: bool,
-    context: usize,
-    cancel: &terminator_core::async_service::CancellationToken,
+    input: DocumentWithContextInput<'_>,
 ) -> Result<DiffDocument> {
+    let DocumentWithContextInput {
+        service,
+        cwd,
+        path,
+        staged,
+        context,
+        cancel,
+    } = input;
     let options = || CommandOptions {
         stdout_limit: 4 * 1024 * 1024,
         ..Default::default()
@@ -842,15 +952,24 @@ pub(crate) async fn document_with_context(
     let root_bytes = terminator_git::run(
         service.processes(),
         service.fs(),
-        &cwd,
-        vec!["rev-parse".into(), "--show-toplevel".into()],
-        options(),
+        terminator_git::RunInput {
+            cwd: &cwd,
+            args: vec!["rev-parse".into(), "--show-toplevel".into()],
+            options: options(),
+        },
     )
     .await;
     let root_bytes = match root_bytes {
         Ok(bytes) => bytes,
         Err(_) if !staged => {
-            return crate::perforce::document(service, cwd, path, context, cancel).await;
+            return crate::perforce::document(crate::perforce::DocumentInput {
+                service,
+                cwd,
+                path,
+                context,
+                cancel,
+            })
+            .await;
         }
         Err(error) => return Err(error),
     };
@@ -878,32 +997,46 @@ pub(crate) async fn document_with_context(
     if staged {
         args.push("--cached".into());
     }
-    let raw =
-        terminator_git::run(service.processes(), service.fs(), &root, args, options()).await?;
+    let raw = terminator_git::run(
+        service.processes(),
+        service.fs(),
+        terminator_git::RunInput {
+            cwd: &root,
+            args,
+            options: options(),
+        },
+    )
+    .await?;
     let oids = terminator_git::find_record(&raw, &relative)?;
     let (left, right) = if let Some((left, right)) = oids {
         let left = terminator_git::snapshot::blob_async(
             service.processes(),
             service.fs(),
-            &root,
-            &left,
-            options(),
+            terminator_git::snapshot::BlobAsyncInput {
+                root: &root,
+                oid: &left,
+                options: options(),
+            },
         )
         .await?;
         let right = if staged {
             terminator_git::snapshot::blob_async(
                 service.processes(),
                 service.fs(),
-                &root,
-                &right,
-                options(),
+                terminator_git::snapshot::BlobAsyncInput {
+                    root: &root,
+                    oid: &right,
+                    options: options(),
+                },
             )
             .await?
         } else {
             let path = root.join(&relative);
             service
                 .fs()
-                .run(cancel, move || terminator_git::worktree_file(&path))
+                .run(cancel, move || {
+                    terminator_git::worktree_file(&path).map_err(anyhow::Error::from)
+                })
                 .await?
         };
         (left, right)
@@ -911,15 +1044,17 @@ pub(crate) async fn document_with_context(
         let tracked = terminator_git::run(
             service.processes(),
             service.fs(),
-            &root,
-            vec![
-                "ls-files".into(),
-                "--stage".into(),
-                "-z".into(),
-                "--".into(),
-                actions::literal(&relative),
-            ],
-            options(),
+            terminator_git::RunInput {
+                cwd: &root,
+                args: vec![
+                    "ls-files".into(),
+                    "--stage".into(),
+                    "-z".into(),
+                    "--".into(),
+                    actions::literal(&relative),
+                ],
+                options: options(),
+            },
         )
         .await?;
         let oid = tracked
@@ -931,9 +1066,11 @@ pub(crate) async fn document_with_context(
             terminator_git::snapshot::blob_async(
                 service.processes(),
                 service.fs(),
-                &root,
-                oid,
-                options(),
+                terminator_git::snapshot::BlobAsyncInput {
+                    root: &root,
+                    oid,
+                    options: options(),
+                },
             )
             .await?
         } else {
@@ -945,7 +1082,9 @@ pub(crate) async fn document_with_context(
             let path = root.join(&relative);
             service
                 .fs()
-                .run(cancel, move || terminator_git::worktree_file(&path))
+                .run(cancel, move || {
+                    terminator_git::worktree_file(&path).map_err(anyhow::Error::from)
+                })
                 .await?
         };
         (left, right)
@@ -955,19 +1094,34 @@ pub(crate) async fn document_with_context(
         .cpu()
         .run(cancel, move || {
             let (left, right) = decode_sides(&left, &right)?;
-            let mut doc = build_with_context(&relative, &left, &right, staged, context);
+            let mut doc = build_with_context(BuildWithContextInput {
+                path: &relative,
+                left: &left,
+                right: &right,
+                staged,
+                context,
+            });
             doc.source = Some(source);
             Ok(doc)
         })
         .await
 }
-pub(crate) async fn remote_document(
-    service: &crate::gui_services::Services,
-    client: &terminator_core::async_client::Client,
-    tab: &crate::Tab,
-    context: usize,
-    cancel: &terminator_core::async_service::CancellationToken,
-) -> Result<DiffDocument> {
+pub(crate) struct RemoteDocumentInput<'a> {
+    pub(crate) service: &'a crate::gui_services::Services,
+    pub(crate) client: &'a terminator_core::async_client::Client,
+    pub(crate) tab: &'a crate::Tab,
+    pub(crate) context: usize,
+    pub(crate) cancel: &'a terminator_core::async_service::CancellationToken,
+}
+
+pub(crate) async fn remote_document(input: RemoteDocumentInput<'_>) -> Result<DiffDocument> {
+    let RemoteDocumentInput {
+        service,
+        client,
+        tab,
+        context,
+        cancel,
+    } = input;
     use base64::Engine;
     let crate::Tab::Diff {
         remote: Some(project),
@@ -1022,7 +1176,13 @@ pub(crate) async fn remote_document(
                 .context("Remote binary files cannot be displayed as text diffs")?;
             let right = String::from_utf8(right)
                 .context("Remote binary files cannot be displayed as text diffs")?;
-            Ok(build_with_context(&path, &left, &right, staged, context))
+            Ok(build_with_context(BuildWithContextInput {
+                path: &path,
+                left: &left,
+                right: &right,
+                staged,
+                context,
+            }))
         })
         .await
 }
@@ -1074,17 +1234,33 @@ mod tests {
     #[test]
     fn gap_steps_reveal_twenty_lines_from_either_edge() {
         let (original, changed) = long_pair();
-        let doc = build_with_context(Path::new("f.txt"), &original, &changed, false, 3);
+        let doc = build_with_context(BuildWithContextInput {
+            path: Path::new("f.txt"),
+            left: &original,
+            right: &changed,
+            staged: false,
+            context: 3,
+        });
         // Leading, middle, trailing gaps.
         assert_eq!(doc.gaps.len(), 3);
         let middle = doc.gaps[1].old.clone();
         let top = doc
-            .expand_gap(Path::new("f.txt"), 1, GapPart::Top, false)
+            .expand_gap(ExpandGapInput {
+                path: Path::new("f.txt"),
+                gap: 1,
+                part: GapPart::Top,
+                staged: false,
+            })
             .unwrap();
         assert_eq!(top.gaps.len(), 3);
         assert_eq!(top.gaps[1].old, middle.start + GAP_STEP..middle.end);
         let both = top
-            .expand_gap(Path::new("f.txt"), 1, GapPart::Bottom, false)
+            .expand_gap(ExpandGapInput {
+                path: Path::new("f.txt"),
+                gap: 1,
+                part: GapPart::Bottom,
+                staged: false,
+            })
             .unwrap();
         assert_eq!(
             both.gaps[1].old,
@@ -1096,9 +1272,20 @@ mod tests {
     #[test]
     fn rebuild_keeps_revealed_ranges_and_whitespace_mode() {
         let (original, changed) = long_pair();
-        let doc = build_with_context(Path::new("f.txt"), &original, &changed, false, 3);
+        let doc = build_with_context(BuildWithContextInput {
+            path: Path::new("f.txt"),
+            left: &original,
+            right: &changed,
+            staged: false,
+            context: 3,
+        });
         let expanded = doc
-            .expand_gap(Path::new("f.txt"), 1, GapPart::All, false)
+            .expand_gap(ExpandGapInput {
+                path: Path::new("f.txt"),
+                gap: 1,
+                part: GapPart::All,
+                staged: false,
+            })
             .unwrap();
         let view = DiffView {
             context: 3,
@@ -1114,7 +1301,13 @@ mod tests {
     fn ignore_whitespace_hides_indent_only_changes_and_keeps_text() {
         let left = "fn a() {\nx();\n}\n";
         let right = "fn a() {\n    x();\n}\nnew();\n";
-        let exact = build_with_context(Path::new("a.rs"), left, right, false, 3);
+        let exact = build_with_context(BuildWithContextInput {
+            path: Path::new("a.rs"),
+            left,
+            right,
+            staged: false,
+            context: 3,
+        });
         assert_eq!(exact.hunks.len(), 2);
         let loose = exact.rebuild(
             Path::new("a.rs"),

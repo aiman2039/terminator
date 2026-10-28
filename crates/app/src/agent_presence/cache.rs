@@ -6,6 +6,21 @@ use terminator_core::{
     AGENT_PRESENCE_CAPABILITY, AgentState, Session, State,
     agents::{self},
 };
+
+pub(crate) struct GetInput<'a> {
+    pub state: &'a State,
+    pub id: &'a str,
+    pub now: u64,
+    pub fresh: Option<bool>,
+}
+
+pub(crate) struct AttentionInput<'a> {
+    pub state: &'a State,
+    pub session_ids: &'a [String],
+    pub now: u64,
+    pub fresh: Option<bool>,
+}
+
 /// Rebuilt on snapshot/local mutation, freshness changes, and snooze expiry.
 /// Time alone does not rebuild stable presentations on every frame.
 ///
@@ -73,13 +88,13 @@ impl PresentationCache {
         self.rebuild(state, now, fresh);
     }
 
-    pub fn get(
-        &mut self,
-        state: &State,
-        id: &str,
-        now: u64,
-        fresh: Option<bool>,
-    ) -> std::sync::Arc<AgentPresentation> {
+    pub fn get(&mut self, input: GetInput<'_>) -> std::sync::Arc<AgentPresentation> {
+        let GetInput {
+            state,
+            id,
+            now,
+            fresh,
+        } = input;
         self.ensure(state, now, fresh);
         self.entries
             .get(id)
@@ -95,13 +110,13 @@ impl PresentationCache {
     /// Sum precomputed attention. Duplicate session ids count once.
     /// Ended sessions contribute nothing. Pending input, permission, and
     /// failure stay distinct.
-    pub fn attention(
-        &mut self,
-        state: &State,
-        session_ids: &[String],
-        now: u64,
-        fresh: Option<bool>,
-    ) -> AttentionCounts {
+    pub fn attention(&mut self, input: AttentionInput<'_>) -> AttentionCounts {
+        let AttentionInput {
+            state,
+            session_ids,
+            now,
+            fresh,
+        } = input;
         self.ensure(state, now, fresh);
         let mut seen = std::collections::HashSet::with_capacity(session_ids.len());
         let mut counts = AttentionCounts::default();

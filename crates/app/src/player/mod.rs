@@ -111,7 +111,7 @@ mod controller;
 mod eq;
 #[cfg(test)]
 mod player_tests;
-pub(crate) use controller::{Controller, PlaylistConfirm, PollInput, Skip};
+pub(crate) use controller::{Controller, PlayStationInput, PlaylistConfirm, PollInput, Skip};
 #[cfg(test)]
 #[cfg(unix)]
 pub(crate) use eq::fixture_download;

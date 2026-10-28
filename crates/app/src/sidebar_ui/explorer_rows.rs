@@ -69,13 +69,22 @@ pub(super) fn cached_variable_card(
 
 /// Names | Contents segmented control for the Explorer search bar.
 /// Small text toggle used by the Contents search bar (`Aa`, whole word, `.*`).
-pub(super) fn explorer_toggle(
-    ui: &mut egui::Ui,
-    text: &str,
-    tip: &str,
-    selected: bool,
-    target: &str,
-) -> egui::Response {
+pub(crate) struct ExplorerToggleInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) text: &'a str,
+    pub(crate) tip: &'a str,
+    pub(crate) selected: bool,
+    pub(crate) target: &'a str,
+}
+
+pub(super) fn explorer_toggle(input: ExplorerToggleInput<'_>) -> egui::Response {
+    let ExplorerToggleInput {
+        ui,
+        text,
+        tip,
+        selected,
+        target,
+    } = input;
     let response = ui
         .add_sized(
             [22.0, 22.0],
@@ -203,35 +212,47 @@ pub(crate) fn explorer_query_keeps_file(
     needle.is_none_or(|needle| label.to_lowercase().contains(needle))
 }
 
-#[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
-pub fn explorer_file_row(
-    ui: &mut egui::Ui,
-    path: &Path,
-    label: &str,
-    status: char,
-    ignored: bool,
-    theme: &AppearanceConfig,
-    open_shortcut: &str,
-    split_shortcut: &str,
-    selected: bool,
-    perforce: bool,
-    git_branches: Option<&[String]>,
-) -> ExplorerRowOutcome {
+pub(crate) struct ExplorerFileRowInput<'a> {
+    pub path: &'a Path,
+    pub label: &'a str,
+    pub status: char,
+    pub ignored: bool,
+    pub theme: &'a AppearanceConfig,
+    pub open_shortcut: &'a str,
+    pub split_shortcut: &'a str,
+    pub selected: bool,
+    pub perforce: bool,
+    pub git_branches: Option<&'a [String]>,
+}
+
+pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> ExplorerRowOutcome {
+    let ExplorerFileRowInput {
+        path,
+        label,
+        status,
+        ignored,
+        theme,
+        open_shortcut,
+        split_shortcut,
+        selected,
+        perforce,
+        git_branches,
+    } = input;
     let mut outcome = ExplorerRowOutcome::default();
     let color = if ignored {
         appearance::color(&theme.git_ignored)
     } else {
         git_color(theme, status)
     };
-    let r = appearance::file_row(
+    let r = appearance::file_row(appearance::FileRowInput {
         ui,
         label,
-        icons::file_icon(path),
+        icon: icons::file_icon(path),
         selected,
-        24.0,
-        &status.to_string(),
-        color,
-    )
+        height: 24.0,
+        trailing: &status.to_string(),
+        tint: color,
+    })
     .interact(egui::Sense::drag());
     // Tooltip text is only needed for the hovered row; formatting it for
     // every row on every scroll frame allocates heavily.

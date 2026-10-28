@@ -1,5 +1,5 @@
 //! One asynchronous preflight for pane, workspace, shortcut and sidebar close intents.
-use super::*;
+use crate::*;
 use terminator_core::idle_close::{Outcome, Status};
 
 impl App {
@@ -20,7 +20,7 @@ impl App {
         }
     }
 
-    pub(super) fn check_idle_close(
+    pub(crate) fn check_idle_close(
         &mut self,
         target: editor_close::Target,
         sessions: Vec<String>,
@@ -103,7 +103,7 @@ impl App {
         true
     }
 
-    pub(super) fn idle_closed(
+    pub(crate) fn idle_closed(
         &mut self,
         target: editor_close::Target,
         ids: Vec<String>,

@@ -1,5 +1,4 @@
 use super::*;
-use super::*;
 #[test]
 fn rotation_retention_clear_and_remove_ordering() {
     let dir = tempfile::tempdir().unwrap();

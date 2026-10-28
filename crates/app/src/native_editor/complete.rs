@@ -91,13 +91,22 @@ pub(crate) fn rank(items: &[native_lsp::CompletionItem], prefix: &str) -> Vec<us
 
 /// Insert `item`, replacing the typed prefix (or the server's range on
 /// this line), as one undo step; the caret lands on the snippet's stop.
-pub(crate) fn accept(
-    buffer: &mut Doc,
-    engine: &mut VimEngine,
-    line: usize,
-    start: usize,
-    item: &native_lsp::CompletionItem,
-) {
+pub(crate) struct AcceptInput<'a> {
+    pub(crate) buffer: &'a mut Doc,
+    pub(crate) engine: &'a mut VimEngine,
+    pub(crate) line: usize,
+    pub(crate) start: usize,
+    pub(crate) item: &'a native_lsp::CompletionItem,
+}
+
+pub(crate) fn accept(input: AcceptInput<'_>) {
+    let AcceptInput {
+        buffer,
+        engine,
+        line,
+        start,
+        item,
+    } = input;
     let caret = engine.cursor();
     if caret.line != line {
         return;
@@ -131,17 +140,30 @@ pub(crate) fn accept(
 /// prefix grows, handle its keys, and say whether to ask the server
 /// (`(position, line, prefix start)`): Ctrl+Space, or typing an
 /// identifier char, `.`, or `::` while no popup is open.
-#[expect(clippy::too_many_arguments, reason = "PENDING input struct")]
+pub(crate) struct AfterFrameInput<'a> {
+    pub(crate) ui: &'a egui::Ui,
+    pub(crate) popup: &'a mut Option<CompletionPopup>,
+    pub(crate) buffer: &'a mut Doc,
+    pub(crate) engine: &'a mut VimEngine,
+    pub(crate) revision_before: u64,
+    pub(crate) manual: bool,
+    pub(crate) caret_rect: Option<egui::Rect>,
+    pub(crate) server: bool,
+}
+
 pub(crate) fn after_frame(
-    ui: &egui::Ui,
-    popup: &mut Option<CompletionPopup>,
-    buffer: &mut Doc,
-    engine: &mut VimEngine,
-    revision_before: u64,
-    manual: bool,
-    caret_rect: Option<egui::Rect>,
-    server: bool,
+    input: AfterFrameInput<'_>,
 ) -> Option<(native_lsp::Position, usize, usize)> {
+    let AfterFrameInput {
+        ui,
+        popup,
+        buffer,
+        engine,
+        revision_before,
+        manual,
+        caret_rect,
+        server,
+    } = input;
     use terminator_native_edit::vim::{ModalEngine as _, Mode};
     let caret = engine.cursor();
     let text = buffer.line_text(caret.line);
@@ -174,7 +196,13 @@ pub(crate) fn after_frame(
                     let (line, start) = (open.line, open.start);
                     *popup = None;
                     if let Some(item) = chosen {
-                        accept(buffer, engine, line, start, &item);
+                        accept(AcceptInput {
+                            buffer,
+                            engine,
+                            line,
+                            start,
+                            item: &item,
+                        });
                     }
                     return None;
                 }
@@ -222,13 +250,24 @@ pub(crate) fn open_paren(line: &str, col: usize) -> Option<usize> {
 
 /// Signature upkeep after the view drew: close when the caret leaves the
 /// call, and say when to ask (typing `(` or `,` inside a call).
+pub(crate) struct SignatureAfterFrameInput<'a> {
+    pub(crate) popup: &'a mut Option<SignaturePopup>,
+    pub(crate) buffer: &'a Doc,
+    pub(crate) engine: &'a VimEngine,
+    pub(crate) revision_before: u64,
+    pub(crate) server: bool,
+}
+
 pub(crate) fn signature_after_frame(
-    popup: &mut Option<SignaturePopup>,
-    buffer: &Doc,
-    engine: &VimEngine,
-    revision_before: u64,
-    server: bool,
+    input: SignatureAfterFrameInput<'_>,
 ) -> Option<(native_lsp::Position, usize, usize)> {
+    let SignatureAfterFrameInput {
+        popup,
+        buffer,
+        engine,
+        revision_before,
+        server,
+    } = input;
     use terminator_native_edit::vim::{ModalEngine as _, Mode};
     let caret = engine.cursor();
     let text = buffer.line_text(caret.line);
@@ -437,7 +476,13 @@ mod tests {
         let before = buffer.revision();
         engine.type_text(&mut buffer, ",");
         let mut popup = None;
-        let asked = signature_after_frame(&mut popup, &buffer, &engine, before, true);
+        let asked = signature_after_frame(SignatureAfterFrameInput {
+            popup: &mut popup,
+            buffer: &buffer,
+            engine: &engine,
+            revision_before: before,
+            server: true,
+        });
         assert_eq!(asked.map(|(_, line, open)| (line, open)), Some((0, 2)));
         popup = Some(SignaturePopup {
             path: PathBuf::from("/f.rs"),
@@ -450,7 +495,16 @@ mod tests {
         // Leaving the call (past its `)`) closes the popup.
         let _ = engine.place_cursor(&mut buffer, 0, 0);
         let rev = buffer.revision();
-        assert!(signature_after_frame(&mut popup, &buffer, &engine, rev, true).is_none());
+        assert!(
+            signature_after_frame(SignatureAfterFrameInput {
+                popup: &mut popup,
+                buffer: &buffer,
+                engine: &engine,
+                revision_before: rev,
+                server: true
+            })
+            .is_none()
+        );
         assert!(popup.is_none());
     }
 
@@ -484,7 +538,13 @@ mod tests {
         let mut chosen = item("println!", "0");
         chosen.insert = "println!(\"$1\")$0".into();
         chosen.snippet = true;
-        accept(&mut buffer, &mut engine, 0, 8, &chosen);
+        accept(AcceptInput {
+            buffer: &mut buffer,
+            engine: &mut engine,
+            line: 0,
+            start: 8,
+            item: &chosen,
+        });
         assert_eq!(buffer.text(), "let v = println!(\"\")\n");
         assert_eq!(engine.cursor().col, 18);
         engine.undo(&mut buffer);

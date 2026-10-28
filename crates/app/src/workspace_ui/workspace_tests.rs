@@ -178,7 +178,15 @@ mod tests {
                 ..Default::default()
             },
             |ui| {
-                paint_diff_document(PaintDiffDocumentInput { ui, doc, split: true, colors, scroll_key: "sync-regression", ratio: &mut ratio, sync });
+                paint_diff_document(PaintDiffDocumentInput {
+                    ui,
+                    doc,
+                    split: true,
+                    colors,
+                    scroll_key: "sync-regression",
+                    ratio: &mut ratio,
+                    sync,
+                });
             },
         );
         output.textures_delta.clear();

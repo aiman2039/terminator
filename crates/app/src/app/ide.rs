@@ -152,7 +152,13 @@ impl App {
                                 label
                             };
                             let response =
-                                appearance::stripe_button(ui, icon, caption, selected, badge);
+                                appearance::stripe_button(appearance::StripeButtonInput {
+                                    ui,
+                                    icon,
+                                    label: caption,
+                                    selected,
+                                    badge,
+                                });
                             let response = if tool == StripeTool::Tool(SidebarTool::Git) {
                                 response.on_hover_text("Git / Perforce")
                             } else {
@@ -196,7 +202,13 @@ impl App {
                 );
                 search_ui.set_clip_rect(ui.clip_rect().intersect(search_rect));
                 search_ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                    let search = appearance::stripe_button(ui, "Search", "Search", false, None);
+                    let search = appearance::stripe_button(appearance::StripeButtonInput {
+                        ui,
+                        icon: "Search",
+                        label: "Search",
+                        selected: false,
+                        badge: None,
+                    });
                     #[cfg(feature = "test-support")]
                     diagnostics::record(
                         ui.ctx(),

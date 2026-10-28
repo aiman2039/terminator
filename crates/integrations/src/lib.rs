@@ -1,6 +1,36 @@
 //! Managed hook configuration. Installers only run on explicit user action.
 #![forbid(unsafe_code)]
-use anyhow::{Context, Result, bail, ensure};
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("{0}")]
+    Message(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Core(#[from] anyhow::Error),
+    #[error(transparent)]
+    Serde(#[from] serde_json::Error),
+    #[error("{context}")]
+    Json {
+        context: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("{context}")]
+    Toml {
+        context: &'static str,
+        #[source]
+        source: toml_edit::TomlError,
+    },
+}
+
+impl Error {
+    fn message(text: impl Into<String>) -> Self {
+        Self::Message(text.into())
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -19,7 +49,7 @@ pub fn config_path(home: &Path, kind: &str) -> Result<PathBuf> {
         "muse" => ".muse/hooks.json",
         "grok" => ".grok/hooks/terminator.json",
         "cursor" => ".cursor/hooks.json",
-        _ => bail!("Unknown built-in integration"),
+        _ => return Err(Error::message("Unknown built-in integration")),
     }))
 }
 #[must_use]
@@ -79,15 +109,30 @@ fn muse_hook_events() -> &'static [&'static str] {
     ]
 }
 pub fn install(home: &Path, kind: &str, helper: &Path, remove: bool) -> Result<PathBuf> {
-    install_at(home, kind, helper, remove, &Paths::discover()?)
+    install_at(InstallAtInput {
+        home,
+        kind,
+        helper,
+        remove,
+        paths: &Paths::discover()?,
+    })
 }
-pub fn install_at(
-    home: &Path,
-    kind: &str,
-    helper: &Path,
-    remove: bool,
-    paths: &Paths,
-) -> Result<PathBuf> {
+pub struct InstallAtInput<'a> {
+    pub home: &'a Path,
+    pub kind: &'a str,
+    pub helper: &'a Path,
+    pub remove: bool,
+    pub paths: &'a Paths,
+}
+
+pub fn install_at(input: InstallAtInput<'_>) -> Result<PathBuf> {
+    let InstallAtInput {
+        home,
+        kind,
+        helper,
+        remove,
+        paths,
+    } = input;
     let path = config_path(home, kind)?;
     let before = fs::read_to_string(&path).or_else(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -96,10 +141,11 @@ pub fn install_at(
             Err(e)
         }
     })?;
-    ensure!(
-        !path.is_symlink(),
-        "Refusing to rewrite a symlinked agent configuration"
-    );
+    if !(!path.is_symlink()) {
+        return Err(Error::message(
+            "Refusing to rewrite a symlinked agent configuration",
+        ));
+    }
     let invocation = format!(
         "{} event {} --data-dir {} --runtime-dir {}",
         quote(&helper.to_string_lossy()),
@@ -109,10 +155,11 @@ pub fn install_at(
     );
     let command = format!("{invocation} # {MARKER}");
     let after = if kind == "opencode" {
-        ensure!(
-            before.is_empty() || before.contains(MARKER),
-            "Existing plugin is not managed by Terminator"
-        );
+        if !(before.is_empty() || before.contains(MARKER)) {
+            return Err(Error::message(
+                "Existing plugin is not managed by Terminator",
+            ));
+        }
         if remove {
             String::new()
         } else {
@@ -130,19 +177,23 @@ pub fn install_at(
         let mut doc: Value = if before.trim().is_empty() {
             json!({})
         } else {
-            serde_json::from_str(&before)
-                .context("Agent configuration is invalid JSON; left untouched")?
+            serde_json::from_str(&before).map_err(|source| Error::Json {
+                context: "Agent configuration is invalid JSON; left untouched",
+                source,
+            })?
         };
-        ensure!(doc.is_object(), "Expected config object");
+        if !(doc.is_object()) {
+            return Err(Error::message("Expected config object"));
+        }
         if doc.get("hooks").is_none() {
             doc.as_object_mut()
-                .context("Expected config object")?
+                .ok_or_else(|| Error::message("Expected config object"))?
                 .insert("hooks".to_owned(), json!({}));
         }
         let hooks = doc
             .get_mut("hooks")
             .and_then(Value::as_object_mut)
-            .context("hooks is not an object")?;
+            .ok_or_else(|| Error::message("hooks is not an object"))?;
         for groups in hooks.values_mut() {
             clean_json_groups(groups)?;
         }
@@ -167,7 +218,7 @@ pub fn install_at(
                     .entry(event)
                     .or_insert(json!([]))
                     .as_array_mut()
-                    .context("Hook groups must be arrays")?;
+                    .ok_or_else(|| Error::message("Hook groups must be arrays"))?;
                 list.push(json!({"hooks":[{"type":"command","command":command,"timeout":2}]}));
             }
         }
@@ -218,10 +269,11 @@ fn write_config(path: &Path, bytes: &[u8]) -> Result<()> {
 
 fn sync_muse_settings(home: &Path, command: &str, remove: bool) -> Result<()> {
     let path = muse_settings_path(home);
-    ensure!(
-        !path.is_symlink(),
-        "Refusing to rewrite a symlinked Muse settings file"
-    );
+    if !(!path.is_symlink()) {
+        return Err(Error::message(
+            "Refusing to rewrite a symlinked Muse settings file",
+        ));
+    }
     let before = fs::read_to_string(&path).or_else(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             Ok(String::new())
@@ -235,27 +287,36 @@ fn sync_muse_settings(home: &Path, command: &str, remove: bool) -> Result<()> {
     let mut doc: Value = if before.trim().is_empty() {
         json!({"schema_version": 1})
     } else {
-        serde_json::from_str(&before).context("Muse settings are invalid JSON; left untouched")?
+        serde_json::from_str(&before).map_err(|source| Error::Json {
+            context: "Muse settings are invalid JSON; left untouched",
+            source,
+        })?
     };
-    ensure!(doc.is_object(), "Muse settings must be an object");
+    if !(doc.is_object()) {
+        return Err(Error::message("Muse settings must be an object"));
+    }
     match doc.get("schema_version") {
         None => {
             doc.as_object_mut()
-                .context("Muse settings must be an object")?
+                .ok_or_else(|| Error::message("Muse settings must be an object"))?
                 .insert("schema_version".to_owned(), json!(1));
         }
         Some(version) if version.as_u64() == Some(1) => {}
-        Some(_) => bail!("Muse settings schema is not version 1; left untouched"),
+        Some(_) => {
+            return Err(Error::message(
+                "Muse settings schema is not version 1; left untouched",
+            ));
+        }
     }
     if doc.get("hooks").is_none() {
         doc.as_object_mut()
-            .context("Muse settings must be an object")?
+            .ok_or_else(|| Error::message("Muse settings must be an object"))?
             .insert("hooks".to_owned(), json!({}));
     }
     let hooks = doc
         .get_mut("hooks")
         .and_then(Value::as_object_mut)
-        .context("Muse hooks must be an object")?;
+        .ok_or_else(|| Error::message("Muse hooks must be an object"))?;
     for groups in hooks.values_mut() {
         clean_json_groups(groups)?;
     }
@@ -265,7 +326,7 @@ fn sync_muse_settings(home: &Path, command: &str, remove: bool) -> Result<()> {
                 .entry(*event)
                 .or_insert(json!([]))
                 .as_array_mut()
-                .context("Hook groups must be arrays")?;
+                .ok_or_else(|| Error::message("Hook groups must be arrays"))?;
             list.push(json!({"hooks":[{"type":"command","command":command,"timeout":2}]}));
         }
     }
@@ -281,7 +342,7 @@ fn sync_muse_settings(home: &Path, command: &str, remove: bool) -> Result<()> {
 fn clean_json_groups(groups: &mut Value) -> Result<()> {
     let groups = groups
         .as_array_mut()
-        .context("Hook groups must be arrays")?;
+        .ok_or_else(|| Error::message("Hook groups must be arrays"))?;
     for group in groups.iter_mut() {
         if let Some(hooks) = group.get_mut("hooks").and_then(Value::as_array_mut) {
             hooks.retain(|h| {
@@ -302,39 +363,50 @@ fn cursor_config(before: &str, invocation: &str, remove: bool) -> Result<String>
     let mut doc: Value = if before.trim().is_empty() {
         json!({"version": 1})
     } else {
-        serde_json::from_str(before).context("Cursor hooks.json is invalid JSON; left untouched")?
+        serde_json::from_str(before).map_err(|source| Error::Json {
+            context: "Cursor hooks.json is invalid JSON; left untouched",
+            source,
+        })?
     };
-    ensure!(doc.is_object(), "Cursor hooks.json must be an object");
+    if !(doc.is_object()) {
+        return Err(Error::message("Cursor hooks.json must be an object"));
+    }
     match doc.get("version") {
         None => {
             doc.as_object_mut()
-                .context("Cursor hooks.json must be an object")?
+                .ok_or_else(|| Error::message("Cursor hooks.json must be an object"))?
                 .insert("version".to_owned(), json!(1));
         }
         Some(version) if version.as_u64() == Some(1) => {}
-        Some(_) => bail!("Cursor hooks.json version is not 1; left untouched"),
+        Some(_) => {
+            return Err(Error::message(
+                "Cursor hooks.json version is not 1; left untouched",
+            ));
+        }
     }
     if doc.get("hooks").is_none() {
         doc.as_object_mut()
-            .context("Cursor hooks.json must be an object")?
+            .ok_or_else(|| Error::message("Cursor hooks.json must be an object"))?
             .insert("hooks".to_owned(), json!({}));
     }
     let hooks = doc
         .get_mut("hooks")
         .and_then(Value::as_object_mut)
-        .context("Cursor hooks must be an object")?;
+        .ok_or_else(|| Error::message("Cursor hooks must be an object"))?;
     for &(event, response) in cursor_hook_events() {
         let list = hooks
             .entry(event)
             .or_insert(json!([]))
             .as_array_mut()
-            .with_context(|| format!("Cursor {event} hooks must be an array"))?;
+            .ok_or_else(|| Error::message(format!("Cursor {event} hooks must be an array")))?;
         if list.iter().any(|entry| {
             entry.as_object().is_some_and(|object| {
                 object.contains_key("hooks") && !object.contains_key("command")
             })
         }) {
-            bail!("Unsupported Cursor hook format for {event}; left untouched");
+            return Err(Error::message(
+                "Unsupported Cursor hook format for {event}; left untouched",
+            ));
         }
         list.retain(|entry| {
             !entry
@@ -359,14 +431,17 @@ fn codex_config(before: &str, command: &str, remove: bool) -> Result<String> {
     use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value as T};
     let mut doc = before
         .parse::<DocumentMut>()
-        .context("Invalid Codex TOML; left untouched")?;
+        .map_err(|source| Error::Toml {
+            context: "Invalid Codex TOML; left untouched",
+            source,
+        })?;
     if doc.get("hooks").is_none() {
         doc.insert("hooks", Item::Table(Table::new()));
     }
     let hooks = doc
         .get_mut("hooks")
         .and_then(Item::as_table_mut)
-        .context("Codex hooks must be a table")?;
+        .ok_or_else(|| Error::message("Codex hooks must be a table"))?;
     let events = [
         "SessionStart",
         "UserPromptSubmit",
@@ -418,7 +493,9 @@ fn codex_config(before: &str, command: &str, remove: bool) -> Result<String> {
                         .is_none_or(|h| !h.is_empty())
                 });
             } else {
-                bail!("Unsupported Codex hook format for {event}; left untouched")
+                return Err(Error::message(
+                    "Unsupported Codex hook format for {event}; left untouched",
+                ));
             }
         }
         if !remove {
@@ -441,7 +518,9 @@ fn codex_config(before: &str, command: &str, remove: bool) -> Result<String> {
                 hooks
                     .get_mut(event)
                     .and_then(Item::as_array_of_tables_mut)
-                    .context("Unsupported Codex hook format for {event}; left untouched")?
+                    .ok_or_else(|| {
+                        Error::message("Unsupported Codex hook format for {event}; left untouched")
+                    })?
                     .push(group);
             }
         }

@@ -3,6 +3,32 @@ use super::diff_paint::{
     DiffColors, PaintDiffDocumentInput, PaintMarkdownDiffPreviewInput, diff_gutter_digits,
     paint_diff_document, paint_markdown_diff_preview,
 };
+use crate::app::FileActionInput;
+
+pub(crate) struct ClickAndTypeInput<'a> {
+    pub(crate) app: &'a mut App,
+    pub(crate) ctx: &'a egui::Context,
+    pub(crate) tab: &'a Tab,
+    pub(crate) target: &'a str,
+    pub(crate) text: &'a str,
+}
+
+pub(crate) struct ClickAndKeyInput<'a> {
+    pub(crate) app: &'a mut App,
+    pub(crate) ctx: &'a egui::Context,
+    pub(crate) tab: &'a Tab,
+    pub(crate) target: &'a str,
+    pub(crate) key: egui::Key,
+}
+
+pub(crate) struct ClickAndShortcutInput<'a> {
+    pub(crate) app: &'a mut App,
+    pub(crate) ctx: &'a egui::Context,
+    pub(crate) tab: &'a Tab,
+    pub(crate) target: &'a str,
+    pub(crate) shift: bool,
+}
+
 use super::header::{HeaderAction, header_action_view};
 use super::tabs::cached_terminal_theme;
 #[cfg(test)]
@@ -80,13 +106,13 @@ pub(crate) mod tests {
 
     #[test]
     fn highlighted_editor_job_keeps_buffer_text_and_tints() {
-        let doc = diff::build_with_context(
-            std::path::Path::new("file.rs"),
-            "let a = 1;\n",
-            "let a = 2;\n",
-            false,
-            3,
-        );
+        let doc = diff::build_with_context(diff::BuildWithContextInput {
+            path: std::path::Path::new("file.rs"),
+            left: "let a = 1;\n",
+            right: "let a = 2;\n",
+            staged: false,
+            context: 3,
+        });
         let colors = DiffColors {
             added: Color32::GREEN,
             deleted: Color32::RED,
@@ -97,7 +123,17 @@ pub(crate) mod tests {
             super::super::diff_edit::live_tints(&doc.left_text, &doc.right_text, colors);
         let spans = diff::highlight_spans(std::path::Path::new("file.rs"), &doc.right_text);
         let valid: Vec<bool> = spans.iter().map(|line| !line.is_empty()).collect();
-        let job = super::super::diff_edit::highlighted_job(super::super::diff_edit::HighlightedJobInput { text: &doc.right_text, spans: &spans, valid: &valid, tints: &right_tints, font: egui::FontId::monospace(12.0), fallback: Color32::WHITE, wrap_width: f32::INFINITY });
+        let job = super::super::diff_edit::highlighted_job(
+            super::super::diff_edit::HighlightedJobInput {
+                text: &doc.right_text,
+                spans: &spans,
+                valid: &valid,
+                tints: &right_tints,
+                font: egui::FontId::monospace(12.0),
+                fallback: Color32::WHITE,
+                wrap_width: f32::INFINITY,
+            },
+        );
         // A TextEdit layouter must reproduce the buffer text exactly.
         assert_eq!(job.text, doc.right_text);
         // The changed line carries a diff tint background.
@@ -162,17 +198,15 @@ pub(crate) mod tests {
     }
 
     #[cfg(feature = "test-support")]
-    struct ClickAndTypeInput<'a> {
-     app: &'a mut App,
-     ctx: &'a egui::Context,
-     tab: &'a Tab,
-     target: &'a str,
-     text: &'a str,
-}
-
     #[cfg(feature = "test-support")]
     fn click_and_type(input: ClickAndTypeInput<'_>) {
-        let ClickAndTypeInput { app, ctx, tab, target, text } = input;
+        let ClickAndTypeInput {
+            app,
+            ctx,
+            tab,
+            target,
+            text,
+        } = input;
 
         // Times keep moving forward across calls within one test.
         let base = ctx.input(|input| input.time);
@@ -228,23 +262,35 @@ pub(crate) mod tests {
             path: "/repo/file.rs".into(),
             staged: false,
         };
-        let doc = diff::build_with_context(
-            std::path::Path::new("file.rs"),
-            "let a = 1;\nlet b = 2;\n",
-            "let a = 1;\nlet b = 3;\n",
-            false,
-            3,
-        );
+        let doc = diff::build_with_context(diff::BuildWithContextInput {
+            path: std::path::Path::new("file.rs"),
+            left: "let a = 1;\nlet b = 2;\n",
+            right: "let a = 1;\nlet b = 3;\n",
+            staged: false,
+            context: 3,
+        });
         app.diffs.insert(tab.key(), Ok(doc.into()));
         // Edit the already-changed line 2.
-        click_and_type(ClickAndTypeInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-unified-edit-2", text: "X" });
+        click_and_type(ClickAndTypeInput {
+            app: &mut app,
+            ctx: &ctx,
+            tab: &tab,
+            target: "diff-unified-edit-2",
+            text: "X",
+        });
         let text = buffer_text(&app, &tab);
         assert!(
             text.contains('X'),
             "unified typing must reach the buffer, got {text:?}"
         );
         // Changing the untouched line 1 must tint it in the same session.
-        click_and_type(ClickAndTypeInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-unified-edit-1", text: "Y" });
+        click_and_type(ClickAndTypeInput {
+            app: &mut app,
+            ctx: &ctx,
+            tab: &tab,
+            target: "diff-unified-edit-1",
+            text: "Y",
+        });
         assert!(
             buffer_text(&app, &tab).contains('Y'),
             "line 1 typing must reach the buffer, got {:?}",
@@ -274,15 +320,21 @@ pub(crate) mod tests {
             staged: false,
         };
         app.diff_split.insert(tab.key());
-        let doc = diff::build_with_context(
-            std::path::Path::new("file.rs"),
-            "let a = 1;\nlet b = 2;\n",
-            "let a = 1;\nlet b = 3;\n",
-            false,
-            3,
-        );
+        let doc = diff::build_with_context(diff::BuildWithContextInput {
+            path: std::path::Path::new("file.rs"),
+            left: "let a = 1;\nlet b = 2;\n",
+            right: "let a = 1;\nlet b = 3;\n",
+            staged: false,
+            context: 3,
+        });
         app.diffs.insert(tab.key(), Ok(doc.into()));
-        click_and_type(ClickAndTypeInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-right-editor", text: "Z" });
+        click_and_type(ClickAndTypeInput {
+            app: &mut app,
+            ctx: &ctx,
+            tab: &tab,
+            target: "diff-right-editor",
+            text: "Z",
+        });
         let text = buffer_text(&app, &tab);
         assert!(
             text.contains('Z'),
@@ -358,17 +410,15 @@ pub(crate) mod tests {
     }
 
     #[cfg(feature = "test-support")]
-    struct ClickAndKeyInput<'a> {
-     app: &'a mut App,
-     ctx: &'a egui::Context,
-     tab: &'a Tab,
-     target: &'a str,
-     key: egui::Key,
-}
-
     #[cfg(feature = "test-support")]
     fn click_and_key(input: ClickAndKeyInput<'_>) {
-        let ClickAndKeyInput { app, ctx, tab, target, key } = input;
+        let ClickAndKeyInput {
+            app,
+            ctx,
+            tab,
+            target,
+            key,
+        } = input;
 
         let base = ctx.input(|input| input.time);
         run_diff_frames(app, ctx, tab, &[(base + 0.1, vec![]), (base + 0.2, vec![])]);
@@ -411,17 +461,15 @@ pub(crate) mod tests {
     }
 
     #[cfg(feature = "test-support")]
-    struct ClickAndShortcutInput<'a> {
-     app: &'a mut App,
-     ctx: &'a egui::Context,
-     tab: &'a Tab,
-     target: &'a str,
-     shift: bool,
-}
-
     #[cfg(feature = "test-support")]
     fn click_and_shortcut(input: ClickAndShortcutInput<'_>) {
-        let ClickAndShortcutInput { app, ctx, tab, target, shift } = input;
+        let ClickAndShortcutInput {
+            app,
+            ctx,
+            tab,
+            target,
+            shift,
+        } = input;
 
         let base = ctx.input(|input| input.time);
         run_diff_frames(app, ctx, tab, &[(base + 0.1, vec![]), (base + 0.2, vec![])]);
@@ -480,24 +528,42 @@ pub(crate) mod tests {
             staged: false,
         };
         let original = "let a = 1;\nlet b = 3;\n";
-        let doc = diff::build_with_context(
-            std::path::Path::new("file.rs"),
-            "let a = 1;\nlet b = 2;\n",
-            original,
-            false,
-            3,
-        );
+        let doc = diff::build_with_context(diff::BuildWithContextInput {
+            path: std::path::Path::new("file.rs"),
+            left: "let a = 1;\nlet b = 2;\n",
+            right: original,
+            staged: false,
+            context: 3,
+        });
         app.diffs.insert(tab.key(), Ok(doc.into()));
-        click_and_type(ClickAndTypeInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-unified-edit-1", text: "X" });
+        click_and_type(ClickAndTypeInput {
+            app: &mut app,
+            ctx: &ctx,
+            tab: &tab,
+            target: "diff-unified-edit-1",
+            text: "X",
+        });
         let edited = buffer_text(&app, &tab);
         assert_ne!(edited, original, "typing must change the buffer first");
-        click_and_shortcut(ClickAndShortcutInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-unified-edit-1", shift: false });
+        click_and_shortcut(ClickAndShortcutInput {
+            app: &mut app,
+            ctx: &ctx,
+            tab: &tab,
+            target: "diff-unified-edit-1",
+            shift: false,
+        });
         assert_eq!(
             buffer_text(&app, &tab),
             original,
             "Cmd+Z must restore the pre-edit buffer"
         );
-        click_and_shortcut(ClickAndShortcutInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-unified-edit-1", shift: true });
+        click_and_shortcut(ClickAndShortcutInput {
+            app: &mut app,
+            ctx: &ctx,
+            tab: &tab,
+            target: "diff-unified-edit-1",
+            shift: true,
+        });
         assert_eq!(
             buffer_text(&app, &tab),
             edited,
@@ -518,15 +584,21 @@ pub(crate) mod tests {
             path: "/repo/file.rs".into(),
             staged: false,
         };
-        let doc = diff::build_with_context(
-            std::path::Path::new("file.rs"),
-            "let a = 1;\nlet b = 2;\n",
-            "let a = 1;\nlet b = 3;\n",
-            false,
-            3,
-        );
+        let doc = diff::build_with_context(diff::BuildWithContextInput {
+            path: std::path::Path::new("file.rs"),
+            left: "let a = 1;\nlet b = 2;\n",
+            right: "let a = 1;\nlet b = 3;\n",
+            staged: false,
+            context: 3,
+        });
         app.diffs.insert(tab.key(), Ok(doc.into()));
-        click_and_key(ClickAndKeyInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-unified-edit-2", key: egui::Key::Enter });
+        click_and_key(ClickAndKeyInput {
+            app: &mut app,
+            ctx: &ctx,
+            tab: &tab,
+            target: "diff-unified-edit-2",
+            key: egui::Key::Enter,
+        });
         let text = buffer_text(&app, &tab);
         assert!(
             text.contains(";\n") && text.lines().count() >= 3,
@@ -561,12 +633,23 @@ pub(crate) mod tests {
         });
         let mut right = left.clone();
         right = right.replace("line 12", "line twelve");
-        let doc =
-            diff::build_with_context(std::path::Path::new("file.rs"), &left, &right, false, 3);
+        let doc = diff::build_with_context(diff::BuildWithContextInput {
+            path: std::path::Path::new("file.rs"),
+            left: &left,
+            right: &right,
+            staged: false,
+            context: 3,
+        });
         app.diffs.insert(tab.key(), Ok(doc.into()));
         // Line 1 sits in a collapsed gap in the old grouped view; it must be
         // editable here exactly like in split view.
-        click_and_type(ClickAndTypeInput { app: &mut app, ctx: &ctx, tab: &tab, target: "diff-unified-edit-1", text: "Q" });
+        click_and_type(ClickAndTypeInput {
+            app: &mut app,
+            ctx: &ctx,
+            tab: &tab,
+            target: "diff-unified-edit-1",
+            text: "Q",
+        });
         assert!(
             buffer_text(&app, &tab).lines().next() == Some("line 1Q"),
             "gap line must accept edits, got {:?}",
@@ -672,13 +755,13 @@ pub(crate) mod tests {
                 path: dir.path().join("file.txt"),
                 staged: false,
             };
-            let doc = diff::build_with_context(
-                std::path::Path::new("file.txt"),
-                "old text\n",
-                "new text\n",
-                false,
-                3,
-            );
+            let doc = diff::build_with_context(diff::BuildWithContextInput {
+                path: std::path::Path::new("file.txt"),
+                left: "old text\n",
+                right: "new text\n",
+                staged: false,
+                context: 3,
+            });
             app.diffs.insert(tab.key(), Ok(doc.into()));
             if split {
                 app.diff_split.insert(tab.key());
@@ -826,16 +909,16 @@ pub(crate) mod tests {
         });
         let open_native = |app: &mut App| {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                app.file_action(
+                app.file_action(FileActionInput {
                     ui,
-                    if *staged {
+                    action: if *staged {
                         FileAction::NativeStagedDiff
                     } else {
                         FileAction::NativeWorkingDiff
                     },
                     path,
-                    None,
-                );
+                    line: None,
+                });
             });
             output.textures_delta.clear();
         };
@@ -1201,12 +1284,20 @@ pub(crate) mod tests {
                 ..Default::default()
             },
             |ui| {
-                scroll = Some(paint_diff_document(PaintDiffDocumentInput { ui, doc, split, colors: DiffColors {
+                scroll = Some(paint_diff_document(PaintDiffDocumentInput {
+                    ui,
+                    doc,
+                    split,
+                    colors: DiffColors {
                         added: Color32::GREEN,
                         deleted: Color32::RED,
                         accent: Color32::BLUE,
                         text: Color32::WHITE,
-                    }, scroll_key: "scroll-regression", ratio: &mut ratio, sync: &mut sync }));
+                    },
+                    scroll_key: "scroll-regression",
+                    ratio: &mut ratio,
+                    sync: &mut sync,
+                }));
             },
         );
         output.textures_delta.clear();
@@ -1389,7 +1480,15 @@ pub(crate) mod tests {
                     ..Default::default()
                 },
                 |ui| {
-                    paint_diff_document(PaintDiffDocumentInput { ui, doc: &doc, split: true, colors, scroll_key: "drag-test", ratio, sync: &mut sync });
+                    paint_diff_document(PaintDiffDocumentInput {
+                        ui,
+                        doc: &doc,
+                        split: true,
+                        colors,
+                        scroll_key: "drag-test",
+                        ratio,
+                        sync: &mut sync,
+                    });
                 },
             );
             output.textures_delta.clear();
@@ -1449,7 +1548,13 @@ pub(crate) mod tests {
                 ..Default::default()
             },
             |ui| {
-                paint_markdown_diff_preview(PaintMarkdownDiffPreviewInput { ui, doc: &doc, previews: &mut previews, path: std::path::Path::new("/repo/test.md"), scroll_key: "test-preview" });
+                paint_markdown_diff_preview(PaintMarkdownDiffPreviewInput {
+                    ui,
+                    doc: &doc,
+                    previews: &mut previews,
+                    path: std::path::Path::new("/repo/test.md"),
+                    scroll_key: "test-preview",
+                });
             },
         );
         output.textures_delta.clear();
@@ -1461,8 +1566,13 @@ pub(crate) mod tests {
     }
     #[test]
     fn perforce_working_diff_is_read_only() {
-        let mut doc =
-            diff::build_with_context(std::path::Path::new("file.rs"), "old\n", "new\n", false, 3);
+        let mut doc = diff::build_with_context(diff::BuildWithContextInput {
+            path: std::path::Path::new("file.rs"),
+            left: "old\n",
+            right: "new\n",
+            staged: false,
+            context: 3,
+        });
         doc.read_only = true;
         doc.left_label = "Have revision".into();
         doc.right_label = "Workspace".into();

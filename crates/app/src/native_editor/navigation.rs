@@ -3,6 +3,7 @@
 //! window (grouped by file, with line previews, open until closed).
 
 use super::*;
+use crate::app::OpenFileInput;
 use std::collections::HashMap;
 
 /// Jumps remembered for Back; older ones fall off.
@@ -84,12 +85,12 @@ impl App {
             character: target.character,
         };
         let absolute = std::path::absolute(&target.path).unwrap_or_else(|_| target.path.clone());
-        self.open_file(
-            target.path.clone(),
-            position.line.checked_add(1),
-            None,
-            false,
-        );
+        self.open_file(OpenFileInput {
+            path: target.path.clone(),
+            line: position.line.checked_add(1),
+            split: None,
+            external: false,
+        });
         if self.native_pending_line.contains_key(&absolute) {
             self.native_pending_col.insert(absolute, position.character);
         }

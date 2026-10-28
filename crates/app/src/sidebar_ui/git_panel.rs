@@ -123,13 +123,22 @@ pub struct GitPanelOutcome {
 /// as files; a deleted row with no staged side is a no-op; otherwise the diff
 /// viewer preference picks native vs Neovim (Neovim only when the daemon
 /// advertises it).
-pub fn git_click_action(
-    deleted: bool,
-    staged: Option<bool>,
-    clicked: bool,
-    review_mode: ReviewMode,
-    neovim_review: bool,
-) -> Option<FileAction> {
+pub(crate) struct GitClickActionInput {
+    pub deleted: bool,
+    pub staged: Option<bool>,
+    pub clicked: bool,
+    pub review_mode: ReviewMode,
+    pub neovim_review: bool,
+}
+
+pub fn git_click_action(input: GitClickActionInput) -> Option<FileAction> {
+    let GitClickActionInput {
+        deleted,
+        staged,
+        clicked,
+        review_mode,
+        neovim_review,
+    } = input;
     if !clicked {
         return None;
     }
@@ -179,7 +188,13 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
         if !input.history
             && let Some(compare) = input.compare
         {
-            git_compare_row(ui, input.theme, &branch_name, compare, input.base_ref);
+            git_compare_row(GitCompareRowInput {
+                ui,
+                theme: input.theme,
+                branch: &branch_name,
+                compare,
+                base_ref: input.base_ref,
+            });
         }
         let staged = prepared
             .groups
@@ -327,15 +342,15 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
                     ui.weak("No commits");
                 }
                 for (hash, subject) in input.commits {
-                    let row = appearance::row(
+                    let row = appearance::row(appearance::RowInput {
                         ui,
-                        subject,
-                        "GitBranch",
-                        false,
-                        22.0,
-                        hash,
-                        appearance::color(&input.theme.secondary),
-                    );
+                        label: subject,
+                        icon: "GitBranch",
+                        selected: false,
+                        height: 22.0,
+                        trailing: hash,
+                        tint: appearance::color(&input.theme.secondary),
+                    });
                     if row.clicked() {
                         outcome.view_log = true;
                     }
@@ -360,7 +375,14 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
                 for prepared in &prepared.groups {
                     for (change, label) in prepared.entries.iter().zip(&prepared.labels) {
                         any = true;
-                        git_change_row(ui, &row_ctx, &mut outcome, change, prepared.group, label);
+                        git_change_row(GitChangeRowInput {
+                            ui,
+                            ctx: &row_ctx,
+                            outcome: &mut outcome,
+                            change,
+                            group: prepared.group,
+                            label,
+                        });
                     }
                 }
                 if !any {
@@ -368,26 +390,26 @@ pub fn git_panel(ui: &mut egui::Ui, input: &mut GitPanelInput) -> GitPanelOutcom
                 }
             } else {
                 for group in &prepared.groups {
-                    git_group_section(
+                    git_group_section(GitGroupSectionInput {
                         ui,
-                        &row_ctx,
-                        &mut outcome,
-                        root.as_deref(),
-                        group,
-                        input.collapse_generation,
-                    );
+                        ctx: &row_ctx,
+                        outcome: &mut outcome,
+                        root: root.as_deref(),
+                        prepared: group,
+                        collapse_generation: input.collapse_generation,
+                    });
                 }
                 if let Some(compare) = input.compare
                     && !compare.files.is_empty()
                 {
-                    git_committed_section(
+                    git_committed_section(GitCommittedSectionInput {
                         ui,
-                        &row_ctx,
-                        &mut outcome,
-                        root.as_deref(),
-                        &compare.files,
-                        input.collapse_generation,
-                    );
+                        ctx: &row_ctx,
+                        outcome: &mut outcome,
+                        root: root.as_deref(),
+                        files: &compare.files,
+                        collapse_generation: input.collapse_generation,
+                    });
                 }
             }
         });
@@ -575,13 +597,22 @@ fn git_toolbar(
 }
 
 /// `branch → base` with ahead/behind counts, the Orca branch compare line.
-fn git_compare_row(
-    ui: &mut egui::Ui,
-    theme: &AppearanceConfig,
-    branch: &str,
-    compare: &workspace_ops::CompareData,
-    base_ref: Option<&str>,
-) {
+struct GitCompareRowInput<'a> {
+    ui: &'a mut egui::Ui,
+    theme: &'a AppearanceConfig,
+    branch: &'a str,
+    compare: &'a workspace_ops::CompareData,
+    base_ref: Option<&'a str>,
+}
+
+fn git_compare_row(input: GitCompareRowInput<'_>) {
+    let GitCompareRowInput {
+        ui,
+        theme,
+        branch,
+        compare,
+        base_ref,
+    } = input;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.add(egui::Label::new(RichText::new(branch).monospace().strong()).truncate());
@@ -618,7 +649,13 @@ pub enum CheckState {
 }
 
 /// Aggregate checkbox state: all, none, or some children included.
-pub fn check_state(checked: usize, total: usize) -> CheckState {
+pub struct CheckStateInput {
+    pub checked: usize,
+    pub total: usize,
+}
+
+pub fn check_state(input: CheckStateInput) -> CheckState {
+    let CheckStateInput { checked, total } = input;
     if total == 0 || checked == 0 {
         CheckState::Unchecked
     } else if checked >= total {
@@ -675,14 +712,24 @@ fn tri_checkbox(ui: &mut egui::Ui, state: CheckState) -> bool {
 }
 
 /// One changed file: diffstat, status letter, click-to-diff, and context menu.
-fn git_change_row(
-    ui: &mut egui::Ui,
-    ctx: &GitRowCtx<'_>,
-    outcome: &mut GitPanelOutcome,
-    change: &terminator_git::Change,
+struct GitChangeRowInput<'a> {
+    ui: &'a mut egui::Ui,
+    ctx: &'a GitRowCtx<'a>,
+    outcome: &'a mut GitPanelOutcome,
+    change: &'a terminator_git::Change,
     group: terminator_git::GitGroup,
-    label: &str,
-) {
+    label: &'a str,
+}
+
+fn git_change_row(input: GitChangeRowInput<'_>) {
+    let GitChangeRowInput {
+        ui,
+        ctx,
+        outcome,
+        change,
+        group,
+        label,
+    } = input;
     // Keep layout height without constructing thousands of off-screen widgets.
     if skip_clipped_git_row(ui) {
         return;
@@ -701,17 +748,18 @@ fn git_change_row(
             ui.spacing_mut().item_spacing.x = 2.0;
             if group != terminator_git::GitGroup::Conflicts {
                 let checked = usize::from(group == terminator_git::GitGroup::Staged);
-                check_clicked = tri_checkbox(ui, check_state(checked, 1));
+                check_clicked =
+                    tri_checkbox(ui, check_state(CheckStateInput { checked, total: 1 }));
             }
-            appearance::file_row(
+            appearance::file_row(appearance::FileRowInput {
                 ui,
                 label,
-                icons::file_icon(&change.path),
-                false,
-                GIT_TREE_ROW_HEIGHT,
-                &trailing,
-                git_color(ctx.theme, letter),
-            )
+                icon: icons::file_icon(&change.path),
+                selected: false,
+                height: GIT_TREE_ROW_HEIGHT,
+                trailing: &trailing,
+                tint: git_color(ctx.theme, letter),
+            })
         })
         .inner
         .on_hover_text(format!(
@@ -741,26 +789,26 @@ fn git_change_row(
         response.rect,
     );
     let staged = (!change.conflict()).then_some(group == terminator_git::GitGroup::Staged);
-    if let Some(action) = git_click_action(
-        letter == 'D',
+    if let Some(action) = git_click_action(GitClickActionInput {
+        deleted: letter == 'D',
         staged,
-        response.clicked() || response.double_clicked(),
-        ctx.review_mode,
-        ctx.neovim_review,
-    ) {
+        clicked: response.clicked() || response.double_clicked(),
+        review_mode: ctx.review_mode,
+        neovim_review: ctx.neovim_review,
+    }) {
         outcome.clicked.push(GitFileAction {
             action,
             path: change.path.clone(),
         });
     }
     appearance::context_menu(&response, |ui| {
-        let open_changes = git_click_action(
-            letter == 'D',
+        let open_changes = git_click_action(GitClickActionInput {
+            deleted: letter == 'D',
             staged,
-            true,
-            ctx.review_mode,
-            ctx.neovim_review,
-        );
+            clicked: true,
+            review_mode: ctx.review_mode,
+            neovim_review: ctx.neovim_review,
+        });
         if let Some(action) = open_changes
             && appearance::menu_item(ui, "Open changes", "FileDiff", "").clicked()
         {
@@ -831,14 +879,24 @@ pub(super) const GIT_TREE_ROW_HEIGHT: f32 = 20.0;
 
 /// Orca-style section header with per-section stage/unstage all. The body is a
 /// directory tree (JetBrains-style), collapsible per folder.
-fn git_group_section(
-    ui: &mut egui::Ui,
-    ctx: &GitRowCtx<'_>,
-    outcome: &mut GitPanelOutcome,
-    root: Option<&Path>,
-    prepared: &PreparedGroup,
+struct GitGroupSectionInput<'a, 'b> {
+    ui: &'a mut egui::Ui,
+    ctx: &'a GitRowCtx<'b>,
+    outcome: &'a mut GitPanelOutcome,
+    root: Option<&'a Path>,
+    prepared: &'a PreparedGroup,
     collapse_generation: u64,
-) {
+}
+
+fn git_group_section(input: GitGroupSectionInput<'_, '_>) {
+    let GitGroupSectionInput {
+        ui,
+        ctx,
+        outcome,
+        root,
+        prepared,
+        collapse_generation,
+    } = input;
     let group = prepared.group;
     let entries = &prepared.entries;
     let label = git_group_label(group);
@@ -859,7 +917,8 @@ fn git_group_section(
                 } else {
                     0
                 };
-                group_check_clicked = tri_checkbox(ui, check_state(checked, total));
+                group_check_clicked =
+                    tri_checkbox(ui, check_state(CheckStateInput { checked, total }));
             }
             ui.add(
                 egui::Label::new(RichText::new(format!("{label} {total}")).small().strong())
@@ -892,7 +951,14 @@ fn git_group_section(
             let tree = &prepared.tree;
             ui.spacing_mut().indent = GIT_TREE_INDENT;
             ui.spacing_mut().item_spacing.y = 0.0;
-            git_change_tree(ui, ctx, outcome, tree, "", group);
+            git_change_tree(GitChangeTreeInput {
+                ui,
+                ctx,
+                outcome,
+                node: tree,
+                prefix: "",
+                group,
+            });
         });
     if group_check_clicked {
         for change in entries {
@@ -1032,14 +1098,24 @@ fn compress_change_tree(node: &mut ChangeTree) {
     }
 }
 
-fn git_change_tree(
-    ui: &mut egui::Ui,
-    ctx: &GitRowCtx<'_>,
-    outcome: &mut GitPanelOutcome,
-    node: &ChangeTree,
-    prefix: &str,
+struct GitChangeTreeInput<'a, 'b> {
+    ui: &'a mut egui::Ui,
+    ctx: &'a GitRowCtx<'b>,
+    outcome: &'a mut GitPanelOutcome,
+    node: &'a ChangeTree,
+    prefix: &'a str,
     group: terminator_git::GitGroup,
-) {
+}
+
+fn git_change_tree(input: GitChangeTreeInput<'_, '_>) {
+    let GitChangeTreeInput {
+        ui,
+        ctx,
+        outcome,
+        node,
+        prefix,
+        group,
+    } = input;
     for (name, child) in &node.dirs {
         let key = if prefix.is_empty() {
             name.clone()
@@ -1060,18 +1136,24 @@ fn git_change_tree(
                         } else {
                             0
                         };
-                        folder_check_clicked = tri_checkbox(ui, check_state(checked, count));
+                        folder_check_clicked = tri_checkbox(
+                            ui,
+                            check_state(CheckStateInput {
+                                checked,
+                                total: count,
+                            }),
+                        );
                     }
                     let trailing = count.to_string();
-                    folder_response = Some(appearance::file_row(
+                    folder_response = Some(appearance::file_row(appearance::FileRowInput {
                         ui,
-                        name,
-                        "Folder",
-                        false,
-                        GIT_TREE_ROW_HEIGHT,
-                        &trailing,
-                        appearance::color(&ctx.theme.secondary),
-                    ));
+                        label: name,
+                        icon: "Folder",
+                        selected: false,
+                        height: GIT_TREE_ROW_HEIGHT,
+                        trailing: &trailing,
+                        tint: appearance::color(&ctx.theme.secondary),
+                    }));
                 });
         if folder_check_clicked {
             let mut files = Vec::new();
@@ -1090,7 +1172,16 @@ fn git_change_tree(
         {
             header.toggle();
         }
-        let _ = header.body(|ui| git_change_tree(ui, ctx, outcome, child, &key, group));
+        let _ = header.body(|ui| {
+            git_change_tree(GitChangeTreeInput {
+                ui,
+                ctx,
+                outcome,
+                node: child,
+                prefix: &key,
+                group,
+            })
+        });
         if let Some(response) = folder_response {
             let response = response.on_hover_text(format!("{key} ({count} changed)"));
             appearance::context_menu(&response, |ui| match group {
@@ -1119,19 +1210,36 @@ fn git_change_tree(
         }
     }
     for (change, label) in node.files.iter().zip(&node.labels) {
-        git_change_row(ui, ctx, outcome, change, group, label);
+        git_change_row(GitChangeRowInput {
+            ui,
+            ctx,
+            outcome,
+            change,
+            group,
+            label,
+        });
     }
 }
 
 /// Files changed since the base ref, grouped under "COMMITTED ON BRANCH".
-fn git_committed_section(
-    ui: &mut egui::Ui,
-    ctx: &GitRowCtx<'_>,
-    outcome: &mut GitPanelOutcome,
-    root: Option<&Path>,
-    files: &[workspace_ops::CommittedFile],
+struct GitCommittedSectionInput<'a, 'b> {
+    ui: &'a mut egui::Ui,
+    ctx: &'a GitRowCtx<'b>,
+    outcome: &'a mut GitPanelOutcome,
+    root: Option<&'a Path>,
+    files: &'a [workspace_ops::CommittedFile],
     collapse_generation: u64,
-) {
+}
+
+fn git_committed_section(input: GitCommittedSectionInput<'_, '_>) {
+    let GitCommittedSectionInput {
+        ui,
+        ctx,
+        outcome,
+        root,
+        files,
+        collapse_generation,
+    } = input;
     let total = files.len();
     let id = ui.make_persistent_id(("git-committed", root, total, collapse_generation));
     let view_all_id =
@@ -1199,15 +1307,15 @@ fn git_committed_row(
     } else {
         format!("+{} {}", file.added, file.letter)
     };
-    let response = appearance::file_row(
+    let response = appearance::file_row(appearance::FileRowInput {
         ui,
-        &name,
-        icons::file_icon(&file.path),
-        false,
-        24.0,
-        &trailing,
-        git_color(ctx.theme, file.letter),
-    )
+        label: &name,
+        icon: icons::file_icon(&file.path),
+        selected: false,
+        height: 24.0,
+        trailing: &trailing,
+        tint: git_color(ctx.theme, file.letter),
+    })
     .on_hover_text(file.path.display().to_string());
     #[cfg(feature = "test-support")]
     diagnostics::record(
@@ -1252,10 +1360,34 @@ mod tests {
 
     #[test]
     fn check_state_covers_all_none_and_some() {
-        assert_eq!(check_state(0, 0), CheckState::Unchecked);
-        assert_eq!(check_state(0, 3), CheckState::Unchecked);
-        assert_eq!(check_state(3, 3), CheckState::Checked);
-        assert_eq!(check_state(1, 3), CheckState::Partial);
+        assert_eq!(
+            check_state(CheckStateInput {
+                checked: 0,
+                total: 0
+            }),
+            CheckState::Unchecked
+        );
+        assert_eq!(
+            check_state(CheckStateInput {
+                checked: 0,
+                total: 3
+            }),
+            CheckState::Unchecked
+        );
+        assert_eq!(
+            check_state(CheckStateInput {
+                checked: 3,
+                total: 3
+            }),
+            CheckState::Checked
+        );
+        assert_eq!(
+            check_state(CheckStateInput {
+                checked: 1,
+                total: 3
+            }),
+            CheckState::Partial
+        );
     }
 
     #[test]

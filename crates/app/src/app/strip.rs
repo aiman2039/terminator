@@ -4,6 +4,15 @@ use std::collections::HashSet;
 use terminator_core::*;
 
 use super::super::*;
+
+pub(crate) struct LandStripShellOnLeafInput<'a> {
+    pub(crate) dock: &'a mut Workspace,
+    pub(crate) sid: &'a str,
+    pub(crate) group: &'a str,
+    pub(crate) path: egui_dock::NodePath,
+    pub(crate) zone: PaneDropZone,
+}
+
 impl App {
     pub(crate) fn shell_ids_for(&self, project: &str) -> HashSet<String> {
         self.state
@@ -438,19 +447,27 @@ impl App {
     /// A failed landing still leaves the shell in its own workspace tab.
     pub(crate) fn land_strip_shell_on_leaf(
         &mut self,
-        dock: &mut Workspace,
-        sid: &str,
-        group: &str,
-        path: egui_dock::NodePath,
-        zone: PaneDropZone,
+        input: LandStripShellOnLeafInput<'_>,
     ) -> bool {
+        let LandStripShellOnLeafInput {
+            dock,
+            sid,
+            group,
+            path,
+            zone,
+        } = input;
         if !self.pull_strip_shell_into(dock, sid) {
             return false;
         }
         let pane = Tab::Terminal(sid.to_owned());
         let placed = match zone.split() {
             None => dock.move_pane_to_group_leaf(&pane, group, path),
-            Some(split) => dock.move_pane_to_split(crate::workspace::MovePaneToSplitInput { pane: &pane, dest_group: group, dest: path, split }),
+            Some(split) => dock.move_pane_to_split(crate::workspace::MovePaneToSplitInput {
+                pane: &pane,
+                dest_group: group,
+                dest: path,
+                split,
+            }),
         };
         placed || dock.contains(&pane)
     }

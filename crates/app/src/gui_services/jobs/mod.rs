@@ -1,10 +1,31 @@
 mod daemon;
+pub(crate) use daemon::CloseEditorsInput;
+pub(crate) use daemon::CloseIdleInput;
+pub(crate) use daemon::ExitSaveInput;
+pub(crate) use daemon::PrepareLayoutsInput;
+pub(crate) use daemon::RepairInstallationInput;
+pub(crate) use daemon::SaveLayoutInput;
 mod files;
+pub(crate) use files::OpenProjectInput;
+pub(crate) use files::ResolveTargetInput;
+pub(crate) use files::SearchInput;
+pub(crate) use files::WorkspaceOpInput;
 mod git;
+pub(crate) use git::DiffActionInput;
+pub(crate) use git::DiffContextInput;
 mod platform;
+pub(crate) use platform::TestExternalInput;
 mod remote;
+pub(crate) use remote::RemoteAddInput;
+pub(crate) use remote::RemoteAssetInput;
+pub(crate) use remote::RemoteTransferInput;
 mod settings;
+pub(crate) use settings::InstallInput;
+pub(crate) use settings::SaveAppearanceInput;
+pub(crate) use settings::TestNtfyInput;
 mod vnc;
+pub(crate) use vnc::VncFrameInput;
+pub(crate) use vnc::VncPickTransferInput;
 
 use super::submit::Services;
 use crate::{After, Job, Tab, Update, editor_close, image_preview};
@@ -307,3 +328,4 @@ impl ImageJobs {
         Ok(cancel)
     }
 }
+pub(in crate::gui_services) use git::DiffExpandInput;

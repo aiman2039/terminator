@@ -113,7 +113,13 @@ pub fn perform(root: &Path, op: Op) -> Result<Report> {
             amend,
             signoff,
             push,
-        } => commit(CommitInput { root, message: &message, amend, signoff, push }),
+        } => commit(CommitInput {
+            root,
+            message: &message,
+            amend,
+            signoff,
+            push,
+        }),
         Op::Shelve(paths) => shelve(root, &paths),
         Op::Shelves => Ok(Report::Shelves(shelves(root)?)),
         Op::Unshelve(reference) => {
@@ -253,16 +259,22 @@ fn git_path(root: &Path, prefix: &[&str], path: &Path, verb: &str) -> Result<Rep
 /// must not be restored then, or committing again would duplicate the commit.
 pub(crate) const PUSH_FAILED: &str = "Committed, but push failed";
 
- struct CommitInput<'a> {
-     root: &'a Path,
-     message: &'a str,
-     amend: bool,
-     signoff: bool,
-     push: bool,
+struct CommitInput<'a> {
+    root: &'a Path,
+    message: &'a str,
+    amend: bool,
+    signoff: bool,
+    push: bool,
 }
 
 fn commit(input: CommitInput<'_>) -> Result<Report> {
-        let CommitInput { root, message, amend, signoff, push } = input;
+    let CommitInput {
+        root,
+        message,
+        amend,
+        signoff,
+        push,
+    } = input;
 
     let message = message.trim();
     ensure!(amend || !message.is_empty(), "Commit message is empty");

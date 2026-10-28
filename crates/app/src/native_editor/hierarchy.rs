@@ -5,6 +5,7 @@
 
 use super::*;
 use crate::lsp_manager::HierarchyAnswer;
+use crate::lsp_manager::RequestHierarchyChildrenInput;
 use native_lsp::{HierarchyDirection, HierarchyItem, HierarchyKind};
 
 /// One tree node; `children` is `None` until asked for.
@@ -151,14 +152,16 @@ impl App {
         }
         entry.children = None;
         let raw = entry.item.raw.clone();
-        entry.loading = self.lsp.request_hierarchy_children(
-            &view.path,
-            &raw,
-            view.kind,
-            view.direction,
-            view.generation,
-            node,
-        );
+        entry.loading = self
+            .lsp
+            .request_hierarchy_children(RequestHierarchyChildrenInput {
+                path: &view.path,
+                item: &raw,
+                kind: view.kind,
+                direction: view.direction,
+                generation: view.generation,
+                node,
+            });
         if !entry.loading {
             entry.children = Some(Vec::new());
         }

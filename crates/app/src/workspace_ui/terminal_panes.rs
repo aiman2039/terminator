@@ -1,11 +1,12 @@
 use super::super::*;
 use super::viewer::Viewer;
-pub(super) struct StripTerminalClicksInput {
-    sid: Option<String>,
-    path: egui_dock::NodePath,
-    git_clicked: bool,
-    vertical_clicked: bool,
-    horizontal_clicked: bool,
+use crate::app::TerminalActionInput;
+pub(crate) struct StripTerminalClicksInput {
+    pub(crate) sid: Option<String>,
+    pub(crate) path: egui_dock::NodePath,
+    pub(crate) git_clicked: bool,
+    pub(crate) vertical_clicked: bool,
+    pub(crate) horizontal_clicked: bool,
 }
 impl Viewer<'_> {
     pub(super) fn strip_terminal_actions(&mut self, ui: &mut egui::Ui, path: egui_dock::NodePath) {
@@ -133,13 +134,13 @@ impl Viewer<'_> {
             .get(sid)
             .copied()
             .unwrap_or_default();
-        let header = appearance::markdown_header(
+        let header = appearance::markdown_header(appearance::MarkdownHeaderInput {
             ui,
-            &session.label,
-            self.app.active_session.as_ref() == Some(sid),
+            title: &session.label,
+            active: self.app.active_session.as_ref() == Some(sid),
             editing,
             mode,
-        );
+        });
         #[cfg(feature = "test-support")]
         {
             diagnostics::record(ui.ctx(), "markdown-title", header.title.rect);
@@ -218,12 +219,12 @@ impl Viewer<'_> {
         }
         if let Some(link) = link {
             match link {
-                markdown::Link::File(path) => self.app.terminal_action(
-                    ui.ctx(),
+                markdown::Link::File(path) => self.app.terminal_action(TerminalActionInput {
+                    ctx: ui.ctx(),
                     session,
-                    &services::Target::File(path, None, None),
-                    FileAction::Open,
-                ),
+                    target: &services::Target::File(path, None, None),
+                    action: FileAction::Open,
+                }),
                 markdown::Link::Web(url) => {
                     let _ = self.app.jobs.send(Job::Browser(url));
                 }
@@ -321,49 +322,46 @@ impl Viewer<'_> {
     ) -> (Option<i32>, bool) {
         let mut reveal = None;
         let mut close = false;
-            let total = find.outcome.matches.len();
-            let label = if find.query.is_empty() {
-                String::new()
-            } else if total == 0 {
-                "No matches".to_string()
-            } else {
-                let mut text = format!("{}/{}", find.current.saturating_add(1), total);
-                if find.outcome.truncated {
-                    text.push('+');
-                }
-                text
-            };
-            ui.monospace(label);
-            let shift = ui.input(|i| i.modifiers.shift);
-            if ui
-                .small_button("↑")
-                .on_hover_text("Previous (Shift+Enter)")
-                .clicked()
-                || (response.has_focus()
-                    && shift
-                    && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-            {
-                find.step(-1);
-                reveal = find.outcome.matches.get(find.current).map(|hit| hit.line);
+        let total = find.outcome.matches.len();
+        let label = if find.query.is_empty() {
+            String::new()
+        } else if total == 0 {
+            "No matches".to_string()
+        } else {
+            let mut text = format!("{}/{}", find.current.saturating_add(1), total);
+            if find.outcome.truncated {
+                text.push('+');
             }
-            if ui.small_button("↓").on_hover_text("Next (Enter)").clicked()
-                || (response.has_focus()
-                    && !shift
-                    && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-            {
-                find.step(1);
-                reveal = find.outcome.matches.get(find.current).map(|hit| hit.line);
-            }
-            if appearance::sidebar_action(ui, "X", "Close (Esc)").clicked() {
-                close = true;
-            }
-            if response.has_focus()
-                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-            {
-                close = true;
-            }
-            if response.has_focus() {
-                ui.ctx().request_repaint_after(Duration::from_millis(250));
-            }        (reveal, close)
+            text
+        };
+        ui.monospace(label);
+        let shift = ui.input(|i| i.modifiers.shift);
+        if ui
+            .small_button("↑")
+            .on_hover_text("Previous (Shift+Enter)")
+            .clicked()
+            || (response.has_focus() && shift && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+        {
+            find.step(-1);
+            reveal = find.outcome.matches.get(find.current).map(|hit| hit.line);
+        }
+        if ui.small_button("↓").on_hover_text("Next (Enter)").clicked()
+            || (response.has_focus() && !shift && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+        {
+            find.step(1);
+            reveal = find.outcome.matches.get(find.current).map(|hit| hit.line);
+        }
+        if appearance::sidebar_action(ui, "X", "Close (Esc)").clicked() {
+            close = true;
+        }
+        if response.has_focus()
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            close = true;
+        }
+        if response.has_focus() {
+            ui.ctx().request_repaint_after(Duration::from_millis(250));
+        }
+        (reveal, close)
     }
 }

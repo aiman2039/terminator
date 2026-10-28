@@ -93,7 +93,11 @@ fn authenticated(env: &Envelope, shared: &Shared) -> bool {
         _ => false,
     }
 }
-fn prepare_snapshot(env: &Envelope, shared: &Shared, stream: &mut transport::Stream) -> Result<bool> {
+fn prepare_snapshot(
+    env: &Envelope,
+    shared: &Shared,
+    stream: &mut transport::Stream,
+) -> Result<bool> {
     if !matches!(env.request, Request::Snapshot) {
         return Ok(false);
     }
@@ -124,8 +128,16 @@ struct ServeAttachInput {
     rows: u16,
     cols: u16,
 }
-fn serve_attach(stream: &mut transport::Stream, shared: &Arc<Shared>, input: ServeAttachInput) -> Result<()> {
-    let ServeAttachInput { session, rows, cols } = input;
+fn serve_attach(
+    stream: &mut transport::Stream,
+    shared: &Arc<Shared>,
+    input: ServeAttachInput,
+) -> Result<()> {
+    let ServeAttachInput {
+        session,
+        rows,
+        cols,
+    } = input;
     let _disconnect = Disconnect(stream.try_clone()?);
     let (rt, rx, snapshot) = match attach_setup(shared, &session, rows, cols) {
         Ok(setup) => setup,
@@ -222,8 +234,21 @@ pub(crate) fn serve(mut stream: transport::Stream, shared: Arc<Shared>) -> Resul
     if prepare_snapshot(&env, &shared, &mut stream)? {
         return Ok(());
     }
-    if let Request::Attach { session, rows, cols } = env.request {
-        return serve_attach(&mut stream, &shared, ServeAttachInput { session, rows, cols });
+    if let Request::Attach {
+        session,
+        rows,
+        cols,
+    } = env.request
+    {
+        return serve_attach(
+            &mut stream,
+            &shared,
+            ServeAttachInput {
+                session,
+                rows,
+                cols,
+            },
+        );
     }
     let ssh_errors = env.ssh_errors;
     let response = shared.handle(env.request).unwrap_or_else(|e| {

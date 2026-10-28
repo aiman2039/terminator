@@ -1,4 +1,6 @@
 use super::super::appearance;
+use crate::app::InsertFloatInput;
+use crate::native_editor::OpenNativeInput;
 use eframe::egui::{self};
 use egui_term::PtyEvent;
 use std::{
@@ -623,7 +625,12 @@ impl App {
                         } else if self.state.settings.editor_mode == EditorMode::Native
                             && let Some(project) = &project
                         {
-                            self.open_native(project, path, None, None);
+                            self.open_native(OpenNativeInput {
+                                project,
+                                path,
+                                line: None,
+                                split: None,
+                            });
                         } else if let Some(project) = project {
                             if self.reuse_file_session(&project, &path) {
                                 continue;
@@ -663,7 +670,12 @@ impl App {
                     self.layouts
                         .entry(project.clone())
                         .or_insert_with(Workspace::empty)
-                        .add_at_from(crate::workspace::AddAtFromInput { index, id, pane: Tab::Terminal(session.id.clone()), anchors: &anchors });
+                        .add_at_from(crate::workspace::AddAtFromInput {
+                            index,
+                            id,
+                            pane: Tab::Terminal(session.id.clone()),
+                            anchors: &anchors,
+                        });
                     if self.selected.as_ref() == Some(&project) {
                         self.active_session = Some(session.id.clone());
                     }
@@ -761,12 +773,12 @@ impl App {
                     // The originating window wins even after focus or
                     // project changes. A window closed mid-flight falls
                     // back to the project dock so the tab is not lost.
-                    if self.insert_float(
+                    if self.insert_float(InsertFloatInput {
                         viewport,
-                        Tab::Terminal(session.id.clone()),
-                        split.as_deref(),
-                        &anchors,
-                    ) {
+                        tab: Tab::Terminal(session.id.clone()),
+                        split: split.as_deref(),
+                        anchors: &anchors,
+                    }) {
                         self.active_session = Some(session.id.clone());
                     } else {
                         self.insert(

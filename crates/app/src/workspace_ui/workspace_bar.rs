@@ -421,16 +421,16 @@ impl App {
                             // Focused terminal identity: stable brand glyph
                             // beside the hook lifecycle status.
                             if let Some(brand) = face.brand {
-                                appearance::paint_status_icon(
+                                appearance::paint_status_icon(appearance::PaintStatusIconInput {
                                     ui,
-                                    egui::Rect::from_center_size(
+                                    rect: egui::Rect::from_center_size(
                                         egui::pos2(rect.left() + 10.0, rect.center().y),
                                         egui::vec2(13.0, 13.0),
                                     ),
-                                    brand,
-                                    appearance::icon_color(),
-                                    false,
-                                );
+                                    icon: brand,
+                                    tint: appearance::icon_color(),
+                                    spin: false,
+                                });
                             }
                             let status_center = if face.brand.is_some() {
                                 rect.left() + 24.0
@@ -443,13 +443,13 @@ impl App {
                                 egui::vec2(status_size, status_size),
                             );
                             if let Some((state, status_icon, tint)) = face.status {
-                                appearance::paint_status_icon(
+                                appearance::paint_status_icon(appearance::PaintStatusIconInput {
                                     ui,
-                                    icon_rect,
-                                    status_icon,
+                                    rect: icon_rect,
+                                    icon: status_icon,
                                     tint,
-                                    state == AgentState::Running,
-                                );
+                                    spin: state == AgentState::Running,
+                                });
                             } else {
                                 egui::Image::new(icons::source(face.icon))
                                     .tint(terminal_tint.unwrap_or(appearance::icon_color()))
@@ -463,13 +463,18 @@ impl App {
                                 .is_some_and(|sid| self.renaming(sid, RenameSurface::Workspace));
                             if editing {
                                 if let Some(sid) = &face.sid {
-                                    self.inline_rename(super::menus::InlineRenameInput { ui, sid, surface: RenameSurface::Workspace, rect: egui::Rect::from_min_max(
+                                    self.inline_rename(super::menus::InlineRenameInput {
+                                        ui,
+                                        sid,
+                                        surface: RenameSurface::Workspace,
+                                        rect: egui::Rect::from_min_max(
                                             egui::pos2(rect.min.x + label_x, rect.min.y + 8.0),
                                             egui::pos2(
                                                 rect.max.x - (28.0 + badge_reserve),
                                                 rect.max.y - 7.0,
                                             ),
-                                        ) });
+                                        ),
+                                    });
                                 }
                             } else {
                                 let mut text = egui::text::LayoutJob::simple(
@@ -890,7 +895,13 @@ impl App {
                                 egui::StrokeKind::Inside,
                             );
                         }
-                        Self::paint_strip_insertion(super::drag::PaintStripInsertionInput { ui, strip: &strip_rect, tabs: &strip_rects, index, accent });
+                        Self::paint_strip_insertion(super::drag::PaintStripInsertionInput {
+                            ui,
+                            strip: &strip_rect,
+                            tabs: &strip_rects,
+                            index,
+                            accent,
+                        });
                         if let Some(dragged) = self.drag.tab.clone()
                             && let Some((_, rect)) =
                                 strip_rects.iter().find(|(id, _)| id == &dragged)

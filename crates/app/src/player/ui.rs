@@ -293,7 +293,14 @@ fn eq_panel(app: &mut App, ui: &mut Ui) {
             };
             value
         };
-        if let Some(next) = v_slider(ui, groove_rect, &format!("eq-{i}"), value, groove, accent) {
+        if let Some(next) = v_slider(VSliderInput {
+            ui,
+            rect: groove_rect,
+            id: &format!("eq-{i}"),
+            value,
+            groove,
+            thumb: accent,
+        }) {
             if i == 0 {
                 app.player.eq_preamp = next;
             } else if let Some(slot) = app.player.eq_bands.get_mut(i.saturating_sub(1)) {
@@ -750,19 +757,50 @@ fn mode_toggle(app: &mut App, ui: &mut Ui) {
     let mid = rect.center().x;
     let files = Rect::from_min_max(rect.min, pos2(mid, rect.max.y)).shrink(2.0);
     let radio_rect = Rect::from_min_max(pos2(mid, rect.min.y), rect.max).shrink(2.0);
-    if mode_half(ui, files, "ListMusic", "Files", !radio).clicked() {
+    if mode_half(ModeHalfInput {
+        ui,
+        rect: files,
+        icon: "ListMusic",
+        tip: "Files",
+        active: !radio,
+    })
+    .clicked()
+    {
         app.player.radio_mode = false;
         app.preferences.player_radio_mode = false;
         app.player.pl_open = true;
     }
-    if mode_half(ui, radio_rect, "Radio", "Radio", radio).clicked() {
+    if mode_half(ModeHalfInput {
+        ui,
+        rect: radio_rect,
+        icon: "Radio",
+        tip: "Radio",
+        active: radio,
+    })
+    .clicked()
+    {
         app.player.radio_mode = true;
         app.preferences.player_radio_mode = true;
         app.player.pl_open = true;
     }
 }
 
-fn mode_half(ui: &mut Ui, rect: Rect, icon: &str, tip: &str, active: bool) -> egui::Response {
+pub(crate) struct ModeHalfInput<'a> {
+    pub(crate) ui: &'a mut Ui,
+    pub(crate) rect: Rect,
+    pub(crate) icon: &'a str,
+    pub(crate) tip: &'a str,
+    pub(crate) active: bool,
+}
+
+fn mode_half(input: ModeHalfInput<'_>) -> egui::Response {
+    let ModeHalfInput {
+        ui,
+        rect,
+        icon,
+        tip,
+        active,
+    } = input;
     let response = ui
         .interact(rect, ui.scope_id().with(icon), Sense::click())
         .on_hover_text(tip);
@@ -815,14 +853,24 @@ fn eq_matches(app: &App, preset: &EqPreset) -> bool {
             .all(|(left, right)| (left - right).abs() < 0.03)
 }
 
-fn v_slider(
-    ui: &mut Ui,
-    rect: Rect,
-    id: &str,
-    value: f32,
-    groove: Color32,
-    thumb: Color32,
-) -> Option<f32> {
+pub(crate) struct VSliderInput<'a> {
+    pub(crate) ui: &'a mut Ui,
+    pub(crate) rect: Rect,
+    pub(crate) id: &'a str,
+    pub(crate) value: f32,
+    pub(crate) groove: Color32,
+    pub(crate) thumb: Color32,
+}
+
+fn v_slider(input: VSliderInput<'_>) -> Option<f32> {
+    let VSliderInput {
+        ui,
+        rect,
+        id,
+        value,
+        groove,
+        thumb,
+    } = input;
     let response = ui.interact(rect, ui.scope_id().with(id), Sense::click_and_drag());
     ui.painter().rect_filled(rect, 2.0, groove);
     let y = rect.max.y - 4.0 - (rect.height() - 8.0) * value.clamp(0.0, 1.0);

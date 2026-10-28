@@ -68,14 +68,24 @@ async fn connect_client(
         .map_err(|e| Failure::Permanent(format!("VNC setup failed: {e}")))?;
     Ok(client)
 }
-async fn type_text(
-    client: &vnc::VncClient,
-    shared: &Arc<Shared>,
-    runtime: &Arc<Mutex<VncRuntime>>,
-    sid: &str,
-    text: &str,
-    input_rx: &mut mpsc::Receiver<VncInputEvent>,
-) -> Result<(), Failure> {
+struct TypeTextInput<'a> {
+    client: &'a vnc::VncClient,
+    shared: &'a Arc<Shared>,
+    runtime: &'a Arc<Mutex<VncRuntime>>,
+    sid: &'a str,
+    text: &'a str,
+    input_rx: &'a mut mpsc::Receiver<VncInputEvent>,
+}
+
+async fn type_text(input: TypeTextInput<'_>) -> Result<(), Failure> {
+    let TypeTextInput {
+        client,
+        shared,
+        runtime,
+        sid,
+        text,
+        input_rx,
+    } = input;
     for keycode in text.chars().filter_map(input::keysym) {
         if input_rx.is_closed() {
             return Err(Failure::Cancelled);
@@ -137,7 +147,7 @@ pub(super) async fn run(input: RunInput<'_>) -> Result<(), Failure> {
                         }));
                     }
                     VncInputEvent::TypeText(text)=>{
-                        if let Err(e)=type_text(&client,shared,runtime,sid,&text,input_rx).await{break 'connection Err(e);}
+                        if let Err(e)=type_text(TypeTextInput { client: &client, shared, runtime, sid, text: &text, input_rx }).await{break 'connection Err(e);}
                     }
                     event=>{
                         let printable_release=matches!(&event,VncInputEvent::Key{keycode,down:false} if *keycode<=255||*keycode>=0x0100_0000);

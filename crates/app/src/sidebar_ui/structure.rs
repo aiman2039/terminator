@@ -353,8 +353,14 @@ impl App {
                     };
                     let parent = tree.has_children(*index);
                     let selected = current == Some(*index);
-                    let response =
-                        outline_row(ui, symbol, *depth, parent, expanded(*index), selected);
+                    let response = outline_row(OutlineRowInput {
+                        ui,
+                        symbol,
+                        depth: *depth,
+                        parent,
+                        expanded: expanded(*index),
+                        selected,
+                    });
                     if selected && scroll_to_current {
                         response.scroll_to_me(None);
                     }
@@ -439,14 +445,24 @@ impl App {
 
 /// One outline row: chevron, kind badge, name (struck through when
 /// deprecated), and the dimmed server detail.
-fn outline_row(
-    ui: &mut egui::Ui,
-    symbol: &Symbol,
-    depth: usize,
-    parent: bool,
-    expanded: bool,
-    selected: bool,
-) -> egui::Response {
+pub(crate) struct OutlineRowInput<'a> {
+    pub(crate) ui: &'a mut egui::Ui,
+    pub(crate) symbol: &'a Symbol,
+    pub(crate) depth: usize,
+    pub(crate) parent: bool,
+    pub(crate) expanded: bool,
+    pub(crate) selected: bool,
+}
+
+fn outline_row(input: OutlineRowInput<'_>) -> egui::Response {
+    let OutlineRowInput {
+        ui,
+        symbol,
+        depth,
+        parent,
+        expanded,
+        selected,
+    } = input;
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), ROW_HEIGHT),
         egui::Sense::click(),
@@ -462,17 +478,17 @@ fn outline_row(
     if parent {
         let chevron =
             egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(CHEVRON, ROW_HEIGHT));
-        appearance::paint_centered_icon(
+        appearance::paint_centered_icon(appearance::PaintCenteredIconInput {
             ui,
-            chevron,
-            if expanded {
+            rect: chevron,
+            icon: if expanded {
                 "ChevronDown"
             } else {
                 "ChevronRight"
             },
-            12.0,
-            appearance::icon_color(),
-        );
+            size: 12.0,
+            tint: appearance::icon_color(),
+        });
     }
     x += CHEVRON;
     let (letter, color) = kind_badge(&symbol.kind);

@@ -148,7 +148,17 @@ impl Shared {
         }
     }
     fn spawn_vnc_thread(self: &Arc<Self>, input: SpawnVncThreadInput) {
-        let SpawnVncThreadInput { runtime, session_id, host, port, username, password, shared, options, input_rx } = input;
+        let SpawnVncThreadInput {
+            runtime,
+            session_id,
+            host,
+            port,
+            username,
+            password,
+            shared,
+            options,
+            input_rx,
+        } = input;
         let shared_ref = Arc::clone(self);
         thread::spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

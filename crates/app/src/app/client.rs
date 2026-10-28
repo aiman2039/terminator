@@ -1,3 +1,4 @@
+use crate::app::OpenFileModeInput;
 use anyhow::{Context, Result};
 use eframe::egui::{self};
 #[cfg(feature = "test-support")]
@@ -272,7 +273,13 @@ impl App {
                     "Project has an unsupported layout version"
                 );
                 self.select_project(project);
-                self.open_file_mode(path, None, None, false, as_text);
+                self.open_file_mode(OpenFileModeInput {
+                    path,
+                    line: None,
+                    split: None,
+                    external: false,
+                    text: as_text,
+                });
             }
             Ui::OpenBrowser { url } => {
                 let _ = self.jobs.send(Job::Browser(metadata::http_url(&url)?));

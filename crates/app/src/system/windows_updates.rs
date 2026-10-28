@@ -6,7 +6,7 @@
 //! `terminator-*-x86_64-pc-windows-msvc.zip`. Nothing downloads or installs
 //! automatically, and development/isolated launches never touch the feed.
 
-use super::*;
+use crate::*;
 use std::{
     sync::mpsc,
     time::{Duration, Instant},

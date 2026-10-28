@@ -1,17 +1,17 @@
 //! Recovery uses the ordinary session navigation and safe idle restart paths.
-use super::*;
+use crate::*;
 
 impl App {
-    pub(super) fn installation_problem(&self) -> bool {
+    pub(crate) fn installation_problem(&self) -> bool {
         self.installation_error.is_some() || self.state.attachment_helper_available == Some(false)
     }
 
-    pub(super) fn open_installation_settings(&mut self) {
+    pub(crate) fn open_installation_settings(&mut self) {
         self.open_settings();
         self.settings_section = SettingsSection::Updates;
     }
 
-    pub(super) fn maybe_upgrade_idle_daemon(&mut self) {
+    pub(crate) fn maybe_upgrade_idle_daemon(&mut self) {
         if self.exit.active()
             || !self.connected
             || self.repair_pending
@@ -25,7 +25,7 @@ impl App {
         self.begin_installation_repair();
     }
 
-    pub(super) fn restart_session_button(&mut self, ui: &mut egui::Ui, small: bool) {
+    pub(crate) fn restart_session_button(&mut self, ui: &mut egui::Ui, small: bool) {
         if !self.connected || !can_restart_service(&self.state) {
             return;
         }
@@ -47,7 +47,7 @@ impl App {
         }
     }
 
-    pub(super) fn begin_session_restart(&mut self) {
+    pub(crate) fn begin_session_restart(&mut self) {
         if self.restart_pending
             || self.repair_pending
             || self.exit.active()
@@ -67,7 +67,7 @@ impl App {
         }
     }
 
-    pub(super) fn begin_installation_repair(&mut self) {
+    pub(crate) fn begin_installation_repair(&mut self) {
         if self.repair_pending
             || !self.connected
             || (!can_retire_daemon(&self.state) && self.state.generations.is_empty())
@@ -99,14 +99,14 @@ impl App {
     /// longer reach the session service (reboot, crash, or a wiped runtime
     /// directory). Session records and window-close persistence are stale
     /// until the service is started again.
-    pub(super) fn service_disconnected(&self) -> bool {
+    pub(crate) fn service_disconnected(&self) -> bool {
         self.state_loaded && !self.connected
     }
 
     /// Terminal tabs without a matching session record in the latest daemon
     /// state. Only reported while connected so a stale snapshot never prunes
     /// tabs whose sessions may still exist.
-    pub(super) fn unavailable_tabs(&self) -> Vec<String> {
+    pub(crate) fn unavailable_tabs(&self) -> Vec<String> {
         if !self.connected {
             return Vec::new();
         }
@@ -147,7 +147,7 @@ impl App {
         missing
     }
 
-    pub(super) fn start_service_button(&mut self, ui: &mut egui::Ui, small: bool) {
+    pub(crate) fn start_service_button(&mut self, ui: &mut egui::Ui, small: bool) {
         if !self.service_disconnected() {
             return;
         }
@@ -169,7 +169,7 @@ impl App {
         }
     }
 
-    pub(super) fn begin_service_start(&mut self) {
+    pub(crate) fn begin_service_start(&mut self) {
         if self.service_start_pending || self.connected {
             return;
         }
@@ -187,18 +187,18 @@ impl App {
     /// `paint_dock` checks the workspace out of `layouts`. `remove_tab`
     /// only walks `layouts`, so a direct close from the pane body misses
     /// the visible tab and it reappears on check-in.
-    pub(super) fn queue_unavailable_tab_close(&mut self, sid: &str) {
+    pub(crate) fn queue_unavailable_tab_close(&mut self, sid: &str) {
         self.pending_unavailable_close.push(sid.to_owned());
     }
 
-    pub(super) fn drain_pending_unavailable_close(&mut self) {
+    pub(crate) fn drain_pending_unavailable_close(&mut self) {
         let pending = std::mem::take(&mut self.pending_unavailable_close);
         for sid in &pending {
             self.remove_tab(sid);
         }
     }
 
-    pub(super) fn close_unavailable_tabs(&mut self) {
+    pub(crate) fn close_unavailable_tabs(&mut self) {
         let missing = self.unavailable_tabs();
         if missing.is_empty() {
             return;
@@ -217,7 +217,7 @@ impl App {
     /// Runs after state updates so a tab left behind by a pruned (ended,
     /// non-resumable) session disappears on its own. The explicit
     /// [`Self::close_unavailable_tabs`] remains for the Info action.
-    pub(super) fn prune_unavailable_tabs(&mut self) {
+    pub(crate) fn prune_unavailable_tabs(&mut self) {
         if !self.connected {
             return;
         }
@@ -226,7 +226,7 @@ impl App {
         }
     }
 
-    pub(super) fn installation_settings(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn installation_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading("Installation");
         if !self.connected {
             ui.label(

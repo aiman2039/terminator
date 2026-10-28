@@ -3,7 +3,12 @@ struct ApplyResolutionInput {
     width: u16,
     height: u16,
 }
-fn apply_resolution(shared: &Arc<Shared>, runtime: &Arc<Mutex<VncRuntime>>, session_id: &str, input: ApplyResolutionInput) -> bool {
+fn apply_resolution(
+    shared: &Arc<Shared>,
+    runtime: &Arc<Mutex<VncRuntime>>,
+    session_id: &str,
+    input: ApplyResolutionInput,
+) -> bool {
     let ApplyResolutionInput { width, height } = input;
     {
         let mut rt = relock(runtime);
@@ -22,7 +27,12 @@ fn apply_resolution(shared: &Arc<Shared>, runtime: &Arc<Mutex<VncRuntime>>, sess
     }
     true
 }
-fn apply_layout(shared: &Arc<Shared>, runtime: &Arc<Mutex<VncRuntime>>, session_id: &str, layout: vnc::DesktopLayout) -> bool {
+fn apply_layout(
+    shared: &Arc<Shared>,
+    runtime: &Arc<Mutex<VncRuntime>>,
+    session_id: &str,
+    layout: vnc::DesktopLayout,
+) -> bool {
     {
         let mut rt = relock(runtime);
         rt.resize(layout.width, layout.height);
@@ -51,10 +61,8 @@ fn apply_layout(shared: &Arc<Shared>, runtime: &Arc<Mutex<VncRuntime>>, session_
     true
 }
 fn apply_jpeg(runtime: &Arc<Mutex<VncRuntime>>, rect: vnc::Rect, bytes: Vec<u8>) -> bool {
-    let mut reader = image::ImageReader::with_format(
-        std::io::Cursor::new(bytes),
-        image::ImageFormat::Jpeg,
-    );
+    let mut reader =
+        image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Jpeg);
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(u32::from(MAX_DIMENSION));
     limits.max_image_height = Some(u32::from(MAX_DIMENSION));
@@ -101,7 +109,10 @@ pub(super) fn apply_vnc_event(
             shared,
             runtime,
             session_id,
-            ApplyResolutionInput { width: screen.width, height: screen.height },
+            ApplyResolutionInput {
+                width: screen.width,
+                height: screen.height,
+            },
         ),
         VncEvent::DesktopUpdate(update) => match update.layout {
             Some(layout) => apply_layout(shared, runtime, session_id, layout),

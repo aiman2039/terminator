@@ -9,7 +9,7 @@ pub use persistence::{
 // without tripping `unused_imports` on normal builds.
 #[cfg(test)]
 pub use persistence::Playlist;
-pub use sorting::{
+pub(crate) use sorting::{
     HistoryGroup, HistoryInput, HistorySort, ProjectSort, VisibleProjects, sort_history,
     sort_visible_projects,
 };

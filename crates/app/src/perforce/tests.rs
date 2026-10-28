@@ -83,13 +83,13 @@ async fn isolated_server() {
         ("new file.txt", "", "new file\n"),
         ("special@file#1.txt", "original\n", "original\n"),
     ] {
-        let doc = crate::diff::document_async(
-            &service,
-            command_root.clone(),
-            root.join(name),
-            false,
-            &cancel,
-        )
+        let doc = crate::diff::document_async(crate::diff::DocumentAsyncInput {
+            service: &service,
+            cwd: command_root.clone(),
+            path: root.join(name),
+            staged: false,
+            cancel: &cancel,
+        })
         .await
         .unwrap();
         assert_eq!(doc.left_text, before, "{name}");
@@ -237,16 +237,28 @@ async fn isolated_server() {
     let path = excluded.join("local.txt");
     std::fs::write(&path, "not in the client view\n").unwrap();
     assert!(
-        document(&service, command_root.clone(), path, 3, &cancel)
-            .await
-            .is_err()
+        document(DocumentInput {
+            service: &service,
+            cwd: command_root.clone(),
+            path,
+            context: 3,
+            cancel: &cancel
+        })
+        .await
+        .is_err()
     );
     // This cwd is outside the client; Git-to-Perforce fallback must also fail.
     let path = state.path().join("unrelated.txt");
     std::fs::write(&path, "unrelated\n").unwrap();
     assert!(
-        crate::diff::document_async(&service, state.path().into(), path, false, &cancel)
-            .await
-            .is_err()
+        crate::diff::document_async(crate::diff::DocumentAsyncInput {
+            service: &service,
+            cwd: state.path().into(),
+            path,
+            staged: false,
+            cancel: &cancel
+        })
+        .await
+        .is_err()
     );
 }

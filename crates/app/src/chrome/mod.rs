@@ -1,0 +1,15 @@
+pub(super) mod dialogs_ui;
+pub(super) mod git_log;
+pub(super) mod hosts_ui;
+pub mod installation;
+pub(super) mod installation_ui;
+pub(super) mod markdown_images;
+pub(super) mod menu_bar;
+pub(super) mod popup;
+pub(super) mod remote_ui;
+pub(super) mod session_info;
+pub(super) mod settings_controls;
+pub(super) mod shortcuts;
+pub(super) mod sidebar_cache;
+pub(super) mod transfers_ui;
+pub(super) mod worktree_ui;

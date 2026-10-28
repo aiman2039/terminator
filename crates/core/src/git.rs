@@ -40,13 +40,19 @@ pub fn run_blocking<A: AsRef<OsStr>>(
 /// Run a read-only Git command through the shared process pool. The
 /// repository key is computed on the filesystem pool, as before.
 #[cfg(feature = "async-client")]
+pub struct RunInput<'a> {
+    pub cwd: &'a Path,
+    pub args: Vec<OsString>,
+    pub options: CommandOptions,
+}
+
+#[cfg(feature = "async-client")]
 pub async fn run(
     processes: &crate::async_process::Processes,
     files: &crate::async_service::NativePool,
-    cwd: &Path,
-    args: Vec<OsString>,
-    options: CommandOptions,
+    input: RunInput<'_>,
 ) -> Result<Vec<u8>> {
+    let RunInput { cwd, args, options } = input;
     let command = command(cwd, &args);
     let directory = cwd.to_owned();
     let key = files

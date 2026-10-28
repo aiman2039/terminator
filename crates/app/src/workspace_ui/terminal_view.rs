@@ -2,6 +2,7 @@ use super::super::*;
 use super::hover::link_menu_modifier_pressed;
 use super::tabs::cached_terminal_theme;
 use super::viewer::Viewer;
+use crate::app::TerminalActionInput;
 use egui_term::TerminalBackend;
 impl Viewer<'_> {
     pub(crate) fn terminal_view(&mut self, ui: &mut egui::Ui, session: &Session) {
@@ -237,11 +238,18 @@ impl Viewer<'_> {
             && !ui.input(|i| i.pointer.any_down())
             && !mouse_reporting
         {
-            self.app.remember_hover_copy(crate::workspace_ui::hover::RememberHoverCopyInput { ui, sid, target: resolved, rects: target
-                    .rects
-                    .iter()
-                    .map(|rect| rect.translate(response.rect.min.to_vec2()))
-                    .collect(), strip: self.strip });
+            self.app
+                .remember_hover_copy(crate::workspace_ui::hover::RememberHoverCopyInput {
+                    ui,
+                    sid,
+                    target: resolved,
+                    rects: target
+                        .rects
+                        .iter()
+                        .map(|rect| rect.translate(response.rect.min.to_vec2()))
+                        .collect(),
+                    strip: self.strip,
+                });
             for rect in &target.rects {
                 let rect = rect.translate(response.rect.min.to_vec2());
                 ui.painter().with_clip_rect(response.rect).line_segment(
@@ -334,7 +342,12 @@ impl Viewer<'_> {
             let key = Tab::Terminal(sid.clone()).key();
             let pane = self.pane_for(&key);
             self.app
-                .new_terminal_menu(super::menus::NewTerminalMenuInput { ui, pane, strip: self.strip, window: self.window });
+                .new_terminal_menu(super::menus::NewTerminalMenuInput {
+                    ui,
+                    pane,
+                    strip: self.strip,
+                    window: self.window,
+                });
             ui.separator();
             let key = ui
                 .ctx()
@@ -343,7 +356,12 @@ impl Viewer<'_> {
             if let Some(Some(target)) = self.app.targets.get(&key).cloned() {
                 appearance::target_header(ui, &target.compact(), &target.display());
                 if let Some(action) = file_actions::menu(ui, file_actions::target_menu(&target)) {
-                    self.app.terminal_action(ui.ctx(), session, &target, action);
+                    self.app.terminal_action(TerminalActionInput {
+                        ctx: ui.ctx(),
+                        session,
+                        target: &target,
+                        action,
+                    });
                 }
             }
             if appearance::menu_item(
@@ -462,8 +480,12 @@ impl Viewer<'_> {
                     if let Some(action) =
                         file_actions::menu(ui, file_actions::target_menu(&popup.target))
                     {
-                        self.app
-                            .terminal_action(ui.ctx(), session, &popup.target, action);
+                        self.app.terminal_action(TerminalActionInput {
+                            ctx: ui.ctx(),
+                            session,
+                            target: &popup.target,
+                            action,
+                        });
                     }
                 });
             if !open {

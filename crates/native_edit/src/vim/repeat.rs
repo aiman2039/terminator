@@ -1,5 +1,6 @@
 use super::super::doc::Buffer;
 use super::mode::{Bit, BlockPending, Cursor, Effect, Key, ModalEngine, PendingOp, Place, Repeat};
+use super::operators::DeleteBlockRangesInput;
 use super::state::VimEngine;
 use super::words::line_len;
 impl VimEngine {
@@ -188,7 +189,15 @@ impl VimEngine {
                     .saturating_add(height)
                     .min(doc.line_count().saturating_sub(1));
                 doc.begin_undo_group();
-                self.delete_block_ranges(doc, top, bottom, left, right.saturating_add(1));
+                self.delete_block_ranges(
+                    doc,
+                    DeleteBlockRangesInput {
+                        top,
+                        bottom,
+                        left,
+                        right_excl: right.saturating_add(1),
+                    },
+                );
                 doc.end_undo_group();
                 self.cursor = Cursor {
                     line: top,
@@ -265,7 +274,15 @@ impl VimEngine {
                     skip_first: false,
                 };
                 doc.begin_undo_group();
-                self.delete_block_ranges(doc, top, bottom, left, right.saturating_add(1));
+                self.delete_block_ranges(
+                    doc,
+                    DeleteBlockRangesInput {
+                        top,
+                        bottom,
+                        left,
+                        right_excl: right.saturating_add(1),
+                    },
+                );
                 self.apply_block_insert(doc, &block, &text);
                 doc.end_undo_group();
                 self.cursor = Cursor {

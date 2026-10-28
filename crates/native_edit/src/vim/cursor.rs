@@ -2,6 +2,12 @@ use super::super::doc::Buffer;
 use super::mode::{Cursor, Mode};
 use super::state::VimEngine;
 use super::words::line_len;
+
+pub(super) struct GotoInput {
+    pub(super) line: usize,
+    pub(super) col: usize,
+    pub(super) preferred: bool,
+}
 impl VimEngine {
     /// Last cursor-addressable line. A trailing empty line exists only to
     /// terminate the final newline (vim shows no line there), so it is
@@ -58,7 +64,12 @@ impl VimEngine {
         doc.char_at_line_col(cursor.line, cursor.col)
     }
 
-    pub(super) fn goto<B: Buffer>(&mut self, doc: &B, line: usize, col: usize, preferred: bool) {
+    pub(super) fn goto<B: Buffer>(&mut self, doc: &B, input: GotoInput) {
+        let GotoInput {
+            line,
+            col,
+            preferred,
+        } = input;
         self.cursor.line = line;
         self.cursor.col = col;
         if preferred {
@@ -76,12 +87,26 @@ impl VimEngine {
 
     pub(super) fn move_h<B: Buffer>(&mut self, doc: &B, count: usize) {
         let col = self.cursor.col.saturating_sub(count);
-        self.goto(doc, self.cursor.line, col, true);
+        self.goto(
+            doc,
+            GotoInput {
+                line: self.cursor.line,
+                col,
+                preferred: true,
+            },
+        );
     }
 
     pub(super) fn move_l<B: Buffer>(&mut self, doc: &B, count: usize) {
         let col = self.cursor.col.saturating_add(count);
-        self.goto(doc, self.cursor.line, col, true);
+        self.goto(
+            doc,
+            GotoInput {
+                line: self.cursor.line,
+                col,
+                preferred: true,
+            },
+        );
     }
 
     pub(super) fn move_j<B: Buffer>(&mut self, doc: &B, count: usize) {

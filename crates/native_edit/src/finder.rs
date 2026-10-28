@@ -26,6 +26,13 @@ pub struct FileIndex {
     files: Vec<IndexedFile>,
 }
 
+pub struct QueryScoredInInput<'a> {
+    pub root: Option<&'a Path>,
+    pub exclude: &'a [PathBuf],
+    pub pattern: &'a str,
+    pub limit: usize,
+}
+
 impl FileIndex {
     #[must_use]
     pub fn empty() -> Self {
@@ -118,20 +125,25 @@ impl FileIndex {
     /// categories. The caller can merge all kinds into one fuzzy list.
     #[must_use]
     pub fn query_scored(&self, pattern: &str, limit: usize) -> Vec<(u16, IndexedFile)> {
-        self.query_scored_in(None, &[], pattern, limit)
+        self.query_scored_in(QueryScoredInInput {
+            root: None,
+            exclude: &[],
+            pattern,
+            limit,
+        })
     }
 
     /// Same ranking as [`Self::query_scored`], limited to files under `root`.
     /// `None` searches the whole index. `exclude` drops nested roots before
     /// the limit, so those files cannot fill the result list.
     #[must_use]
-    pub fn query_scored_in(
-        &self,
-        root: Option<&Path>,
-        exclude: &[PathBuf],
-        pattern: &str,
-        limit: usize,
-    ) -> Vec<(u16, IndexedFile)> {
+    pub fn query_scored_in(&self, input: QueryScoredInInput<'_>) -> Vec<(u16, IndexedFile)> {
+        let QueryScoredInInput {
+            root,
+            exclude,
+            pattern,
+            limit,
+        } = input;
         let allowed = |path: &Path| {
             root.is_none_or(|root| path.starts_with(root))
                 && exclude.iter().all(|child| !path.starts_with(child))

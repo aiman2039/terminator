@@ -3,6 +3,7 @@ use super::attention::state_color;
 use super::explorer_rows::ExplorerLocal;
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
+use crate::sidebar_ui::SessionRowInTabInput;
 use crate::{
     App, Job, Tab, appearance, icons,
     preferences::{HistorySort, ProjectSort},
@@ -301,15 +302,15 @@ impl App {
                                 },
                             )
                         } else {
-                            appearance::project_row(
+                            appearance::project_row(appearance::ProjectRowInput {
                                 ui,
-                                &p.name,
-                                if expanded { "FolderOpen" } else { "Folder" },
+                                label: &p.name,
+                                icon: if expanded { "FolderOpen" } else { "Folder" },
                                 selected,
-                                self.theme.row_height(),
-                                &count.to_string(),
-                                appearance::color(&self.theme.secondary),
-                            )
+                                height: self.theme.row_height(),
+                                trailing: &count.to_string(),
+                                tint: appearance::color(&self.theme.secondary),
+                            })
                         }
                         .on_hover_text(format!(
                             "{}\n{}{}",
@@ -485,7 +486,12 @@ impl App {
                     .and_then(|sid| by_id.get(sid.as_str()))
                     .map(|session| session.as_ref())
                 {
-                    self.session_row_in_tab(ui, session, project_id, tab_id);
+                    self.session_row_in_tab(SessionRowInTabInput {
+                        ui,
+                        session,
+                        project_id,
+                        tab_id,
+                    });
                 }
                 continue;
             }
@@ -546,15 +552,15 @@ impl App {
                         }
                         field.rect.left()
                     } else {
-                        let response = appearance::project_row(
+                        let response = appearance::project_row(appearance::ProjectRowInput {
                             ui,
-                            &group_label,
-                            "LayoutDashboard",
+                            label: &group_label,
+                            icon: "LayoutDashboard",
                             selected,
-                            self.theme.row_height(),
-                            &sids.len().to_string(),
-                            appearance::color(&self.theme.secondary),
-                        )
+                            height: self.theme.row_height(),
+                            trailing: &sids.len().to_string(),
+                            tint: appearance::color(&self.theme.secondary),
+                        })
                         .on_hover_text(format!("Tab group\n{group_label}\nDouble-click to rename"));
                         #[cfg(feature = "test-support")]
                         diagnostics::record(

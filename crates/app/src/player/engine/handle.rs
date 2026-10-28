@@ -1,4 +1,5 @@
 use super::super::tap;
+use super::decode::RunInput;
 use super::decode::run;
 use std::{
     cell::RefCell,
@@ -106,14 +107,14 @@ impl Handle {
         if let Err(error) = service
             .handle()
             .submit(context, lifetime.clone(), async move {
-                if let Err(error) = run(
-                    services,
+                if let Err(error) = run(RunInput {
+                    service: services,
                     commands,
                     controls,
-                    status.clone(),
+                    status: status.clone(),
                     spectrum,
                     lifetime,
-                )
+                })
                 .await
                 {
                     let generation = error_controls.generation.load(Ordering::Acquire);

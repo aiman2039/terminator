@@ -5,6 +5,16 @@ use super::*;
 use anyhow::Context as _;
 use std::collections::HashSet;
 use std::io::Write as _;
+
+#[cfg(test)]
+struct EditInput<'a> {
+    pub(crate) path: &'a Path,
+    pub(crate) line: u32,
+    pub(crate) start: u32,
+    pub(crate) end: u32,
+    pub(crate) replacement: &'a str,
+}
+
 type RenameResult<T> = std::result::Result<T, String>;
 
 const MAX_RENAME_FILES: usize = 64;
@@ -623,13 +633,14 @@ pub(super) fn apply_rename(prepared: PreparedRename) -> anyhow::Result<Vec<PathB
 mod tests {
     use super::*;
 
-    fn edit(
-        path: &Path,
-        line: u32,
-        start: u32,
-        end: u32,
-        replacement: &str,
-    ) -> native_lsp::RenameFileEdit {
+    fn edit(input: EditInput<'_>) -> native_lsp::RenameFileEdit {
+        let EditInput {
+            path,
+            line,
+            start,
+            end,
+            replacement,
+        } = input;
         native_lsp::RenameFileEdit {
             uri: native_lsp::file_uri(path).unwrap().to_string(),
             version: None,
@@ -658,7 +669,22 @@ mod tests {
         std::fs::write(&b, "foo();\n").unwrap();
         let preview = prepare_rename(
             root.path(),
-            vec![edit(&a, 0, 9, 12, "bar"), edit(&b, 0, 0, 3, "bar")],
+            vec![
+                edit(EditInput {
+                    path: &a,
+                    line: 0,
+                    start: 9,
+                    end: 12,
+                    replacement: "bar",
+                }),
+                edit(EditInput {
+                    path: &b,
+                    line: 0,
+                    start: 0,
+                    end: 3,
+                    replacement: "bar",
+                }),
+            ],
         )
         .unwrap();
         assert_eq!(preview.files.len(), 2);
@@ -677,7 +703,22 @@ mod tests {
         std::fs::write(&b, "foo\n").unwrap();
         let preview = prepare_rename(
             root.path(),
-            vec![edit(&a, 0, 0, 3, "bar"), edit(&b, 0, 0, 3, "bar")],
+            vec![
+                edit(EditInput {
+                    path: &a,
+                    line: 0,
+                    start: 0,
+                    end: 3,
+                    replacement: "bar",
+                }),
+                edit(EditInput {
+                    path: &b,
+                    line: 0,
+                    start: 0,
+                    end: 3,
+                    replacement: "bar",
+                }),
+            ],
         )
         .unwrap();
         std::fs::write(&b, "other\n").unwrap();
@@ -694,10 +735,37 @@ mod tests {
         let b = outside.path().join("b.rs");
         std::fs::write(&a, "foobar\n").unwrap();
         std::fs::write(&b, "foo\n").unwrap();
-        let mut same = edit(&a, 0, 0, 3, "bar");
-        same.edits.extend(edit(&a, 0, 2, 5, "baz").edits);
+        let mut same = edit(EditInput {
+            path: &a,
+            line: 0,
+            start: 0,
+            end: 3,
+            replacement: "bar",
+        });
+        same.edits.extend(
+            edit(EditInput {
+                path: &a,
+                line: 0,
+                start: 2,
+                end: 5,
+                replacement: "baz",
+            })
+            .edits,
+        );
         assert!(prepare_rename(root.path(), vec![same]).is_err());
-        assert!(prepare_rename(root.path(), vec![edit(&b, 0, 0, 3, "bar")]).is_err());
+        assert!(
+            prepare_rename(
+                root.path(),
+                vec![edit(EditInput {
+                    path: &b,
+                    line: 0,
+                    start: 0,
+                    end: 3,
+                    replacement: "bar"
+                })]
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -710,7 +778,19 @@ mod tests {
         let link = root.path().join("link.rs");
         std::fs::write(&target, "foo\n").unwrap();
         symlink(&target, &link).unwrap();
-        assert!(prepare_rename(root.path(), vec![edit(&link, 0, 0, 3, "bar")]).is_err());
+        assert!(
+            prepare_rename(
+                root.path(),
+                vec![edit(EditInput {
+                    path: &link,
+                    line: 0,
+                    start: 0,
+                    end: 3,
+                    replacement: "bar"
+                })]
+            )
+            .is_err()
+        );
         assert_eq!(std::fs::read_to_string(target).unwrap(), "foo\n");
     }
 }

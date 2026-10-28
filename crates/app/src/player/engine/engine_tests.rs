@@ -3,6 +3,7 @@ use super::analysis::download;
 use super::decode::Permanent;
 use super::handle::{COMPRESSED_SLOTS, Controls, Event, Handle, Outcome, Playable, Status};
 use super::pipeline::PreparedSource;
+use crate::player::engine::DownloadInput;
 
 use std::{
     num::NonZero,
@@ -316,17 +317,17 @@ mod tests {
             let (tx, _rx) = mpsc::channel(COMPRESSED_SLOTS);
             let result = tokio::time::timeout(
                 Duration::from_secs(10),
-                download(
-                    &client,
-                    format!("http://{address}"),
-                    tx,
-                    if block_headers {
+                download(DownloadInput {
+                    client: &client,
+                    url: format!("http://{address}"),
+                    sender: tx,
+                    headers: if block_headers {
                         Duration::from_millis(100)
                     } else {
                         Duration::from_secs(5)
                     },
-                    Duration::from_millis(100),
-                ),
+                    read_timeout: Duration::from_millis(100),
+                }),
             )
             .await;
             let _ = release.send(());
@@ -352,9 +353,15 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(COMPRESSED_SLOTS);
         let read_deadline = Duration::from_secs(2);
         let started = Instant::now();
-        download(&client, url, tx, Duration::from_secs(5), read_deadline)
-            .await
-            .unwrap();
+        download(DownloadInput {
+            client: &client,
+            url,
+            sender: tx,
+            headers: Duration::from_secs(5),
+            read_timeout: read_deadline,
+        })
+        .await
+        .unwrap();
         assert!(
             started.elapsed() > read_deadline,
             "Fixture must outlive a single read deadline"
@@ -377,13 +384,13 @@ mod tests {
         .await;
         let (tx, _rx) = mpsc::channel(COMPRESSED_SLOTS);
         assert!(
-            download(
-                &client,
+            download(DownloadInput {
+                client: &client,
                 url,
-                tx,
-                Duration::from_secs(1),
-                Duration::from_secs(1)
-            )
+                sender: tx,
+                headers: Duration::from_secs(1),
+                read_timeout: Duration::from_secs(1)
+            })
             .await
             .unwrap_err()
             .downcast_ref::<Permanent>()
