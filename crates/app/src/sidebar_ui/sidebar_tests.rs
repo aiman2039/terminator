@@ -2,12 +2,13 @@ use super::attention::*;
 use super::explorer_rows::*;
 use super::git_panel::*;
 use crate::agent_presence::attention_status_icon;
-use crate::{
-    appearance, file_actions::FileAction, icons, preferences::ExplorerSearchMode,
-    services::ContextData, workspace_ops,
-};
+use crate::{appearance, file_actions::FileAction, icons};
+#[cfg(feature = "test-support")]
+use crate::{preferences::ExplorerSearchMode, services::ContextData, workspace_ops};
 use eframe::egui::{self};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "test-support")]
+use std::path::PathBuf;
 use terminator_core::appearance::AppearanceConfig;
 use terminator_core::{AgentState, Notification, ReviewMode};
 

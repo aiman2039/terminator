@@ -174,16 +174,7 @@ impl App {
             text,
         } = input;
         if let Some(remote) = self.selected_remote_project().cloned() {
-            let cache = crate::remote_ui::snapshot_root(&self.paths.data, &remote.id);
-            let relative = path
-                .strip_prefix(&cache)
-                .or_else(|_| path.strip_prefix(remote.identity_path()))
-                .or_else(|_| path.strip_prefix(&remote.root))
-                .map_or_else(
-                    |_| path.to_str().map(str::to_owned),
-                    |p| p.to_str().map(str::to_owned),
-                );
-            if let Some(relative) = relative {
+            if let Some(relative) = self.remote_relative_path(&remote, &path) {
                 self.open_remote_file(OpenRemoteFileInput {
                     project: &remote,
                     path: relative,
@@ -250,6 +241,23 @@ impl App {
             ));
         }
     }
+    /// `path` relative to the remote project, whether it points into the
+    /// local snapshot cache or at the remote root; `None` when not UTF-8.
+    fn remote_relative_path(
+        &self,
+        remote: &terminator_core::remote::RemoteProject,
+        path: &std::path::Path,
+    ) -> Option<String> {
+        let cache = crate::remote_ui::snapshot_root(&self.paths.data, &remote.id);
+        path.strip_prefix(&cache)
+            .or_else(|_| path.strip_prefix(remote.identity_path()))
+            .or_else(|_| path.strip_prefix(&remote.root))
+            .map_or_else(
+                |_| path.to_str().map(str::to_owned),
+                |p| p.to_str().map(str::to_owned),
+            )
+    }
+
     pub(crate) fn open_image(&mut self, project: &str, path: PathBuf, split: Option<&str>) {
         self.hide_center_overlay();
         let origin = self

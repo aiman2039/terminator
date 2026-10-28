@@ -129,6 +129,22 @@ fn write_assets(root: &Path, out: &Path, ext: &str, library: &Path) -> Result<()
     write_if_changed(&out.join("review_assets.rs"), generated.as_bytes())?;
     Ok(())
 }
+/// CodeDiff C sources, relative to `libvscode-diff`.
+const NATIVE_SOURCES: [&str; 13] = [
+    "default_lines_diff_computer.c",
+    "src/char_level.c",
+    "src/line_level.c",
+    "src/myers.c",
+    "src/optimize.c",
+    "src/sequence.c",
+    "src/range_mapping.c",
+    "src/string_hash_map.c",
+    "src/utils.c",
+    "src/print_utils.c",
+    "src/utf8_utils.c",
+    "src/compute_moved_lines.c",
+    "vendor/utf8proc.c",
+];
 fn run() -> Result<(), Box<dyn Error>> {
     let root = without_verbatim_prefix(Path::new("../../vendor/codediff.nvim").canonicalize()?);
     let out = std::path::PathBuf::from(env::var_os("OUT_DIR").ok_or("OUT_DIR is not set")?);
@@ -179,21 +195,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             cmd.arg("-I").arg(dir);
         }
     }
-    for file in [
-        "default_lines_diff_computer.c",
-        "src/char_level.c",
-        "src/line_level.c",
-        "src/myers.c",
-        "src/optimize.c",
-        "src/sequence.c",
-        "src/range_mapping.c",
-        "src/string_hash_map.c",
-        "src/utils.c",
-        "src/print_utils.c",
-        "src/utf8_utils.c",
-        "src/compute_moved_lines.c",
-        "vendor/utf8proc.c",
-    ] {
+    for file in NATIVE_SOURCES {
         cmd.arg(source.join(file));
     }
     if compiler.is_like_msvc() {

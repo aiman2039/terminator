@@ -32,7 +32,11 @@ case "${1:-all}" in
     fmt) cargo fmt --all --check ;;
     lint) cargo check --workspace --all-targets --all-features --locked ;;
     build) cargo build --workspace --all-targets --all-features --locked ;;
-    clippy) cargo clippy --workspace --all-targets --all-features --locked -- -D warnings ;;
+    clippy)
+        cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        # Release builds have no test-support; keep that feature set lint-clean too.
+        cargo clippy --workspace --all-targets --locked -- -D warnings
+        ;;
     sarah)
         # Size and structure limits from sarah.toml (https://github.com/aiman2039/sarah).
         if ! command -v sarah >/dev/null 2>&1; then
