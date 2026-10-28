@@ -1,4 +1,5 @@
 mod html;
+pub(crate) mod images;
 #[cfg(test)]
 mod markdown_tests;
 mod mermaid;

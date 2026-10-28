@@ -1,26 +1,35 @@
 #![forbid(unsafe_code)]
+mod browser;
 mod chrome;
-mod link;
-mod system;
-pub(crate) use chrome::git_log;
-pub use chrome::installation;
-pub(crate) use chrome::{
-    hosts_ui, markdown_images, popup, remote_ui, session_info, settings_controls, shortcuts,
-    sidebar_cache, transfers_ui, worktree_ui,
+mod daemon_link;
+mod files;
+mod git;
+mod install;
+mod lifecycle;
+mod remote;
+pub(crate) use browser::host as browser_host;
+pub(crate) use chrome::{popup, session_info, settings_controls, shortcuts, sidebar_cache};
+pub use daemon_link::daemon_connection;
+pub(crate) use daemon_link::{
+    metadata_refresh, native_jobs, nvim_rpc, refresh, services, ui_control,
 };
-pub(crate) use link::{
-    daemon_upgrade, forwards_ui, metadata_refresh, native_jobs, nvim_rpc, refresh, services,
-    ui_control,
+pub(crate) use files::{
+    editor_close, external_editor, file_actions, image_preview, search, workspace_ops,
 };
-#[cfg(feature = "test-support")]
-pub(crate) use system::diagnostics;
+pub(crate) use git::git_log;
 #[cfg(any(test, target_os = "macos"))]
-pub(crate) use system::merge;
+pub(crate) use git::merge;
+pub(crate) use git::worktree_ui;
+pub(crate) use install::daemon_upgrade;
+pub use install::installation;
 #[cfg(any(windows, test))]
-pub(crate) use system::windows_updates;
-pub(crate) use system::{exit, notify_test, resource_sample, retry_budget};
+pub(crate) use install::windows_updates;
+#[cfg(feature = "test-support")]
+pub(crate) use lifecycle::diagnostics;
+pub(crate) use lifecycle::{exit, notify_test, resource_sample, retry_budget};
+pub(crate) use markdown::images as markdown_images;
+pub(crate) use remote::{forwards_ui, hosts_ui, remote_ui, transfers_ui};
 pub mod console;
-pub mod daemon_connection;
 use daemon_connection::{can_restart_service, can_retire_daemon};
 mod updater {
     pub use terminator_updater::*;
@@ -31,14 +40,8 @@ mod sidebar_ui;
 use sidebar_ui::{AttentionAction, AttentionCard, attention_card};
 mod agent_presence;
 mod appearance;
-mod browser;
-mod browser_host;
-mod external_editor;
-mod file_actions;
-mod workspace_ops;
 pub(crate) use browser::{BrowserTarget, rewrite_html_tabs};
 mod icons;
-mod image_preview;
 mod lsp_manager;
 mod markdown;
 mod native_editor;
@@ -49,7 +52,6 @@ mod palette;
 use shortcuts::Action;
 mod vnc_ui;
 use file_actions::FileAction;
-mod editor_close;
 mod preferences;
 mod workspace;
 use preferences::{AgentsTab, SidebarTool, UiPreferences};
@@ -61,7 +63,6 @@ mod clipboard;
 pub(crate) mod diff;
 mod gui_services;
 mod perforce;
-mod search;
 pub use app::app_state::App;
 pub(crate) use app::app_state::{
     inventory_is_stale, is_missing_path_error, is_session_auth_error, observation_is_stale,

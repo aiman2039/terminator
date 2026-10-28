@@ -1,4 +1,5 @@
 //! GUI-owned browser tab identity. The native view is mounted later.
+pub(crate) mod host;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
