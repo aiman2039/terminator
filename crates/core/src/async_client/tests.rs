@@ -295,57 +295,49 @@ fn archived_mutation_marks_only_retired_writes_for_cache_eviction() {
     );
 }
 
-#[tokio::test]
-async fn archived_notice_dismissal_is_visible_to_the_next_snapshot() {
-    use crate::generations::{self, Catalog, Generation, Status};
-    let dir = crate::tests::tempdir("archived-notice-");
-    let root = Paths::at(dir.path().into());
-    root.init().unwrap();
-    generations::migrate_idle(&root).unwrap();
-    fn test_owner(root: &Paths, catalog: &Catalog) -> Generation {
-        let id = crate::id();
-        let owner = Generation {
-            data: root.data.join("generations").join(&id),
-            runtime: root.runtime.join(id.get(..8).unwrap_or(&id)),
-            id,
-            version: "1.0.0".into(),
-            build: "fixture".into(),
-            protocol: PROTOCOL_VERSION,
-            catalog: generations::CATALOG_VERSION,
-            status: Status::Prepared,
-            pid: None,
-        };
-        owner.paths().init().unwrap();
-        let db = rusqlite::Connection::open(owner.data.join("state.sqlite3")).unwrap();
-        db.execute_batch(
-            "CREATE TABLE app_state(id INTEGER PRIMARY KEY,json TEXT NOT NULL); PRAGMA user_version=1;",
+use crate::generations::{Catalog, Generation, Status};
+fn test_owner(root: &Paths, catalog: &Catalog) -> Generation {
+    let id = crate::id();
+    let owner = Generation {
+        data: root.data.join("generations").join(&id),
+        runtime: root.runtime.join(id.get(..8).unwrap_or(&id)),
+        id,
+        version: "1.0.0".into(),
+        build: "fixture".into(),
+        protocol: PROTOCOL_VERSION,
+        catalog: generations::CATALOG_VERSION,
+        status: Status::Prepared,
+        pid: None,
+    };
+    owner.paths().init().unwrap();
+    let db = rusqlite::Connection::open(owner.data.join("state.sqlite3")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE app_state(id INTEGER PRIMARY KEY,json TEXT NOT NULL); PRAGMA user_version=1;",
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO app_state VALUES(1,?1)",
+        [serde_json::to_string(&State {
+            generation: owner.id.clone(),
+            ..Default::default()
+        })
+        .unwrap()],
+    )
+    .unwrap();
+    catalog.register(&owner).unwrap();
+    owner
+}
+fn save_state(owner: &Generation, state: &State) {
+    rusqlite::Connection::open(owner.data.join("state.sqlite3"))
+        .unwrap()
+        .execute(
+            "UPDATE app_state SET json=?1",
+            [serde_json::to_string(state).unwrap()],
         )
         .unwrap();
-        db.execute(
-            "INSERT INTO app_state VALUES(1,?1)",
-            [serde_json::to_string(&State {
-                generation: owner.id.clone(),
-                ..Default::default()
-            })
-            .unwrap()],
-        )
-        .unwrap();
-        catalog.register(&owner).unwrap();
-        owner
-    }
-    fn save_state(owner: &Generation, state: &State) {
-        rusqlite::Connection::open(owner.data.join("state.sqlite3"))
-            .unwrap()
-            .execute(
-                "UPDATE app_state SET json=?1",
-                [serde_json::to_string(state).unwrap()],
-            )
-            .unwrap();
-    }
-    let mut catalog = Catalog::open(&root).unwrap();
-    let retired = test_owner(&root, &catalog);
-    let active = test_owner(&root, &catalog);
-    let notice_id = crate::id();
+}
+/// A retired owner's state: one interrupted session with a pending notice.
+fn retired_with_notice(retired: &Generation, notice_id: &str) -> State {
     let stale_session = crate::Session {
         remote: None,
         id: crate::id(),
@@ -365,29 +357,40 @@ async fn archived_notice_dismissal_is_visible_to_the_next_snapshot() {
         cwd_confirmed: false,
         review: false,
     };
-    save_state(
-        &retired,
-        &State {
-            generation: retired.id.clone(),
-            revision: 1,
-            sessions: vec![stale_session.clone()],
-            notifications: vec![crate::Notification {
-                id: notice_id.clone(),
-                session_id: stale_session.id.clone(),
-                invocation_id: crate::id(),
-                request_id: None,
-                state: crate::AgentState::WaitingInput,
-                summary: "waiting".into(),
-                details: String::new(),
-                created: crate::now(),
-                read: false,
-                dismissed: false,
-                resolved: false,
-                snoozed_until: 0,
-            }],
-            ..Default::default()
-        },
-    );
+    State {
+        generation: retired.id.clone(),
+        revision: 1,
+        sessions: vec![stale_session.clone()],
+        notifications: vec![crate::Notification {
+            id: notice_id.to_owned(),
+            session_id: stale_session.id.clone(),
+            invocation_id: crate::id(),
+            request_id: None,
+            state: crate::AgentState::WaitingInput,
+            summary: "waiting".into(),
+            details: String::new(),
+            created: crate::now(),
+            read: false,
+            dismissed: false,
+            resolved: false,
+            snoozed_until: 0,
+        }],
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn archived_notice_dismissal_is_visible_to_the_next_snapshot() {
+    use crate::generations;
+    let dir = crate::tests::tempdir("archived-notice-");
+    let root = Paths::at(dir.path().into());
+    root.init().unwrap();
+    generations::migrate_idle(&root).unwrap();
+    let mut catalog = Catalog::open(&root).unwrap();
+    let retired = test_owner(&root, &catalog);
+    let active = test_owner(&root, &catalog);
+    let notice_id = crate::id();
+    save_state(&retired, &retired_with_notice(&retired, &notice_id));
     catalog.activate(&active.id).unwrap();
     catalog.retire(&retired.id).unwrap();
     std::fs::write(active.paths().auth(), "fixture").unwrap();
