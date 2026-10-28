@@ -260,7 +260,7 @@ impl NativeDoc {
                 let token = CancellationToken::new();
                 if let Ok(mtime) = service
                     .fs()
-                    .run(&token, move || Ok(NativeFileIo::disk_mtime(&path)))
+                    .run(&token, move || anyhow::Ok(NativeFileIo::disk_mtime(&path)))
                     .await
                 {
                     let _ = tx.send(mtime);

@@ -79,3 +79,79 @@ pub(crate) fn decode_frame(frame: VncFrame) -> Result<VncDecodedFrame> {
         clipboard: frame.clipboard,
     })
 }
+
+impl App {
+    pub(crate) fn apply_vnc_frame(&mut self, ctx: &egui::Context, decoded: VncDecodedFrame) {
+        let entry = self.vnc_views.entry(decoded.session.clone()).or_default();
+        entry.fetching = false;
+        entry.monitors = decoded.monitors;
+        entry.resize_supported = decoded.resize_supported;
+        if let Some((cursor, image)) = decoded.cursor
+            && (entry.cursor_signature.as_ref() != Some(&cursor.rgba)
+                || entry.cursor_hotspot != [cursor.x, cursor.y]
+                || image.as_ref().map(|i| i.size)
+                    != entry.cursor_texture.as_ref().map(TextureHandle::size))
+        {
+            entry.cursor_signature = Some(cursor.rgba);
+            entry.cursor_hotspot = [cursor.x, cursor.y];
+            entry.cursor_texture = image.map(|image| {
+                ctx.load_texture(
+                    format!("vnc-cursor:{}", decoded.session),
+                    image,
+                    egui::TextureOptions::NEAREST,
+                )
+            });
+        }
+        if decoded.status != VncSessionStatus::Connected {
+            entry.held_keys.clear();
+            entry.modifier_bits = 0;
+            entry.focused = false;
+        }
+
+        entry.width = decoded.width;
+        entry.height = decoded.height;
+        entry.revision = decoded.revision;
+        entry.status = decoded.status;
+        entry.error = decoded.error;
+        let frame_size = [usize::from(decoded.width), usize::from(decoded.height)];
+        let mut applied = false;
+        if let Some(image) = decoded.image {
+            // A partial frame is valid only on top of the texture the daemon
+            // cut it from. Anything else (no texture yet, a resize, a
+            // dropped frame) falls through to a full request.
+            if let Some(region) = decoded.region {
+                let in_bounds = usize::from(region.x).saturating_add(usize::from(region.width))
+                    <= frame_size[0]
+                    && usize::from(region.y).saturating_add(usize::from(region.height))
+                        <= frame_size[1];
+                if in_bounds
+                    && let Some(texture) = entry.texture.as_mut()
+                    && texture.size() == frame_size
+                {
+                    texture.set_partial(
+                        [usize::from(region.x), usize::from(region.y)],
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    );
+                    applied = true;
+                }
+            } else {
+                entry.texture = Some(ctx.load_texture(
+                    format!("vnc:{}", decoded.session),
+                    image,
+                    egui::TextureOptions::LINEAR,
+                ));
+                applied = true;
+            }
+        }
+        if !applied {
+            entry.force_full = true;
+        }
+        if let Some(clipboard) = decoded.clipboard
+            && entry.remote_clipboard.as_ref() != Some(&clipboard)
+        {
+            entry.remote_clipboard = Some(clipboard.clone());
+            ctx.copy_text(clipboard);
+        }
+    }
+}

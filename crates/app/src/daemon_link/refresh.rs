@@ -355,7 +355,7 @@ pub fn spawn_async(
         let dirty = std::sync::Arc::new(std::sync::Mutex::new(Dirty::default()));
         let recorder = std::sync::Arc::clone(&dirty);
         let watcher = service.fs().run(&token, move || {
-            Ok(notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            anyhow::Ok(notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
                 if !event.as_ref().is_ok_and(|e| matches!(e.kind, notify::EventKind::Access(_))) {
                     let event = event.map(|mut event| {
                         event.paths = event.paths.iter().map(|path| normalize(path)).collect();
@@ -407,7 +407,7 @@ pub fn spawn_async(
             let wanted = request.directories.clone();
             let changed_paths = seen.paths.clone();
             let relist = service.fs().run(&operation, move || {
-                Ok(directories_to_list(&wanted, &|path| known.contains(path), &changed_paths, full))
+                anyhow::Ok(directories_to_list(&wanted, &|path| known.contains(path), &changed_paths, full))
             }).await.unwrap_or_else(|_| request.directories.clone());
             let work = async {
                 // Show the bounded directory entries before repository status,
@@ -436,7 +436,7 @@ pub fn spawn_async(
                         for (path, _) in old { let _ = watcher.unwatch(&path); }
                         for (path, mode) in &targets { if watcher.watch(path, *mode).is_err() { fallback = true; } }
                     }
-                    Ok((targets, fallback))
+                    anyhow::Ok((targets, fallback))
                 }).await?;
                 let directories = services::directories_with_ignored_async(
                     &service, &request.cwd, raw_directories, context.root.is_some() && context.perforce.is_none(),
@@ -479,7 +479,7 @@ pub fn spawn_async(
             let generation = request.generation;
             let missing = service
                 .fs()
-                .run(&operation, move || Ok(crate::retry_budget::path_missing(&cwd)))
+                .run(&operation, move || anyhow::Ok(crate::retry_budget::path_missing(&cwd)))
                 .await
                 .unwrap_or(false);
             missing_path.record(&request.cwd, generation, missing);
@@ -501,7 +501,7 @@ pub fn spawn_async(
                 () = tokio::time::sleep(Duration::from_secs(if fallback { 3 } else { 30 })) => Wake::Timer,
             };
         }
-        service.fs().run(&CancellationToken::new(), move || { drop(watcher); Ok(()) }).await?;
+        service.fs().run(&CancellationToken::new(), move || { drop(watcher); anyhow::Ok(()) }).await?;
         Ok(Vec::new())
     });
     sender

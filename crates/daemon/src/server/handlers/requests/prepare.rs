@@ -82,6 +82,7 @@ impl Shared {
             .as_ref()
             .map(|paths| generations::coordinate_timeout(paths, Duration::from_secs(2)))
             .transpose()
+            .map_err(Into::into)
     }
 
     /// Rejects requests this generation may not run, then refreshes

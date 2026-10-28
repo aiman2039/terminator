@@ -193,8 +193,7 @@ impl Shared {
                 relock(&shared.remote_transfers).update(&id, |status| {
                     status.done = true;
                     if let Err(error) = result {
-                        status.ssh = error
-                            .downcast_ref::<terminator_core::ssh::SshError>()
+                        status.ssh = terminator_core::ssh::SshError::find(error.as_ref())
                             .cloned();
                         status.error = Some(format!("{error:#}"));
                     }

@@ -18,24 +18,7 @@ pub fn muse(muse: &Path) -> Result<()> {
             .unwrap(),
     );
     output(install)?;
-    let args = vec![
-        muse.to_string_lossy().into_owned(),
-        "exec".into(),
-        "--provider".into(),
-        "echo".into(),
-        "--workspace".into(),
-        project
-            .get("path")
-            .ok_or_else(|| anyhow!("missing project path"))?
-            .as_str()
-            .unwrap()
-            .into(),
-        "--no-session-log".into(),
-        "--no-foreign-personal-context".into(),
-        "--trust-workspace".into(),
-        "--disable-web-tools".into(),
-        "local hook fixture".into(),
-    ];
+    let args = muse_command(muse, &project)?;
     h.write(
         &mut h.attach(&s)?,
         &(args
@@ -55,6 +38,37 @@ pub fn muse(muse: &Path) -> Result<()> {
         },
         20,
     )?;
+    check_muse_state(&state)?;
+    println!(
+        "{}",
+        json!({"muse_echo":"passed","invocations":1,"completion_received":true})
+    );
+    Ok(())
+}
+
+fn muse_command(muse: &Path, project: &Value) -> Result<Vec<String>> {
+    Ok(vec![
+        muse.to_string_lossy().into_owned(),
+        "exec".into(),
+        "--provider".into(),
+        "echo".into(),
+        "--workspace".into(),
+        project
+            .get("path")
+            .ok_or_else(|| anyhow!("missing project path"))?
+            .as_str()
+            .unwrap()
+            .into(),
+        "--no-session-log".into(),
+        "--no-foreign-personal-context".into(),
+        "--trust-workspace".into(),
+        "--disable-web-tools".into(),
+        "local hook fixture".into(),
+    ])
+}
+
+/// One stopped Muse invocation with a completion notice and a resume command.
+fn check_muse_state(state: &Value) -> Result<()> {
     ensure!(
         state
             .get("agents")
@@ -81,10 +95,6 @@ pub fn muse(muse: &Path) -> Result<()> {
             .and_then(|resume| resume.get("program"))
             .is_some_and(|program| program == "muse"),
         "Missing resume"
-    );
-    println!(
-        "{}",
-        json!({"muse_echo":"passed","invocations":1,"completion_received":true})
     );
     Ok(())
 }

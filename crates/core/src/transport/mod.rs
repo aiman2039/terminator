@@ -8,7 +8,6 @@
 //! in the mode-0700 equivalent runtime directory, so a loopback listener does
 //! not widen access beyond local processes that already share the data dir.
 
-use anyhow::{Context, Result};
 use std::{
     io::{Read, Write},
     net::{Shutdown, TcpListener, TcpStream},
@@ -18,6 +17,35 @@ use std::{
 
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
+
+/// Why an IPC endpoint could not be connected, bound, or configured.
+#[derive(Debug, thiserror::Error)]
+pub enum TransportError {
+    #[error("Session daemon unavailable")]
+    Unavailable {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[cfg(not(unix))]
+    #[error("Session daemon address is corrupt")]
+    CorruptAddress {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::net::AddrParseError,
+    },
+    #[cfg(not(unix))]
+    #[error(transparent)]
+    Write(#[from] crate::AtomicWriteError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+type Result<T, E = TransportError> = std::result::Result<T, E>;
+
+fn unavailable(path: &Path) -> impl FnOnce(std::io::Error) -> TransportError {
+    let path = path.to_path_buf();
+    move |source| TransportError::Unavailable { path, source }
+}
 
 /// Default IPC timeouts, matching the previous sync client behavior.
 pub const READ_TIMEOUT: Duration = Duration::from_secs(3);
@@ -35,13 +63,13 @@ impl Stream {
     pub fn connect_ipc(socket_path: &Path) -> Result<Self> {
         #[cfg(unix)]
         {
-            let stream = UnixStream::connect(socket_path).context("Session daemon unavailable")?;
+            let stream = UnixStream::connect(socket_path).map_err(unavailable(socket_path))?;
             Ok(Self::Unix(stream))
         }
         #[cfg(not(unix))]
         {
             let addr = read_port(socket_path)?;
-            let stream = TcpStream::connect(addr).context("Session daemon unavailable")?;
+            let stream = TcpStream::connect(addr).map_err(unavailable(socket_path))?;
             Ok(Self::Tcp(stream))
         }
     }
@@ -280,10 +308,13 @@ pub fn pair() -> Result<(Stream, Stream)> {
 #[cfg(not(unix))]
 fn read_port(socket_path: &Path) -> Result<std::net::SocketAddr> {
     std::fs::read_to_string(socket_path)
-        .context("Session daemon unavailable")?
+        .map_err(unavailable(socket_path))?
         .trim()
         .parse()
-        .context("Session daemon address is corrupt")
+        .map_err(|source| TransportError::CorruptAddress {
+            path: socket_path.to_path_buf(),
+            source,
+        })
 }
 
 /// Async connected IPC stream for the Tokio client.
@@ -301,7 +332,7 @@ impl AsyncStream {
         {
             let stream = tokio::net::UnixStream::connect(socket_path)
                 .await
-                .context("Session daemon unavailable")?;
+                .map_err(unavailable(socket_path))?;
             Ok(Self::Unix(stream))
         }
         #[cfg(not(unix))]
@@ -310,7 +341,7 @@ impl AsyncStream {
             let addr = read_port(socket_path)?;
             let stream = tokio::net::TcpStream::connect(addr)
                 .await
-                .context("Session daemon unavailable")?;
+                .map_err(unavailable(socket_path))?;
             Ok(Self::Tcp(stream))
         }
     }

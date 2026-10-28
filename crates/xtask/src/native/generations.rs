@@ -1,8 +1,8 @@
 //! Native generation diagnostics, restart warning, cancellation and reattachment.
 use super::CaptureInput;
 use super::{
-    Context, Duration, Harness, Options, Result, Value, capture, ensure, fs, id, json, output,
-    session, sessions, thread, wait_child,
+    Context, Duration, Harness, Options, Path, Result, Value, capture, ensure, fs, id, json,
+    output, session, sessions, thread, wait_child,
 };
 use std::{process::Command, time::Instant};
 use terminator_core::{Paths, ui_control};
@@ -14,10 +14,61 @@ pub fn run(o: &Options) -> Result<()> {
     h.rpc(json!("ShutdownIfIdle"))?;
     wait_child(&mut h.daemon.as_mut().unwrap().0, Duration::from_secs(5))?;
     h.daemon.take();
-    // The first GUI launch performs the real idle migration and candidate check.
+    first_migration(&h, o)?;
+    let project = h.project("generation-workspace")?;
+    let a = h.shell(&project)?;
+    let file = h.root.join("generation-workspace/buffer.md");
+    fs::write(&file, "# Saved\n")?;
+    let editor = h.editor(&project, &file)?;
+    change_editor_buffer(&h, &editor)?;
+    h.layout(&project, &[a.clone(), editor.clone()])?;
+    let original_generation = h
+        .state()?
+        .get("generation")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("missing generation"))?;
+    h.env
+        .insert("TERMINATOR_TEST_NEW_GENERATION".into(), "1".into());
+    let b = updated_service_ready(&h, o, (&project, &editor, &original_generation))?;
+    h.env.remove("TERMINATOR_TEST_NEW_GENERATION");
+    h.assert_pids(&[a.clone(), b.clone(), editor.clone()])?;
+    restart_warning_and_cancel(&h, o)?;
+    h.assert_pids(&[a.clone(), b.clone(), editor.clone()])?;
+    ensure!(
+        fs::read_to_string(&file)? == "# Saved\n",
+        "Unsaved editor text reached disk unexpectedly"
+    );
+    let mut attached = h.attach(&a)?;
+    h.write(&mut attached, "printf 'OLD_OWNER_AFTER_GUI_RELAUNCH\\n'\n")?;
+    h.wait(
+        |_| {
+            h.history(id(&a))
+                .is_ok_and(|s| s.contains("OLD_OWNER_AFTER_GUI_RELAUNCH"))
+        },
+        5,
+    )?;
+    refuse_late_session(&h, &project, &[a.clone(), b.clone(), editor.clone()])?;
+    let before_recovery = h.state()?;
+    drop(attached);
+    confirmed_cleanup(&h, &file)?;
+    after_confirmed_recovery(&h, o, &before_recovery)?;
+    fs::write(
+        o.output.join("generations.json"),
+        serde_json::to_vec_pretty(&json!({
+            "idle_migration":true,"generations":before_recovery.get("generations").unwrap_or(&Value::Null),
+            "original_session":a,"new_session":b,"unsaved_editor":editor,"gui_relaunch_pids_preserved":true,
+            "warning_counts_all_owners":true,"cancellation_preserves_sessions":true,
+            "late_session_aborts_confirmed_cleanup":true,"confirmed_cleanup_stops_all_owners":true,"recovery_does_not_rerun_sessions":true
+        }))?,
+    )?;
+    Ok(())
+}
+
+// The first GUI launch performs the real idle migration and candidate check.
+fn first_migration(h: &Harness, o: &Options) -> Result<()> {
     capture(
         CaptureInput {
-            h: &h,
+            h,
             opts: o,
             name: "first-migration",
             actions: json!([]),
@@ -37,23 +88,23 @@ pub fn run(o: &Options) -> Result<()> {
             Ok(())
         },
     )?;
-    let project = h.project("generation-workspace")?;
-    let a = h.shell(&project)?;
-    let file = h.root.join("generation-workspace/buffer.md");
-    fs::write(&file, "# Saved\n")?;
-    let editor = h.editor(&project, &file)?;
+    Ok(())
+}
+
+/// Wait for the editor's Neovim server, then change its buffer without saving.
+fn change_editor_buffer(h: &Harness, editor: &Value) -> Result<()> {
     let owner = terminator_core::generations::owner_for(
         &Paths::at(h.root.clone()),
         &terminator_core::Request::History {
-            session: id(&editor).into(),
+            session: id(editor).into(),
         },
     )?;
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(5))
         .ok_or_else(|| anyhow::anyhow!("editor deadline overflow"))?;
-    let server = terminator_core::transport::nvim_listen_arg(&owner.editor_socket(id(&editor)));
+    let server = terminator_core::transport::nvim_listen_arg(&owner.editor_socket(id(editor)));
     #[cfg(unix)]
-    while !owner.editor_socket(id(&editor)).exists() {
+    while !owner.editor_socket(id(editor)).exists() {
         ensure!(Instant::now() < deadline, "Editor did not start");
         thread::sleep(Duration::from_millis(50));
     }
@@ -82,18 +133,20 @@ pub fn run(o: &Options) -> Result<()> {
         .arg(&server)
         .args(["--remote-expr", "setline(1, '# Unsaved across upgrades')"]);
     output(change)?;
-    h.layout(&project, &[a.clone(), editor.clone()])?;
-    let original_generation = h
-        .state()?
-        .get("generation")
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("missing generation"))?;
-    h.env
-        .insert("TERMINATOR_TEST_NEW_GENERATION".into(), "1".into());
+    Ok(())
+}
+
+/// Wait for the new generation, create a shell in it, and check the unsaved
+/// editor survived. Returns the new shell.
+fn updated_service_ready(
+    h: &Harness,
+    o: &Options,
+    (project, editor, original_generation): (&Value, &Value, &Value),
+) -> Result<Value> {
     let mut b = Value::Null;
     capture(
         CaptureInput {
-            h: &h,
+            h,
             opts: o,
             name: "updated-service-ready",
             actions: json!([
@@ -103,15 +156,15 @@ pub fn run(o: &Options) -> Result<()> {
             after: 2800,
         },
         |_| {
-            h.wait(|s| s["generation"] != original_generation, 10)?;
-            b = h.shell(&project)?;
+            h.wait(|s| s["generation"] != *original_generation, 10)?;
+            b = h.shell(project)?;
             h.wait(|s| sessions(s).len() == 3, 5)?;
             h.wait(
                 |_| {
                     ui_control::rpc(&Paths::at(h.root.clone()), ui_control::Request::Snapshot)
                         .is_ok_and(|s| {
                             s.get("markdown")
-                                .and_then(|markdown| markdown.get(id(&editor)))
+                                .and_then(|markdown| markdown.get(id(editor)))
                                 .and_then(|editor| editor.get("text"))
                                 .and_then(Value::as_str)
                                 .is_some_and(|text| text.contains("Unsaved across upgrades"))
@@ -122,11 +175,13 @@ pub fn run(o: &Options) -> Result<()> {
             Ok(())
         },
     )?;
-    h.env.remove("TERMINATOR_TEST_NEW_GENERATION");
-    h.assert_pids(&[a.clone(), b.clone(), editor.clone()])?;
+    Ok(b)
+}
+
+fn restart_warning_and_cancel(h: &Harness, o: &Options) -> Result<()> {
     capture(
         CaptureInput {
-            h: &h,
+            h,
             opts: o,
             name: "all-owners-restart-warning",
             actions: json!([
@@ -158,7 +213,7 @@ pub fn run(o: &Options) -> Result<()> {
     )?;
     capture(
         CaptureInput {
-            h: &h,
+            h,
             opts: o,
             name: "restart-cancelled",
             actions: json!([
@@ -171,23 +226,14 @@ pub fn run(o: &Options) -> Result<()> {
         },
         |_| Ok(()),
     )?;
-    h.assert_pids(&[a.clone(), b.clone(), editor.clone()])?;
-    ensure!(
-        fs::read_to_string(&file)? == "# Saved\n",
-        "Unsaved editor text reached disk unexpectedly"
-    );
-    let mut attached = h.attach(&a)?;
-    h.write(&mut attached, "printf 'OLD_OWNER_AFTER_GUI_RELAUNCH\\n'\n")?;
-    h.wait(
-        |_| {
-            h.history(id(&a))
-                .is_ok_and(|s| s.contains("OLD_OWNER_AFTER_GUI_RELAUNCH"))
-        },
-        5,
-    )?;
+    Ok(())
+}
+
+/// A session created after the inventory was approved must abort confirmed cleanup.
+fn refuse_late_session(h: &Harness, project: &Value, live: &[Value]) -> Result<()> {
     let approved: terminator_core::State = serde_json::from_value(h.state()?)?;
     let inventory = terminator_core::recovery::RestartInventory::capture(&approved);
-    let late = h.shell(&project)?;
+    let late = h.shell(project)?;
     let refused = h
         .command("terminator-hook")
         .args(["ctl", "shutdown", "--stop-all", "--confirmed-inventory"])
@@ -198,12 +244,16 @@ pub fn run(o: &Options) -> Result<()> {
             && String::from_utf8_lossy(&refused.stderr).contains("after confirmation"),
         "Changed confirmation inventory was accepted"
     );
-    h.assert_pids(&[a.clone(), b.clone(), editor.clone(), late.clone()])?;
+    let mut expected = live.to_vec();
+    expected.push(late.clone());
+    h.assert_pids(&expected)?;
     h.rpc(json!({"Stop":{"session":id(&late)}}))?;
     h.wait(|state| session(state, id(&late))["lifecycle"] == "ended", 5)?;
     h.rpc(json!({"Remove":{"session":id(&late)}}))?;
-    let before_recovery = h.state()?;
-    drop(attached);
+    Ok(())
+}
+
+fn confirmed_cleanup(h: &Harness, file: &Path) -> Result<()> {
     let cleanup = h
         .command("terminator-hook")
         .args(["ctl", "shutdown", "--stop-all", "--timeout", "10"])
@@ -214,12 +264,16 @@ pub fn run(o: &Options) -> Result<()> {
         String::from_utf8_lossy(&cleanup.stderr)
     );
     ensure!(
-        fs::read_to_string(&file)? == "# Saved\n",
+        fs::read_to_string(file)? == "# Saved\n",
         "Recovery silently saved an unsaved buffer"
     );
+    Ok(())
+}
+
+fn after_confirmed_recovery(h: &Harness, o: &Options, before_recovery: &Value) -> Result<()> {
     capture(
         CaptureInput {
-            h: &h,
+            h,
             opts: o,
             name: "after-confirmed-recovery",
             actions: json!([]),
@@ -236,15 +290,6 @@ pub fn run(o: &Options) -> Result<()> {
             )?;
             Ok(())
         },
-    )?;
-    fs::write(
-        o.output.join("generations.json"),
-        serde_json::to_vec_pretty(&json!({
-            "idle_migration":true,"generations":before_recovery.get("generations").unwrap_or(&Value::Null),
-            "original_session":a,"new_session":b,"unsaved_editor":editor,"gui_relaunch_pids_preserved":true,
-            "warning_counts_all_owners":true,"cancellation_preserves_sessions":true,
-            "late_session_aborts_confirmed_cleanup":true,"confirmed_cleanup_stops_all_owners":true,"recovery_does_not_rerun_sessions":true
-        }))?,
     )?;
     Ok(())
 }

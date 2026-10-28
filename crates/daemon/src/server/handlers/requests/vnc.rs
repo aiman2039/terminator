@@ -110,7 +110,7 @@ impl Shared {
         if profile.id.trim().is_empty() {
             profile.id = id();
         }
-        profile.validate()
+        Ok(profile.validate()?)
     }
 
     fn ensure_vnc_endpoint_kept(

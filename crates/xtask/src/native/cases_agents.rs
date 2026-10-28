@@ -2,7 +2,7 @@ use super::super::harness::{Harness, id};
 use super::dispatch::CaptureInput;
 use super::dispatch::{Options, capture};
 use anyhow::{Context, Result, ensure};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{fs, thread, time::Duration};
 pub(crate) fn scrolling(opts: &Options) -> Result<()> {
     let h = Harness::new()?;
@@ -16,11 +16,24 @@ pub(crate) fn scrolling(opts: &Options) -> Result<()> {
         h.write(&mut stream, "i=0; while [ $i -lt 500 ]; do printf 'Sample retained line %s\\n' \"$i\"; i=$((i+1)); done\n")?;
     }
     thread::sleep(Duration::from_millis(500));
-    let left_target = format!("terminal:{}", id(&left));
-    let right_target = format!("terminal:{}", id(&right));
-    let logs = capture(
+    let logs = capture_hover_history(&h, opts, (&left, &right))?;
+    fs::create_dir_all(&opts.output)?;
+    fs::write(opts.output.join("scroll-evidence.log"), &logs)?;
+    check_scroll_evidence(&logs, (&left, &right))?;
+    h.assert_pids(&[left, right])?;
+    Ok(())
+}
+
+fn capture_hover_history(
+    h: &Harness,
+    opts: &Options,
+    (left, right): (&Value, &Value),
+) -> Result<String> {
+    let left_target = format!("terminal:{}", id(left));
+    let right_target = format!("terminal:{}", id(right));
+    capture(
         CaptureInput {
-            h: &h,
+            h,
             opts,
             name: "hover-history",
             actions: json!([
@@ -39,17 +52,19 @@ pub(crate) fn scrolling(opts: &Options) -> Result<()> {
         |_| {
             thread::sleep(Duration::from_millis(2800));
             h.write(
-                &mut h.attach(&right)?,
+                &mut h.attach(right)?,
                 "printf 'Sample arriving output\\n'\n",
             )?;
             Ok(())
         },
-    )?;
-    fs::create_dir_all(&opts.output)?;
-    fs::write(opts.output.join("scroll-evidence.log"), &logs)?;
+    )
+}
+
+/// The hovered right pane scrolled back and returned; the focused left pane stayed put.
+fn check_scroll_evidence(logs: &str, (left, right): (&Value, &Value)) -> Result<()> {
     let prefix = format!(
         "Scroll evidence: session={} focused=false offset=",
-        id(&right)
+        id(right)
     );
     ensure!(
         logs.lines()
@@ -74,10 +89,7 @@ pub(crate) fn scrolling(opts: &Options) -> Result<()> {
         offsets.iter().filter(|offset| **offset > 0).count() >= 2,
         "Missing retained-history observations during output"
     );
-    let left_prefix = format!(
-        "Scroll evidence: session={} focused=true offset=",
-        id(&left)
-    );
+    let left_prefix = format!("Scroll evidence: session={} focused=true offset=", id(left));
     ensure!(
         !logs
             .lines()
@@ -85,7 +97,6 @@ pub(crate) fn scrolling(opts: &Options) -> Result<()> {
             .any(|s| !s.starts_with("0 ")),
         "Focused pane scrolled with hovered pane: {logs}"
     );
-    h.assert_pids(&[left, right])?;
     Ok(())
 }
 

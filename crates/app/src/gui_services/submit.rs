@@ -64,7 +64,7 @@ pub(crate) fn project_directories(
 #[derive(Clone)]
 pub struct Services(Arc<Inner>);
 struct Inner {
-    pub handle: Handle<Vec<Update>>,
+    pub handle: Handle<Vec<Update>, anyhow::Error>,
     pub client: Client,
     pub fs: NativePool,
     pub platform: NativePool,
@@ -78,19 +78,19 @@ struct Inner {
     snapshot: Arc<std::sync::Mutex<Option<Box<State>>>>,
 }
 pub struct Owner {
-    pub supervisor: Supervisor<Vec<Update>>,
+    pub supervisor: Supervisor<Vec<Update>, anyhow::Error>,
     pub events: tokio::sync::mpsc::Receiver<Update>,
     pub snapshot: Arc<std::sync::Mutex<Option<Box<State>>>>,
 }
 /// Narrow background-decode handle; see [`Services::submit`].
 #[derive(Clone)]
 pub struct Submit {
-    handle: Handle<Vec<Update>>,
+    handle: Handle<Vec<Update>, anyhow::Error>,
     fs: NativePool,
     cpu: NativePool,
 }
 impl Submit {
-    pub fn handle(&self) -> &Handle<Vec<Update>> {
+    pub fn handle(&self) -> &Handle<Vec<Update>, anyhow::Error> {
         &self.handle
     }
     pub fn fs(&self) -> &NativePool {
@@ -144,7 +144,7 @@ impl Services {
                     .run(&CancellationToken::new(), || {
                         let catalog = Arc::new(player::radio::catalog().to_vec());
                         player::radio::categories();
-                        Ok(catalog)
+                        anyhow::Ok(catalog)
                     })
                     .await?;
                 Ok(vec![Update::RadioCatalog(catalog)])
@@ -186,7 +186,7 @@ impl Services {
     pub fn processes(&self) -> &Processes {
         &self.0.processes
     }
-    pub fn handle(&self) -> &Handle<Vec<Update>> {
+    pub fn handle(&self) -> &Handle<Vec<Update>, anyhow::Error> {
         &self.0.handle
     }
     /// Narrow background-decode handle: job submission plus the filesystem
@@ -411,13 +411,13 @@ impl Services {
                         let paths = service.client().paths.clone();
                         let state = service.client().catalog.run(&token, move || {
                             let result = installation::restart_result(&paths, &state, &std::env::current_exe()?);
-                            Ok((state, result))
+                            anyhow::Ok((state, result))
                         }).await?;
                         if let Err(error) = state.1 { service.emit(Update::Error(format!("{error:#}"))).await?; }
                         revision = Some(state.0.snapshot_hint()); Some(Update::State(state.0))
                     }
                     Ok(_) => None,
-                    Err(error) => { revision = None; Some(Update::Error(format!("Reconnecting: {error:#}"))) }
+                    Err(error) => { revision = None; Some(Update::Error(format!("Reconnecting: {error}", error = terminator_core::ErrorChain(&error)))) }
                 };
                 let update = match update.filter(|_| !service.reads_paused()) {
                     Some(Update::State(state)) => {
@@ -441,7 +441,7 @@ impl Services {
                 if directory_check.elapsed() >= Duration::from_secs(1) {
                     directory_check = Instant::now();
                     let paths = projects.clone();
-                    let directories = service.client().catalog.run(&token, move || Ok(project_directories(paths))).await?;
+                    let directories = service.client().catalog.run(&token, move || anyhow::Ok(project_directories(paths))).await?;
                     if directories != previous_directories {
                         previous_directories = directories.clone();
                         if events.send(Update::ProjectDirectories(directories)).await.is_err() { break; }
@@ -454,7 +454,7 @@ impl Services {
                     let file = paths.runtime.join("activation");
                     let notice = fs::read_to_string(&file).ok();
                     if notice.is_some() { let _ = fs::remove_file(file); }
-                    Ok(notice)
+                    anyhow::Ok(notice)
                 }).await?;
                 if let Some(notice) = activation { if events.send(Update::Activation(notice)).await.is_err() { break; } service.0.ctx.request_repaint(); }
                 if config_check.elapsed() >= Duration::from_secs(1) {
@@ -465,7 +465,7 @@ impl Services {
                         let path = config_path(&paths)?;
                         let source = fs::read_to_string(&path).unwrap_or_default();
                         if previous.as_ref() == Some(&source) { return Ok(None); }
-                        Ok(Some((source, AppearanceFile::load(&path)?)))
+                        anyhow::Ok(Some((source, AppearanceFile::load(&path)?)))
                     }).await;
                     let update = match changed {
                         Ok(Some((source, file))) => { appearance_source = Some(source); Some(Update::Appearance(Box::new(file))) }
@@ -649,7 +649,7 @@ impl Services {
                 let files = self
                     .fs()
                     .run(&cancel, move || {
-                        Ok(crate::git_log::commit_files(&cwd, &query))
+                        anyhow::Ok(crate::git_log::commit_files(&cwd, &query))
                     })
                     .await
                     .unwrap_or_else(|error| Err(format!("{error:#}")));
@@ -664,7 +664,7 @@ impl Services {
                             .parent()
                             .map(std::path::Path::to_path_buf)
                             .unwrap_or_default();
-                        Ok(
+                        anyhow::Ok(
                             crate::git_log::blame_with_contents(&cwd, &file, Some(&text))
                                 .map(|blame| blame.entries),
                         )
@@ -681,7 +681,7 @@ impl Services {
                 let lines = self
                     .fs()
                     .run(&cancel, move || {
-                        Ok(crate::native_editor::read_line_previews(files))
+                        anyhow::Ok(crate::native_editor::read_line_previews(files))
                     })
                     .await
                     .unwrap_or_default();

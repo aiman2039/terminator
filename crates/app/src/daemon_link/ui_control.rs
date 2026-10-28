@@ -37,7 +37,9 @@ pub fn spawn(paths: Paths, service: Services) -> Result<Server> {
         let std_listener: transport::Listener = service
             .client()
             .catalog
-            .run(&token, move || transport::Listener::bind_ipc(&bind))
+            .run(&token, move || {
+                Ok::<_, anyhow::Error>(transport::Listener::bind_ipc(&bind)?)
+            })
             .await?;
         let listener = transport::AsyncListener::from_std(std_listener)?;
         let mut clients = FuturesUnordered::new();
@@ -59,7 +61,7 @@ pub fn spawn(paths: Paths, service: Services) -> Result<Server> {
             .catalog
             .run(&CancellationToken::new(), move || {
                 let _ = fs::remove_file(socket);
-                Ok(())
+                anyhow::Ok(())
             })
             .await?;
         Ok(Vec::new())
@@ -103,13 +105,15 @@ async fn serve_until(
         let envelope: Envelope = service
             .cpu()
             .run(&CancellationToken::new(), move || {
-                Ok(serde_json::from_slice(&bytes)?)
+                anyhow::Ok(serde_json::from_slice(&bytes)?)
             })
             .await?;
         let token = service
             .client()
             .catalog
-            .run(&CancellationToken::new(), move || paths.token())
+            .run(&CancellationToken::new(), move || {
+                Ok::<_, anyhow::Error>(paths.token()?)
+            })
             .await?;
         ensure!(
             envelope.version == 1 && envelope.auth == token,
@@ -152,7 +156,7 @@ async fn serve_until(
     let bytes = service
         .cpu()
         .run(&CancellationToken::new(), move || {
-            Ok(serde_json::to_vec(&response)?)
+            anyhow::Ok(serde_json::to_vec(&response)?)
         })
         .await?;
     ensure!(
@@ -188,7 +192,7 @@ mod tests {
                 .run(&CancellationToken::new(), move || {
                     let _ = started.send(());
                     blocked.recv().unwrap();
-                    Ok(())
+                    anyhow::Ok(())
                 })
                 .await
         });

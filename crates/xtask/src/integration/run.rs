@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-use terminator_core::{quote as shell_quote, read_frame};
+use terminator_core::{quote as shell_quote, read_frame, transport};
 /// Fixture symlink. Windows directory/file variants are picked by the caller;
 /// creating links may need developer mode or privileges at runtime.
 #[cfg(unix)]
@@ -24,52 +24,83 @@ pub(super) fn symlink(original: &Path, link: &Path, dir: bool) -> Result<()> {
     Ok(())
 }
 
+/// Two projects and a shell started in the first.
+struct Fixture {
+    a: Value,
+    b: Value,
+    s: Value,
+}
+
 pub fn run() -> Result<()> {
     let mut h = Harness::new()?;
     h.setup()?;
     let a = h.project("project-a")?;
     let b = h.project("project-b")?;
     let s = h.shell(&a)?;
-    let mut stream = h.attach(&s)?;
+    let f = Fixture { a, b, s };
+    reconnect(&h, &f.s)?;
+    idempotent_selection(&h, &f)?;
+    invalid_projects(&h, &f.a)?;
+    let mut stream = h.attach(&f.s)?;
+    cwd_keeps_owner(&h, &f, &mut stream)?;
+    hook_dedup_and_auth(&h, &f, &mut stream)?;
+    let layout = json!({"fixture":"layout-does-not-launch-anything"});
+    h.rpc(json!({"SaveLayout":{"project":id(&f.a),"layout":layout}}))?;
+    blocked_paste_stop(&h, &f.s, &mut stream)?;
+    drop(stream);
+    h.restart()?;
+    let state = h.state()?;
+    ensure!(
+        sessions(&state).is_empty(),
+        "Recovery resurrected a pruned session"
+    );
+    ensure!(
+        state
+            .get("projects")
+            .and_then(|projects| projects.get(0))
+            .and_then(|project| project.get("layout"))
+            .is_some_and(|saved| saved == &layout),
+        "Layout lost"
+    );
+    conditional_snapshots(&mut h, &state)?;
+    println!(
+        "{}",
+        json!({"functional":"passed","reconnect_same_pid":true,"cwd_grouping":true,"hook_delivery":true,"dedup_and_dismissal":true,"restart_no_launch":true,"conditional_snapshot":true,"legacy_client":true})
+    );
+    Ok(())
+}
+
+fn project_path(project: &Value) -> Result<PathBuf> {
+    Ok(PathBuf::from(
+        project
+            .get("path")
+            .ok_or_else(|| anyhow!("missing project path"))?
+            .as_str()
+            .unwrap(),
+    ))
+}
+
+fn reconnect(h: &Harness, s: &Value) -> Result<()> {
+    let mut stream = h.attach(s)?;
     h.write(&mut stream, "printf 'RECONNECT_PROOF_123\\n'\n")?;
     h.wait(
         |_| {
-            h.history(id(&s))
+            h.history(id(s))
                 .is_ok_and(|text| text.contains("RECONNECT_PROOF_123"))
         },
         5,
     )?;
-    drop(stream);
-    symlink(
-        Path::new(
-            a.get("path")
-                .ok_or_else(|| anyhow!("missing project path"))?
-                .as_str()
-                .unwrap(),
-        ),
-        &h.root.join("alias-a"),
-        true,
-    )?;
+    Ok(())
+}
+
+/// Re-adding a project, through its path or an alias, selects it without duplicating it.
+fn idempotent_selection(h: &Harness, f: &Fixture) -> Result<()> {
+    let Fixture { a, b, s } = f;
+    symlink(&project_path(a)?, &h.root.join("alias-a"), true)?;
     for (path, expected) in [
-        (
-            PathBuf::from(
-                b.get("path")
-                    .ok_or_else(|| anyhow!("missing project path"))?
-                    .as_str()
-                    .unwrap(),
-            ),
-            id(&b),
-        ),
-        (h.root.join("alias-a"), id(&a)),
-        (
-            PathBuf::from(
-                a.get("path")
-                    .ok_or_else(|| anyhow!("missing project path"))?
-                    .as_str()
-                    .unwrap(),
-            ),
-            id(&a),
-        ),
+        (project_path(b)?, id(b)),
+        (h.root.join("alias-a"), id(a)),
+        (project_path(a)?, id(a)),
     ] {
         h.rpc(json!({"AddProject":{"path":path}}))?;
         let state = h.state()?;
@@ -83,8 +114,12 @@ pub fn run() -> Result<()> {
             "Project selection must be idempotent: expected {expected}, selected {selected}, projects {}",
             projects.len()
         );
-        h.assert_pids(std::slice::from_ref(&s))?;
+        h.assert_pids(std::slice::from_ref(s))?;
     }
+    Ok(())
+}
+
+fn invalid_projects(h: &Harness, a: &Value) -> Result<()> {
     for path in [h.root.join("missing"), h.root.join("daemon.log")] {
         ensure!(
             h.rpc(json!({"AddProject":{"path":path}})).is_err(),
@@ -93,13 +128,18 @@ pub fn run() -> Result<()> {
         ensure!(
             h.state()?
                 .get("selected_project")
-                .is_some_and(|selected| selected == id(&a)),
+                .is_some_and(|selected| selected == id(a)),
             "Failed open changed selection"
         );
     }
-    let mut stream = h.attach(&s)?;
+    Ok(())
+}
+
+/// A shell's reported cwd moves into project B without changing its owner.
+fn cwd_keeps_owner(h: &Harness, f: &Fixture, stream: &mut transport::Stream) -> Result<()> {
+    let Fixture { a, b, s } = f;
     h.write(
-        &mut stream,
+        stream,
         &format!(
             "cd {}; {} cwd \"$PWD\"\n",
             shell_quote(
@@ -114,17 +154,22 @@ pub fn run() -> Result<()> {
     h.wait(
         |st| {
             b.get("path")
-                .is_some_and(|path| &session(st, id(&s))["cwd"] == path)
+                .is_some_and(|path| &session(st, id(s))["cwd"] == path)
         },
         5,
     )?;
     ensure!(
-        session(&h.state()?, id(&s))["project_id"] == id(&a),
+        session(&h.state()?, id(s))["project_id"] == id(a),
         "cwd moved project ownership"
     );
-    let event = json!({"protocol_version":1,"event_id":"fixture-1","terminal_session_id":id(&s),"agent_invocation_id":"fixture-agent","agent_kind":"custom","provider_session_id":"provider-123","state":"waiting_input","request_id":"req-1","sequence":1,"summary":"Fixture needs input","details":"Isolated test","resume":null});
+    Ok(())
+}
+
+fn hook_dedup_and_auth(h: &Harness, f: &Fixture, stream: &mut transport::Stream) -> Result<()> {
+    let Fixture { b, s, .. } = f;
+    let event = json!({"protocol_version":1,"event_id":"fixture-1","terminal_session_id":id(s),"agent_invocation_id":"fixture-agent","agent_kind":"custom","provider_session_id":"provider-123","state":"waiting_input","request_id":"req-1","sequence":1,"summary":"Fixture needs input","details":"Isolated test","resume":null});
     h.write(
-        &mut stream,
+        stream,
         &format!(
             "printf '%s' {} | {} emit\n",
             shell_quote(&event.to_string()),
@@ -132,7 +177,7 @@ pub fn run() -> Result<()> {
         ),
     )?;
     h.wait(|st| st["notifications"].as_array().unwrap().len() == 1, 5)?;
-    h.rpc(json!({"Focus":{"session":id(&s)}}))?;
+    h.rpc(json!({"Focus":{"session":id(s)}}))?;
     let st = h.state()?;
     ensure!(
         st.get("notifications")
@@ -157,7 +202,7 @@ pub fn run() -> Result<()> {
         "Duplicate hook"
     );
     if let Ok(mut wrong) = h.connect(
-        json!({"Cwd":{"session":id(&s),"path":"/"}}),
+        json!({"Cwd":{"session":id(s),"path":"/"}}),
         Some("wrong"),
         None,
     ) && let Ok(response) = read_frame::<Value>(&mut wrong)
@@ -167,52 +212,44 @@ pub fn run() -> Result<()> {
     ensure!(
         h.state().is_ok_and(|state| {
             b.get("path")
-                .is_some_and(|path| &session(&state, id(&s))["cwd"] == path)
+                .is_some_and(|path| &session(&state, id(s))["cwd"] == path)
         }),
         "Invalid auth mutated cwd"
     );
-    let layout = json!({"fixture":"layout-does-not-launch-anything"});
-    h.rpc(json!({"SaveLayout":{"project":id(&a),"layout":layout}}))?;
+    Ok(())
+}
+
+/// Stop must not wait behind a paste the blocked shell never reads.
+fn blocked_paste_stop(h: &Harness, s: &Value, stream: &mut transport::Stream) -> Result<()> {
     h.write(
-        &mut stream,
+        stream,
         "stty -icanon -echo; printf 'BLOCKING_WRITE_READY\\n'; exec sleep 30\n",
     )?;
     h.wait(
         |_| {
-            h.history(id(&s))
+            h.history(id(s))
                 .is_ok_and(|t| t.lines().any(|l| l.trim() == "BLOCKING_WRITE_READY"))
         },
         5,
     )?;
-    h.write(&mut stream, &"x".repeat(131072))?;
+    h.write(stream, &"x".repeat(131072))?;
     let start = Instant::now();
-    h.rpc(json!({"Stop":{"session":id(&s)}}))?;
+    h.rpc(json!({"Stop":{"session":id(s)}}))?;
     ensure!(
         start.elapsed() < Duration::from_secs(2),
         "Blocked paste prevented Stop"
     );
     // A plain shell has no agent resume handle, so ending it drops the record
     // and its scrollback instead of leaving a dead History entry.
-    h.wait(|st| !session_present(st, id(&s)), 5)?;
+    h.wait(|st| !session_present(st, id(s)), 5)?;
     ensure!(
-        h.history(id(&s)).is_err(),
+        h.history(id(s)).is_err(),
         "Pruned session kept a History record"
     );
-    drop(stream);
-    h.restart()?;
-    let state = h.state()?;
-    ensure!(
-        sessions(&state).is_empty(),
-        "Recovery resurrected a pruned session"
-    );
-    ensure!(
-        state
-            .get("projects")
-            .and_then(|projects| projects.get(0))
-            .and_then(|project| project.get("layout"))
-            .is_some_and(|saved| saved == &layout),
-        "Layout lost"
-    );
+    Ok(())
+}
+
+fn conditional_snapshots(h: &mut Harness, state: &Value) -> Result<()> {
     let hint = json!({
         "generation": state.get("generation").unwrap_or(&Value::Null),
         "revision": state.get("revision").unwrap_or(&Value::Null)
@@ -239,10 +276,6 @@ pub fn run() -> Result<()> {
             .get("State")
             .is_some(),
         "Restart generation not invalidated"
-    );
-    println!(
-        "{}",
-        json!({"functional":"passed","reconnect_same_pid":true,"cwd_grouping":true,"hook_delivery":true,"dedup_and_dismissal":true,"restart_no_launch":true,"conditional_snapshot":true,"legacy_client":true})
     );
     Ok(())
 }

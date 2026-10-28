@@ -29,7 +29,9 @@ impl Analysis {
         let controls = Arc::clone(&self.controls);
         let _ = self.service.handle().submit(context, cancel, async move {
             let bars = cpu
-                .run(&token, move || Ok(tap::bars_from_samples(&samples, rate)))
+                .run(&token, move || {
+                    anyhow::Ok(tap::bars_from_samples(&samples, rate))
+                })
                 .await?;
             if controls.generation.load(Ordering::Acquire) == generation {
                 sender.send_replace(Some(bars));

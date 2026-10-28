@@ -42,7 +42,7 @@ impl Services {
         self.platform()
             .run(&cancel, move || {
                 open::that(url)?;
-                Ok(())
+                anyhow::Ok(())
             })
             .await?;
         Ok(())

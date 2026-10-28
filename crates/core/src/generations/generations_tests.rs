@@ -200,7 +200,11 @@ mod tests {
         }
     }
 
-    fn broadcast(paths: &Paths, request: Request, asynchronous: bool) -> anyhow::Result<Response> {
+    fn broadcast(
+        paths: &Paths,
+        request: Request,
+        asynchronous: bool,
+    ) -> Result<Response, Box<dyn std::error::Error + Send + Sync>> {
         if asynchronous {
             #[cfg(feature = "async-client")]
             {
@@ -210,12 +214,12 @@ mod tests {
                     crate::async_service::NativePool::new("heartbeat-catalog", 1).unwrap(),
                     crate::async_service::NativePool::new("heartbeat-cpu", 1).unwrap(),
                 );
-                return runtime.block_on(client.rpc(request));
+                return Ok(runtime.block_on(client.rpc(request))?);
             }
             #[cfg(not(feature = "async-client"))]
             panic!("async-client feature is required");
         }
-        rpc(paths, request)
+        Ok(rpc(paths, request)?)
     }
 
     fn broadcast_modes() -> &'static [bool] {

@@ -9,15 +9,16 @@ pub(crate) struct StripTerminalClicksInput {
     pub(crate) horizontal_clicked: bool,
 }
 impl Viewer<'_> {
-    pub(super) fn strip_terminal_actions(&mut self, ui: &mut egui::Ui, path: egui_dock::NodePath) {
+    /// The strip leaf's terminal the actions target: the active session
+    /// when it lives in this leaf, else the leaf's first terminal.
+    fn strip_pane_session(&self, path: egui_dock::NodePath) -> Option<String> {
         let tabs = self
             .app
             .strip_pane_tabs
             .get(&path)
             .cloned()
             .unwrap_or_default();
-        let sid = self
-            .app
+        self.app
             .active_session
             .as_ref()
             .filter(|sid| {
@@ -30,7 +31,11 @@ impl Viewer<'_> {
                     Tab::Terminal(id) => Some(id.clone()),
                     _ => None,
                 })
-            });
+            })
+    }
+
+    pub(super) fn strip_terminal_actions(&mut self, ui: &mut egui::Ui, path: egui_dock::NodePath) {
+        let sid = self.strip_pane_session(path);
         let branch = sid.as_ref().and_then(|sid| {
             self.app
                 .state

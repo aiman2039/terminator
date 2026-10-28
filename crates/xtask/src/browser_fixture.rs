@@ -63,6 +63,21 @@ fn page() -> Result<(Server, u16)> {
         port,
     ))
 }
+/// `terminator-hook ctl browser` bound to one page endpoint.
+struct BrowserCtl<'a> {
+    endpoint: String,
+    data_dir: &'a std::path::Path,
+}
+impl BrowserCtl<'_> {
+    fn call(&self, action: &str, args: &[&str]) -> Result<Value> {
+        let mut command = Command::new(bin().join("terminator-hook"));
+        command
+            .args(["ctl", "browser", action, "--endpoint", &self.endpoint])
+            .args(args)
+            .env("TERMINATOR_DATA_DIR", self.data_dir);
+        serde_json::from_slice(&output(command)?).map_err(Into::into)
+    }
+}
 pub fn run() -> Result<()> {
     let browser=["chromium","chromium-browser","google-chrome"].into_iter().find_map(terminator_core::find_executable).context("Install a browser for the optional live fixture; linux-check --browser installs Chromium only inside its test container")?;
     let temp = tempfile::Builder::new()
@@ -72,6 +87,37 @@ pub fn run() -> Result<()> {
     let profile = temp.path().join("profile");
     let logpath = temp.path().join("browser.log");
     let log = fs::File::create(&logpath)?;
+    let mut browser = launch(browser, &profile, log)?;
+    let (debugging_port, browser_path) = wait_endpoint(&mut browser, &profile, &logpath)?;
+    let target = create_target(debugging_port, &browser_path)?;
+    let ctl = BrowserCtl {
+        endpoint: format!("ws://127.0.0.1:{debugging_port}/devtools/page/{target}"),
+        data_dir: temp.path(),
+    };
+    ctl.call("navigate", &[&format!("http://127.0.0.1:{port}/")])?;
+    check_snapshot(&ctl.call("snapshot", &[])?)?;
+    fill_and_click(&ctl)?;
+    let directory = artifacts().join("browser");
+    fs::create_dir_all(&directory)?;
+    let image = directory.join("browser.png");
+    ctl.call("screenshot", &[image.to_str().unwrap()])?;
+    let image = image::open(image)?;
+    ensure!(
+        image.width() > 100 && image.height() > 100,
+        "Invalid browser screenshot"
+    );
+    println!(
+        "{}",
+        json!({"live_external_browser":true,"navigation":true,"html_and_css_snapshot":true,"literal_fill_and_click":true,"screenshot":true})
+    );
+    Ok(())
+}
+
+fn launch(
+    browser: std::path::PathBuf,
+    profile: &std::path::Path,
+    log: fs::File,
+) -> Result<Process> {
     let mut command = Command::new(browser);
     command
         .args([
@@ -88,16 +134,25 @@ pub fn run() -> Result<()> {
     if std::path::Path::new("/.dockerenv").exists() {
         command.arg("--no-sandbox");
     }
-    let mut browser = Process(command.spawn()?);
+    Ok(Process(command.spawn()?))
+}
+
+/// Wait for the debugging port file; returns the port and browser endpoint path.
+fn wait_endpoint(
+    browser: &mut Process,
+    profile: &std::path::Path,
+    logpath: &std::path::Path,
+) -> Result<(u16, String)> {
+    let child = &mut browser.0;
     let deadline = Instant::now()
         .checked_add(Duration::from_secs(15))
         .ok_or_else(|| anyhow::anyhow!("browser deadline overflow"))?;
     let discovery = profile.join("DevToolsActivePort");
     while !discovery.exists() {
         ensure!(
-            browser.0.try_wait()?.is_none(),
+            child.try_wait()?.is_none(),
             "Browser failed: {}",
-            fs::read_to_string(&logpath)?
+            fs::read_to_string(logpath)?
         );
         ensure!(
             Instant::now() < deadline,
@@ -109,6 +164,10 @@ pub fn run() -> Result<()> {
     let mut lines = data.lines();
     let debugging_port = lines.next().context("Port missing")?.parse::<u16>()?;
     let browser_path = lines.next().context("Browser endpoint missing")?;
+    Ok((debugging_port, browser_path.to_owned()))
+}
+
+fn create_target(debugging_port: u16, browser_path: &str) -> Result<String> {
     let stream = TcpStream::connect(("127.0.0.1", debugging_port))?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let (mut socket, _) = tungstenite::client(
@@ -120,30 +179,22 @@ pub fn run() -> Result<()> {
             .to_string()
             .into(),
     ))?;
-    let target = loop {
+    loop {
         if let Message::Text(text) = socket.read()? {
             let v: Value = serde_json::from_str(&text)?;
             if v.get("id").is_some_and(|id| *id == 1) {
-                break v
+                return Ok(v
                     .get("result")
                     .and_then(|result| result.get("targetId"))
                     .and_then(Value::as_str)
                     .context("Target not created")?
-                    .to_owned();
+                    .to_owned());
             }
         }
-    };
-    let endpoint = format!("ws://127.0.0.1:{debugging_port}/devtools/page/{target}");
-    let ctl = |action: &str, args: &[&str]| -> Result<Value> {
-        let mut command = Command::new(bin().join("terminator-hook"));
-        command
-            .args(["ctl", "browser", action, "--endpoint", &endpoint])
-            .args(args)
-            .env("TERMINATOR_DATA_DIR", temp.path());
-        serde_json::from_slice(&output(command)?).map_err(Into::into)
-    };
-    ctl("navigate", &[&format!("http://127.0.0.1:{port}/")])?;
-    let snapshot = ctl("snapshot", &[])?;
+    }
+}
+
+fn check_snapshot(snapshot: &Value) -> Result<()> {
     ensure!(
         snapshot
             .get("title")
@@ -162,32 +213,23 @@ pub fn run() -> Result<()> {
             .is_empty(),
         "Styles missing"
     );
+    Ok(())
+}
+
+fn fill_and_click(ctl: &BrowserCtl<'_>) -> Result<()> {
     let value = "literal text '; window.bad=true;//";
-    ctl("fill", &["#name", value])?;
-    ctl("click", &["#go"])?;
+    ctl.call("fill", &["#name", value])?;
+    ctl.call("click", &["#go"])?;
     ensure!(
-        ctl(
+        ctl.call(
             "evaluate",
             &["document.querySelector('#result').textContent"]
         )? == value,
         "Fill/click did not preserve literal text"
     );
     ensure!(
-        ctl("evaluate", &["typeof window.bad"])? == "undefined",
+        ctl.call("evaluate", &["typeof window.bad"])? == "undefined",
         "Input escaped into script"
-    );
-    let directory = artifacts().join("browser");
-    fs::create_dir_all(&directory)?;
-    let image = directory.join("browser.png");
-    ctl("screenshot", &[image.to_str().unwrap()])?;
-    let image = image::open(image)?;
-    ensure!(
-        image.width() > 100 && image.height() > 100,
-        "Invalid browser screenshot"
-    );
-    println!(
-        "{}",
-        json!({"live_external_browser":true,"navigation":true,"html_and_css_snapshot":true,"literal_fill_and_click":true,"screenshot":true})
     );
     Ok(())
 }

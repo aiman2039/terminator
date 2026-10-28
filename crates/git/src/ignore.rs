@@ -124,9 +124,7 @@ pub fn entries_known(path: &Path, in_git: bool) -> Result<Vec<Entry>> {
     for entry in std::fs::read_dir(path)? {
         let entry = entry?;
         if entries.len() >= DISPLAY_LIMIT {
-            return Err(Error::message(format!(
-                "Directory exceeds the {DISPLAY_LIMIT}-entry display limit"
-            )));
+            return Err(Error::DirectoryLimit { path: path.into() });
         }
         entries.push(Entry {
             ignored: entry.file_name() == ".git",
