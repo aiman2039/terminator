@@ -127,15 +127,23 @@ pub(super) fn git_overflow_more(
     let _ = more;
 }
 
+pub(super) struct GitToolbarInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) input: &'a GitPanelInput<'a>,
+    pub(super) branch_name: &'a str,
+    pub(super) outcome: &'a mut GitPanelOutcome,
+}
+
 /// Icon toolbar: collapse, Changes/History, branch switcher, refresh, log,
 /// then the compare/view actions inline when the sidebar has room, or behind
 /// the overflow menu when narrow.
-pub(super) fn git_toolbar(
-    ui: &mut egui::Ui,
-    input: &GitPanelInput<'_>,
-    branch_name: &str,
-    outcome: &mut GitPanelOutcome,
-) {
+pub(super) fn git_toolbar(input: GitToolbarInput<'_>) {
+    let GitToolbarInput {
+        ui,
+        input,
+        branch_name,
+        outcome,
+    } = input;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.spacing_mut().interact_size.y = appearance::TOOLBAR_BUTTON;

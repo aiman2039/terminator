@@ -1,5 +1,5 @@
 use super::super::*;
-use super::header::click_enabled_menu_item;
+use super::header::{ClickEnabledMenuItemInput, click_enabled_menu_item};
 use super::tab_menu::{WorkspaceTabMenu, WorkspaceTabMenuSpec, click_menu_item, split_action};
 pub(crate) struct NewTerminalMenuInput<'a> {
     pub(crate) ui: &'a mut egui::Ui,
@@ -88,14 +88,24 @@ impl App {
             click_menu_item(ui, if pinned { "Unpin tab" } else { "Pin tab" }, "FileCode");
         let close = click_menu_item(ui, "Close tab…", "X");
         ui.separator();
-        let close_all = click_enabled_menu_item(ui, count > 1, "Close all tabs…", "X");
-        let close_left = click_enabled_menu_item(ui, index > 0, "Close all tabs to the left…", "X");
-        let close_right = click_enabled_menu_item(
+        let close_all = click_enabled_menu_item(ClickEnabledMenuItemInput {
             ui,
-            index.saturating_add(1) < count,
-            "Close all tabs to the right…",
-            "X",
-        );
+            enabled: count > 1,
+            label: "Close all tabs…",
+            icon: "X",
+        });
+        let close_left = click_enabled_menu_item(ClickEnabledMenuItemInput {
+            ui,
+            enabled: index > 0,
+            label: "Close all tabs to the left…",
+            icon: "X",
+        });
+        let close_right = click_enabled_menu_item(ClickEnabledMenuItemInput {
+            ui,
+            enabled: index.saturating_add(1) < count,
+            label: "Close all tabs to the right…",
+            icon: "X",
+        });
         ui.separator();
         let add_left = click_menu_item(ui, "Add tab to the left", "Plus");
         let add_right = click_menu_item(ui, "Add tab to the right", "Plus");

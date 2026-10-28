@@ -3,7 +3,9 @@ mod live;
 use super::attention::{
     AttentionCard, NoticeGroup, attention_badge_label, attention_card, state_color,
 };
-use super::explorer_rows::{cached_variable_card, paint_header_count, skip_clipped_row};
+use super::explorer_rows::{
+    PaintHeaderCountInput, cached_variable_card, paint_header_count, skip_clipped_row,
+};
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
 use crate::{
@@ -77,16 +79,16 @@ impl App {
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Agents"));
         let count = waiting.saturating_add(unread);
         if count > 0 {
-            paint_header_count(
+            paint_header_count(PaintHeaderCountInput {
                 ui,
-                response.rect,
+                rect: response.rect,
                 count,
-                appearance::color(if waiting > 0 {
+                color: appearance::color(if waiting > 0 {
                     &self.theme.status_waiting
                 } else {
                     &self.theme.text
                 }),
-            );
+            });
         }
         #[cfg(feature = "test-support")]
         diagnostics::record(ui.ctx(), "left-agent-bar", response.rect);

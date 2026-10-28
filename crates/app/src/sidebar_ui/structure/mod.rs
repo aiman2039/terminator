@@ -255,7 +255,12 @@ fn outline_row(input: OutlineRowInput<'_>) -> egui::Response {
         egui::pos2(x + BADGE / 2.0, rect.center().y),
     );
     x += BADGE + 6.0;
-    paint_symbol_text(ui, &painter, symbol, egui::pos2(x, rect.center().y));
+    paint_symbol_text(PaintSymbolTextInput {
+        ui,
+        painter: &painter,
+        symbol,
+        start: egui::pos2(x, rect.center().y),
+    });
     response.on_hover_text(outline_tip(symbol))
 }
 
@@ -272,9 +277,22 @@ fn paint_kind_badge(painter: &egui::Painter, kind: &str, center: egui::Pos2) {
     );
 }
 
+struct PaintSymbolTextInput<'a> {
+    ui: &'a egui::Ui,
+    painter: &'a egui::Painter,
+    symbol: &'a Symbol,
+    start: egui::Pos2,
+}
+
 /// Name (struck through when deprecated) and the first detail line,
 /// starting at `start` (left edge, vertical center).
-fn paint_symbol_text(ui: &egui::Ui, painter: &egui::Painter, symbol: &Symbol, start: egui::Pos2) {
+fn paint_symbol_text(input: PaintSymbolTextInput<'_>) {
+    let PaintSymbolTextInput {
+        ui,
+        painter,
+        symbol,
+        start,
+    } = input;
     let visuals = ui.visuals();
     let x = start.x;
     let center_y = start.y;

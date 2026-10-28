@@ -208,7 +208,14 @@ impl SidebarPass<'_> {
             .id_salt(("remote-git", project_id))
             .show(ui, |ui| {
                 for change in &view.changes {
-                    ui.horizontal(|ui| git_change_row(ui, change, project_id, actions));
+                    ui.horizontal(|ui| {
+                        git_change_row(GitChangeRowInput {
+                            ui,
+                            change,
+                            project_id,
+                            actions,
+                        })
+                    });
                 }
                 if view.changes.is_empty() && !view.git_loading && view.git_error.is_none() {
                     ui.weak("Working tree is clean.");
@@ -278,16 +285,31 @@ impl SidebarPass<'_> {
             }
         }
         let transfers = self.transfers;
-        response.context_menu(|ui| file_menu(ui, entry, transfers, &mut self.actions));
+        response.context_menu(|ui| {
+            file_menu(FileMenuInput {
+                ui,
+                entry,
+                transfers,
+                actions: &mut self.actions,
+            })
+        });
     }
 }
 
-fn git_change_row(
-    ui: &mut egui::Ui,
-    change: &Change,
-    project_id: &str,
-    actions: &mut SidebarActions,
-) {
+struct GitChangeRowInput<'a> {
+    ui: &'a mut egui::Ui,
+    change: &'a Change,
+    project_id: &'a str,
+    actions: &'a mut SidebarActions,
+}
+
+fn git_change_row(input: GitChangeRowInput<'_>) {
+    let GitChangeRowInput {
+        ui,
+        change,
+        project_id,
+        actions,
+    } = input;
     #[cfg(not(feature = "test-support"))]
     let _ = project_id;
     let x = change.status.as_bytes().first().copied().unwrap_or(b' ');
@@ -307,7 +329,20 @@ fn git_change_row(
     }
 }
 
-fn file_menu(ui: &mut egui::Ui, entry: &Entry, transfers: bool, actions: &mut SidebarActions) {
+struct FileMenuInput<'a> {
+    ui: &'a mut egui::Ui,
+    entry: &'a Entry,
+    transfers: bool,
+    actions: &'a mut SidebarActions,
+}
+
+fn file_menu(input: FileMenuInput<'_>) {
+    let FileMenuInput {
+        ui,
+        entry,
+        transfers,
+        actions,
+    } = input;
     if entry.directory {
         if ui
             .add_enabled(transfers, egui::Button::new("Upload into this folder…"))

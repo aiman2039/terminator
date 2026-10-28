@@ -266,12 +266,20 @@ pub fn filter_history_lines<'a>(text: &'a str, query: &str) -> Vec<&'a str> {
         .collect()
 }
 
-pub(super) fn click_enabled_menu_item(
-    ui: &mut egui::Ui,
-    enabled: bool,
-    label: &str,
-    icon: &str,
-) -> bool {
+pub(super) struct ClickEnabledMenuItemInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) enabled: bool,
+    pub(super) label: &'a str,
+    pub(super) icon: &'a str,
+}
+
+pub(super) fn click_enabled_menu_item(input: ClickEnabledMenuItemInput<'_>) -> bool {
+    let ClickEnabledMenuItemInput {
+        ui,
+        enabled,
+        label,
+        icon,
+    } = input;
     let clicked = ui
         .add_enabled_ui(enabled, |ui| {
             appearance::menu_item(appearance::MenuItemInput {

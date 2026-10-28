@@ -11,6 +11,14 @@ pub(super) struct HoverTarget {
     mouse_reporting: bool,
 }
 
+#[cfg(feature = "test-support")]
+struct RecordScrollEvidenceInput<'a> {
+    ui: &'a egui::Ui,
+    sid: &'a String,
+    backend: &'a TerminalBackend,
+    focused: bool,
+}
+
 impl Viewer<'_> {
     /// Hit-test the pointer against the terminal's link targets. None when
     /// the backend is gone.
@@ -25,7 +33,12 @@ impl Viewer<'_> {
         let dragging = ui.input(|i| i.pointer.any_down());
         let backend = self.app.backends.get(sid)?;
         #[cfg(feature = "test-support")]
-        Self::record_scroll_evidence(ui, sid, backend, frame.focused);
+        Self::record_scroll_evidence(RecordScrollEvidenceInput {
+            ui,
+            sid,
+            backend,
+            focused: frame.focused,
+        });
         let mouse_reporting = backend
             .last_content()
             .terminal_mode
@@ -48,12 +61,13 @@ impl Viewer<'_> {
     }
 
     #[cfg(feature = "test-support")]
-    fn record_scroll_evidence(
-        ui: &egui::Ui,
-        sid: &String,
-        backend: &TerminalBackend,
-        focused: bool,
-    ) {
+    fn record_scroll_evidence(input: RecordScrollEvidenceInput<'_>) {
+        let RecordScrollEvidenceInput {
+            ui,
+            sid,
+            backend,
+            focused,
+        } = input;
         if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_none() {
             return;
         }

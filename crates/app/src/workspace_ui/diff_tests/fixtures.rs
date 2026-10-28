@@ -8,12 +8,20 @@ pub(super) fn span(text: &str) -> diff::DiffSpan {
     }
 }
 
-pub(super) fn line(
-    kind: diff::LineKind,
-    old_no: Option<u32>,
-    new_no: Option<u32>,
-    text: &str,
-) -> diff::DiffLine {
+pub(super) struct LineInput<'a> {
+    pub(super) kind: diff::LineKind,
+    pub(super) old_no: Option<u32>,
+    pub(super) new_no: Option<u32>,
+    pub(super) text: &'a str,
+}
+
+pub(super) fn line(input: LineInput<'_>) -> diff::DiffLine {
+    let LineInput {
+        kind,
+        old_no,
+        new_no,
+        text,
+    } = input;
     diff::DiffLine {
         kind,
         old_no,
@@ -23,7 +31,12 @@ pub(super) fn line(
 }
 
 pub(super) fn sample_line() -> diff::DiffLine {
-    line(diff::LineKind::Insert, None, Some(1), "visible-diff-marker")
+    line(LineInput {
+        kind: diff::LineKind::Insert,
+        old_no: None,
+        new_no: Some(1),
+        text: "visible-diff-marker",
+    })
 }
 
 pub(super) fn sample_doc() -> diff::DiffDocument {
@@ -147,16 +160,16 @@ pub(super) fn scroll_doc(
 pub(crate) fn long_doc() -> diff::DiffDocument {
     let unified: Vec<_> = (1..=150)
         .map(|n| {
-            line(
-                diff::LineKind::Equal,
-                Some(n),
-                Some(n),
-                &if n == 1 {
+            line(LineInput {
+                kind: diff::LineKind::Equal,
+                old_no: Some(n),
+                new_no: Some(n),
+                text: &if n == 1 {
                     format!("{}END", "long-line-".repeat(30))
                 } else {
                     format!("short-{n}")
                 },
-            )
+            })
         })
         .collect();
     let split = unified

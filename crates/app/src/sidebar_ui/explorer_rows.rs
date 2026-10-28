@@ -430,7 +430,20 @@ pub(super) fn prompt_button_width(ui: &egui::Ui, label: &str) -> f32 {
     padded.max(ui.spacing().interact_size.x) + 6.0
 }
 
-pub(super) fn paint_header_count(ui: &egui::Ui, rect: egui::Rect, count: usize, color: Color32) {
+pub(super) struct PaintHeaderCountInput<'a> {
+    pub(super) ui: &'a egui::Ui,
+    pub(super) rect: egui::Rect,
+    pub(super) count: usize,
+    pub(super) color: Color32,
+}
+
+pub(super) fn paint_header_count(input: PaintHeaderCountInput<'_>) {
+    let PaintHeaderCountInput {
+        ui,
+        rect,
+        count,
+        color,
+    } = input;
     let label = if count > 9 {
         "9+".to_string()
     } else {

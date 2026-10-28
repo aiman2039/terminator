@@ -29,12 +29,20 @@ pub(super) fn fixture_target(ctx: &egui::Context, name: &str) -> Option<egui::Re
     ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::unique(("fixture-target", name))))
 }
 
-pub(super) fn run_diff_frames(
-    app: &mut App,
-    ctx: &egui::Context,
-    tab: &Tab,
-    frames: &[(f64, Vec<egui::Event>)],
-) {
+pub(super) struct RunDiffFramesInput<'a> {
+    pub(super) app: &'a mut App,
+    pub(super) ctx: &'a egui::Context,
+    pub(super) tab: &'a Tab,
+    pub(super) frames: &'a [(f64, Vec<egui::Event>)],
+}
+
+pub(super) fn run_diff_frames(input: RunDiffFramesInput<'_>) {
+    let RunDiffFramesInput {
+        app,
+        ctx,
+        tab,
+        frames,
+    } = input;
     for (time, events) in frames {
         let mut output = ctx.run_ui(
             egui::RawInput {
@@ -69,7 +77,12 @@ pub(super) fn click_and_type(input: ClickAndTypeInput<'_>) {
 
     // Times keep moving forward across calls within one test.
     let base = ctx.input(|input| input.time);
-    run_diff_frames(app, ctx, tab, &[(base + 0.1, vec![]), (base + 0.2, vec![])]);
+    run_diff_frames(RunDiffFramesInput {
+        app,
+        ctx,
+        tab,
+        frames: &[(base + 0.1, vec![]), (base + 0.2, vec![])],
+    });
     let rect = fixture_target(ctx, target)
         .unwrap_or_else(|| panic!("editor target {target} was not painted"));
     let pos = rect.center();
@@ -84,11 +97,11 @@ pub(super) fn click_and_type(input: ClickAndTypeInput<'_>) {
             },
         ]
     };
-    run_diff_frames(
+    run_diff_frames(RunDiffFramesInput {
         app,
         ctx,
         tab,
-        &[
+        frames: &[
             (base + 0.3, click(true)),
             (base + 0.4, click(false)),
             (base + 0.45, vec![]),
@@ -96,7 +109,7 @@ pub(super) fn click_and_type(input: ClickAndTypeInput<'_>) {
             (base + 0.6, vec![]),
             (base + 0.7, vec![]),
         ],
-    );
+    });
 }
 
 pub(super) fn buffer_text(app: &App, tab: &Tab) -> String {
@@ -117,7 +130,12 @@ pub(super) fn click_and_key(input: ClickAndKeyInput<'_>) {
     } = input;
 
     let base = ctx.input(|input| input.time);
-    run_diff_frames(app, ctx, tab, &[(base + 0.1, vec![]), (base + 0.2, vec![])]);
+    run_diff_frames(RunDiffFramesInput {
+        app,
+        ctx,
+        tab,
+        frames: &[(base + 0.1, vec![]), (base + 0.2, vec![])],
+    });
     let rect = fixture_target(ctx, target)
         .unwrap_or_else(|| panic!("editor target {target} was not painted"));
     let pos = rect.center();
@@ -132,11 +150,11 @@ pub(super) fn click_and_key(input: ClickAndKeyInput<'_>) {
             },
         ]
     };
-    run_diff_frames(
+    run_diff_frames(RunDiffFramesInput {
         app,
         ctx,
         tab,
-        &[
+        frames: &[
             (base + 0.3, click(true)),
             (base + 0.4, click(false)),
             (base + 0.45, vec![]),
@@ -153,7 +171,7 @@ pub(super) fn click_and_key(input: ClickAndKeyInput<'_>) {
             (base + 0.6, vec![]),
             (base + 0.7, vec![]),
         ],
-    );
+    });
 }
 
 pub(super) fn click_and_shortcut(input: ClickAndShortcutInput<'_>) {
@@ -166,7 +184,12 @@ pub(super) fn click_and_shortcut(input: ClickAndShortcutInput<'_>) {
     } = input;
 
     let base = ctx.input(|input| input.time);
-    run_diff_frames(app, ctx, tab, &[(base + 0.1, vec![]), (base + 0.2, vec![])]);
+    run_diff_frames(RunDiffFramesInput {
+        app,
+        ctx,
+        tab,
+        frames: &[(base + 0.1, vec![]), (base + 0.2, vec![])],
+    });
     let rect = fixture_target(ctx, target)
         .unwrap_or_else(|| panic!("editor target {target} was not painted"));
     let pos = rect.center();
@@ -183,11 +206,11 @@ pub(super) fn click_and_shortcut(input: ClickAndShortcutInput<'_>) {
     };
     let mut modifiers = egui::Modifiers::COMMAND;
     modifiers.shift = shift;
-    run_diff_frames(
+    run_diff_frames(RunDiffFramesInput {
         app,
         ctx,
         tab,
-        &[
+        frames: &[
             (base + 0.3, click(true)),
             (base + 0.4, click(false)),
             (base + 0.45, vec![]),
@@ -205,5 +228,5 @@ pub(super) fn click_and_shortcut(input: ClickAndShortcutInput<'_>) {
             (base + 0.7, vec![]),
             (base + 0.8, vec![]),
         ],
-    );
+    });
 }

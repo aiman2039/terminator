@@ -234,7 +234,12 @@ impl GitPanelPass<'_, '_> {
     /// box and changes. Returns false in history mode.
     fn repository(&mut self, ui: &mut egui::Ui) -> bool {
         let branch_name = self.input.context.branch.clone();
-        git_toolbar(ui, self.input, &branch_name, self.outcome);
+        git_toolbar(GitToolbarInput {
+            ui,
+            input: self.input,
+            branch_name: &branch_name,
+            outcome: self.outcome,
+        });
         if !self.input.history
             && let Some(compare) = self.input.compare
         {

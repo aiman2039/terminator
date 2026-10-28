@@ -22,6 +22,13 @@ struct SplitGeometry<'a> {
     frame_sync: f32,
 }
 
+struct PaintSplitRightInput<'a> {
+    ui: &'a mut egui::Ui,
+    panes: &'a DiffPanes<'a>,
+    pass: &'a mut DiffPass,
+    geometry: &'a SplitGeometry<'a>,
+}
+
 impl App {
     /// Working tree split view. The right pane is the whole buffer, one row
     /// per line; the left pane is laid out on those rows so both scroll in
@@ -82,19 +89,25 @@ impl App {
                 key: &frame.key,
             });
         }
-        let right = Self::paint_split_right(ui, panes, pass, &geometry);
+        let right = Self::paint_split_right(PaintSplitRightInput {
+            ui,
+            panes,
+            pass,
+            geometry: &geometry,
+        });
         self.drag_diff_split(ui, panes, gap_rect);
         panes.sync = Self::followed_split_offset(ui, &geometry, [&left, &right]);
         vec![left, right]
     }
 
     /// The right pane: the live buffer editor, or the plain right side.
-    fn paint_split_right(
-        ui: &mut egui::Ui,
-        panes: &DiffPanes<'_>,
-        pass: &mut DiffPass,
-        geometry: &SplitGeometry<'_>,
-    ) -> PaneOutput {
+    fn paint_split_right(input: PaintSplitRightInput<'_>) -> PaneOutput {
+        let PaintSplitRightInput {
+            ui,
+            panes,
+            pass,
+            geometry,
+        } = input;
         let frame = panes.frame;
         match &mut pass.review.buffer {
             Some(buffer) => paint_right_editor(PaintRightEditorInput {

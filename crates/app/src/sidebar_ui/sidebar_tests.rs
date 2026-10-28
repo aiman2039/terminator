@@ -38,7 +38,20 @@ mod tests {
 
     #[test]
     fn inbox_rows_fold_notices_per_session() {
-        fn notice(id: &str, session: &str, invocation: &str, created: u64) -> Notification {
+        struct NoticeInput<'a> {
+            id: &'a str,
+            session: &'a str,
+            invocation: &'a str,
+            created: u64,
+        }
+
+        fn notice(input: NoticeInput<'_>) -> Notification {
+            let NoticeInput {
+                id,
+                session,
+                invocation,
+                created,
+            } = input;
             Notification {
                 id: id.into(),
                 session_id: session.into(),
@@ -55,10 +68,30 @@ mod tests {
             }
         }
         let groups = group_notices(vec![
-            notice("n1", "s", "a", 3),
-            notice("n2", "s", "a", 2),
-            notice("n3", "s", "b", 1),
-            notice("n4", "t", "a", 0),
+            notice(NoticeInput {
+                id: "n1",
+                session: "s",
+                invocation: "a",
+                created: 3,
+            }),
+            notice(NoticeInput {
+                id: "n2",
+                session: "s",
+                invocation: "a",
+                created: 2,
+            }),
+            notice(NoticeInput {
+                id: "n3",
+                session: "s",
+                invocation: "b",
+                created: 1,
+            }),
+            notice(NoticeInput {
+                id: "n4",
+                session: "t",
+                invocation: "a",
+                created: 0,
+            }),
         ]);
         // Repeated agent runs in one session fold into a single row.
         assert_eq!(groups.len(), 2);

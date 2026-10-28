@@ -60,19 +60,32 @@ pub(super) fn git_committed_section(input: GitCommittedSectionInput<'_, '_>) {
                 total.min(GIT_SECTION_LIMIT)
             };
             for file in files.iter().take(shown) {
-                git_committed_row(ui, ctx, outcome, file);
+                git_committed_row(GitCommittedRowInput {
+                    ui,
+                    ctx,
+                    outcome,
+                    file,
+                });
             }
         });
 }
 
+pub(super) struct GitCommittedRowInput<'a> {
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) ctx: &'a GitRowCtx<'a>,
+    pub(super) outcome: &'a mut GitPanelOutcome,
+    pub(super) file: &'a workspace_ops::CommittedFile,
+}
+
 /// One file changed since the base ref. It has no index/worktree side, so the
 /// only useful actions are open and copy.
-pub(super) fn git_committed_row(
-    ui: &mut egui::Ui,
-    ctx: &GitRowCtx<'_>,
-    outcome: &mut GitPanelOutcome,
-    file: &workspace_ops::CommittedFile,
-) {
+pub(super) fn git_committed_row(input: GitCommittedRowInput<'_>) {
+    let GitCommittedRowInput {
+        ui,
+        ctx,
+        outcome,
+        file,
+    } = input;
     if skip_clipped_git_row(ui) {
         return;
     }

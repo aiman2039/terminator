@@ -86,13 +86,18 @@ fn equal_lines_share_a_gutter_x() {
             left_text: "f\nf\nf\nf\nf\nf\nf\nx\nthis-is-a-much-longer-equal-line\n".into(),
             right_text: "f\nf\nf\nf\nf\nf\nf\nx\nthis-is-a-much-longer-equal-line\n".into(),
             unified: vec![
-                line(diff::LineKind::Equal, Some(8), Some(8), "x"),
-                line(
-                    diff::LineKind::Equal,
-                    Some(9),
-                    Some(9),
-                    "this-is-a-much-longer-equal-line",
-                ),
+                line(LineInput {
+                    kind: diff::LineKind::Equal,
+                    old_no: Some(8),
+                    new_no: Some(8),
+                    text: "x",
+                }),
+                line(LineInput {
+                    kind: diff::LineKind::Equal,
+                    old_no: Some(9),
+                    new_no: Some(9),
+                    text: "this-is-a-much-longer-equal-line",
+                }),
             ],
             split: vec![],
             ..Default::default()
@@ -118,12 +123,12 @@ fn delete_sign_stays_right_of_line_numbers() {
             // 100 lines force a 3-digit gutter; the deleted row is visible.
             left_text: format!("f\nf\nremoved-line\n{}", "f\n".repeat(97)),
             right_text: "f\n".repeat(99),
-            unified: vec![line(
-                diff::LineKind::Delete,
-                Some(100),
-                None,
-                "removed-line",
-            )],
+            unified: vec![line(LineInput {
+                kind: diff::LineKind::Delete,
+                old_no: Some(100),
+                new_no: None,
+                text: "removed-line",
+            })],
             split: vec![],
             ..Default::default()
         },
@@ -155,7 +160,12 @@ fn insert_sign_stays_right_of_line_numbers() {
             // 102 lines force a 3-digit gutter; the inserted row is visible.
             left_text: "f\n".repeat(101),
             right_text: format!("f\nf\nadded-line\n{}", "f\n".repeat(99)),
-            unified: vec![line(diff::LineKind::Insert, None, Some(102), "added-line")],
+            unified: vec![line(LineInput {
+                kind: diff::LineKind::Insert,
+                old_no: None,
+                new_no: Some(102),
+                text: "added-line",
+            })],
             split: vec![],
             ..Default::default()
         },
@@ -181,8 +191,18 @@ fn split_paints_one_number_per_side() {
             right_text: "\n\n\n\n\nright-only\n".into(),
             unified: vec![],
             split: vec![diff::SplitRow {
-                left: Some(line(diff::LineKind::Delete, Some(5), None, "left-only")),
-                right: Some(line(diff::LineKind::Insert, None, Some(6), "right-only")),
+                left: Some(line(LineInput {
+                    kind: diff::LineKind::Delete,
+                    old_no: Some(5),
+                    new_no: None,
+                    text: "left-only",
+                })),
+                right: Some(line(LineInput {
+                    kind: diff::LineKind::Insert,
+                    old_no: None,
+                    new_no: Some(6),
+                    text: "right-only",
+                })),
             }],
             ..Default::default()
         },
@@ -221,8 +241,18 @@ fn diff_rows_use_font_height_not_item_spacing() {
             left_text: "row-a\nrow-b\n".into(),
             right_text: "row-a\nrow-b\n".into(),
             unified: vec![
-                line(diff::LineKind::Equal, Some(1), Some(1), "row-a"),
-                line(diff::LineKind::Equal, Some(2), Some(2), "row-b"),
+                line(LineInput {
+                    kind: diff::LineKind::Equal,
+                    old_no: Some(1),
+                    new_no: Some(1),
+                    text: "row-a",
+                }),
+                line(LineInput {
+                    kind: diff::LineKind::Equal,
+                    old_no: Some(2),
+                    new_no: Some(2),
+                    text: "row-b",
+                }),
             ],
             split: vec![],
             ..Default::default()
@@ -246,7 +276,12 @@ fn equal_line_keeps_old_and_new_numbers_apart() {
             right_label: "Working tree".into(),
             left_text: format!("f\nf\nunchanged\n{}", "f\n".repeat(94)),
             right_text: format!("f\nf\nunchanged\n{}", "f\n".repeat(94)),
-            unified: vec![line(diff::LineKind::Equal, Some(97), Some(97), "unchanged")],
+            unified: vec![line(LineInput {
+                kind: diff::LineKind::Equal,
+                old_no: Some(97),
+                new_no: Some(97),
+                text: "unchanged",
+            })],
             split: vec![],
             ..Default::default()
         },
@@ -276,7 +311,12 @@ fn hunk_header_paints_no_line_numbers() {
             right_label: "Working tree".into(),
             left_text: String::new(),
             right_text: String::new(),
-            unified: vec![line(diff::LineKind::Hunk, None, None, "@@ -3,2 +3,2 @@")],
+            unified: vec![line(LineInput {
+                kind: diff::LineKind::Hunk,
+                old_no: None,
+                new_no: None,
+                text: "@@ -3,2 +3,2 @@",
+            })],
             split: vec![],
             ..Default::default()
         },
@@ -303,7 +343,12 @@ fn five_digit_line_numbers_still_clear_the_sign() {
             // 10,000 lines force a 5-digit gutter; the inserted row is visible.
             left_text: "f\n".repeat(9999),
             right_text: format!("f\nf\nwide-line\n{}", "f\n".repeat(9997)),
-            unified: vec![line(diff::LineKind::Insert, None, Some(10000), "wide-line")],
+            unified: vec![line(LineInput {
+                kind: diff::LineKind::Insert,
+                old_no: None,
+                new_no: Some(10000),
+                text: "wide-line",
+            })],
             split: vec![],
             ..Default::default()
         },
@@ -323,21 +368,21 @@ fn five_digit_line_numbers_still_clear_the_sign() {
 fn gutter_digit_columns_grow_with_line_numbers() {
     assert_eq!(diff_gutter_digits(std::iter::empty()), 4);
     assert_eq!(
-        diff_gutter_digits(std::iter::once(&line(
-            diff::LineKind::Equal,
-            Some(9999),
-            Some(9999),
-            "n",
-        ))),
+        diff_gutter_digits(std::iter::once(&line(LineInput {
+            kind: diff::LineKind::Equal,
+            old_no: Some(9999),
+            new_no: Some(9999),
+            text: "n"
+        }))),
         4
     );
     assert_eq!(
-        diff_gutter_digits(std::iter::once(&line(
-            diff::LineKind::Equal,
-            Some(10000),
-            Some(10000),
-            "n",
-        ))),
+        diff_gutter_digits(std::iter::once(&line(LineInput {
+            kind: diff::LineKind::Equal,
+            old_no: Some(10000),
+            new_no: Some(10000),
+            text: "n"
+        }))),
         5
     );
 }
@@ -354,19 +399,34 @@ fn insertion_only_split_rows_keep_the_right_column() {
             split: vec![
                 diff::SplitRow {
                     left: None,
-                    right: Some(line(diff::LineKind::Insert, None, Some(1), "insert-only")),
+                    right: Some(line(LineInput {
+                        kind: diff::LineKind::Insert,
+                        old_no: None,
+                        new_no: Some(1),
+                        text: "insert-only",
+                    })),
                 },
                 diff::SplitRow {
-                    left: Some(line(diff::LineKind::Equal, Some(1), Some(2), "paired-left")),
-                    right: Some(line(
-                        diff::LineKind::Equal,
-                        Some(1),
-                        Some(2),
-                        "paired-right",
-                    )),
+                    left: Some(line(LineInput {
+                        kind: diff::LineKind::Equal,
+                        old_no: Some(1),
+                        new_no: Some(2),
+                        text: "paired-left",
+                    })),
+                    right: Some(line(LineInput {
+                        kind: diff::LineKind::Equal,
+                        old_no: Some(1),
+                        new_no: Some(2),
+                        text: "paired-right",
+                    })),
                 },
                 diff::SplitRow {
-                    left: Some(line(diff::LineKind::Delete, Some(2), None, "delete-only")),
+                    left: Some(line(LineInput {
+                        kind: diff::LineKind::Delete,
+                        old_no: Some(2),
+                        new_no: None,
+                        text: "delete-only",
+                    })),
                     right: None,
                 },
             ],

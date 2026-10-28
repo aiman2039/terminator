@@ -25,6 +25,13 @@ pub(super) struct DiffPanes<'a> {
     pub(super) sync: f32,
 }
 
+struct DiffPaneControlsInput<'a, 'p> {
+    ui: &'a mut egui::Ui,
+    panes: &'a mut DiffPanes<'p>,
+    pass: &'a mut DiffPass,
+    outputs: &'a [PaneOutput],
+}
+
 impl App {
     pub(super) fn diff_body(
         &mut self,
@@ -143,7 +150,12 @@ impl App {
         ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
             ui.set_clip_rect(full);
             let outputs = self.diff_pane_outputs(ui, &mut panes, pass);
-            Self::diff_pane_controls(ui, &mut panes, pass, &outputs);
+            Self::diff_pane_controls(DiffPaneControlsInput {
+                ui,
+                panes: &mut panes,
+                pass,
+                outputs: &outputs,
+            });
         });
         ui.allocate_rect(full, egui::Sense::hover());
         self.diff_split_scroll.insert(frame.key.clone(), panes.sync);
@@ -197,12 +209,13 @@ impl App {
 
     /// Hunk rail and gutter controls over the painted panes, then the
     /// pending jump to the selected change.
-    fn diff_pane_controls(
-        ui: &mut egui::Ui,
-        panes: &mut DiffPanes<'_>,
-        pass: &mut DiffPass,
-        outputs: &[PaneOutput],
-    ) {
+    fn diff_pane_controls(input: DiffPaneControlsInput<'_, '_>) {
+        let DiffPaneControlsInput {
+            ui,
+            panes,
+            pass,
+            outputs,
+        } = input;
         let frame = panes.frame;
         let interaction = diff_controls::paint(diff_controls::PaintInput {
             ui,

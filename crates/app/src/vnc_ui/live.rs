@@ -23,7 +23,12 @@ impl App {
             return;
         };
         if features {
-            transfer::panel(self, ui, sid, view_only);
+            transfer::panel(transfer::PanelInput {
+                app: self,
+                ui,
+                sid,
+                view_only,
+            });
         }
         let outcome = {
             let view = self.vnc_views.entry(sid.to_owned()).or_default();

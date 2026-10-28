@@ -1,7 +1,20 @@
 //! Native file pickers run on the worker pool; network transfers run in the daemon.
 use super::*;
 use terminator_core::vnc::{TransferDirection, Transport};
-pub(super) fn panel(app: &mut App, ui: &mut egui::Ui, sid: &str, view_only: bool) {
+pub(super) struct PanelInput<'a> {
+    pub(super) app: &'a mut App,
+    pub(super) ui: &'a mut egui::Ui,
+    pub(super) sid: &'a str,
+    pub(super) view_only: bool,
+}
+
+pub(super) fn panel(input: PanelInput<'_>) {
+    let PanelInput {
+        app,
+        ui,
+        sid,
+        view_only,
+    } = input;
     let mut pick = None;
     let mut poll = None;
     {
