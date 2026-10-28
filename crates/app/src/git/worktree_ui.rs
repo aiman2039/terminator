@@ -218,38 +218,38 @@ impl App {
             .find(|project| project.id == draft.source)
             .map(|project| project.name.clone())
             .unwrap_or_else(|| "Project".into());
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Source project",
-            "Must already be a git checkout.",
-            |ui| {
+            label: "Source project",
+            description: "Must already be a git checkout.",
+            add_control: |ui| {
                 ui.label(source_name);
             },
-        );
-        settings_controls::settings_row(
+        });
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Start from",
-            "HEAD, a branch, or another git revision.",
-            |ui| start_revision(ui, draft),
-        );
-        settings_controls::settings_row(
+            label: "Start from",
+            description: "HEAD, a branch, or another git revision.",
+            add_control: |ui| start_revision(ui, draft),
+        });
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Branch name",
-            "Created on the new checkout. Git rejects invalid names.",
-            |ui| {
+            label: "Branch name",
+            description: "Created on the new checkout. Git rejects invalid names.",
+            add_control: |ui| {
                 ui.add(appearance::singleline(&mut draft.branch).desired_width(260.0));
             },
-        );
-        settings_controls::settings_row(
+        });
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Destination",
-            "Folder must not already exist.",
-            |ui| {
+            label: "Destination",
+            description: "Folder must not already exist.",
+            add_control: |ui| {
                 if destination(ui, draft) {
                     *browse = true;
                 }
             },
-        );
+        });
         ui.checkbox(
             &mut draft.open_terminal,
             "Create a terminal in the new project",

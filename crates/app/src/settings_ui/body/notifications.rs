@@ -113,11 +113,11 @@ impl App {
         if !self.field_visible("Dismiss notifications", "focus resolve manual") {
             return;
         }
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Dismiss notifications",
-            "When in-app attention is cleared.",
-            |ui| {
+            label: "Dismiss notifications",
+            description: "When in-app attention is cleared.",
+            add_control: |ui| {
                 settings_controls::segmented(
                     ui,
                     &mut self.settings_draft.dismissal,
@@ -128,7 +128,7 @@ impl App {
                     ],
                 );
             },
-        );
+        });
     }
 
     fn notification_sound_row(&mut self, ui: &mut egui::Ui) {

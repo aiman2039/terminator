@@ -274,7 +274,12 @@ impl App {
             show_system: self.preferences.info_show_system,
         };
         let model = session_info::model(&input);
-        session_info::show(ui, &model, &mut toggles, &self.theme);
+        session_info::show(session_info::ShowInput {
+            ui,
+            model: &model,
+            toggles: &mut toggles,
+            theme: &self.theme,
+        });
         self.preferences.info_process_open = toggles.process_open;
         self.preferences.info_resources_open = toggles.resources_open;
         self.preferences.info_show_system = toggles.show_system;

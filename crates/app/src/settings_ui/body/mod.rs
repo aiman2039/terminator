@@ -47,25 +47,39 @@ impl App {
     fn history_settings(&mut self, ui: &mut egui::Ui) {
         ui.heading("History");
         if self.field_visible("Days", "age retain") {
-            settings_controls::settings_row(ui, "Days", "How long saved output is kept.", |ui| {
-                ui.add(egui::DragValue::new(&mut self.settings_draft.history_days).range(1..=3650));
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
+                ui,
+                label: "Days",
+                description: "How long saved output is kept.",
+                add_control: |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings_draft.history_days).range(1..=3650),
+                    );
+                },
             });
         }
         if self.field_visible("MiB per session", "disk") {
-            settings_controls::settings_row(
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
                 ui,
-                "MiB per session",
-                "Cap for one session's saved output.",
-                |ui| {
+                label: "MiB per session",
+                description: "Cap for one session's saved output.",
+                add_control: |ui| {
                     ui.add(
                         egui::DragValue::new(&mut self.settings_draft.session_mib).range(1..=4096),
                     );
                 },
-            );
+            });
         }
         if self.field_visible("MiB total", "disk") {
-            settings_controls::settings_row(ui, "MiB total", "Cap across all sessions.", |ui| {
-                ui.add(egui::DragValue::new(&mut self.settings_draft.total_mib).range(1..=65536));
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
+                ui,
+                label: "MiB total",
+                description: "Cap across all sessions.",
+                add_control: |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut self.settings_draft.total_mib).range(1..=65536),
+                    );
+                },
             });
         }
         ui.weak("Limits apply to saved output; records and resume commands remain.");
@@ -98,13 +112,18 @@ impl App {
             } else {
                 shortcuts::display(&binding)
             };
-            settings_controls::settings_row(ui, label, action, |ui| {
-                let button = ui.add_sized([180.0, 28.0], egui::Button::new(shown));
-                #[cfg(feature = "test-support")]
-                diagnostics::record(ui.ctx(), &format!("shortcut:{action}"), button.rect);
-                if button.clicked() {
-                    self.shortcut_capture = Some(action.into());
-                }
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
+                ui,
+                label,
+                description: action,
+                add_control: |ui| {
+                    let button = ui.add_sized([180.0, 28.0], egui::Button::new(shown));
+                    #[cfg(feature = "test-support")]
+                    diagnostics::record(ui.ctx(), &format!("shortcut:{action}"), button.rect);
+                    if button.clicked() {
+                        self.shortcut_capture = Some(action.into());
+                    }
+                },
             });
         }
         if let Some(action) = self.shortcut_capture.clone() {

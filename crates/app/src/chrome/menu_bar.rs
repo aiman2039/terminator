@@ -174,12 +174,30 @@ fn blit_label(input: BlitLabelInput<'_>) {
     let mut cursor = x.saturating_add(w.saturating_sub(text_w) / 2);
     let origin_y = y.saturating_add(h.saturating_sub(text_h) / 2);
     for ch in label.chars() {
-        blit_glyph(image, glyph(ch), cursor, origin_y);
+        blit_glyph(BlitGlyphInput {
+            image,
+            rows: glyph(ch),
+            origin_x: cursor,
+            origin_y,
+        });
         cursor = cursor.saturating_add(5u32.saturating_mul(SCALE).saturating_add(SCALE));
     }
 }
 
-fn blit_glyph(image: &mut image::RgbaImage, rows: &[&str], origin_x: u32, origin_y: u32) {
+struct BlitGlyphInput<'a> {
+    image: &'a mut image::RgbaImage,
+    rows: &'a [&'a str],
+    origin_x: u32,
+    origin_y: u32,
+}
+
+fn blit_glyph(input: BlitGlyphInput<'_>) {
+    let BlitGlyphInput {
+        image,
+        rows,
+        origin_x,
+        origin_y,
+    } = input;
     for (row, line) in rows.iter().enumerate() {
         for (col, bit) in line.chars().enumerate() {
             if bit != '1' {

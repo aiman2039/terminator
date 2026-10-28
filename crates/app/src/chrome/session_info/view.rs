@@ -10,7 +10,20 @@ use eframe::egui::{self, Color32, RichText};
 use terminator_core::appearance::AppearanceConfig;
 use terminator_sys::PressureLevel;
 
-pub fn show(ui: &mut egui::Ui, model: &Model, toggles: &mut Toggles, theme: &AppearanceConfig) {
+pub struct ShowInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub model: &'a Model,
+    pub toggles: &'a mut Toggles,
+    pub theme: &'a AppearanceConfig,
+}
+
+pub fn show(input: ShowInput<'_>) {
+    let ShowInput {
+        ui,
+        model,
+        toggles,
+        theme,
+    } = input;
     ui.spacing_mut().item_spacing.y = 3.0;
     appearance::sidebar_scroll("session-info").show(ui, |ui| {
         ui.set_width(ui.available_width());

@@ -38,11 +38,11 @@ impl App {
         if !self.field_visible("Theme", "preset dark contrast") {
             return;
         }
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Theme",
-            "Presets fill colors. Advanced hex stays available below.",
-            |ui| {
+            label: "Theme",
+            description: "Presets fill colors. Advanced hex stays available below.",
+            add_control: |ui| {
                 let mut choice = self.theme_preset_choice();
                 if settings_controls::segmented(
                     ui,
@@ -61,7 +61,7 @@ impl App {
                     ui.weak("Custom colors");
                 }
             },
-        );
+        });
     }
 
     /// Which preset the draft colors currently match, or `CUSTOM`.
@@ -101,29 +101,29 @@ impl App {
         if !self.field_visible("Accent", "accent selection") {
             return;
         }
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Accent",
-            "Selection color is derived from the accent.",
-            |ui| {
+            label: "Accent",
+            description: "Selection color is derived from the accent.",
+            add_control: |ui| {
                 let mut color = terminator_core::appearance::rgb(&self.theme_draft.accent)
                     .unwrap_or([56, 113, 225]);
                 if ui.color_edit_button_srgb(&mut color).changed() {
                     self.theme_draft.apply_accent(ThemeHelpers::hex(color));
                 }
             },
-        );
+        });
     }
 
     fn density_row(&mut self, ui: &mut egui::Ui) {
         if !self.field_visible("Density", "compact comfortable spacing") {
             return;
         }
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Density",
-            "Compact shortens sidebar rows and control height.",
-            |ui| {
+            label: "Density",
+            description: "Compact shortens sidebar rows and control height.",
+            add_control: |ui| {
                 settings_controls::segmented(
                     ui,
                     &mut self.theme_draft.density,
@@ -136,7 +136,7 @@ impl App {
                     ],
                 );
             },
-        );
+        });
     }
 
     fn color_groups(&mut self, ui: &mut egui::Ui) {

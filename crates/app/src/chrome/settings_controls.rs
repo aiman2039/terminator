@@ -14,12 +14,20 @@ pub fn matches_search(query: &str, haystacks: &[&str]) -> bool {
 
 const LABEL_COL: f32 = 220.0;
 
-pub fn settings_row(
-    ui: &mut egui::Ui,
-    label: &str,
-    description: &str,
-    add_control: impl FnOnce(&mut egui::Ui),
-) {
+pub struct SettingsRowInput<'a, F: FnOnce(&mut egui::Ui)> {
+    pub ui: &'a mut egui::Ui,
+    pub label: &'a str,
+    pub description: &'a str,
+    pub add_control: F,
+}
+
+pub fn settings_row(input: SettingsRowInput<'_, impl FnOnce(&mut egui::Ui)>) {
+    let SettingsRowInput {
+        ui,
+        label,
+        description,
+        add_control,
+    } = input;
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.set_width(LABEL_COL);
@@ -56,16 +64,24 @@ pub fn segmented<T: Copy + PartialEq>(
     changed
 }
 
-pub fn path_field(
-    ui: &mut egui::Ui,
-    value: &mut String,
+pub struct PathFieldInput<'a> {
+    pub ui: &'a mut egui::Ui,
+    pub value: &'a mut String,
+    pub browse_id: &'a str,
+    pub browse: &'a mut bool,
+}
+
+pub fn path_field(input: PathFieldInput<'_>) -> egui::Response {
     #[cfg_attr(
         not(feature = "test-support"),
         expect(unused_variables, reason = "only fixtures address the browse button")
     )]
-    browse_id: &str,
-    browse: &mut bool,
-) -> egui::Response {
+    let PathFieldInput {
+        ui,
+        value,
+        browse_id,
+        browse,
+    } = input;
     ui.horizontal(|ui| {
         let browse_width = 88.0;
         let width = (ui.available_width() - browse_width - ui.spacing().item_spacing.x).max(120.0);
@@ -313,19 +329,14 @@ mod tests {
             ..Default::default()
         };
         let mut output = ctx.run_ui(input, |ui| {
-            settings_row(ui, "Days", "short", |ui| {
+            settings_row(SettingsRowInput { ui, label: "Days", description: "short", add_control: |ui| {
                 xs.0 = ui.next_widget_position().x;
                 ui.label("control-a");
-            });
-            settings_row(
-                ui,
-                "A much longer label",
-                "a longer description that should wrap without shifting the control column",
-                |ui| {
+            } });
+            settings_row(SettingsRowInput { ui, label: "A much longer label", description: "a longer description that should wrap without shifting the control column", add_control: |ui| {
                     xs.1 = ui.next_widget_position().x;
                     ui.label("control-b");
-                },
-            );
+                } });
         });
         output.textures_delta.clear();
         xs

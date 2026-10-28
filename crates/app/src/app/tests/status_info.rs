@@ -424,7 +424,12 @@ fn system_meter_bars_share_one_column() {
             ..Default::default()
         },
         |ui| {
-            session_info::show(ui, &model, &mut toggles, &theme);
+            session_info::show(session_info::ShowInput {
+                ui,
+                model: &model,
+                toggles: &mut toggles,
+                theme: &theme,
+            });
         },
     );
     output.textures_delta.clear();

@@ -46,11 +46,11 @@ impl App {
         if !self.field_visible("Shell override", "zsh bash fish sh") {
             return;
         }
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Shell override",
-            "Used for new terminals. Leave Automatic unless you need a specific binary.",
-            |ui| {
+            label: "Shell override",
+            description: "Used for new terminals. Leave Automatic unless you need a specific binary.",
+            add_control: |ui| {
                 settings_controls::combo_or_custom(settings_controls::ComboOrCustomInput {
                     ui,
                     id: "shell-override",
@@ -60,12 +60,12 @@ impl App {
                 });
                 let mut pick = false;
                 if self.custom_shell {
-                    settings_controls::path_field(
+                    settings_controls::path_field(settings_controls::PathFieldInput {
                         ui,
-                        &mut self.settings_draft.shell,
-                        "shell-path",
-                        &mut pick,
-                    );
+                        value: &mut self.settings_draft.shell,
+                        browse_id: "shell-path",
+                        browse: &mut pick,
+                    });
                 } else if ui.button("Browse…").clicked() {
                     pick = true;
                 }
@@ -83,18 +83,18 @@ impl App {
                     );
                 }
             },
-        );
+        });
     }
 
     fn pr_metadata_row(&mut self, ui: &mut egui::Ui) {
         if !self.field_visible("Pull requests", "github gh metadata") {
             return;
         }
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Pull requests",
-            "Uses GitHub CLI when the session service supports it.",
-            |ui| {
+            label: "Pull requests",
+            description: "Uses GitHub CLI when the session service supports it.",
+            add_control: |ui| {
                 ui.add_enabled(
                     self.state
                         .capabilities
@@ -103,18 +103,23 @@ impl App {
                     egui::Checkbox::new(&mut self.settings_draft.pr_metadata, "Fetch PR metadata"),
                 );
             },
-        );
+        });
     }
 
     fn font_size_row(&mut self, ui: &mut egui::Ui) {
         if !self.field_visible("Font size", "type terminal") {
             return;
         }
-        settings_controls::settings_row(ui, "Font size", "Applies to terminal surfaces.", |ui| {
-            ui.add(egui::Slider::new(
-                &mut self.settings_draft.font_size,
-                9.0..=32.0,
-            ));
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
+            ui,
+            label: "Font size",
+            description: "Applies to terminal surfaces.",
+            add_control: |ui| {
+                ui.add(egui::Slider::new(
+                    &mut self.settings_draft.font_size,
+                    9.0..=32.0,
+                ));
+            },
         });
     }
 
@@ -122,11 +127,11 @@ impl App {
         if !self.field_visible("Editor mode", "embedded neovim terminal external") {
             return;
         }
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Editor mode",
-            "Embedded uses Neovim with your config. External opens the app you choose.",
-            |ui| {
+            label: "Editor mode",
+            description: "Embedded uses Neovim with your config. External opens the app you choose.",
+            add_control: |ui| {
                 settings_controls::segmented(
                     ui,
                     &mut self.settings_draft.editor_mode,
@@ -138,31 +143,31 @@ impl App {
                     ],
                 );
             },
-        );
+        });
     }
 
     /// Vim keybindings and inlay hints, shown only for the native editor.
     fn native_editor_rows(&mut self, ui: &mut egui::Ui) {
         let native = self.settings_draft.editor_mode == EditorMode::Native;
         if self.field_visible("Vim keybindings", "vim modal native") && native {
-            settings_controls::settings_row(
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
                 ui,
-                "Vim keybindings",
-                "Native editor starts in Normal mode with the minimal vim grammar.",
-                |ui| {
+                label: "Vim keybindings",
+                description: "Native editor starts in Normal mode with the minimal vim grammar.",
+                add_control: |ui| {
                     ui.checkbox(&mut self.settings_draft.native_vim, "Enable vim mode");
                 },
-            );
+            });
         }
         if self.field_visible("Inlay hints", "inlay hints types parameters native lsp") && native {
-            settings_controls::settings_row(
+            settings_controls::settings_row(settings_controls::SettingsRowInput {
                 ui,
-                "Inlay hints",
-                "Show inferred types and parameter names inline (from the language server).",
-                |ui| {
+                label: "Inlay hints",
+                description: "Show inferred types and parameter names inline (from the language server).",
+                add_control: |ui| {
                     ui.checkbox(&mut self.settings_draft.inlay_hints, "Show inlay hints");
                 },
-            );
+            });
         }
     }
 
@@ -184,23 +189,23 @@ impl App {
     /// One language-server path row. Returns whether Browse was clicked.
     fn lsp_server_row(&mut self, ui: &mut egui::Ui, language: &str, label: &str) -> bool {
         let mut pick = false;
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
             label,
-            "Empty finds it on PATH. Saving restarts that server; the app keeps running.",
-            |ui| {
+            description: "Empty finds it on PATH. Saving restarts that server; the app keeps running.",
+            add_control: |ui| {
                 let mut value = self
                     .settings_draft
                     .lsp_servers
                     .get(language)
                     .cloned()
                     .unwrap_or_default();
-                let _ = settings_controls::path_field(
+                let _ = settings_controls::path_field(settings_controls::PathFieldInput {
                     ui,
-                    &mut value,
-                    &format!("lsp-{language}"),
-                    &mut pick,
-                );
+                    value: &mut value,
+                    browse_id: &format!("lsp-{language}"),
+                    browse: &mut pick,
+                });
                 if value.is_empty() {
                     self.settings_draft.lsp_servers.remove(language);
                 } else {
@@ -210,7 +215,7 @@ impl App {
                 }
                 self.lsp_server_status(ui, value.trim());
             },
-        );
+        });
         pick
     }
 
@@ -231,11 +236,11 @@ impl App {
         if !self.field_visible("Diff viewer", "native neovim review") {
             return;
         }
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Diff viewer",
-            "Neovim review needs nvim-review-v1 on the running session service.",
-            |ui| {
+            label: "Diff viewer",
+            description: "Neovim review needs nvim-review-v1 on the running session service.",
+            add_control: |ui| {
                 settings_controls::segmented(
                     ui,
                     &mut self.settings_draft.review_mode,
@@ -245,7 +250,7 @@ impl App {
                     ],
                 );
             },
-        );
+        });
     }
 
     fn editor_executable_row(
@@ -262,11 +267,11 @@ impl App {
         {
             return;
         }
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Editor executable",
-            "Embedded and terminal editors launch this Neovim.",
-            |ui| {
+            label: "Editor executable",
+            description: "Embedded and terminal editors launch this Neovim.",
+            add_control: |ui| {
                 settings_controls::combo_or_custom(settings_controls::ComboOrCustomInput {
                     ui,
                     id: "editor-program",
@@ -276,12 +281,12 @@ impl App {
                 });
                 let mut pick = false;
                 if self.custom_editor {
-                    settings_controls::path_field(
+                    settings_controls::path_field(settings_controls::PathFieldInput {
                         ui,
-                        &mut self.settings_draft.editor_program,
-                        "editor-path",
-                        &mut pick,
-                    );
+                        value: &mut self.settings_draft.editor_program,
+                        browse_id: "editor-path",
+                        browse: &mut pick,
+                    });
                 } else if ui.button("Browse…").clicked() {
                     pick = true;
                 }
@@ -296,18 +301,18 @@ impl App {
                     ),
                 };
             },
-        );
+        });
     }
 
     fn external_editor_row(&mut self, ui: &mut egui::Ui) {
         if !self.field_visible("External editor", "vscode cursor zed rustrover") {
             return;
         }
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "External editor",
-            "Used when opening files outside Terminator.",
-            |ui| {
+            label: "External editor",
+            description: "Used when opening files outside Terminator.",
+            add_control: |ui| {
                 egui::ComboBox::from_id_salt("external-preset")
                     .width(ui.available_width().clamp(180.0, 320.0))
                     .selected_text(
@@ -318,7 +323,7 @@ impl App {
                     )
                     .show_ui(ui, |ui| self.external_preset_options(ui));
             },
-        );
+        });
     }
 
     fn external_preset_options(&mut self, ui: &mut egui::Ui) {
@@ -342,25 +347,26 @@ impl App {
         {
             return;
         }
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Executable",
-            "Choose the binary. The file path is appended as {file}.",
-            |ui| {
+            label: "Executable",
+            description: "Choose the binary. The file path is appended as {file}.",
+            add_control: |ui| {
                 let mut pick = false;
-                let _executable = settings_controls::path_field(
-                    ui,
-                    &mut self.settings_draft.external_editor,
-                    "external-program",
-                    &mut pick,
-                );
+                let _executable =
+                    settings_controls::path_field(settings_controls::PathFieldInput {
+                        ui,
+                        value: &mut self.settings_draft.external_editor,
+                        browse_id: "external-program",
+                        browse: &mut pick,
+                    });
                 if pick {
                     *browse = Some(BrowseTarget::External);
                 }
                 ui.weak("{file} is appended automatically.");
                 ui.vertical(|ui| self.external_args_list(ui));
             },
-        );
+        });
     }
 
     fn external_args_list(&mut self, ui: &mut egui::Ui) {
@@ -385,11 +391,11 @@ impl App {
         if !self.field_visible("Test draft", "launch editor") {
             return;
         }
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Test draft",
-            "Opens a file with the unsaved external editor settings.",
-            |ui| {
+            label: "Test draft",
+            description: "Opens a file with the unsaved external editor settings.",
+            add_control: |ui| {
                 if ui
                     .add_enabled(
                         !self.picker_active,
@@ -400,7 +406,7 @@ impl App {
                     self.test_editor = true;
                 }
             },
-        );
+        });
     }
 
     fn folder_access_row(&self, ui: &mut egui::Ui, grant_folder: &mut bool) {
@@ -409,15 +415,15 @@ impl App {
         {
             return;
         }
-        settings_controls::settings_row(
+        settings_controls::settings_row(settings_controls::SettingsRowInput {
             ui,
-            "Folder access",
-            "Choose a project folder to grant access. System Settings → Privacy & Security → Files and Folders controls protected locations.",
-            |ui| {
+            label: "Folder access",
+            description: "Choose a project folder to grant access. System Settings → Privacy & Security → Files and Folders controls protected locations.",
+            add_control: |ui| {
                 if ui.button("Choose folder…").clicked() {
                     *grant_folder = true;
                 }
             },
-        );
+        });
     }
 }

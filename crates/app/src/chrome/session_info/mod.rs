@@ -3,7 +3,7 @@
 mod tests;
 mod view;
 
-pub use view::show;
+pub use view::{ShowInput, show};
 
 use crate::resource_sample::SystemStats;
 use terminator_sys::PressureLevel;
