@@ -19,24 +19,55 @@ impl App {
             return;
         }
         let index = self.sidebar_index();
-        let terminal_note = index.terminal_notes.get(&session.id);
-        let unread_terminal = terminal_note.is_some_and(|n| !n.dismissed);
+        let response = self.session_row_widget(
+            ui,
+            SessionRowView {
+                session,
+                presented: &presented,
+                editing,
+                note: index.terminal_notes.get(&session.id),
+            },
+        );
+        #[cfg(feature = "test-support")]
+        diagnostics::record(
+            ui.ctx(),
+            &format!("session-row:{}", session.id),
+            response.rect,
+        );
+        if editing {
+            self.inline_rename(crate::workspace_ui::InlineRenameInput {
+                ui,
+                sid: &session.id,
+                surface: RenameSurface::Sidebar,
+                rect: egui::Rect::from_min_max(
+                    egui::pos2(response.rect.min.x + 36.0, response.rect.min.y + 4.0),
+                    egui::pos2(response.rect.max.x - 6.0, response.rect.max.y - 3.0),
+                ),
+            });
+        }
+        if response.clicked() && !editing {
+            self.go_session(&session.id);
+        }
+        appearance::context_menu(&response, |ui| {
+            self.session_row_menu(ui, session, rename_tab);
+        });
+    }
+
+    /// The row itself: status icon, label, trailing state, and hover text.
+    fn session_row_widget(&self, ui: &mut egui::Ui, view: SessionRowView<'_>) -> egui::Response {
+        let SessionRowView {
+            session,
+            presented,
+            editing,
+            note,
+        } = view;
+        let unread_terminal = note.is_some_and(|n| !n.dismissed);
         let color = appearance::color(if unread_terminal {
             &self.theme.accent
         } else {
             &self.theme.secondary
         });
-        let visible = self
-            .layouts
-            .get(&session.project_id)
-            .is_some_and(|d| d.contains(&Tab::Terminal(session.id.clone())));
-        let secondary = if !session.lifecycle.live() {
-            "ended"
-        } else if !visible {
-            "background"
-        } else {
-            ""
-        };
+        let secondary = self.session_row_secondary(session);
         // The status icon carries agent state; the dot is for terminal notices.
         let trailing = if editing {
             ""
@@ -47,7 +78,7 @@ impl App {
         } else {
             ""
         };
-        let response = appearance::session_row_spec(
+        appearance::session_row_spec(
             ui,
             appearance::SessionRowSpec {
                 label: if editing { "" } else { &session.label },
@@ -76,67 +107,67 @@ impl App {
                 } else {
                     format!("\n{secondary}")
                 },
-                terminal_note
-                    .map(|n| format!("\nTerminal: {}\n{}", n.title, n.body))
+                note.map(|n| format!("\nTerminal: {}\n{}", n.title, n.body))
                     .unwrap_or_default()
             ));
-        });
-        #[cfg(feature = "test-support")]
-        diagnostics::record(
-            ui.ctx(),
-            &format!("session-row:{}", session.id),
-            response.rect,
-        );
-        if editing {
-            self.inline_rename(crate::workspace_ui::InlineRenameInput {
-                ui,
-                sid: &session.id,
-                surface: RenameSurface::Sidebar,
-                rect: egui::Rect::from_min_max(
-                    egui::pos2(response.rect.min.x + 36.0, response.rect.min.y + 4.0),
-                    egui::pos2(response.rect.max.x - 6.0, response.rect.max.y - 3.0),
-                ),
-            });
+        })
+    }
+
+    /// "ended" or "background" for a session not live in its layout.
+    fn session_row_secondary(&self, session: &Session) -> &'static str {
+        let visible = self
+            .layouts
+            .get(&session.project_id)
+            .is_some_and(|d| d.contains(&Tab::Terminal(session.id.clone())));
+        if !session.lifecycle.live() {
+            "ended"
+        } else if !visible {
+            "background"
+        } else {
+            ""
         }
-        if response.clicked() && !editing {
+    }
+
+    fn session_row_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        session: &Session,
+        rename_tab: Option<(&str, &str)>,
+    ) {
+        self.rename_action(ui, &session.id, RenameSurface::Sidebar);
+        ui.separator();
+        if appearance::menu_item(ui, "Open session", "Terminal", "").clicked() {
             self.go_session(&session.id);
+            ui.close();
         }
-        appearance::context_menu(&response, |ui| {
-            self.rename_action(ui, &session.id, RenameSurface::Sidebar);
-            ui.separator();
-            if appearance::menu_item(ui, "Open session", "Terminal", "").clicked() {
-                self.go_session(&session.id);
-                ui.close();
-            }
-            if let Some((project_id, tab_id)) = rename_tab
-                && appearance::menu_item(ui, "Name tab…", "Pencil", "").clicked()
+        if let Some((project_id, tab_id)) = rename_tab
+            && appearance::menu_item(ui, "Name tab…", "Pencil", "").clicked()
+        {
+            self.rename_group = Some((project_id.to_string(), tab_id.to_string()));
+            self.rename_group_text.clear();
+            self.rename_group_focus = true;
+            ui.close();
+        }
+        ui.separator();
+        if session.lifecycle.live() {
+            if appearance::menu_item(
+                ui,
+                "Close session…",
+                "X",
+                &self.shortcut_label(Action::CloseSession),
+            )
+            .clicked()
             {
-                self.rename_group = Some((project_id.to_string(), tab_id.to_string()));
-                self.rename_group_text.clear();
-                self.rename_group_focus = true;
+                self.close_session = Some(session.id.clone());
                 ui.close();
             }
-            ui.separator();
-            if session.lifecycle.live() {
-                if appearance::menu_item(
-                    ui,
-                    "Close session…",
-                    "X",
-                    &self.shortcut_label(Action::CloseSession),
-                )
-                .clicked()
-                {
-                    self.close_session = Some(session.id.clone());
-                    ui.close();
-                }
-            } else if appearance::menu_item(ui, "Remove historical record", "X", "").clicked() {
-                self.send(Request::Remove {
-                    session: session.id.clone(),
-                });
-                self.remove_tab(&session.id);
-                ui.close();
-            }
-        });
+        } else if appearance::menu_item(ui, "Remove historical record", "X", "").clicked() {
+            self.send(Request::Remove {
+                session: session.id.clone(),
+            });
+            self.remove_tab(&session.id);
+            ui.close();
+        }
     }
 
     pub(in crate::sidebar_ui) fn worktree_card(&mut self, ui: &mut egui::Ui, project: &Project) {
@@ -203,4 +234,12 @@ impl App {
             }
         });
     }
+}
+
+/// What one session row shows.
+struct SessionRowView<'a> {
+    session: &'a Session,
+    presented: &'a crate::agent_presence::AgentPresentation,
+    editing: bool,
+    note: Option<&'a terminator_core::TerminalNotice>,
 }
