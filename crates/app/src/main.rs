@@ -32,28 +32,11 @@ fn hold_fixture_activity() {
 }
 
 fn main() -> Result<()> {
-    let renderer_name = std::env::var_os("TERMINATOR_RENDERER")
-        .map(|name| {
-            name.into_string()
-                .map_err(|_| anyhow::anyhow!("TERMINATOR_RENDERER must be UTF-8"))
-        })
-        .transpose()?;
-    let renderer = renderer::selected(renderer_name.as_deref())?;
+    let renderer = selected_renderer()?;
     if !installation::preflight()? {
         return Ok(());
     }
-    let args = std::env::args().collect::<Vec<_>>();
-    let paths = if let Some(i) = args.iter().position(|a| a == "--data-dir") {
-        Paths::at(
-            args.get(i.checked_add(1).context("Missing data directory")?)
-                .context("Missing data directory")?
-                .into(),
-        )
-    } else {
-        Paths::discover()?
-    };
-    let paths = generations::workspace_paths(&paths)?;
-    paths.init()?;
+    let paths = data_paths()?;
     #[cfg(all(target_os = "macos", feature = "test-support"))]
     hold_fixture_activity();
     crash::install(crash::CrashInstall {
@@ -62,113 +45,16 @@ fn main() -> Result<()> {
         data_dir: paths.data.clone(),
         notify: Some(installation::show_crash_dialog),
     });
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(paths.runtime.join("ui.lock"))?;
-    if lock.try_lock_exclusive().is_err() {
-        terminator::console::Console::err(format_args!(
-            "Terminator is already open (lock {}).",
-            paths.runtime.join("ui.lock").display()
-        ));
+    // Held for the whole process: one GUI per data directory.
+    let Some(_lock) = ui_lock(&paths)? else {
         return Ok(());
-    }
+    };
     daemon_connection::ensure_running(&paths, &std::env::current_exe()?)?;
-    let window_size = [1440.0, 900.0];
-    #[cfg(feature = "test-support")]
-    let window_size = {
-        let scale = std::env::var("TERMINATOR_TEST_SCALE")
-            .ok()
-            .and_then(|s| s.parse::<f32>().ok())
-            .filter(|s| (1.0..=2.0).contains(s))
-            .unwrap_or(1.0);
-        let size = if std::env::var_os("TERMINATOR_TEST_NARROW").is_some() {
-            [900.0, 650.0]
-        } else {
-            window_size
-        };
-        [size[0] * scale, size[1] * scale]
-    };
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_icon(
-                eframe::icon_data::from_png_bytes(include_bytes!(
-                    "../assets/branding/terminator.png"
-                ))
-                .context("bundled Terminator icon must be a valid PNG")?,
-            )
-            .with_active(
-                !(cfg!(feature = "test-support")
-                    && std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
-                    && std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some()
-                    && std::env::var_os("TERMINATOR_TEST_FOREGROUND").is_none()),
-            )
-            .with_mouse_passthrough(
-                cfg!(feature = "test-support")
-                    && std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
-                    && std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some()
-                    && std::env::var_os("TERMINATOR_TEST_NATIVE_INPUT").is_none(),
-            )
-            .with_window_level(
-                if cfg!(feature = "test-support")
-                    && std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
-                    && std::env::var_os("TERMINATOR_TEST_VISIBLE_CAPTURE").is_some()
-                {
-                    egui::WindowLevel::AlwaysOnTop
-                } else if cfg!(feature = "test-support")
-                    && std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
-                    && std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some()
-                {
-                    egui::WindowLevel::AlwaysOnBottom
-                } else {
-                    egui::WindowLevel::Normal
-                },
-            )
-            .with_inner_size(window_size)
-            .with_min_inner_size([900.0, 550.0])
-            .with_fullsize_content_view(cfg!(target_os = "macos"))
-            .with_title_shown(false)
-            .with_titlebar_shown(false)
-            .with_titlebar_buttons_shown(true)
-            .with_movable_by_background(false)
-            .with_decorations(cfg!(target_os = "macos")),
-        renderer,
-        ..Default::default()
-    };
+    let options = native_options(renderer)?;
     #[cfg(all(target_os = "macos", feature = "test-support"))]
-    let options = {
-        let mut options = options;
-        if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
-            && std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some()
-        {
-            options.event_loop_builder = Some(Box::new(|builder| {
-                use egui_winit::winit::platform::macos::{
-                    ActivationPolicy, EventLoopBuilderExtMacOS,
-                };
-                builder
-                    .with_activation_policy(ActivationPolicy::Accessory)
-                    .with_activate_ignoring_other_apps(false)
-                    .with_default_menu(false);
-            }));
-        }
-        options
-    };
+    let options = fixture_event_loop(options);
     #[cfg(all(feature = "test-support", feature = "wgpu"))]
-    let options = {
-        let mut options = options;
-        let handler = std::sync::Arc::clone(&options.wgpu_options.on_surface_status);
-        let count = std::sync::atomic::AtomicU32::new(0);
-        options.wgpu_options.on_surface_status = std::sync::Arc::new(move |status| {
-            if count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 8 {
-                terminator::console::Console::err(format_args!(
-                    "Native Wgpu surface status: {status:?}"
-                ));
-            }
-            handler(status)
-        });
-        options
-    };
+    let options = log_surface_status(options);
     #[cfg(feature = "test-support")]
     terminator::console::Console::err(format_args!("Native renderer: {:?}", options.renderer));
     eframe::run_native(
@@ -186,4 +72,141 @@ fn main() -> Result<()> {
         }),
     )
     .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+fn selected_renderer() -> Result<eframe::Renderer> {
+    let renderer_name = std::env::var_os("TERMINATOR_RENDERER")
+        .map(|name| {
+            name.into_string()
+                .map_err(|_| anyhow::anyhow!("TERMINATOR_RENDERER must be UTF-8"))
+        })
+        .transpose()?;
+    renderer::selected(renderer_name.as_deref())
+}
+
+/// `--data-dir` or the discovered default, resolved to the workspace and
+/// initialized.
+fn data_paths() -> Result<Paths> {
+    let args = std::env::args().collect::<Vec<_>>();
+    let paths = if let Some(i) = args.iter().position(|a| a == "--data-dir") {
+        Paths::at(
+            args.get(i.checked_add(1).context("Missing data directory")?)
+                .context("Missing data directory")?
+                .into(),
+        )
+    } else {
+        Paths::discover()?
+    };
+    let paths = generations::workspace_paths(&paths)?;
+    paths.init()?;
+    Ok(paths)
+}
+
+/// The single-instance lock, or `None` when another GUI already holds it.
+fn ui_lock(paths: &Paths) -> Result<Option<fs::File>> {
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(paths.runtime.join("ui.lock"))?;
+    if lock.try_lock_exclusive().is_err() {
+        terminator::console::Console::err(format_args!(
+            "Terminator is already open (lock {}).",
+            paths.runtime.join("ui.lock").display()
+        ));
+        return Ok(None);
+    }
+    Ok(Some(lock))
+}
+
+fn window_size() -> [f32; 2] {
+    let window_size = [1440.0, 900.0];
+    #[cfg(feature = "test-support")]
+    let window_size = {
+        let scale = std::env::var("TERMINATOR_TEST_SCALE")
+            .ok()
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|s| (1.0..=2.0).contains(s))
+            .unwrap_or(1.0);
+        let size = if std::env::var_os("TERMINATOR_TEST_NARROW").is_some() {
+            [900.0, 650.0]
+        } else {
+            window_size
+        };
+        [size[0] * scale, size[1] * scale]
+    };
+    window_size
+}
+
+/// Whether this is a native fixture run with `flag` set.
+fn fixture_flag(flag: &str) -> bool {
+    cfg!(feature = "test-support")
+        && std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
+        && std::env::var_os(flag).is_some()
+}
+
+fn native_options(renderer: eframe::Renderer) -> Result<eframe::NativeOptions> {
+    let background = fixture_flag("TERMINATOR_TEST_BACKGROUND");
+    let level = if fixture_flag("TERMINATOR_TEST_VISIBLE_CAPTURE") {
+        egui::WindowLevel::AlwaysOnTop
+    } else if background {
+        egui::WindowLevel::AlwaysOnBottom
+    } else {
+        egui::WindowLevel::Normal
+    };
+    Ok(eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_icon(
+                eframe::icon_data::from_png_bytes(include_bytes!(
+                    "../assets/branding/terminator.png"
+                ))
+                .context("bundled Terminator icon must be a valid PNG")?,
+            )
+            .with_active(!(background && std::env::var_os("TERMINATOR_TEST_FOREGROUND").is_none()))
+            .with_mouse_passthrough(
+                background && std::env::var_os("TERMINATOR_TEST_NATIVE_INPUT").is_none(),
+            )
+            .with_window_level(level)
+            .with_inner_size(window_size())
+            .with_min_inner_size([900.0, 550.0])
+            .with_fullsize_content_view(cfg!(target_os = "macos"))
+            .with_title_shown(false)
+            .with_titlebar_shown(false)
+            .with_titlebar_buttons_shown(true)
+            .with_movable_by_background(false)
+            .with_decorations(cfg!(target_os = "macos")),
+        renderer,
+        ..Default::default()
+    })
+}
+
+#[cfg(all(target_os = "macos", feature = "test-support"))]
+fn fixture_event_loop(mut options: eframe::NativeOptions) -> eframe::NativeOptions {
+    if std::env::var_os("TERMINATOR_CAPTURE_PATH").is_some()
+        && std::env::var_os("TERMINATOR_TEST_BACKGROUND").is_some()
+    {
+        options.event_loop_builder = Some(Box::new(|builder| {
+            use egui_winit::winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+            builder
+                .with_activation_policy(ActivationPolicy::Accessory)
+                .with_activate_ignoring_other_apps(false)
+                .with_default_menu(false);
+        }));
+    }
+    options
+}
+
+#[cfg(all(feature = "test-support", feature = "wgpu"))]
+fn log_surface_status(mut options: eframe::NativeOptions) -> eframe::NativeOptions {
+    let handler = std::sync::Arc::clone(&options.wgpu_options.on_surface_status);
+    let count = std::sync::atomic::AtomicU32::new(0);
+    options.wgpu_options.on_surface_status = std::sync::Arc::new(move |status| {
+        if count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 8 {
+            terminator::console::Console::err(format_args!(
+                "Native Wgpu surface status: {status:?}"
+            ));
+        }
+        handler(status)
+    });
+    options
 }
