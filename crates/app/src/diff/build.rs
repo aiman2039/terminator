@@ -89,7 +89,6 @@ pub(crate) fn build_with_options(input: BuildWithOptionsInput<'_>) -> DiffDocume
         old: left.split_inclusive('\n').collect(),
         new: right.split_inclusive('\n').collect(),
     });
-    let originals = originals.as_ref();
     let diff = if view.whitespace {
         TextDiff::configure()
             .timeout(DIFF_TIMEOUT)
@@ -99,253 +98,222 @@ pub(crate) fn build_with_options(input: BuildWithOptionsInput<'_>) -> DiffDocume
             .timeout(DIFF_TIMEOUT)
             .diff_lines(left, right)
     };
-    let context = view.context;
     let mut doc = DiffDocument {
         left_label: if staged { "HEAD" } else { "Index" }.into(),
         right_label: if staged { "Index" } else { "Working tree" }.into(),
         left_text: left.into(),
         right_text: right.into(),
-        context,
+        context: view.context,
         whitespace: view.whitespace,
         revealed: view.revealed.clone(),
         ..Default::default()
     };
-    let mut old_end = 0;
-    let mut new_end = 0;
-    for group in diff.grouped_ops(context) {
-        if let Some(first) = group.first() {
-            emit_gap(EmitGapInput {
-                doc: &mut doc,
-                diff: &diff,
-                old: old_end..first.old_range().start,
-                new: new_end..first.new_range().start,
-                old_hl: &old_hl,
-                new_hl: &new_hl,
-                originals,
-            });
-        }
-        for op in &group {
-            if op.tag() != DiffTag::Equal {
-                doc.hunks.push(review::Hunk {
-                    old: op.old_range(),
-                    new: op.new_range(),
-                    unified_row: doc.unified.len(),
-                    split_row: doc.split.len(),
-                });
-            }
-            emit_op(EmitOpInput {
-                diff: &diff,
-                op,
-                old_hl: &old_hl,
-                new_hl: &new_hl,
-                unified: &mut doc.unified,
-                split: &mut doc.split,
-                originals,
-            });
-            old_end = op.old_range().end;
-            new_end = op.new_range().end;
-        }
-    }
+    let sides = Sides {
+        diff: &diff,
+        old_hl: &old_hl,
+        new_hl: &new_hl,
+        originals: originals.as_ref(),
+    };
+    let (old_end, new_end) = sides.emit_groups(&mut doc, view.context);
     if !doc.hunks.is_empty() {
-        emit_gap(EmitGapInput {
-            doc: &mut doc,
-            diff: &diff,
-            old: old_end..left.split_inclusive('\n').count(),
-            new: new_end..right.split_inclusive('\n').count(),
-            old_hl: &old_hl,
-            new_hl: &new_hl,
-            originals,
-        });
+        sides.emit_gap(
+            &mut doc,
+            old_end..left.split_inclusive('\n').count(),
+            new_end..right.split_inclusive('\n').count(),
+        );
     }
     doc
 }
 
-/// Unchanged lines between changes: runs the user revealed are shown, and
-/// every remaining run collapses into its own expandable gap row.
-struct EmitGapInput<'a, 'b> {
-    doc: &'a mut DiffDocument,
+/// The line diff and both sides' highlighting, shared by every row.
+#[derive(Clone, Copy)]
+struct Sides<'a, 'b> {
     diff: &'a TextDiff<'b, 'b, str>,
-    old: std::ops::Range<usize>,
-    new: std::ops::Range<usize>,
     old_hl: &'a [Vec<DiffSpan>],
     new_hl: &'a [Vec<DiffSpan>],
     originals: Option<&'a Originals<'b>>,
 }
 
-fn emit_gap(input: EmitGapInput<'_, '_>) {
-    let EmitGapInput {
-        doc,
-        diff,
-        old,
-        new,
-        old_hl,
-        new_hl,
-        originals,
-    } = input;
-    let mut start = old.start;
-    while start < old.end {
-        let shown = |line: usize| doc.revealed.iter().any(|range| range.contains(&line));
-        let visible = shown(start);
-        let mut end = start.saturating_add(1);
-        while end < old.end && shown(end) == visible {
-            end = end.saturating_add(1);
-        }
-        let len = end.saturating_sub(start);
-        let new_start = new.start.saturating_add(start.saturating_sub(old.start));
-        if visible {
-            let op = similar::DiffOp::Equal {
-                old_index: start,
-                new_index: new_start,
-                len,
-            };
-            emit_op(EmitOpInput {
-                diff,
-                op: &op,
-                old_hl,
-                new_hl,
-                unified: &mut doc.unified,
-                split: &mut doc.split,
-                originals,
-            });
-        } else {
-            let line = DiffLine {
-                kind: LineKind::Hunk,
-                old_no: None,
-                new_no: None,
-                spans: vec![DiffSpan {
-                    text: format!("⋯ {len} unchanged lines ⋯"),
-                    rgb: fallback_rgb(),
-                    intra: Intra::None,
-                }],
-            };
-            doc.gaps.push(review::Gap {
-                old: start..end,
-                new: new_start..new_start.saturating_add(len),
-                unified_row: doc.unified.len(),
-                split_row: doc.split.len(),
-            });
-            doc.unified.push(line.clone());
-            doc.split.push(SplitRow {
-                left: Some(line.clone()),
-                right: Some(line),
-            });
-        }
-        start = end;
-    }
-}
-
-struct EmitOpInput<'a, 'b> {
-    diff: &'a TextDiff<'b, 'b, str>,
-    op: &'a similar::DiffOp,
-    old_hl: &'a [Vec<DiffSpan>],
-    new_hl: &'a [Vec<DiffSpan>],
-    unified: &'a mut Vec<DiffLine>,
-    split: &'a mut Vec<SplitRow>,
-    originals: Option<&'a Originals<'b>>,
-}
-
-fn emit_op(input: EmitOpInput<'_, '_>) {
-    let EmitOpInput {
-        diff,
-        op,
-        old_hl,
-        new_hl,
-        unified,
-        split,
-        originals,
-    } = input;
-    match op.tag() {
-        DiffTag::Equal => {
-            for change in diff.iter_changes(op) {
-                let line = equal_line(change, old_hl, originals.map(|o| o.old.as_slice()), true);
-                // Whitespace-insensitive equal lines may still differ in
-                // whitespace: each side shows its own text.
-                let right = match originals {
-                    Some(originals) => {
-                        equal_line(change, new_hl, Some(originals.new.as_slice()), false)
-                    }
-                    None => line.clone(),
-                };
-                unified.push(right.clone());
-                split.push(SplitRow {
-                    left: Some(line),
-                    right: Some(right),
-                });
+impl<'b> Sides<'_, 'b> {
+    /// Emits each group of changes with its context and the gap before it.
+    /// Returns where the last group ended on each side.
+    fn emit_groups(self, doc: &mut DiffDocument, context: usize) -> (usize, usize) {
+        let mut old_end = 0;
+        let mut new_end = 0;
+        for group in self.diff.grouped_ops(context) {
+            if let Some(first) = group.first() {
+                self.emit_gap(
+                    doc,
+                    old_end..first.old_range().start,
+                    new_end..first.new_range().start,
+                );
+            }
+            for op in &group {
+                if op.tag() != DiffTag::Equal {
+                    doc.hunks.push(review::Hunk {
+                        old: op.old_range(),
+                        new: op.new_range(),
+                        unified_row: doc.unified.len(),
+                        split_row: doc.split.len(),
+                    });
+                }
+                self.emit_op(op, doc);
+                old_end = op.old_range().end;
+                new_end = op.new_range().end;
             }
         }
-        DiffTag::Delete => {
-            for change in diff.iter_inline_changes(op) {
-                let line = change_line(ChangeLineInput {
-                    change,
-                    kind: LineKind::Delete,
-                    highlighted: old_hl,
-                    old_side: true,
-                    originals,
-                });
-                unified.push(line.clone());
-                split.push(SplitRow {
+        (old_end, new_end)
+    }
+
+    /// Unchanged lines between changes: runs the user revealed are shown, and
+    /// every remaining run collapses into its own expandable gap row.
+    fn emit_gap(
+        self,
+        doc: &mut DiffDocument,
+        old: std::ops::Range<usize>,
+        new: std::ops::Range<usize>,
+    ) {
+        let mut start = old.start;
+        while start < old.end {
+            let shown = |line: usize| doc.revealed.iter().any(|range| range.contains(&line));
+            let visible = shown(start);
+            let mut end = start.saturating_add(1);
+            while end < old.end && shown(end) == visible {
+                end = end.saturating_add(1);
+            }
+            let len = end.saturating_sub(start);
+            let new_start = new.start.saturating_add(start.saturating_sub(old.start));
+            if visible {
+                let op = similar::DiffOp::Equal {
+                    old_index: start,
+                    new_index: new_start,
+                    len,
+                };
+                self.emit_op(&op, doc);
+            } else {
+                push_gap_row(doc, start..end, new_start..new_start.saturating_add(len));
+            }
+            start = end;
+        }
+    }
+
+    fn emit_op(self, op: &similar::DiffOp, doc: &mut DiffDocument) {
+        match op.tag() {
+            DiffTag::Equal => self.emit_equal(op, doc),
+            DiffTag::Delete => self.emit_one_side(op, doc, true),
+            DiffTag::Insert => self.emit_one_side(op, doc, false),
+            DiffTag::Replace => self.emit_replace(op, doc),
+        }
+    }
+
+    fn emit_equal(self, op: &similar::DiffOp, doc: &mut DiffDocument) {
+        for change in self.diff.iter_changes(op) {
+            let line = equal_line(
+                change,
+                self.old_hl,
+                self.originals.map(|o| o.old.as_slice()),
+                true,
+            );
+            // Whitespace-insensitive equal lines may still differ in
+            // whitespace: each side shows its own text.
+            let right = match self.originals {
+                Some(originals) => {
+                    equal_line(change, self.new_hl, Some(originals.new.as_slice()), false)
+                }
+                None => line.clone(),
+            };
+            doc.unified.push(right.clone());
+            doc.split.push(SplitRow {
+                left: Some(line),
+                right: Some(right),
+            });
+        }
+    }
+
+    /// A pure deletion (`old_side`) or insertion: rows on one side only.
+    fn emit_one_side(self, op: &similar::DiffOp, doc: &mut DiffDocument, old_side: bool) {
+        for change in self.diff.iter_inline_changes(op) {
+            let line = self.change(change, old_side);
+            doc.unified.push(line.clone());
+            doc.split.push(if old_side {
+                SplitRow {
                     left: Some(line),
                     right: None,
-                });
-            }
-        }
-        DiffTag::Insert => {
-            for change in diff.iter_inline_changes(op) {
-                let line = change_line(ChangeLineInput {
-                    change,
-                    kind: LineKind::Insert,
-                    highlighted: new_hl,
-                    old_side: false,
-                    originals,
-                });
-                unified.push(line.clone());
-                split.push(SplitRow {
+                }
+            } else {
+                SplitRow {
                     left: None,
                     right: Some(line),
-                });
-            }
-        }
-        DiffTag::Replace => {
-            let mut deletes = Vec::new();
-            let mut inserts = Vec::new();
-            for change in diff.iter_inline_changes(op) {
-                match change.tag() {
-                    ChangeTag::Delete => {
-                        deletes.push(change_line(ChangeLineInput {
-                            change,
-                            kind: LineKind::Delete,
-                            highlighted: old_hl,
-                            old_side: true,
-                            originals,
-                        }));
-                    }
-                    ChangeTag::Insert => {
-                        inserts.push(change_line(ChangeLineInput {
-                            change,
-                            kind: LineKind::Insert,
-                            highlighted: new_hl,
-                            old_side: false,
-                            originals,
-                        }));
-                    }
-                    ChangeTag::Equal => {}
                 }
-            }
-            for line in &deletes {
-                unified.push(line.clone());
-            }
-            for line in &inserts {
-                unified.push(line.clone());
-            }
-            let rows = deletes.len().max(inserts.len());
-            for i in 0..rows {
-                split.push(SplitRow {
-                    left: deletes.get(i).cloned(),
-                    right: inserts.get(i).cloned(),
-                });
-            }
+            });
         }
     }
+
+    fn emit_replace(self, op: &similar::DiffOp, doc: &mut DiffDocument) {
+        let mut deletes = Vec::new();
+        let mut inserts = Vec::new();
+        for change in self.diff.iter_inline_changes(op) {
+            match change.tag() {
+                ChangeTag::Delete => deletes.push(self.change(change, true)),
+                ChangeTag::Insert => inserts.push(self.change(change, false)),
+                ChangeTag::Equal => {}
+            }
+        }
+        for line in &deletes {
+            doc.unified.push(line.clone());
+        }
+        for line in &inserts {
+            doc.unified.push(line.clone());
+        }
+        let rows = deletes.len().max(inserts.len());
+        for i in 0..rows {
+            doc.split.push(SplitRow {
+                left: deletes.get(i).cloned(),
+                right: inserts.get(i).cloned(),
+            });
+        }
+    }
+
+    /// A deleted (`old_side`) or inserted line.
+    fn change(self, change: similar::InlineChange<'b, str>, old_side: bool) -> DiffLine {
+        change_line(ChangeLineInput {
+            change,
+            kind: if old_side {
+                LineKind::Delete
+            } else {
+                LineKind::Insert
+            },
+            highlighted: if old_side { self.old_hl } else { self.new_hl },
+            old_side,
+            originals: self.originals,
+        })
+    }
+}
+
+/// A collapsed run of unchanged lines, expandable from its row.
+fn push_gap_row(doc: &mut DiffDocument, old: std::ops::Range<usize>, new: std::ops::Range<usize>) {
+    let len = old.end.saturating_sub(old.start);
+    let line = DiffLine {
+        kind: LineKind::Hunk,
+        old_no: None,
+        new_no: None,
+        spans: vec![DiffSpan {
+            text: format!("⋯ {len} unchanged lines ⋯"),
+            rgb: fallback_rgb(),
+            intra: Intra::None,
+        }],
+    };
+    doc.gaps.push(review::Gap {
+        old,
+        new,
+        unified_row: doc.unified.len(),
+        split_row: doc.split.len(),
+    });
+    doc.unified.push(line.clone());
+    doc.split.push(SplitRow {
+        left: Some(line.clone()),
+        right: Some(line),
+    });
 }
 
 fn equal_line(

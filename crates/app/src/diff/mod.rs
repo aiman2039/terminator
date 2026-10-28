@@ -34,8 +34,8 @@ mod tests;
 
 #[cfg(test)]
 use build::build;
-pub(crate) use build::{BuildWithContextInput, BuildWithOptionsInput, build_with_context};
 use build::build_with_options;
+pub(crate) use build::{BuildWithContextInput, BuildWithOptionsInput, build_with_context};
 pub(crate) use highlight::highlight_spans;
 use highlight::{fallback_rgb, highlight_file, line_spans, overlay};
 pub use load::{DocumentAsyncInput, document_async};

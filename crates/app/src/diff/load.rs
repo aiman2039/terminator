@@ -48,21 +48,11 @@ pub(crate) async fn document_with_context(
         context,
         cancel,
     } = input;
-    let options = || CommandOptions {
-        stdout_limit: 4 * 1024 * 1024,
-        ..Default::default()
-    };
-    let root_bytes = terminator_git::run(
-        service.processes(),
-        service.fs(),
-        terminator_git::RunInput {
-            cwd: &cwd,
-            args: vec!["rev-parse".into(), "--show-toplevel".into()],
-            options: options(),
-        },
-    )
-    .await;
-    let root_bytes = match root_bytes {
+    let git = GitSnapshots { service, cancel };
+    let root_bytes = match git
+        .run(&cwd, vec!["rev-parse".into(), "--show-toplevel".into()])
+        .await
+    {
         Ok(bytes) => bytes,
         Err(_) if !staged => {
             return crate::perforce::document(crate::perforce::DocumentInput {
@@ -85,113 +75,7 @@ pub(crate) async fn document_with_context(
             anyhow::Ok((root, relative))
         })
         .await?;
-    let mut args: Vec<std::ffi::OsString> = [
-        "diff",
-        "--raw",
-        "-z",
-        "--no-abbrev",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--find-renames",
-    ]
-    .into_iter()
-    .map(Into::into)
-    .collect();
-    if staged {
-        args.push("--cached".into());
-    }
-    let raw = terminator_git::run(
-        service.processes(),
-        service.fs(),
-        terminator_git::RunInput {
-            cwd: &root,
-            args,
-            options: options(),
-        },
-    )
-    .await?;
-    let oids = terminator_git::find_record(&raw, &relative)?;
-    let (left, right) = if let Some((left, right)) = oids {
-        let left = terminator_git::snapshot::blob_async(
-            service.processes(),
-            service.fs(),
-            terminator_git::snapshot::BlobAsyncInput {
-                root: &root,
-                oid: &left,
-                options: options(),
-            },
-        )
-        .await?;
-        let right = if staged {
-            terminator_git::snapshot::blob_async(
-                service.processes(),
-                service.fs(),
-                terminator_git::snapshot::BlobAsyncInput {
-                    root: &root,
-                    oid: &right,
-                    options: options(),
-                },
-            )
-            .await?
-        } else {
-            let path = root.join(&relative);
-            service
-                .fs()
-                .run(cancel, move || {
-                    terminator_git::worktree_file(&path).map_err(anyhow::Error::from)
-                })
-                .await?
-        };
-        (left, right)
-    } else {
-        let tracked = terminator_git::run(
-            service.processes(),
-            service.fs(),
-            terminator_git::RunInput {
-                cwd: &root,
-                args: vec![
-                    "ls-files".into(),
-                    "--stage".into(),
-                    "-z".into(),
-                    "--".into(),
-                    actions::literal(&relative),
-                ],
-                options: options(),
-            },
-        )
-        .await?;
-        let oid = tracked
-            .split(|byte| *byte == b' ')
-            .nth(1)
-            .map(std::str::from_utf8)
-            .transpose()?;
-        let left = if let Some(oid) = oid {
-            terminator_git::snapshot::blob_async(
-                service.processes(),
-                service.fs(),
-                terminator_git::snapshot::BlobAsyncInput {
-                    root: &root,
-                    oid,
-                    options: options(),
-                },
-            )
-            .await?
-        } else {
-            Vec::new()
-        };
-        let right = if staged {
-            left.clone()
-        } else {
-            let path = root.join(&relative);
-            service
-                .fs()
-                .run(cancel, move || {
-                    terminator_git::worktree_file(&path).map_err(anyhow::Error::from)
-                })
-                .await?
-        };
-        (left, right)
-    };
+    let (left, right) = git.sides(&root, &relative, staged).await?;
     let source = actions::Source::capture(service, &root, &relative, cancel).await?;
     service
         .cpu()
@@ -208,6 +92,129 @@ pub(crate) async fn document_with_context(
             Ok(doc)
         })
         .await
+}
+
+/// Reads Git blobs and worktree files through the GUI service pools.
+#[derive(Clone, Copy)]
+struct GitSnapshots<'a> {
+    service: &'a crate::gui_services::Services,
+    cancel: &'a terminator_core::async_service::CancellationToken,
+}
+
+fn git_options() -> CommandOptions {
+    CommandOptions {
+        stdout_limit: 4 * 1024 * 1024,
+        ..Default::default()
+    }
+}
+
+impl GitSnapshots<'_> {
+    async fn run(
+        self,
+        cwd: &Path,
+        args: Vec<std::ffi::OsString>,
+    ) -> std::result::Result<Vec<u8>, terminator_core::async_process::AsyncProcessError> {
+        terminator_git::run(
+            self.service.processes(),
+            self.service.fs(),
+            terminator_git::RunInput {
+                cwd,
+                args,
+                options: git_options(),
+            },
+        )
+        .await
+    }
+
+    async fn blob(self, root: &Path, oid: &str) -> Result<Vec<u8>> {
+        Ok(terminator_git::snapshot::blob_async(
+            self.service.processes(),
+            self.service.fs(),
+            terminator_git::snapshot::BlobAsyncInput {
+                root,
+                oid,
+                options: git_options(),
+            },
+        )
+        .await?)
+    }
+
+    async fn worktree(self, root: &Path, relative: &Path) -> Result<Vec<u8>> {
+        let path = root.join(relative);
+        self.service
+            .fs()
+            .run(self.cancel, move || {
+                terminator_git::worktree_file(&path).map_err(anyhow::Error::from)
+            })
+            .await
+    }
+
+    /// Left and right bytes: HEAD to index when `staged`, else index to
+    /// worktree. Files without a diff record compare against the index.
+    async fn sides(self, root: &Path, relative: &Path, staged: bool) -> Result<(Vec<u8>, Vec<u8>)> {
+        let mut args: Vec<std::ffi::OsString> = [
+            "diff",
+            "--raw",
+            "-z",
+            "--no-abbrev",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--find-renames",
+        ]
+        .into_iter()
+        .map(Into::into)
+        .collect();
+        if staged {
+            args.push("--cached".into());
+        }
+        let raw = self.run(root, args).await?;
+        let Some((left, right)) = terminator_git::find_record(&raw, relative)? else {
+            return self.unchanged_sides(root, relative, staged).await;
+        };
+        let left = self.blob(root, &left).await?;
+        let right = if staged {
+            self.blob(root, &right).await?
+        } else {
+            self.worktree(root, relative).await?
+        };
+        Ok((left, right))
+    }
+
+    async fn unchanged_sides(
+        self,
+        root: &Path,
+        relative: &Path,
+        staged: bool,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        let tracked = self
+            .run(
+                root,
+                vec![
+                    "ls-files".into(),
+                    "--stage".into(),
+                    "-z".into(),
+                    "--".into(),
+                    actions::literal(relative),
+                ],
+            )
+            .await?;
+        let oid = tracked
+            .split(|byte| *byte == b' ')
+            .nth(1)
+            .map(std::str::from_utf8)
+            .transpose()?;
+        let left = if let Some(oid) = oid {
+            self.blob(root, oid).await?
+        } else {
+            Vec::new()
+        };
+        let right = if staged {
+            left.clone()
+        } else {
+            self.worktree(root, relative).await?
+        };
+        Ok((left, right))
+    }
 }
 pub(crate) struct RemoteDocumentInput<'a> {
     pub(crate) service: &'a crate::gui_services::Services,
