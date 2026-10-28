@@ -176,14 +176,14 @@ impl Services {
             {
                 Ok(Response::Ok) => Ok(()),
                 Ok(_) => Err("Unexpected host key response".into()),
-                Err(e) => Err(format!("{e:#}")),
+                Err(e) => Err(format!("{e}", e = terminator_core::ErrorChain(&e))),
             };
             updates.push(Update::HostKeyTrusted(ssh, result));
         } else {
             let result = match client.rpc(Request::ScanHostKey { ssh: ssh.clone() }).await {
                 Ok(Response::HostKeys(scan)) => Ok(scan),
                 Ok(_) => Err("Unexpected host key response".into()),
-                Err(e) => Err(format!("{e:#}")),
+                Err(e) => Err(format!("{e}", e = terminator_core::ErrorChain(&e))),
             };
             updates.push(Update::HostKeyScanned(ssh, result));
         }

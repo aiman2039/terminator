@@ -417,7 +417,7 @@ impl Services {
                         revision = Some(state.0.snapshot_hint()); Some(Update::State(state.0))
                     }
                     Ok(_) => None,
-                    Err(error) => { revision = None; Some(Update::Error(format!("Reconnecting: {error:#}"))) }
+                    Err(error) => { revision = None; Some(Update::Error(format!("Reconnecting: {error}", error = terminator_core::ErrorChain(&error)))) }
                 };
                 let update = match update.filter(|_| !service.reads_paused()) {
                     Some(Update::State(state)) => {

@@ -238,7 +238,10 @@ fn spawn_generation_worker(weak: std::sync::Weak<Shared>) {
                             if let Err(error) =
                                 generations::prune_retired(root, generations::RETIRED_RETENTION)
                             {
-                                shared.degraded(&format!("Generation retention: {error:#}"));
+                                shared.degraded(&format!(
+                                    "Generation retention: {error}",
+                                    error = terminator_core::ErrorChain(&error)
+                                ));
                             }
                             global_prune = Instant::now();
                         }

@@ -70,7 +70,7 @@ impl Services {
                         error: None,
                     })),
                     Ok(_) => Err("Unexpected SFTP transfer response".into()),
-                    Err(e) => Err(format!("{e:#}")),
+                    Err(e) => Err(format!("{e}", e = terminator_core::ErrorChain(&e))),
                 }
             }
             Ok(None) => Ok(None),
@@ -96,7 +96,7 @@ impl Services {
         {
             Ok(Response::VncTransferStatus(status)) => Ok(Some(status)),
             Ok(_) => Err("Unexpected SFTP transfer status".into()),
-            Err(e) => Err(format!("{e:#}")),
+            Err(e) => Err(format!("{e}", e = terminator_core::ErrorChain(&e))),
         };
         updates.push(Update::VncTransfer(session, result));
         Ok(())
@@ -117,7 +117,7 @@ impl Services {
                 Ok(session)
             }
             Ok(_) => Err("Unexpected VNC connection response".into()),
-            Err(err) => Err(format!("{err:#}")),
+            Err(err) => Err(format!("{err}", err = terminator_core::ErrorChain(&err))),
         };
         updates.push(Update::VncTabConnected(tab_id, result));
         Ok(())
@@ -148,7 +148,7 @@ impl Services {
                 .map_err(|e| format!("{e:#}")),
             Ok(Response::Unchanged) => Ok(None),
             Ok(_) => Err("Unexpected VNC frame response".into()),
-            Err(err) => Err(format!("{err:#}")),
+            Err(err) => Err(format!("{err}", err = terminator_core::ErrorChain(&err))),
         };
         updates.push(Update::VncFrame(session, result));
         Ok(())
