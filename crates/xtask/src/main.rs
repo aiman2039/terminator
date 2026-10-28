@@ -239,7 +239,12 @@ fn dispatch(task: Task) -> Result<()> {
             styled,
             output,
             timings,
-        } => package::local_dmg(release, styled, output, timings),
+        } => package::local_dmg(package::LocalDmgInput {
+            release,
+            styled,
+            destination: output,
+            timings,
+        }),
         Task::Dmg { app, output } => package::dmg(&app, &output),
         Task::Assemble {
             app,
