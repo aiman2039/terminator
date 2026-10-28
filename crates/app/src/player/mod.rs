@@ -107,6 +107,8 @@ pub(super) enum Stack {
 }
 
 mod app_player;
+mod app_playlist;
+mod app_radio;
 mod controller;
 mod eq;
 #[cfg(test)]
