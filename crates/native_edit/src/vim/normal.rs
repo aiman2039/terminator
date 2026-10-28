@@ -12,6 +12,16 @@ impl VimEngine {
         } else {
             key
         };
+        if let Some(effects) = self.normal_prefix(key) {
+            return effects;
+        }
+        let count = self.take_count();
+        self.normal_command(doc, key, count)
+    }
+
+    /// Count digits and the `g` prefix: `Some` when the key was consumed
+    /// before reaching a command.
+    fn normal_prefix(&mut self, key: Key) -> Option<Vec<Effect>> {
         // Digits accumulate a count; a bare 0 is the line-start motion.
         if let Key::Char(c) = key
             && c.is_ascii_digit()
@@ -20,213 +30,55 @@ impl VimEngine {
             self.count.push(c);
             self.pending_g = false;
             self.rec_bit(Bit::Key(key));
-            return Vec::new();
+            return Some(Vec::new());
         }
         // `gd` is goto-definition; any other non-`g` key after `g`
         // cancels the prefix.
         if self.pending_g && key != Key::Char('g') && key != Key::Char('d') {
             self.clear_pending();
             self.rec_discard();
-            return vec![Effect::Bell];
+            return Some(vec![Effect::Bell]);
         }
-        let count = self.take_count();
+        None
+    }
+
+    fn normal_command<B: Buffer>(&mut self, doc: &mut B, key: Key, count: usize) -> Vec<Effect> {
         match key {
-            Key::Char('h') | Key::Left => {
-                self.apply_motion(doc, 'h', count);
-            }
-            Key::Char('j') | Key::Down => {
-                self.apply_motion(doc, 'j', count);
-            }
-            Key::Char('k') | Key::Up => {
-                self.apply_motion(doc, 'k', count);
-            }
-            Key::Char('l') | Key::Right => {
-                self.apply_motion(doc, 'l', count);
-            }
-            Key::Char('w' | 'W') => {
-                self.apply_motion(doc, 'w', count);
-            }
-            Key::Char('b' | 'B') => {
-                self.apply_motion(doc, 'b', count);
-            }
-            Key::Char('e' | 'E') => {
-                self.apply_motion(doc, 'e', count);
-            }
-            Key::Char('0') => {
-                self.apply_motion(doc, '0', 1);
-            }
-            Key::Char('$') => {
-                self.apply_motion(doc, '$', 1);
-            }
-            Key::Char('^') => {
-                let col = Self::first_non_blank(doc, self.cursor.line);
-                self.apply_motion_to(
-                    doc,
-                    Cursor {
-                        line: self.cursor.line,
-                        col,
-                    },
-                    '^',
-                );
-            }
-            Key::Char('G') => {
-                let line = if self.count.is_empty() {
-                    doc.line_count().saturating_sub(1)
-                } else {
-                    count.saturating_sub(1)
-                };
-                let col = Self::first_non_blank(doc, line.min(doc.line_count().saturating_sub(1)));
-                self.apply_motion_to(doc, Cursor { line, col }, 'G');
-                self.scroll_request = true;
-            }
-            Key::Char('g') => {
-                if self.pending_g {
-                    self.clear_pending();
-                    let col = Self::first_non_blank(doc, 0);
-                    self.apply_motion_to(doc, Cursor { line: 0, col }, 'g');
-                    self.scroll_request = true;
-                } else {
-                    self.pending_g = true;
-                    return Vec::new();
-                }
-            }
-            Key::Char('x') => {
-                self.rec_bit(Bit::Key(key));
-                self.delete_chars_forward(doc, count);
-                self.rec_commit();
-            }
-            Key::Char('d') => {
-                if self.pending_g {
-                    self.clear_pending();
-                    self.rec_discard();
-                    self.scroll_request = true;
-                    return vec![Effect::GotoDefinition];
-                }
-                return self.operator_key(doc, PendingOp::Delete);
-            }
-            Key::Char('c') => {
-                return self.operator_key(doc, PendingOp::Change);
-            }
-            Key::Char('y') => {
-                return self.operator_key(doc, PendingOp::Yank);
-            }
-            Key::Char('p') => {
-                self.rec_bit(Bit::Key(key));
-                self.paste(doc);
-                self.clear_pending();
-                self.rec_commit();
-            }
-            Key::Char('.') => {
-                if self.pending.is_some() {
-                    self.clear_pending();
-                    self.rec_discard();
-                    return vec![Effect::Bell];
-                }
-                let Some(change) = self.last_change.clone() else {
-                    return vec![Effect::Bell];
-                };
-                return self.exec_repeat(doc, change);
-            }
-            Key::Char('u') => {
-                self.undo(doc);
-            }
-            Key::Char('i') => {
-                self.rec_bit(Bit::Key(key));
-                self.start_insert_place(doc, Place::AtCursor);
-            }
-            Key::Char('a') => {
-                self.rec_bit(Bit::Key(key));
-                self.start_insert_place(doc, Place::AfterCursor);
-            }
-            Key::Char('A') => {
-                self.rec_bit(Bit::Key(key));
-                self.start_insert_place(doc, Place::LineEnd);
-            }
-            Key::Char('I') => {
-                self.rec_bit(Bit::Key(key));
-                self.start_insert_place(doc, Place::FirstBlank);
-            }
-            Key::Char('o') => {
-                self.rec_bit(Bit::Key(key));
-                self.start_insert_place(doc, Place::LineBelow);
-            }
-            Key::Char('O') => {
-                self.rec_bit(Bit::Key(key));
-                self.start_insert_place(doc, Place::LineAbove);
-            }
-            Key::Char('v') => {
-                self.rec_bit(Bit::Key(key));
-                self.mode = Mode::Visual;
-                self.anchor = self.cursor;
-                self.clear_pending();
-            }
-            Key::Char('V') => {
-                self.rec_bit(Bit::Key(key));
-                self.mode = Mode::VisualLine;
-                self.anchor = self.cursor;
-                self.clear_pending();
-            }
-            Key::CtrlV => {
-                self.rec_bit(Bit::Key(key));
-                self.mode = Mode::VisualBlock;
-                self.anchor = self.cursor;
-                self.clear_pending();
-            }
-            Key::Char(':') => {
-                self.mode = Mode::Command;
-                self.command.clear();
-                self.clear_pending();
-                self.rec_discard();
-            }
-            Key::Char('/') => {
-                self.mode = Mode::Command;
-                self.command.clear();
-                self.command.push('/');
-                self.clear_pending();
-                self.rec_discard();
-            }
-            Key::Char('n') => {
-                if self.search_last.is_empty() {
-                    self.rec_discard();
-                    return vec![Effect::Bell];
-                }
-                let pattern = self.search_last.clone();
-                let from = self.char_idx(doc, self.cursor).saturating_add(1);
-                self.clear_pending();
-                self.rec_discard();
-                if !self.jump_to_match(
-                    doc,
-                    JumpToMatchInput {
-                        pattern: &pattern,
-                        from,
-                        forward: true,
-                    },
-                ) {
-                    return vec![Effect::Bell];
-                }
-            }
-            Key::Char('N') => {
-                if self.search_last.is_empty() {
-                    self.rec_discard();
-                    return vec![Effect::Bell];
-                }
-                let pattern = self.search_last.clone();
-                let from = self.char_idx(doc, self.cursor);
-                self.clear_pending();
-                self.rec_discard();
-                if !self.jump_to_match(
-                    doc,
-                    JumpToMatchInput {
-                        pattern: &pattern,
-                        from,
-                        forward: false,
-                    },
-                ) {
-                    return vec![Effect::Bell];
-                }
-            }
-            // `K` looks up the cursor word, like vim with `keywordprg`
-            // on an LSP: no buffer change, nothing to repeat or record.
+            Key::Char('h') | Key::Left => self.apply_motion(doc, 'h', count),
+            Key::Char('j') | Key::Down => self.apply_motion(doc, 'j', count),
+            Key::Char('k') | Key::Up => self.apply_motion(doc, 'k', count),
+            Key::Char('l') | Key::Right => self.apply_motion(doc, 'l', count),
+            Key::Char('w' | 'W') => self.apply_motion(doc, 'w', count),
+            Key::Char('b' | 'B') => self.apply_motion(doc, 'b', count),
+            Key::Char('e' | 'E') => self.apply_motion(doc, 'e', count),
+            Key::Char('0') => self.apply_motion(doc, '0', 1),
+            Key::Char('$') => self.apply_motion(doc, '$', 1),
+            Key::Char('^') => self.motion_first_non_blank(doc),
+            Key::Char('G') => self.motion_last_line(doc, count),
+            Key::Char('g') => return self.g_key(doc),
+            // The Delete key deletes like `x`, including under counts.
+            Key::Char('x') | Key::Delete => self.delete_x(doc, count),
+            Key::Char('d') => return self.d_key(doc),
+            Key::Char('c') => return self.operator_key(doc, PendingOp::Change),
+            Key::Char('y') => return self.operator_key(doc, PendingOp::Yank),
+            Key::Char('p') => self.paste_key(doc),
+            Key::Char('.') => return self.repeat_key(doc),
+            Key::Char('u') => self.undo(doc),
+            Key::Char('i') => self.insert_key_at(doc, key, Place::AtCursor),
+            Key::Char('a') => self.insert_key_at(doc, key, Place::AfterCursor),
+            Key::Char('A') => self.insert_key_at(doc, key, Place::LineEnd),
+            Key::Char('I') => self.insert_key_at(doc, key, Place::FirstBlank),
+            Key::Char('o') => self.insert_key_at(doc, key, Place::LineBelow),
+            Key::Char('O') => self.insert_key_at(doc, key, Place::LineAbove),
+            Key::Char('v') => self.start_visual(key, Mode::Visual),
+            Key::Char('V') => self.start_visual(key, Mode::VisualLine),
+            Key::CtrlV => self.start_visual(key, Mode::VisualBlock),
+            Key::Char(':') => self.open_command_line(""),
+            Key::Char('/') => self.open_command_line("/"),
+            Key::Char('n') => return self.search_again(doc, true),
+            Key::Char('N') => return self.search_again(doc, false),
+            // `K` looks up the cursor word, like vim with `keywordprg` on
+            // an LSP: no buffer change, nothing to repeat or record.
             Key::Char('K') => {
                 self.clear_pending();
                 self.rec_discard();
@@ -234,12 +86,6 @@ impl VimEngine {
             }
             // Vim parity: Backspace moves left like `h` in Normal mode.
             Key::Backspace => self.apply_motion(doc, 'h', 1),
-            // The Delete key deletes like `x`, including under counts.
-            Key::Delete => {
-                self.rec_bit(Bit::Key(Key::Char('x')));
-                self.delete_chars_forward(doc, count);
-                self.rec_commit();
-            }
             Key::Home => self.apply_motion(doc, '0', 1),
             Key::End => self.apply_motion(doc, '$', 1),
             Key::Escape => {
@@ -250,6 +96,128 @@ impl VimEngine {
                 self.rec_discard();
                 return vec![Effect::Bell];
             }
+        }
+        Vec::new()
+    }
+
+    /// `^`: first non-blank of the cursor line.
+    fn motion_first_non_blank<B: Buffer>(&mut self, doc: &mut B) {
+        let col = Self::first_non_blank(doc, self.cursor.line);
+        self.apply_motion_to(
+            doc,
+            Cursor {
+                line: self.cursor.line,
+                col,
+            },
+            '^',
+        );
+    }
+
+    /// `G`: the last line, or line `count`.
+    fn motion_last_line<B: Buffer>(&mut self, doc: &mut B, count: usize) {
+        let line = if self.count.is_empty() {
+            doc.line_count().saturating_sub(1)
+        } else {
+            count.saturating_sub(1)
+        };
+        let col = Self::first_non_blank(doc, line.min(doc.line_count().saturating_sub(1)));
+        self.apply_motion_to(doc, Cursor { line, col }, 'G');
+        self.scroll_request = true;
+    }
+
+    /// `g` arms the prefix; `gg` goes to the first line.
+    fn g_key<B: Buffer>(&mut self, doc: &mut B) -> Vec<Effect> {
+        if !self.pending_g {
+            self.pending_g = true;
+            return Vec::new();
+        }
+        self.clear_pending();
+        let col = Self::first_non_blank(doc, 0);
+        self.apply_motion_to(doc, Cursor { line: 0, col }, 'g');
+        self.scroll_request = true;
+        Vec::new()
+    }
+
+    /// `gd` is goto-definition; a plain `d` starts the delete operator.
+    fn d_key<B: Buffer>(&mut self, doc: &mut B) -> Vec<Effect> {
+        if self.pending_g {
+            self.clear_pending();
+            self.rec_discard();
+            self.scroll_request = true;
+            return vec![Effect::GotoDefinition];
+        }
+        self.operator_key(doc, PendingOp::Delete)
+    }
+
+    fn delete_x<B: Buffer>(&mut self, doc: &mut B, count: usize) {
+        self.rec_bit(Bit::Key(Key::Char('x')));
+        self.delete_chars_forward(doc, count);
+        self.rec_commit();
+    }
+
+    fn paste_key<B: Buffer>(&mut self, doc: &mut B) {
+        self.rec_bit(Bit::Key(Key::Char('p')));
+        self.paste(doc);
+        self.clear_pending();
+        self.rec_commit();
+    }
+
+    /// `.` replays the last change; it bells under an operator or with
+    /// nothing to repeat.
+    fn repeat_key<B: Buffer>(&mut self, doc: &mut B) -> Vec<Effect> {
+        if self.pending.is_some() {
+            self.clear_pending();
+            self.rec_discard();
+            return vec![Effect::Bell];
+        }
+        let Some(change) = self.last_change.clone() else {
+            return vec![Effect::Bell];
+        };
+        self.exec_repeat(doc, change)
+    }
+
+    fn insert_key_at<B: Buffer>(&mut self, doc: &mut B, key: Key, place: Place) {
+        self.rec_bit(Bit::Key(key));
+        self.start_insert_place(doc, place);
+    }
+
+    fn start_visual(&mut self, key: Key, mode: Mode) {
+        self.rec_bit(Bit::Key(key));
+        self.mode = mode;
+        self.anchor = self.cursor;
+        self.clear_pending();
+    }
+
+    /// `:` opens an empty command line, `/` one starting with `/`.
+    fn open_command_line(&mut self, prefix: &str) {
+        self.mode = Mode::Command;
+        self.command.clear();
+        self.command.push_str(prefix);
+        self.clear_pending();
+        self.rec_discard();
+    }
+
+    /// `n` / `N`: the next match of the last search after (or before) the
+    /// cursor, wrapping.
+    fn search_again<B: Buffer>(&mut self, doc: &mut B, forward: bool) -> Vec<Effect> {
+        if self.search_last.is_empty() {
+            self.rec_discard();
+            return vec![Effect::Bell];
+        }
+        let pattern = self.search_last.clone();
+        let at = self.char_idx(doc, self.cursor);
+        let from = if forward { at.saturating_add(1) } else { at };
+        self.clear_pending();
+        self.rec_discard();
+        if !self.jump_to_match(
+            doc,
+            JumpToMatchInput {
+                pattern: &pattern,
+                from,
+                forward,
+            },
+        ) {
+            return vec![Effect::Bell];
         }
         Vec::new()
     }
@@ -301,48 +269,56 @@ impl VimEngine {
             self.pending_g = false;
             self.count.clear();
             self.rec_bit(Bit::Motion(kind));
-            match kind {
-                'h' | 'l' | '0' | '$' | 'w' | 'b' | 'e' => {
-                    let (target, inclusive) = self.motion_target(doc, kind, count);
-                    self.apply_operator(
-                        doc,
-                        ApplyOperatorInput {
-                            op,
-                            target,
-                            inclusive,
-                        },
-                    );
-                }
-                'j' | 'k' => {
-                    // Vertical motions under an operator stay charwise in v1;
-                    // dd/yy/cc cover the linewise case.
-                    let saved = self.cursor;
-                    if kind == 'j' {
-                        self.move_j(doc, count);
-                    } else {
-                        self.move_k(doc, count);
-                    }
-                    let target = self.cursor;
-                    self.cursor = saved;
-                    let inclusive = target.line != saved.line;
-                    self.apply_operator(
-                        doc,
-                        ApplyOperatorInput {
-                            op,
-                            target,
-                            inclusive,
-                        },
-                    );
-                }
-                _ => {
-                    self.rec_discard();
-                }
-            }
+            let Some((target, inclusive)) = self.operator_target(doc, kind, count) else {
+                self.rec_discard();
+                return;
+            };
+            self.apply_operator(
+                doc,
+                ApplyOperatorInput {
+                    op,
+                    target,
+                    inclusive,
+                },
+            );
             return;
         }
         self.pending_g = false;
         self.count.clear();
         self.rec_discard();
+        self.move_by(doc, kind, count);
+        doc.end_run();
+    }
+
+    /// Target and inclusivity of `kind` under an operator; `None` for
+    /// motions operators do not take.
+    fn operator_target<B: Buffer>(
+        &mut self,
+        doc: &mut B,
+        kind: char,
+        count: usize,
+    ) -> Option<(Cursor, bool)> {
+        match kind {
+            'h' | 'l' | '0' | '$' | 'w' | 'b' | 'e' => Some(self.motion_target(doc, kind, count)),
+            'j' | 'k' => {
+                // Vertical motions under an operator stay charwise in v1;
+                // dd/yy/cc cover the linewise case.
+                let saved = self.cursor;
+                if kind == 'j' {
+                    self.move_j(doc, count);
+                } else {
+                    self.move_k(doc, count);
+                }
+                let target = self.cursor;
+                self.cursor = saved;
+                Some((target, target.line != saved.line))
+            }
+            _ => None,
+        }
+    }
+
+    /// Plain cursor motion (no operator pending).
+    fn move_by<B: Buffer>(&mut self, doc: &mut B, kind: char, count: usize) {
         match kind {
             'h' => self.move_h(doc, count),
             'j' => self.move_j(doc, count),
@@ -380,7 +356,6 @@ impl VimEngine {
             }
             _ => {}
         }
-        doc.end_run();
     }
 
     pub(super) fn apply_motion_to<B: Buffer>(&mut self, doc: &mut B, target: Cursor, motion: char) {
