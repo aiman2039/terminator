@@ -3,15 +3,55 @@
 //! Unix uses nonblocking pipes drained on the calling thread. Windows pipes
 //! cannot be polled from std, so bounded reader threads drain them instead.
 #[cfg(unix)]
-use anyhow::Context;
-use anyhow::{Result, bail, ensure};
-#[cfg(unix)]
 use std::os::{fd::AsFd, unix::process::CommandExt};
 use std::{
     io::{Read, Write},
     process::{Command, Output, Stdio},
     time::{Duration, Instant},
 };
+/// Why a bounded subprocess failed, timed out, or produced too much output.
+#[derive(Debug, thiserror::Error)]
+pub enum ProcessError {
+    #[error("{pipe} pipe missing")]
+    MissingPipe { pipe: &'static str },
+    #[cfg(unix)]
+    #[error("Set nonblocking pipe failed")]
+    Nonblocking { errno: rustix::io::Errno },
+    #[cfg(unix)]
+    #[error("Command output exceeds {limit} bytes")]
+    OutputTooLarge { limit: usize },
+    #[cfg(not(unix))]
+    #[error("Command output exceeds the configured limit")]
+    OutputOverLimit,
+    #[error("Command failed ({status}): {stderr}")]
+    Failed {
+        status: std::process::ExitStatus,
+        stderr: String,
+    },
+    #[error("Command timed out after {timeout:?}")]
+    TimedOut { timeout: Duration },
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+type Result<T, E = ProcessError> = std::result::Result<T, E>;
+
+/// `Err` unless `status` is one of `accepted` (any status when `None`).
+fn check_status(
+    status: std::process::ExitStatus,
+    accepted: Option<&[i32]>,
+    stderr: &[u8],
+) -> Result<()> {
+    if let Some(accepted) = accepted
+        && !status.code().is_some_and(|c| accepted.contains(&c))
+    {
+        return Err(ProcessError::Failed {
+            status,
+            stderr: String::from_utf8_lossy(stderr).into_owned(),
+        });
+    }
+    Ok(())
+}
+
 pub struct CommandOptions {
     pub timeout: Duration,
     pub input: Option<Vec<u8>>,
@@ -32,10 +72,9 @@ impl Default for CommandOptions {
 }
 #[cfg(unix)]
 fn nonblocking(fd: impl AsFd) -> Result<()> {
-    let flags =
-        rustix::fs::fcntl_getfl(&fd).map_err(|_| anyhow::anyhow!("Set nonblocking pipe failed"))?;
-    rustix::fs::fcntl_setfl(&fd, flags | rustix::fs::OFlags::NONBLOCK)
-        .map_err(|_| anyhow::anyhow!("Set nonblocking pipe failed"))?;
+    let failed = |errno| ProcessError::Nonblocking { errno };
+    let flags = rustix::fs::fcntl_getfl(&fd).map_err(failed)?;
+    rustix::fs::fcntl_setfl(&fd, flags | rustix::fs::OFlags::NONBLOCK).map_err(failed)?;
     Ok(())
 }
 #[cfg(unix)]
@@ -45,10 +84,9 @@ fn drain(pipe: &mut impl Read, bytes: &mut Vec<u8>, limit: usize) -> Result<bool
         match pipe.read(&mut buf) {
             Ok(0) => return Ok(true),
             Ok(n) => {
-                ensure!(
-                    bytes.len().saturating_add(n) <= limit,
-                    "Command output exceeds {limit} bytes"
-                );
+                if bytes.len().saturating_add(n) > limit {
+                    return Err(ProcessError::OutputTooLarge { limit });
+                }
                 if let Some(chunk) = buf.get(..n) {
                     bytes.extend_from_slice(chunk);
                 }
@@ -72,8 +110,14 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
         .stderr(Stdio::piped());
     let mut child = cmd.spawn()?;
     let result = (|| {
-        let mut out = child.stdout.take().context("stdout pipe missing")?;
-        let mut err = child.stderr.take().context("stderr pipe missing")?;
+        let mut out = child
+            .stdout
+            .take()
+            .ok_or(ProcessError::MissingPipe { pipe: "stdout" })?;
+        let mut err = child
+            .stderr
+            .take()
+            .ok_or(ProcessError::MissingPipe { pipe: "stderr" })?;
         let mut input = child.stdin.take();
         nonblocking(&out)?;
         nonblocking(&err)?;
@@ -111,13 +155,7 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
                 && out_done
                 && err_done
             {
-                if let Some(accepted) = &options.accepted_exit_codes {
-                    ensure!(
-                        status.code().is_some_and(|c| accepted.contains(&c)),
-                        "Command failed ({status}): {}",
-                        String::from_utf8_lossy(&stderr)
-                    );
-                }
+                check_status(status, options.accepted_exit_codes.as_deref(), &stderr)?;
                 return Ok(Output {
                     status,
                     stdout,
@@ -125,7 +163,9 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
                 });
             }
             if started.elapsed() >= options.timeout {
-                bail!("Command timed out after {:?}", options.timeout);
+                return Err(ProcessError::TimedOut {
+                    timeout: options.timeout,
+                });
             }
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -164,17 +204,15 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
     let (status, timed_out) = wait_for_child(&mut child, &options, started)?;
     done.store(true, Ordering::Relaxed);
     let (stdout, stderr, overflow) = collect_output(readers);
-    ensure!(!overflow, "Command output exceeds the configured limit");
+    if overflow {
+        return Err(ProcessError::OutputOverLimit);
+    }
     if timed_out {
-        bail!("Command timed out after {:?}", options.timeout);
+        return Err(ProcessError::TimedOut {
+            timeout: options.timeout,
+        });
     }
-    if let Some(accepted) = &options.accepted_exit_codes {
-        ensure!(
-            status.code().is_some_and(|c| accepted.contains(&c)),
-            "Command failed ({status}): {}",
-            String::from_utf8_lossy(&stderr)
-        );
-    }
+    check_status(status, options.accepted_exit_codes.as_deref(), &stderr)?;
     Ok(Output {
         status,
         stdout,
@@ -273,7 +311,9 @@ fn wait_for_child(
                         .checked_add(Duration::from_secs(2))
                         .unwrap_or(Duration::MAX)
                 {
-                    bail!("Command timed out after {:?}", options.timeout);
+                    return Err(ProcessError::TimedOut {
+                        timeout: options.timeout,
+                    });
                 }
                 std::thread::sleep(Duration::from_millis(5));
             };

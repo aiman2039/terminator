@@ -391,12 +391,12 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AtomicWriteError> {
 
 mod error;
 pub mod process;
-pub use process::{CommandOptions, run_command, spawn_session_leader};
+pub use process::{CommandOptions, ProcessError, run_command, spawn_session_leader};
 /// Legacy callers inspect the exit status themselves.
 pub fn bounded_output(
     cmd: std::process::Command,
     timeout: Duration,
-) -> Result<std::process::Output> {
+) -> Result<std::process::Output, ProcessError> {
     run_command(
         cmd,
         CommandOptions {
