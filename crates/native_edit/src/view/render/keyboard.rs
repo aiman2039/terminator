@@ -6,8 +6,8 @@ use super::helpers::{CaretChord, RenderHelpers};
 use crate::doc::Buffer;
 use crate::highlight::Language;
 use crate::view::{
-    IdeAction, IdeEdit, comment_token, ctrl_h_is_motion, ctrl_v_is_block, ide_edit_in_vim,
-    ide_edit_key, ide_shortcut,
+    IdeAction, IdeEdit, IdeEditKeyInput, comment_token, ctrl_h_is_motion, ctrl_v_is_block,
+    ide_edit_in_vim, ide_edit_key, ide_shortcut,
 };
 use crate::vim::ModalEngine;
 use crate::vim::{Effect, IdeMotion, Key as VKey, Mode, VimEngine};
@@ -280,8 +280,12 @@ impl<B: Buffer> SourceView<'_, B> {
                     ..
                 } = event
                     && !(self.options.popup_keys && RenderHelpers::popup_key(*key))
-                    && let Some(edit) =
-                        ide_edit_key(*key, *modifiers, cfg!(target_os = "macos"), page_rows)
+                    && let Some(edit) = ide_edit_key(IdeEditKeyInput {
+                        key: *key,
+                        modifiers: *modifiers,
+                        mac: cfg!(target_os = "macos"),
+                        page_rows,
+                    })
                     && (!self.options.vim || ide_edit_in_vim(edit, *modifiers))
                 {
                     edits.push((*key, *modifiers, edit));

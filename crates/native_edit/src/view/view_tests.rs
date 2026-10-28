@@ -2,8 +2,8 @@ use super::super::doc::Buffer;
 use super::super::highlight::{HighlightCache, Language};
 use super::super::vim::{Effect, Key as VKey, ModalEngine, Mode, VimEngine};
 use super::keys::{
-    IdeAction, IdeEdit, command_prompt, ctrl_h_is_motion, ctrl_v_is_block, echo_of_handled_key,
-    egui_key, ide_edit_key, ide_shortcut, mode_name, source_focus_id,
+    IdeAction, IdeEdit, IdeEditKeyInput, command_prompt, ctrl_h_is_motion, ctrl_v_is_block,
+    echo_of_handled_key, egui_key, ide_edit_key, ide_shortcut, mode_name, source_focus_id,
 };
 use super::render::{ShowSourceInput, SourceOptions, show_source};
 use super::{char_display_width, col_at_display_x, display_x};
@@ -990,19 +990,39 @@ mod tests {
         let ctrl = egui::Modifiers::CTRL;
         // macOS: Option moves by word, Command by line edge.
         assert_eq!(
-            ide_edit_key(egui::Key::ArrowLeft, egui::Modifiers::ALT, true, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::ArrowLeft,
+                modifiers: egui::Modifiers::ALT,
+                mac: true,
+                page_rows: 30
+            }),
             Some(IdeEdit::Move(IdeMotion::WordLeft, false))
         );
         assert_eq!(
-            ide_edit_key(egui::Key::ArrowRight, mac_cmd, true, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::ArrowRight,
+                modifiers: mac_cmd,
+                mac: true,
+                page_rows: 30
+            }),
             Some(IdeEdit::Move(IdeMotion::LineEnd, false))
         );
         assert_eq!(
-            ide_edit_key(egui::Key::D, mac_cmd, true, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::D,
+                modifiers: mac_cmd,
+                mac: true,
+                page_rows: 30
+            }),
             Some(IdeEdit::Duplicate)
         );
         assert_eq!(
-            ide_edit_key(egui::Key::Backspace, mac_cmd, true, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::Backspace,
+                modifiers: mac_cmd,
+                mac: true,
+                page_rows: 30
+            }),
             Some(IdeEdit::DeleteLines)
         );
         // Linux/Windows: Ctrl moves by word, Ctrl+Y deletes the line.
@@ -1011,28 +1031,58 @@ mod tests {
             ..ctrl
         };
         assert_eq!(
-            ide_edit_key(egui::Key::ArrowLeft, linux_ctrl, false, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::ArrowLeft,
+                modifiers: linux_ctrl,
+                mac: false,
+                page_rows: 30
+            }),
             Some(IdeEdit::Move(IdeMotion::WordLeft, false))
         );
         assert_eq!(
-            ide_edit_key(egui::Key::Y, linux_ctrl, false, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::Y,
+                modifiers: linux_ctrl,
+                mac: false,
+                page_rows: 30
+            }),
             Some(IdeEdit::DeleteLines)
         );
         // Shared: Shift selects, Alt+Shift moves lines, paging uses rows.
         assert_eq!(
-            ide_edit_key(egui::Key::End, egui::Modifiers::SHIFT, false, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::End,
+                modifiers: egui::Modifiers::SHIFT,
+                mac: false,
+                page_rows: 30
+            }),
             Some(IdeEdit::Move(IdeMotion::LineEnd, true))
         );
         assert_eq!(
-            ide_edit_key(egui::Key::ArrowUp, alt_shift, true, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::ArrowUp,
+                modifiers: alt_shift,
+                mac: true,
+                page_rows: 30
+            }),
             Some(IdeEdit::MoveLines { up: true })
         );
         assert_eq!(
-            ide_edit_key(egui::Key::PageDown, egui::Modifiers::NONE, true, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::PageDown,
+                modifiers: egui::Modifiers::NONE,
+                mac: true,
+                page_rows: 30
+            }),
             Some(IdeEdit::Move(IdeMotion::PageDown(30), false))
         );
         assert_eq!(
-            ide_edit_key(egui::Key::A, egui::Modifiers::NONE, true, 30),
+            ide_edit_key(IdeEditKeyInput {
+                key: egui::Key::A,
+                modifiers: egui::Modifiers::NONE,
+                mac: true,
+                page_rows: 30
+            }),
             None
         );
     }

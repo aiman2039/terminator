@@ -291,12 +291,12 @@ pub fn consume(ctx: &egui::Context, value: &str) -> bool {
 /// does not split the pane). The editor wins, as in `IntelliJ`.
 pub fn editor_owns(value: &str) -> bool {
     parse(value).is_some_and(|chord| {
-        terminator_native_edit::view::ide_edit_key(
-            chord.key,
-            chord.modifiers,
-            cfg!(target_os = "macos"),
-            1,
-        )
+        terminator_native_edit::view::ide_edit_key(terminator_native_edit::view::IdeEditKeyInput {
+            key: chord.key,
+            modifiers: chord.modifiers,
+            mac: cfg!(target_os = "macos"),
+            page_rows: 1,
+        })
         .is_some()
             || terminator_native_edit::view::ide_shortcut(chord.key, chord.modifiers).is_some()
     })
