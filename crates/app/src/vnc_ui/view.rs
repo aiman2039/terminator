@@ -209,7 +209,7 @@ impl App {
         .show(ui)
     }
 
-    fn vnc_status_color(&self, status: VncSessionStatus) -> egui::Color32 {
+    pub(super) fn vnc_status_color(&self, status: VncSessionStatus) -> egui::Color32 {
         match status {
             VncSessionStatus::Connected => appearance::color(&self.theme.status_running),
             VncSessionStatus::Connecting => appearance::color(&self.theme.status_waiting),
