@@ -25,53 +25,8 @@ impl App {
         target: editor_close::Target,
         sessions: Vec<String>,
     ) -> bool {
-        // A mixed-owner batch needs a distributed preflight; preserve the normal
-        // confirmation flow instead of partially closing across owners.
-        let owners: std::collections::BTreeSet<_> = sessions
-            .iter()
-            .filter_map(|id| {
-                self.state
-                    .sessions
-                    .iter()
-                    .find(|s| &s.id == id)
-                    .map(|s| s.generation.clone())
-            })
-            .collect();
-        if sessions.iter().any(|id| {
-            self.state
-                .sessions
-                .iter()
-                .find(|session| &session.id == id)
-                .is_some_and(|session| {
-                    !daemon_connection::session_owner_available(&self.state, session)
-                })
-        }) {
-            return false;
-        }
-        if !self.state.generations.is_empty()
-            && (owners.len() != 1
-                || !self.state.generations.iter().any(|g| {
-                    owners.contains(&g.owner.id)
-                        && g.capabilities
-                            .iter()
-                            .any(|c| c == terminator_core::idle_close::CAPABILITY)
-                }))
-        {
-            return false;
-        }
-        if !self
-            .state
-            .capabilities
-            .iter()
-            .any(|c| c == terminator_core::idle_close::CAPABILITY)
-            || sessions.iter().any(|id| {
-                self.state
-                    .sessions
-                    .iter()
-                    .find(|s| &s.id == id)
-                    .is_none_or(|s| s.kind != SessionKind::Shell)
-            })
-        {
+        let owners = self.session_owners(&sessions);
+        if !self.idle_close_supported(&sessions, &owners) {
             return false;
         }
         if self.idle_close_fallback.as_ref() == Some(&target) {
@@ -101,6 +56,63 @@ impl App {
             return false;
         }
         true
+    }
+
+    fn session_owners(&self, sessions: &[String]) -> std::collections::BTreeSet<String> {
+        sessions
+            .iter()
+            .filter_map(|id| {
+                self.state
+                    .sessions
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .map(|s| s.generation.clone())
+            })
+            .collect()
+    }
+
+    /// Daemon idle close applies only to live-owner shell sessions of one
+    /// owner that advertises it. A mixed-owner batch needs a distributed
+    /// preflight, so it keeps the normal confirmation flow instead of
+    /// partially closing across owners.
+    fn idle_close_supported(
+        &self,
+        sessions: &[String],
+        owners: &std::collections::BTreeSet<String>,
+    ) -> bool {
+        if sessions.iter().any(|id| {
+            self.state
+                .sessions
+                .iter()
+                .find(|session| &session.id == id)
+                .is_some_and(|session| {
+                    !daemon_connection::session_owner_available(&self.state, session)
+                })
+        }) {
+            return false;
+        }
+        if !self.state.generations.is_empty()
+            && (owners.len() != 1
+                || !self.state.generations.iter().any(|g| {
+                    owners.contains(&g.owner.id)
+                        && g.capabilities
+                            .iter()
+                            .any(|c| c == terminator_core::idle_close::CAPABILITY)
+                }))
+        {
+            return false;
+        }
+        self.state
+            .capabilities
+            .iter()
+            .any(|c| c == terminator_core::idle_close::CAPABILITY)
+            && !sessions.iter().any(|id| {
+                self.state
+                    .sessions
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .is_none_or(|s| s.kind != SessionKind::Shell)
+            })
     }
 
     pub(crate) fn idle_closed(
