@@ -4,7 +4,7 @@ mod document;
 
 use crate::gui_services::Services;
 use anyhow::{Context, Result, bail, ensure};
-pub use context::context;
+pub use context::{ContextInput, context};
 pub use document::{DocumentInput, document};
 use serde_json::Value;
 use std::{
@@ -74,7 +74,20 @@ fn field<'a>(record: &'a Value, key: &str) -> &'a str {
     record.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
-async fn run(service: &Services, cwd: &Path, args: &[String], json: bool) -> Result<Vec<u8>> {
+struct RunInput<'a> {
+    service: &'a Services,
+    cwd: &'a Path,
+    args: &'a [String],
+    json: bool,
+}
+
+async fn run(input: RunInput<'_>) -> Result<Vec<u8>> {
+    let RunInput {
+        service,
+        cwd,
+        args,
+        json,
+    } = input;
     let mut command = Command::new("p4");
     command.current_dir(cwd).arg("-d").arg(cwd);
     if json {
@@ -123,19 +136,27 @@ async fn run(service: &Services, cwd: &Path, args: &[String], json: bool) -> Res
     Ok(output.stdout)
 }
 
-async fn query(
-    service: &Services,
-    cwd: &Path,
-    args: &[&str],
+struct QueryInput<'a> {
+    service: &'a Services,
+    cwd: &'a Path,
+    args: &'a [&'a str],
     allow_empty: bool,
-) -> Result<Vec<Value>> {
+}
+
+async fn query(input: QueryInput<'_>) -> Result<Vec<Value>> {
+    let QueryInput {
+        service,
+        cwd,
+        args,
+        allow_empty,
+    } = input;
     records(
-        &run(
+        &run(RunInput {
             service,
             cwd,
-            &args.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            true,
-        )
+            args: &args.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            json: true,
+        })
         .await?,
         allow_empty,
     )
@@ -221,12 +242,20 @@ pub fn parse_files(root: &Path, opened: &[Value], offline: &[Value]) -> Vec<File
     files.into_values().collect()
 }
 
-pub async fn perform(
-    service: &Services,
-    cwd: &Path,
-    op: Op,
-    cancel: &CancellationToken,
-) -> Result<crate::workspace_ops::Report> {
+pub struct PerformInput<'a> {
+    pub service: &'a Services,
+    pub cwd: &'a Path,
+    pub op: Op,
+    pub cancel: &'a CancellationToken,
+}
+
+pub async fn perform(input: PerformInput<'_>) -> Result<crate::workspace_ops::Report> {
+    let PerformInput {
+        service,
+        cwd,
+        op,
+        cancel,
+    } = input;
     let verb = match &op {
         Op::Edit(_) => "edit",
         Op::Reconcile(_) => "reconcile",
@@ -260,9 +289,14 @@ pub async fn perform(
             ]
         }
     };
-    let raw = run(service, cwd, &args, true)
-        .await
-        .context("Perforce action failed; check the workspace before retrying")?;
+    let raw = run(RunInput {
+        service,
+        cwd,
+        args: &args,
+        json: true,
+    })
+    .await
+    .context("Perforce action failed; check the workspace before retrying")?;
     let result = records(&raw, verb == "sync")?;
     let messages: Vec<_> = result
         .iter()

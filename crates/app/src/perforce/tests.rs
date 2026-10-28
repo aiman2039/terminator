@@ -100,14 +100,25 @@ impl P4Fixture {
     }
 
     async fn perform(&self, cwd: &Path, op: Op) -> Result<crate::workspace_ops::Report> {
-        perform(&self.service, cwd, op, &self.cancel).await
+        perform(PerformInput {
+            service: &self.service,
+            cwd,
+            op,
+            cancel: &self.cancel,
+        })
+        .await
     }
 
     /// Runs a raw p4 command from the client root; it must succeed.
     async fn p4(&self, args: &[String]) {
-        run(&self.service, &self.command_root, args, true)
-            .await
-            .unwrap();
+        run(RunInput {
+            service: &self.service,
+            cwd: &self.command_root,
+            args,
+            json: true,
+        })
+        .await
+        .unwrap();
     }
 
     fn spec(&self, name: &str) -> String {
@@ -186,12 +197,12 @@ impl P4Fixture {
             "{}",
             String::from_utf8_lossy(&output.stdout)
         );
-        let changes = query(
-            &self.service,
-            &self.command_root,
-            &["changes", "-s", "pending", "-c", "terminator-fixture"],
-            false,
-        )
+        let changes = query(QueryInput {
+            service: &self.service,
+            cwd: &self.command_root,
+            args: &["changes", "-s", "pending", "-c", "terminator-fixture"],
+            allow_empty: false,
+        })
         .await
         .unwrap();
         field(changes.first().unwrap(), "change").to_string()
@@ -221,12 +232,12 @@ impl P4Fixture {
     async fn assert_unreviewable_paths_fail(&self) {
         // A failed raw print must not become an empty left-hand snapshot.
         assert!(
-            run(
-                &self.service,
-                &self.command_root,
-                &["print".into(), "-q".into(), "//depot/missing.txt#1".into()],
-                false,
-            )
+            run(RunInput {
+                service: &self.service,
+                cwd: &self.command_root,
+                args: &["print".into(), "-q".into(), "//depot/missing.txt#1".into()],
+                json: false
+            })
             .await
             .is_err()
         );

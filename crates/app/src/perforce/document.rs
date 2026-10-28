@@ -1,5 +1,5 @@
 //! Native diff document for one Perforce file: have revision vs workspace.
-use super::{field, filespec, local_path, number, query, run};
+use super::{QueryInput, RunInput, field, filespec, local_path, number, query, run};
 use crate::gui_services::Services;
 use anyhow::{Result, ensure};
 use serde_json::Value;
@@ -30,19 +30,31 @@ pub async fn document(input: DocumentInput<'_>) -> Result<crate::diff::DiffDocum
         context,
         cancel,
     } = input;
-    let located = locate(service, &cwd, path, cancel).await?;
-    ensure_mapped(service, &cwd, &located, cancel).await?;
-    let files = query(
+    let located = locate(LocateInput {
         service,
-        &cwd,
-        &[
+        cwd: &cwd,
+        path,
+        cancel,
+    })
+    .await?;
+    ensure_mapped(EnsureMappedInput {
+        service,
+        cwd: &cwd,
+        located: &located,
+        cancel,
+    })
+    .await?;
+    let files = query(QueryInput {
+        service,
+        cwd: &cwd,
+        args: &[
             "fstat",
             "-T",
             "clientFile,depotFile,haveRev,action",
             &located.spec,
         ],
-        true,
-    )
+        allow_empty: true,
+    })
     .await?;
     let record = files
         .iter()
@@ -88,12 +100,20 @@ pub async fn document(input: DocumentInput<'_>) -> Result<crate::diff::DiffDocum
         .await
 }
 
-async fn locate(
-    service: &Services,
-    cwd: &Path,
+struct LocateInput<'a> {
+    service: &'a Services,
+    cwd: &'a Path,
     path: PathBuf,
-    cancel: &CancellationToken,
-) -> Result<Located> {
+    cancel: &'a CancellationToken,
+}
+
+async fn locate(input: LocateInput<'_>) -> Result<Located> {
+    let LocateInput {
+        service,
+        cwd,
+        path,
+        cancel,
+    } = input;
     let root = cwd.to_owned();
     service
         .fs()
@@ -110,15 +130,29 @@ async fn locate(
         .await
 }
 
+struct EnsureMappedInput<'a> {
+    service: &'a Services,
+    cwd: &'a Path,
+    located: &'a Located,
+    cancel: &'a CancellationToken,
+}
+
 /// fstat reports EV_EMPTY for both new files and paths outside the client
 /// view. Verify the mapping before treating an empty result as an addition.
-async fn ensure_mapped(
-    service: &Services,
-    cwd: &Path,
-    located: &Located,
-    cancel: &CancellationToken,
-) -> Result<()> {
-    let mappings = query(service, cwd, &["where", &located.spec], false).await?;
+async fn ensure_mapped(input: EnsureMappedInput<'_>) -> Result<()> {
+    let EnsureMappedInput {
+        service,
+        cwd,
+        located,
+        cancel,
+    } = input;
+    let mappings = query(QueryInput {
+        service,
+        cwd,
+        args: &["where", &located.spec],
+        allow_empty: false,
+    })
+    .await?;
     let canonical = located.canonical.clone();
     let expected = canonical.join(&located.relative);
     service
@@ -145,15 +179,15 @@ async fn have_revision(service: &Services, cwd: &Path, record: Option<&Value>) -
         return Ok(Vec::new());
     };
     let depot = field(record, "depotFile");
-    run(
+    run(RunInput {
         service,
         cwd,
-        &[
+        args: &[
             "print".into(),
             "-q".into(),
             format!("{depot}#{}", number(record, "haveRev")),
         ],
-        false,
-    )
+        json: false,
+    })
     .await
 }

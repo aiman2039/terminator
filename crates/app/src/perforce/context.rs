@@ -1,21 +1,36 @@
 //! Perforce workspace context: client root, opened files and changelists.
-use super::{File, Workspace, field, filespec, parse_files, query};
+use super::{File, QueryInput, Workspace, field, filespec, parse_files, query};
 use crate::{gui_services::Services, services::ContextData};
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use terminator_core::async_service::CancellationToken;
 
-pub async fn context(
-    service: &Services,
-    result: &mut ContextData,
-    include_status: bool,
-    cancel: &CancellationToken,
-) {
+pub struct ContextInput<'a> {
+    pub service: &'a Services,
+    pub result: &'a mut ContextData,
+    pub include_status: bool,
+    pub cancel: &'a CancellationToken,
+}
+
+pub async fn context(input: ContextInput<'_>) {
+    let ContextInput {
+        service,
+        result,
+        include_status,
+        cancel,
+    } = input;
     let Some(info) = client_info(service, result).await else {
         return;
     };
-    let Some((root, command_root)) = client_root(service, &result.cwd, &info, cancel).await else {
+    let Some((root, command_root)) = client_root(ClientRootInput {
+        service,
+        cwd: &result.cwd,
+        info: &info,
+        cancel,
+    })
+    .await
+    else {
         return;
     };
     let client = field(&info, "clientName").to_string();
@@ -32,7 +47,13 @@ pub async fn context(
     if !include_status {
         return;
     }
-    let status = workspace_files(service, &command_root, &root, cancel).await;
+    let status = workspace_files(WorkspaceFilesInput {
+        service,
+        command_root: &command_root,
+        root: &root,
+        cancel,
+    })
+    .await;
     if let Some(workspace) = &mut result.perforce
         && let Err(error) = load_changelists(service, &result.cwd, workspace).await
     {
@@ -44,7 +65,14 @@ pub async fn context(
 /// The `p4 info` record that names a client root. Errors surface only when
 /// the environment configures Perforce.
 async fn client_info(service: &Services, result: &mut ContextData) -> Option<Value> {
-    let info = match query(service, &result.cwd, &["info"], false).await {
+    let info = match query(QueryInput {
+        service,
+        cwd: &result.cwd,
+        args: &["info"],
+        allow_empty: false,
+    })
+    .await
+    {
         Ok(info) => info,
         Err(error) => {
             if ["P4PORT", "P4CLIENT", "P4CONFIG"]
@@ -60,14 +88,22 @@ async fn client_info(service: &Services, result: &mut ContextData) -> Option<Val
         .find(|record| !field(record, "clientRoot").is_empty())
 }
 
+struct ClientRootInput<'a> {
+    service: &'a Services,
+    cwd: &'a Path,
+    info: &'a Value,
+    cancel: &'a CancellationToken,
+}
+
 /// The canonical folder and the same folder under the client root as
 /// Perforce spells it, or `None` outside the workspace.
-async fn client_root(
-    service: &Services,
-    cwd: &Path,
-    info: &Value,
-    cancel: &CancellationToken,
-) -> Option<(PathBuf, PathBuf)> {
+async fn client_root(input: ClientRootInput<'_>) -> Option<(PathBuf, PathBuf)> {
+    let ClientRootInput {
+        service,
+        cwd,
+        info,
+        cancel,
+    } = input;
     let root = PathBuf::from(field(info, "clientRoot"));
     let cwd = cwd.to_owned();
     service
@@ -85,26 +121,34 @@ async fn client_root(
         .ok()
 }
 
-async fn workspace_files(
-    service: &Services,
-    command_root: &Path,
-    root: &Path,
-    cancel: &CancellationToken,
-) -> Result<Vec<File>> {
+struct WorkspaceFilesInput<'a> {
+    service: &'a Services,
+    command_root: &'a Path,
+    root: &'a Path,
+    cancel: &'a CancellationToken,
+}
+
+async fn workspace_files(input: WorkspaceFilesInput<'_>) -> Result<Vec<File>> {
+    let WorkspaceFilesInput {
+        service,
+        command_root,
+        root,
+        cancel,
+    } = input;
     let scope = format!("{}/...", filespec(command_root)?);
-    let opened = query(
+    let opened = query(QueryInput {
         service,
-        command_root,
-        &["fstat", "-Ro", "-T", "clientFile,action,change", &scope],
-        true,
-    )
+        cwd: command_root,
+        args: &["fstat", "-Ro", "-T", "clientFile,action,change", &scope],
+        allow_empty: true,
+    })
     .await?;
-    let offline = query(
+    let offline = query(QueryInput {
         service,
-        command_root,
-        &["reconcile", "-n", "-l", &scope],
-        true,
-    )
+        cwd: command_root,
+        args: &["reconcile", "-n", "-l", &scope],
+        allow_empty: true,
+    })
     .await?;
     let root = root.to_owned();
     service
@@ -126,12 +170,12 @@ async fn load_changelists(
         ("pending", &mut workspace.pending),
         ("submitted", &mut workspace.history),
     ] {
-        match query(
+        match query(QueryInput {
             service,
             cwd,
-            &["changes", "-m", "30", "-s", state, "-c", &workspace.client],
-            true,
-        )
+            args: &["changes", "-m", "30", "-s", state, "-c", &workspace.client],
+            allow_empty: true,
+        })
         .await
         {
             Ok(records) => {

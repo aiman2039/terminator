@@ -126,7 +126,13 @@ impl Services {
         let reply = op.clone();
         let result = match op {
             workspace_ops::Op::Perforce(op) => {
-                crate::perforce::perform(self, &root, op, &cancel).await
+                crate::perforce::perform(crate::perforce::PerformInput {
+                    service: self,
+                    cwd: &root,
+                    op,
+                    cancel: &cancel,
+                })
+                .await
             }
             op => {
                 self.fs()

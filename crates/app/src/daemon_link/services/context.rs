@@ -32,7 +32,13 @@ pub async fn context_async(input: ContextAsyncInput<'_>) -> ContextData {
     };
     let git = GitRunner { service };
     let Ok(bytes) = git.run(&cwd, &["rev-parse", "--show-toplevel"]).await else {
-        crate::perforce::context(service, &mut result, include_stats, cancel).await;
+        crate::perforce::context(crate::perforce::ContextInput {
+            service,
+            result: &mut result,
+            include_status: include_stats,
+            cancel,
+        })
+        .await;
         return result;
     };
     let root = PathBuf::from(String::from_utf8_lossy(&bytes).trim());
