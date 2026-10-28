@@ -70,27 +70,7 @@ pub(crate) fn build_presentation(view: &SessionView<'_>, now: u64) -> AgentPrese
     // terminal is a plain shell again. Hook history stays for the inbox,
     // but terminal chrome must not keep the brand or lifecycle status.
     let plain_shell = verified && detected.is_empty();
-    let (brand_icon, brand_label) = if !detected.is_empty() {
-        match agents::preferred_agent(&detected) {
-            Some(agent) => (
-                Some(agents::icon_key(&agent.kind)),
-                Some(agents::display_name(&agent.kind).to_string()),
-            ),
-            None => (
-                Some(agents::MULTIPLE_ICON),
-                Some(format!("{} agents", detected.len())),
-            ),
-        }
-    } else if let Some(hook) = hook
-        && !plain_shell
-    {
-        (
-            Some(agents::icon_key(&hook.kind)),
-            Some(agents::display_name(&hook.kind).to_string()),
-        )
-    } else {
-        (None, None)
-    };
+    let (brand_icon, brand_label) = brand(&detected, hook.filter(|_| !plain_shell));
     let lifecycle = if plain_shell {
         None
     } else {
@@ -101,12 +81,7 @@ pub(crate) fn build_presentation(view: &SessionView<'_>, now: u64) -> AgentPrese
         _ => "Status unavailable".to_string(),
     };
     let status_icon = attention_status_icon(lifecycle.unwrap_or(AgentState::Unknown));
-    let hook_linked = match (hook, hook.and_then(|agent| agent.process.as_ref())) {
-        (Some(current), Some(identity)) => detected
-            .iter()
-            .any(|agent| agent.kind == current.kind && agent.process == *identity),
-        _ => false,
-    };
+    let hook_linked = hook_linked(hook, &detected);
     AgentPresentation {
         brand_icon,
         brand_label,
@@ -128,6 +103,42 @@ pub(crate) fn build_presentation(view: &SessionView<'_>, now: u64) -> AgentPrese
             support,
             hook_linked,
         }),
+    }
+}
+
+/// Brand from live detection, else from the hook agent.
+fn brand(
+    detected: &[agents::DetectedAgent],
+    hook: Option<&terminator_core::Agent>,
+) -> (Option<&'static str>, Option<String>) {
+    if !detected.is_empty() {
+        return match agents::preferred_agent(detected) {
+            Some(agent) => (
+                Some(agents::icon_key(&agent.kind)),
+                Some(agents::display_name(&agent.kind).to_string()),
+            ),
+            None => (
+                Some(agents::MULTIPLE_ICON),
+                Some(format!("{} agents", detected.len())),
+            ),
+        };
+    }
+    match hook {
+        Some(hook) => (
+            Some(agents::icon_key(&hook.kind)),
+            Some(agents::display_name(&hook.kind).to_string()),
+        ),
+        None => (None, None),
+    }
+}
+
+/// Whether the hook agent's process is one of the detected live agents.
+fn hook_linked(hook: Option<&terminator_core::Agent>, detected: &[agents::DetectedAgent]) -> bool {
+    match (hook, hook.and_then(|agent| agent.process.as_ref())) {
+        (Some(current), Some(identity)) => detected
+            .iter()
+            .any(|agent| agent.kind == current.kind && agent.process == *identity),
+        _ => false,
     }
 }
 
@@ -176,48 +187,13 @@ pub(super) fn diagnostics_text(input: DiagnosticsTextInput<'_>) -> String {
         now,
     } = input;
     let mut lines = Vec::new();
-    if !session.lifecycle.live() {
-        lines.push("Session ended".into());
+    lines.push(if !session.lifecycle.live() {
+        "Session ended".into()
     } else if detected.is_empty() {
-        if verified {
-            lines.push(format!(
-                "No live agent detected (verified {})",
-                ago(presence.map(|p| p.observed_at).unwrap_or(now), now)
-            ));
-        } else if !support.available {
-            lines.push("Presence unverified: session owner unavailable".into());
-        } else if !support.supported {
-            lines.push("Presence unverified: unsupported daemon".into());
-        } else if presence.is_some_and(|p| p.outcome == PresenceOutcome::Unavailable) {
-            lines.push("Presence unverified: detection unavailable".into());
-        } else if let Some(observed) = presence.map(|p| p.observed_at) {
-            lines.push(format!(
-                "Presence unverified: stale observation ({})",
-                ago(observed, now)
-            ));
-        } else {
-            lines.push("Presence unverified: no observation yet".into());
-        }
+        absent_agent_line(presence, support, verified, now)
     } else {
-        let names: Vec<_> = detected
-            .iter()
-            .map(|a| agents::display_name(&a.kind))
-            .collect();
-        let age = ago(presence.map(|p| p.observed_at).unwrap_or(now), now);
-        if detected.len() == 1
-            && agents::preferred_agent(detected).is_some()
-            && let (Some(agent), Some(name)) = (detected.first(), names.first())
-        {
-            let how = if agent.foreground {
-                "foreground"
-            } else {
-                "only agent"
-            };
-            lines.push(format!("{name} live (verified {age}; {how})"));
-        } else {
-            lines.push(format!("{} live (verified {age})", names.join(", ")));
-        }
-    }
+        live_agents_line(detected, presence, now)
+    });
     lines.push(if detected.is_empty() {
         match hook {
             Some(_) if !verified => "Identity source: hook event".into(),
@@ -226,8 +202,71 @@ pub(super) fn diagnostics_text(input: DiagnosticsTextInput<'_>) -> String {
     } else {
         "Identity source: process inspection".into()
     });
+    lines.push(hook_line(hook, hook_linked, now));
+    lines.push(format!("Status: {status_label}"));
+    if unread > 0 {
+        lines.push(format!("Unread: {unread}"));
+    }
+    lines.push(crate::remote_ui::location_label(session));
+    lines.join("\n")
+}
+
+/// Why no live agent is shown for a live session.
+fn absent_agent_line(
+    presence: Option<&agents::TerminalPresence>,
+    support: OwnerSupport,
+    verified: bool,
+    now: u64,
+) -> String {
+    if verified {
+        format!(
+            "No live agent detected (verified {})",
+            ago(presence.map(|p| p.observed_at).unwrap_or(now), now)
+        )
+    } else if !support.available {
+        "Presence unverified: session owner unavailable".into()
+    } else if !support.supported {
+        "Presence unverified: unsupported daemon".into()
+    } else if presence.is_some_and(|p| p.outcome == PresenceOutcome::Unavailable) {
+        "Presence unverified: detection unavailable".into()
+    } else if let Some(observed) = presence.map(|p| p.observed_at) {
+        format!(
+            "Presence unverified: stale observation ({})",
+            ago(observed, now)
+        )
+    } else {
+        "Presence unverified: no observation yet".into()
+    }
+}
+
+fn live_agents_line(
+    detected: &[agents::DetectedAgent],
+    presence: Option<&agents::TerminalPresence>,
+    now: u64,
+) -> String {
+    let names: Vec<_> = detected
+        .iter()
+        .map(|a| agents::display_name(&a.kind))
+        .collect();
+    let age = ago(presence.map(|p| p.observed_at).unwrap_or(now), now);
+    if detected.len() == 1
+        && agents::preferred_agent(detected).is_some()
+        && let (Some(agent), Some(name)) = (detected.first(), names.first())
+    {
+        let how = if agent.foreground {
+            "foreground"
+        } else {
+            "only agent"
+        };
+        format!("{name} live (verified {age}; {how})")
+    } else {
+        format!("{} live (verified {age})", names.join(", "))
+    }
+}
+
+fn hook_line(hook: Option<&terminator_core::Agent>, hook_linked: bool, now: u64) -> String {
     match hook {
-        Some(h) => lines.push(format!(
+        Some(h) => format!(
             "Hook ({}): {} · {} · {}",
             agents::display_name(&h.kind),
             h.state.label(),
@@ -237,15 +276,9 @@ pub(super) fn diagnostics_text(input: DiagnosticsTextInput<'_>) -> String {
                 "last reported"
             },
             ago(h.updated, now),
-        )),
-        None => lines.push("Hook: none reported".into()),
+        ),
+        None => "Hook: none reported".into(),
     }
-    lines.push(format!("Status: {status_label}"));
-    if unread > 0 {
-        lines.push(format!("Unread: {unread}"));
-    }
-    lines.push(crate::remote_ui::location_label(session));
-    lines.join("\n")
 }
 
 /// Sessions with verified live agents, for the All-live view.
