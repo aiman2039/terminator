@@ -1,4 +1,6 @@
-use super::attention::{AttentionCard, attention_badge_label, attention_card, state_color};
+use super::attention::{
+    AttentionCard, NoticeGroup, attention_badge_label, attention_card, state_color,
+};
 use super::explorer_rows::{cached_variable_card, paint_header_count, skip_clipped_row};
 #[cfg(feature = "test-support")]
 use crate::diagnostics;
@@ -9,6 +11,13 @@ use crate::{
 };
 use eframe::egui::{self};
 use terminator_core::{Request, Session, TERMINAL_NOTICES_CAPABILITY, now};
+
+/// How one notice group card is drawn.
+struct NoticeCardInput<'a> {
+    session: Option<&'a Session>,
+    highlight: bool,
+    show_read: bool,
+}
 
 impl App {
     /// Expanded playback controls stay at the top of the project sidebar.
@@ -121,86 +130,130 @@ impl App {
                 let Some(notice) = group.notices.first() else {
                     continue;
                 };
-                let session = index.sessions.get(&notice.session_id);
                 let highlight = group
                     .notices
                     .iter()
                     .any(|n| self.detail.as_ref() == Some(&n.id));
-                let selected = self.active_session.as_ref() == Some(&notice.session_id);
-                let presented = self.present_session(&notice.session_id);
-                let history = self.notice_history_brand(notice);
-                let brand_icon = history
-                    .as_ref()
-                    .map(|(icon, _)| *icon)
-                    .or(presented.brand_icon);
-                let history_label = history.map(|(_, label)| label);
-                let brand_label = history_label
-                    .as_deref()
-                    .or(presented.brand_label.as_deref());
-                let action = attention_card(
+                self.notice_group_card(
                     ui,
-                    AttentionCard {
-                        theme: &self.theme,
-                        notice,
-                        session: session.map(std::convert::AsRef::as_ref),
-                        selected,
+                    group,
+                    NoticeCardInput {
+                        session: index
+                            .sessions
+                            .get(&notice.session_id)
+                            .map(std::convert::AsRef::as_ref),
                         highlight,
-                        brand_icon,
-                        brand_label,
                         show_read: false,
-                        group_extra: group.notices.get(1..).unwrap_or(&[]),
                     },
                 );
-                self.apply_group_action(group, action);
             }
             for notice in terminal_notices {
                 let Some(layout_key) = index.terminal_layout_keys.get(&notice.id).copied() else {
                     continue;
                 };
-                let row = cached_variable_card(ui, layout_key, |ui| {
-                    ui.group(|ui| {
-                        ui.label(if notice.title.is_empty() {
-                            "Terminal"
-                        } else {
-                            &notice.title
-                        });
-                        ui.label(&notice.body);
-                        ui.horizontal(|ui| {
-                            let go = ui.button("Go to terminal");
-                            #[cfg(feature = "test-support")]
-                            diagnostics::record(
-                                ui.ctx(),
-                                &format!("terminal-go:{}", notice.session_id),
-                                go.rect,
-                            );
-                            if go.clicked() {
-                                self.go_session(&notice.session_id);
-                            }
-                            if self
-                                .state
-                                .capabilities
-                                .iter()
-                                .any(|c| c == TERMINAL_NOTICES_CAPABILITY)
-                                && ui.button("Dismiss").clicked()
-                            {
-                                self.send(Request::DismissTerminalNotice {
-                                    id: notice.id.clone(),
-                                });
-                            }
-                        });
-                    })
-                    .response
-                    .rect
+                self.terminal_notice_card(ui, notice, layout_key);
+            }
+        });
+    }
+
+    /// One notice group as an attention card; applies the card's action.
+    fn notice_group_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        group: &NoticeGroup,
+        input: NoticeCardInput<'_>,
+    ) {
+        let NoticeCardInput {
+            session,
+            highlight,
+            show_read,
+        } = input;
+        let Some(notice) = group.notices.first() else {
+            return;
+        };
+        let selected = self.active_session.as_ref() == Some(&notice.session_id);
+        let presented = self.present_session(&notice.session_id);
+        let history = self.notice_history_brand(notice);
+        let brand_icon = history
+            .as_ref()
+            .map(|(icon, _)| *icon)
+            .or(presented.brand_icon);
+        let history_label = history.map(|(_, label)| label);
+        let brand_label = history_label
+            .as_deref()
+            .or(presented.brand_label.as_deref());
+        let action = attention_card(
+            ui,
+            AttentionCard {
+                theme: &self.theme,
+                notice,
+                session,
+                selected,
+                highlight,
+                brand_icon,
+                brand_label,
+                show_read,
+                group_extra: group.notices.get(1..).unwrap_or(&[]),
+            },
+        );
+        self.apply_group_action(group, action);
+    }
+
+    /// A terminal notice card with Go to terminal and Dismiss.
+    fn terminal_notice_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        notice: &terminator_core::TerminalNotice,
+        layout_key: u64,
+    ) {
+        let row = cached_variable_card(ui, layout_key, |ui| {
+            ui.group(|ui| self.terminal_notice_body(ui, notice))
+                .response
+                .rect
+        });
+        #[cfg(feature = "test-support")]
+        if let Some(rect) = row {
+            diagnostics::record(
+                ui.ctx(),
+                &format!("terminal-row:{}", notice.session_id),
+                rect,
+            );
+        }
+        let _ = row;
+    }
+
+    fn terminal_notice_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        notice: &terminator_core::TerminalNotice,
+    ) {
+        ui.label(if notice.title.is_empty() {
+            "Terminal"
+        } else {
+            &notice.title
+        });
+        ui.label(&notice.body);
+        ui.horizontal(|ui| {
+            let go = ui.button("Go to terminal");
+            #[cfg(feature = "test-support")]
+            diagnostics::record(
+                ui.ctx(),
+                &format!("terminal-go:{}", notice.session_id),
+                go.rect,
+            );
+            if go.clicked() {
+                self.go_session(&notice.session_id);
+            }
+            if self
+                .state
+                .capabilities
+                .iter()
+                .any(|c| c == TERMINAL_NOTICES_CAPABILITY)
+                && ui.button("Dismiss").clicked()
+            {
+                self.send(Request::DismissTerminalNotice {
+                    id: notice.id.clone(),
                 });
-                #[cfg(feature = "test-support")]
-                if let Some(rect) = row {
-                    diagnostics::record(
-                        ui.ctx(),
-                        &format!("terminal-row:{}", notice.session_id),
-                        rect,
-                    );
-                }
-                let _ = row;
             }
         });
     }
@@ -219,37 +272,22 @@ impl App {
                 let Some(notice) = group.notices.first() else {
                     continue;
                 };
-                let session = index.sessions.get(&notice.session_id);
                 let highlight = group.notices.iter().any(|n| {
                     self.detail.as_ref() == Some(&n.id)
                         || self.unread_selected.as_deref() == Some(n.id.as_str())
                 });
-                let selected = self.active_session.as_ref() == Some(&notice.session_id);
-                let presented = self.present_session(&notice.session_id);
-                let history = self.notice_history_brand(notice);
-                let brand_icon = history
-                    .as_ref()
-                    .map(|(icon, _)| *icon)
-                    .or(presented.brand_icon);
-                let history_label = history.map(|(_, label)| label);
-                let brand_label = history_label
-                    .as_deref()
-                    .or(presented.brand_label.as_deref());
-                let action = attention_card(
+                self.notice_group_card(
                     ui,
-                    AttentionCard {
-                        theme: &self.theme,
-                        notice,
-                        session: session.map(std::convert::AsRef::as_ref),
-                        selected,
+                    group,
+                    NoticeCardInput {
+                        session: index
+                            .sessions
+                            .get(&notice.session_id)
+                            .map(std::convert::AsRef::as_ref),
                         highlight,
-                        brand_icon,
-                        brand_label,
                         show_read: true,
-                        group_extra: group.notices.get(1..).unwrap_or(&[]),
                     },
                 );
-                self.apply_group_action(group, action);
             }
         });
     }
@@ -257,26 +295,7 @@ impl App {
     /// Verified live agents grouped by project/worktree, plus hook-only and
     /// unavailable-owner entries under Presence unverified.
     pub(super) fn agents_all_live(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            let width = (ui.available_width() - 132.0).max(80.0);
-            let response = ui.add_sized(
-                egui::vec2(width, 22.0),
-                appearance::singleline(&mut self.preferences.agents_search)
-                    .id(ui.scope_id().with("agents-search"))
-                    .hint_text("Search agents"),
-            );
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "agents-search", response.rect);
-            #[cfg(not(feature = "test-support"))]
-            let _ = &response;
-            if !self.preferences.agents_search.is_empty()
-                && appearance::sidebar_action(ui, "X", "Clear search").clicked()
-            {
-                self.preferences.agents_search.clear();
-            }
-            self.agents_filter_menu(ui);
-        });
+        ui.horizontal(|ui| self.agents_search_bar(ui));
         let rows = self.cached_live_rows();
         let query_empty = self.preferences.agents_search.trim().is_empty();
         let kind_filter = self.preferences.agents_filter.clone();
@@ -291,72 +310,123 @@ impl App {
                 return;
             }
             for (project, sessions) in &rows.groups {
-                let collapsed = self.preferences.agents_collapsed.contains(&project.id);
-                let header = appearance::row(appearance::RowInput { ui, label: &project.name, icon: if collapsed {
-                        "ChevronRight"
-                    } else {
-                        "ChevronDown"
-                    }, selected: false, height: 26.0, trailing: &sessions.len().to_string(), tint: appearance::color(&self.theme.text) })
-                .on_hover_text(format!(
-                    "{}{}{}",
-                    self.project_location_label(&project.id),
-                    if self.managed_worktree(&project.id).is_some() {
-                        "\nManaged Git worktree"
-                    } else {
-                        ""
-                    },
-                    "\nVerified live agents"
-                ));
-                #[cfg(feature = "test-support")]
-                diagnostics::record(
-                    ui.ctx(),
-                    &format!("live-project:{}", project.id),
-                    header.rect,
-                );
-                if header.clicked() {
-                    if collapsed {
-                        self.preferences.agents_collapsed.remove(&project.id);
-                    } else {
-                        self.preferences.agents_collapsed.insert(project.id.clone());
-                    }
-                }
-                if !collapsed {
-                    ui.indent(("live-project", &project.id), |ui| {
-                        for session in sessions {
-                            self.live_agent_row(ui, session, "live-row");
-                        }
-                    });
-                }
+                self.live_project_group(ui, project, sessions);
                 ui.add_space(4.0);
             }
             if !unverified.is_empty() {
-                let collapsed = self.preferences.agents_collapsed.contains("unverified");
-                let header = appearance::row(appearance::RowInput { ui, label: "Presence unverified", icon: if collapsed {
-                        "ChevronRight"
-                    } else {
-                        "ChevronDown"
-                    }, selected: false, height: 26.0, trailing: &unverified.len().to_string(), tint: appearance::color(&self.theme.status_waiting) })
-                .on_hover_text(
-                    "Hook-only or unavailable-owner sessions.\nLast reported hook state; no verified live process.",
-                );
-                #[cfg(feature = "test-support")]
-                diagnostics::record(ui.ctx(), "live-unverified", header.rect);
-                if header.clicked() {
-                    if collapsed {
-                        self.preferences.agents_collapsed.remove("unverified");
-                    } else {
-                        self.preferences.agents_collapsed.insert("unverified".into());
-                    }
-                }
-                if !collapsed {
-                    ui.indent("live-unverified", |ui| {
-                        for session in unverified {
-                            self.live_agent_row(ui, session, "unverified-row");
-                        }
-                    });
-                }
+                self.live_unverified_group(ui, unverified);
             }
         });
+    }
+
+    fn agents_search_bar(&mut self, ui: &mut egui::Ui) {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let width = (ui.available_width() - 132.0).max(80.0);
+        let response = ui.add_sized(
+            egui::vec2(width, 22.0),
+            appearance::singleline(&mut self.preferences.agents_search)
+                .id(ui.scope_id().with("agents-search"))
+                .hint_text("Search agents"),
+        );
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "agents-search", response.rect);
+        #[cfg(not(feature = "test-support"))]
+        let _ = &response;
+        if !self.preferences.agents_search.is_empty()
+            && appearance::sidebar_action(ui, "X", "Clear search").clicked()
+        {
+            self.preferences.agents_search.clear();
+        }
+        self.agents_filter_menu(ui);
+    }
+
+    /// Flip a collapsed key in the live-agents tree.
+    fn toggle_agents_collapsed(&mut self, key: &str, collapsed: bool) {
+        if collapsed {
+            self.preferences.agents_collapsed.remove(key);
+        } else {
+            self.preferences.agents_collapsed.insert(key.to_owned());
+        }
+    }
+
+    fn live_project_group(
+        &mut self,
+        ui: &mut egui::Ui,
+        project: &terminator_core::Project,
+        sessions: &[std::sync::Arc<Session>],
+    ) {
+        let collapsed = self.preferences.agents_collapsed.contains(&project.id);
+        let header = appearance::row(appearance::RowInput {
+            ui,
+            label: &project.name,
+            icon: if collapsed {
+                "ChevronRight"
+            } else {
+                "ChevronDown"
+            },
+            selected: false,
+            height: 26.0,
+            trailing: &sessions.len().to_string(),
+            tint: appearance::color(&self.theme.text),
+        })
+        .on_hover_text(format!(
+            "{}{}{}",
+            self.project_location_label(&project.id),
+            if self.managed_worktree(&project.id).is_some() {
+                "\nManaged Git worktree"
+            } else {
+                ""
+            },
+            "\nVerified live agents"
+        ));
+        #[cfg(feature = "test-support")]
+        diagnostics::record(
+            ui.ctx(),
+            &format!("live-project:{}", project.id),
+            header.rect,
+        );
+        if header.clicked() {
+            self.toggle_agents_collapsed(&project.id, collapsed);
+        }
+        if !collapsed {
+            ui.indent(("live-project", &project.id), |ui| {
+                for session in sessions {
+                    self.live_agent_row(ui, session, "live-row");
+                }
+            });
+        }
+    }
+
+    fn live_unverified_group(&mut self, ui: &mut egui::Ui, unverified: &[std::sync::Arc<Session>]) {
+        let collapsed = self.preferences.agents_collapsed.contains("unverified");
+        let header = appearance::row(appearance::RowInput {
+            ui,
+            label: "Presence unverified",
+            icon: if collapsed {
+                "ChevronRight"
+            } else {
+                "ChevronDown"
+            },
+            selected: false,
+            height: 26.0,
+            trailing: &unverified.len().to_string(),
+            tint: appearance::color(&self.theme.status_waiting),
+        })
+        .on_hover_text(
+            "Hook-only or unavailable-owner sessions.\nLast reported hook state; no verified live process.",
+        );
+        #[cfg(feature = "test-support")]
+        diagnostics::record(ui.ctx(), "live-unverified", header.rect);
+        if header.clicked() {
+            self.toggle_agents_collapsed("unverified", collapsed);
+        }
+        if !collapsed {
+            ui.indent("live-unverified", |ui| {
+                for session in unverified {
+                    self.live_agent_row(ui, session, "unverified-row");
+                }
+            });
+        }
     }
 
     fn live_agent_row(&mut self, ui: &mut egui::Ui, session: &Session, target: &str) {
