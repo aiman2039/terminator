@@ -252,7 +252,7 @@ pub(crate) fn serve(mut stream: transport::Stream, shared: Arc<Shared>) -> Resul
     }
     let ssh_errors = env.ssh_errors;
     let response = shared.handle(env.request).unwrap_or_else(|e| {
-        match e.downcast_ref::<terminator_core::ssh::SshError>() {
+        match terminator_core::ssh::SshError::find(e.as_ref()) {
             Some(ssh) if ssh_errors => Response::SshError(terminator_core::ssh::SshError {
                 failure: ssh.failure.clone(),
                 message: format!("{e:#}"),
@@ -260,7 +260,11 @@ pub(crate) fn serve(mut stream: transport::Stream, shared: Arc<Shared>) -> Resul
             _ => Response::Error(format!("{e:#}")),
         }
     });
-    snapshot::write_response(&mut stream, &response, env.snapshot_chunks)
+    Ok(snapshot::write_response(
+        &mut stream,
+        &response,
+        env.snapshot_chunks,
+    )?)
 }
 
 #[cfg(test)]

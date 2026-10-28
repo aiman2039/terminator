@@ -290,6 +290,24 @@ impl std::fmt::Display for SshError {
 }
 impl std::error::Error for SshError {}
 impl SshError {
+    /// The classified failure anywhere in `error`'s source chain, including
+    /// one a core error enum forwards transparently.
+    #[must_use]
+    pub fn find<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a Self> {
+        std::iter::successors(Some(error), |e| e.source()).find_map(|e| {
+            if let Some(ssh) = e.downcast_ref::<Self>() {
+                return Some(ssh);
+            }
+            if let Some(ipc) = e.downcast_ref::<crate::IpcError>() {
+                return ipc.ssh();
+            }
+            #[cfg(feature = "async-client")]
+            if let Some(client) = e.downcast_ref::<crate::async_client::AsyncClientError>() {
+                return client.ssh();
+            }
+            None
+        })
+    }
     /// `None` when stderr is not a recognized SSH connection failure.
     #[must_use]
     pub fn from_stderr(stderr: &[u8]) -> Option<Self> {

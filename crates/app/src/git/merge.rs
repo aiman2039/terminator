@@ -164,7 +164,7 @@ impl App {
                 let token = CancellationToken::new();
                 let result = service
                     .fs()
-                    .run(&token, move || Ok(work()))
+                    .run(&token, move || anyhow::Ok(work()))
                     .await
                     .unwrap_or_else(|error| Err(format!("{error:#}")));
                 let _ = tx.send(result);

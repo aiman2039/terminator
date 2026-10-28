@@ -225,7 +225,7 @@ impl AsyncConnection {
                     let mut decoder = rmp_serde::Deserializer::from_read_ref(&bytes);
                     decoder.set_max_depth(32);
                     let parsed = Value::deserialize(&mut decoder);
-                    Ok((bytes, parsed))
+                    anyhow::Ok((bytes, parsed))
                 };
                 let (buffer, parsed) = if n <= 4096 && limit <= 4096 {
                     parse()?

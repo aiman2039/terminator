@@ -1,12 +1,33 @@
 //! Opt-in response streaming keeps snapshots and VNC frames within the IPC limit.
-use crate::{MAX_FRAME, Response, read_frame, write_frame};
-use anyhow::{Result, ensure};
+use crate::{FrameError, MAX_FRAME, Response, read_frame, write_frame};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use std::io::{self, Cursor, Read, Write};
 
 pub const CAPABILITY: &str = "snapshot-chunks-v1";
 const CHUNK_BYTES: usize = 512 * 1024;
 pub(crate) const MAX_RESPONSE_BYTES: usize = 256 * 1024 * 1024;
+
+/// Why a response could not be written, or a chunked response reassembled.
+#[derive(Debug, thiserror::Error)]
+pub enum SnapshotError {
+    #[error("Snapshot chunk too large")]
+    ChunkTooLarge { bytes: usize },
+    #[error("Invalid snapshot chunk")]
+    InvalidChunk { bytes: usize },
+    #[error("Interrupted snapshot transfer")]
+    Interrupted,
+    #[error("Expected snapshot state or VNC frame")]
+    UnexpectedResponse,
+    #[error(transparent)]
+    Frame(#[from] FrameError),
+    #[error(transparent)]
+    Base64(#[from] base64::DecodeError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+type Result<T, E = SnapshotError> = std::result::Result<T, E>;
 
 pub fn write_response(writer: &mut impl Write, response: &Response, chunks: bool) -> Result<()> {
     let bytes = serde_json::to_vec(response)?;
@@ -52,28 +73,25 @@ pub fn read_response(reader: &mut impl Read) -> Result<Response> {
         remaining: MAX_RESPONSE_BYTES,
     };
     let response = serde_json::from_reader(stream)?;
-    ensure!(
-        matches!(response, Response::State(_) | Response::VncFrame(_)),
-        "Expected snapshot state or VNC frame"
-    );
+    if !matches!(response, Response::State(_) | Response::VncFrame(_)) {
+        return Err(SnapshotError::UnexpectedResponse);
+    }
     Ok(response)
 }
 
 pub(crate) fn decode(data: &str) -> Result<Vec<u8>> {
-    ensure!(
-        data.len()
-            <= CHUNK_BYTES
-                .saturating_add(2)
-                .checked_div(3)
-                .unwrap_or(0)
-                .saturating_mul(4),
-        "Snapshot chunk too large"
-    );
+    let limit = CHUNK_BYTES
+        .saturating_add(2)
+        .checked_div(3)
+        .unwrap_or(0)
+        .saturating_mul(4);
+    if data.len() > limit {
+        return Err(SnapshotError::ChunkTooLarge { bytes: data.len() });
+    }
     let bytes = B64.decode(data)?;
-    ensure!(
-        !bytes.is_empty() && bytes.len() <= CHUNK_BYTES,
-        "Invalid snapshot chunk"
-    );
+    if bytes.is_empty() || bytes.len() > CHUNK_BYTES {
+        return Err(SnapshotError::InvalidChunk { bytes: bytes.len() });
+    }
     Ok(bytes)
 }
 struct Chunks<'a, R> {
@@ -98,7 +116,7 @@ impl<R: Read> Read for Chunks<'_, R> {
             }
             let next = (|| -> Result<()> {
                 let Response::SnapshotChunk { data, last } = read_frame(self.reader)? else {
-                    anyhow::bail!("Interrupted snapshot transfer");
+                    return Err(SnapshotError::Interrupted);
                 };
                 self.current = Cursor::new(decode(&data)?);
                 self.last = last;

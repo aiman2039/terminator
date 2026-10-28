@@ -113,7 +113,10 @@ impl Services {
             cancel,
             updates,
         } = input;
-        let picked = self.fs().run(&cancel, move || Ok(pick.resolve())).await;
+        let picked = self
+            .fs()
+            .run(&cancel, move || anyhow::Ok(pick.resolve()))
+            .await;
         let result = match picked {
             Ok(Some(operation)) => self.remote_transfer_rpc(&project, operation).await,
             Ok(None) => Ok(None),
@@ -196,7 +199,7 @@ impl Services {
     ) -> Result<()> {
         let hosts = self
             .cpu()
-            .run(&cancel, || Ok(terminator_core::ssh::config_hosts()))
+            .run(&cancel, || anyhow::Ok(terminator_core::ssh::config_hosts()))
             .await?;
         updates.push(Update::SshConfigHosts(generation, hosts));
         Ok(())

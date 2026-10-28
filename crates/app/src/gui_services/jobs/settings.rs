@@ -42,7 +42,7 @@ impl Services {
             .catalog
             .run(&cancel, move || {
                 prefs.save(&data)?;
-                Ok(prefs)
+                anyhow::Ok(prefs)
             })
             .await
             .map_err(|e| format!("Save UI preferences: {e:#}"));
@@ -125,15 +125,17 @@ impl Services {
                 let home = std::env::var_os("HOME")
                     .map(PathBuf::from)
                     .unwrap_or_default();
-                Ok(terminator_integrations::AGENTS
-                    .iter()
-                    .map(|kind| {
-                        (
-                            (*kind).to_string(),
-                            terminator_integrations::installed(&home, kind),
-                        )
-                    })
-                    .collect())
+                anyhow::Ok(
+                    terminator_integrations::AGENTS
+                        .iter()
+                        .map(|kind| {
+                            (
+                                (*kind).to_string(),
+                                terminator_integrations::installed(&home, kind),
+                            )
+                        })
+                        .collect(),
+                )
             })
             .await?;
         updates.push(Update::HookStatus(status));

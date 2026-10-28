@@ -68,12 +68,14 @@ pub(super) async fn run(input: RunInput) -> Result<()> {
             let mut resolver = hickory_resolver::TokioResolver::builder_tokio()?;
             resolver.options_mut().ip_strategy =
                 hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
-            Ok(reqwest::Client::builder()
-                .pool_max_idle_per_host(0)
-                .dns_resolver(Arc::new(Resolver(resolver.build()?)))
-                .connect_timeout(Duration::from_secs(8))
-                .redirect(reqwest::redirect::Policy::limited(8))
-                .build()?)
+            anyhow::Ok(
+                reqwest::Client::builder()
+                    .pool_max_idle_per_host(0)
+                    .dns_resolver(Arc::new(Resolver(resolver.build()?)))
+                    .connect_timeout(Duration::from_secs(8))
+                    .redirect(reqwest::redirect::Policy::limited(8))
+                    .build()?,
+            )
         })
         .await?;
     let decoder = NativePool::new("audio-decoder", 1)?;

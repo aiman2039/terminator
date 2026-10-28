@@ -43,7 +43,7 @@ impl Services {
                 } else {
                     "Save SFTP download to a new file"
                 });
-                Ok(if upload {
+                anyhow::Ok(if upload {
                     dialog.pick_file()
                 } else {
                     dialog.save_file()

@@ -1,5 +1,6 @@
 use super::*;
-use crate::write_frame;
+use crate::{Envelope, MAX_FRAME, PROTOCOL_VERSION, transport::AsyncStream, write_frame};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 fn fixture() -> (tempfile::TempDir, Client, crate::transport::AsyncListener) {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::at(dir.path().into());
@@ -43,7 +44,7 @@ async fn large_vnc_frame_uses_opt_in_chunks_over_async_transport() {
         assert!(request.snapshot_chunks);
         assert!(matches!(request.request, Request::VncFrame { .. }));
         let mut wire = Vec::new();
-        snapshot::write_response(
+        crate::snapshot::write_response(
             &mut wire,
             &Response::VncFrame(Box::new(frame)),
             request.snapshot_chunks,
@@ -106,10 +107,7 @@ async fn connection_loss_after_mutation_is_uncertain_and_never_replayed() {
         })
         .await
         .unwrap_err();
-    assert!(
-        error.downcast_ref::<UncertainMutation>().is_some(),
-        "{error:#}"
-    );
+    assert!(error.is_uncertain_mutation(), "{error:#}");
     server.await.unwrap();
 }
 #[tokio::test]
@@ -130,7 +128,7 @@ async fn archived_history_read_loss_is_certain_and_retryable() {
         .await
         .unwrap_err();
     assert!(
-        error.downcast_ref::<UncertainMutation>().is_none(),
+        !error.is_uncertain_mutation(),
         "a retired-session read must stay retryable: {error:#}"
     );
     server.await.unwrap();
@@ -408,7 +406,7 @@ async fn archived_notice_dismissal_is_visible_to_the_next_snapshot() {
             match request.request {
                 Request::Snapshot => {
                     let mut bytes = Vec::new();
-                    snapshot::write_response(
+                    crate::snapshot::write_response(
                         &mut bytes,
                         &Response::State(Box::new(served.clone())),
                         request.snapshot_chunks,

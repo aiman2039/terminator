@@ -30,10 +30,10 @@ fn ssh_errors_survive_the_wire_as_typed_errors() {
     let wire = serde_json::to_vec(&Response::SshError(error.clone())).unwrap();
     let response: Response = serde_json::from_slice(&wire).unwrap();
     let checked = response.checked().unwrap_err();
-    assert_eq!(checked.downcast_ref::<crate::ssh::SshError>(), Some(&error));
+    assert_eq!(crate::ssh::SshError::find(&checked), Some(&error));
     assert_eq!(
-        format!("{:#}", checked.context("outer")),
-        "outer: The SSH host key is not trusted yet"
+        crate::ErrorChain(&checked).to_string(),
+        "The SSH host key is not trusted yet"
     );
 }
 

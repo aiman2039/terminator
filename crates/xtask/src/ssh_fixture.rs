@@ -279,13 +279,15 @@ fn control_sockets(dir: &Path) -> Vec<PathBuf> {
 }
 
 pub(crate) fn rpc(h: &Harness, request: Request) -> Result<Response> {
-    terminator_core::rpc(&terminator_core::Paths::at(h.root.clone()), request)
+    Ok(terminator_core::rpc(
+        &terminator_core::Paths::at(h.root.clone()),
+        request,
+    )?)
 }
 fn ssh_failure(result: Result<Response>) -> Result<SshFailure> {
     match result {
         Ok(response) => bail!("Expected an SSH failure, got {response:?}"),
-        Err(error) => error
-            .downcast_ref::<SshError>()
+        Err(error) => SshError::find(error.as_ref())
             .map(|e| e.failure.clone())
             .ok_or_else(|| anyhow!("Unclassified failure: {error:#}")),
     }

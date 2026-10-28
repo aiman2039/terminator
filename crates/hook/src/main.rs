@@ -340,7 +340,10 @@ fn lock_writer<T>(writer: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 fn write_winsize(writer: &Mutex<impl Write>) -> Result<()> {
     let (rows, cols) = dimensions();
-    write_frame(&mut *lock_writer(writer), &Request::Resize { rows, cols })
+    Ok(write_frame(
+        &mut *lock_writer(writer),
+        &Request::Resize { rows, cols },
+    )?)
 }
 #[cfg(unix)]
 struct Raw(rustix::termios::Termios);

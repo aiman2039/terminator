@@ -196,9 +196,14 @@ pub fn snapshot(paths: &Paths) -> Result<State> {
         } else {
             match crate::rpc(&owner.paths(), Request::Snapshot) {
                 Ok(Response::State(s)) => (*s, None),
-                result => {
-                    unavailable_snapshot(&owner, &active, format!("Owner unavailable: {result:?}"))?
-                }
+                result => unavailable_snapshot(
+                    &owner,
+                    &active,
+                    format!(
+                        "Owner unavailable: {:?}",
+                        result.as_ref().map_err(|e| crate::ErrorReport(e))
+                    ),
+                )?,
             }
         };
         if owner.id == active {
