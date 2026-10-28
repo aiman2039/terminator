@@ -190,7 +190,12 @@ pub(super) fn diagnostics_text(input: DiagnosticsTextInput<'_>) -> String {
     lines.push(if !session.lifecycle.live() {
         "Session ended".into()
     } else if detected.is_empty() {
-        absent_agent_line(presence, support, verified, now)
+        absent_agent_line(AbsentAgentLineInput {
+            presence,
+            support,
+            verified,
+            now,
+        })
     } else {
         live_agents_line(detected, presence, now)
     });
@@ -211,13 +216,21 @@ pub(super) fn diagnostics_text(input: DiagnosticsTextInput<'_>) -> String {
     lines.join("\n")
 }
 
-/// Why no live agent is shown for a live session.
-fn absent_agent_line(
-    presence: Option<&agents::TerminalPresence>,
+struct AbsentAgentLineInput<'a> {
+    presence: Option<&'a agents::TerminalPresence>,
     support: OwnerSupport,
     verified: bool,
     now: u64,
-) -> String {
+}
+
+/// Why no live agent is shown for a live session.
+fn absent_agent_line(input: AbsentAgentLineInput<'_>) -> String {
+    let AbsentAgentLineInput {
+        presence,
+        support,
+        verified,
+        now,
+    } = input;
     if verified {
         format!(
             "No live agent detected (verified {})",

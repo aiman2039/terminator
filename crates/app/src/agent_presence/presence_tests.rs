@@ -62,7 +62,20 @@ mod tests {
         });
     }
 
-    fn hook(state: &mut State, kind: &str, lifecycle: AgentState, linked: bool) {
+    struct HookInput<'a> {
+        state: &'a mut State,
+        kind: &'a str,
+        lifecycle: AgentState,
+        linked: bool,
+    }
+
+    fn hook(input: HookInput<'_>) {
+        let HookInput {
+            state,
+            kind,
+            lifecycle,
+            linked,
+        } = input;
         state.agents.push(Agent {
             invocation_id: format!("agent-{kind}"),
             session_id: "s".into(),
@@ -214,7 +227,12 @@ mod tests {
         state.sessions.push(session("s"));
         capable(&mut state);
         observe(&mut state, &["codex"], now());
-        hook(&mut state, "codex", AgentState::Running, true);
+        hook(HookInput {
+            state: &mut state,
+            kind: "codex",
+            lifecycle: AgentState::Running,
+            linked: true,
+        });
         let presented = present_session(&state, "s", now());
         assert_eq!(presented.brand_icon, Some("AgentCodex"));
         assert_eq!(presented.brand_label.as_deref(), Some("Codex"));
@@ -248,7 +266,12 @@ mod tests {
     fn hook_only_state_on_old_daemons_is_labeled_unverified() {
         let mut state = State::default();
         state.sessions.push(session("s"));
-        hook(&mut state, "my-agent", AgentState::WaitingInput, false);
+        hook(HookInput {
+            state: &mut state,
+            kind: "my-agent",
+            lifecycle: AgentState::WaitingInput,
+            linked: false,
+        });
         let presented = present_session(&state, "s", now());
         assert!(!presented.verified && !presented.live);
         assert_eq!(presented.brand_icon, Some(agents::GENERIC_ICON));
@@ -313,7 +336,12 @@ mod tests {
                 outcome,
                 observed_at: now().saturating_sub(age),
             });
-            hook(&mut state, "codex", AgentState::Running, true);
+            hook(HookInput {
+                state: &mut state,
+                kind: "codex",
+                lifecycle: AgentState::Running,
+                linked: true,
+            });
             let presented = present_session(&state, "s", now());
             assert!(!presented.verified && !presented.live, "{needle}");
             assert!(
@@ -365,7 +393,12 @@ mod tests {
     fn unknown_lifecycle_shows_status_unavailable() {
         let mut state = State::default();
         state.sessions.push(session("s"));
-        hook(&mut state, "codex", AgentState::Unknown, false);
+        hook(HookInput {
+            state: &mut state,
+            kind: "codex",
+            lifecycle: AgentState::Unknown,
+            linked: false,
+        });
         let presented = present_session(&state, "s", now());
         assert_eq!(presented.status_label, "Status unavailable");
         assert_eq!(presented.status_icon, "CircleQuestion");
@@ -439,7 +472,12 @@ mod tests {
         state.sessions.push(session("plain"));
         capable(&mut state);
         observe(&mut state, &["codex"], now());
-        hook(&mut state, "codex", AgentState::Running, true);
+        hook(HookInput {
+            state: &mut state,
+            kind: "codex",
+            lifecycle: AgentState::Running,
+            linked: true,
+        });
         state.agents.push(Agent {
             invocation_id: "hook-only".into(),
             session_id: "plain".into(),
@@ -459,7 +497,20 @@ mod tests {
         assert_eq!(unverified[0].id, "plain");
     }
 
-    fn notice(id: &str, session: &str, lifecycle: AgentState, created: u64) -> Notification {
+    struct NoticeInput<'a> {
+        id: &'a str,
+        session: &'a str,
+        lifecycle: AgentState,
+        created: u64,
+    }
+
+    fn notice(input: NoticeInput<'_>) -> Notification {
+        let NoticeInput {
+            id,
+            session,
+            lifecycle,
+            created,
+        } = input;
         Notification {
             id: id.into(),
             session_id: session.into(),
@@ -485,22 +536,22 @@ mod tests {
             state.sessions.push(session(&format!("s{index}")));
         }
         for index in 0..notices {
-            state.notifications.push(notice(
-                &format!("n{index}"),
-                &format!("s{}", index % sessions),
-                AgentState::WaitingInput,
-                index as u64,
-            ));
+            state.notifications.push(notice(NoticeInput {
+                id: &format!("n{index}"),
+                session: &format!("s{}", index % sessions),
+                lifecycle: AgentState::WaitingInput,
+                created: index as u64,
+            }));
         }
         let mut ended = session("ended");
         ended.lifecycle = Lifecycle::Ended;
         state.sessions.push(ended);
-        state.notifications.push(notice(
-            "ended-note",
-            "ended",
-            AgentState::WaitingPermission,
-            100,
-        ));
+        state.notifications.push(notice(NoticeInput {
+            id: "ended-note",
+            session: "ended",
+            lifecycle: AgentState::WaitingPermission,
+            created: 100,
+        }));
         let mut cache = PresentationCache::default();
         cache.reconcile(&state, 50, Some(true));
         assert_eq!(cache.indexes_built, 1);
@@ -620,12 +671,18 @@ mod tests {
             outcome: PresenceOutcome::Verified,
             observed_at: 1,
         });
-        state
-            .notifications
-            .push(notice("na", "a", AgentState::Failed, 1));
-        state
-            .notifications
-            .push(notice("nb", "b", AgentState::WaitingInput, 2));
+        state.notifications.push(notice(NoticeInput {
+            id: "na",
+            session: "a",
+            lifecycle: AgentState::Failed,
+            created: 1,
+        }));
+        state.notifications.push(notice(NoticeInput {
+            id: "nb",
+            session: "b",
+            lifecycle: AgentState::WaitingInput,
+            created: 2,
+        }));
         let mut cache = PresentationCache::default();
         cache.reconcile(&state, 10, Some(true));
         let left = cache.get(GetInput {
@@ -790,13 +847,28 @@ mod tests {
         let mut state = State::default();
         state.sessions.push(session("s"));
         state.sessions.push(session("other"));
-        let mut early = notice("early", "s", AgentState::WaitingInput, 1);
+        let mut early = notice(NoticeInput {
+            id: "early",
+            session: "s",
+            lifecycle: AgentState::WaitingInput,
+            created: 1,
+        });
         early.snoozed_until = 20;
-        let mut later = notice("later", "s", AgentState::WaitingPermission, 2);
+        let mut later = notice(NoticeInput {
+            id: "later",
+            session: "s",
+            lifecycle: AgentState::WaitingPermission,
+            created: 2,
+        });
         later.snoozed_until = 30;
         state.notifications.push(early);
         state.notifications.push(later);
-        hook(&mut state, "codex", AgentState::Running, false);
+        hook(HookInput {
+            state: &mut state,
+            kind: "codex",
+            lifecycle: AgentState::Running,
+            linked: false,
+        });
         let mut cache = PresentationCache::default();
         cache.reconcile(&state, 10, Some(true));
         assert!(
@@ -914,7 +986,12 @@ mod tests {
         assert_eq!(cache.indexes_built, 1);
         let mut state = State::default();
         state.sessions.push(session("s"));
-        hook(&mut state, "codex", AgentState::Running, false);
+        hook(HookInput {
+            state: &mut state,
+            kind: "codex",
+            lifecycle: AgentState::Running,
+            linked: false,
+        });
         let presented = cache.get(GetInput {
             state: &state,
             id: "s",
@@ -940,7 +1017,12 @@ mod tests {
         state.sessions.push(session("s"));
         capable(&mut state);
         observe(&mut state, &[], now());
-        hook(&mut state, "codex", AgentState::Running, false);
+        hook(HookInput {
+            state: &mut state,
+            kind: "codex",
+            lifecycle: AgentState::Running,
+            linked: false,
+        });
         let presented = present_session(&state, "s", now());
         assert!(presented.verified);
         assert!(!presented.live);
