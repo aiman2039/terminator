@@ -1,4 +1,5 @@
 //! Explorer, session rows, and sidebar tool hosting.
+mod dnd;
 mod entry;
 mod session_row;
 mod tool;
