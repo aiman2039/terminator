@@ -1,5 +1,45 @@
 //! GUI client for `worktrees-v1`. Git still owns the checkout.
 use crate::*;
+
+fn start_revision(ui: &mut egui::Ui, draft: &mut WorktreeDraft) {
+    ui.horizontal(|ui| {
+        for start in ["HEAD", "main", "master"] {
+            if ui.selectable_label(draft.start == start, start).clicked() {
+                draft.start = start.into();
+            }
+        }
+    });
+    ui.add(
+        appearance::singleline(&mut draft.start)
+            .hint_text("revision")
+            .desired_width(220.0),
+    );
+}
+
+/// Destination path field. Returns whether Browse was clicked.
+fn destination(ui: &mut egui::Ui, draft: &mut WorktreeDraft) -> bool {
+    let mut dest = draft.dest.display().to_string();
+    let response = ui.add(appearance::singleline(&mut dest).desired_width(260.0));
+    #[cfg(feature = "test-support")]
+    diagnostics::record(ui.ctx(), "worktree-dest", response.rect);
+    if response.changed() {
+        draft.dest = PathBuf::from(dest);
+    }
+    ui.button("Browse…").clicked()
+}
+
+/// Returns `(create, cancel)` clicks.
+fn form_buttons(ui: &mut egui::Ui, draft: &WorktreeDraft) -> (bool, bool) {
+    let create = ui.add_enabled(
+        !draft.branch.trim().is_empty() && !draft.start.trim().is_empty(),
+        egui::Button::new("Create worktree"),
+    );
+    #[cfg(feature = "test-support")]
+    diagnostics::record(ui.ctx(), "worktree-create", create.rect);
+    let create = create.clicked();
+    (create, ui.button("Cancel").clicked())
+}
+
 #[cfg(test)]
 use anyhow::Context;
 
@@ -190,20 +230,7 @@ impl App {
             ui,
             "Start from",
             "HEAD, a branch, or another git revision.",
-            |ui| {
-                ui.horizontal(|ui| {
-                    for start in ["HEAD", "main", "master"] {
-                        if ui.selectable_label(draft.start == start, start).clicked() {
-                            draft.start = start.into();
-                        }
-                    }
-                });
-                ui.add(
-                    appearance::singleline(&mut draft.start)
-                        .hint_text("revision")
-                        .desired_width(220.0),
-                );
-            },
+            |ui| start_revision(ui, draft),
         );
         settings_controls::settings_row(
             ui,
@@ -218,14 +245,7 @@ impl App {
             "Destination",
             "Folder must not already exist.",
             |ui| {
-                let mut dest = draft.dest.display().to_string();
-                let response = ui.add(appearance::singleline(&mut dest).desired_width(260.0));
-                #[cfg(feature = "test-support")]
-                diagnostics::record(ui.ctx(), "worktree-dest", response.rect);
-                if response.changed() {
-                    draft.dest = PathBuf::from(dest);
-                }
-                if ui.button("Browse…").clicked() {
+                if destination(ui, draft) {
                     *browse = true;
                 }
             },
@@ -236,16 +256,11 @@ impl App {
         );
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            let create = ui.add_enabled(
-                !draft.branch.trim().is_empty() && !draft.start.trim().is_empty(),
-                egui::Button::new("Create worktree"),
-            );
-            #[cfg(feature = "test-support")]
-            diagnostics::record(ui.ctx(), "worktree-create", create.rect);
-            if create.clicked() {
+            let (create, close) = form_buttons(ui, draft);
+            if create {
                 *submit = true;
             }
-            if ui.button("Cancel").clicked() {
+            if close {
                 *cancel = true;
             }
         });

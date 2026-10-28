@@ -198,29 +198,8 @@ impl App {
     }
 
     pub(crate) fn show_merge_window(&mut self, ctx: &egui::Context) {
-        let Some(window) = self.merge.as_mut() else {
+        if self.poll_merge_io() {
             return;
-        };
-        if let Some(rx) = window.io.as_mut()
-            && let Ok(result) = rx.try_recv()
-        {
-            window.io = None;
-            match result {
-                Ok(text) => {
-                    window.blocks = parse_conflicts(&text);
-                    window.text = Some(text);
-                    window.dirty = false;
-                    window.error = None;
-                    if std::mem::take(&mut window.stage_after_save) {
-                        let path = window.path.clone();
-                        self.queue_workspace(workspace_ops::Op::Stage(path));
-                        self.merge = None;
-                        self.info = Some("Conflicts resolved and staged".into());
-                        return;
-                    }
-                }
-                Err(error) => window.error = Some(error),
-            }
         }
         let Some(window) = self.merge.as_mut() else {
             return;
@@ -234,102 +213,63 @@ impl App {
                 .to_string_lossy()
         );
         let mut open = true;
-        let mut pick: Option<(usize, Choice)> = None;
-        let mut save: Option<bool> = None;
-        let busy = window.io.is_some();
-        let colors = (
-            appearance::color(&self.theme.git_added),
-            appearance::color(&self.theme.git_modified),
-        );
+        let mut clicks = MergeClicks::default();
+        let view = ConflictView {
+            busy: window.io.is_some(),
+            ours: appearance::color(&self.theme.git_added),
+            theirs: appearance::color(&self.theme.git_modified),
+        };
         self.popups
             .window(ctx, &title)
             .open(&mut open)
             .collapsible(false)
             .default_width(820.0)
-            .show(ctx, |ui| {
-                if let Some(error) = &window.error {
-                    ui.colored_label(ui.visuals().error_fg_color, error);
+            .show(ctx, |ui| clicks = view.show(ui, window));
+        if let Some((index, choice)) = clicks.pick {
+            self.apply_merge_pick(index, choice);
+        }
+        if let Some(stage) = clicks.save {
+            self.save_merge(stage);
+        }
+        if !open {
+            self.merge = None;
+        }
+    }
+
+    /// Takes a finished read or write. Returns `true` when a save that marks
+    /// the file resolved closed the window.
+    fn poll_merge_io(&mut self) -> bool {
+        let Some(window) = self.merge.as_mut() else {
+            return false;
+        };
+        let Some(rx) = window.io.as_mut() else {
+            return false;
+        };
+        let Ok(result) = rx.try_recv() else {
+            return false;
+        };
+        window.io = None;
+        match result {
+            Ok(text) => {
+                window.blocks = parse_conflicts(&text);
+                window.text = Some(text);
+                window.dirty = false;
+                window.error = None;
+                if std::mem::take(&mut window.stage_after_save) {
+                    let path = window.path.clone();
+                    self.queue_workspace(workspace_ops::Op::Stage(path));
+                    self.merge = None;
+                    self.info = Some("Conflicts resolved and staged".into());
+                    return true;
                 }
-                if window.text.is_none() {
-                    ui.spinner();
-                    return;
-                }
-                ui.weak(format!(
-                    "{} conflict{} left",
-                    window.blocks.len(),
-                    if window.blocks.len() == 1 { "" } else { "s" }
-                ));
-                egui::ScrollArea::vertical()
-                    .max_height(520.0)
-                    .show(ui, |ui| {
-                        for (index, block) in window.blocks.iter().enumerate() {
-                            ui.separator();
-                            ui.horizontal(|ui| {
-                                ui.strong(format!(
-                                    "Conflict {} · lines {}–{}",
-                                    index.saturating_add(1),
-                                    block.start.saturating_add(1),
-                                    block.end.saturating_add(1)
-                                ));
-                                ui.add_enabled_ui(!busy, |ui| {
-                                    for (label, choice) in [
-                                        ("Accept ours", Choice::Ours),
-                                        ("Accept theirs", Choice::Theirs),
-                                        ("Accept both", Choice::Both),
-                                    ] {
-                                        if ui.button(label).clicked() {
-                                            pick = Some((index, choice));
-                                        }
-                                    }
-                                });
-                            });
-                            ui.columns(2, |columns| {
-                                for (column, (label, lines, color)) in columns.iter_mut().zip([
-                                    (
-                                        format!("Ours · {}", block.ours_label),
-                                        &block.ours,
-                                        colors.0,
-                                    ),
-                                    (
-                                        format!("Theirs · {}", block.theirs_label),
-                                        &block.theirs,
-                                        colors.1,
-                                    ),
-                                ]) {
-                                    column.weak(label);
-                                    for line in lines {
-                                        column.label(
-                                            egui::RichText::new(line).monospace().color(color),
-                                        );
-                                    }
-                                }
-                            });
-                        }
-                    });
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.add_enabled_ui(!busy, |ui| {
-                        if ui
-                            .add_enabled(window.dirty, egui::Button::new("Save"))
-                            .clicked()
-                        {
-                            save = Some(false);
-                        }
-                        if ui
-                            .add_enabled(
-                                window.blocks.is_empty(),
-                                egui::Button::new("Save and mark resolved"),
-                            )
-                            .on_disabled_hover_text("Resolve every conflict first")
-                            .clicked()
-                        {
-                            save = Some(true);
-                        }
-                    });
-                });
-            });
-        if let Some((index, choice)) = pick
-            && let Some(window) = self.merge.as_mut()
+            }
+            Err(error) => window.error = Some(error),
+        }
+        false
+    }
+
+    fn apply_merge_pick(&mut self, index: usize, choice: Choice) {
+        if let Some(window) = self.merge.as_mut()
             && let (Some(text), Some(block)) = (window.text.as_ref(), window.blocks.get(index))
         {
             let resolved = resolve(text, block, choice);
@@ -337,12 +277,119 @@ impl App {
             window.text = Some(resolved);
             window.dirty = true;
         }
-        if let Some(stage) = save {
-            self.save_merge(stage);
+    }
+}
+
+/// What the resolver window asked for this frame.
+#[derive(Default)]
+struct MergeClicks {
+    /// Conflict block index and the side to keep.
+    pick: Option<(usize, Choice)>,
+    /// Save; `true` also marks the file resolved.
+    save: Option<bool>,
+}
+
+#[derive(Clone, Copy)]
+struct ConflictView {
+    busy: bool,
+    ours: egui::Color32,
+    theirs: egui::Color32,
+}
+
+impl ConflictView {
+    fn show(self, ui: &mut egui::Ui, window: &MergeWindow) -> MergeClicks {
+        let mut clicks = MergeClicks::default();
+        if let Some(error) = &window.error {
+            ui.colored_label(ui.visuals().error_fg_color, error);
         }
-        if !open {
-            self.merge = None;
+        if window.text.is_none() {
+            ui.spinner();
+            return clicks;
         }
+        ui.weak(format!(
+            "{} conflict{} left",
+            window.blocks.len(),
+            if window.blocks.len() == 1 { "" } else { "s" }
+        ));
+        egui::ScrollArea::vertical()
+            .max_height(520.0)
+            .show(ui, |ui| {
+                for (index, block) in window.blocks.iter().enumerate() {
+                    if let Some(choice) = self.block(ui, index, block) {
+                        clicks.pick = Some((index, choice));
+                    }
+                }
+            });
+        ui.separator();
+        clicks.save = ui.horizontal(|ui| self.save_buttons(ui, window)).inner;
+        clicks
+    }
+
+    fn block(self, ui: &mut egui::Ui, index: usize, block: &ConflictBlock) -> Option<Choice> {
+        let mut pick = None;
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.strong(format!(
+                "Conflict {} · lines {}–{}",
+                index.saturating_add(1),
+                block.start.saturating_add(1),
+                block.end.saturating_add(1)
+            ));
+            ui.add_enabled_ui(!self.busy, |ui| {
+                for (label, choice) in [
+                    ("Accept ours", Choice::Ours),
+                    ("Accept theirs", Choice::Theirs),
+                    ("Accept both", Choice::Both),
+                ] {
+                    if ui.button(label).clicked() {
+                        pick = Some(choice);
+                    }
+                }
+            });
+        });
+        ui.columns(2, |columns| {
+            for (column, (label, lines, color)) in columns.iter_mut().zip([
+                (
+                    format!("Ours · {}", block.ours_label),
+                    &block.ours,
+                    self.ours,
+                ),
+                (
+                    format!("Theirs · {}", block.theirs_label),
+                    &block.theirs,
+                    self.theirs,
+                ),
+            ]) {
+                column.weak(label);
+                for line in lines {
+                    column.label(egui::RichText::new(line).monospace().color(color));
+                }
+            }
+        });
+        pick
+    }
+
+    fn save_buttons(self, ui: &mut egui::Ui, window: &MergeWindow) -> Option<bool> {
+        let mut save = None;
+        ui.add_enabled_ui(!self.busy, |ui| {
+            if ui
+                .add_enabled(window.dirty, egui::Button::new("Save"))
+                .clicked()
+            {
+                save = Some(false);
+            }
+            if ui
+                .add_enabled(
+                    window.blocks.is_empty(),
+                    egui::Button::new("Save and mark resolved"),
+                )
+                .on_disabled_hover_text("Resolve every conflict first")
+                .clicked()
+            {
+                save = Some(true);
+            }
+        });
+        save
     }
 }
 

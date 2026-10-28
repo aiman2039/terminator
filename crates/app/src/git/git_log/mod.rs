@@ -1,4 +1,10 @@
 //! Commit log and blame data structures, fetched via `git log` and `git blame`.
+mod files;
+#[cfg(test)]
+mod tests;
+
+pub use files::*;
+
 use std::path::Path;
 pub use terminator_core::CommandOptions;
 
@@ -144,88 +150,93 @@ fn current_branch(root: &Path) -> Result<String, String> {
 }
 
 fn parse_log(text: &str) -> Vec<CommitEntry> {
-    let mut commits = Vec::new();
-    for entry in text.split(">>>>>END<<<<<\n") {
-        let entry = entry.trim();
-        if entry.is_empty() {
-            continue;
-        }
-        let mut lines = entry.lines();
-        let hash = lines.next().unwrap_or("").to_string();
-        let short_hash = lines.next().unwrap_or("").to_string();
-        let author = lines.next().unwrap_or("").to_string();
-        let email = lines.next().unwrap_or("").to_string();
-        let date = lines.next().unwrap_or("").to_string();
-        let parents_str = lines.next().unwrap_or("").to_string();
-        let refs_str = lines.next().unwrap_or("").to_string();
-        let message = lines.collect::<Vec<_>>().join("\n").trim().to_string();
-        let subject = message.lines().next().unwrap_or("").to_string();
-        let parents: Vec<String> = if parents_str.is_empty() {
-            vec![]
-        } else {
-            parents_str
-                .split_whitespace()
-                .map(std::string::ToString::to_string)
-                .collect()
-        };
-        let refs: Vec<String> = if refs_str.is_empty() {
-            vec![]
-        } else {
-            refs_str
-                .split(", ")
-                .map(std::string::ToString::to_string)
-                .collect()
-        };
-        let timestamp: i64 = date.parse().unwrap_or(0);
-        let formatted_date = if timestamp > 0 {
-            let secs = timestamp;
-            use std::time::SystemTime;
-            // approximate: days ago
-            let now = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                .cast_signed();
-            let diff = now.saturating_sub(secs);
-            if diff < 86400 {
-                format!("{}h ago", diff / 3600)
-            } else if diff < 7 * 86400 {
-                format!("{}d ago", diff / 86400)
-            } else {
-                // Format as YYYY-MM-DD
-                let days = secs / 86400;
-                let span = 146_097_i64;
-                let year = days
-                    .checked_div(span)
-                    .and_then(|quotient| quotient.checked_mul(span))
-                    .and_then(|product| days.checked_sub(product))
-                    .and_then(|remainder| remainder.checked_add(719_468))
-                    .and_then(|shifted| shifted.checked_div(span))
-                    .and_then(|era| era.checked_add(1970))
-                    .unwrap_or(1970);
-                let month = 1;
-                let day = 1;
-                format!("{year}-{month:02}-{day:02}")
-            }
-        } else {
-            String::new()
-        };
-        commits.push(CommitEntry {
-            hash,
-            short_hash,
-            author,
-            email,
-            date: formatted_date,
-            timestamp,
-            message,
-            subject,
-            refs,
-            parents,
-            graph_col: 0,
-            graph_color: 0,
-        });
+    text.split(">>>>>END<<<<<\n")
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(parse_commit)
+        .collect()
+}
+
+/// One `git log` record: hash, short hash, author, email, date, parents,
+/// refs, then the message.
+fn parse_commit(entry: &str) -> CommitEntry {
+    let mut lines = entry.lines();
+    let hash = lines.next().unwrap_or("").to_string();
+    let short_hash = lines.next().unwrap_or("").to_string();
+    let author = lines.next().unwrap_or("").to_string();
+    let email = lines.next().unwrap_or("").to_string();
+    let date = lines.next().unwrap_or("").to_string();
+    let parents_str = lines.next().unwrap_or("").to_string();
+    let refs_str = lines.next().unwrap_or("").to_string();
+    let message = lines.collect::<Vec<_>>().join("\n").trim().to_string();
+    let subject = message.lines().next().unwrap_or("").to_string();
+    let parents: Vec<String> = if parents_str.is_empty() {
+        vec![]
+    } else {
+        parents_str
+            .split_whitespace()
+            .map(std::string::ToString::to_string)
+            .collect()
+    };
+    let refs: Vec<String> = if refs_str.is_empty() {
+        vec![]
+    } else {
+        refs_str
+            .split(", ")
+            .map(std::string::ToString::to_string)
+            .collect()
+    };
+    let timestamp: i64 = date.parse().unwrap_or(0);
+    CommitEntry {
+        hash,
+        short_hash,
+        author,
+        email,
+        date: relative_date(timestamp),
+        timestamp,
+        message,
+        subject,
+        refs,
+        parents,
+        graph_col: 0,
+        graph_color: 0,
     }
-    commits
+}
+
+/// Hours or days ago for recent commits, else a date; blank when unknown.
+fn relative_date(timestamp: i64) -> String {
+    if timestamp <= 0 {
+        return String::new();
+    }
+    let secs = timestamp;
+    use std::time::SystemTime;
+    // approximate: days ago
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .cast_signed();
+    let diff = now.saturating_sub(secs);
+    if diff < 86400 {
+        format!("{}h ago", diff / 3600)
+    } else if diff < 7 * 86400 {
+        format!("{}d ago", diff / 86400)
+    } else {
+        // Format as YYYY-MM-DD
+        let days = secs / 86400;
+        let span = 146_097_i64;
+        let year = days
+            .checked_div(span)
+            .and_then(|quotient| quotient.checked_mul(span))
+            .and_then(|product| days.checked_sub(product))
+            .and_then(|remainder| remainder.checked_add(719_468))
+            .and_then(|shifted| shifted.checked_div(span))
+            .and_then(|era| era.checked_add(1970))
+            .unwrap_or(1970);
+        let month = 1;
+        let day = 1;
+        format!("{year}-{month:02}-{day:02}")
+    }
 }
 
 fn fetch_refs(root: &Path) -> Vec<RefEntry> {
@@ -281,553 +292,4 @@ fn fetch_refs(root: &Path) -> Vec<RefEntry> {
         });
     }
     refs
-}
-
-/// Fetch blame annotations for a file.
-pub fn fetch_blame(cwd: &Path, path: &Path) -> Result<BlameData, String> {
-    blame_with_contents(cwd, path, None)
-}
-
-/// Blame `path` as `contents` (an editor's unsaved text) when given, so
-/// every buffer line gets an entry and edited lines read as uncommitted.
-pub fn blame_with_contents(
-    cwd: &Path,
-    path: &Path,
-    contents: Option<&str>,
-) -> Result<BlameData, String> {
-    let root = git_root(cwd)?;
-    let options = CommandOptions {
-        stdout_limit: 16 * 1024 * 1024,
-        input: contents.map(|text| text.as_bytes().to_vec()),
-        timeout: std::time::Duration::from_secs(20),
-        ..Default::default()
-    };
-    let path = path.to_string_lossy();
-    let mut args = vec!["blame", "--line-porcelain"];
-    if contents.is_some() {
-        args.extend(["--contents", "-"]);
-    }
-    args.extend(["--", path.as_ref()]);
-    let bytes = terminator_core::git::run_blocking(&root, &args, options)
-        .map_err(|e| format!("git blame: {e}"))?;
-    let text = String::from_utf8_lossy(&bytes);
-    let mut entries = Vec::new();
-    let mut current_hash = String::new();
-    let mut current_author = String::new();
-    let mut current_date = String::new();
-    let mut current_time = 0i64;
-    let mut current_summary = String::new();
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("summary ") {
-            rest.clone_into(&mut current_summary);
-        } else if let Some(rest) = line.strip_prefix("author ") {
-            current_author = rest.to_string();
-        } else if let Some(rest) = line.strip_prefix("author-time ") {
-            let ts: i64 = rest.parse().unwrap_or(0);
-            current_time = ts;
-            current_date = if ts > 0 {
-                let secs = ts;
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-                    .cast_signed();
-                let diff = now.saturating_sub(secs);
-                if diff < 86400 {
-                    format!("{}h ago", diff / 3600)
-                } else {
-                    format!("{}d ago", diff / 86400)
-                }
-            } else {
-                String::new()
-            };
-        } else if line.starts_with('\t') {
-            let code = line.to_string();
-            entries.push(BlameEntry {
-                hash: current_hash.clone(),
-                author: current_author.clone(),
-                date: current_date.clone(),
-                line: entries.len(),
-                code,
-                time: current_time,
-                summary: current_summary.clone(),
-            });
-        } else if let Some(hash) = line.split_whitespace().next()
-            && hash.len() >= 40
-            && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
-            // `<hash> <original line> <final line> [<group size>]`; header
-            // lines (`summary`, `filename`, `previous`, …) are not hashes.
-            hash.clone_into(&mut current_hash);
-        }
-    }
-    Ok(BlameData {
-        entries,
-        error: None,
-    })
-}
-
-/// One commit in a file's history.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HistoryEntry {
-    pub hash: String,
-    pub short_hash: String,
-    pub author: String,
-    pub date: String,
-    pub subject: String,
-}
-
-/// Commits touching `path`, newest first, following renames.
-pub fn file_history(cwd: &Path, path: &Path) -> Result<Vec<HistoryEntry>, String> {
-    let root = git_root(cwd)?;
-    let relative = terminator_git::relative_path(&root, path).map_err(|error| error.to_string())?;
-    let relative = relative.to_string_lossy().into_owned();
-    let bytes = terminator_core::git::run_blocking(
-        &root,
-        &[
-            "log",
-            "--follow",
-            "--date=short",
-            "--format=%H%x1f%h%x1f%an%x1f%ad%x1f%s",
-            "-300",
-            "--",
-            &relative,
-        ],
-        CommandOptions {
-            stdout_limit: 4 * 1024 * 1024,
-            ..Default::default()
-        },
-    )
-    .map_err(|error| format!("git log: {error}"))?;
-    Ok(String::from_utf8_lossy(&bytes)
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split('\u{1f}');
-            Some(HistoryEntry {
-                hash: fields.next()?.to_owned(),
-                short_hash: fields.next()?.to_owned(),
-                author: fields.next()?.to_owned(),
-                date: fields.next()?.to_owned(),
-                subject: fields.next().unwrap_or_default().to_owned(),
-            })
-        })
-        .collect())
-}
-
-/// Files a commit changed: `(status letter, absolute path)`.
-pub fn commit_files(cwd: &Path, hash: &str) -> Result<Vec<(char, std::path::PathBuf)>, String> {
-    let root = git_root(cwd)?;
-    let bytes = terminator_core::git::run_blocking(
-        &root,
-        &[
-            "show",
-            "--name-status",
-            "--format=",
-            "--first-parent",
-            "-m",
-            hash,
-        ],
-        CommandOptions {
-            stdout_limit: 4 * 1024 * 1024,
-            ..Default::default()
-        },
-    )
-    .map_err(|error| format!("git show: {error}"))?;
-    Ok(String::from_utf8_lossy(&bytes)
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.split('\t');
-            let status = fields.next()?.chars().next()?;
-            // Renames and copies list old then new: show the new path.
-            let path = fields.next_back()?;
-            Some((status, root.join(path)))
-        })
-        .collect())
-}
-
-/// `path` at `revision`, or `None` when it did not exist there.
-fn revision_text(root: &Path, revision: &str, relative: &str) -> Option<String> {
-    let bytes = terminator_core::git::run_blocking(
-        root,
-        &["show", &format!("{revision}:{relative}")],
-        CommandOptions {
-            stdout_limit: 4 * 1024 * 1024,
-            ..Default::default()
-        },
-    )
-    .ok()?;
-    terminator_git::check_text(&bytes).then(|| String::from_utf8_lossy(&bytes).into_owned())
-}
-
-/// The name `relative` (its current name) had at `revision`, following
-/// renames: `C` is the name after commit `C`, `C^` the name before it.
-/// Other revisions, and files never renamed, keep `relative`.
-fn name_at(root: &Path, relative: &str, revision: &str) -> String {
-    if revision.is_empty() || revision_text(root, revision, relative).is_some() {
-        return relative.to_owned();
-    }
-    let (commit, before) = match revision.strip_suffix('^') {
-        Some(commit) => (commit, true),
-        None => (revision, false),
-    };
-    let Ok(bytes) = terminator_core::git::run_blocking(
-        root,
-        &[
-            "log",
-            "--follow",
-            "--name-status",
-            "--format=%x1e%H",
-            "--",
-            relative,
-        ],
-        CommandOptions {
-            stdout_limit: 4 * 1024 * 1024,
-            ..Default::default()
-        },
-    ) else {
-        return relative.to_owned();
-    };
-    let text = String::from_utf8_lossy(&bytes);
-    for record in text.split('\u{1e}') {
-        let mut lines = record.lines().filter(|line| !line.trim().is_empty());
-        let Some(hash) = lines.next() else {
-            continue;
-        };
-        if !hash.starts_with(commit) {
-            continue;
-        }
-        // `R100\told\tnew` for a rename, `M\tpath` otherwise.
-        let Some(status) = lines.next() else {
-            break;
-        };
-        let fields: Vec<&str> = status.split('\t').collect();
-        let name = match fields.as_slice() {
-            [kind, old, new] if kind.starts_with(['R', 'C']) => {
-                if before {
-                    old
-                } else {
-                    new
-                }
-            }
-            [_, path] => path,
-            _ => break,
-        };
-        return (*name).to_owned();
-    }
-    relative.to_owned()
-}
-
-/// Read-only diff of `path` between `left` and `right` (empty `right` is
-/// the working tree). A side where the file did not exist is empty; a
-/// side from before a rename reads the file under its name back then.
-pub fn revision_document(
-    cwd: &Path,
-    path: &Path,
-    left: &str,
-    right: &str,
-) -> Result<crate::diff::DiffDocument, String> {
-    let root = git_root(cwd)?;
-    let relative = terminator_git::relative_path(&root, path).map_err(|error| error.to_string())?;
-    let name = relative.to_string_lossy().into_owned();
-    let left_name = name_at(&root, &name, left);
-    let right_name = name_at(&root, &name, right);
-    let old = revision_text(&root, left, &left_name);
-    let new = if right.is_empty() {
-        std::fs::read_to_string(root.join(&relative)).ok()
-    } else {
-        revision_text(&root, right, &right_name)
-    };
-    if old.is_none() && new.is_none() {
-        return Err(format!("{name} is not a text file in either revision"));
-    }
-    let mut doc = crate::diff::build_with_context(crate::diff::BuildWithContextInput {
-        path: &relative,
-        left: old.as_deref().unwrap_or_default(),
-        right: new.as_deref().unwrap_or_default(),
-        staged: false,
-        context: 3,
-    });
-    let short = |revision: &str| {
-        if revision.len() > 12 && revision.chars().all(|c| c.is_ascii_hexdigit() || c == '^') {
-            revision.chars().take(8).collect()
-        } else {
-            revision.to_owned()
-        }
-    };
-    // A renamed side says which name it shows (`IntelliJ`: old → new).
-    let labelled = |label: String, side: &str| {
-        if side == name {
-            label
-        } else {
-            format!("{label} · {side}")
-        }
-    };
-    doc.left_label = labelled(short(left), &left_name);
-    doc.right_label = labelled(
-        if right.is_empty() {
-            "Working tree".into()
-        } else {
-            short(right)
-        },
-        &right_name,
-    );
-    doc.read_only = true;
-    Ok(doc)
-}
-
-impl crate::GitView {
-    /// Run the blocking git query behind a commit-log or blame tab.
-    pub(crate) fn load(tab: &crate::Tab) -> Self {
-        match tab {
-            crate::Tab::CommitLog { cwd } => {
-                Self::Log(fetch_log(cwd).unwrap_or_else(|error| CommitLog {
-                    error: Some(error),
-                    ..Default::default()
-                }))
-            }
-            crate::Tab::Blame { cwd, path } => Self::Blame(fetch_blame(cwd, path)),
-            crate::Tab::FileHistory { cwd, path } => Self::History(file_history(cwd, path)),
-            crate::Tab::RevisionDiff {
-                cwd,
-                path,
-                left,
-                right,
-            } => Self::Revision(revision_document(cwd, path, left, right).map(std::sync::Arc::new)),
-            _ => Self::failed(tab, "Not a Git view".into()),
-        }
-    }
-
-    pub(crate) fn failed(tab: &crate::Tab, error: String) -> Self {
-        match tab {
-            crate::Tab::Blame { .. } => Self::Blame(Err(error)),
-            crate::Tab::FileHistory { .. } => Self::History(Err(error)),
-            crate::Tab::RevisionDiff { .. } => Self::Revision(Err(error)),
-            _ => Self::Log(CommitLog {
-                error: Some(error),
-                ..Default::default()
-            }),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::process::Command;
-
-    fn git_cmd(root: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(root)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    fn repo() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        git_cmd(dir.path(), &["init", "-q", "-b", "main"]);
-        git_cmd(
-            dir.path(),
-            &["config", "user.email", "fixture@example.invalid"],
-        );
-        git_cmd(dir.path(), &["config", "user.name", "Fixture"]);
-        dir
-    }
-
-    #[test]
-    fn fetch_log_reads_commits_refs_and_the_active_branch() {
-        let dir = repo();
-        let root = dir.path();
-        std::fs::write(root.join("a.txt"), "one\n").unwrap();
-        git_cmd(root, &["add", "."]);
-        git_cmd(root, &["commit", "-qm", "first commit"]);
-        git_cmd(root, &["branch", "feature"]);
-        git_cmd(root, &["tag", "v1"]);
-        std::fs::write(root.join("a.txt"), "two\n").unwrap();
-        git_cmd(root, &["commit", "-qam", "second commit"]);
-
-        let log = fetch_log(root).expect("log should load");
-        assert!(log.error.is_none());
-        assert_eq!(log.active_branch, "main");
-        assert!(log.commits.iter().any(|c| c.subject == "second commit"));
-        assert!(log.commits.iter().any(|c| c.subject == "first commit"));
-        assert!(log.commits.iter().all(|c| !c.short_hash.is_empty()));
-        assert!(log.commits.iter().all(|c| c.author == "Fixture"));
-        assert!(
-            log.refs.iter().any(|r| r.name == "feature"),
-            "branch ref missing: {:?}",
-            log.refs
-        );
-        assert!(
-            log.refs
-                .iter()
-                .any(|r| r.name == "v1" && r.kind == RefKind::Tag),
-            "tag ref missing: {:?}",
-            log.refs
-        );
-    }
-
-    #[test]
-    fn fetch_log_reports_a_directory_outside_a_repository() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = fetch_log(dir.path());
-        assert!(log.is_err(), "non-repository should error: {log:?}");
-    }
-
-    #[test]
-    fn parse_log_keeps_multi_line_messages_parents_and_refs() {
-        let hash = "1111111111111111111111111111111111111111";
-        let parent = "2222222222222222222222222222222222222222";
-        let text = format!(
-            "{hash}\n1111111\nJane\njane@example.invalid\n1700000000\n{parent}\nHEAD -> main, tag: v1\nsubject line\n\nbody line one\nbody line two\n>>>>>END<<<<<\n"
-        );
-        let commits = parse_log(&text);
-        assert_eq!(commits.len(), 1);
-        let commit = &commits[0];
-        assert_eq!(commit.hash, hash);
-        assert_eq!(commit.short_hash, "1111111");
-        assert_eq!(commit.author, "Jane");
-        assert_eq!(commit.subject, "subject line");
-        assert_eq!(
-            commit.message,
-            "subject line\n\nbody line one\nbody line two"
-        );
-        assert_eq!(commit.parents, vec![parent.to_string()]);
-        assert_eq!(commit.refs, vec!["HEAD -> main", "tag: v1"]);
-        assert_eq!(commit.timestamp, 1_700_000_000);
-    }
-
-    #[test]
-    fn parse_log_ignores_empty_entries() {
-        assert!(parse_log("").is_empty());
-        assert!(parse_log(">>>>>END<<<<<\n").is_empty());
-    }
-
-    #[test]
-    fn fetch_blame_annotates_every_line() {
-        let dir = repo();
-        let root = dir.path();
-        std::fs::write(root.join("blame.txt"), "alpha\nbeta\n").unwrap();
-        git_cmd(root, &["add", "."]);
-        git_cmd(root, &["commit", "-qm", "base"]);
-
-        let blame = fetch_blame(root, Path::new("blame.txt")).expect("blame should load");
-        assert!(blame.error.is_none());
-        assert_eq!(blame.entries.len(), 2);
-        assert_eq!(blame.entries[0].line, 0);
-        assert_eq!(blame.entries[1].line, 1);
-        assert!(blame.entries.iter().all(|e| e.author == "Fixture"));
-        assert!(blame.entries[0].code.contains("alpha"));
-        assert!(blame.entries[1].code.contains("beta"));
-        // Every entry carries the real commit, its time, and its subject.
-        let head = String::from_utf8(
-            std::process::Command::new("git")
-                .args(["rev-parse", "HEAD"])
-                .current_dir(root)
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .unwrap();
-        assert!(blame.entries.iter().all(|e| e.hash == head.trim()));
-        assert!(
-            blame
-                .entries
-                .iter()
-                .all(|e| e.summary == "base" && e.time > 0)
-        );
-        // Blaming unsaved text marks the edited line as uncommitted.
-        let edited = blame_with_contents(root, Path::new("blame.txt"), Some("alpha\nBETA\nnew\n"))
-            .expect("contents blame");
-        let flags: Vec<bool> = edited.entries.iter().map(BlameEntry::uncommitted).collect();
-        assert_eq!(flags, [false, true, true]);
-    }
-
-    #[test]
-    fn history_files_and_revision_diffs_follow_commits() {
-        let dir = repo();
-        let root = dir.path();
-        let file = root.join("a.txt");
-        std::fs::write(&file, "one\n").unwrap();
-        git_cmd(root, &["add", "a.txt"]);
-        git_cmd(root, &["commit", "-qm", "add a"]);
-        std::fs::write(&file, "one\ntwo\n").unwrap();
-        std::fs::write(root.join("b.txt"), "b\n").unwrap();
-        git_cmd(root, &["add", "."]);
-        git_cmd(root, &["commit", "-qm", "grow a, add b"]);
-        std::fs::write(&file, "one\ntwo\nlocal\n").unwrap();
-
-        let history = file_history(root, &file).unwrap();
-        assert_eq!(
-            history
-                .iter()
-                .map(|entry| entry.subject.as_str())
-                .collect::<Vec<_>>(),
-            ["grow a, add b", "add a"]
-        );
-        let newest = &history[0].hash;
-        let mut changed = commit_files(root, newest).unwrap();
-        changed.sort();
-        let root_real = root.canonicalize().unwrap();
-        assert_eq!(
-            changed,
-            [
-                ('A', root_real.join("b.txt")),
-                ('M', root_real.join("a.txt"))
-            ]
-        );
-
-        // The commit's own change: one added line.
-        let commit = revision_document(root, &file, &format!("{newest}^"), newest).unwrap();
-        assert_eq!(commit.hunks.len(), 1);
-        assert_eq!(commit.right_text, "one\ntwo\n");
-        assert!(commit.read_only);
-        // Against the working tree.
-        let local = revision_document(root, &file, newest, "").unwrap();
-        assert_eq!(local.right_label, "Working tree");
-        assert_eq!(local.right_text, "one\ntwo\nlocal\n");
-        // A file added by the commit has an empty left side.
-        let added =
-            revision_document(root, &root.join("b.txt"), &format!("{newest}^"), newest).unwrap();
-        assert_eq!(added.left_text, "");
-        assert_eq!(added.right_text, "b\n");
-    }
-
-    #[test]
-    fn revision_diffs_before_a_rename_read_the_old_name() {
-        let dir = repo();
-        let root = dir.path();
-        std::fs::write(root.join("old.txt"), "one\n").unwrap();
-        git_cmd(root, &["add", "."]);
-        git_cmd(root, &["commit", "-qm", "add old"]);
-        std::fs::write(root.join("old.txt"), "one\ntwo\n").unwrap();
-        git_cmd(root, &["commit", "-qam", "grow old"]);
-        git_cmd(root, &["mv", "old.txt", "new.txt"]);
-        git_cmd(root, &["commit", "-qm", "rename"]);
-        let file = root.join("new.txt");
-        let history = file_history(root, &file).unwrap();
-        assert_eq!(history.len(), 3);
-        // The pre-rename commit's own change, read under the old name.
-        let grow = &history[1].hash;
-        let before = revision_document(root, &file, &format!("{grow}^"), grow).unwrap();
-        assert_eq!(before.left_text, "one\n");
-        assert_eq!(before.right_text, "one\ntwo\n");
-        assert!(
-            before.left_label.ends_with("old.txt"),
-            "{}",
-            before.left_label
-        );
-        // The rename commit itself: old name on the left, new on the right.
-        let rename = &history[0].hash;
-        let moved = revision_document(root, &file, &format!("{rename}^"), rename).unwrap();
-        assert_eq!(moved.left_text, moved.right_text);
-        assert!(moved.left_label.ends_with("old.txt"));
-        assert!(!moved.right_label.contains("old.txt"));
-    }
 }
