@@ -14,6 +14,7 @@ terminator-integrations = { path = "crates/integrations" }
 terminator-sys = { path = "crates/sys" }
 terminator-updater = { path = "crates/updater" }
 anyhow = "1"
+thiserror = "2"
 rustix = { version = "1.1.4", features = ["fs", "process", "termios", "event"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
