@@ -93,6 +93,10 @@ fn known_hosts(options: &SshOptions) -> Result<PathBuf> {
     let path = ssh::default_known_hosts().context("Home directory is unavailable")?;
     let directory = path.parent().context("known_hosts has no parent")?;
     if !directory.exists() {
+        #[cfg_attr(
+            not(unix),
+            expect(unused_mut, reason = "only Unix sets the directory mode")
+        )]
         let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
         std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);

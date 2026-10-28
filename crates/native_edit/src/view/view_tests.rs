@@ -38,7 +38,7 @@ mod tests {
                 events, ..Default::default()
             }, |ui| {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0))), |ui| {
-                    show_source(ShowSourceInput { ui: ui, doc: &mut doc, engine: &mut engine, options: &SourceOptions { vim: false, ..Default::default() }, highlight: &mut highlight, language: Language::Rust, id: "file.rs#project.tab.split" } );
+                    show_source(ShowSourceInput { ui, doc: &mut doc, engine: &mut engine, options: &SourceOptions { vim: false, ..Default::default() }, highlight: &mut highlight, language: Language::Rust, id: "file.rs#project.tab.split" } );
                 });
                 assert!(crate::view::source_has_focus(ui.ctx()));
                 if frame == 1 {
@@ -60,7 +60,7 @@ mod tests {
         for _ in 0..2 {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 show_source(ShowSourceInput {
-                    ui: ui,
+                    ui,
                     doc: &mut doc,
                     engine: &mut engine,
                     options: &SourceOptions::default(),
@@ -257,7 +257,7 @@ mod tests {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let result = show_source(ShowSourceInput {
-                        ui: ui,
+                        ui,
                         doc: &mut doc,
                         engine: &mut engine,
                         options: &SourceOptions::default(),
@@ -292,9 +292,9 @@ mod tests {
             let mut output = ctx.run_ui(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     outcome = Some(show_source(ShowSourceInput {
-                        ui: ui,
-                        doc: doc,
-                        engine: engine,
+                        ui,
+                        doc,
+                        engine,
                         options: &SourceOptions::default(),
                         highlight,
                         language: Language::Plain,
@@ -478,9 +478,9 @@ mod tests {
             let mut output = ctx.run_ui(raw, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let outcome = super::show_source(ShowSourceInput {
-                        ui: ui,
-                        doc: doc,
-                        engine: engine,
+                        ui,
+                        doc,
+                        engine,
                         options,
                         highlight,
                         language,
@@ -812,7 +812,7 @@ mod tests {
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         show_source(ShowSourceInput {
-                            ui: ui,
+                            ui,
                             doc: &mut doc,
                             engine: &mut engine,
                             options: &SourceOptions::default(),
@@ -1351,7 +1351,7 @@ mod tests {
             for _ in 0..2 {
                 let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                     caret = show_source(ShowSourceInput {
-                        ui: ui,
+                        ui,
                         doc: &mut doc,
                         engine: &mut engine,
                         options: &options,
@@ -1424,9 +1424,9 @@ mod tests {
                 },
                 |ui| {
                     show_source(ShowSourceInput {
-                        ui: ui,
-                        doc: doc,
-                        engine: engine,
+                        ui,
+                        doc,
+                        engine,
                         options: &options,
                         highlight: &mut highlight,
                         language: Language::Plain,

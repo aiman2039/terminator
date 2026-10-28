@@ -135,6 +135,15 @@ pub fn strip_terminal_actions_width() -> f32 {
         + TERMINAL_BUTTON
 }
 
+/// Title color when the caller gives no tint: accent while active, weak otherwise.
+fn default_title_tint(ui: &egui::Ui, active: bool) -> egui::Color32 {
+    if active {
+        ui.visuals().selection.stroke.color
+    } else {
+        ui.visuals().weak_text_color()
+    }
+}
+
 pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar {
     let TerminalBarSpec {
         title,
@@ -158,13 +167,7 @@ pub fn terminal_bar(ui: &mut egui::Ui, spec: TerminalBarSpec<'_>) -> TerminalBar
     );
     let git_width = TERMINAL_BUTTON + branch_width(ui, branch);
     let slots = BarSlots::layout(rect, git_width, stack_tip.is_some());
-    let tint = title_tint.unwrap_or_else(|| {
-        if active {
-            ui.visuals().selection.stroke.color
-        } else {
-            ui.visuals().weak_text_color()
-        }
-    });
+    let tint = title_tint.unwrap_or_else(|| default_title_tint(ui, active));
     let lead = paint_leading_icons(
         ui,
         rect,

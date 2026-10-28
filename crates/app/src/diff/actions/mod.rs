@@ -321,16 +321,9 @@ struct EditInput<'a> {
     lines: Option<&'a LineSelection>,
 }
 
-fn edit(input: EditInput<'_>) -> Undo {
-    let EditInput {
-        source,
-        doc,
-        hunk,
-        kind,
-        lines,
-    } = input;
-    let index = kind != Kind::Discard;
-    let before = match kind {
+/// The side an edit overwrites, captured so Undo can restore it.
+fn before_version(source: &Source, doc: &DiffDocument, kind: Kind) -> Version {
+    match kind {
         Kind::Stage => Version {
             text: doc.left_text.clone(),
             exists: !source.index.is_empty(),
@@ -346,7 +339,19 @@ fn edit(input: EditInput<'_>) -> Undo {
             exists: source.exists,
             mode: source.mode,
         },
-    };
+    }
+}
+
+fn edit(input: EditInput<'_>) -> Undo {
+    let EditInput {
+        source,
+        doc,
+        hunk,
+        kind,
+        lines,
+    } = input;
+    let index = kind != Kind::Discard;
+    let before = before_version(source, doc, kind);
     let text = match lines.filter(|picked| !picked.is_empty()) {
         Some(picked) => {
             let region = partial_lines(PartialLinesInput {

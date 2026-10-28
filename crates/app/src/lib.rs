@@ -17,7 +17,6 @@ pub(crate) use files::{
     editor_close, external_editor, file_actions, image_preview, search, workspace_ops,
 };
 pub(crate) use git::git_log;
-#[cfg(any(test, target_os = "macos"))]
 pub(crate) use git::merge;
 pub(crate) use git::worktree_ui;
 pub(crate) use install::daemon_upgrade;

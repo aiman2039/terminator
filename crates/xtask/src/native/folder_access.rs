@@ -4,7 +4,10 @@ use super::{Duration, Harness, Options, PathBuf, Result, capture, ensure, fs, js
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(
+    not(unix),
+    expect(dead_code, reason = "access is only restored on Unix")
+)]
 struct RestoreAccess(PathBuf);
 impl Drop for RestoreAccess {
     fn drop(&mut self) {

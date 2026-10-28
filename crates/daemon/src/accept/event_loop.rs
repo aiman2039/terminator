@@ -46,7 +46,7 @@ impl AcceptLoop<'_> {
     // Windows has no `poll` on sockets here; the loop polls the non-blocking
     // listener and waker on a short sleep instead.
     #[cfg(not(unix))]
-    pub(crate) fn run(mut self) -> Result<()> {
+    pub(crate) fn run(self) -> Result<()> {
         while !self.shared.shutdown.load(Ordering::Relaxed) {
             drain_wake(self.wake_drain);
             if notifications::waiting() {

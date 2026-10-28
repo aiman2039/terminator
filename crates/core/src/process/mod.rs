@@ -220,9 +220,6 @@ pub fn run_command(mut cmd: Command, options: CommandOptions) -> Result<Output> 
     })
 }
 
-/// Detach so the process is not a child of the GUI (double-fork + setsid on
-/// Unix; a new process group on Windows, which has no fork).
-
 #[cfg(not(unix))]
 fn spawn_stdin_writer(child: &mut std::process::Child, options: &CommandOptions) {
     if let Some(mut stdin) = child.stdin.take()
@@ -259,7 +256,7 @@ fn spawn_output_readers(
         ),
     ] {
         let Some(mut pipe) = pipe else { continue };
-        let done = Arc::clone(&done);
+        let done = Arc::clone(done);
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         std::thread::spawn(move || {
             let mut bytes = Vec::new();
@@ -345,6 +342,8 @@ fn collect_output(
     (stdout, stderr, overflow)
 }
 
+/// Detach so the process is not a child of the GUI (double-fork + setsid on
+/// Unix; a new process group on Windows, which has no fork).
 pub fn spawn_session_leader(mut command: Command) -> Result<std::process::Child> {
     terminator_sys::double_fork_setsid(&mut command);
     Ok(command.spawn()?)

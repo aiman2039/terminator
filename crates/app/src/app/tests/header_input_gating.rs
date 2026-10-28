@@ -424,7 +424,7 @@ fn select_all_yields_to_focused_native_editor() {
     let mut highlight = terminator_native_edit::highlight::HighlightCache::default();
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         terminator_native_edit::view::show_source(terminator_native_edit::view::ShowSourceInput {
-            ui: ui,
+            ui,
             doc: &mut doc,
             engine: &mut engine,
             options: &terminator_native_edit::view::SourceOptions::default(),

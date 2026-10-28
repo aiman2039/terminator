@@ -14,6 +14,18 @@ pub(super) fn playlist_panel(app: &mut App, ui: &mut Ui, project: &str) {
     playlist_footer(app, ui, project);
 }
 
+fn empty_playlist(app: &mut App, ui: &mut Ui) {
+    ui.weak("No tracks yet.");
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Add files…").clicked() {
+            app.pick_audio = true;
+        }
+        if ui.button("Add folder…").clicked() {
+            app.pick_audio_dir = true;
+        }
+    });
+}
+
 pub(super) struct PlaylistRowsInput<'a> {
     pub(super) app: &'a mut App,
     pub(super) ui: &'a mut Ui,
@@ -38,15 +50,7 @@ pub(super) fn playlist_rows(input: PlaylistRowsInput<'_>) {
             .id_salt("player-rows"),
     );
     if tracks.is_empty() {
-        child.weak("No tracks yet.");
-        child.horizontal_wrapped(|ui| {
-            if ui.button("Add files…").clicked() {
-                app.pick_audio = true;
-            }
-            if ui.button("Add folder…").clicked() {
-                app.pick_audio_dir = true;
-            }
-        });
+        empty_playlist(app, &mut child);
         return;
     }
     let mut play = None;

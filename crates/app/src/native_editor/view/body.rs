@@ -372,9 +372,9 @@ impl ViewPass<'_> {
         } = input;
         let mut source = |ui: &mut egui::Ui| {
             show_source(ShowSourceInput {
-                ui: ui,
+                ui,
                 doc: buffer,
-                engine: engine,
+                engine,
                 options: &options,
                 highlight,
                 language,

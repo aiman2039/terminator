@@ -24,8 +24,22 @@ impl App {
             return;
         };
         let key = tab.key();
+        if self.revision_toolbar(ui, tab, &key) {
+            self.git_views.remove(&key);
+        }
+        if !self.git_view_ready(ui, &key, tab) {
+            return;
+        }
+        self.revision_diff_body(ui, &key, &cwd.join(path));
+    }
+
+    /// Title plus reload and split/unified toggles. Returns whether Reload was clicked.
+    fn revision_toolbar(&mut self, ui: &mut egui::Ui, tab: &Tab, key: &str) -> bool {
+        let Tab::RevisionDiff { cwd, path, .. } = tab else {
+            return false;
+        };
         let mut refresh = false;
-        let split = self.diff_split.contains(&key);
+        let split = self.diff_split.contains(key);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             ui.add(egui::Label::new(egui::RichText::new(tab.git_title()).strong()).truncate())
@@ -40,7 +54,7 @@ impl App {
                 })
                 .clicked()
                 {
-                    self.diff_split.insert(key.clone());
+                    self.diff_split.insert(key.to_owned());
                 }
                 if appearance::selectable_icon(appearance::SelectableIconInput {
                     ui,
@@ -50,17 +64,15 @@ impl App {
                 })
                 .clicked()
                 {
-                    self.diff_split.remove(&key);
+                    self.diff_split.remove(key);
                 }
             });
         });
-        if refresh {
-            self.git_views.remove(&key);
-        }
-        if !self.git_view_ready(ui, &key, tab) {
-            return;
-        }
-        let Some(crate::GitView::Revision(result)) = self.git_views.get(&key) else {
+        refresh
+    }
+
+    fn revision_diff_body(&mut self, ui: &mut egui::Ui, key: &str, full_path: &std::path::Path) {
+        let Some(crate::GitView::Revision(result)) = self.git_views.get(key) else {
             return;
         };
         let doc = match result {
@@ -70,14 +82,14 @@ impl App {
                 return;
             }
         };
-        let split = self.diff_split.contains(&key);
+        let split = self.diff_split.contains(key);
         super::super::diff_paint::comparison_headers(
             super::super::diff_paint::ComparisonHeadersInput {
                 ui,
                 doc: &doc,
                 split,
                 ratio: self.diff_split_ratio,
-                path: &cwd.join(path),
+                path: full_path,
                 editable: false,
                 staged: false,
             },
@@ -92,19 +104,19 @@ impl App {
             accent: appearance::color(&self.theme.accent),
             text: appearance::color(&self.theme.text),
         };
-        let mut sync = self.diff_split_scroll.get(&key).copied().unwrap_or(0.0);
+        let mut sync = self.diff_split_scroll.get(key).copied().unwrap_or(0.0);
         super::super::diff_paint::paint_diff_document(
             super::super::diff_paint::PaintDiffDocumentInput {
                 ui,
                 doc: &doc,
                 split,
                 colors,
-                scroll_key: &key,
+                scroll_key: key,
                 ratio: &mut self.diff_split_ratio,
                 sync: &mut sync,
             },
         );
-        self.diff_split_scroll.insert(key, sync);
+        self.diff_split_scroll.insert(key.to_owned(), sync);
     }
 
     /// Commits that touched a file; each opens its change, or a comparison

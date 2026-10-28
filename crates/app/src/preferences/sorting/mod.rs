@@ -257,7 +257,7 @@ struct SessionActivityInput<'a> {
 }
 
 /// Each session's latest activity: creation, agent updates, and notices.
-fn session_activity<'a>(input: SessionActivityInput<'a>) -> HashMap<&'a str, u64> {
+fn session_activity(input: SessionActivityInput<'_>) -> HashMap<&str, u64> {
     let SessionActivityInput {
         sessions,
         agents,

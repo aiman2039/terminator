@@ -105,7 +105,14 @@ impl Shared {
         Ok(Outcome::Changed)
     }
 
-    fn hang_up_session(rt: &Arc<Mutex<Runtime>>, pid: u32) -> Result<()> {
+    fn hang_up_session(
+        #[cfg_attr(
+            not(unix),
+            expect(unused_variables, reason = "only Unix signals the foreground job")
+        )]
+        rt: &Arc<Mutex<Runtime>>,
+        pid: u32,
+    ) -> Result<()> {
         // Signal the PTY's foreground job as well as its owning shell.
         #[cfg(unix)]
         if let Ok(shell_pid) = i32::try_from(pid)

@@ -21,7 +21,7 @@ fn markdown_source_uses_wrapped_viewport_height() {
         |ui| {
             ui.set_width(200.0);
             let outcome = show_source(ShowSourceInput {
-                ui: ui,
+                ui,
                 doc: &mut doc,
                 engine: &mut engine,
                 options: &SourceOptions {
