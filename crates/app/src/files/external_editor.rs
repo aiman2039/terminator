@@ -141,7 +141,6 @@ pub async fn launch_supervised(
     path: std::path::PathBuf,
 ) -> Result<()> {
     use terminator_core::async_service::{CancellationToken, OperationContext, Policy};
-    use tokio::io::AsyncReadExt;
     let cancel = CancellationToken::new();
     let token = cancel.clone();
     let (started, ready) = tokio::sync::oneshot::channel();
@@ -152,90 +151,123 @@ pub async fn launch_supervised(
     );
     context.deadline = None;
     let handle = service.handle().clone();
+    let launch = Launch {
+        program,
+        args,
+        path,
+    };
     handle.submit(context, cancel, async move {
-        let result = service
-            .fs()
-            .run(&token, move || command(&program, &args, &path))
-            .await;
-        let command = match result {
-            Ok(command) => command,
-            Err(error) => {
-                let _ = started.send(Err(format!("{error:#}")));
-                return Ok(Vec::new());
-            }
-        };
-        let mut child = match tokio::process::Command::from(command)
-            .kill_on_drop(false)
-            .spawn()
-        {
+        let child = match spawn_editor(&service, &token, launch).await {
             Ok(child) => child,
             Err(error) => {
-                let _ = started.send(Err(format!("Start external editor: {error}")));
+                let _ = started.send(Err(error));
                 return Ok(Vec::new());
             }
         };
         let _ = started.send(Ok(()));
-        let Some(mut stderr) = child.stderr.take() else {
-            let result = child.wait().await?;
-            if !result.success() {
-                return Ok(vec![crate::Update::Error(format!(
-                    "External editor exited with {result}"
-                ))]);
-            }
-            return Ok(Vec::new());
-        };
-        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let collected = std::sync::Arc::clone(&output);
-        let read = async move {
-            let mut bytes = [0; 1024];
-            loop {
-                let n = stderr.read(&mut bytes).await?;
-                if n == 0 {
-                    return Ok::<_, std::io::Error>(());
-                }
-                let mut output = collected
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let n = n.min(4096usize.saturating_sub(output.len()));
-                let Some(chunk) = bytes.get(..n) else {
-                    return Ok(());
-                };
-                output.extend_from_slice(chunk);
-            }
-        };
-        tokio::pin!(read);
-        let mut drained = false;
-        let result = loop {
-            tokio::select! {
-                () = token.cancelled() => return Ok(Vec::new()), // persistent external editor is never killed
-                result = &mut read, if !drained => { let _ = result; drained = true; }
-                result = child.wait() => break result?,
-            }
-        };
-        if !result.success() {
-            if !drained {
-                let _ =
-                    tokio::time::timeout(std::time::Duration::from_millis(100), &mut read).await;
-            }
-            let bytes = output
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let message: String = String::from_utf8_lossy(&bytes)
-                .chars()
-                .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
-                .take(2048)
-                .collect();
-            return Ok(vec![crate::Update::Error(format!(
-                "External editor exited with {result}: {}",
-                message.trim()
-            ))]);
-        }
-        Ok(Vec::new())
+        watch_editor(child, &token).await
     })?;
     ready
         .await
         .context("External editor launch cancelled before acknowledgment")?
         .map_err(anyhow::Error::msg)
+}
+
+/// The external editor command line for one file.
+struct Launch {
+    program: String,
+    args: Vec<String>,
+    path: std::path::PathBuf,
+}
+
+async fn spawn_editor(
+    service: &crate::gui_services::Services,
+    token: &terminator_core::async_service::CancellationToken,
+    launch: Launch,
+) -> std::result::Result<tokio::process::Child, String> {
+    let Launch {
+        program,
+        args,
+        path,
+    } = launch;
+    let command = service
+        .fs()
+        .run(token, move || command(&program, &args, &path))
+        .await
+        .map_err(|error| format!("{error:#}"))?;
+    tokio::process::Command::from(command)
+        .kill_on_drop(false)
+        .spawn()
+        .map_err(|error| format!("Start external editor: {error}"))
+}
+
+/// Waits for the editor; a failed exit reports its stderr. A persistent
+/// external editor is never killed on cancellation.
+async fn watch_editor(
+    mut child: tokio::process::Child,
+    token: &terminator_core::async_service::CancellationToken,
+) -> anyhow::Result<Vec<crate::Update>> {
+    let Some(stderr) = child.stderr.take() else {
+        let result = child.wait().await?;
+        if !result.success() {
+            return Ok(vec![crate::Update::Error(format!(
+                "External editor exited with {result}"
+            ))]);
+        }
+        return Ok(Vec::new());
+    };
+    let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let read = read_stderr(stderr, std::sync::Arc::clone(&output));
+    tokio::pin!(read);
+    let mut drained = false;
+    let result = loop {
+        tokio::select! {
+            () = token.cancelled() => return Ok(Vec::new()), // persistent external editor is never killed
+            result = &mut read, if !drained => { let _ = result; drained = true; }
+            result = child.wait() => break result?,
+        }
+    };
+    if result.success() {
+        return Ok(Vec::new());
+    }
+    if !drained {
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(100), &mut read).await;
+    }
+    let bytes = output
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let message: String = String::from_utf8_lossy(&bytes)
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .take(2048)
+        .collect();
+    Ok(vec![crate::Update::Error(format!(
+        "External editor exited with {result}: {}",
+        message.trim()
+    ))])
+}
+
+/// Keeps the first 4 KiB of the editor's stderr.
+async fn read_stderr(
+    mut stderr: tokio::process::ChildStderr,
+    collected: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+) -> std::io::Result<()> {
+    use tokio::io::AsyncReadExt;
+    let mut bytes = [0; 1024];
+    loop {
+        let n = stderr.read(&mut bytes).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        let mut output = collected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let n = n.min(4096usize.saturating_sub(output.len()));
+        let Some(chunk) = bytes.get(..n) else {
+            return Ok(());
+        };
+        output.extend_from_slice(chunk);
+    }
 }
 
 #[cfg(test)]

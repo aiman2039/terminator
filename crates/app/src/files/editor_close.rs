@@ -77,58 +77,119 @@ pub async fn close_async(
     };
     let live = live_editors(&state, ids)?;
     for id in &live {
-        if mode == Mode::Save {
-            client
-                .rpc(Request::EditorSave {
-                    session: id.clone(),
-                })
-                .await?;
-        }
-        if mode != Mode::Discard {
-            let Response::Text(status) = client
-                .rpc(Request::EditorStatus {
-                    session: id.clone(),
-                })
-                .await?
-            else {
-                anyhow::bail!("Could not check unsaved changes")
-            };
-            ensure!(
-                status
-                    .trim()
-                    .parse::<usize>()
-                    .context("Could not check unsaved changes")?
-                    == 0,
-                "Unsaved changes"
-            );
-        }
+        save_or_check(client, id, mode).await?;
     }
     for id in &live {
-        let socket = client.editor_socket(id.clone()).await?;
-        let result = async {
-            let mut rpc = crate::nvim_rpc::AsyncConnection::connect(
-                &socket,
-                QUIT_TIMEOUT,
-                client.cpu.clone(),
+        quit_editor(client, id, mode).await?;
+    }
+    for attempt in 0..2 {
+        if wait_closed(client, ids, mode, timeout).await? {
+            return Ok(());
+        }
+        if mode != Mode::Discard || attempt != 0 {
+            break;
+        }
+        stop_live(client, ids).await?;
+    }
+    anyhow::bail!("Editor did not close. Check for unsaved buffers or running editor jobs.")
+}
+
+/// Saves first in Save mode; except when discarding, fails on unsaved changes.
+async fn save_or_check(client: &async_client::Client, id: &str, mode: Mode) -> Result<()> {
+    if mode == Mode::Save {
+        client
+            .rpc(Request::EditorSave {
+                session: id.to_owned(),
+            })
+            .await?;
+    }
+    if mode == Mode::Discard {
+        return Ok(());
+    }
+    let Response::Text(status) = client
+        .rpc(Request::EditorStatus {
+            session: id.to_owned(),
+        })
+        .await?
+    else {
+        anyhow::bail!("Could not check unsaved changes")
+    };
+    ensure!(
+        status
+            .trim()
+            .parse::<usize>()
+            .context("Could not check unsaved changes")?
+            == 0,
+        "Unsaved changes"
+    );
+    Ok(())
+}
+
+/// Sends the quit keys. A discarding close stops an unreachable editor.
+async fn quit_editor(client: &async_client::Client, id: &str, mode: Mode) -> Result<()> {
+    let socket = client.editor_socket(id.to_owned()).await?;
+    let result = async {
+        let mut rpc =
+            crate::nvim_rpc::AsyncConnection::connect(&socket, QUIT_TIMEOUT, client.cpu.clone())
+                .await?;
+        let keys = rpc
+            .call(
+                "nvim_replace_termcodes",
+                serde_json::json!([quit_keys(mode), true, false, true]),
+                4096,
             )
             .await?;
-            let keys = rpc
-                .call(
-                    "nvim_replace_termcodes",
-                    serde_json::json!([quit_keys(mode), true, false, true]),
-                    4096,
-                )
-                .await?;
-            // nvim_input acknowledges queued input; process exit is confirmed below.
-            rpc.call("nvim_input", serde_json::json!([keys]), 4096)
-                .await?;
-            Ok::<_, anyhow::Error>(())
+        // nvim_input acknowledges queued input; process exit is confirmed below.
+        rpc.call("nvim_input", serde_json::json!([keys]), 4096)
+            .await?;
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    if let Err(error) = result {
+        if mode != Mode::Discard {
+            return Err(error);
         }
-        .await;
-        if let Err(error) = result {
-            if mode != Mode::Discard {
-                return Err(error);
-            }
+        client
+            .rpc(Request::Stop {
+                session: id.to_owned(),
+            })
+            .await?;
+    }
+    Ok(())
+}
+
+/// Polls until no listed session still occupies the close, up to `timeout`.
+async fn wait_closed(
+    client: &async_client::Client,
+    ids: &[String],
+    mode: Mode,
+    timeout: Duration,
+) -> Result<bool> {
+    let started = Instant::now();
+    loop {
+        let Response::State(state) = client.rpc(Request::Snapshot).await? else {
+            anyhow::bail!("Could not inspect editor state")
+        };
+        if !state
+            .sessions
+            .iter()
+            .any(|s| ids.contains(&s.id) && occupies_close(mode, &s.lifecycle))
+        {
+            return Ok(true);
+        }
+        if started.elapsed() >= timeout {
+            return Ok(false);
+        }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+}
+
+async fn stop_live(client: &async_client::Client, ids: &[String]) -> Result<()> {
+    let Response::State(state) = client.rpc(Request::Snapshot).await? else {
+        anyhow::bail!("Could not inspect editor state")
+    };
+    for id in ids {
+        if session_live(&state, id) {
             client
                 .rpc(Request::Stop {
                     session: id.clone(),
@@ -136,41 +197,7 @@ pub async fn close_async(
                 .await?;
         }
     }
-    for attempt in 0..2 {
-        let started = Instant::now();
-        loop {
-            let Response::State(state) = client.rpc(Request::Snapshot).await? else {
-                anyhow::bail!("Could not inspect editor state")
-            };
-            if !state
-                .sessions
-                .iter()
-                .any(|s| ids.contains(&s.id) && occupies_close(mode, &s.lifecycle))
-            {
-                return Ok(());
-            }
-            if started.elapsed() >= timeout {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(40)).await;
-        }
-        if mode != Mode::Discard || attempt != 0 {
-            break;
-        }
-        let Response::State(state) = client.rpc(Request::Snapshot).await? else {
-            anyhow::bail!("Could not inspect editor state")
-        };
-        for id in ids {
-            if session_live(&state, id) {
-                client
-                    .rpc(Request::Stop {
-                        session: id.clone(),
-                    })
-                    .await?;
-            }
-        }
-    }
-    anyhow::bail!("Editor did not close. Check for unsaved buffers or running editor jobs.")
+    Ok(())
 }
 
 #[cfg(test)]
