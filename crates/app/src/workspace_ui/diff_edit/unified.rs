@@ -4,7 +4,7 @@ use super::super::diff_paint::{
     FillDiffRowInput, diff_content_width, diff_row_style, fill_diff_row, gutter_cols,
     paint_diff_gutter, paint_diff_line,
 };
-use super::row_ops::{RowOp, apply_redo, apply_row_op, apply_undo, record_undo};
+use super::row_ops::{RowOp, apply_row_op, buffer_undo_keys, record_undo};
 use super::{
     HighlightedJobInput, MAX_HIGHLIGHT_BYTES, bg_to_layout, ensure_cache, highlighted_job,
     replace_line,
@@ -72,7 +72,7 @@ pub(in super::super) fn paint_unified_editor(input: PaintUnifiedEditorInput<'_>)
         key,
     } = input;
 
-    UnifiedFrame::undo_keys(ui, buffer, key);
+    buffer_undo_keys(ui, buffer, key);
     if buffer.left_spans.is_none() {
         buffer.left_spans = Some(Arc::new(
             if buffer.document.left_text.len() > MAX_HIGHLIGHT_BYTES {
@@ -116,49 +116,6 @@ pub(in super::super) fn paint_unified_editor(input: PaintUnifiedEditorInput<'_>)
 }
 
 impl UnifiedFrame<'_> {
-    /// Buffer-level undo/redo, but only when a unified row editor holds
-    /// focus (never steal Cmd+Z from e.g. the commit message), and
-    /// consumed here so the row editor does not also apply its own
-    /// per-line undo.
-    fn undo_keys(ui: &mut egui::Ui, buffer: &mut diff::review::Edit, key: &str) {
-        let command_z = ui.input(|input| {
-            input.events.iter().any(|event| {
-                matches!(
-                    event,
-                    egui::Event::Key {
-                        key: egui::Key::Z,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } if modifiers.command || modifiers.ctrl
-                )
-            })
-        });
-        if !command_z {
-            return;
-        }
-        let focused = ui.memory(|memory| memory.focused());
-        let line_count = buffer.text.split_inclusive('\n').count();
-        let ours = focused.is_some_and(|id| {
-            (1..=line_count.saturating_add(2)).any(|n| {
-                id == egui::Id::unique((key, "unified-line", u32::try_from(n).unwrap_or(1)))
-            })
-        });
-        if !ours {
-            return;
-        }
-        let mut shift_command = egui::Modifiers::COMMAND;
-        shift_command.shift = true;
-        let redo_pressed = ui.input_mut(|input| input.consume_key(shift_command, egui::Key::Z));
-        let undo_pressed = !redo_pressed
-            && ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Z));
-        if redo_pressed {
-            apply_redo(buffer);
-        } else if undo_pressed {
-            apply_undo(buffer);
-        }
-    }
-
     fn show_rows(
         &self,
         ui: &mut egui::Ui,

@@ -82,3 +82,45 @@ pub(super) fn apply_redo(buffer: &mut diff::review::Edit) -> bool {
     buffer.burst = 0.0;
     true
 }
+
+/// Buffer-level undo/redo, but only when a unified row editor holds
+/// focus (never steal Cmd+Z from e.g. the commit message), and
+/// consumed here so the row editor does not also apply its own
+/// per-line undo.
+pub(super) fn buffer_undo_keys(ui: &mut egui::Ui, buffer: &mut diff::review::Edit, key: &str) {
+    let command_z = ui.input(|input| {
+        input.events.iter().any(|event| {
+            matches!(
+                event,
+                egui::Event::Key {
+                    key: egui::Key::Z,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } if modifiers.command || modifiers.ctrl
+            )
+        })
+    });
+    if !command_z {
+        return;
+    }
+    let focused = ui.memory(|memory| memory.focused());
+    let line_count = buffer.text.split_inclusive('\n').count();
+    let ours = focused.is_some_and(|id| {
+        (1..=line_count.saturating_add(2))
+            .any(|n| id == egui::Id::unique((key, "unified-line", u32::try_from(n).unwrap_or(1))))
+    });
+    if !ours {
+        return;
+    }
+    let mut shift_command = egui::Modifiers::COMMAND;
+    shift_command.shift = true;
+    let redo_pressed = ui.input_mut(|input| input.consume_key(shift_command, egui::Key::Z));
+    let undo_pressed = !redo_pressed
+        && ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Z));
+    if redo_pressed {
+        apply_redo(buffer);
+    } else if undo_pressed {
+        apply_undo(buffer);
+    }
+}
