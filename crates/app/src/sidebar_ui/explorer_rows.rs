@@ -274,83 +274,114 @@ pub fn explorer_file_row(ui: &mut egui::Ui, input: ExplorerFileRowInput<'_>) -> 
     if r.clicked() || r.double_clicked() {
         outcome.clicked = Some(FileAction::Open);
     }
-    appearance::context_menu(&r, |ui| {
+    let menu = FileRowMenu {
+        path,
+        open_shortcut,
+        split_shortcut,
+        perforce,
+        git_branches,
+    };
+    appearance::context_menu(&r, |ui| menu.show(ui, &mut outcome));
+    outcome.response = Some(r);
+    outcome
+}
+
+/// The file row's context menu.
+struct FileRowMenu<'a> {
+    path: &'a Path,
+    open_shortcut: &'a str,
+    split_shortcut: &'a str,
+    perforce: bool,
+    git_branches: Option<&'a [String]>,
+}
+
+impl FileRowMenu<'_> {
+    fn show(&self, ui: &mut egui::Ui, outcome: &mut ExplorerRowOutcome) {
         if let Some(action) = file_actions::menu_with(
             ui,
             file_actions::FileMenu {
                 file: true,
-                browser: file_actions::browser_document(path),
+                browser: file_actions::browser_document(self.path),
                 git: None,
                 neovim: false,
             },
-            open_shortcut,
-            split_shortcut,
+            self.open_shortcut,
+            self.split_shortcut,
         ) {
             outcome.menu = Some(action);
         }
-        if perforce {
+        if self.perforce {
             ui.separator();
-            if appearance::menu_item(ui, "Perforce: Open for edit", "Pencil", "").clicked() {
-                outcome.perforce = Some(crate::perforce::Op::Edit(path.into()));
-                ui.close();
-            }
-            if appearance::menu_item(ui, "Perforce: Reconcile file", "RefreshCw", "").clicked() {
-                outcome.perforce = Some(crate::perforce::Op::Reconcile(path.into()));
-                ui.close();
-            }
-            if appearance::menu_item(ui, "Perforce: Diff", "FileDiff", "").clicked() {
-                outcome.menu = Some(FileAction::NativeWorkingDiff);
-                ui.close();
-            }
+            self.perforce_items(ui, outcome);
         }
-        if let Some(branches) = git_branches {
+        if let Some(branches) = self.git_branches {
             ui.separator();
-            if appearance::menu_item(ui, "Show history", "History", "").clicked() {
-                outcome.local = Some(ExplorerLocal::History);
+            Self::git_items(ui, branches, outcome);
+        }
+        ui.separator();
+        Self::local_items(ui, outcome);
+    }
+
+    fn perforce_items(&self, ui: &mut egui::Ui, outcome: &mut ExplorerRowOutcome) {
+        if appearance::menu_item(ui, "Perforce: Open for edit", "Pencil", "").clicked() {
+            outcome.perforce = Some(crate::perforce::Op::Edit(self.path.into()));
+            ui.close();
+        }
+        if appearance::menu_item(ui, "Perforce: Reconcile file", "RefreshCw", "").clicked() {
+            outcome.perforce = Some(crate::perforce::Op::Reconcile(self.path.into()));
+            ui.close();
+        }
+        if appearance::menu_item(ui, "Perforce: Diff", "FileDiff", "").clicked() {
+            outcome.menu = Some(FileAction::NativeWorkingDiff);
+            ui.close();
+        }
+    }
+
+    fn git_items(ui: &mut egui::Ui, branches: &[String], outcome: &mut ExplorerRowOutcome) {
+        if appearance::menu_item(ui, "Show history", "History", "").clicked() {
+            outcome.local = Some(ExplorerLocal::History);
+            ui.close();
+        }
+        ui.menu_button("Compare with branch", |ui| {
+            if branches.is_empty() {
+                ui.weak("Loading branches…");
+            }
+            for branch in branches {
+                if ui.button(branch).clicked() {
+                    outcome.local = Some(ExplorerLocal::CompareWith(branch.clone()));
+                    ui.close();
+                }
+            }
+        });
+    }
+
+    /// Reveal, copy, rename, duplicate, and delete.
+    fn local_items(ui: &mut egui::Ui, outcome: &mut ExplorerRowOutcome) {
+        let mut item = |ui: &mut egui::Ui, label: &str, icon: &str, local: ExplorerLocal| {
+            if appearance::menu_item(ui, label, icon, "").clicked() {
+                outcome.local = Some(local);
                 ui.close();
             }
-            ui.menu_button("Compare with branch", |ui| {
-                if branches.is_empty() {
-                    ui.weak("Loading branches…");
-                }
-                for branch in branches {
-                    if ui.button(branch).clicked() {
-                        outcome.local = Some(ExplorerLocal::CompareWith(branch.clone()));
-                        ui.close();
-                    }
-                }
-            });
-        }
+        };
+        item(
+            ui,
+            "Reveal in file manager",
+            "FolderOpen",
+            ExplorerLocal::Reveal,
+        );
+        item(
+            ui,
+            "Copy relative path",
+            "Copy",
+            ExplorerLocal::CopyRelative,
+        );
+        item(ui, "Copy file name", "Copy", ExplorerLocal::CopyName);
         ui.separator();
-        if appearance::menu_item(ui, "Reveal in file manager", "FolderOpen", "").clicked() {
-            outcome.local = Some(ExplorerLocal::Reveal);
-            ui.close();
-        }
-        if appearance::menu_item(ui, "Copy relative path", "Copy", "").clicked() {
-            outcome.local = Some(ExplorerLocal::CopyRelative);
-            ui.close();
-        }
-        if appearance::menu_item(ui, "Copy file name", "Copy", "").clicked() {
-            outcome.local = Some(ExplorerLocal::CopyName);
-            ui.close();
-        }
+        item(ui, "Rename", "Pencil", ExplorerLocal::Rename);
+        item(ui, "Duplicate", "Copy", ExplorerLocal::Duplicate);
         ui.separator();
-        if appearance::menu_item(ui, "Rename", "Pencil", "").clicked() {
-            outcome.local = Some(ExplorerLocal::Rename);
-            ui.close();
-        }
-        if appearance::menu_item(ui, "Duplicate", "Copy", "").clicked() {
-            outcome.local = Some(ExplorerLocal::Duplicate);
-            ui.close();
-        }
-        ui.separator();
-        if appearance::menu_item(ui, "Delete", "X", "").clicked() {
-            outcome.local = Some(ExplorerLocal::Delete);
-            ui.close();
-        }
-    });
-    outcome.response = Some(r);
-    outcome
+        item(ui, "Delete", "X", ExplorerLocal::Delete);
+    }
 }
 
 pub(super) fn prompt_button_width(ui: &egui::Ui, label: &str) -> f32 {
