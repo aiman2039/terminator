@@ -1,4 +1,5 @@
 //! Minimal vim-modal engine over [`crate::doc::Buffer`].
+mod block;
 mod carets;
 mod command;
 mod cursor;

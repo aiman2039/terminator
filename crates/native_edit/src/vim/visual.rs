@@ -1,9 +1,9 @@
 //! Visual-mode keys and the selection helpers they share with operators.
 use super::super::doc::Buffer;
+use super::block::DeleteBlockRangesInput;
 use super::cursor::GotoInput;
 use super::helpers::range_text;
 use super::mode::{Bit, Effect, Key, Mode, Repeat};
-use super::operators::DeleteBlockRangesInput;
 use super::state::VimEngine;
 use super::words::line_len;
 

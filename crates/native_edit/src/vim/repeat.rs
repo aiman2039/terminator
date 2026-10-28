@@ -1,6 +1,6 @@
 use super::super::doc::Buffer;
+use super::block::DeleteBlockRangesInput;
 use super::mode::{Bit, BlockPending, Cursor, Effect, Key, ModalEngine, PendingOp, Place, Repeat};
-use super::operators::DeleteBlockRangesInput;
 use super::state::VimEngine;
 use super::words::line_len;
 
