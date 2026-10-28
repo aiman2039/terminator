@@ -225,7 +225,12 @@ pub fn document(DiffRequest { cwd, path, staged }: DiffRequest<'_>) -> Result<Di
         stdout_limit: 4 * 1024 * 1024,
         ..Default::default()
     };
-    let (left, right) = terminator_git::snapshots(&root, &relative, staged, &options)?;
+    let (left, right) = terminator_git::snapshots(terminator_git::SnapshotsInput {
+        root: &root,
+        path: &relative,
+        staged,
+        options: &options,
+    })?;
     let (left, right) = decode_sides(&left, &right)?;
     Ok(build(&relative, &left, &right, staged))
 }

@@ -208,12 +208,20 @@ pub async fn blob_async(
 /// Capture the before/after bytes for `path` (repository-relative). Staged
 /// snapshots compare index sides; working snapshots compare the index side
 /// against the worktree file. Untracked files snapshot as empty vs content.
-pub fn snapshots(
-    root: &Path,
-    path: &Path,
-    staged: bool,
-    options: &CommandOptions,
-) -> Result<(Vec<u8>, Vec<u8>)> {
+pub struct SnapshotsInput<'a> {
+    pub root: &'a Path,
+    pub path: &'a Path,
+    pub staged: bool,
+    pub options: &'a CommandOptions,
+}
+
+pub fn snapshots(input: SnapshotsInput<'_>) -> Result<(Vec<u8>, Vec<u8>)> {
+    let SnapshotsInput {
+        root,
+        path,
+        staged,
+        options,
+    } = input;
     if !(!path.is_absolute() && path.components().all(|c| matches!(c, Component::Normal(_)))) {
         return Err(Error::PathEscapes { path: path.into() });
     }
@@ -300,10 +308,22 @@ mod tests {
         git_cmd(root, &["add", "."]);
         std::fs::write(root.join(name), "working\n").unwrap();
         let options = options();
-        let (left, right) = snapshots(root, name, true, &options).unwrap();
+        let (left, right) = snapshots(SnapshotsInput {
+            root,
+            path: name,
+            staged: true,
+            options: &options,
+        })
+        .unwrap();
         assert_eq!(left, b"base\n");
         assert_eq!(right, b"staged\n");
-        let (left, right) = snapshots(root, name, false, &options).unwrap();
+        let (left, right) = snapshots(SnapshotsInput {
+            root,
+            path: name,
+            staged: false,
+            options: &options,
+        })
+        .unwrap();
         assert_eq!(left, b"staged\n");
         assert_eq!(right, b"working\n");
     }
@@ -348,7 +368,13 @@ mod tests {
         let relative = relative_path(&alias, &alias.join("file.rs")).unwrap();
         assert_eq!(relative, PathBuf::from("file.rs"));
         let options = options();
-        let (left, right) = snapshots(root, &relative, false, &options).unwrap();
+        let (left, right) = snapshots(SnapshotsInput {
+            root,
+            path: &relative,
+            staged: false,
+            options: &options,
+        })
+        .unwrap();
         assert_eq!(left, b"old\n");
         assert!(right.is_empty());
     }
@@ -359,12 +385,32 @@ mod tests {
         let root = dir.path();
         let options = options();
         std::fs::write(root.join("new.rs"), "fn new() {}\n").unwrap();
-        let (left, right) = snapshots(root, Path::new("new.rs"), false, &options).unwrap();
+        let (left, right) = snapshots(SnapshotsInput {
+            root,
+            path: Path::new("new.rs"),
+            staged: false,
+            options: &options,
+        })
+        .unwrap();
         assert!(left.is_empty());
         assert!(check_text(&left) && check_text(&right));
         std::fs::write(root.join("new.rs"), b"binary\0").unwrap();
-        let (_, right) = snapshots(root, Path::new("new.rs"), false, &options).unwrap();
+        let (_, right) = snapshots(SnapshotsInput {
+            root,
+            path: Path::new("new.rs"),
+            staged: false,
+            options: &options,
+        })
+        .unwrap();
         assert!(!check_text(&right));
-        assert!(snapshots(root, Path::new("../outside.rs"), false, &options).is_err());
+        assert!(
+            snapshots(SnapshotsInput {
+                root,
+                path: Path::new("../outside.rs"),
+                staged: false,
+                options: &options
+            })
+            .is_err()
+        );
     }
 }

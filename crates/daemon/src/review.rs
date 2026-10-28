@@ -25,7 +25,12 @@ impl Drop for Files {
     }
 }
 pub fn snapshots(root: &Path, path: &Path, staged: bool) -> Result<(Vec<u8>, Vec<u8>)> {
-    let pair = terminator_git::snapshots(root, path, staged, &CommandOptions::default())?;
+    let pair = terminator_git::snapshots(terminator_git::SnapshotsInput {
+        root,
+        path,
+        staged,
+        options: &CommandOptions::default(),
+    })?;
     for bytes in [&pair.0, &pair.1] {
         ensure!(
             terminator_git::check_text(bytes),

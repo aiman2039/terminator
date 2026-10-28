@@ -61,7 +61,8 @@ pub mod status;
 pub use diffstat::{Stat, parse_numstat};
 pub use ignore::{DISPLAY_LIMIT, Entry, compare_entries, entries, entries_known, natural_cmp};
 pub use snapshot::{
-    SNAPSHOT_LIMIT, blob, check_text, find_record, relative_path, snapshots, worktree_file,
+    SNAPSHOT_LIMIT, SnapshotsInput, blob, check_text, find_record, relative_path, snapshots,
+    worktree_file,
 };
 pub use status::{Change, GitGroup, decorations, parse_porcelain, status_description};
 pub use terminator_core::git::{RunInput, command, command_with, run, run_blocking};
